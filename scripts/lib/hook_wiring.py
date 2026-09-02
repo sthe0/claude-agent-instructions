@@ -167,8 +167,8 @@ TIMEOUT_REQUIREMENTS: "tuple[tuple[str, int, str], ...]" = (
     ("hook-deferring-disposition-gate.py", 45,
      "one deferring-disposition judge, on the first fired menu, under a 45s "
      "whole-invocation budget"),
-    ("hook-turn-end-gate.py", 69,
-     "up to three judges in one invocation under a 69s whole-invocation budget"),
+    ("hook-turn-end-gate.py", 105,
+     "up to four judges in one invocation under a 105s whole-invocation budget"),
     ("hook-plan-delivery-gate.py", 30,
      "one approval-ask judge under a 30s whole-invocation budget"),
     ("hook-resolution-reminder.py", 22,
@@ -217,7 +217,7 @@ TIMEOUT_REQUIREMENT_OWN_CONSTANT: "dict[str, str]" = {
 TIMEOUT_REQUIREMENT_CALLS: "dict[str, int]" = {
     "hook-escalation-diagnosis-gate.py": 1,
     "hook-deferring-disposition-gate.py": 1,
-    "hook-turn-end-gate.py": 3,
+    "hook-turn-end-gate.py": 4,
     "hook-plan-delivery-gate.py": 1,
     "hook-resolution-reminder.py": 1,
     "hook-published-text-writer-gate.py": 1,

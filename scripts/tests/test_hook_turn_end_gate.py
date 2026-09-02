@@ -191,7 +191,7 @@ def test_passes_when_self_improvement_engaged(tmp_path, isolated_state):
     t = _write_transcript(tmp_path, [
         _user_line(FEEDBACK),
         _assistant_skill_line("self-improvement"),
-        _assistant_text_line("done"),
+        _assistant_text_line("noted"),
     ])
     assert _mod.decide(
         {"transcript_path": str(t), "stop_hook_active": False},
@@ -1075,6 +1075,160 @@ def test_prose_binary_ask_silent_on_open_wh_question(tmp_path, isolated_state):
     assert _mod.decide({"transcript_path": str(t), "stop_hook_active": False}) is None
 
 
+# --- silent_closure guardian -------------------------------------------------
+
+# Cluster A: a fork-point decision committed to silently. Cluster C: requested
+# work declared complete with no confirmation sought. Neutral user text is
+# paired with both so the self-improvement guardian never co-fires.
+DECISION_TEXT = "There are two viable stores; I've decided to use Postgres."
+COMPLETION_TEXT = "All tests pass. The task is complete."
+
+
+def _scl_ctx(sought=True, invocations=frozenset(), closure=False, prose=False, state=None):
+    return _mod.TurnContext(
+        last_user_text="add a parser for the config file",
+        invocations=invocations,
+        transcript_path="/x.jsonl",
+        session_key="s",
+        agentctl_state=state,
+        closure_sought=closure,
+        prose_binary_ask=prose,
+        silent_closure_sought=sought,
+    )
+
+
+def test_silent_closure_fires_when_sought_and_unsuppressed():
+    out = _mod.silent_closure_blockers(_scl_ctx())
+    assert len(out) == 1
+    assert "AskUserQuestion" in out[0]
+
+
+def test_silent_closure_silent_when_not_sought():
+    assert _mod.silent_closure_blockers(_scl_ctx(sought=False)) == []
+
+
+def test_silent_closure_silent_when_ask_invoked():
+    ctx = _scl_ctx(invocations=frozenset({"AskUserQuestion"}))
+    assert _mod.silent_closure_blockers(ctx) == []
+
+
+def test_silent_closure_silent_when_closure_sought():
+    assert _mod.silent_closure_blockers(_scl_ctx(closure=True)) == []
+
+
+def test_silent_closure_silent_when_prose_binary_ask_also_fires():
+    # The turn already poses a question in prose -- that is prose_binary_ask's
+    # obligation, not this guardian's; firing both would double-count one turn's
+    # single missing click-gate.
+    assert _mod.silent_closure_blockers(_scl_ctx(prose=True)) == []
+
+
+def test_silent_closure_silent_when_resolution_also_fires():
+    # A plan whose every stage has PASSED is resolution_turn_blockers's narrower,
+    # more specific obligation; this guardian exists for what falls OUTSIDE that
+    # conjunction, not to duplicate it.
+    assert _mod.silent_closure_blockers(_scl_ctx(state=_FakeState())) == []
+
+
+def test_silent_closure_registered_after_prose_binary_ask():
+    keys = list(_mod.TURN_GUARDIANS)
+    assert "silent_closure" in keys
+    assert keys.index("prose_binary_ask") < keys.index("silent_closure")
+    assert keys.index("silent_closure") < keys.index("resolution")
+
+
+# --- silent_closure guardian: integration through decide() ------------------
+
+def test_silent_closure_blocks_on_a_silently_committed_decision(tmp_path, isolated_state, monkeypatch):
+    """Cluster A: a decision taken at a fork point, posed nowhere as a question."""
+    _patch_state(monkeypatch, None)
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line(DECISION_TEXT),
+    ])
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"},
+        runner=_fake_runner("YES"),
+    )
+    assert out is not None and out["decision"] == "block"
+    assert "reaches closure" in out["reason"]
+
+
+def test_silent_closure_blocks_on_completion_outside_resolution_conjunction(
+    tmp_path, isolated_state, monkeypatch
+):
+    """Cluster C's blind spot: completion narrated with no confirmation sought,
+    but with no readable agentctl SessionState at all -- outside
+    resolution_turn_blockers's narrow conjunction, which requires one."""
+    _patch_state(monkeypatch, None)
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line(COMPLETION_TEXT),
+    ])
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"},
+        runner=_fake_runner("YES"),
+    )
+    assert out is not None and out["decision"] == "block"
+    assert "reaches closure" in out["reason"]
+    assert "resolution gate" not in out["reason"]
+
+
+def test_silent_closure_silent_on_routine_narration(tmp_path, isolated_state, monkeypatch):
+    """The prefilter fires on a decision-shaped phrase describing an ordinary
+    intermediate step, not a real fork-point decision; the judge says NO."""
+    _patch_state(monkeypatch, None)
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line(
+            "I'll go with reading the file first, then updating the config."
+        ),
+    ])
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"},
+        runner=_fake_runner("NO"),
+    )
+    assert out is None
+
+
+def test_silent_closure_does_not_double_fire_with_prose_binary_ask(
+    tmp_path, isolated_state, monkeypatch
+):
+    """A turn that both commits to a decision AND ends in a prose confirm
+    question blocks ONCE, via prose_binary_ask -- not twice."""
+    _patch_state(monkeypatch, None)
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line("I've decided to use Postgres. Should I proceed?"),
+    ])
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"},
+        runner=_fake_runner("YES"),
+    )
+    assert out is not None and out["decision"] == "block"
+    assert "ends with a binary / confirm decision" in out["reason"]
+    assert "reaches closure" not in out["reason"]
+
+
+def test_silent_closure_does_not_double_fire_with_resolution(
+    tmp_path, isolated_state, monkeypatch
+):
+    """A turn narrating completion under a SUBSTANTIVE, all-stages-PASSED plan
+    blocks ONCE, via the resolution gate -- not twice."""
+    _patch_state(monkeypatch, _FakeState())
+    t = _write_transcript(tmp_path, [
+        _user_line("add a parser for the config file"),
+        _assistant_text_line(COMPLETION_TEXT),
+    ])
+    out = _mod.decide(
+        {"transcript_path": str(t), "stop_hook_active": False, "session_id": "s1"},
+        runner=_fake_runner("YES"),
+    )
+    assert out is not None and out["decision"] == "block"
+    assert "resolution gate" in out["reason"]
+    assert "reaches closure" not in out["reason"]
+
+
 # --- the judge budget: order, tail-drop, and explicit per-call timeouts -------
 #
 # This hook makes up to THREE `claude -p` judge calls in one invocation. They
@@ -1176,11 +1330,13 @@ def test_budget_drops_the_tail_and_records_the_skip(
     this change exists to remove."""
     clock = _FakeClock()
     _pin_budget_clock(monkeypatch, clock)
-    # 24s per call: two of them leave 21s of the 69s budget, under the outage
+    # 40s per call: two of them leave 25s of the 105s budget (silent_closure's
+    # prefilter is silent on this fixture and costs no clock time — see
+    # test_a_judge_whose_prefilter_is_silent_costs_no_budget), under the outage
     # judge's own 26s floor (lib/judge_latency.py, ceil(p90) over the re-sampled
     # row) — while still leaving the SECOND call startable, so what this pins is
     # a tail drop and not a budget that dies on its first judge.
-    runner = _recording_runner(elapsed=24.0, clock=clock)
+    runner = _recording_runner(elapsed=40.0, clock=clock)
 
     ctx = _mod.build_context(
         {"transcript_path": str(_all_three_prefilters(tmp_path))}, runner=runner
@@ -1196,7 +1352,7 @@ def test_a_dropped_judge_fails_open(tmp_path, isolated_state, monkeypatch):
     these judges feeds a Stop-gate BLOCKER, so an unrun judge must not block."""
     clock = _FakeClock()
     _pin_budget_clock(monkeypatch, clock)
-    runner = _recording_runner(text="YES", elapsed=24.0, clock=clock)
+    runner = _recording_runner(text="YES", elapsed=40.0, clock=clock)
 
     ctx = _mod.build_context(
         {"transcript_path": str(_all_three_prefilters(tmp_path))}, runner=runner
@@ -1269,14 +1425,14 @@ def test_a_judge_whose_prefilter_is_silent_costs_no_budget(
     tmp_path, isolated_state, monkeypatch
 ):
     """The budget is spent on CALLS, not on candidates: an ordinary turn trips no
-    prefilter, so the three judges cost nothing and the turn is not slowed."""
+    prefilter, so the four judges cost nothing and the turn is not slowed."""
     clock = _FakeClock()
     _pin_budget_clock(monkeypatch, clock)
     runner = _recording_runner(elapsed=13.0, clock=clock)
 
     ctx = _mod.build_context({"transcript_path": str(_write_transcript(tmp_path, [
         _user_line("add a parser for the config file"),
-        _assistant_text_line("Готово, парсер добавлен."),
+        _assistant_text_line("Парсер добавлен в модуль конфигурации."),
     ]))}, runner=runner)
 
     assert runner.calls == []
@@ -1301,12 +1457,12 @@ def test_main_opens_the_budget_before_stdin_json_parsing(
     real_json_load = json.load
 
     def slow_json_load(fp, *a, **kw):
-        # 49s of stdin-JSON-parsing cost, spent BEFORE main() ever reaches
+        # 85s of stdin-JSON-parsing cost, spent BEFORE main() ever reaches
         # build_context. Chosen so the remainder (20s) falls INSIDE the first
         # judge's [floor, cap] band: a smaller cost would leave more than the
         # 21s cap and the first timeout would read 21 either way, making the test
         # blind to the very mutation it exists for.
-        clock.now += 49.0
+        clock.now += 85.0
         return real_json_load(fp, *a, **kw)
 
     monkeypatch.setattr(json, "load", slow_json_load)
@@ -1323,12 +1479,12 @@ def test_main_opens_the_budget_before_stdin_json_parsing(
     assert runner.calls, "expected the feedback_signal judge to be called"
     first_name, first_timeout = runner.calls[0]
     assert first_name == "feedback_signal"
-    # 69s whole-invocation budget - 49s already spent in json.load == 20s left,
+    # 105s whole-invocation budget - 85s already spent in json.load == 20s left,
     # below the feedback judge's 21s per-call cap -- the deadline must already
     # reflect that cost.
     assert first_timeout == 20.0, (
         f"first judge got timeout={first_timeout}s, expected 20.0s "
-        f"({_mod._TURN_JUDGE_BUDGET_S}s budget minus the 49s spent in json.load "
+        f"({_mod._TURN_JUDGE_BUDGET_S}s budget minus the 85s spent in json.load "
         "before build_context was ever entered) -- main() is not opening the "
         "budget before stdin parsing"
     )

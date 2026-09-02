@@ -81,6 +81,7 @@ try:
     from si_feedback_detect import find_signals, strip_injected_context  # noqa: E402
     from long_job_detect import detect as _detect_long_job  # noqa: E402
     from outage_escalation_detect import detect as _detect_outage  # noqa: E402
+    from silent_closure_detect import detect as _detect_silent_closure  # noqa: E402
     import transcript_read  # noqa: E402
     from timer_arm_detect import (  # noqa: E402
         closure_sought as _closure_sought,
@@ -95,37 +96,41 @@ except BaseException as exc:
     raise
 
 # Whole-invocation deadline covering ALL judge calls this hook makes, and the
-# registration that must accommodate it (install-reminder-hooks.sh: 74s = this
-# budget plus interpreter-start headroom). Larger than the single-judge gates'
-# because this one invocation runs up to THREE judges; before it existed the hook
-# was registered at 5s and called every judge with advisor's 8s default, under
-# every one of these judges' own fastest measured runs — so every verdict was
-# computed after the hook was already dead, or never computed at all.
+# registration that must accommodate it (install-reminder-hooks.sh: this budget
+# plus interpreter-start headroom). Larger than the single-judge gates' because
+# this one invocation runs up to FOUR judges; before the first of these existed
+# the hook was registered at 5s and called every judge with advisor's 8s
+# default, under every one of these judges' own fastest measured runs — so
+# every verdict was computed after the hook was already dead, or never
+# computed at all.
 #
 # The height is a judgement (how long a Stop hook may hold the turn boundary);
 # what is machine-checked against lib/judge_latency.py is the size inequality
-# `required_budget_s("hook-turn-end-gate.py")` — the two earlier judges at their
-# medians plus the last judge's floor plus one second of non-judge head-room —
-# so the third judge is structurally REACHABLE on a typical turn rather than
-# starved by the two ahead of it.
+# `required_budget_s("hook-turn-end-gate.py")` — the three earlier judges at
+# their medians plus the last judge's floor plus one second of non-judge
+# head-room — so the fourth judge is structurally REACHABLE on a typical turn
+# rather than starved by the three ahead of it.
 #
-# This constant is sized ABOVE that median-based minimum (56.05s today), on the
-# worst-case-safe posture: it must hold even when the two earlier judges each
-# run their own full per-call ceiling rather than their median, which is the
-# only way to guarantee the third judge is never converted from a timeout into
-# a budget SKIP (a call dropped for want of remaining budget, recorded as
+# This constant is sized ABOVE that median-based minimum, on the worst-case-safe
+# posture: it must hold even when the three earlier judges each run their own
+# full per-call ceiling rather than their median, which is the only way to
+# guarantee the fourth judge is never converted from a timeout into a budget
+# SKIP (a call dropped for want of remaining budget, recorded as
 # `stage="budget"`, and indistinguishable from a healthy verdict in every
 # timeout statistic). Concretely: ceil(feedback's ceiling) + ceil(binary_ask's
-# ceiling) + outage's floor + head-room = 21 + 21 + 26 + 1 = 69, which leaves
-# exactly 1s of the outage judge's own floor uneaten in the worst case (69 - 21
-# - 21 = 27 >= 26). It is deliberately NOT the sum of the three per-call
-# ceilings (21 + 21 + 55 = 97 before head-room): a budget covering three
-# simultaneous worst cases including the outage tail would hold the turn
-# boundary for well over a minute to buy a co-occurrence never observed.
-_TURN_JUDGE_BUDGET_S = 69
+# ceiling) + ceil(silent_closure's ceiling) + outage's floor + head-room =
+# 21 + 21 + 36 + 26 + 1 = 105, which leaves exactly outage's own floor uneaten
+# in the worst case (105 - 21 - 21 - 36 = 27 >= 26). It is deliberately NOT the
+# sum of the four per-call ceilings (21 + 21 + 36 + 55 = 133 before head-room):
+# a budget covering four simultaneous worst cases including the outage tail
+# would hold the turn boundary for well over two minutes to buy a co-occurrence
+# never observed. silent_closure's own ceiling (36) is driven by a single
+# outlier observation in its latency sample (34.78s, a genuine model call, not
+# a fabricated fail-open) — see lib/judge_latency.py's row comment.
+_TURN_JUDGE_BUDGET_S = 105
 
 # Per-judge ceiling and floor, one pair per call site. They are NOT one shared
-# pair: these three judges answer different prompts and their measured latencies
+# pair: these four judges answer different prompts and their measured latencies
 # differ (lib/judge_latency.py), so a shared ceiling would either truncate the
 # slow judge or let the fast one hold budget it cannot use, and a shared floor
 # would skip a call the remainder could in fact have carried. Ceiling is at
@@ -139,18 +144,19 @@ _TURN_FEEDBACK_CALL_CAP_S = 21
 _TURN_FEEDBACK_MIN_CALL_S = 18
 _TURN_BINARY_ASK_CALL_CAP_S = 21
 _TURN_BINARY_ASK_MIN_CALL_S = 19
+_TURN_SILENT_CLOSURE_CALL_CAP_S = 36
+_TURN_SILENT_CLOSURE_MIN_CALL_S = 7
 _TURN_OUTAGE_CALL_CAP_S = 55
 _TURN_OUTAGE_MIN_CALL_S = 26
 
 # The budget object's OWN floor, a fallback only: every call site below names its
 # judge's floor, so this is reached solely by a future call site that forgets to.
-# It is the smallest of the three deliberately — the least restrictive value. A
+# It is the smallest of the four deliberately — the least restrictive value. A
 # fallback that skipped a call the remainder could in fact have carried would be
 # an invisible recall loss, while one that admits a slightly-too-small call is
-# still bounded by that call's own timeout. The re-sampled rows moved which
-# judge that is: feedback_signal's floor (18) is now the smallest, not
-# binary_ask's (19) as before.
-_TURN_JUDGE_MIN_CALL_S = _TURN_FEEDBACK_MIN_CALL_S
+# still bounded by that call's own timeout. silent_closure's floor (7) is now the
+# smallest, not feedback_signal's (18) as before.
+_TURN_JUDGE_MIN_CALL_S = _TURN_SILENT_CLOSURE_MIN_CALL_S
 
 try:
     from lib import config_root  # noqa: E402
@@ -169,6 +175,7 @@ except Exception:  # pragma: no cover - fail-open if the store is unavailable
 _BINARY_ASK_KILLSWITCH_ENV = "CLAUDE_BINARY_ASK_SEMANTIC"
 _SI_FEEDBACK_KILLSWITCH_ENV = "CLAUDE_SI_FEEDBACK_SEMANTIC"
 _OUTAGE_ESCALATION_KILLSWITCH_ENV = "CLAUDE_OUTAGE_ESCALATION_SEMANTIC"
+_SILENT_CLOSURE_KILLSWITCH_ENV = "CLAUDE_SILENT_CLOSURE_SEMANTIC"
 
 # Skills whose invocation this turn satisfies the self-improvement discipline.
 _SATISFYING_SKILLS = frozenset({"self-improvement", "overcome-difficulty"})
@@ -219,6 +226,19 @@ class TurnContext:
                      prefilter + agentctl.advisor.judge_binary_ask semantic model
                      verdict over the concatenated assistant text). Computed by
                      the shell.
+    silent_closure_sought : whether this turn's assistant text reaches CLOSURE —
+                     a decision taken at a fork point, or requested work declared
+                     complete — while posing no question anywhere in the text
+                     (shared silent_closure_detect prefilter over the
+                     concatenated assistant text AND
+                     agentctl.advisor.judge_silent_closure semantic model
+                     verdict). Computed by the shell. Distinct from
+                     prose_binary_ask (which fires only when a question IS
+                     posed, just not via AskUserQuestion) and from
+                     resolution_turn_blockers's narrower conjunction (a readable
+                     agentctl SessionState AND weight_class SUBSTANTIVE AND
+                     every stage PASSED) — this catches a silent decision or
+                     completion outside both of those shapes.
     self_diagnose_findings : one pre-formatted line per distinct OPEN, ACTIONABLE
                      self-diagnose CONDITION older than the store's debounce
                      (rows differing only in directory collapse into one line),
@@ -245,6 +265,7 @@ class TurnContext:
     difficulty_declared: bool = False
     self_improvement_feedback: bool = False
     prose_binary_ask: bool = False
+    silent_closure_sought: bool = False
     self_diagnose_findings: tuple[str, ...] = ()
     judges_skipped: tuple[str, ...] = ()
 
@@ -332,6 +353,61 @@ def prose_binary_ask_blockers(ctx: TurnContext) -> list[str]:
         "it may share this turn with any preceding text and tool calls. If the "
         "question is genuinely open-ended (a free-text name/path/sentence), state "
         "in your reply why AskUserQuestion does not apply."
+    ]
+
+
+def silent_closure_blockers(ctx: TurnContext) -> list[str]:
+    """This turn reaches CLOSURE — a decision taken at a fork point (Cluster A),
+    or requested work declared complete (Cluster C) — while posing no question
+    anywhere in the text, and through neither of the two channels the other
+    guardians already cover.
+
+    Two gaps this closes, both outside what the existing guardians see:
+      - Cluster A: a turn that narrates a decision at an ambiguous fork point and
+        silently commits to it, posing no question at all.
+      - Cluster C's blind spot: a turn narrating completion of requested work
+        with no confirmation sought, OUTSIDE resolution_turn_blockers's narrow
+        conjunction (a readable agentctl SessionState AND weight_class
+        SUBSTANTIVE AND every stage PASSED) — e.g. no agentctl session, a
+        SMALL_CHANGE / CHAT turn, or a plan with an unpassed stage.
+
+    Fires ONLY under the full conjunction, all read from the frozen context:
+      - silent_closure_sought (the shell's silent_closure_detect prefilter AND
+        agentctl.advisor.judge_silent_closure semantic verdict both fired);
+      - no AskUserQuestion was invoked this turn;
+      - the turn is not already seeking closure via the timer-arm channel
+        (ctx.closure_sought) — an inline ask or an armed deferral already
+        satisfies the obligation this guardian exists to enforce;
+      - prose_binary_ask_blockers does NOT also fire on this turn — a turn that
+        already poses a question in prose (just not via AskUserQuestion) is
+        that guardian's obligation, not this one's, and firing both would
+        double-count one turn's single missing click-gate;
+      - resolution_turn_blockers does NOT also fire on this turn — a plan whose
+        every stage has PASSED is that guardian's narrower, more specific
+        obligation, and this guardian exists precisely for what falls OUTSIDE
+        its conjunction, not to duplicate it.
+
+    Pure: reads only frozen ctx booleans / the invocations set, and calls the
+    two sibling guardians above (themselves pure over the same frozen ctx) to
+    decide suppression — no I/O, no additional state.
+    """
+    if not ctx.silent_closure_sought:
+        return []
+    if "AskUserQuestion" in ctx.invocations:
+        return []
+    if ctx.closure_sought:
+        return []
+    if prose_binary_ask_blockers(ctx):
+        return []
+    if resolution_turn_blockers(ctx):
+        return []
+    return [
+        "This turn reaches closure — a decision taken at a fork point, or "
+        "requested work declared complete — without posing any question to the "
+        "user, in any form. Before ending the turn, either pose the decision or "
+        "the completion confirmation via AskUserQuestion (it may share this turn "
+        "with the preceding text), or state explicitly why no confirmation is "
+        "needed here."
     ]
 
 
@@ -440,6 +516,7 @@ TURN_GUARDIANS: dict[str, Callable[[TurnContext], list[str]]] = {
     "escalation_without_diagnosis": escalation_without_diagnosis_blockers,
     "long_job_autowake": long_job_autowake_blockers,
     "prose_binary_ask": prose_binary_ask_blockers,
+    "silent_closure": silent_closure_blockers,
     "self_diagnose_findings": self_diagnose_findings_blockers,
     "resolution": resolution_turn_blockers,
 }
@@ -624,10 +701,10 @@ def build_context(
     passes its own budget through instead of relying on this default, so the
     deadline covers the same span the harness actually times.
 
-    The three judges are evaluated SEQUENTIALLY against one _TURN_JUDGE_BUDGET_S
-    deadline, not as three eager arguments to the TurnContext constructor. As
+    The four judges are evaluated SEQUENTIALLY against one _TURN_JUDGE_BUDGET_S
+    deadline, not as four eager arguments to the TurnContext constructor. As
     constructor arguments they had no short circuit at all: Python evaluates
-    every one before the object exists, so three calls of unbounded length ran
+    every one before the object exists, so four calls of unbounded length ran
     on every turn that tripped their prefilters, and the harness killed the hook
     somewhere in the middle. Sequential evaluation lets the budget drop the TAIL
     instead — and the drop is RECORDED (`judges_skipped`) rather than swallowed,
@@ -677,12 +754,12 @@ def build_context(
         the direction every judge here already fails in) when the prefilter did
         not fire or the budget can no longer fit a call.
 
-        ``cap_s`` and ``min_call_s`` are per-CALL, not per-hook: the three judges
+        ``cap_s`` and ``min_call_s`` are per-CALL, not per-hook: the four judges
         have measurably different latency distributions (lib/judge_latency.py),
         so one shared pair would either cap the slow judge below its own ceiling
         or hold the budget open for the fast one long past the point where it
         could still have returned. The budget object stays shared — the whole
-        point is that the three calls draw down ONE deadline.
+        point is that the four calls draw down ONE deadline.
 
         ``call`` now takes ``(timeout, remaining)`` — the remaining budget at
         entry is handed to the judge function alongside the timeout so its own
@@ -704,8 +781,12 @@ def build_context(
 
     # Order is a priority order, since the budget drops from the tail. feedback
     # first: its guardian blocks the turn on an obligation the user just raised
-    # and nothing else re-raises it. binary_ask second. outage_escalation last —
-    # it is the only one of the three with a PreToolUse gate of its own
+    # and nothing else re-raises it. binary_ask second. silent_closure third —
+    # it has no PreToolUse backstop of its own, but it is strictly narrower than
+    # outage_escalation's audience (most turns never mention an outage; a
+    # meaningful fraction reach some kind of closure), so it sits ahead of the
+    # judge that already has an independent guard elsewhere. outage_escalation
+    # last — it is the only one of the four with a PreToolUse gate of its own
     # (hook-escalation-diagnosis-gate.py), so losing it here costs a backstop
     # rather than the sole guard.
     self_improvement_feedback = _judged(
@@ -735,6 +816,20 @@ def build_context(
         )[0],
         cap_s=_TURN_BINARY_ASK_CALL_CAP_S,
         min_call_s=_TURN_BINARY_ASK_MIN_CALL_S,
+    )
+    silent_closure_sought = _judged(
+        "silent_closure",
+        bool(_detect_silent_closure(assistant_text)),
+        lambda t, rem: advisor.judge_silent_closure(
+            assistant_text,
+            runner,
+            enabled=os.environ.get(_SILENT_CLOSURE_KILLSWITCH_ENV) != "0",
+            timeout=t,
+            remaining=rem,
+            ceiling=_TURN_SILENT_CLOSURE_CALL_CAP_S,
+        )[0],
+        cap_s=_TURN_SILENT_CLOSURE_CALL_CAP_S,
+        min_call_s=_TURN_SILENT_CLOSURE_MIN_CALL_S,
     )
     outage_escalation_sought = _judged(
         "outage_escalation",
@@ -777,6 +872,7 @@ def build_context(
         difficulty_declared=_difficulty_declared(agentctl_state),
         self_improvement_feedback=self_improvement_feedback,
         prose_binary_ask=prose_binary_ask,
+        silent_closure_sought=silent_closure_sought,
         self_diagnose_findings=_open_self_diagnose_findings(session_key),
         judges_skipped=tuple(skipped),
     )

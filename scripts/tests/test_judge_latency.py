@@ -174,6 +174,7 @@ _DERIVED_CONSTANTS = [
     # pins the reason: the headroom itself, not a coincidence).
     (_TURN_END, "_TURN_FEEDBACK_MIN_CALL_S", "feedback_signal", judge_latency.call_floor_s),
     (_TURN_END, "_TURN_BINARY_ASK_MIN_CALL_S", "binary_ask", judge_latency.call_floor_s),
+    (_TURN_END, "_TURN_SILENT_CLOSURE_MIN_CALL_S", "silent_closure", judge_latency.call_floor_s),
     (_TURN_END, "_TURN_OUTAGE_MIN_CALL_S", "outage_escalation", judge_latency.call_floor_s),
 ]
 
@@ -190,6 +191,7 @@ _DERIVED_CONSTANTS = [
 _DERIVED_CEILING_CONSTANTS = [
     (_TURN_END, "_TURN_FEEDBACK_CALL_CAP_S", "feedback_signal", judge_latency.call_ceiling_s),
     (_TURN_END, "_TURN_BINARY_ASK_CALL_CAP_S", "binary_ask", judge_latency.call_ceiling_s),
+    (_TURN_END, "_TURN_SILENT_CLOSURE_CALL_CAP_S", "silent_closure", judge_latency.call_ceiling_s),
     (_TURN_END, "_TURN_OUTAGE_CALL_CAP_S", "outage_escalation", judge_latency.call_ceiling_s),
 ]
 
@@ -296,8 +298,9 @@ def test_the_approval_ask_budgets_headroom_over_its_ceiling_is_real():
 
 def test_the_turn_end_budgets_own_floor_is_the_least_restrictive_of_its_three():
     """The budget object's constructor floor is a fallback for a future call site
-    that forgets to name its judge's floor. It must be the SMALLEST of the three:
-    a larger fallback would skip a call the remainder could in fact have carried."""
+    that forgets to name its judge's floor. It must be the SMALLEST of the four
+    (name kept for history; the hook now calls four judges): a larger fallback
+    would skip a call the remainder could in fact have carried."""
     floors = [judge_latency.call_floor_s(j)
               for j in judge_latency.HOOK_CALL_SEQUENCE["hook-turn-end-gate.py"]]
     assert _TURN_END._TURN_JUDGE_MIN_CALL_S == min(floors)
@@ -315,18 +318,20 @@ def test_the_last_resort_ceiling_is_the_family_maximum_plus_one():
                      advisor._ACCEPTANCE_JUDGE_TIMEOUT_S,
                      advisor._APPROVAL_ASK_TIMEOUT_S,
                      advisor._LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S,
-                     advisor._PUBLISHED_ATTACHMENT_TIMEOUT_S):
+                     advisor._PUBLISHED_ATTACHMENT_TIMEOUT_S,
+                     advisor._SILENT_CLOSURE_TIMEOUT_S):
         assert constant == judge_latency.LAST_RESORT_CEILING_S
 
 
 def test_required_budget_covers_the_preceding_medians_and_the_last_floor():
-    feedback, binary_ask, outage = (
+    feedback, binary_ask, silent_closure, outage = (
         judge_latency.row("feedback_signal"),
         judge_latency.row("binary_ask"),
+        judge_latency.row("silent_closure"),
         judge_latency.row("outage_escalation"),
     )
     assert judge_latency.required_budget_s("hook-turn-end-gate.py") == pytest.approx(
-        feedback.median_s + binary_ask.median_s
+        feedback.median_s + binary_ask.median_s + silent_closure.median_s
         + judge_latency.call_floor_s("outage_escalation")
         + judge_latency.SIZE_HEADROOM_S
     )
@@ -345,6 +350,7 @@ _JUDGE_CALLS = {
     "judge_binary_ask": (lambda run: advisor.judge_binary_ask("Продолжаем?", run, enabled=True)),
     "judge_feedback_signal": (lambda run: advisor.judge_feedback_signal("не так", run, enabled=True)),
     "judge_outage_escalation": (lambda run: advisor.judge_outage_escalation("500 от API", run, enabled=True)),
+    "judge_silent_closure": (lambda run: advisor.judge_silent_closure("готово", run, enabled=True)),
     "judge_deferring_disposition": (lambda run: advisor.judge_deferring_disposition("меню", run, enabled=True)),
     "judge_landing_discipline_ask": (lambda run: advisor.judge_landing_discipline_ask("меню", run, enabled=True)),
     "acceptance_judge": (lambda run: advisor.acceptance_judge("наблюдение", "ожидание", run, enabled=True)),

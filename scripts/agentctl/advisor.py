@@ -780,6 +780,28 @@ _OUTAGE_ESCALATION_JUDGE_PROMPT = (
     "MESSAGE:\n{text}"
 )
 
+_SILENT_CLOSURE_JUDGE_PROMPT = (
+    "You are given the final message of an AI assistant's turn, written in any "
+    "language. Decide whether this message reaches CLOSURE without asking the "
+    "user anything -- either committing to one choice at a fork point on its own "
+    "authority, or declaring the requested work finished -- while posing NO "
+    "question to the user anywhere in the message, not even in prose.\n\n"
+    "Answer YES only when BOTH hold: (a) the message EXPLICITLY commits to one "
+    "of several plausible choices at a point the assistant itself frames as "
+    "having more than one reasonable option, OR explicitly declares the "
+    "requested work finished/resolved; AND (b) the message poses no question of "
+    "any kind, open or closed, to the user anywhere in its text.\n\n"
+    "Answer NO for: a message that asks anything, even a small or open-ended "
+    "question; a decision the assistant frames as the ONLY reasonable option "
+    "(no real fork); routine narration of an intermediate step within ongoing "
+    "work (reading a file, running a command, finishing a sub-step) rather than "
+    "the terminal decision or completion of the requested work; a status update "
+    "that explicitly says more work remains; or any case that is ambiguous "
+    "rather than clearly closure-shaped -- when in doubt, answer NO.\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "MESSAGE:\n{text}"
+)
+
 
 # LAST-RESORT default for the deferring-disposition judge, used only when a
 # caller names no timeout of its own. Superseded numbers, kept as the reason this
@@ -940,6 +962,89 @@ def judge_outage_escalation(
     except Exception:
         return _record_raised(
             "outage_escalation", duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    finally:
+        judge_ledger.set_current_judge(None)
+
+
+# LAST-RESORT default. Own name rather than reusing _BINARY_ASK_TIMEOUT_S, for
+# the same reason _DEFERRING_DISPOSITION_TIMEOUT_S / _PUBLISHED_ATTACHMENT_TIMEOUT_S
+# each hold their own: this judge's in-hook ceiling is derived per its own
+# measured row (lib/judge_latency.py's "silent_closure" row), and a shared name
+# would invite a caller to reuse whichever constant it imported first. Kept equal
+# to lib.judge_latency.LAST_RESORT_CEILING_S by
+# test_the_last_resort_ceiling_is_the_family_maximum_plus_one, same as every
+# other last-resort default on this module.
+_SILENT_CLOSURE_TIMEOUT_S = 55
+
+
+def judge_silent_closure(
+    assistant_text: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _SILENT_CLOSURE_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
+) -> tuple[bool, str]:
+    """Semantic judge behind the silent-closure regex prefilter: does
+    ``assistant_text`` reach closure -- commit to a decision at a fork point, or
+    declare requested work finished -- while posing no question to the user
+    anywhere in the message, as opposed to routine narration, a decision framed
+    as the only reasonable option, or a message that asks something (even in
+    prose)?
+
+    Catches what neither existing guardian sees: `prose_binary_ask_blockers`
+    only fires when the turn DOES pose a question (just not via
+    AskUserQuestion); `resolution_turn_blockers` only fires under its own narrow
+    conjunction (a readable agentctl SessionState, weight_class SUBSTANTIVE,
+    every stage PASSED). A turn that silently decides or silently finishes
+    outside those two shapes -- a chat/small-change turn, a sub-step inside a
+    larger plan, a CLAUDE.md-fallback session -- reaches neither.
+
+    This function is a PURE model call with no inline prefilter -- the caller
+    (silent_closure_detect.detect) runs the regex prefilter outside the
+    agentctl package and calls this judge only when it fires -- same shape as
+    judge_feedback_signal / judge_outage_escalation, unlike judge_binary_ask's
+    self-contained punctuation check.
+
+    Three-valued fail-open contract, mirroring judge_binary_ask: returns
+    (verdict, reason) with reason "" for a genuine verdict and a non-empty
+    "...(fail-open)" string for disabled/no-text/no-runner, non-zero exit,
+    empty/unparseable output, a timeout (``result.timed_out``), or an
+    exception -- the guardian this feeds is a Stop-gate BLOCKER, so a
+    fabricated False is still the safe failure direction; ``remaining``/
+    ``ceiling`` are forwarded to the ledger only, alongside ``timeout`` as the
+    active threshold."""
+    if not enabled:
+        return _judge_unavailable(
+            "silent_closure", _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if not isinstance(assistant_text, str) or not assistant_text:
+        return _judge_unavailable(
+            "silent_closure", _NO_TEXT_REASON, stage="no_text",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if runner is None:
+        return _judge_unavailable(
+            "silent_closure", _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    judge_ledger.set_current_judge("silent_closure")
+    start = time.monotonic()
+    try:
+        prompt = _SILENT_CLOSURE_JUDGE_PROMPT.format(text=assistant_text)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
+        return _record_result(
+            "silent_closure", result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    except Exception:
+        return _record_raised(
+            "silent_closure", duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     finally:
