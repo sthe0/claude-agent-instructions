@@ -280,6 +280,24 @@ CODE_PARTITIONS = [
 # per the stage-2 method's step 3 ("every semantic-unguarded code site... must
 # be individually named, not hidden in a partition").
 CODE_ID_OVERRIDES = {
+    # hook-published-text-writer-gate.py's deny_with is reached from decide()'s
+    # two branches, only one of which is a semantic judge call: _decide_text's
+    # deny is a structural fact-check (writer_pass.bind against the harness's
+    # own transcript -- did the tech-writer pass actually run on these exact
+    # bytes, no free-text classification involved), while _decide_attachment's
+    # deny is gated by agentctl.advisor.judge_published_attachment (fail-open,
+    # UNMEASURED by design per lib/judge_latency.py) behind a structural
+    # _recognized_artifact_kind prefilter. Neither path reaches deny_with via
+    # an unguarded regex on free-text meaning -- confirmed by reading decide(),
+    # _decide_text(), and _decide_attachment() at source. Mirrors
+    # hook-escalation-diagnosis-gate.py's identical deny_with shape below.
+    ("scripts/hook-published-text-writer-gate.py", "deny_with"): (
+        "semantic-guarded", "keep",
+        "decide() dispatches to _decide_text (structural transcript-witness "
+        "check) or _decide_attachment (judge_published_attachment behind a "
+        "structural prefilter); deny_with only emits the reason either branch "
+        "already decided -- no regex-classified free text reaches this sink.",
+    ),
     # hook-turn-end-gate.py: per-scope split against the prior audit's row
     # granularity (regex-not-for-semantic-classification.md lists 5 of this
     # file's TURN_GUARDIANS individually). The 4 scopes below actually consume

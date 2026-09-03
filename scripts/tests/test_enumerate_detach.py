@@ -375,7 +375,7 @@ class TestJudgeFallbackUnaffectedByEnumerateTimeout:
 
         calls = []
 
-        def fake_run(argv, *, capture_output, text, timeout):
+        def fake_run(argv, *, capture_output, text, timeout, input=None, **kwargs):
             calls.append(timeout)
             return SimpleNamespace(returncode=0, stdout="YES\nlooks concrete", stderr="")
 
