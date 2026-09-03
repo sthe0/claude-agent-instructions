@@ -8157,6 +8157,30 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "88806a586a990f02"
+domain = "code"
+file = "scripts/tests/test_replan_renegotiation.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "0233416a27ec2dab"
+domain = "code"
+file = "scripts/tests/test_replan_renegotiation.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "8337305a3c8a8b17"
+domain = "code"
+file = "scripts/tests/test_replan_renegotiation.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "ed3b47643a10c488"
 domain = "code"
 file = "scripts/tests/test_resolution_reminder_hook.py"
@@ -11000,6 +11024,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "6f8322d4c9680c65"
 domain = "code_file_rollup"
 file = "scripts/tests/test_replan_coverage_surface.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "e01fb6eb57cc9e8f"
+domain = "code_file_rollup"
+file = "scripts/tests/test_replan_renegotiation.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

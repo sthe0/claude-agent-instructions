@@ -973,14 +973,18 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
 
 def cmd_task_reset(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Explicit renegotiation: zero the cross-session task accumulator (item B)
-    for `--task`. The ONLY path that clears it — `cmd_reset` deliberately does
-    NOT, since the accumulator is task-scoped, not session-scoped: a fresh
-    session re-armed on the same stuck task must inherit its prior friction,
-    not silently forgive it (that would defeat the accumulator's entire
-    purpose). Session-independent by design (no `--session`, no state load) —
-    the accumulator lives outside any single session's state file — and
-    requires `--reason` so this is never a casual one-flag habit; a user
-    genuinely renegotiating a task's scope states why."""
+    for `--task`. `cmd_reset` deliberately does NOT clear it, since the
+    accumulator is task-scoped, not session-scoped: a fresh session re-armed
+    on the same stuck task must inherit its prior friction, not silently
+    forgive it (that would defeat the accumulator's entire purpose).
+    Session-independent by design (no `--session`, no state load) — the
+    accumulator lives outside any single session's state file — and requires
+    `--reason` so this is never a casual one-flag habit; a user genuinely
+    renegotiating a task's scope states why. A second, in-session path exists
+    for the same explicit-renegotiation act: `cmd_replan`'s
+    `--renegotiation-decision continue|rescope` (see
+    `task_accumulator.reset`'s own docstring) — that path folds the reset into
+    an already-required customer decision instead of a separate command."""
     task_accumulator.reset(args.task)
     return Directive(
         True, "(task-scoped)", "noop",
@@ -5394,6 +5398,91 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     if not state.plan_path:
         return Directive(False, state.node, "submit_plan", "no current plan to replan against")
 
+    # diagnosing-replan renegotiation gate (GitHub #177): once this task's
+    # cross-session replan_count reaches the Rule-of-Three ceiling
+    # (`effort-replan-absolute`) while inside DIAGNOSING, a further replan is
+    # refused until the order's customer has made an explicit renegotiation
+    # decision. [] (and this whole block a no-op) outside DIAGNOSING and below
+    # the ceiling — gates.diagnosing_replan_blockers itself returns [] there.
+    # Placed AFTER effort_fire_blockers/difficulty_blockers (an unacknowledged
+    # fire or an incomplete difficulty record must still be resolved through the
+    # ordinary path first) and BEFORE normalization_blockers/failure_address_
+    # blockers/plan_review_blockers/renormalize (those are properties of the
+    # CORRECTED PLAN or of the sequence it changes; this gate is about whether
+    # another replan should happen at all, a strictly prior question).
+    cross_replan_count = int(
+        task_accumulator.get(state.task_id).get("per_axis_totals", {}).get("replan_count", 0) or 0
+    )
+    rrblock = gates.diagnosing_replan_blockers(state, task_replan_count=cross_replan_count)
+    _log_gate(state, "diagnosing_replan", rrblock, passed=not rrblock)
+    if rrblock:
+        decision = getattr(args, "renegotiation_decision", None)
+        if not decision:
+            return Directive(
+                False, state.node, "renegotiate", "replan blocked: " + rrblock[0],
+                marker=DIRECTIVE_ESCALATE_TO_USER,
+                data={"blockers": rrblock, "replan_count": cross_replan_count},
+            )
+        renegotiated_by = (getattr(args, "renegotiated_by", None) or "").strip()
+        if not renegotiated_by:
+            return Directive(
+                False, state.node, "renegotiate",
+                "--renegotiation-decision requires a non-empty --renegotiated-by",
+                data={"blockers": rrblock},
+            )
+        renegotiation_note = (getattr(args, "renegotiation_note", None) or "").strip()
+        if not renegotiation_note:
+            return Directive(
+                False, state.node, "renegotiate",
+                "--renegotiation-decision requires a non-empty --renegotiation-note",
+                data={"blockers": rrblock},
+            )
+        try:
+            order_doc = _load(args.plan, strict=False)
+        except (OSError, PlanError):
+            order_doc = None
+        order = order_doc.meta.order if order_doc is not None else None
+        if order is not None and order.customer_id and renegotiated_by != order.customer_id:
+            return Directive(
+                False, state.node, "renegotiate",
+                f"renegotiation author {renegotiated_by!r} does not match order "
+                f"customer_id {order.customer_id!r}; record it as the customer of "
+                "record, or correct --renegotiated-by",
+                data={"blockers": rrblock},
+            )
+        state.renegotiations.append({
+            "decision": decision,
+            "note": renegotiation_note,
+            "by": renegotiated_by,
+            "ts": _utcnow(),
+            "task_replan_count_at_decision": cross_replan_count,
+        })
+        state.log("renegotiation", decision=decision, by=renegotiated_by)
+        if decision == "abandon":
+            # mirrors cmd_block's own bypass-transition idiom (and fire-acknowledge's
+            # "abandon" decision) — parks reversibly via unblock, never RESOLVED, and
+            # never touches args.plan.
+            state.blocked_from = state.node
+            state.node = Node.BLOCKED.value
+            state.log("block", reason=f"renegotiation abandoned: {renegotiation_note}")
+            store.save(state)
+            return Directive(
+                True, state.node, "unblock",
+                "session abandoned after DIAGNOSING-replan renegotiation; unblock to resume",
+                marker="ESCALATE",
+                data={"renegotiation": state.renegotiations[-1]},
+            )
+        # continue/rescope: fold this renegotiation's effect the same way task-reset
+        # does (task_accumulator.reset is now a deliberate second caller — see its
+        # docstring) and fall through to the rest of this command unchanged. This is
+        # also the concrete fix for GitHub #201: effort.py's own REPLANS-scale
+        # effective_deltas() reads this exact accumulator field against the same
+        # static ceiling and never resets it itself, which is why an unbounded
+        # renegotiation-free loop could re-fire on every subsequent replan; zeroing
+        # it here means the closing replan starts the scale's next Rule-of-Three
+        # budget from zero instead.
+        task_accumulator.reset(state.task_id)
+
     # The renormalization branch sits HERE deliberately: after difficulty_blockers (a
     # renormalization offers a whole plan, and offering one while the difficulty record
     # is still incomplete is how a difficulty gets re-plannned away rather than worked
@@ -6651,6 +6740,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("quality_note", ("resolve", "close")),
     ("coverage_waiver", ("replan",)),
     ("normalization_waiver", ("replan",)),
+    ("renegotiation_note", ("replan",)),
     ("bypass_reason", ("accept",)),
     ("reopen_reason", ("reset",)),
     ("reopen_user_decision", ("reset",)),
@@ -6703,6 +6793,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("code_ref", ("code-review", "record-result"), "commit / PR reference the verdict binds to"),
     ("unit", ("partition", "partition-units"), "'|'-delimited partition-unit record"),
     ("author", ("accept", "risk-accept"), "acceptance author id — an identity token, not narrative"),
+    ("renegotiated_by", ("replan",), "who made the renegotiation decision — a name, not a narrative"),
     ("verdict", ("accept",), "'|'-delimited requirement-verdict record"),
     ("budget", ("dispatch",), "budget tier name"),
     ("complexity", ("dispatch",), "complexity tier name"),
@@ -7220,6 +7311,18 @@ def build_parser() -> argparse.ArgumentParser:
                          "the edit reaches a method, a criterion, a result image or the goal")
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG)")
+    sp.add_argument("--renegotiation-decision", dest="renegotiation_decision", default=None,
+                    choices=["continue", "rescope", "abandon"],
+                    help="clear the diagnosing_replan round-release ceiling (Rule-of-Three "
+                         "replans out of DIAGNOSING): continue/rescope zero the cross-session "
+                         "task accumulator and let this replan proceed; abandon parks the "
+                         "session at BLOCKED without applying --plan. Requires "
+                         "--renegotiated-by and --renegotiation-note")
+    sp.add_argument("--renegotiated-by", dest="renegotiated_by", default=None,
+                    help="who made the renegotiation decision; must match "
+                         "[meta.order].customer_id when the plan declares one")
+    sp.add_argument("--renegotiation-note", dest="renegotiation_note", default=None,
+                    help="what the customer decided and why (refused if empty)")
     sp = add("fire-acknowledge"); sp.add_argument("--session", required=True)
     sp.add_argument("--by", required=True, help="who decided — a name, not a narrative")
     sp.add_argument("--decision", required=True, choices=["continue", "abandon", "revise"],

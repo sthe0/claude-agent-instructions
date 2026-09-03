@@ -255,8 +255,15 @@ def add(
 def reset(task_id: str, *, root: Path | None = None) -> dict:
     """Explicit renegotiation: zero this task's accumulator. Never called from
     `cmd_reset` (task-scoped, not session-scoped -- a session reset must not
-    silently forgive a task's accumulated cross-session friction); the only
-    intended caller is the dedicated `task-reset` subcommand."""
+    silently forgive a task's accumulated cross-session friction). Two
+    deliberate callers, both an explicit renegotiation regardless of which
+    command records it: the dedicated `task-reset` subcommand, and
+    `cmd_replan`'s `--renegotiation-decision continue|rescope` path (the
+    customer decision that clears the diagnosing_replan round-release
+    ceiling, GitHub #177) -- the latter also being the fix for GitHub #201's
+    unbounded REPLANS-scale re-fire, since effort.py's effective_deltas()
+    reads this same accumulator field against a static ceiling and never
+    resets it itself."""
     path = _path(task_id, root)
     data = _empty(task_id)
     with _FileLock(path):
