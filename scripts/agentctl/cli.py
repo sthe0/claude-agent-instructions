@@ -723,6 +723,40 @@ def _diagnose_venue_refusal(
     )
 
 
+def _diagnose_acceptance_rejection(
+    state: SessionState, store: StateStore, failing_ids: list[str],
+) -> Directive:
+    """Route a verify-final resolution refusal caused by a FAILING AcceptanceReview
+    verdict into the ordinary DIAGNOSING cycle, instead of stranding the session at
+    VERIFYING with no reachable difficulty cycle (declare/investigate/critique all
+    require DIAGNOSING; only `reject` reaches it, and only from RESOLUTION — a node
+    this session never gets to when acceptance already failed before every stage
+    finished being verified). Mirrors _diagnose_venue_refusal's transition/save/
+    Directive shape, and cmd_reject's declaration pre-seed (state.py Difficulty):
+    a customer rejection recorded after every stage already PASSED is categorically
+    the same event reject already handles at RESOLUTION — expected==pass, actual==
+    the failing verdict(s), mismatch==the order's customer rejected the delivery —
+    just reached one gate earlier, before an AcceptanceReview was ever able to pass.
+    No effort-divergence data is attached here (see this stage's Method note: doing
+    so would require hoisting refresh_spend/divergence earlier in cmd_verify_final
+    for a defense-in-depth nicety, not the core fix)."""
+    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
+    state.difficulty = Difficulty(declaration=Declaration(
+        expected="every [meta.order] requirement accepted (verdict pass)",
+        actual=f"requirement id(s) {failing_ids} recorded as fail",
+        mismatch="the order's customer rejected part of the delivery after every "
+                  "stage already PASSED",
+    ))
+    store.save(state)
+    return Directive(
+        False, state.node, "declare",
+        f"AcceptanceReview carries a non-pass verdict on requirement id(s) "
+        f"{failing_ids}; run overcome-difficulty — declare the divergence, then "
+        "investigate, then critique; replan is blocked until the cycle is complete",
+        marker="OVERCOME-DIFFICULTY",
+    )
+
+
 def _diagnose_effort_divergence(
     state: SessionState, store: StateStore, div: "effort.Divergence", fire: dict,
 ) -> Directive:
@@ -4808,6 +4842,9 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     blockers = gates.blockers(state, "resolution")
     _log_gate(state, "resolution", blockers, passed=not blockers)
     if blockers:
+        failing_ids = gates.failing_acceptance_requirements(state)
+        if failing_ids:
+            return _diagnose_acceptance_rejection(state, store, failing_ids)
         return Directive(False, state.node, "fix_stages", "not ready for resolution", data={"blockers": blockers})
     # Effort-divergence spend refresh (call site 2) + divergence computation — fire
     # site 2. Hoisted here, ahead of the stage-verification loop below, so a venue

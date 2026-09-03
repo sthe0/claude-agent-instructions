@@ -496,3 +496,78 @@ def test_case15_unreadable_plan_blocks_resolution_and_refuses_accept(
     )
     assert d.ok is False
     assert "cannot read the plan" in d.detail
+
+
+# --- GitHub #128: a failing verdict at VERIFYING has no reachable difficulty
+# cycle unless verify-final's early resolution-blockers branch routes it into
+# DIAGNOSING the same way a failed stage/final_check already does -------------
+
+def test_case16_failing_verdict_at_verify_final_routes_to_diagnosing(
+    store, tmp_path, monkeypatch
+):
+    """(a) the literal #128 repro: all stages PASSED, a fail verdict recorded, then
+    verify-final — must transition VERIFYING -> DIAGNOSING with a seeded, non-empty
+    Difficulty record, not strand the session at VERIFYING with an inert
+    'fix_stages' Directive (from which declare/investigate/critique all refuse)."""
+    monkeypatch.delenv("AGENTCTL_ACCEPTANCE", raising=False)
+    plan = _write_plan(tmp_path / "p16.toml")
+    s = _approved_state("c16", plan)
+    s.acceptance_review = AcceptanceReview(
+        author="user", plan_sha256=s.accepted_plan_digest,
+        verdicts=[RequirementVerdict("R1", "pass"), RequirementVerdict("R2", "fail")],
+    )
+    store.save(s)
+    d = cli.cmd_verify_final(ns(session="c16"), store=store)
+    assert d.ok is False
+    assert d.marker == "OVERCOME-DIFFICULTY"
+    assert d.node == Node.DIAGNOSING.value
+    after = store.load("c16")
+    assert after.node == Node.DIAGNOSING.value
+    assert after.difficulty is not None
+    assert after.difficulty.declaration is not None
+    assert "R2" in after.difficulty.declaration.actual
+
+
+def test_case17_no_review_yet_keeps_the_passive_fix_stages_refusal(
+    store, tmp_path, monkeypatch
+):
+    """(b) regression guard: an all-PASSED session with NO acceptance recorded at
+    all is ordinary in-progress flow (verify-final's own success path tells the
+    operator to run `accept` next), not a difficulty — must NOT route to
+    DIAGNOSING."""
+    monkeypatch.delenv("AGENTCTL_ACCEPTANCE", raising=False)
+    plan = _write_plan(tmp_path / "p17.toml")
+    s = _approved_state("c17", plan)
+    store.save(s)
+    d = cli.cmd_verify_final(ns(session="c17"), store=store)
+    assert d.ok is False
+    assert d.marker is None
+    assert d.action == "fix_stages"
+    assert d.node == Node.VERIFYING.value
+    after = store.load("c17")
+    assert after.node == Node.VERIFYING.value
+    assert after.difficulty is None
+
+
+def test_case18_stale_review_keeps_the_passive_fix_stages_refusal(
+    store, tmp_path, monkeypatch
+):
+    """(c) regression guard: a review written against a different plan_sha256 is
+    treated as absent, same as case17 — not a fail verdict, so no DIAGNOSING
+    routing."""
+    monkeypatch.delenv("AGENTCTL_ACCEPTANCE", raising=False)
+    plan = _write_plan(tmp_path / "p18.toml")
+    s = _approved_state("c18", plan)
+    s.acceptance_review = AcceptanceReview(
+        author="user", plan_sha256="not-the-current-digest",
+        verdicts=[RequirementVerdict("R1", "pass"), RequirementVerdict("R2", "pass")],
+    )
+    store.save(s)
+    d = cli.cmd_verify_final(ns(session="c18"), store=store)
+    assert d.ok is False
+    assert d.marker is None
+    assert d.action == "fix_stages"
+    assert d.node == Node.VERIFYING.value
+    after = store.load("c18")
+    assert after.node == Node.VERIFYING.value
+    assert after.difficulty is None

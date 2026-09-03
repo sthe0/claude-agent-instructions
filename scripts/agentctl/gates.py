@@ -118,6 +118,52 @@ def acceptance_active(state: SessionState) -> bool:
     return state.weight_class == WeightClass.SUBSTANTIVE.value
 
 
+def _acceptance_review_check(state: SessionState) -> tuple[str, list[str], dict[str, str]]:
+    """Shared guard chain behind both acceptance-review checks
+    (_acceptance_review_resolution_blockers and failing_acceptance_requirements):
+    resolves a status in {"inactive", "no_review", "stale", "unreadable", "ok"} plus,
+    only when "ok", the current plan's declared requirement ids and the review's
+    recorded verdicts. Each early-out mirrors a distinct guard
+    _acceptance_review_resolution_blockers already documents in full; this helper
+    exists so the two callers never drift on WHICH guard fired."""
+    if not acceptance_active(state):
+        return "inactive", [], {}
+    review = state.acceptance_review
+    if review is None:
+        return "no_review", [], {}
+    if (review.plan_sha256 or "") != (state.accepted_plan_digest or ""):
+        return "stale", [], {}
+    doc = None
+    if state.plan_path:
+        try:
+            doc = load_plan(state.plan_path, strict=False)
+        except (OSError, PlanError):
+            doc = None
+    if doc is None:
+        return "unreadable", [], {}
+    order = doc.meta.order
+    requirement_ids = [r.id for r in order.requirements] if order is not None else []
+    verdicted = {v.requirement_id: v.verdict for v in review.verdicts}
+    return "ok", requirement_ids, verdicted
+
+
+def failing_acceptance_requirements(state: SessionState) -> list[str]:
+    """The requirement ids an AcceptanceReview recorded as 'fail', or [] whenever
+    there is nothing genuinely failing to report: acceptance inactive, no review
+    recorded yet, a stale review, an unreadable plan, or missing (not yet
+    verdicted) requirement ids. Distinguishes the ONE resolution_blockers() cause
+    that is a genuine difficulty (a customer rejection) from the other three,
+    which are ordinary in-progress states that must keep their existing passive
+    'not ready yet' refusal — see cmd_verify_final's early-blockers branch."""
+    status, requirement_ids, verdicted = _acceptance_review_check(state)
+    if status != "ok":
+        return []
+    missing = [rid for rid in requirement_ids if rid not in verdicted]
+    if missing:
+        return []
+    return sorted(rid for rid, v in verdicted.items() if v != "pass")
+
+
 def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
     """Precondition guardian folded into resolution_blockers: the order's customer
     must have recorded a plan-level AcceptanceReview comparing the delivered PRODUCT
@@ -157,36 +203,27 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
     Deliberately never reads state.acceptance_bypass: a bypass is a resolution
     OUTCOME the engine surfaces (verify-final), never a resolution PRECONDITION the
     engine evaluates — see AcceptanceBypass's docstring for why."""
-    if not acceptance_active(state):
+    status, requirement_ids, verdicted = _acceptance_review_check(state)
+    if status == "inactive":
         return []
-    review = state.acceptance_review
-    if review is None:
+    if status == "no_review":
         return [
             "no AcceptanceReview recorded — the order's customer must record "
             "acceptance (agentctl accept) before resolution"
         ]
-    if (review.plan_sha256 or "") != (state.accepted_plan_digest or ""):
+    if status == "stale":
         return [
             "no AcceptanceReview recorded — the recorded review is stale (it was "
             "written against a different plan version than the one currently "
             "accepted) and is treated as absent; re-run accept on the current plan"
         ]
-    doc = None
-    if state.plan_path:
-        try:
-            doc = load_plan(state.plan_path, strict=False)
-        except (OSError, PlanError):
-            doc = None
-    if doc is None:
+    if status == "unreadable":
         return [
             "the accepted plan cannot be read "
             f"({state.plan_path or 'no plan_path on this session'}), so the order this "
             "AcceptanceReview claims to satisfy cannot be re-read; restore the plan file "
             "and re-run accept"
         ]
-    order = doc.meta.order
-    requirement_ids = [r.id for r in order.requirements] if order is not None else []
-    verdicted = {v.requirement_id: v.verdict for v in review.verdicts}
     missing = [rid for rid in requirement_ids if rid not in verdicted]
     if missing:
         return [
