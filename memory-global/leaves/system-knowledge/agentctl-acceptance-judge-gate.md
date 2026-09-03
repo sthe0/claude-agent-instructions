@@ -1,10 +1,10 @@
 ---
 name: agentctl-acceptance-judge-gate
-description: "How agentctl's acceptance-judge gate on record-result --status passed actually works: a haiku model compares --observation against stage.subject.result, verdicts live in state.stage_reviews (not an 'advisor' key)"
+description: "How agentctl's acceptance-judge gate on record-result --status passed actually works: a haiku model compares --observation against stage.subject.result, verdicts live in state.stage_reviews (not an 'advisor' key); the predicted short-observation mitigation is now falsified by a second confirmed occurrence"
 type: reference
 schema: leaf/v1
 created: 2026-08-26
-last_verified: 2026-08-26
+last_verified: 2026-09-03
 ---
 
 ## Difficulty
@@ -110,6 +110,31 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
 - `record-result`'s valid flags are only `--session`, `--status {passed,failed}`, `--actual`,
   `--control`, `--observation`, `--code-ref`, `--cost-log` — argparse rejects anything else
   (e.g. a plausible-sounding `--observation-source-note` is not a real flag).
+- **The predicted mitigation (short, single-gap-targeted observation) is now FALSIFIED by a
+  second confirmed occurrence (2026-09-03, `published-text-writer-gate` plan, stage 5,
+  `expected_result_image`/`done_criterion` ~1200-1500 chars bundling ~10 distinct facts).** A
+  first observation citing only aggregate test-pass counts drew `revise` ("doesn't demonstrate
+  specific permission decisions, remedy messages, fixture behaviors..."); a second, deliberately
+  short (~450 char) observation that dropped the aggregate framing and instead quoted 6 literal
+  `PASSED` test names mapped one-to-one to specific `done_criterion` clauses drew a **second**
+  `revise` with a differently-shaped complaint ("asserts test names match criteria rather than
+  demonstrating the actual observed behaviors... aggregate pass counts don't prove specific
+  requirements were verified") — i.e. shortening *and* targeting the observation at concrete,
+  named facts did not converge; the judge moved from "too aggregate" to "citing names isn't
+  citing behavior" between the two calls. This means the mitigation's own mechanism (bundle size
+  in the expected-image) is not sufficient on its own — a `done_criterion`/`expected_result_image`
+  this size and this itemized appears to make the single-call judge unstable regardless of how the
+  `--observation` is shaped, since no textual attestation (aggregate or literal-per-clause) reads
+  to it as "demonstrating the behavior" rather than "asserting a proxy for it." Resolved both times
+  via the `stage-review --verdict override` escape (2026-08-26 and 2026-09-03), not by ever
+  reaching a `pass` verdict. **Open, unmitigated normative gap** — no code fix has been proposed or
+  applied yet; a plausible direction (untried) is bounding the judge's demand explicitly in
+  `advisor._PROMPTS["acceptance_observation"]` to "does the text name at least N concrete,
+  falsifiable facts from the expected image", rather than an open-ended "is this adequate" that a
+  single cheap call answers inconsistently across resubmissions of the same underlying evidence.
+  This is a candidate self-improvement task in its own right (edits `advisor.py`, hence its own
+  plan-approval spine) — not something a single plan's replan can fix, since the mechanism is
+  shared across every SUBSTANTIVE session's judge-gated stages, not scoped to one plan.
 
 ## See also
 
