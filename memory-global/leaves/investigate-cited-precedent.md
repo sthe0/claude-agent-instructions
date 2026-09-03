@@ -4,7 +4,7 @@ description: When the user points at a specific prior success/precedent (ticket,
 type: feedback
 schema: leaf/v1
 created: 2026-07-03
-last_verified: 2026-08-19
+last_verified: 2026-09-03
 ---
 
 # Investigate a cited precedent before theorizing from the current snapshot
@@ -36,6 +36,12 @@ Before attributing an entity to a system by analogy (two systems share vocabular
 Concrete instance — routing (2026-08-19): a finished-but-parked plan for a **Core** artifact was routed to the org tracker because the two prior parked plans had gone there. The tier rule sends Core backlog to GitHub Issues under the `backlog` label ([[instruction-dev-queues]]); the prior two went to the tracker only because they needed **file attachments**, which the GitHub issue API cannot accept. The driver was a capability constraint, not the tier — and one user question ("why there and not the other venue?") exposed it. The rule had been read in the same session; it was the analogy, not the ignorance, that produced the wrong venue.
 
 Concrete instance — ownership attribution (2026-08-19): investigating a block-parsing defect in one internal agent platform's coding agent, a research agent was spawned into a **second, unrelated** internal platform — a different codebase, different team — solely because a project-local memory leaf about that second platform's layout pattern-matched on shared vocabulary ("same upstream framework fork, same structured-output block format"). The agent's actual code was never checked against the second platform's runtime before the spawn. The user caught it directly, naming the mismatch by project. A single local grep for the entity's own identifiers inside the actual project in scope immediately confirmed every reference lived in that project's own tree — the second platform was never involved. The misdirected agent was stopped and re-spawned correctly scoped. The fix that would have caught this before spending any research budget: the one-grep ownership check above, run *before* reaching into a differently-scoped memory leaf.
+
+### A precedent may live in the artifact's own thread, not just the live dialogue
+
+A cited precedent need not reach you through the live conversation to be binding. When the task is tracked in a ticket, PR, or review thread you are actively managing, another participant's comment in that thread — a suggested reproduction path, a workaround, a diagnosis — is exactly as load-bearing as something the user says out loud, and just as easy to miss if you re-read the thread only for status, not for prior proposals. Before devising your own alternative approach to a blocker tracked in such a thread, re-read the full thread for an already-suggested path from **any** participant, not only the user, and try that path before inventing a new one.
+
+Concrete instance (2026-09-03): a comment on a tracked ticket from a third party suggested reproducing a bug through a specific existing entry point (a web form). Before working through that specific path, several rounds were spent devising alternative one-off approaches (a hand-written client mimicking an internal auth exchange, with a hardcoded client secret) — the already-suggested path was investigated only after the user pointed back at it. The thread itself, not only the live dialogue, was the source of the missed precedent — user correction 2026-09-03.
 
 ### The precedent may be implicit — a repeat/extend task carries its own baseline
 
