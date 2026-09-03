@@ -1515,6 +1515,12 @@ class SessionState:
     effort_fires: list[dict] = field(default_factory=list)
     effort_spend_seen: dict = field(default_factory=dict)
     user_prompt_count: int = 0
+    # DIAGNOSING-renegotiation audit trail (GitHub #177) — one record per customer
+    # decision at the diagnosing_replan round-release gate, keyed by string (decision,
+    # note, by, ts, task_replan_count_at_decision). Same plain list[dict] shape as
+    # effort_fires above; absent key on legacy states defaults to [] via from_dict's
+    # cls(**data).
+    renegotiations: list[dict] = field(default_factory=list)
     # coordination host (schema 31): claude|cursor, None until bound.
     runtime_host: str | None = None
     # Stage-6 re-attest carry-forward records (schema 32): rebuilt FROM SCRATCH by
