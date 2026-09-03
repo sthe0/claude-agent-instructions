@@ -1,6 +1,6 @@
 ---
 name: plan-control-criterion-hygiene
-description: Eight plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world; sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; and make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start.
+description: Nine plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world (both whole-plan merge/rollout and stage-to-stage cleanup transitions); sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start; and bind a hand-copied mirror of a live-computed value to an import-and-compare test, not a frozen literal, because a merge race with unrelated trunk work can drift the mirror while the merge itself stays textually clean.
 type: feedback
 schema: leaf/v1
 created: 2026-08-31
@@ -14,17 +14,20 @@ last_verified: 2026-09-02
 To achieve a stage check that can actually go red for the right reason and
 green for the right reason, the criterion has to survive the interval between
 plan authoring and stage execution — and the executor has to be able to run it
-without repairing it. Eight distinct authoring habits break that, and all
-eight were observed live: three of them inside the very plan whose fourth
-stage first recorded this leaf, the sixth inside that same plan's own
-resolution — a stale exact-shape criterion caught only at `verify-final`,
-after two further, fully legitimate review rounds had already moved the
-ground it stood on — the seventh recurring three separate times inside one
-unrelated eight-stage plan (stages 3, 5 and 7), each occurrence costing its
-own full difficulty cycle before the pattern was named — and the eighth
-surfacing only after three post-approval replans on one plan's own fourth
-stage were traced back to a single common thread, the third of which closed
-with no reproducible factual cause at all.
+without repairing it. Nine distinct authoring habits break that, and all nine
+were observed live: three of them inside the very plan whose fourth stage
+first recorded this leaf, the sixth inside that same plan's own resolution —
+a stale exact-shape criterion caught only at `verify-final`, after two
+further, fully legitimate review rounds had already moved the ground it stood
+on — the seventh recurring three separate times inside one unrelated
+eight-stage plan (stages 3, 5 and 7), each occurrence costing its own full
+difficulty cycle before the pattern was named — the eighth surfacing only
+after three post-approval replans on one plan's own fourth stage were traced
+back to a single common thread, the third of which closed with no
+reproducible factual cause at all — and the fifth and ninth recurring
+together inside one further eight-stage plan's own `verify-final`, the fifth
+as a second, stage-boundary instance and the ninth as a genuinely new failure
+class (the delivered code, not the criterion, going stale).
 
 The engine makes the cost concrete. `record-result` *runs* the stage's
 `verify_command` itself and its exit code overrides the caller's `--status`, so
@@ -159,12 +162,42 @@ norm 4 applies unchanged: surface it as a difficulty and re-baseline through
 `declare → … → replan`. Do not edit it in flight, even though the correction is
 obviously right — obviousness is what makes this the tempting case.
 
+**Corollary on the plan's own replan-count estimate.** A stage whose
+`verify_command` reads live external-state lifecycle (git refs, worktrees,
+running processes) rather than a pure code/test assertion is empirically
+harder to get exhaustively right in one authoring pass than a stage whose
+check is a static assertion — this leaf's own governing plan needed two
+independent, non-exclusive defect-fix cycles on exactly one such stage (the
+worktree-lifecycle timeout below, then the second "Observed" entry above)
+before its check held. A plan carrying such a stage should budget its own
+`replan`-count estimate above the flat default (`effort-replan-absolute`,
+reused verbatim as a plan-level norm) rather than treating every stage as
+equally likely to need one authoring-time correction — the effort-divergence
+trigger cannot tell "thrashing" from "two real, distinct defects found by two
+independent review passes on the one stage that was always going to need
+them" from the replan count alone. Sibling to
+[[plan-cost-tier-empirical-stage-underestimate]] on the *cost-tier* axis; this
+is the same authoring blind spot applied to the *replan-count* axis instead.
+
 > **Observed.** A stage's criterion was written against a standing open review.
 > The user then merged and rolled the change out themselves, so the stage's
 > terminal state became the merge and the criterion's subject no longer existed.
 > The repair re-derived both `done_criterion` and `verify_command` against a
 > revision pair — a fact no later event can unmake — and a plan-wide sweep
 > confirmed no other criterion was still phrased over the superseded state.
+
+> **Observed, a second time — a stage-boundary lifecycle, not just a
+> whole-plan one.** Stage 1's `verify_command` in an eight-stage plan asserted
+> "the delivery worktree exists, on branch X, HEAD = origin/main" — true only
+> in the mid-execution shape. Stage 8's own designed cleanup (removing the
+> worktree and the branch on landing) was guaranteed to falsify it, and
+> `verify-final` re-ran the check in exactly that post-landing world and
+> failed, precisely as this norm predicts. The fix disjoined the check into
+> the mid-execution shape OR the post-landing shape (worktree/branch absent,
+> and the branch's last known commit an ancestor of `origin/main`) — the same
+> "anchor to something immutable" move the norm already prescribes, applied
+> across a *stage-to-stage* transition (a later stage's own cleanup) rather
+> than the whole-plan merge/rollout transition the first observation covered.
 
 ### 6. Sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc
 
@@ -314,6 +347,48 @@ transient or not.
 > present even in the replans that were about correctness — the compound's
 > shape made every one of them more expensive to localize than it needed to
 > be.
+
+### 9. A stage's own delivered code — not just its criterion — can drift across a merge race; a check binding it to a live-computed value must import that value, not restate it
+
+Norms 1–8 all govern the **criterion**. This is the one case where the
+*delivered code itself* is the thing that goes stale between authoring and
+`verify-final`, and the criterion is only the messenger.
+
+A branch is forked from trunk at authoring time and lands, possibly stages or
+days later, after unrelated commits have changed trunk in between. If the
+stage's own delivered code hand-copies a **literal** that is supposed to track
+a value computed elsewhere in the same codebase (a calibration constant, a
+ceiling derived from measured samples, a default mirrored for a
+circular-import reason), and that live-computed source changes on trunk
+during the branch's lifetime — from work that has nothing to do with this
+stage — the merge is textually clean (no conflicting lines) and nothing
+flags the semantic invariant break. The two copies simply disagree, silently,
+until something compares them.
+
+The unit test meant to guard this only helps if it asserts against the
+**live-computed value at test-run time**, not a literal expected number frozen
+when the test was written — a fixed-value assertion goes stale for exactly the
+same reason the constant itself did, and passes right through the same merge
+race. Where a circular import forces a hand-copied literal (the mirrored value
+cannot itself `import` its source), the guarding test must import the source
+and compare, so a stale mirror fails the very next test run after the source
+moves, on whichever branch runs that test next — including, per this
+observation, one that forked before the source changed.
+
+> **Observed.** `advisor.py` hand-copied three "last-resort default" ceiling
+> constants for judges with no measured latency row of their own, each kept
+> equal to `judge_latency.LAST_RESORT_CEILING_S` "by
+> `test_the_last_resort_defaults_are_computed_from_the_measurements`" per an
+> adjacent comment — a reasonable design, since `judge_latency.py` imports
+> `advisor` and a reverse import would be circular. A commit re-sampling one
+> judge's measured latency landed on trunk and raised the live-computed
+> ceiling from 41 to 55 while a delivery branch — forked before that commit,
+> and itself only adding a new, unrelated constant elsewhere in the file — sat
+> unmerged. The merge was textually clean; two of the three hand-copied
+> constants already matched 55 (authored or re-synced after the ceiling
+> moved), the third still read 41. `verify-final` caught it only because it
+> re-runs stage 5's full test suite against the post-merge tree, where the
+> guarding test's comparison anchor had itself moved.
 
 ## See also
 
