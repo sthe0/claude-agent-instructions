@@ -6,6 +6,10 @@ Sub-index of `memory-global/leaves/experience/`. Pointed at from `memory-global/
 
 Most recent first. (Migrated 2026-06-11 from the older task-centric format — the prior 12 leaves were merged into these 7 by recurring difficulty.)
 
+## 2026-09
+
+- [2026-09-03 — Publication-gate task landed; discovered a replans-absolute effort-divergence deadlock at DIAGNOSING exit](2026-09-03-published-text-writer-gate-effort-divergence-deadlock.md) — Delivering GitHub issue #125 (mechanize tech-writer usage before publishing to tickets) surfaced two engine gaps in agentctl's effort-divergence machinery: fire-acknowledge does not exit DIAGNOSING by itself, and the replans-absolute scale creates an unbreakable deadlock once its counter crosses the threshold, because the very replan call required to exit DIAGNOSING increments the same counter the trigger compares.
+
 ## 2026-08
 
 - [2026-08-27 — A self-recorded identity/verdict field (--reviewer, --author) is worthless without a declared-principal check, on BOTH the read gate and every sibling write gate](2026-08-27-self-attested-identity-field-needs-declared-principal-check.md) — cmd_plan_review --verdict override accepted any free-text --reviewer with no binding to who actually decided, letting the coordinator self-record the user's own deadlock-escape decision; the same gap existed silently on the WRITE side too (cmd_replan editing an approved plan with no proof a human saw the diff, and pop-subplan re-deriving venue from a plan file that could have been edited in the same silent way) until the user explicitly widened the order to cover editability, not just executability.
