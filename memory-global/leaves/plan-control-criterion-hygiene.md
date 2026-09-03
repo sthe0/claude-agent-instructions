@@ -1,10 +1,10 @@
 ---
 name: plan-control-criterion-hygiene
-description: Nine plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world (both whole-plan merge/rollout and stage-to-stage cleanup transitions); sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start; and bind a hand-copied mirror of a live-computed value to an import-and-compare test, not a frozen literal, because a merge race with unrelated trunk work can drift the mirror while the merge itself stays textually clean.
+description: Ten plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world (both whole-plan merge/rollout and stage-to-stage cleanup transitions); sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start; bind a hand-copied mirror of a live-computed value to an import-and-compare test, not a frozen literal, because a merge race with unrelated trunk work can drift the mirror while the merge itself stays textually clean; and never freeze an exact identifier (a test/function node id) for an artifact that does not exist yet at authoring time — reconcile it against what the implementing stage actually names, before verify-final runs it for real.
 type: feedback
 schema: leaf/v1
 created: 2026-08-31
-last_verified: 2026-09-02
+last_verified: 2026-09-03
 ---
 
 # Plan control-criterion hygiene
@@ -389,6 +389,44 @@ observation, one that forked before the source changed.
 > moved), the third still read 41. `verify-final` caught it only because it
 > re-runs stage 5's full test suite against the post-merge tree, where the
 > guarding test's comparison anchor had itself moved.
+
+### 10. A criterion never freezes an exact identifier for an artifact that does not exist yet
+
+Norm 6 governs an exact-shape criterion invalidated by a *later* legitimate
+revision. This is the opposite direction: a criterion frozen *before* the
+artifact it names has ever been built. `final_check`/`verify_command` entries
+are often authored ahead of the stage that implements them, and an author who
+wants the check to be a precise, node-id-level proof of a requirement has to
+guess what the implementing stage will call the thing — a test function, a
+symbol, a generated file name. Nothing forces that guess to be reconciled
+against what actually gets built; `submit_plan`/`approve` don't run the
+implementing stage, so the guess passes every review round untouched, exactly
+as norm 7 describes for a broken script — except here the check script is
+*syntactically* fine (it is valid `pytest <node-id>` shell), so a norm-7 dry
+run does not catch it either: pytest's own "no tests collected" is only
+raised at actual invocation.
+
+The fix is the authoring-time discipline norm 4 already establishes for
+in-flight edits, applied one step earlier: once the implementing stage lands,
+sweep every not-yet-executed criterion that names one of its identifiers and
+confirm the identifier is real (`grep` the actual name, or run the check)
+before treating that criterion as still frozen — do not wait for
+`verify-final` to discover the guess was wrong by failing.
+
+> **Observed.** A plan's `final_check` block, authored before stage 7 was
+> dispatched, named four pytest node ids for tests the stage would write
+> (`test_scenario_a_gate_and_continue`, `test_scenario_a_abandon`,
+> `test_scenario_b_accept_fail_routes_to_diagnosing`,
+> `test_scenario_c_unbounded_refire_stopped`). The spawned developer wrote
+> the same four scenarios under different, more descriptive names
+> (confirmed identical in coverage via a code-reviewer `pass` verdict and an
+> acceptance-judge pass citing exact line ranges for each scenario) and
+> nothing reconciled the two. `verify-final` ran three of the four checks
+> against non-existent node ids and got pytest's usage-error exit (4) on
+> each — not a functional regression (the real tests, run directly, passed
+> cleanly: `4 passed in 1.39s`), purely a stale forward-reference, costing a
+> full `declare → investigate → critique → normalize → replan` cycle to
+> repair.
 
 ## See also
 
