@@ -45,6 +45,21 @@ def test_dangling_stage_target_blocks():
     assert any("stage 3" in b and "dangling" in b for b in blockers)
 
 
+def test_retired_question_with_unparseable_target_does_not_block():
+    q = Question(
+        id="q1", target="not-a-target", question="?",
+        disposition="retired", reason="the goal wording changed, question no longer applies",
+    )
+    blockers = validate_questions([q], stage_keys={})
+    assert not any("target" in b for b in blockers)
+
+
+def test_non_retired_question_with_unparseable_target_still_blocks():
+    q = Question(id="q1", target="not-a-target", question="?", disposition="assumed")
+    blockers = validate_questions([q], stage_keys={})
+    assert any("target" in b for b in blockers)
+
+
 def test_open_question_blocks():
     q = Question(id="q1", target="plan.goal", question="?", disposition="open")
     blockers = validate_questions([q], stage_keys={})
@@ -161,6 +176,35 @@ def test_plan_goal_target_exempt_from_key_check():
     q = _researched(target="plan.goal", disposed_at_key="")
     blockers = validate_questions([q], stage_keys={1: _element_keys("some-key")})
     assert blockers == []
+
+
+def test_plan_goal_bound_key_mismatch_blocks():
+    """A question disposed against plan.goal is invalidated when plan.goal's text
+    changes on replan (#123) — the plan-level twin of test_stage_bound_key_mismatch_blocks."""
+    q = _researched(target="plan.goal", disposed_at_key="OLDKEY")
+    blockers = validate_questions(
+        [q], stage_keys={}, meta_keys={"goal": "NEWKEY", "done_criterion": "DC-KEY"})
+    assert any("plan.goal" in b and "changed" in b for b in blockers)
+
+
+def test_plan_done_criterion_edit_does_not_invalidate_goal_question():
+    """goal and done_criterion must be keyed separately: editing one leaves a
+    question bound to the other undisturbed (the risk plan_meta_digest's bundled
+    hash would have introduced had it been reused for this check)."""
+    q = _researched(target="plan.goal", disposed_at_key="KEEP")
+    blockers = validate_questions(
+        [q], stage_keys={}, meta_keys={"goal": "KEEP", "done_criterion": "CHANGED"})
+    assert blockers == []
+
+
+def test_invalidate_stale_dispositions_stamps_plan_goal_target():
+    q = _researched(target="plan.goal", disposed_at_key="OLDKEY")
+    bag = {"questions": questions_to_dicts([q])}
+    changed = premise.invalidate_stale_dispositions(
+        bag, stage_keys={}, meta_keys={"goal": "NEWKEY", "done_criterion": "DC-KEY"})
+    assert changed is True
+    q_after = questions_from_dicts(bag["questions"])[0]
+    assert q_after.stale_note == premise.STALE_DISPOSITION_NOTE
 
 
 def test_empty_stage_keys_skips_binding_checks():

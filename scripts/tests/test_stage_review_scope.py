@@ -78,7 +78,7 @@ def _measurable_session(store, sid, *, weight=WeightClass.SUBSTANTIVE.value):
     return state
 
 
-def _fail_open_runner(argv, *, timeout=None):
+def _fail_open_runner(argv, *, timeout=None, stdin=""):
     """A stub judge runner that always fails open with a non-zero exit."""
     return RunResult(returncode=1, stdout="", stderr="boom")
 
@@ -184,7 +184,7 @@ def test_fail_open_reason_reaches_directive_and_log(store, monkeypatch):
     _measurable_session(store, "s-e")
     observation = "pytest printed 12 passed, 0 failed"
 
-    def no_output_runner(argv, *, timeout=None):
+    def no_output_runner(argv, *, timeout=None, stdin=""):
         return RunResult(returncode=0, stdout="", stderr="")
 
     d = cli.cmd_record_result(

@@ -213,7 +213,7 @@ class TestEnumerateRunnerTimeoutBinding:
     def test_enumerate_subprocess_runner_delegates_at_enumerate_timeout(self, monkeypatch):
         calls = []
 
-        def fake_subprocess_runner(argv, *, timeout=None):
+        def fake_subprocess_runner(argv, *, timeout=None, stdin=""):
             calls.append((argv, timeout))
             return RunResult(0, "", "")
 
@@ -375,7 +375,7 @@ class TestJudgeFallbackUnaffectedByEnumerateTimeout:
 
         calls = []
 
-        def fake_run(argv, *, capture_output, text, timeout):
+        def fake_run(argv, *, capture_output, text, timeout, input=None, **kwargs):
             calls.append(timeout)
             return SimpleNamespace(returncode=0, stdout="YES\nlooks concrete", stderr="")
 
@@ -1179,9 +1179,10 @@ def test_enumerate_runner_signature_matches_what_the_entry_points_pass(entry, mo
     nothing."""
     seen: dict = {}
 
-    def fake_subprocess_runner(argv, *, timeout=None):
+    def fake_subprocess_runner(argv, *, timeout=None, stdin=""):
         seen["argv"] = argv
         seen["timeout"] = timeout
+        seen["stdin"] = stdin
         return RunResult(0, "", "")
 
     monkeypatch.setattr(advisor, "subprocess_runner", fake_subprocess_runner)

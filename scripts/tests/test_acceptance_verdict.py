@@ -75,11 +75,11 @@ def ns(**kw):
 
 # --- stubbed cheap judges (the advisor.subprocess_runner injection point) ----
 
-def judge_fail_open(argv, *, timeout=None):
+def judge_fail_open(argv, *, timeout=None, stdin=""):
     return RunResult(1, stdout="", stderr="boom")
 
 
-def judge_yes(argv, *, timeout=None):
+def judge_yes(argv, *, timeout=None, stdin=""):
     return RunResult(0, stdout="YES\nconcrete and adequate", stderr="")
 
 

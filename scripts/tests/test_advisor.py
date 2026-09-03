@@ -687,6 +687,48 @@ class TestJudgeOutageEscalation:
         assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
 
 
+class TestJudgeSilentClosure:
+    def test_yes(self):
+        assert advisor.judge_silent_closure("I'll go with the JWT approach. Implementing now.", _fake_runner("YES"))[0] is True
+
+    def test_no(self):
+        assert advisor.judge_silent_closure("This hook detects silent closures via regex.", _fake_runner("NO"))[0] is False
+
+    def test_disabled(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _fake_runner("YES"), enabled=False)[0] is False
+
+    def test_no_runner(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", None)[0] is False
+
+    def test_empty_text_skips_runner(self):
+        assert advisor.judge_silent_closure("", _raising_runner)[0] is False
+
+    def test_non_string_text_skips_runner(self):
+        assert advisor.judge_silent_closure(None, _raising_runner)[0] is False
+
+    def test_non_zero_exit_fails_open(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _fake_runner("YES", code=1))[0] is False
+
+    def test_empty_stdout_fails_open(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _fake_runner("  \n  "))[0] is False
+
+    def test_unparseable_answer_fails_open(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _fake_runner("unclear"))[0] is False
+
+    def test_raising_runner_fails_open(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _raising_runner)[0] is False
+
+    def test_argv_carries_judge_model(self):
+        seen = {}
+
+        def recording_runner(argv, **kwargs):
+            seen["argv"] = argv
+            return RunResult(0, stdout="NO", stderr="")
+
+        advisor.judge_silent_closure("some text", recording_runner)
+        assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
+
+
 class TestJudgeDeferringDisposition:
     _ASK = "Что делать с дефектом?\nЗавести отдельной задачей\nНе трогать"
 
@@ -836,6 +878,7 @@ _JUDGE_TIMEOUT_CONSTANTS = {
     "judge_published_attachment": "_PUBLISHED_ATTACHMENT_TIMEOUT_S",
     "judge_feedback_signal": "_BINARY_ASK_TIMEOUT_S",
     "judge_outage_escalation": "_BINARY_ASK_TIMEOUT_S",
+    "judge_silent_closure": "_SILENT_CLOSURE_TIMEOUT_S",
     "judge_deferring_disposition": "_DEFERRING_DISPOSITION_TIMEOUT_S",
     "judge_landing_discipline_ask": "_LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S",
     "acceptance_judge": "_ACCEPTANCE_JUDGE_TIMEOUT_S",
@@ -953,8 +996,8 @@ class TestRuntimeHostArgv:
         assert seen[0][0] == "claude"
 
     def test_prompt_argv_dispatches_lean_true_for_a_judge_complexity_call(self, monkeypatch):
-        """Pins `_prompt_argv`'s own dispatch line, not just `build_prompt_argv`'s
-        response to an explicit `lean` value — a spy on `build_prompt_argv` proves
+        """Pins `_prompt_argv`'s own dispatch line, not just `build_launch_argv`'s
+        response to an explicit `lean` value — a spy on `build_launch_argv` proves
         the ternary actually passes `lean=True` for a `_JUDGE_COMPLEXITY` call.
         An inverted or mistyped ternary here would silently route a
         `_ADVISOR_COMPLEXITY` list-output call through the binary-classifier
@@ -963,13 +1006,13 @@ class TestRuntimeHostArgv:
         from lib import host_llm
 
         seen_lean = []
-        real_build = host_llm.build_prompt_argv
+        real_build = host_llm.build_launch_argv
 
         def spy(*args, **kwargs):
             seen_lean.append(kwargs.get("lean", False))
             return real_build(*args, **kwargs)
 
-        monkeypatch.setattr(host_llm, "build_prompt_argv", spy)
+        monkeypatch.setattr(host_llm, "build_launch_argv", spy)
         advisor.judge_binary_ask("do X or Y?", self._recording_runner([], "1\nreason"), enabled=True)
         assert seen_lean == [True]
 
@@ -977,12 +1020,83 @@ class TestRuntimeHostArgv:
         from lib import host_llm
 
         seen_lean = []
-        real_build = host_llm.build_prompt_argv
+        real_build = host_llm.build_launch_argv
 
         def spy(*args, **kwargs):
             seen_lean.append(kwargs.get("lean", False))
             return real_build(*args, **kwargs)
 
-        monkeypatch.setattr(host_llm, "build_prompt_argv", spy)
+        monkeypatch.setattr(host_llm, "build_launch_argv", spy)
         advisor.enumerate_claims("some deliverable text", self._recording_runner([], "claim one"))
         assert seen_lean == [False]
+
+
+# ── the prompt must never ride argv: E2BIG regression ─────────────────────────
+#
+# A judge/enumerate prompt built from a whole plan or artifact can exceed Linux
+# MAX_ARG_STRLEN (32 * PAGE_SIZE = 131072 bytes, the per-argv-string ceiling);
+# execve then rejects the launch with OSError errno E2BIG before the child even
+# starts. `_fake_kernel_run` below reproduces that kernel behaviour faithfully
+# (raising E2BIG for any argv element over the ceiling), so these tests are red
+# on the old argv-embedded-prompt path and green on the stdin-delivery path
+# without spawning a real child.
+
+MAX_ARG_STRLEN = 131072  # Linux: 32 * PAGE_SIZE
+
+
+def _fake_kernel_run(argv, *, input="", **kwargs):
+    for a in argv:
+        if len(a.encode()) > MAX_ARG_STRLEN:
+            raise OSError(7, "Argument list too long", argv[0] if argv else None)
+    return subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+
+
+class TestOversizePromptDeliveredViaStdin:
+    def test_subprocess_runner_delivers_an_oversize_prompt_via_stdin_not_argv(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(subprocess, "run", _fake_kernel_run)
+        oversize_prompt = "x" * (MAX_ARG_STRLEN + 50_000)
+
+        result = advisor.subprocess_runner(
+            ["claude", "-p", "--model", "sonnet"], timeout=5, stdin=oversize_prompt
+        )
+
+        assert result.returncode == 0
+
+    def test_subprocess_runner_raises_e2big_if_the_prompt_rides_argv(self, monkeypatch):
+        """Control: proves `_fake_kernel_run` actually reproduces the defect this
+        stage removes -- the old call shape (prompt appended to argv) still fails."""
+        monkeypatch.setattr(subprocess, "run", _fake_kernel_run)
+        oversize_prompt = "x" * (MAX_ARG_STRLEN + 50_000)
+
+        with pytest.raises(OSError):
+            advisor.subprocess_runner(
+                ["claude", "-p", "--model", "sonnet", oversize_prompt], timeout=5
+            )
+
+    def test_judge_binary_ask_end_to_end_survives_an_oversize_observation(
+        self, monkeypatch
+    ):
+        """`judge_binary_ask`'s prompt embeds the caller's observation text; with an
+        oversize observation the old argv-embedded-prompt path raised E2BIG before
+        the fake kernel's stdout ("ok") could even be produced. The runner is
+        called directly (no try/except around the OSError at this call site), so a
+        raised OSError would propagate out of this call -- asserting a normal
+        return proves it no longer does."""
+        monkeypatch.setattr(subprocess, "run", _fake_kernel_run)
+        oversize_observation = "x" * (MAX_ARG_STRLEN + 50_000) + "?"
+
+        verdict, reason = advisor.judge_binary_ask(
+            oversize_observation, advisor.subprocess_runner, enabled=True, timeout=5
+        )
+
+        assert reason != "judge raised (fail-open)"
+
+    def test_enumerate_claims_end_to_end_survives_an_oversize_artifact(self, monkeypatch):
+        monkeypatch.setattr(subprocess, "run", _fake_kernel_run)
+        oversize_artifact = "x" * (MAX_ARG_STRLEN + 50_000)
+
+        claims = advisor.enumerate_claims(oversize_artifact, advisor.subprocess_runner)
+
+        assert claims == ["ok"]

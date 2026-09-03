@@ -1862,6 +1862,32 @@ def plan_meta_digest(doc: PlanDoc) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def plan_meta_element_key(doc: PlanDoc, element: str) -> str:
+    """Digest of a single plan-level field a Question can target — 'goal' or
+    'done_criterion' — narrower than `plan_meta_digest`, which bundles goal,
+    done_criterion, criterion_type, weight_class, repo_root and the order into
+    ONE hash and would invalidate a goal-bound question on an unrelated
+    done_criterion edit (or vice versa). Tagged with the element name, mirroring
+    `stage_question_key`'s element form, so a goal and a done_criterion that
+    happen to hold identical text cannot collide.
+
+    Returns a stable sha256 hex digest for the same reason `stage_question_key`
+    does: the value is persisted in Question.disposed_at_key and compared across
+    processes."""
+    value = doc.meta.goal if element == "goal" else doc.meta.done_criterion
+    payload = repr((element, value))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def plan_meta_element_keys(doc: PlanDoc) -> dict[str, str]:
+    """Both plan-level element keys, in the {element: key} shape premise.py
+    already uses per stage (`stage_element_keys`)."""
+    return {
+        "goal": plan_meta_element_key(doc, "goal"),
+        "done_criterion": plan_meta_element_key(doc, "done_criterion"),
+    }
+
+
 def plan_stage_digests(doc: PlanDoc) -> dict[int, str]:
     return {s.index: stage_element_keys(s)[WHOLE_STAGE_ELEMENT] for s in doc.stages}
 

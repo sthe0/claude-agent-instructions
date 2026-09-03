@@ -401,13 +401,13 @@ def test_attachment_judge_genuine_deny_and_allow(monkeypatch):
         kind=published_body.ATTACHMENT, path=str(FIXTURES / "reader-facing.md"), shape=5,
     )
 
-    monkeypatch.setattr(advisor, "subprocess_runner", lambda argv, *, timeout: types.SimpleNamespace(
+    monkeypatch.setattr(advisor, "subprocess_runner", lambda argv, *, timeout, stdin="": types.SimpleNamespace(
         returncode=0, stdout="YES\n", timed_out=False,
     ))
     decision, _ = mod._decide_attachment(resolution, "cmd")
     assert decision == "deny"
 
-    monkeypatch.setattr(advisor, "subprocess_runner", lambda argv, *, timeout: types.SimpleNamespace(
+    monkeypatch.setattr(advisor, "subprocess_runner", lambda argv, *, timeout, stdin="": types.SimpleNamespace(
         returncode=0, stdout="NO\n", timed_out=False,
     ))
     decision, _ = mod._decide_attachment(resolution, "cmd")

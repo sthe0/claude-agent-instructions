@@ -35,8 +35,8 @@ hashes, e.g. a sha256 of the stage's TOML fields). A question is invalidated onl
 when the value at ITS OWN bound stage's key changes, never by an edit to any
 other stage — the whole-plan-sha design this replaces would invalidate every
 question on any unrelated stage edit. `plan.goal` / `plan.done_criterion`
-targets are exempt from this check (there is no per-goal key to compare against;
-the plan-level target does not repeat under a stage index).
+targets get the same binding via `meta_keys`, the caller-supplied plan-level
+twin of `stage_keys` (#123).
 
 Order coverage (validate_order_elements) is the second bag this module holds: the
 elements of the ORDER the plan answers, each covered by a stage or cut with a
@@ -238,8 +238,23 @@ def _accepted_keys(element_keys: dict[str, str], element: str) -> tuple[str, ...
     return tuple(k for k in accepted if k is not None)
 
 
+def _accepted_plan_keys(meta_keys: dict[str, str], element: str) -> tuple[str, ...]:
+    """The stamps rule 12 lets stand for a question on `plan.<element>`: that
+    element's own current key, and the empty string — the legacy sentinel every
+    plan.goal / plan.done_criterion question disposed before this key existed
+    carries (disposed_at_key was unconditionally "" for these kinds; see
+    cli._bound_stage_key). Dropping the legacy branch would flip every
+    already-disposed plan-level question to a staleness blocker in one step —
+    the same hazard `_accepted_keys`' WHOLE_STAGE_ELEMENT fallback avoids for
+    stages."""
+    return (meta_keys.get(element), "")
+
+
 def validate_questions(
-    questions: list[Question], *, stage_keys: dict[int, dict[str, str]]
+    questions: list[Question],
+    *,
+    stage_keys: dict[int, dict[str, str]],
+    meta_keys: dict[str, str] | None = None,
 ) -> list[str]:
     """Pure: a question bag + the caller's {stage_index: {element: current_key}} map ->
     blockers (empty iff every raised question is closed). An empty question bag
@@ -260,6 +275,13 @@ def validate_questions(
     stamp blocks, so the failure direction of an incomplete map is re-confirmation, never
     a silently unchecked question.
 
+    `meta_keys` is the plan-level twin of `stage_keys` — `{'goal': <key>, 'done_criterion':
+    <key>}` — checked by rule 12 for a `plan.goal` / `plan.done_criterion` target the same
+    way `stage_keys` is checked for a `stage:<n>.<element>` one. Omitted or empty, it skips
+    the plan-level half of rule 12 exactly as an empty `stage_keys` skips the stage half —
+    the caller who cannot yet compute it (no plan submitted) gets disposition-shape checks
+    only, not binding.
+
     A Question's `control` is deliberately NOT checked here. Naming the control a
     question bears on is enforced at the WRITE seam (cli.cmd_question_raise), because
     every question persisted in a live session before the requirement existed carries
@@ -271,9 +293,18 @@ def validate_questions(
     for q in questions:
         parsed = parse_target(q.target)
         if parsed is None:
-            blockers.append(f"question {q.id!r} has an unparseable target {q.target!r}")
-            continue
-        kind, stage_index, element = parsed
+            if q.disposition != "retired":
+                blockers.append(f"question {q.id!r} has an unparseable target {q.target!r}")
+                continue
+            # 'retired' has deliberately walked away from the target (see the
+            # _KEY_BOUND_DISPOSITIONS comment), same as the dangling-stage branch
+            # below — an unparseable target must not itself keep blocking a question
+            # that has already been retired. Fall through to the reason-required
+            # check with no stage-scoped kind, so the stage-bound rules further down
+            # short-circuit on `kind == "stage"` being false.
+            kind, stage_index, element = None, None, None
+        else:
+            kind, stage_index, element = parsed
 
         if (
             kind == "stage"
@@ -339,6 +370,18 @@ def validate_questions(
                 "current stage or leave it open for re-disposition"
             )
 
+        if (
+            kind in ("goal", "done_criterion")
+            and q.disposition in _KEY_BOUND_DISPOSITIONS
+            and meta_keys
+            and q.disposed_at_key not in _accepted_plan_keys(meta_keys, kind)
+        ):
+            blockers.append(
+                f"question {q.id!r} is bound to plan.{kind}, which changed since this "
+                "question was disposed — re-confirm it against the current plan or "
+                "leave it open for re-disposition"
+            )
+
     return blockers
 
 
@@ -361,12 +404,21 @@ class OrderElement:
     """One element of the ORDER the plan answers — the user's ask, decomposed before
     the plan exists. Its `disposition` says what the plan does with it: 'covered' by
     a named stage, or 'cut' with a reason. 'raised' is the undispositioned state and
-    always blocks."""
+    always blocks.
+
+    `content_digest` and `stale_note` mirror the Question binding mechanism (#123):
+    when an element is marked 'covered', `content_digest` stamps the covering
+    stage's key at that moment (`cli._bound_order_stage_key`), and a later replan
+    that changes the covering stage's content flags `stale_note` — the same
+    "cited field changed under a live disposition" hazard, on the order-coverage
+    axis instead of the question-disposition axis."""
     id: str
     element: str
     disposition: str = "raised"
     stage: int | None = None
     reason: str = ""
+    content_digest: str = ""
+    stale_note: str = ""
 
 
 def order_elements_from_dicts(raw: list[dict]) -> list[OrderElement]:
@@ -377,6 +429,8 @@ def order_elements_from_dicts(raw: list[dict]) -> list[OrderElement]:
             disposition=d.get("disposition", "raised"),
             stage=d.get("stage"),
             reason=d.get("reason", ""),
+            content_digest=d.get("content_digest", ""),
+            stale_note=d.get("stale_note", ""),
         )
         for d in raw
     ]
@@ -390,13 +444,19 @@ def order_elements_to_dicts(elements: list[OrderElement]) -> list[dict]:
             "disposition": e.disposition,
             "stage": e.stage,
             "reason": e.reason,
+            "content_digest": e.content_digest,
+            "stale_note": e.stale_note,
         }
         for e in elements
     ]
 
 
 def validate_order_elements(
-    elements: list[OrderElement], *, stage_indices: set[int], plan_present: bool
+    elements: list[OrderElement],
+    *,
+    stage_indices: set[int],
+    plan_present: bool,
+    stage_keys: dict[int, dict[str, str]] | None = None,
 ) -> list[str]:
     """Pure: an order bag + the current plan's stage indices -> blockers (empty iff
     every element of the order is covered by a stage that exists or cut with a
@@ -411,6 +471,11 @@ def validate_order_elements(
 
     `stage_indices` is skipped when empty (no plan submitted yet), exactly as
     validate_questions skips its binding checks for the same case.
+
+    `stage_keys`, when given, additionally blocks a 'covered' element whose
+    `content_digest` no longer matches its covering stage's current key (#123) —
+    the same staleness check `validate_questions` runs for a stage-bound question,
+    applied to order coverage.
     """
     blockers: list[str] = []
 
@@ -439,6 +504,17 @@ def validate_order_elements(
                     f"order element {e.id!r} is covered by stage {e.stage}, which the "
                     f"current plan does not contain (dangling edge) — point it at a "
                     f"stage that exists or cut it with a reason"
+                )
+            elif (
+                stage_keys
+                and e.stage in stage_keys
+                and e.content_digest
+                not in (*_accepted_keys(stage_keys[e.stage], WHOLE_STAGE_ELEMENT), "")
+            ):
+                blockers.append(
+                    f"order element {e.id!r} is covered by stage {e.stage}, which "
+                    "changed since coverage was recorded — re-confirm the coverage "
+                    "or cut it with a reason"
                 )
             continue
 
@@ -597,14 +673,18 @@ STALE_DISPOSITION_NOTE = "stale disposition: cited stage field changed on replan
 
 
 def invalidate_stale_dispositions(
-    bag: dict, stage_keys: dict[int, dict[str, str]]
+    bag: dict,
+    stage_keys: dict[int, dict[str, str]],
+    meta_keys: dict[str, str] | None = None,
 ) -> bool:
     """Walk all key-bound-disposed questions; for each whose disposed_at_key no
-    longer matches the current stage-element key, stamp stale_note so the mismatch
-    is visible in question-list output on the next replan (#123). The disposition
-    itself is preserved — re-opening would lose the audit trail. Clears stale_note
-    when the key is again valid (e.g. the edit was reverted on a later replan).
-    Returns True if any question was annotated or un-annotated.
+    longer matches the current stage-element key (or, for a `plan.goal` /
+    `plan.done_criterion` target, the current `meta_keys` entry — #123), stamp
+    stale_note so the mismatch is visible in question-list output on the next
+    replan. The disposition itself is preserved — re-opening would lose the audit
+    trail. Clears stale_note when the key is again valid (e.g. the edit was
+    reverted on a later replan). Returns True if any question was annotated or
+    un-annotated.
 
     Pure: no filesystem, subprocess or network access.
     """
@@ -614,16 +694,51 @@ def invalidate_stale_dispositions(
         if q.disposition not in _KEY_BOUND_DISPOSITIONS:
             continue
         parsed = parse_target(q.target)
-        if parsed is None or parsed[0] != "stage":
+        if parsed is None:
             continue
-        _, stage_index, element = parsed
-        if not stage_keys or stage_index not in stage_keys:
-            continue  # dangling target: validate_questions handles it separately
-        accepted = _accepted_keys(stage_keys[stage_index], element)
+        kind = parsed[0]
+        if kind == "stage":
+            _, stage_index, element = parsed
+            if not stage_keys or stage_index not in stage_keys:
+                continue  # dangling target: validate_questions handles it separately
+            accepted = _accepted_keys(stage_keys[stage_index], element)
+        elif kind in ("goal", "done_criterion"):
+            if not meta_keys:
+                continue
+            accepted = _accepted_plan_keys(meta_keys, kind)
+        else:
+            continue
         note = "" if q.disposed_at_key in accepted else STALE_DISPOSITION_NOTE
         if q.stale_note != note:
             q.stale_note = note
             changed = True
     if changed:
         bag["questions"] = questions_to_dicts(questions)
+    return changed
+
+
+def invalidate_stale_order_dispositions(
+    bag: dict, stage_keys: dict[int, dict[str, str]]
+) -> bool:
+    """Walk all 'covered' order elements; for each whose content_digest no longer
+    matches its covering stage's current whole-stage key, stamp stale_note (#123) —
+    the order-coverage twin of invalidate_stale_dispositions above. The disposition
+    itself is preserved. Returns True if any element was annotated or un-annotated.
+
+    Pure: no filesystem, subprocess or network access.
+    """
+    elements = order_elements_from_dicts(bag.get("order_elements", []))
+    changed = False
+    for e in elements:
+        if e.disposition != "covered" or e.stage is None:
+            continue
+        if not stage_keys or e.stage not in stage_keys:
+            continue  # dangling target: validate_order_elements handles it separately
+        accepted = (*_accepted_keys(stage_keys[e.stage], WHOLE_STAGE_ELEMENT), "")
+        note = "" if e.content_digest in accepted else STALE_DISPOSITION_NOTE
+        if e.stale_note != note:
+            e.stale_note = note
+            changed = True
+    if changed:
+        bag["order_elements"] = order_elements_to_dicts(elements)
     return changed

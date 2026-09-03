@@ -293,7 +293,7 @@ def test_genuine_conditions_never_reach_the_preconditions_refusal(store, tmp_pat
 # --- the move that was rejected --------------------------------------------
 
 
-def test_preserved_item_in_conditions_still_satisfies_the_coverage_haystack(tmp_path):
+def test_preserved_item_in_conditions_still_satisfies_the_coverage_haystack(tmp_path, monkeypatch):
     """`gates.replan_coverage_blockers` reads its PRESERVE haystack from `conditions` +
     `invariants`, and this stage did NOT touch it. Narrowing it to invariants alone was
     considered and rejected: a similarity an author carried into a stage's conditions is
@@ -302,7 +302,16 @@ def test_preserved_item_in_conditions_still_satisfies_the_coverage_haystack(tmp_
 
     The second half pins the other direction — `preconditions` is deliberately not in the
     haystack. Adding it would let a similarity be "preserved" by a sentence about what was
-    true before the stage started, which is not where a preserved invariant lives."""
+    true before the stage started, which is not where a preserved invariant lives.
+
+    This is a pure substring/haystack-construction pin, not a judge test — but
+    `replan_coverage_blockers` takes no `runner` param, so with the file's own
+    `_advisor_on` fixture forcing AGENTCTL_ADVISOR=1, `_semantic_invariants_coverage`'s
+    prefilter-miss fallback (the second call below, where `preserved` sits in
+    preconditions rather than conditions) would reach a REAL `claude -p` subprocess and
+    make this pin flaky. Override back to the suite-wide default here so both calls stay
+    on the deterministic substring path this test exists to pin."""
+    monkeypatch.setenv("AGENTCTL_ADVISOR", "0")
     # A sentinel that appears in NEITHER stage's `invariants` in the template, so the
     # conditions half of the haystack is the only thing that can answer for it.
     preserved = "the frozen plan corpus is never migrated"

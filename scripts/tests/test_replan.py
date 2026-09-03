@@ -908,6 +908,14 @@ def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_repl
                                    runner=_silent_advisor)
     assert d.ok is True
 
+    # the retitle also moves O1's covering-stage key (order coverage tracks the
+    # whole-stage key, #123) — re-cover against the corrected plan by name, the
+    # same escape order-dispose now supports for the identical reason --plan was
+    # added to question-dispose/-rebind
+    d = cli.cmd_order_dispose(ns(session=sid, id="O1", as_="covered", stage=1,
+                                 reason="", plan=corrected), store=store)
+    assert d.ok is True
+
     d = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
     assert d.ok is True, d.detail
     assert d.marker == "PLAN-READY"
@@ -977,6 +985,12 @@ def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_re
     assert d.ok is True
     d = cli.cmd_question_enumerate(ns(session=sid, plan=corrected), store=store,
                                    runner=_silent_advisor)
+    assert d.ok is True
+
+    # the retitle also moves O1's covering-stage key (order coverage tracks the
+    # whole-stage key, #123) — re-cover against the corrected plan by name
+    d = cli.cmd_order_dispose(ns(session=sid, id="O1", as_="covered", stage=1,
+                                 reason="", plan=corrected), store=store)
     assert d.ok is True
 
     d = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)

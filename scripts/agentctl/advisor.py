@@ -109,10 +109,17 @@ JUDGE_REVIEWER = "judge:haiku"
 # module is UNMEASURED, so this default is the only number available to it; the
 # test-suite asserts the literal still equals what that rule computes.
 _ACCEPTANCE_JUDGE_TIMEOUT_S = 55
-def _prompt_argv(runtime_host: str, complexity: str, prompt: str) -> list[str]:
+def _prompt_argv(runtime_host: str, complexity: str) -> list[str]:
+    """Launch argv for a judge/enumerate call, WITHOUT the prompt.
+
+    Every caller below delivers the prompt via the runner's `stdin=` kwarg
+    instead of embedding it in argv — see `host_llm.build_launch_argv`'s
+    docstring for why: a whole-plan prompt can exceed Linux MAX_ARG_STRLEN
+    and an argv-embedded prompt then raises E2BIG before the child starts.
+    """
     model = model_for(runtime_host, complexity)
-    return host_llm.build_prompt_argv(
-        runtime_host, model, prompt, lean=(complexity == _JUDGE_COMPLEXITY)
+    return host_llm.build_launch_argv(
+        runtime_host, model, lean=(complexity == _JUDGE_COMPLEXITY)
     )
 
 _JUDGE_PASS = "pass"
@@ -153,7 +160,7 @@ _ENUMERATE_PROMPT = (
 
 
 def enumerate_subprocess_runner(
-    argv: list[str], *, timeout: int = ENUMERATE_TIMEOUT_S
+    argv: list[str], *, timeout: int = ENUMERATE_TIMEOUT_S, stdin: str = ""
 ) -> RunResult:
     """subprocess_runner bound to ENUMERATE_TIMEOUT_S -- the default runner for the
     two whole-plan enumeration entry points (enumerate_claims,
@@ -175,7 +182,7 @@ def enumerate_subprocess_runner(
     must already exist when their `runner=enumerate_subprocess_runner` defaults
     are bound. The `subprocess_runner` call inside the body resolves at CALL time,
     so it is free to reference the module-level function defined later below."""
-    return subprocess_runner(argv, timeout=timeout)
+    return subprocess_runner(argv, timeout=timeout, stdin=stdin)
 
 
 def enumerate_claims(artifact_text: str, runner=enumerate_subprocess_runner, *, runtime_host: str = HOST_CLAUDE) -> list[str]:
@@ -199,8 +206,9 @@ def enumerate_claims(artifact_text: str, runner=enumerate_subprocess_runner, *, 
     try:
         prompt = _ENUMERATE_PROMPT.format(payload=artifact_text)
         result = runner(
-            _prompt_argv(runtime_host, _ADVISOR_COMPLEXITY, prompt),
+            _prompt_argv(runtime_host, _ADVISOR_COMPLEXITY),
             timeout=ENUMERATE_TIMEOUT_S,
+            stdin=prompt,
         )
         if result.returncode != 0:
             return []
@@ -280,8 +288,9 @@ def enumerate_questions_health(
         payload = f"GOAL:\n{goal}\n\nDONE CRITERION:\n{done_criterion}\n\nPLAN:\n{plan_text}"
         prompt = _ENUMERATE_QUESTIONS_PROMPT.format(payload=payload)
         result = runner(
-            _prompt_argv(runtime_host, _ADVISOR_COMPLEXITY, prompt),
+            _prompt_argv(runtime_host, _ADVISOR_COMPLEXITY),
             timeout=ENUMERATE_TIMEOUT_S,
+            stdin=prompt,
         )
         if result.returncode != 0:
             return False, [], result.stderr or ""
@@ -335,8 +344,9 @@ def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None, runt
             return []
         prompt = template.format(payload=payload)
         result = runner(
-            _prompt_argv(runtime_host, _ADVISOR_COMPLEXITY, prompt),
+            _prompt_argv(runtime_host, _ADVISOR_COMPLEXITY),
             timeout=_ADVISOR_TIMEOUT_S,
+            stdin=prompt,
         )
         if result.returncode != 0:
             return []
@@ -387,7 +397,7 @@ def acceptance_judge(
             "On the SECOND line give a one-line reason."
         )
         result = runner(
-            _prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout
+            _prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt
         )
         if result.returncode != 0:
             return None, "judge exited non-zero (fail-open)"
@@ -638,7 +648,7 @@ def judge_binary_ask(
     start = time.monotonic()
     try:
         prompt = _BINARY_ASK_PROMPT.format(text=final_text)
-        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
         return _record_result(
             "binary_ask", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
@@ -734,7 +744,7 @@ def judge_published_attachment(
     start = time.monotonic()
     try:
         prompt = _PUBLISHED_ATTACHMENT_JUDGE_PROMPT.format(name=name, excerpt=content_excerpt)
-        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
         return _record_result(
             "published_attachment", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
@@ -776,6 +786,28 @@ _OUTAGE_ESCALATION_JUDGE_PROMPT = (
     "gate works, a past or already-resolved incident, ordinary prose that "
     "mentions error codes or failures without escalating one, or a message that "
     "reports a diagnosed failure with a proposed fix.\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "MESSAGE:\n{text}"
+)
+
+_SILENT_CLOSURE_JUDGE_PROMPT = (
+    "You are given the final message of an AI assistant's turn, written in any "
+    "language. Decide whether this message reaches CLOSURE without asking the "
+    "user anything -- either committing to one choice at a fork point on its own "
+    "authority, or declaring the requested work finished -- while posing NO "
+    "question to the user anywhere in the message, not even in prose.\n\n"
+    "Answer YES only when BOTH hold: (a) the message EXPLICITLY commits to one "
+    "of several plausible choices at a point the assistant itself frames as "
+    "having more than one reasonable option, OR explicitly declares the "
+    "requested work finished/resolved; AND (b) the message poses no question of "
+    "any kind, open or closed, to the user anywhere in its text.\n\n"
+    "Answer NO for: a message that asks anything, even a small or open-ended "
+    "question; a decision the assistant frames as the ONLY reasonable option "
+    "(no real fork); routine narration of an intermediate step within ongoing "
+    "work (reading a file, running a command, finishing a sub-step) rather than "
+    "the terminal decision or completion of the requested work; a status update "
+    "that explicitly says more work remains; or any case that is ambiguous "
+    "rather than clearly closure-shaped -- when in doubt, answer NO.\n\n"
     "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
     "MESSAGE:\n{text}"
 )
@@ -870,7 +902,7 @@ def judge_feedback_signal(
     start = time.monotonic()
     try:
         prompt = _FEEDBACK_JUDGE_PROMPT.format(text=user_text)
-        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
         return _record_result(
             "feedback_signal", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
@@ -932,7 +964,7 @@ def judge_outage_escalation(
     start = time.monotonic()
     try:
         prompt = _OUTAGE_ESCALATION_JUDGE_PROMPT.format(text=assistant_text)
-        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
         return _record_result(
             "outage_escalation", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
@@ -940,6 +972,89 @@ def judge_outage_escalation(
     except Exception:
         return _record_raised(
             "outage_escalation", duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    finally:
+        judge_ledger.set_current_judge(None)
+
+
+# LAST-RESORT default. Own name rather than reusing _BINARY_ASK_TIMEOUT_S, for
+# the same reason _DEFERRING_DISPOSITION_TIMEOUT_S / _PUBLISHED_ATTACHMENT_TIMEOUT_S
+# each hold their own: this judge's in-hook ceiling is derived per its own
+# measured row (lib/judge_latency.py's "silent_closure" row), and a shared name
+# would invite a caller to reuse whichever constant it imported first. Kept equal
+# to lib.judge_latency.LAST_RESORT_CEILING_S by
+# test_the_last_resort_ceiling_is_the_family_maximum_plus_one, same as every
+# other last-resort default on this module.
+_SILENT_CLOSURE_TIMEOUT_S = 55
+
+
+def judge_silent_closure(
+    assistant_text: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _SILENT_CLOSURE_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
+) -> tuple[bool, str]:
+    """Semantic judge behind the silent-closure regex prefilter: does
+    ``assistant_text`` reach closure -- commit to a decision at a fork point, or
+    declare requested work finished -- while posing no question to the user
+    anywhere in the message, as opposed to routine narration, a decision framed
+    as the only reasonable option, or a message that asks something (even in
+    prose)?
+
+    Catches what neither existing guardian sees: `prose_binary_ask_blockers`
+    only fires when the turn DOES pose a question (just not via
+    AskUserQuestion); `resolution_turn_blockers` only fires under its own narrow
+    conjunction (a readable agentctl SessionState, weight_class SUBSTANTIVE,
+    every stage PASSED). A turn that silently decides or silently finishes
+    outside those two shapes -- a chat/small-change turn, a sub-step inside a
+    larger plan, a CLAUDE.md-fallback session -- reaches neither.
+
+    This function is a PURE model call with no inline prefilter -- the caller
+    (silent_closure_detect.detect) runs the regex prefilter outside the
+    agentctl package and calls this judge only when it fires -- same shape as
+    judge_feedback_signal / judge_outage_escalation, unlike judge_binary_ask's
+    self-contained punctuation check.
+
+    Three-valued fail-open contract, mirroring judge_binary_ask: returns
+    (verdict, reason) with reason "" for a genuine verdict and a non-empty
+    "...(fail-open)" string for disabled/no-text/no-runner, non-zero exit,
+    empty/unparseable output, a timeout (``result.timed_out``), or an
+    exception -- the guardian this feeds is a Stop-gate BLOCKER, so a
+    fabricated False is still the safe failure direction; ``remaining``/
+    ``ceiling`` are forwarded to the ledger only, alongside ``timeout`` as the
+    active threshold."""
+    if not enabled:
+        return _judge_unavailable(
+            "silent_closure", _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if not isinstance(assistant_text, str) or not assistant_text:
+        return _judge_unavailable(
+            "silent_closure", _NO_TEXT_REASON, stage="no_text",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if runner is None:
+        return _judge_unavailable(
+            "silent_closure", _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    judge_ledger.set_current_judge("silent_closure")
+    start = time.monotonic()
+    try:
+        prompt = _SILENT_CLOSURE_JUDGE_PROMPT.format(text=assistant_text)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
+        return _record_result(
+            "silent_closure", result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    except Exception:
+        return _record_raised(
+            "silent_closure", duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
         )
     finally:
@@ -995,7 +1110,7 @@ def judge_deferring_disposition(
     start = time.monotonic()
     try:
         prompt = _DEFERRING_DISPOSITION_JUDGE_PROMPT.format(text=ask_text)
-        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
         return _record_result(
             "deferring_disposition", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
@@ -1098,7 +1213,7 @@ def judge_landing_discipline_ask(
     start = time.monotonic()
     try:
         prompt = _LANDING_DISCIPLINE_JUDGE_PROMPT.format(text=ask_text)
-        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
         return _record_result(
             "landing_discipline", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
@@ -1198,7 +1313,7 @@ def judge_question_materiality(
             control=control, control_text=control_text or "(not rendered)",
             question=question,
         )
-        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
         return _record_result(
             "question_materiality", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
@@ -1288,7 +1403,7 @@ def judge_approval_ask(
     start = time.monotonic()
     try:
         prompt = _APPROVAL_ASK_PROMPT.format(text=ask_text)
-        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY, prompt), timeout=timeout)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
         return _record_result(
             "approval_ask", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
@@ -1338,10 +1453,18 @@ def _child_was_authenticated(run_kwargs: dict) -> bool:
     return status in host_llm.AUTHENTICATED_TOKEN_STATUSES
 
 
-def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> RunResult:
+def subprocess_runner(
+    argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S, stdin: str = ""
+) -> RunResult:
     """Real `claude -p` runner with a hard timeout. Not judge()'s default (a caller
     that wants a live advisor pass this explicitly) — kept separate so the fail-open
     `runner=None -> []` contract in judge() stays byte-identical to advisor-absent.
+
+    ``stdin`` carries the prompt. It is never a member of ``argv``: appended as a
+    single argv string it can exceed Linux MAX_ARG_STRLEN (131072 bytes), and
+    execve then rejects the whole launch with E2BIG before the child even starts
+    — see host_llm.build_launch_argv's docstring. Every caller in this module
+    builds argv via ``_prompt_argv`` (prompt-free) and passes the prompt here.
 
     ``timeout`` still carries a default, and that is the remaining hole: this
     signature is the last place where forgetting to pass a ceiling is silently
@@ -1390,7 +1513,7 @@ def subprocess_runner(argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S) -> 
     try:
         run_kwargs = host_llm.isolated_run_kwargs()
         proc = subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout, **run_kwargs,
+            argv, input=stdin, capture_output=True, text=True, timeout=timeout, **run_kwargs,
         )
         duration = time.monotonic() - start
         judge_ledger.call(judge_name, timed_out=False, duration=duration, returncode=proc.returncode)

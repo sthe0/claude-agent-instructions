@@ -59,6 +59,7 @@ CEILING_CONST = {
     ("hook-escalation-diagnosis-gate.py", "outage_escalation"): "_JUDGE_BUDGET_S",
     ("hook-turn-end-gate.py", "feedback_signal"): "_TURN_FEEDBACK_CALL_CAP_S",
     ("hook-turn-end-gate.py", "binary_ask"): "_TURN_BINARY_ASK_CALL_CAP_S",
+    ("hook-turn-end-gate.py", "silent_closure"): "_TURN_SILENT_CLOSURE_CALL_CAP_S",
     ("hook-turn-end-gate.py", "outage_escalation"): "_TURN_OUTAGE_CALL_CAP_S",
     ("hook-plan-delivery-gate.py", "approval_ask"): "_APPROVAL_ASK_JUDGE_BUDGET_S",
     ("hook-resolution-reminder.py", "landing_discipline"): "_LANDING_DISCIPLINE_JUDGE_BUDGET_S",

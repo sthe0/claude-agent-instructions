@@ -190,12 +190,23 @@ def test_budget_skip_rate_warns_with_no_timeouts_at_all():
 
 
 def test_ceilings_are_read_from_judge_latency_never_restated(monkeypatch):
-    """Patch the one function every ceiling comes from and every reference this
-    check prints must move with it — proof it holds no copy of its own."""
+    """Patch the two functions every ceiling comes from and every reference this
+    check prints must move with them — proof it holds no copy of its own. A
+    measured judge's reference comes from call_ceiling_s; published_attachment
+    is UNMEASURED (no sampled max to derive one from), so its reference comes
+    from last_resort_ceiling_s instead — the same fallback production already
+    uses for an unmeasured judge (see judge_latency.last_resort_ceiling_s's own
+    docstring, which names the unmeasured acceptance_judge as exactly this
+    case)."""
     monkeypatch.setattr(judge_latency, "call_ceiling_s", lambda judge: 12345.0)
+    monkeypatch.setattr(judge_latency, "last_resort_ceiling_s", lambda *a, **k: 6789.0)
     findings = mod.check_drift([])
     assert findings  # one per HOOK_CALL_SEQUENCE pair, even with no ledger data
-    assert all(f.reference_ceiling == 12345.0 for f in findings)
+    measured = [f for f in findings if f.judge != "published_attachment"]
+    unmeasured = [f for f in findings if f.judge == "published_attachment"]
+    assert measured and unmeasured
+    assert all(f.reference_ceiling == 12345.0 for f in measured)
+    assert all(f.reference_ceiling == 6789.0 for f in unmeasured)
 
 
 def test_one_judge_under_two_hooks_at_different_ceilings_yields_two_findings():

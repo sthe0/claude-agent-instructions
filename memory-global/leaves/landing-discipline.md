@@ -4,7 +4,7 @@ description: At the resolution gate, committed work must reach its terminal VCS 
 type: feedback
 schema: leaf/v1
 created: 2026-07-02
-last_verified: 2026-07-11
+last_verified: 2026-09-03
 ---
 
 # Landing discipline — push, then land into trunk/main at the resolution gate
@@ -30,6 +30,8 @@ Bundle the delivering step into the resolution `AskUserQuestion` with the delive
 **"Review-gated" is defined by a distinct human reviewer, not by surface type.** A repo is review-gated when a separate person must approve the merge before it lands — that, and only that, selects PR create→publish→merge over a fast-forward. This is **orthogonal** to the executable-surface push-*confirmation* gate (CLAUDE.md § Instructions repository): "executable surface keeps a separate gate" governs *when you may push to trunk* (an explicit user OK), **not** whether you open a PR. So for a repo where you hold direct push rights and no distinct reviewer gates merge — e.g. the user's own instructions repo — **fast-forward land is the default; a PR there is the [[capability-before-offload]] anti-pattern** (an extra merge click offloaded onto the user). Reserve the PR flow for repos a separate human must review before merge. *(User correction 2026-07-11: "Зачем в PR? У тебя же есть все права".)*
 
 **Landing is not contingent on a trivial fast-forward**: if trunk moved or the repo gates on review, that's a landing *path* (rebase / PR), not a licence to leave the branch stranded. Trunk/main-push needs explicit confirmation, so it rides that same click-gate — but the default you present is **landing, recommended**.
+
+**When landing via `gh pr merge`, use `--merge` (a plain, two-parent merge commit), not `--squash` or `--rebase`, whenever anything downstream tracks the delivered branch-tip commit's ancestry** — e.g. `agentctl`'s `kind="landed"` final_check, which freezes the delivery worktree's pre-merge `HEAD` and later checks it is an ancestor of trunk. A squash (or rebase) merge discards the branch tip and creates a new, unrelated commit hash on trunk, so an ancestry-based check can never pass afterward even though the code genuinely landed — the only fix at that point is a manual, one-off correction of the check against the actual merge commit. Confirm the merge method matches existing precedent in the same repo (`git log --merges` / `gh pr view <n> --json mergeCommit` on a prior landed stage) before merging. *(Difficulty: PR #217 in `claude-agent-instructions` was squash-merged against this convention, silently breaking `unify-loop-prevention`'s own stage-3 landed check — discovered only at verify-final, three stages later.)*
 
 Never hand-roll `checkout` / `reset --hard` / `clean` on a shared tree; leave any parallel-session uncommitted WIP untouched.
 

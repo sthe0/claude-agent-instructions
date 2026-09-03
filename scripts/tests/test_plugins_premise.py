@@ -221,6 +221,38 @@ def test_gate_blocks_stale_enumerated_at(fixtures_dir):
     assert plugins.plugin_gate_blockers(state, "plan_approval") == []
 
 
+def test_gate_blocks_when_covered_stage_content_changes(tmp_path, fixtures_dir):
+    """An order element marked 'covered' by stage 1 is invalidated when stage 1's
+    content changes on replan (#123) — the order-coverage twin of
+    test_stage_question_key_changes_when_principle_changes, run through the same
+    gate `test_gate_blocks_stale_enumerated_at` exercises."""
+    src = (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text(src, encoding="utf-8")
+    doc = plan.load_plan(str(plan_path))
+    current_key = plan.stage_element_keys(doc.stages[0])[premise.WHOLE_STAGE_ELEMENT]
+
+    state = _new_state(plan_path=str(plan_path))
+    plugins.activate(state, "premise")
+    state.plugins["premise"]["enumerated"] = True
+    state.plugins["premise"]["enumerated_at"] = pp._plan_content_digest(doc)
+    state.plugins["premise"]["order_elements"] = [{
+        "id": "O1", "element": "the order this plan answers",
+        "disposition": "covered", "stage": 1, "reason": "",
+        "content_digest": current_key,
+    }]
+    assert plugins.plugin_gate_blockers(state, "plan_approval") == []
+
+    # rewrite stage 1's title — moves stage 1's key, leaves stage 2's untouched
+    edited_src = src.replace('title = "Scaffold module"', 'title = "Scaffold module (revised)"')
+    plan_path.write_text(edited_src, encoding="utf-8")
+    edited_doc = plan.load_plan(str(plan_path))
+    state.plugins["premise"]["enumerated_at"] = pp._plan_content_digest(edited_doc)
+
+    blockers = plugins.plugin_gate_blockers(state, "plan_approval")
+    assert any("O1" in b and "stage 1" in b and "changed" in b for b in blockers)
+
+
 def test_comment_only_plan_edit_does_not_reblock_enumeration(tmp_path, fixtures_dir):
     # a TOML comment is invisible to tomllib, so a comment-only edit leaves the
     # content digest byte-identical — a discharged enumeration must not re-block.
