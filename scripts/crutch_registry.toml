@@ -453,6 +453,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
+id = "b8091c62905ffbea"
+domain = "code"
+file = "scripts/agentctl/gates.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "f074d70647b6b7db"
 domain = "code"
 file = "scripts/agentctl/gates.py"
@@ -4550,6 +4558,54 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "9ffd63c872a7d55f"
+domain = "code"
+file = "scripts/tests/test_gates_round_release.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "4ed220b50146fca4"
+domain = "code"
+file = "scripts/tests/test_gates_round_release.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "8268a1eefb8847be"
+domain = "code"
+file = "scripts/tests/test_gates_round_release.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "4295ac1a84058429"
+domain = "code"
+file = "scripts/tests/test_gates_round_release.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "8d60e6ec7e3f0c92"
+domain = "code"
+file = "scripts/tests/test_gates_round_release.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "dcb94f2a3b34959c"
+domain = "code"
+file = "scripts/tests/test_gates_round_release.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "a8a067758a82a6e9"
 domain = "code"
 file = "scripts/tests/test_gates_round_release.py"
 class = "not-a-gate"
@@ -13193,6 +13249,46 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "0059e27a1f69d194"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "a79880e673062730"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "5af89b7afdf8ad2a"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "61cf4ee7cfa69e51"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "c7b36fea55761d80"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
 id = "1fc74968f75c32f0"
 domain = "prose"
 file = "memory-global/leaves/experience-leaf-schema.md"
@@ -15193,6 +15289,30 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
+id = "2222fd49bda49abf"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "7c0636607d475de5"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "a13714c49e6be3c8"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
 id = "4ffb813896f24171"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
@@ -15223,6 +15343,14 @@ file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktre
 class = "already-mechanized"
 disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "35a7590d510b3433"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
 id = "3930527d0218b899"
@@ -17473,6 +17601,22 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
+id = "c1f2aaf3832d405d"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-09-03-published-text-writer-gate-effort-divergence-deadlock.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "47400fe7a458a989"
+domain = "prose"
+file = "memory-global/leaves/experience/MEMORY.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
 id = "11f6a438a5b08200"
 domain = "prose"
 file = "memory-global/leaves/experience/MEMORY.md"
@@ -18321,6 +18465,14 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "9f7880dc7395f0a4"
+domain = "prose"
+file = "memory-global/leaves/landing-discipline.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "f352470b3cefd151"
 domain = "prose"
 file = "memory-global/leaves/landing-discipline.md"
@@ -19105,7 +19257,7 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "904772f840dba83d"
+id = "1f1aa26cf50ebac6"
 domain = "prose"
 file = "memory-global/leaves/plan-control-criterion-hygiene.md"
 class = "perception"
@@ -19233,6 +19385,30 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "5e6982d9f528a210"
+domain = "prose"
+file = "memory-global/leaves/plan-control-criterion-hygiene.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "c76135d52f909e17"
+domain = "prose"
+file = "memory-global/leaves/plan-control-criterion-hygiene.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "3e6a8328d5557f61"
+domain = "prose"
+file = "memory-global/leaves/plan-control-criterion-hygiene.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "9127a96b2b2145c2"
 domain = "prose"
 file = "memory-global/leaves/plan-control-criterion-hygiene.md"
@@ -19266,6 +19442,14 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "cbb65a408b869d03"
+domain = "prose"
+file = "memory-global/leaves/plan-control-criterion-hygiene.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "d6aea3df05d27b1d"
 domain = "prose"
 file = "memory-global/leaves/plan-control-criterion-hygiene.md"
 class = "perception"
@@ -21418,6 +21602,14 @@ ground = "System-knowledge leaves document durable FACTS about how an external s
 
 [[entry]]
 id = "a8f2fc1727baeb63"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/agentctl-acceptance-judge-gate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "4bfc4ec01c5c6845"
 domain = "prose"
 file = "memory-global/leaves/system-knowledge/agentctl-acceptance-judge-gate.md"
 class = "not-normative"

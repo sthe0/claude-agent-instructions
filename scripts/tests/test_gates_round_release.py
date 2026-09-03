@@ -21,6 +21,7 @@ from agentctl.state import (
     CodeReview,
     Criterion,
     Means,
+    Node,
     Outcome,
     PlanReview,
     SessionState,
@@ -229,3 +230,60 @@ def test_code_review_blockers_unaffected_when_no_axis_is_near_threshold(gates_on
     b = gates.code_review_blockers(s, s.stages[0])
     assert len(b) == 1
     assert "round budget exhausted" not in b[0]
+
+
+# --- 5. diagnosing_replan: the customer-renegotiation round-release axis ------
+
+def _diagnosing_state():
+    return _subst(node=Node.DIAGNOSING.value)
+
+
+def test_diagnosing_replan_below_threshold_is_empty():
+    assert gates.diagnosing_replan_blockers(_diagnosing_state(), task_replan_count=2) == []
+
+
+def test_diagnosing_replan_at_threshold_blocks():
+    thr = Thresholds().effort_replan_absolute()
+    b = gates.diagnosing_replan_blockers(_diagnosing_state(), task_replan_count=thr)
+    assert len(b) == 1
+    assert "renegotiation-decision" in b[0]
+
+
+def test_diagnosing_replan_past_threshold_blocks():
+    thr = Thresholds().effort_replan_absolute()
+    b = gates.diagnosing_replan_blockers(_diagnosing_state(), task_replan_count=thr + 5)
+    assert len(b) == 1
+
+
+def test_diagnosing_replan_ignored_off_the_diagnosing_node():
+    s = _subst(node="BLOCKED")
+    thr = Thresholds().effort_replan_absolute()
+    assert gates.diagnosing_replan_blockers(s, task_replan_count=thr + 5) == []
+
+
+def test_diagnosing_replan_none_state_is_empty():
+    thr = Thresholds().effort_replan_absolute()
+    assert gates.diagnosing_replan_blockers(None, task_replan_count=thr) == []
+
+
+def test_diagnosing_replan_round_release_active_threshold_comes_from_config():
+    thr = Thresholds().effort_replan_absolute()
+    assert gates.diagnosing_replan_round_release_active(thr - 1) is False
+    assert gates.diagnosing_replan_round_release_active(thr) is True
+
+
+def test_diagnosing_replan_reset_then_reclimb_refires_independently():
+    """Proves the gate re-fires on a SECOND, independent Rule-of-Three crossing after
+    stage 3's task_accumulator.reset() zeroes the live counter, rather than
+    remembering the first decision was already made."""
+    thr = Thresholds().effort_replan_absolute()
+    state = _diagnosing_state()
+
+    first = gates.diagnosing_replan_blockers(state, task_replan_count=thr)
+    assert len(first) == 1
+
+    after_reset = gates.diagnosing_replan_blockers(state, task_replan_count=0)
+    assert after_reset == []
+
+    second = gates.diagnosing_replan_blockers(state, task_replan_count=thr)
+    assert len(second) == 1

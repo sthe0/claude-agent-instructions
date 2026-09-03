@@ -1240,6 +1240,72 @@ def resolved_reentry_blockers(
     return []
 
 
+#: The DIAGNOSING-replan axis's own round-release valve. `getter` is the identity for
+#: the same reason as `_RESOLVED_REENTRY_COUNTER`: the count arrives as a plain int
+#: read from the cross-session task accumulator's `replan_count` field by cli.py —
+#: this module may not touch the filesystem (AST-purity contract). Same threshold as
+#: every other axis: `effort-replan-absolute`. This is also the exact field
+#: effort.py's `effective_deltas()` reads for the REPLANS effort-divergence scale
+#: (GitHub #201) — extending this valve to zero on `continue`/`rescope` is what stops
+#: that scale's unbounded re-fire, not a #201-specific branch.
+_DIAGNOSING_REPLAN_COUNTER = RoundReleaseCounter(
+    name="diagnosing_replan", getter=lambda count: count,
+)
+
+_DIAGNOSING_REPLAN_CEILING_MESSAGE = (
+    "this task has been replanned {rounds} times out of DIAGNOSING — at config.md's "
+    "`effort-replan-absolute` this stops being routine refinement and becomes a "
+    "decision the order's customer must make (CLAUDE.md § When the work is stuck). "
+    "Ask, via AskUserQuestion, whether this order still warrants continuing, rescoping, "
+    "or stopping, then re-run `agentctl replan` with `--renegotiation-decision "
+    "{{continue,rescope,abandon}} --renegotiated-by <customer id, must match "
+    "[meta.order].customer_id> --renegotiation-note <what they decided and why>`."
+)
+
+
+def diagnosing_replan_round_release_active(replan_count: int, thr: Thresholds | None = None) -> bool:
+    """True once the task's cross-session `replan_count` has reached the Rule-of-Three
+    threshold this axis reuses rather than duplicating — config.md's
+    `effort-replan-absolute`. Past this point `diagnosing_replan_blockers` stops
+    letting `agentctl replan` proceed silently from DIAGNOSING and routes to an
+    explicit customer decision instead (see `_DIAGNOSING_REPLAN_CEILING_MESSAGE`).
+
+    Delegates to `_DIAGNOSING_REPLAN_COUNTER` (see `round_release.RoundReleaseCounter`);
+    kept as a standalone function for the same reason as
+    `plan_review_round_release_active` / `resolved_reentry_blockers`'s counter: it is
+    part of this module's public surface (imported directly by cli.py and the test
+    suite)."""
+    return _DIAGNOSING_REPLAN_COUNTER.release_active(replan_count, thr)
+
+
+def diagnosing_replan_blockers(state: SessionState, *, task_replan_count: int) -> list[str]:
+    """Precondition for `agentctl replan` while `state.node == DIAGNOSING`: once the
+    task's cross-session replan count reaches the Rule-of-Three threshold, a further
+    replan is refused until the customer has made an explicit renegotiation decision.
+    [] == ok.
+
+    PURE and takes a plain int rather than reading the cross-session task accumulator
+    itself — same shape as `resolved_reentry_blockers`'s `reopen_count`, for the same
+    reason: the accumulator read is a filesystem seam this module may not cross
+    (`ast_purity.py`).
+
+    Never blocks the first, second, or ordinary third replan — only the point CLAUDE.md
+    already names in prose ("Two re-entry signals warrant a direct user question").
+    Carries no third, record-based clearing clause: the only way this stops firing is
+    the LIVE `task_replan_count` itself dropping back under threshold, which happens
+    when `continue`/`rescope` zeroes the cross-session accumulator (mirroring
+    `task-reset`) — so `diagnosing_replan_round_release_active` alone, reading the live
+    counter on every call, is sufficient. A historical "already decided" record cannot
+    distinguish that from a new, independent Rule-of-Three cycle landing on the same
+    threshold value again."""
+    if state is None or state.node != Node.DIAGNOSING.value:
+        return []
+    count = int(task_replan_count or 0)
+    if not diagnosing_replan_round_release_active(count):
+        return []
+    return [_DIAGNOSING_REPLAN_CEILING_MESSAGE.format(rounds=count)]
+
+
 def _stage_review_for(state: SessionState, stage_index: int):
     """The most-recently-recorded StageReview for `stage_index`, or None. Last-wins so
     a manual override recorded after a judge verdict supersedes it."""
