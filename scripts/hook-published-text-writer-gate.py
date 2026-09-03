@@ -116,6 +116,7 @@ from lib import judge_ledger  # noqa: E402
 try:
     from lib import config_root  # noqa: E402
     from lib import published_body  # noqa: E402
+    from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
 except BaseException as exc:
     judge_ledger.import_failed("published_text_writer", f"{type(exc).__name__}: {exc}")
     raise
@@ -370,6 +371,8 @@ def deny_with(reason: str) -> None:
 
 
 def main() -> int:
+    if os.environ.get(JUDGE_CHILD_ENV_VAR):
+        return 0  # a sandboxed judge subprocess, not a real user turn — allow, no opinion
     judge_ledger.hook_start("published_text_writer")
     try:
         payload = json.load(sys.stdin)

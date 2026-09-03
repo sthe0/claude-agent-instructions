@@ -1854,14 +1854,14 @@ def _candidate_immateriality(target: str, doc) -> str:
 
 
 def _inherit_disposition(existing: dict, entry: dict, preserve: bool) -> dict:
-    # Check if the existing dict has a "target" key (new-scheme) or not (legacy row).
-    if "target" in existing:
-        # New-scheme: match on target
-        match = preserve and existing.get("target") == entry.get("target")
-    else:
-        # Legacy row: fall back to matching on statement text
-        match = preserve and existing.get("statement") == entry.get("statement")
-
+    # Matched on the statement text, never the (coarser) target: two passes can
+    # both address "goal" (same target, same id-slot) with different wording, and
+    # only the statement tells them apart. `statement` is populated on every
+    # candidate dict regardless of whether "target" is present, so there is no
+    # legacy row this would fail to match — see _apply_enumeration_result's own
+    # docstring ("Preservation is keyed on the statement being IDENTICAL, not on
+    # the id alone").
+    match = preserve and existing.get("statement") == entry.get("statement")
     if match and existing.get("disposition") != "raised":
         return dict(existing)
     return entry

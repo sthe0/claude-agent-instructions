@@ -613,7 +613,15 @@ def check_drift(
         hook_points = [p for p in points if p.hook == hook_name]
         groups = latency_by_judge(hook_points, since)
         for judge in sequence:
-            reference = float(judge_latency.call_ceiling_s(judge))
+            if judge_latency.row(judge).measured:
+                reference = float(judge_latency.call_ceiling_s(judge))
+            else:
+                # An UNMEASURED judge (e.g. published_attachment) has no sampled
+                # max to derive a per-call ceiling from -- production falls back
+                # to the last-resort ceiling for it (judge_latency.Row.note), so
+                # that is the meaningful reference to drift-check live calls
+                # against, not a crash.
+                reference = float(judge_latency.last_resort_ceiling_s())
             candidates = sorted(
                 ceiling
                 for (g_judge, ceiling) in groups

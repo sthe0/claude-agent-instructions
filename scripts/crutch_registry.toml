@@ -1248,9 +1248,9 @@ ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-comm
 id = "a0ce40334c52b3b1"
 domain = "code"
 file = "scripts/hook-published-text-writer-gate.py"
-class = "structural"
+class = "semantic-guarded"
 disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+ground = "decide() dispatches to _decide_text (structural transcript-witness check) or _decide_attachment (judge_published_attachment behind a structural prefilter); deny_with only emits the reason either branch already decided -- no regex-classified free text reaches this sink."
 
 [[entry]]
 id = "dd45eb8cef7a1481"
