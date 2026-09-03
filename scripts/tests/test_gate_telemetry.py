@@ -172,17 +172,22 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     # cmd_submit_plan (inside _to_executing_stage1) and every cmd_replan call —
     # three more evaluations than before, all passing (no fire recorded in this
     # walkthrough). The completed replan then logs the closure gates in order —
-    # normalization_blockers (re-norming) then failure_address_blockers (goal-failure
-    # routing) — between the passing difficulty_blockers and the plan_review evaluation
-    # (vacuous, gate off by default in the suite), then stage 5 (item B)'s
-    # replan_authorization gate (vacuous here: the session is DIAGNOSING with a
-    # complete difficulty record, one of the gate's own unconditional exemptions),
-    # then the plan_approval PLUGIN gate (stage 3: cmd_replan now composes
+    # diagnosing_replan (GitHub #177's renegotiation gate — vacuous here, the
+    # seeded task's cross-session replan_count is below the Rule-of-Three
+    # ceiling, so it only logs a passing evaluation and never asks for a
+    # renegotiation decision), then normalization_blockers (re-norming) then
+    # failure_address_blockers (goal-failure routing) — between the passing
+    # difficulty_blockers and the plan_review evaluation (vacuous, gate off by
+    # default in the suite), then stage 5 (item B)'s replan_authorization gate
+    # (vacuous here: the session is DIAGNOSING with a complete difficulty
+    # record, one of the gate's own unconditional exemptions), then the
+    # plan_approval PLUGIN gate (stage 3: cmd_replan now composes
     # plugins.plugin_gate_blockers(state, "plan_approval") just as cmd_approve does —
     # vacuous here, premise force-off in the suite), then the replan_coverage check.
     assert gates_fired == ["effort_fire", "plan_approval",
                            "effort_fire", "difficulty_blockers",
                            "effort_fire", "difficulty_blockers",
+                           "diagnosing_replan",
                            "normalization_blockers",
                            "failure_address_blockers", "plan_review",
                            "replan_authorization",
@@ -193,9 +198,10 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     assert rows[3]["passed"] is False  # premature: record incomplete
     assert rows[4]["passed"] is True   # effort_fire: no fire, completed replan
     assert rows[5]["passed"] is True   # cycle complete
-    assert rows[6]["passed"] is True   # normalization recorded
-    assert rows[7]["passed"] is True   # failure_address routed
-    assert rows[8]["passed"] is True   # plan_review evaluated (vacuous, gate off)
-    assert rows[9]["passed"] is True   # replan_authorization evaluated (vacuous, DIAGNOSING exempt)
-    assert rows[10]["passed"] is True  # plan_approval_plugin evaluated (vacuous)
-    assert rows[11]["passed"] is True  # coverage satisfied
+    assert rows[6]["passed"] is True   # diagnosing_replan evaluated (vacuous, below ceiling)
+    assert rows[7]["passed"] is True   # normalization recorded
+    assert rows[8]["passed"] is True   # failure_address routed
+    assert rows[9]["passed"] is True   # plan_review evaluated (vacuous, gate off)
+    assert rows[10]["passed"] is True  # replan_authorization evaluated (vacuous, DIAGNOSING exempt)
+    assert rows[11]["passed"] is True  # plan_approval_plugin evaluated (vacuous)
+    assert rows[12]["passed"] is True  # coverage satisfied
