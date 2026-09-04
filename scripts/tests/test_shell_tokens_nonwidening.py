@@ -1048,6 +1048,146 @@ def test_strip_bodies_matches_a_frozen_independent_reimplementation():
         )
 
 
+def _frozen_removal_regions(command: str, consumers: frozenset[str]) -> list[tuple[int, int, str]] | None:
+    """D1e: independent reimplementation of `_removal_regions` ITSELF -- D1c's
+    `_frozen_walk` freezes the pre-refactor character walk as a control on the
+    two APPLIERS (`strip_heredoc_bodies` vs `_frozen_strip_bodies`), but both
+    of those still read their spans from the SAME shared producer, so neither
+    can catch a narrowed (or widened) `_removal_regions` on its own -- see
+    D1c's own docstring. This is the same style of control aimed one level
+    lower, at the producer: it shares only the recognition/doubt predicates
+    (`_pipeline_consumers_ok`, `_body_inert`, `_DELIMITER_WORD`, `_WORD_END`)
+    and never calls `_removal_regions` or `_apply_regions`, and it takes
+    `consumers` as a parameter exactly as `_removal_regions` does, so it can
+    be checked against BOTH the narrow and the widened allowlist -- unlike
+    `_frozen_walk`, which only ever reads the module-level `CONSUMERS`.
+    """
+    regions: list[tuple[int, int, str]] = []
+    i = 0
+    n = len(command)
+    quote = None
+    while i < n:
+        c = command[i]
+        if quote is None and c == "\\":
+            i += 2
+            continue
+        if quote is None and c in "'\"":
+            quote = c
+            i += 1
+            continue
+        if quote == '"' and c == "\\":
+            i += 2
+            continue
+        if quote and c == quote:
+            quote = None
+            i += 1
+            continue
+        if quote is None:
+            if c == "#" and (i == 0 or command[i - 1] in " \t\n"):
+                j = command.find("\n", i)
+                j = n if j < 0 else j
+                i = j
+                continue
+            if command.startswith("<<<", i):
+                if not shell_tokens._pipeline_consumers_ok(command, i, consumers):
+                    return None
+                j = i + 3
+                while j < n and command[j] == " ":
+                    j += 1
+                if j < n and command[j] in "'\"":
+                    operand_quote = command[j]
+                    k = command.find(operand_quote, j + 1)
+                    if k == -1:
+                        return None
+                    if not shell_tokens._body_inert(operand_quote == "'", command[j + 1:k]):
+                        return None
+                    j = k + 1
+                    if j < n and command[j] not in shell_tokens._WORD_END:
+                        return None
+                else:
+                    start = j
+                    while j < n and command[j] not in shell_tokens._WORD_END:
+                        j += 1
+                    if not shell_tokens._body_inert(False, command[start:j]):
+                        return None
+                regions.append((i, j, " "))
+                i = j
+                continue
+            if command.startswith("<<", i):
+                if not shell_tokens._pipeline_consumers_ok(command, i, consumers):
+                    return None
+                j = i + 2
+                if j < n and command[j] == "-":
+                    j += 1
+                while j < n and command[j] == " ":
+                    j += 1
+                match = shell_tokens._DELIMITER_WORD.match(command[j:])
+                if not match:
+                    return None
+                backslash, open_quote, word, close_quote = match.groups()
+                if open_quote and open_quote != close_quote:
+                    return None
+                delimiter_quoted = bool(backslash) or bool(open_quote)
+                j += match.end()
+                if j < n and command[j] not in shell_tokens._WORD_END:
+                    return None
+                lines = command[j:].split("\n")
+                terminator = None
+                for index, line in enumerate(lines[1:], start=1):
+                    if line.strip() == word:
+                        terminator = index
+                        break
+                if terminator is None:
+                    return None
+                if not shell_tokens._body_inert(delimiter_quoted, "\n".join(lines[1:terminator])):
+                    return None
+                line0_end = j + len(lines[0])
+                pre_len = len("\n".join(lines[:terminator + 1]))
+                pos_after_terminator = j + pre_len
+                body_end = pos_after_terminator + 1 if pos_after_terminator < n else pos_after_terminator
+                regions.append((i, j, ""))
+                regions.append((line0_end, body_end, "\n"))
+                return regions
+        i += 1
+    return regions if quote is None else None
+
+
+# EXTENT_WITNESSES: no existing corpus/grid command holds more than THREE
+# regions (the D1a grid caps construct count at 3 by construction), so a
+# region-count bug that only shows up at four or five separate `<<<`
+# here-strings would have no witness anywhere else in this suite.
+EXTENT_WITNESSES = (
+    ("four here-strings", "cat <<<hs1 <<<hs2 <<<hs3 <<<hs4"),
+    ("five here-strings", "cat <<<hs1 <<<hs2 <<<hs3 <<<hs4 <<<hs5"),
+    ("four here-strings then heredoc", "cat <<<hs1 <<<hs2 <<<hs3 <<<hs4 <<EOF\nbody\nEOF"),
+    ("five here-strings non-shell consumer", "python3 <<<hs1 <<<hs2 <<<hs3 <<<hs4 <<<hs5"),
+)
+
+
+def test_removal_regions_matches_a_frozen_independent_reimplementation():
+    """D1e: `_removal_regions` must agree region-for-region (including
+    `collapse_text`) with `_frozen_removal_regions`, over BOTH consumer sets
+    (`CONSUMERS` and the widened `CONSUMERS | NON_SHELL_CONSUMERS`), over both
+    corpora, the D1a grid, AND `EXTENT_WITNESSES` -- the producer-level twin
+    of D1c's applier-level control (see `_frozen_removal_regions`'s
+    docstring for why D1c cannot see a narrowed/widened PRODUCER)."""
+    commands = [raw for _, raw in CASES + FALSE_POSITIVES] + list(GRID_COMMANDS) + [
+        raw for _, raw in EXTENT_WITNESSES
+    ]
+    consumer_sets = (
+        ("narrow", shell_tokens.CONSUMERS),
+        ("widened", shell_tokens.CONSUMERS | shell_tokens.NON_SHELL_CONSUMERS),
+    )
+    for label, consumers in consumer_sets:
+        for raw in commands:
+            expected = shell_tokens._removal_regions(raw, consumers)
+            actual = _frozen_removal_regions(raw, consumers)
+            assert actual == expected, (
+                f"[{label}] frozen reference disagrees with _removal_regions\n"
+                f"  raw:      {raw!r}\n  shipped:  {expected!r}\n  frozen:   {actual!r}"
+            )
+
+
 # --- D2/D3: named pins for the shipped guard's actual behaviour today -----
 
 _CASES_BY_NAME = dict(CASES)
