@@ -13,6 +13,7 @@ Loaded into every session via `@~/.claude-agent/memory-global/MEMORY.md` import 
 ## Reasoning and coordination practices
 
 - [Coordination-practice sub-index](leaves/coordination/MEMORY.md) — entries also named inline in CLAUDE.md, moved out to shrink this index under its byte ceiling; CLAUDE.md's own inline mention keeps each entry always-loaded-visible without repeating it here.
+- [Recurring normalize-factor is an architecture signal](leaves/recurring-normalize-factor-is-architecture-signal.md) — ≥2 normalize cycles naming factors in the same underlying category means the prior re-norming was cosmetic; the replanning task must surface a structural alternative to the user, not another patch.
 - [Typical coordinator pitfalls](leaves/coordinator-pitfalls.md) — anti-patterns to avoid as the root coordinator; signals that point to specific corrective actions.
 - [Backlog triage as a task type](leaves/backlog-triage-practice.md) — "разбор беклога" across Core (GitHub Issues) + the Org tier's tracker: compact priority rubric (breadth × recurrence-mass / cost-to-resolve, hard partial order on explicit deps only) + re-run-per-visit procedure; references, doesn't duplicate, the general coordination-spine docs.
 - [Improvement scan](leaves/improvement-scan.md) — standing, mechanized backlog + telemetry producers behind the `improvement-scan` skill; two resume schemes (board-diff vs ledger-cursor) and the report-only boundary.
