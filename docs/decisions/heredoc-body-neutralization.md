@@ -239,4 +239,32 @@ either direction.
 
 ## Review dispositions
 
-(Placeholder — populated by stage 4 once the stage-3 review verdict exists.)
+Stage 3's independent adversarial reviewer returned **approve-with-nits** at commit `77cb774`, run via
+`agentctl dispatch`. Central claim: the reviewer could not exhibit a DENY-to-ALLOW widening outside
+the three named consequences (I1/I2/I3) plus the accepted clause-(v) trade, and verified this against
+real `bash` and a synthetic narrowing injected into `_removal_regions` (in a throwaway `/tmp` copy,
+deleted after use) — `test_neutralization_equivalence_grid` (D1a) and
+`test_removal_regions_matches_a_frozen_independent_reimplementation` (D1e) both went red on the
+injected mutation, while `test_strip_and_neutralize_agree_on_command_line_tokens` (D1) and
+`test_strip_bodies_matches_a_frozen_independent_reimplementation` (D1c) stayed green — the exact
+asymmetry the module's own docs claim, evidence the discrimination claim is not decorative. I1/I2/I3
+were each re-verified fixed against real bash and the shipped code; all five named must-still-DENY
+cases plus the composed double-application case (`tee <<'A' <<<xxx <canon>/f`) were re-verified
+through real `bash -c` and the shipped `decide()` → `command_write_targets` path, all still DENIED.
+Full suite: 4187 passed, 3 skipped, 6 failed — all 6 pre-existing in `test_file_difficulty.py`
+(`ImportError` on `difficulty_channel.port.StreamUnsupported`), confirmed unrelated: this branch's
+diff touches none of `test_file_difficulty.py`, `scripts/difficulty_channel/port.py`, or the
+internal-tracker adapter module the failing import chain runs through. `python3
+scripts/verify-all.py` → 20/20. No blocking or should-fix finding survived
+adversarial testing; two nits:
+
+1. **nit — `scripts/lib/shell_tokens.py`'s `strip_heredoc_bodies` (maintainability)** — `strip_heredoc_bodies` now has no
+   production caller (both consumers migrated to `neutralize_heredoc_constructs`); kept for its D1c
+   frozen-reference role and as public API. **Disposition: no action.** This is deliberate retained
+   API surface, already documented in this record's "Questions answered" § API split, not an
+   oversight or dead code left behind by the migration.
+2. **nit — `scripts/crutch_registry.toml` (reusability)** — this diff carries auto-generated registry
+   churn (re-hashed ids for pre-existing entries, new synthetic-fixture entries for the new test file,
+   entries for unrelated experience leaves re-scanned). **Disposition: no action.** This is the
+   crutch-scanner's ordinary incidental output on any commit touching these files, not evidence of a
+   stray `git add -A` or scope creep.

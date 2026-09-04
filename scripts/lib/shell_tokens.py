@@ -9,10 +9,14 @@ allows" contract does not protect such a consumer, because there is no parse
 error to fall open on.
 
 What this module exposes is a NEUTRAL transformation: body text out, everything
-else verbatim. It carries no allow/deny policy, because its two consumers need
-opposite doubt polarity -- `git_cwd.effective_git_cwd` must never resolve doubt
-into a more permissive guess, while the canon guard must ignore stripped data.
-Each caller keeps its own decision rule.
+else verbatim. It carries no allow/deny policy, because its downstream readers
+need opposite doubt polarity -- `git_cwd.effective_git_cwd` (which reads this
+module's output text, not this module itself: it holds no import of
+`shell_tokens`) must never resolve doubt into a more permissive guess, while
+the canon guard must ignore stripped data. Each caller keeps its own decision
+rule. Hiding a construct's tokens can only make `effective_git_cwd` fall back
+to `payload_cwd` -- the more restrictive direction -- so the opposite-polarity
+concern this paragraph names is satisfied by construction, not merely asserted.
 
 RECOGNITION IS A POSITIVE SHAPE, NOT A LIST OF DISQUALIFIERS.
 

@@ -78,7 +78,7 @@ GUARD_HOOK_PATH = SCRIPTS_DIR / "hook-guard-canon-readonly.py"
 # suite silently going stale against a moved target -- the escape hatch a
 # bare `git diff --quiet <rev>` check does not have.
 MODULE_CONTRACT_SHA256 = {
-    SHELL_TOKENS_PATH: "3184b4f197893840617598a835ccae3eb86e860fee5073a92818d2530b9f52dd",
+    SHELL_TOKENS_PATH: "38816fc42ec4687f0c779a1dd2540e0c6a4eb6af466502dd5432ad115e1d38ed",
     BASH_WRITE_TARGETS_PATH: "ad24b259c12959974385d8714d9967bdcb50359698a4819c793766cc36ae9f9b",
     GUARD_HOOK_PATH: "dec99146110846fa5c599755b445610ff80d0f52ad17c65b77af3105c7c45a74",
 }
