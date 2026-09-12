@@ -70,10 +70,15 @@ def _substantive_meta(**overrides):
     return base
 
 
-# --- SCHEMA_VERSION 25 --------------------------------------------------
+# --- SCHEMA_VERSION 24 --------------------------------------------------
 
-def test_schema_version_is_25():
-    assert SCHEMA_VERSION == 25
+def test_schema_version_covers_the_venue_lifecycle():
+    """verify_venue_at_final arrived at schema 24 and was never withdrawn.
+
+    Asserted as a floor, not an equality: a later feature's bump is not this
+    file's business, and an equality pin makes every unrelated bump land here as
+    a spurious failure (this one silently drifted to a literal 25 that way)."""
+    assert SCHEMA_VERSION >= 24
 
 
 # --- V1: free-text value rejected with the CheckVenue vocabulary ---------

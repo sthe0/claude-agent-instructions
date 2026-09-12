@@ -111,7 +111,7 @@ Every instruction here is a step in the plan for removing an arbitrary difficult
 A protected-Core artifact (`CLAUDE.md`, `config.md`, `skills/**`, `agents/**`, `cursor/**`, `*.mdc`, `scripts/agentctl/**`) can only be landed by a machine with Core commit authority. Before authoring such an edit, gate on `difficulty_channel.authority.is_author()` (a `git push --dry-run` capability probe):
 
 - **Author** → normal spine (`core-difficulty-digest.py` to review clustered difficulties, then `planner → approval → developer`).
-- **Non-author** → do **not** edit Core. Run `python3 ~/claude-agent-instructions/scripts/file-difficulty.py --target <artifact> --ground '<desired-vs-actual>' --severity <lvl>` — the machine's channel is auto-selected from `~/.claude-agent/agent-identity.local`. Submission is decoupled from push; an author lands the change later from the accumulated digest. Non-Core targets (memory leaves, project files) are exempt — they are not edit-restricted.
+- **Non-author** → do **not** edit Core. Run `python3 ~/claude-agent-instructions/scripts/file-difficulty.py --target <artifact> --ground '<desired-vs-actual>' --severity <lvl> --cost '<estimate>'` (or `--cost-not-estimable '<reason>'` when a genuine estimate isn't possible — exactly one of the two is required) — the machine's channel is auto-selected from `~/.claude-agent/agent-identity.local`. Submission is decoupled from push; an author lands the change later from the accumulated digest. Non-Core targets (memory leaves, project files) are exempt — they are not edit-restricted.
 
 This is the propose-not-execute / no-veto driver: a non-author surfaces difficulties, never blocks or bypasses the human gate. SKILL.md § Non-author machines route Core difficulties to a channel is the operational beat.
 
@@ -128,6 +128,8 @@ A difficulty's **tier** decides its destination; the destination's mechanics are
 - **Project** (e.g. a product repo under an org path) → the single queue named by the project's `instruction_queue` field (`agent-project.json`), resolved automatically from the target path by `file-difficulty.py`; backlog and reports collapse onto it because project participants edit project instructions directly.
 
 The model classifies the tier; `--queue`/`--stream` (or the resolved project field) carry it to the right surface.
+
+**File through `file-difficulty.py`, never a raw `gh issue create`.** Every Core difficulty or backlog item goes through the script — an author machine that means to file rather than fix passes `--force-report`. *Difficulty removed:* the raw path writes an issue body directly and therefore bypasses the record itself — the cost gate (`--cost TEXT` | `--cost-not-estimable REASON`), the tier/stream routing above, and the term scan all sit inside the script, so a raw filing lands unpriced and cannot be ranked against the triage rubric's `cost_of_problem` term ([backlog-triage-practice](../../memory-global/leaves/backlog-triage-practice.md)). The bypass is not silent afterwards — `core-difficulty-digest.py` marks a cluster `N of M filed outside the cost gate` for members whose cost is empty — but a marker at the consuming surface detects the bypass, it does not repair it.
 
 ### Working a queued difficulty: verify actuality first
 
@@ -192,7 +194,10 @@ All agent instructions — prompts in `agents/`, skill prompts in `skills/`, `CL
 
 - An established equivalent exists → use it. Russian: «влить» / «выкатить» / «довести до trunk», never «лендить».
 - The term names one of our own artifacts — the coordination machinery counts (`intake`, `partition`, `spine`, an anchor mount, a write gate, a checkpoint) → name the thing **by its function** in the user's language first («главная рабочая копия», «проверка-ограничитель», «журнал состояния»), and give the English identifier as code (`intake.py`) only where the file or command name is itself what matters. Never coin a transliteration («интейк», «партишн»); «анкер-маунт» + «канон» + «гейт» + «чекпоинт» in a single ask cost a full turn (2026-08-05).
+- A **calque** — an English phrase carried over word for word, so every word is native but the construction is not — fails the same test as a transliteration and is harder to catch, because nothing looks foreign. «Шов подачи» for *submission seam*, «фейл-опен» for a check that goes inert when its judge is unreachable: a reader who has not met the English cannot recover either. Say what the thing does instead. Not every settled term is a calque — **«образ результата» is ordinary Russian and stays** (user, 2026-08-10); the test is recoverability by a reader without the English, not etymology.
 - Names stay names: proper nouns, tool names, API identifiers, ticket keys are not vocabulary.
+
+*To achieve a reply the user can follow rather than audit, say WHAT a thing is and WHY it behaved that way before classifying, grading or counting it.* Opening with a verdict, a category or a tally — «71 упавший тест», «дефект 5», «вердикт: pass» — asks the reader to accept a conclusion about a subject they have not met yet: «Ничего не понял… В чем суть упавших тестов непонятно. Почему они падают — тоже неясно. Суть вариантов дальнейшего движения также неясна» (2026-08-10). Name the thing, state what it was meant to do and what it did instead, and only then label or count it. The same order binds the options of an `AskUserQuestion`: an option whose consequence appears only in its label is a choice the user cannot price.
 
 Applies to every user-facing surface — prose, plan narratives, retrospectives, and the question + option-label text of every `AskUserQuestion`.
 

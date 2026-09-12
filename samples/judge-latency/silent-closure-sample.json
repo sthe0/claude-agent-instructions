@@ -1,0 +1,118 @@
+{
+  "signal": [
+    {
+      "i": 0,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.81
+    },
+    {
+      "i": 1,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.2
+    },
+    {
+      "i": 2,
+      "verdict": false,
+      "reason": "",
+      "ok": false,
+      "latency_s": 34.78
+    },
+    {
+      "i": 3,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 3.8
+    },
+    {
+      "i": 4,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.03
+    },
+    {
+      "i": 5,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 3.48
+    },
+    {
+      "i": 6,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 6.66
+    },
+    {
+      "i": 7,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 3.3
+    }
+  ],
+  "not_signal": [
+    {
+      "i": 0,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 3.42
+    },
+    {
+      "i": 1,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 5.19
+    },
+    {
+      "i": 2,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.6
+    },
+    {
+      "i": 3,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.61
+    },
+    {
+      "i": 4,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.62
+    },
+    {
+      "i": 5,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.19
+    },
+    {
+      "i": 6,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 3.41
+    },
+    {
+      "i": 7,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 5.11
+    }
+  ]
+}

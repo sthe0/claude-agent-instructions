@@ -4,7 +4,7 @@ description: The 8-element activity-structure ontology a plan must cover, mapped
 type: reference
 schema: leaf/v1
 created: 2026-06-25
-last_verified: 2026-07-22
+last_verified: 2026-08-06
 ---
 
 # Plan activity ontology (the 8 elements a plan must cover)
@@ -17,7 +17,7 @@ A plan stated as a free list of steps silently omits the constituents that decid
 
 ### Source of truth: the typed code model, not this prose
 
-The **canonical** definition and enforcer of plan structure is the typed model in **`scripts/agentctl/state.py` + `scripts/agentctl/plan.py`**: the grouped dataclasses (`Subject`, `Means`, `Actor`, `Criterion`, `Principle`, `Supply`, `Outcome`) and the algorithms over them — substantive-field validation, the `Confidence` enum check, and `_validate_graph` (dangling `Supply.on`, unknown substantive `Supply.element`, acyclicity). This leaf is a **secondary human-readable mirror** that must track the code; on any divergence, **the code wins**. The author-written TOML stays in a flat per-stage schema (top-level `executor` / `done_criterion` / `criterion_type` / `depends_on`); `parse_plan` maps those flat keys onto the grouped objects, so the grouping is a property of the in-memory model, not of the file syntax.
+The **canonical** definition and enforcer of plan structure is the typed model in **`scripts/agentctl/state.py` + `scripts/agentctl/plan.py`**: the grouped dataclasses (`Subject`, `Means`, `Actor`, `Criterion`, `Principle`, `Supply`, `Outcome`) and the algorithms over them — substantive-field validation, the `Confidence` enum check, and `_validate_graph` (dangling `Supply.on`, unknown substantive `Supply.element`, acyclicity). Enforcement is split across two grades, deliberately: the **loader** (`parse_plan`'s `if strict:` branches) carries only requirements old enough that every plan a live session may re-read already meets them, while a **submission seam** (`scripts/agentctl/submission.py`) carries every newer requirement and runs at exactly the three points plan bytes *enter* a session (`submit-plan`, `replan`'s new side, `approve`'s in-place-edit refresh). A requirement put in the loader instead is retroactive over plans already accepted, with no recovery edge — so new requirements go to the seam. This leaf is a **secondary human-readable mirror** that must track the code; on any divergence, **the code wins**. The author-written TOML stays in a flat per-stage schema (top-level `executor` / `done_criterion` / `criterion_type` / `depends_on`); `parse_plan` maps those flat keys onto the grouped objects, so the grouping is a property of the in-memory model, not of the file syntax.
 
 ### The 8 elements → grouped typed fields
 
@@ -25,15 +25,16 @@ A plan has a `[meta]` head and one or more `[[stage]]` blocks; each stage is a f
 
 | # | Element | Code field (canonical) |
 |---|---------|--------------|
-| 1 | **Order** — what must be done | `meta.goal` |
+| 1 | **Order** — what must be done | `meta.goal` (free text, always accepted) + `meta.order` (typed `state.Order`, parsed from an additive `[meta.order]` table — `requirements`/`coverage`/`customer_id`; a plan authored before it existed keeps loading without it) |
 | 2 | **Material + result** — what is transformed, from what initial state, into what | `stage.subject.material` (initial state + relevant properties) + `stage.subject.result` |
+| 2'| **Knowledge** — what must already be known for the method over the means to reach the result image; a place of its own, upstream of both the norm (#7) and the selection of means (#4). Its two structural projections divide the symbols the stage touches: what it *transforms* vs what it *relies on and leaves alone* | `stage.knowledge` + `stage.subject.material_refs` (transformed) + `stage.subject.knowledge_refs` (relied on). Required of a substantive stage **at the submission seam** (`scripts/agentctl/submission.py`), never in the loader — an incoming `Supply(element="knowledge")` edge fills the place instead |
 | 3 | **Control criterion** — how conformance of result to order is checked | `stage.criterion.criterion_type` (measurable \| acceptance_review) + `stage.criterion.done_criterion` |
 | 4 | **Means** — what is used to carry the material from initial state to result; **immutable during the transformation** | `stage.means.means` |
 | 4'| **Method** — how the means is used | `stage.means.method` |
-| 5 | **Conditions + preserved invariants** — under what conditions the transformation runs, and which properties of the material must remain unchanged | `stage.conditions` + `stage.subject.invariants` |
+| 5 | **Conditions + preserved invariants** — under what conditions the transformation runs, and which properties of the material must remain unchanged | `stage.conditions` + `stage.subject.invariants`. **The preconditions of STARTING are a place of their own** — `stage.preconditions`, required of a substantive stage at the submission seam, which also refuses a `conditions` exhausted by restating `depends_on`. One field asked for both loads answers the cheaper: the conditions of the transformation were being displaced by an ordering the graph already records |
 | 6 | **Actor + capability** — who performs the transformation, with which capability to wield the means in the method | `stage.actor.executor` (`in_thread` \| `spawn:<specialization>`) + `stage.actor.capability_required` |
 | 7 | **Principle** — the inference behind choosing this material/method: a pattern of which the chosen transformation is an instance, with a known source, a stated confidence, treated as refutable; **always a норма** (должное), never typed знание-vs-норма a-priori | `stage.principle` = `Principle`(`statement` + `source` + `confidence` (high\|medium\|low, a `Confidence` enum) + `refutation`) |
-| 8 | **Multi-stage as an acyclic graph** — a plan may be a sequence or DAG of elementary plans, each bearing all the attributes above | `[[stage]]` blocks + typed `Supply`(on/element/artifact) in `stage.supplies` (the SOLE edge source); `stage.depends_on` is a derived projection; `stage.outcome` records each stage's result |
+| 8 | **Multi-stage as an acyclic graph** — a plan may be a sequence or DAG of elementary plans, each bearing all the attributes above | `[[stage]]` blocks + typed `Supply`(on/element/artifact) in `stage.supplies` (the SOLE edge source); `stage.depends_on` is a derived projection; `stage.outcome` records each stage's result. Of a substantive plan the submission seam **requires** every edge to name an `element` from `text_shape.ELEMENT_NAMES` — an edge that names none states an ordering the graph already carries and says nothing about what flows along it |
 
 <!-- Language exception: the user's source ontology is in Russian; the original terms are preserved once for traceability. -->
 > Original terms (user's ontology): заказ = order; материал = material; средство = means; способ = method; деятель = actor.
@@ -41,6 +42,19 @@ A plan has a `[meta]` head and one or more `[[stage]]` blocks; each stage is a f
 ### Weight gating (substantive-only)
 
 The full element set is **mandatory for substantive plans** (`meta.weight_class = "substantive"`) and optional/lighter for `small_change` / `chat`. When `weight_class` is absent, treat the plan **leniently** (new fields optional) so legacy plans keep parsing — strictness applies only where substantive is declared. This mirrors the `schema:leaf/v1` grandfathering: opt-in enforcement, grandfather the rest. See [[leaf-schema]].
+
+### Element 3 splits an objective control from a subjective acceptance
+
+Element 3 (the control criterion) covers two distinct checks the engine used to conflate: an
+objective **control** (does the result match the order — `criterion_type = measurable`, checked
+by `verify_command`) and a subjective **acceptance** (does the customer accept it —
+`criterion_type = acceptance_review`). The latter is a typed hand-off to the customer at the
+plan level: `AcceptanceReview` — bound to the accepted plan digest, authored only by
+`[meta.order].customer_id`, one verdict per order requirement, gated at `resolution_blockers` —
+or an explicit `AcceptanceBypass`, gated on a non-empty `--bypass-reason`. Distinct from the
+per-stage `StageReview` (bound to `sha256(observation)`, escaped by an `override` verdict), which
+is older and gates a stage rather than resolution. See ADR-0005 for the corpus evidence and the
+control-criterion difficulties this distinction surfaced in practice.
 
 ### Element 3 — a machine-enforced instance: review of a developer-actor stage
 
@@ -51,7 +65,7 @@ The control criterion (element #3) is normally a per-plan text the manager check
 Material and method must be chosen by *inference*, not "from the ceiling". State the principle, its **source** (where the regularity comes from), its **confidence**, and what observation would **refute** it. This is the same epistemics already required of rules and memory ("name the difficulty", "cite the source for version-dependent claims", "any principle is potentially refutable") applied to the choice of transformation. It ties to the planner's existing "no numbers/claims without a source" rule.
 
 <!-- Language exception: сущее/должное/знание/норма/принцип are the settled SMD source-ontology terms this passage uses; preserved verbatim for traceability. -->
-**The principle (element 7) is always a норма (должное).** `принцип` is the *most general* member of the norm-series (цель→план→программа→метод→подход→принцип) — the norm from which a whole family of goals/plans/methods is derived. A norm is **never checked for truth**; it is shown *adequate-or-not* to the goals it grounds. So element 7 carries **no** a-priori tag typing it знание-vs-норма (ADR-0004 dropped that `statement_kind` field as a category error): a principle *is* a норма, categorically, and cannot be a знание. The сущее/должное character of a **fault** is a POST-HOC product of критика at difficulty closure, not a label the norm wears in advance (see the closure routing below).
+**The principle (element 7) is always a норма (должное).** `принцип` is the *most general* member of the norm-series (цель→план→программа→метод→подход→принцип) — the norm from which a whole family of goals/plans/methods is derived. A norm is **never checked for truth**; it is shown *adequate-or-not* to the goals it grounds. So element 7 carries **no** a-priori tag typing it знание-vs-норма (ADR-0004 dropped that `statement_kind` field as a category error): what element 7 carries is *used as* a норма, which is a statement about the functional place it occupies, not about what the statement is in itself. Nothing here denies it a знание reading — the stage's own знание place is element 2' (`stage.knowledge`), and a statement can occupy that place in one stage and ground a norm in another. The сущее/должное character of a **fault** is a POST-HOC product of критика at difficulty closure, not a label the norm wears in advance (see the closure routing below).
 
 That the principle is categorically a норма does **not** collapse the two refutation **modes** — these are the two ways a fault surfaces, not two types of principle:
 
@@ -96,7 +110,7 @@ Element 8 is **not an independent eighth thing**; it is the *consequence* of one
 A composite / multi-stage plan is therefore the **acyclic closure of this recursion**, not a flat list declared up front. In the typed model:
 
 - A typed `Supply(on, element, artifact)` in the **consumer's** `stage.supplies` encodes the **producer → consumer** edge: `on` = the producing stage, `element` = which missing element it supplies, `artifact` = the named result. `supplies` is the **SOLE** edge source; `stage.depends_on` is a derived projection (`sorted({s.on for s in supplies})`) — ordering *is* the projection of provision, never a parallel hand-maintained list.
-- `Supply.element` / `Supply.artifact` **names the element supplied** (a produced material, a built means, an established condition, a spawned actor). `_validate_graph` rejects a `Supply.on` that points to no stage, a substantive `Supply.element` that is not a known element name, and any cycle in the derived graph.
+- `Supply.element` / `Supply.artifact` **names the element supplied** (a produced material, a built means, an established condition, a spawned actor). `_validate_graph` rejects a `Supply.on` that points to no stage, a substantive `Supply.element` that is not a known element name, and any cycle in the derived graph. The loader checks the name only **when one is present**; that an edge names an element **at all** is required at the submission seam, per the two-grade split above — so a plan accepted before the requirement existed keeps loading, and only a plan offered as a new norm is refused. The vocabulary itself (`text_shape.ELEMENT_NAMES`) is deliberately not a complete taxonomy of the 8 elements: a name is added when a stage can be shown to **supply** that place, because a validator can tell a name is legal but never that it is the right one, and every unusable name only makes a plausible-wrong pick likelier.
 - "Capability acquirable as a separate service subtask" (element 6) is just **one instance** of this general rule; so is `executor = "spawn:developer"` (establishing the actor), and "material produced by an earlier stage".
 
 When planning: if any element of a stage is not already a given, do **not** hand-wave it inside the stage — split it out as a service stage and add a `Supply` edge naming the element it provides.
@@ -117,3 +131,4 @@ The actor must have the **whole** plan before it, to be guided by it — not onl
 - [[experience-leaf-schema]] — the `difficulty/v1` schema; the difficulty graph (cycles allowed) that recursive sub-ordering mirrors (order → plan → difficulty → induced order → …).
 - [[partition-markers]] — M1–M4 decide whether a substantive plan ships as one PR or several (delivery partition); orthogonal to this element-completeness axis.
 - [[coordinator-objective]] — the objective function a plan's choices are weighed against.
+- [ADR-0005](../../docs/adr/0005-activity-act-functional-places.md) — the 8 categorical defects that closed the gap between this leaf and the code model, with corpus evidence, what was deliberately left unimplemented, and the control-criterion difficulties the closing work surfaced.

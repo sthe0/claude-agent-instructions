@@ -1,0 +1,109 @@
+[meta]
+task_id = "install-switch-requirements-guidance"
+goal = "Подсветить переключение user↔core во всех install-путях; добавить preflight-проверку зависимостей и минимальной версии Claude (>=2.0.20, hard FAIL); печатать в конце установки краткую подсказку 'как начать работать'"
+done_criterion = "bash -n по всем изменённым скриптам зелёный; doctor.sh печатает блок Requirements и делает FAIL при версии < 2.0.20; README.md и docs/operations/setup.md содержат заметный callout про переключение user↔core и секцию требований; scripts/verify-all.sh зелёный"
+criterion_type = "measurable"
+weight_class = "substantive"
+external_research = "Да — минимальный порог версии определён по changelog Claude Code (~/.claude/cache/changelog.md): Skill tool в 2.0.20, Plugin System в 2.0.12; порог = 2.0.20."
+
+[[final_check]]
+command = "bash -n scripts/doctor.sh && bash -n scripts/setup-symlinks.sh && bash -n scripts/onboard.sh"
+expected_exit = 0
+label = "скрипты синтаксически валидны"
+
+[[final_check]]
+command = "scripts/verify-all.sh"
+expected_exit = 0
+label = "верификационные гварды зелёные"
+
+[[stage]]
+index = 1
+title = "doctor.sh: preflight требований (зависимости + мин. версия Claude, hard FAIL)"
+executor = "in_thread"
+expected_result_image = "doctor.sh проверяет наличие claude/git/python3 и парсит `claude --version`; при версии < 2.0.20 печатает [FAIL] и валит готовность; порог хранится константой с комментарием-источником"
+criterion_type = "measurable"
+done_criterion = "искусственно понизив порог/версию, doctor.sh даёт [FAIL] с версией; при 2.1.178 — [ OK ]"
+verify_command = "bash -n scripts/doctor.sh && CLAUDE_MIN_VERSION=99.0.0 scripts/doctor.sh; echo done"
+depends_on = []
+output_artifacts = ["scripts/doctor.sh"]
+material = "scripts/doctor.sh — текущие проверки (claude на PATH, CLAUDE.md-symlink, hooks, agentctl), без сверки версии и без явной проверки git/python3"
+means = "bash; `claude --version`; sort -V / сравнение версий; существующие pass/fail/warn-хелперы doctor.sh"
+method = "Добавить блок Requirements в начало: проверить git и python3 в PATH (FAIL если нет); распарсить версию из `claude --version`, сравнить с константой CLAUDE_MIN_VERSION=2.0.20 (комментарий со ссылкой на changelog: Skill tool@2.0.20); FAIL если ниже, WARN если версию не распознать"
+conditions = "Запуск на машине после setup-symlinks.sh; claude может быть новее порога; парсинг версии должен быть устойчив к суффиксам (напр. '2.1.178 (Claude Code)')"
+invariants = "Существующие проверки doctor.sh и его контракт exit 0/1 сохранены; read-only (ничего не мутирует); формат вывода [ OK ]/[FAIL]/[WARN] неизменен"
+capability_required = "bash, разбор версий, знание доступных фич по версиям Claude Code"
+
+[stage.principle]
+statement = "Установщик, опирающийся на фичи конкретной версии (Skill tool), должен проверять минимальную версию до старта работы, иначе отказ проявится позже и непонятнее"
+source = "changelog Claude Code (~/.claude/cache/changelog.md): «Added support for Claude Skills» — 2.0.20"
+confidence = "high"
+refutation = "Опровергается, если система перестанет зависеть от Skill tool/plugins или если фичи появились в более ранней версии, чем 2.0.20"
+
+[[stage]]
+index = 2
+title = "Финальный вывод установки: подсказка 'как начать' + переключение user↔core"
+executor = "in_thread"
+expected_result_image = "В конце install-потока (doctor.sh 'Ready'-блок и завершение onboard.sh/setup-symlinks.sh) пользователь видит краткое 'как начать работать над задачами' и явную строку про переключение: bare `claude` = личный ~/.claude, `claude-task`/`claude-agent` = система"
+criterion_type = "measurable"
+done_criterion = "onboard.sh при успехе печатает итоговую сводку (как начать + переключение); doctor.sh 'Ready'-блок содержит строку про bare claude vs claude-task"
+verify_command = "bash -n scripts/onboard.sh scripts/setup-symlinks.sh scripts/doctor.sh && grep -q 'claude-task' scripts/doctor.sh"
+depends_on = [1]
+output_artifacts = ["scripts/doctor.sh", "scripts/onboard.sh"]
+material = "doctor.sh 'Ready'-блок (уже печатает как открыть claude и про тикеты) и onboard.sh, который сейчас завершается только 'onboard: done'"
+means = "существующие echo/printf в скриптах; факты из docs/operations/setup.md про изолированный root"
+method = "В doctor.sh 'Ready'-блок добавить строку про переключение (bare `claude` — личный; `claude-task`/`claude-agent` — система). В onboard.sh после успешного B/C печатать краткую итоговую сводку: как начать работать + переключение (без дублирования, ссылкой на 'Ready'-блок doctor)"
+conditions = "Сводка печатается только при успешной установке; при FAIL остаётся текущее 'Not ready' сообщение"
+invariants = "Существующие сообщения doctor.sh/onboard.sh и коды выхода сохранены; вывод остаётся кратким"
+capability_required = "bash, знание launcher-модели (claude-task/claude-agent vs bare claude)"
+
+[stage.principle]
+statement = "Пользователь после установки должен без чтения доков знать первый шаг и то, что система живёт отдельно от личного claude"
+source = "Требование пользователя (3 пункта); текущий README §Getting started + docs/operations/setup.md §Isolated config root"
+confidence = "high"
+refutation = "Опровергается, если onboard уже печатает такую сводку или если пользователь явно не хочет вывода в конце"
+
+[[stage]]
+index = 3
+title = "README.md: секция требований + заметный callout переключения user↔core + путь bootstrap через разговор"
+executor = "in_thread"
+expected_result_image = "README §Setup содержит (а) подсекцию Requirements (зависимости + мин. версия Claude со ссылкой-источником) и (б) заметный callout 'User vs Core — как переключаться'; путь 'let Claude bootstrap itself' инструктирует проверить требования, подсветить переключение и завершить подсказкой 'как начать'"
+criterion_type = "measurable"
+done_criterion = "grep находит в README.md подсекцию Requirements (мин. версия 2.0.20) и callout про bare `claude` vs `claude-task`/`claude-agent`"
+verify_command = "grep -qi 'Requirements' README.md && grep -q '2.0.20' README.md && grep -q 'claude-task' README.md"
+depends_on = []
+output_artifacts = ["README.md"]
+material = "README.md §Setup (Fastest path / bootstrap-through-conversation / Equivalent steps) — сейчас переключение объяснено прозой в §Setup, без выделенного callout и без секции требований"
+means = "Markdown; факты из doctor.sh (после стадии 1) и docs/operations/setup.md §Isolated config root"
+method = "Добавить краткую подсекцию Requirements (claude>=2.0.20 + источник, git, python3). Добавить выделенный callout про переключение user↔core прямо в §Setup и в шаге bootstrap-через-разговор. В инструкции для stock-Claude добавить: проверить требования, подсветить переключение, завершить подсказкой как начать"
+conditions = "README остаётся минимальной точкой входа; детали — в docs (ссылками)"
+invariants = "Существующие команды setup и ссылки на docs сохранены; тон README (general→specific) не нарушен"
+capability_required = "техническое письмо, знание install-путей системы"
+
+[stage.principle]
+statement = "Документация — проекция объекта (install-потока), обязана оставаться согласованной с ним; заметный callout убирает риск, что пользователь не заметит разделения инсталляций"
+source = "plan-activity-ontology.md §'Documentation projection is a preserved invariant'; требование пользователя"
+confidence = "high"
+refutation = "Опровергается, если README уже содержит выделенный callout и секцию требований"
+
+[[stage]]
+index = 4
+title = "docs/operations/setup.md: секция требований + callout переключения (зеркало README)"
+executor = "in_thread"
+expected_result_image = "setup.md содержит секцию Requirements (зависимости + мин. версия со ссылкой) и усиленный callout переключения user↔core в §Isolated config root; ссылка на финальную подсказку установки"
+criterion_type = "measurable"
+done_criterion = "grep находит в setup.md '2.0.20' и явный callout про bare `claude` vs `claude-task`/`claude-agent`"
+verify_command = "grep -q '2.0.20' docs/operations/setup.md && grep -q 'claude-task' docs/operations/setup.md"
+depends_on = [3]
+output_artifacts = ["docs/operations/setup.md"]
+material = "docs/operations/setup.md §Initial setup / §Isolated config root — переключение объяснено, но без секции требований и без выделенного callout"
+means = "Markdown; согласовать формулировки с README (стадия 3) и doctor.sh (стадия 1)"
+method = "Добавить секцию Requirements рядом с §Initial setup; усилить §Isolated config root явным callout переключения; отметить, что установка в конце печатает подсказку 'как начать'"
+conditions = "setup.md — детальный слой под README; не дублировать, а раскрывать"
+invariants = "Существующая структура docs и якоря doc-bindings.json не сломаны (verify-doc-concepts.py зелёный)"
+capability_required = "техническое письмо, знание docs-дерева"
+
+[stage.principle]
+statement = "README и его детальный doc — две проекции одного install-контракта и должны быть взаимно согласованы"
+source = "docs/README.md (general→specific); plan-activity-ontology.md §documentation projection"
+confidence = "high"
+refutation = "Опровергается, если setup.md уже несёт секцию требований и callout переключения"

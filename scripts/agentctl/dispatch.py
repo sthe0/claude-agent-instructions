@@ -1,10 +1,12 @@
-"""Dispatch a stage to a spawned specialist via spawn-specialist.py.
+"""Dispatch a stage to a spawned specialist via spawn-specialist.py or
+spawn-cursor-specialist.py, selected by the session's bound runtime_host.
 
 This is the engine's one process-spawning seam. It does NOT reimplement the spawn
 template, recursion cap, budget resolution, marker validation, or cost logging —
-all of that lives in spawn-specialist.py, which this module shells out to. The
-runner is injectable (default = real subprocess) so the full state-machine cycle
-can be exercised in tests with a fake runner and zero `claude -p` spend.
+all of that lives in the two wrapper scripts, which this module shells out to
+(see spawn_cli_for). The runner is injectable (default = real subprocess) so the
+full state-machine cycle can be exercised in tests with a fake runner and zero
+`claude -p` / `agent -p` spend.
 """
 from __future__ import annotations
 
@@ -15,11 +17,25 @@ from pathlib import Path
 from typing import Callable
 
 from lib import argv_text
+from lib.runtime_models import HOST_CLAUDE, HOST_CURSOR, HOSTS
 
 from .state import CriterionType, Stage
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SPAWN_CLI = REPO_ROOT / "scripts" / "spawn-specialist.py"
+SPAWN_CLI_CURSOR = REPO_ROOT / "scripts" / "spawn-cursor-specialist.py"
+
+_SPAWN_CLI_BY_HOST = {HOST_CLAUDE: SPAWN_CLI, HOST_CURSOR: SPAWN_CLI_CURSOR}
+
+
+def spawn_cli_for(host: str) -> Path:
+    """The wrapper script `runtime_host=host` dispatches through."""
+    try:
+        return _SPAWN_CLI_BY_HOST[host]
+    except KeyError:
+        raise ValueError(f"unknown host {host!r}; must be one of {HOSTS}") from None
+
+
 
 # Conservative staging threshold for a value THIS process forwards on to a
 # child's argv — well under MAX_ARG_STRLEN (131072) so a caller that reaches
@@ -47,17 +63,27 @@ RETURN_MARKERS = (
 )
 MARKER_RE = re.compile(rf"^({'|'.join(RETURN_MARKERS)}):")
 
+# Mirrors scripts/spawn-specialist.py's constants of the same name — the
+# CHILD's own terminal condition, classified there BEFORE the marker question
+# is asked (issue #78's ENOTFOUND run, issue #80's "Prompt is too long" run).
+# Not specialist return markers (not in RETURN_MARKERS): like "MALFORMED",
+# these are envelope labels spawn-specialist.py itself writes onto the FIRST
+# line, so the same ordered scan below resolves them the same way.
+CHILD_INFRA_FAILURE = "CHILD_INFRA_FAILURE"
+CHILD_EXHAUSTED = "CHILD_EXHAUSTED"
+_CHILD_OUTCOME_MARKERS = (CHILD_INFRA_FAILURE, CHILD_EXHAUSTED)
+
 
 def parse_marker(stdout: str) -> tuple[str | None, str]:
     """Read a spawn's stdout for its return marker.
 
-    ONE ordered scan of the non-blank lines: the first line carrying either a
-    known ``^MARKER:`` or a ``MALFORMED:`` prefix wins, and both tests share the
-    single loop body so the winner is the first in DOCUMENT order. Keeping them
-    in one pass is load-bearing — two sequential passes (all lines for a marker,
-    then all lines for MALFORMED) would let a stray ``COMPLETED:`` line inside a
-    MALFORMED envelope's preserved original out-rank the envelope itself, a
-    fail-open mis-route.
+    ONE ordered scan of the non-blank lines: the first line carrying a known
+    ``^MARKER:``, a ``MALFORMED:`` prefix, or a CHILD_* outcome prefix wins,
+    and every case shares the single loop body so the winner is the first in
+    DOCUMENT order. Keeping them in one pass is load-bearing — two sequential
+    passes (all lines for a marker, then all lines for MALFORMED/CHILD_*)
+    would let a stray ``COMPLETED:`` line inside a preserved original
+    out-rank the envelope itself, a fail-open mis-route.
 
     ``lib.planner_plan_check.check_planner_return`` — which ``spawn-specialist.py``
     already ran on this text before it reached our stdout — canonicalises a
@@ -72,8 +98,9 @@ def parse_marker(stdout: str) -> tuple[str | None, str]:
     BARE, so that body is ``""`` for every canonicalised marker — the digest
     lives on its own ``Digest:`` line, deliberately off the line this parse
     feeds to ``cmd_dispatch``'s deterministic consumers (the permission gate
-    among them). A ``MALFORMED:`` line maps to marker "MALFORMED"; if no line
-    carries a marker, map to (None, "")."""
+    among them). A ``MALFORMED:`` line maps to marker "MALFORMED"; a
+    ``CHILD_INFRA_FAILURE:``/``CHILD_EXHAUSTED:`` line maps to that same
+    token; if no line carries a marker, map to (None, "")."""
     for line in (stdout or "").splitlines():
         line = line.strip()
         if not line:
@@ -83,6 +110,10 @@ def parse_marker(stdout: str) -> tuple[str | None, str]:
             return m.group(1), line[m.end():].strip()
         if line.startswith("MALFORMED:"):
             return "MALFORMED", line[len("MALFORMED:"):].strip()
+        for child_marker in _CHILD_OUTCOME_MARKERS:
+            prefix = child_marker + ":"
+            if line.startswith(prefix):
+                return child_marker, line[len(prefix):].strip()
     return None, ""
 
 # A runner takes an argv list and returns (returncode, stdout, stderr).
@@ -120,17 +151,19 @@ def build_argv(
     *,
     budget: str = "medium",
     complexity: str = "medium",
+    effort: str = "medium",
     dry_run: bool = False,
     continue_worktree: str | None = None,
     constraints: str = "",
     done_criterion: str | None = None,
+    runtime_host: str = HOST_CLAUDE,
 ) -> list[str]:
     kind = stage.spawn_kind()
     if not kind:
         raise ValueError(f"stage {stage.index} is not a spawn stage (executor={stage.actor.executor!r})")
     argv = [
         "python3",
-        str(SPAWN_CLI),
+        str(spawn_cli_for(runtime_host)),
         "--kind",
         kind,
         "--plan",
@@ -143,8 +176,11 @@ def build_argv(
         budget,
         "--complexity",
         complexity,
+        "--effort",
+        effort,
     ]
     argv.extend(["--stage-index", str(stage.index)])
+    argv.append("--plan-brief")
     if continue_worktree:
         argv.extend(["--continue-worktree", continue_worktree])
     if constraints:
@@ -194,10 +230,12 @@ def dispatch_stage(
     runner: Runner | None = None,
     budget: str = "medium",
     complexity: str = "medium",
+    effort: str = "medium",
     dry_run: bool = False,
     continue_worktree: str | None = None,
     cwd: str | None = None,
     constraints: str = "",
+    runtime_host: str = HOST_CLAUDE,
 ) -> RunResult:
     staged: list[Path] = []
     try:
@@ -212,9 +250,10 @@ def dispatch_stage(
         if staged_done_criterion is not None:
             staged.append(staged_done_criterion)
         argv = build_argv(
-            stage, plan_path, budget=budget, complexity=complexity, dry_run=dry_run,
-            continue_worktree=continue_worktree, constraints=norm_constraints,
-            done_criterion=norm_done_criterion,
+            stage, plan_path, budget=budget, complexity=complexity, effort=effort,
+            dry_run=dry_run, continue_worktree=continue_worktree,
+            constraints=norm_constraints, done_criterion=norm_done_criterion,
+            runtime_host=runtime_host,
         )
         run = runner or subprocess_runner
         # cwd is only threaded to the runner when set, so every pre-existing

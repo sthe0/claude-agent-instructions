@@ -17,11 +17,12 @@
 scripts/lib/judge_latency.py
 scripts/lib/judge_budget.py
 
-# The three judge-calling hooks: each holds its own budget, ceiling and floor
-# constants and explains them in comments.
+# Judge-calling hooks: each holds its own budget, ceiling and floor constants
+# and explains them in comments.
 scripts/hook-turn-end-gate.py
 scripts/hook-deferring-disposition-gate.py
 scripts/hook-escalation-diagnosis-gate.py
+scripts/hook-resolution-reminder.py
 
 # The last-resort defaults on the judge signatures, and the advisory timeout the
 # non-judge calls keep.

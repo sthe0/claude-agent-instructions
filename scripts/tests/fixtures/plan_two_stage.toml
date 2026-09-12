@@ -1,4 +1,8 @@
 [meta]
+# Declared, and declared as what it is: a two-stage demo document with none of the
+# substantive apparatus. The submission seam refuses SILENCE from a substantive session,
+# not a plan that says what it is.
+weight_class = "small_change"
 task_id = "demo-two-stage"
 goal = "Demonstrate the full two-stage coordination cycle"
 done_criterion = "both stages PASSED and resolution confirmed"

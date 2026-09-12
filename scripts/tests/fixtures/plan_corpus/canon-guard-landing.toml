@@ -1,0 +1,63 @@
+[meta]
+task_id = "canon-guard-landing"
+goal = "Land the already-approved, executed and verify-final-passed branch canon-readonly-guard (commit 662c889, worktree /Users/the0/cai-wt-canonguard) into main. The parent task (canon-readonly-guard-determinize) reached RESOLUTION under session 8ab094fa; a mid-response API crash split the harness session id to d5a92bc6, so the production-edit gate (which authorizes by the harness id) sees this session as fresh and blocked the two rebase-conflict Edits needed to land. The user has explicitly approved BOTH the exact conflict resolution and the landing (AskUserQuestion: 'Да, разрешаю'). Work: complete the in-progress rebase onto origin/main (base moved +5 commits) by resolving two mechanical doc conflicts and re-verifying against the moved base IN THE WORKTREE (stage 1), then land into main fast-forward and take the extended guard live in the primary canon (stage 2)."
+done_criterion = "Branch canon-readonly-guard is landed into main (main fast-forwarded to include 662c889's changes), the branch + worktree are removed (remote+local+worktree), verify-all.py and the full pytest suite are green against the post-rebase worktree tree BEFORE landing, and the primary canon checkout has the extended guard live (install-reminder-hooks.sh re-run; hook-guard-canon-readonly.py denies a canon Edit and a canon sed -i)."
+criterion_type = "measurable"
+weight_class = "substantive"
+# repo_root moved from the ephemeral worktree /Users/the0/cai-wt-canonguard to the
+# surviving canon after the deleted-worktree cwd defect (stage 2 removes the worktree,
+# yet the engine re-runs every stage's verify_command with cwd=repo_root). Post-land the
+# canon holds the byte-identical fast-forwarded tree, so it is the correct surviving
+# equivalent tree for machine re-verification (record-result + verify-final).
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "none"
+
+[[stage]]
+index = 1
+title = "Resolve the two rebase doc-conflicts in the worktree, complete the rebase, and re-verify against the moved base"
+executor = "in_thread"
+expected_result_image = "In the worktree /Users/the0/cai-wt-canonguard the interrupted `git rebase origin/main` is completed: (1) scripts/README.md conflict resolved by KEEPING BOTH inserted hook rows in alphabetical order (hook-budget-calibration-due.py from upstream, then hook-canon-guard-wired-check.py from our commit, above the pre-existing hook-context-growth-reminder.py row); (2) scripts/config-root-refs-allowlist.txt conflict resolved by setting the three scripts/README.md line references to their post-merge values (origin/main's :38/:79/:110 shift +1 to :39/:80/:111 because our canon-guard row is inserted above all three anchors) and CONFIRMED by verify-config-root-refs.py, not by hand-count. Then `git add` the two files and `git rebase --continue`, leaving the branch ahead-only of origin/main. Re-verification runs IN THE WORKTREE against the moved base: the full pytest suite green and verify-all.py green (the base moved +5 commits, so re-run is mandatory, not assumed). No landing happens in this stage — the worktree tree is what gets verified while it still exists."
+criterion_type = "measurable"
+done_criterion = "no conflict markers remain in the two files; verify-config-root-refs.py passes on the merged README line refs; git rebase completed (branch ahead-only of origin/main); the full pytest suite and verify-all.py are green in the worktree /Users/the0/cai-wt-canonguard on the post-rebase tree"
+verify_command = "python3 -m pytest scripts/tests/ -q && python3 scripts/verify-all.py && echo STAGE1_OK"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/README.md", "scripts/config-root-refs-allowlist.txt"]
+material = "the in-progress rebase in /Users/the0/cai-wt-canonguard (rebase-merge active, two UU files); scripts/README.md hook-inventory table; scripts/config-root-refs-allowlist.txt README line refs; verify-config-root-refs.py + verify-all.py"
+means = "Edit (resolve the two conflict files), Bash (git add / rebase --continue / pytest / verify-all); the re-verification means is now repo_root = the surviving canon (changed from the ephemeral worktree that stage 2 deletes)"
+method = "resolve README keeping both hook rows alphabetically; resolve the allowlist by setting the three README line refs to their post-merge values and confirming with verify-config-root-refs.py; git add + git rebase --continue; run the full pytest suite + verify-all.py via RELATIVE paths resolved in repo_root — CHANGED from an embedded 'cd <worktree>' to relative-in-repo_root, because repo_root now points at the surviving canon (byte-identical to the post-rebase tree after the fast-forward land) rather than the worktree that stage 2 deletes; if either is red, STOP for overcome-difficulty rather than proceeding to stage 2"
+conditions = "the user has explicitly approved the exact conflict resolution and the landing; the rebase is in progress (rebase-merge dir present, two UU files); the two conflicts are purely mechanical (row insertion + line-number shift)"
+invariants = "keep the git-commit/Edit/Write deny paths of the guard byte-for-byte unchanged (no code change — only conflict resolution of doc files that upstream also touched); resolve the allowlist line numbers by the verify tool, never by hand-count; Stage 1's substance (full pytest suite + verify-all.py green) is preserved; only the tree it runs against moves to the byte-identical post-land canon. That surviving tree is repo_root (the canon at the landed commit), never the worktree that stage 2 deletes; English-only repo files"
+capability_required = "bash + python + git"
+
+[stage.principle]
+statement = "A change whose base moved is re-verified on the POST-REBASE worktree tree (repo_root) while that tree still exists — before landing — not on the unrelated canon checkout and not after the worktree is gone; the conflict resolutions are tool-confirmed (verify-config-root-refs.py), never hand-asserted"
+source = "the base moved +5 commits while the branch sat at 662c889; both conflicts are pure doc-inventory row/line-number collisions; the worktree is the only tree holding the post-rebase state until landing"
+derivation = "The change itself is unchanged and already verified once; the new material is the two upstream-vs-ours doc collisions and the moved base. Resolving them mechanically and re-running the full verification in the worktree is the minimal honest way to land without re-litigating the approved change; verifying the canon checkout instead would test the wrong tree."
+confidence = "high"
+refutation = "if pytest or verify-all.py is red in the worktree on the post-rebase tree, the moved base introduced a real incompatibility and landing must stop for overcome-difficulty"
+
+[[stage]]
+index = 2
+title = "Land the verified branch fast-forward into main, remove branch+worktree, and take the extended guard live in the primary canon"
+executor = "in_thread"
+expected_result_image = "With stage 1's post-rebase tree verified green, the branch canon-readonly-guard (ahead-only of origin/main) is landed fast-forward into main via land-branch.py (never force), and the branch (remote+local) plus the worktree /Users/the0/cai-wt-canonguard are removed. Then the primary canon checkout /Users/the0/claude-agent-instructions is pulled (fast-forward, now including the landed change) and install-reminder-hooks.sh is re-run so the extended B1 Bash-write guard and the P2 SessionStart detector are wired into live ~/.claude-agent/settings.json. The live guard is probed: hook-guard-canon-readonly.py, piped a canon Edit payload, DENIES; piped a canon `sed -i` Bash payload, DENIES; the guard is present in the live PreToolUse chains."
+criterion_type = "measurable"
+done_criterion = "main fast-forwarded to include 662c889's changes; branch (remote+local) and worktree removed; primary canon pulled; install-reminder-hooks.sh re-run so hook-guard-canon-readonly.py is wired in live settings and the guard binary denies a piped canon Edit payload AND a canon sed -i Bash payload"
+verify_command = "python3 -c \"import json,subprocess,sys; g='/Users/the0/claude-agent-instructions/scripts/hook-guard-canon-readonly.py'; s=json.load(open('/Users/the0/.claude-agent/settings.json')); cmds=[h.get('command','') for grp in s['hooks']['PreToolUse'] for h in grp.get('hooks',[])]; assert any('hook-guard-canon-readonly.py' in c for c in cmds), 'guard not wired live'; run=lambda t,p,k: subprocess.run([sys.executable,g],input=json.dumps({'tool_name':t,'tool_input':{k:p}}),capture_output=True,text=True).stdout; assert 'deny' in run('Edit','/Users/the0/claude-agent-instructions/X','file_path').lower(), 'canon Edit not denied'; assert 'deny' in run('Bash','sed -i s/a/b/ /Users/the0/claude-agent-instructions/X','command').lower(), 'canon sed -i not denied'; print('GUARD_LIVE_OK')\" && echo STAGE2_OK"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = []
+material = "the verified branch canon-readonly-guard @ 662c889 (ahead-only after stage 1); land-branch.py (fast-forward-only); primary canon /Users/the0/claude-agent-instructions; install-reminder-hooks.sh; live ~/.claude-agent/settings.json; the guard binary hook-guard-canon-readonly.py"
+means = "Bash (land-branch.py / git branch -d / worktree remove / pull / install-reminder-hooks.sh), python (guard payload probes)"
+method = "land-branch.py fast-forward into main; delete the branch remote+local and remove the worktree; pull the primary canon (repo_root is now this surviving canon, so the machine re-verification runs here after the worktree is gone); re-run install-reminder-hooks.sh; pipe a canon Edit payload and a canon sed -i Bash payload to the live guard binary and assert both are denied and the guard is present in the live PreToolUse chains"
+conditions = "stage 1 passed (post-rebase tree verified green in the worktree); land-branch.py is fast-forward-only so the branch is ahead-only; the user approved the landing"
+invariants = "Land only fast-forward (never force); stage 2's gate remains the live-guard probe (canon Edit denied AND canon sed -i denied AND guard wired in live settings). Do not touch the primary canon except via pull + the installer (canon stays read-only to session edits); the installer is idempotent and re-adds any missing canonical hooks (its intended wholesale job); state the wired set honestly"
+capability_required = "bash + python + git"
+
+[stage.principle]
+statement = "Landing is a fast-forward of an already-verified ahead-only branch, and taking the change live is done by re-running the existing idempotent installer against the pulled canon — never by hand-editing settings or force-pushing; the live guarantee is probed (guard denies a canon Edit AND a canon sed -i), not assumed"
+source = "land-branch.py is fast-forward-only; install-reminder-hooks.sh declares the guard in both chains and is idempotent; the change is unchanged from the verify-final-passed parent task"
+derivation = "Because stage 1 already verified the post-rebase tree, stage 2 only needs to move refs (ff land) and apply the mechanism to live state (installer on pulled canon). Probing the guard binary on canon Edit + canon sed-i payloads confirms the extended coverage is actually live rather than merely landed."
+confidence = "high"
+refutation = "if the live guard does not deny a canon sed -i after the installer re-run, the extended B1 coverage did not reach live settings and stage 2 has not met its done criterion"

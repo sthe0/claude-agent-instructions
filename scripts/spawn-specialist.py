@@ -35,6 +35,8 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+from agentctl.plan import load_plan  # parse the TOML plan for a single-stage brief projection
+from agentctl.render import render_stage_brief  # pure PlanDoc+index -> markdown brief
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 from lib.config_root import iter_transcripts, plans_dir, skills_dir  # config-root resolver (isolated system root)
@@ -144,6 +146,37 @@ def permissions_digest(project_file: Path | None) -> str:
     return "\n\n".join(chunks)
 
 
+def brief_plan_path(args: argparse.Namespace) -> Path | None:
+    """The resolved path of `args.plan` when assemble_prompt should project it
+    to a single-stage brief rather than inlining the whole plan text; None
+    when it should not (any condition failing falls back to whole-plan
+    behavior, never raises).
+
+    Returns the resolved path rather than `args.plan` as given because a
+    path given outside `plans_dir()` whose target resolves inside it is still
+    eligible, and the child's --add-dir only covers `plans_dir()` — a pointer
+    spelled as given could name a file the child has no grant to open.
+    """
+    kind_can_read_plans = getattr(args, "kind", None) in PLANS_READ_KINDS
+    opted_in = getattr(args, "plan_brief", False)
+    has_stage_index = getattr(args, "stage_index", None) is not None
+    plan_path = getattr(args, "plan", None)
+    if not (kind_can_read_plans and opted_in and has_stage_index and plan_path):
+        return None
+    try:
+        resolved_plan = Path(plan_path).resolve()
+        resolved_plan.relative_to(plans_dir().resolve())
+    except (OSError, ValueError):
+        return None
+    return resolved_plan
+
+
+def brief_eligible(args: argparse.Namespace) -> bool:
+    """Whether `args` earns a projected stage brief — `brief_plan_path`'s
+    predicate face, for callers that need the decision and not the path."""
+    return brief_plan_path(args) is not None
+
+
 def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> str:
     plan = argv_text.read_required_file(args.plan, "--plan")
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
@@ -168,7 +201,18 @@ def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> s
             f"stage's work.",
             "",
         ]
-    sections += ["## Working plan", "", plan, ""]
+    resolved_plan = brief_plan_path(args)
+    if resolved_plan is not None:
+        doc = load_plan(str(args.plan))
+        plan_label = (
+            f"## Working plan — stage {args.stage_index} brief "
+            f"(projected; the full plan lives at `{resolved_plan}`, not inlined here)"
+        )
+        plan_body = render_stage_brief(doc, args.stage_index)
+    else:
+        plan_label = "## Working plan"
+        plan_body = plan
+    sections += [plan_label, "", plan_body, ""]
     sections += [
         "## Done criterion for this step",
         "",
@@ -294,7 +338,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"),
         help="claude --permission-mode for the spawned process. Default: acceptEdits for kind=developer (unattended local writes, and no wider), harness default otherwise. See resolve_permission_mode for why NOT bypassPermissions.",
     )
-    p.add_argument(
+    model_group = p.add_mutually_exclusive_group(required=True)
+    model_group.add_argument(
         "--complexity",
         choices=("low", "medium", "high"),
         help="task difficulty -> sub-agent model: low=haiku, medium=sonnet, high=opus. "
@@ -306,14 +351,47 @@ def build_parser() -> argparse.ArgumentParser:
         "scoped refactor, standard plan, routine debugging) -- pick this when unsure; "
         "high = subtle reasoning, architecture, tricky debugging, cross-cutting change, "
         "or adversarial verification where correctness is load-bearing. "
-        "Overrides the per-kind default; --model overrides this.",
+        "Required unless --model is given: there is no inherit-the-parent-model "
+        "fallback, the manager always classifies. Clamped by --max-complexity if set.",
+    )
+    model_group.add_argument(
+        "--model",
+        help="explicit model alias (e.g. sonnet, haiku, opus). An intentional exact "
+        "override, NOT subject to --max-complexity (which only clamps the "
+        "--complexity classification path). Mutually exclusive with --complexity; "
+        "prefer --complexity unless you need an exact model.",
     )
     p.add_argument(
-        "--model",
-        help="explicit model alias (e.g. sonnet, haiku, opus). Wins over --complexity "
-        "and the per-kind default. Prefer --complexity unless you need an exact model.",
+        "--max-complexity",
+        choices=("low", "medium", "high"),
+        default=None,
+        help="ceiling on the model tier a --complexity classification may resolve "
+        "to (e.g. --max-complexity medium caps a 'high' classification down to "
+        "sonnet). Default: unset, no ceiling -- --complexity high still reaches "
+        "opus. Does not affect an explicit --model.",
+    )
+    p.add_argument(
+        "--effort",
+        choices=("low", "medium", "high", "xhigh", "max"),
+        required=True,
+        help="claude -p --effort reasoning-effort level for the spawned child. "
+        "Required, with no inherit-the-parent fallback, on the same rationale as "
+        "--complexity/--model (see resolve_model): an optional flag with a "
+        "default degrades into an unconsidered default under time pressure. "
+        "Rubric: low = cheap dispatch/retrieval/polling; medium = standard "
+        "implementation or analysis (pick when unsure); high/xhigh = subtle "
+        "reasoning, architecture, adversarial verification where correctness is "
+        "load-bearing; max = rare, only for the most contested judgment calls.",
     )
     p.add_argument("--stage-index", type=int, default=None, help="index of the plan stage this spawn serves (optional; enables per-stage cost attribution)")
+    p.add_argument(
+        "--plan-brief",
+        action="store_true",
+        help="project only --stage-index's stage into the prompt (render_stage_brief) "
+        "instead of inlining the whole plan; requires --kind in PLANS_READ_KINDS, "
+        "--stage-index set, and --plan to resolve inside plans_dir() — falls back "
+        "to today's whole-plan behavior otherwise (see brief_eligible)",
+    )
     p.add_argument(
         "--continue-worktree",
         default=None,
@@ -332,26 +410,31 @@ def build_parser() -> argparse.ArgumentParser:
 # per-token price, so routing any complexity band there is a spend decision for the
 # user to make explicitly via `--model fable`, not a default.
 COMPLEXITY_MODEL = {"low": "haiku", "medium": "sonnet", "high": "opus"}
-
-# Fallback model per specialization, used only when neither --model nor --complexity
-# is given. Cheap-but-capable Sonnet for the high-volume implementation/analysis roles;
-# planner is omitted so it inherits the parent (stronger) model.
-MODEL_BY_KIND = {
-    "developer": "sonnet",
-    "thinker": "sonnet",
-    "tech-writer": "sonnet",
-    "yandex-cloud-expert": "sonnet",
-}
+COMPLEXITY_ORDER = ("low", "medium", "high")
 
 
-def resolve_model(args: argparse.Namespace) -> str | None:
+def _clamp_complexity(complexity: str, ceiling: "str | None") -> str:
+    """`complexity`, capped to `ceiling` on COMPLEXITY_ORDER (no-op if
+    `ceiling` is None or complexity is already at/below it)."""
+    if ceiling is None:
+        return complexity
+    if COMPLEXITY_ORDER.index(complexity) > COMPLEXITY_ORDER.index(ceiling):
+        return ceiling
+    return complexity
+
+
+def resolve_model(args: argparse.Namespace) -> str:
     """Model alias for `claude -p --model`, by precedence:
-    explicit --model > --complexity map > per-kind default > None (inherit parent)."""
+    explicit --model (exact override, ignores --max-complexity) > --complexity,
+    clamped by --max-complexity if set, mapped through COMPLEXITY_MODEL.
+
+    --model and --complexity are a required mutually-exclusive pair (see
+    build_parser) — there is no third "neither given" case, so this never
+    inherits the parent's model."""
     if args.model:
         return args.model
-    if args.complexity:
-        return COMPLEXITY_MODEL[args.complexity]
-    return MODEL_BY_KIND.get(args.kind)
+    complexity = _clamp_complexity(args.complexity, args.max_complexity)
+    return COMPLEXITY_MODEL[complexity]
 
 
 # Absolute context ceiling before auto-compaction (tokens) — our own intent, not a
@@ -371,12 +454,64 @@ AUTOCOMPACT_CEILING_TOKENS = 150_000
 # tengu_amber_moleskin / tengu_amber_rokovoko in client 2.1.220), so a fraction change
 # moves the trigger. The previous percentage mechanism carried the same exposure —
 # the fraction term is an outer min() in the client's trigger — so nothing is lost.
+# The next two are CLIENT-side constants, read out of the installed bundle at
+# /opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe,
+# client 2.1.220 — not values this repository owns. They move on a client
+# release without our involvement, so re-READ them from that bundle rather than
+# re-deriving them, and locate them by the surrounding literal strings rather
+# than by symbol name (the minifier renames symbols between builds). This is
+# the discipline config.md's claude-md-max-chars row already records for a
+# borrowed constant; the version named above is the only thing that later tells
+# a reader whether the numbers here still match the installed client.
 OUTPUT_RESERVE_TOKENS = 20_000        # min(maxOutputTokens, 20000) in the client
+CLIENT_TRIGGER_FLOOR_MARGIN_TOKENS = 13_000   # the floor term of the trigger's min()
 PRECOMPUTE_BUFFER_FRACTION = 0.2      # client default; server-tunable (see above)
 SPAWN_AUTOCOMPACT_WINDOW_TOKENS = (
     round(AUTOCOMPACT_CEILING_TOKENS / (1 - PRECOMPUTE_BUFFER_FRACTION))
     + OUTPUT_RESERVE_TOKENS
 )
+
+# The `model max` term of the client's min(model max, configured window) step.
+# Deliberately ONE number rather than a per-model table, on the same rationale
+# as SPAWN_AUTOCOMPACT_WINDOW_TOKENS: every COMPLEXITY_MODEL entry (haiku,
+# sonnet, opus) shares this 200k maximum, so applying it to every model is
+# exact for the roster as it stands and conservative for anything larger. A
+# smaller-window model joining the roster would make it too generous: a
+# residual, not a guarantee.
+MODEL_FLOOR_WINDOW_TOKENS = 200_000
+
+# Conservative chars-per-token divisor for estimating an assembled prompt's
+# token count from its char count without invoking a tokenizer. Fixed below
+# the 1.744 chars/token actually measured on the failed dispatch below
+# (375,759 chars / 215,416 tokens), so this estimate errs toward refusing
+# early rather than discovering the failure only after the child is spawned.
+# The distance from 1.744 down to 1.5 is picked headroom, not a derivation:
+# only the ratio is measured, and nothing in it fixes how far below to sit.
+PROMPT_CHARS_PER_TOKEN = 1.5
+
+
+def dispatch_prompt_ceiling_tokens(model: str | None) -> int:
+    """Largest assembled prompt (in tokens) this parent will spawn a child with."""
+    window = min(MODEL_FLOOR_WINDOW_TOKENS, SPAWN_AUTOCOMPACT_WINDOW_TOKENS)
+    usable = window - OUTPUT_RESERVE_TOKENS
+    fraction_term = round(usable * (1 - PRECOMPUTE_BUFFER_FRACTION))
+    floor_margin_term = usable - CLIENT_TRIGGER_FLOOR_MARGIN_TOKENS
+    return min(fraction_term, floor_margin_term)
+
+
+def dispatch_prompt_ceiling_chars(model: str | None) -> int:
+    """The token ceiling above, converted into the unit the assembled prompt is
+    already measured in. The CEILING is multiplied by a divisor set below the
+    measured ratio, so the conversion shrinks the char budget; the prompt is
+    never converted the other way, which would invert that safety margin."""
+    return int(dispatch_prompt_ceiling_tokens(model) * PROMPT_CHARS_PER_TOKEN)
+
+
+def prompt_exceeds_ceiling(prompt: str, model: str | None = None) -> bool:
+    """Whether the assembled prompt (stdin payload) is too large to safely
+    spawn. Applies uniformly regardless of whether the size came from the
+    brief or whole-plan path."""
+    return len(prompt) > dispatch_prompt_ceiling_chars(model)
 
 
 # Code-executing permission scoped to developer spawns only, injected into the
@@ -420,6 +555,54 @@ DEVELOPER_SETTINGS_ALLOW = [
     # merge-base and rev-list. Landing stays absent: `git push` is the coordinator's.
     "Bash(git fetch:*)", "Bash(git merge:*)", "Bash(git merge-base:*)",
     "Bash(git rev-list:*)", "Bash(git checkout:*)", "Bash(git restore:*)",
+    # spawn-outcome-typing stage 4 measures marker_extract's own latency via
+    # real host calls — scoped to the driver script only. User-authorized
+    # 2026-08-20 as a temporary unblock; a proper per-stage/plan-declared
+    # permission mechanism (agentctl dispatch reading extra grants from the
+    # plan TOML instead of a static fleet-wide list) is filed separately
+    # rather than built under this stage's time pressure.
+    #
+    # A sibling "Bash(claude -p --model haiku:*)" grant was added alongside
+    # this one at first, then removed the same day on code-review: the
+    # script drives claude via host_llm.build_prompt_argv +
+    # marker_extract.subprocess_runner INSIDE this already-permitted
+    # python3 process, never through the Bash tool directly, so the extra
+    # grant was both unused and, being "claude -p ... :*" (unbounded
+    # trailing args), a bypass of spawn-specialist.py's own outcome-typing
+    # ledger for any developer that DID reach for it directly — the exact
+    # defect this plan exists to fix.
+    "Bash(python3 scripts/measure-marker-extractor-latency.py:*)",
+    # hook-resolution-reminder-pretooluse-gap stage 1 needs to compile its own
+    # edits, check the engine's own worktree-local gate state, and run the new
+    # judge's real-call latency sampler. User-authorized 2026-08-28 as another
+    # narrow, named unblock — same precedent as the grant above, not a
+    # broadening to "any python3". The deferred dynamic per-plan grant
+    # mechanism referenced above still does not exist; this is another
+    # static addition until it does. Root cause of needing this at all:
+    # `agentctl resolve-permission --decision granted` only clears engine
+    # state and returns a continuation string (continuations.py
+    # permission_granted()) — it never writes to any permissions file and
+    # never touches this list, so three consecutive PERMISSION-REQUEST/grant
+    # cycles for this exact stage reproduced the identical block each time.
+    "Bash(python3 -m py_compile:*)",
+    "Bash(python3 -m agentctl classify:*)",
+    "Bash(python3 -m agentctl status:*)",
+    "Bash(python3 samples/judge-latency/sample_landing_discipline.py:*)",
+    # tech-writer-publication-gate stage 6's method is a real in-harness
+    # observation: spawn two actual `claude -p` children (deny arm, allow
+    # arm) against a scratch hook and independently re-check the recorded
+    # timestamps/acts, which a stdin-fed rerun of the hook cannot establish.
+    # User-authorized 2026-09-02 as the same narrow, named, temporary
+    # unblock pattern as the two grants above (the deferred dynamic
+    # per-plan grant mechanism they reference still does not exist). Unlike
+    # the removed "claude -p --model haiku:*" grant noted above, a direct
+    # `claude -p` spawn is this stage's actual deliverable, not an avoidable
+    # implementation detail routed through an already-permitted python3
+    # process — so the raw Bash grant is scoped here, not just the wrapper.
+    "Bash(python3 scripts/check-in-harness-observation.py:*)",
+    "Bash(python3 scripts/check-live-run-evidence.py:*)",
+    "Bash(python3 _ptg_scratch/probe/launch_probe.py:*)",
+    "Bash(claude -p:*)",
 ]
 
 # The plan-artifact directory (lib.config_root.plans_dir()) is where a
@@ -495,6 +678,46 @@ def plans_add_dir_args(kind: str, plans_directory: Path) -> list[str]:
     if kind in PLANS_WRITE_KINDS or kind in PLANS_READ_KINDS:
         return ["--add-dir", str(plans_directory)]
     return []
+
+
+def _vcs_root(cwd: str) -> "str | None":
+    """VCS root of `cwd`: git first, then arc (mirrors
+    hook-scope-track.py::resolve_repo_root_vcs; duplicated rather than
+    imported since that module is a standalone hook script, not a library)."""
+    for probe in (["git", "rev-parse", "--show-toplevel"], ["arc", "root"]):
+        try:
+            out = subprocess.run(probe, cwd=cwd, capture_output=True, text=True, timeout=4)
+        except Exception:
+            continue
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    return None
+
+
+def repo_root_add_dir_args(kind: str, cwd: str) -> list[str]:
+    """`--add-dir` argv granting a `developer` spawn the same VCS-repo-root
+    scope its parent session already has, when the spawn's cwd (inherited
+    from the parent process — nothing in this module passes an explicit
+    `cwd=` to the child launch) sits strictly below that root.
+
+    Difficulty removed: a monorepo mount can hold several product subtrees
+    under one repo_root (e.g. `team-a/service` and a sibling
+    `team-b/tool/...`). The parent session's own trust boundary
+    (session_scope, repo_root-granular) already covers the whole mount, but a
+    spawned developer's workspace defaults to just its cwd, so a stage whose
+    declared deliverable legitimately lives in a sibling subtree hits a
+    permission wall the parent was never actually going to hit. Granting
+    repo_root here does not widen trust past what the parent already holds —
+    it only propagates the parent's own already-established boundary down to
+    the child. Scoped to `developer` only: read-only kinds (thinker,
+    code-reviewer) don't write outside their brief, and `planner` writes only
+    its own plan file (see PLANS_WRITE_KINDS)."""
+    if kind != "developer":
+        return []
+    root = _vcs_root(cwd)
+    if not root or os.path.normpath(root) == os.path.normpath(cwd):
+        return []
+    return ["--add-dir", root]
 
 
 def build_child_settings(kind: str, plans_directory: "Path | None" = None) -> dict:
@@ -648,8 +871,106 @@ def _build_extraction(result_text: str, kind: str) -> "marker_extract.Extraction
     return marker_extract.build_extraction(result_text, kind=kind)
 
 
+# The CHILD's own terminal condition, distinct from every marker/extraction
+# outcome above: these two classes mean the child never got far enough to
+# answer at all, so asking the marker question about its output is asking the
+# wrong question (issue #78, #80 — see CHILD_OUTCOME_NOTE below). CHILD_ANSWERED
+# is not a signature match; it is what a genuine terminal marker forces
+# regardless of any match (see _resolve_child_outcome's precedence rule).
+CHILD_ANSWERED = "CHILD_ANSWERED"
+CHILD_INFRA_FAILURE = "CHILD_INFRA_FAILURE"
+CHILD_EXHAUSTED = "CHILD_EXHAUSTED"
+
+# Signatures the `claude` CLI itself emits on its own stdout/stderr when a run
+# never reaches (or loses) the API, or is refused outright for size before it
+# can answer. These are STRUCTURAL strings a host CLI emits about its own
+# process, not free text a model authored, so matching them here is parsing a
+# machine's own output rather than classifying meaning (the exception this
+# repo's regex-not-for-semantic-classification rule carves out) — and the
+# match only ever shapes a RECOMMENDATION (see _resolve_child_outcome), never
+# suppresses a result the child produced. One entry per family; each cites the
+# observed instance that put it here. Additive: an unmatched failure falls
+# back to today's NO_MARKER/EXTRACTOR_* handling, never to a guess.
+_CHILD_OUTCOME_SIGNATURES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # Issue #78, 2026-08-13 dispatch: died on
+    # "API Error: Unable to connect to API (ENOTFOUND)" after 24.7 minutes and
+    # $0.68 — the child never reached a model turn.
+    (CHILD_INFRA_FAILURE, ("API Error", "Unable to connect to API", "ENOTFOUND")),
+    # Issue #80, 2026-08-16 dispatch: ran 28.4 minutes and $5.52 and was
+    # refused outright with "Prompt is too long", nothing committed.
+    (CHILD_EXHAUSTED, ("Prompt is too long",)),
+)
+
+CHILD_OUTCOME_NOTE: dict[str, str] = {
+    CHILD_INFRA_FAILURE: (
+        "the child spawn never reached, or lost, the API before exiting — a "
+        "transient infrastructure condition, not a judgement about the "
+        "specialist's output. Recommended move: retry the same dispatch."
+    ),
+    CHILD_EXHAUSTED: (
+        "the child spawn was refused for size (a context/prompt-size limit) "
+        "before it could answer — a resource condition, not a judgement about "
+        "the specialist's output. Recommended move: a reduced brief, or the "
+        "re-attest path for a stage the child may have partly completed."
+    ),
+}
+
+
+def classify_child_outcome(stdout: str, stderr: str, returncode: int) -> tuple[str, str | None]:
+    """The high-recall signature scan alone, with no knowledge of whether a
+    marker was found — ``returncode`` is accepted for a future signature
+    keyed on exit code but unused today; every current signature is a
+    substring of the CLI's own stdout/stderr. Returns
+    ``(CHILD_INFRA_FAILURE | CHILD_EXHAUSTED, matched_substring)`` or
+    ``(CHILD_ANSWERED, None)`` when nothing matches. Callers that need the
+    marker-precedence rule applied use ``_resolve_child_outcome`` instead —
+    this function alone does NOT know a marker exists and must never be
+    treated as the final verdict."""
+    haystack = f"{stdout}\n{stderr}"
+    for outcome, signatures in _CHILD_OUTCOME_SIGNATURES:
+        for signature in signatures:
+            if signature in haystack:
+                return outcome, signature
+    return CHILD_ANSWERED, None
+
+
+def _resolve_child_outcome(
+    stdout: str, stderr: str, returncode: int, marker: str | None
+) -> tuple[str, str | None]:
+    """Apply the precedence rule the prefilter's legitimacy rests on: a
+    genuine terminal marker ALWAYS outranks a signature match. ``marker`` is
+    ``check_planner_return``'s parsed marker (``None`` when no line carried
+    one) — the same signal that already decided whether the specialist's
+    output was routable. A signature can therefore only relabel a run that
+    was already going to MALFORMED/NO_MARKER; it can never discard or
+    override a result the child produced."""
+    if marker is not None:
+        return CHILD_ANSWERED, None
+    return classify_child_outcome(stdout, stderr, returncode)
+
+
+def _child_outcome_envelope(outcome: str, matched: str, result_text: str, stderr: str) -> str:
+    """The envelope for a CHILD_INFRA_FAILURE / CHILD_EXHAUSTED run: states
+    what happened to the RUN, never that the output was malformed. Falls back
+    to stderr for the preserved body when the child's stdout never carried
+    anything (the common shape for both documented instances)."""
+    body = result_text if result_text.strip() else stderr
+    return f"{outcome}: {CHILD_OUTCOME_NOTE[outcome]} (matched {matched!r}).\n\n{body}"
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    bound_host = os.environ.get("AGENTCTL_RUNTIME_HOST")
+    if bound_host == "cursor":
+        print(
+            "error: AGENTCTL_RUNTIME_HOST=cursor; refusing to spawn a Claude "
+            "`claude -p` specialist from a Cursor-bound session. Use "
+            "spawn-cursor-specialist.py instead.",
+            file=sys.stderr,
+        )
+        log_refused("cross-host", {"kind": args.kind, "bound_host": bound_host, "this_host": "claude"})
+        return 5
 
     if not argv_text.is_readable_file(args.plan):
         print(argv_text.file_arg_error("--plan", args.plan), file=sys.stderr)
@@ -694,8 +1015,41 @@ def main(argv: list[str] | None = None) -> int:
     tier_label_usd = budget_value(args.budget, constants)
     cap = runaway_ceiling(constants)
     perms = permissions_digest(args.project_permissions)
-    prompt = assemble_prompt(args, depth_next, perms)
+    try:
+        prompt = assemble_prompt(args, depth_next, perms)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        log_refused(
+            "stage-brief-error",
+            {"kind": args.kind, "plan": argv_text.abbreviate(args.plan), "stage_index": args.stage_index},
+        )
+        return 2
     model = resolve_model(args)
+
+    ceiling_chars = dispatch_prompt_ceiling_chars(model)
+    if prompt_exceeds_ceiling(prompt, model):
+        measured = len(prompt)
+        print(
+            f"error: assembled prompt is {measured} chars, exceeding the "
+            f"{ceiling_chars}-char ({dispatch_prompt_ceiling_tokens(model)}-token) "
+            f"pre-spawn refusal ceiling for this child (resolved to --model {model}); "
+            f"refusing before spawning. Shrink constraints/dossier, or dispatch with "
+            f"--plan-brief if not already set.",
+            file=sys.stderr,
+        )
+        log_refused(
+            "prompt-too-large",
+            {
+                "kind": args.kind,
+                "chars": measured,
+                "ceiling_chars": ceiling_chars,
+                "model": model,
+                "plan_brief": getattr(args, "plan_brief", False),
+                "stage_index": args.stage_index,
+            },
+        )
+        return 5
+
     plans_directory = plans_dir()
 
     cmd = [
@@ -716,11 +1070,12 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(build_child_settings(args.kind, plans_directory)),
     ]
     cmd.extend(plans_add_dir_args(args.kind, plans_directory))
+    cmd.extend(repo_root_add_dir_args(args.kind, os.getcwd()))
     permission_mode = resolve_permission_mode(args)
     if permission_mode is not None:
         cmd.extend(["--permission-mode", permission_mode])
-    if model is not None:
-        cmd.extend(["--model", model])
+    cmd.extend(["--model", model])
+    cmd.extend(["--effort", args.effort])
     # The prompt is NOT appended to argv: with the plan inlined it exceeds Linux
     # MAX_ARG_STRLEN (32 pages = 131072 bytes for a single argv string), which execve
     # rejects with E2BIG before the child starts. It travels via stdin instead (see
@@ -814,9 +1169,29 @@ def main(argv: list[str] | None = None) -> int:
     forwarded, ok, parsed_marker = check_planner_return(
         result_text, args.kind, extraction=extraction
     )
+
+    # Classify the CHILD's own terminal condition BEFORE trusting the marker
+    # question's answer: a run that never reached the API or was refused for
+    # size answers "no marker" for a reason that has nothing to do with the
+    # specialist's output being unparseable. Precedence is enforced inside
+    # _resolve_child_outcome — a found marker always wins, so this can only
+    # relabel a run already headed to MALFORMED/NO_MARKER, never suppress one.
+    child_outcome, child_matched = _resolve_child_outcome(
+        completed.stdout, completed.stderr, completed.returncode, parsed_marker
+    )
+    if child_outcome != CHILD_ANSWERED:
+        forwarded = _child_outcome_envelope(child_outcome, child_matched, result_text, completed.stderr)
+
     sys.stdout.write(forwarded)
     if not forwarded.endswith("\n"):
         sys.stdout.write("\n")
+
+    # outcome_class defaults to the extraction's own verdict; a matched CHILD_*
+    # signature overrides it — this stage's whole point is that "the extractor
+    # judged NO_MARKER" is the wrong report when the child never ran at all.
+    outcome_class = extraction.outcome if extraction is not None else None
+    if child_outcome != CHILD_ANSWERED:
+        outcome_class = child_outcome
 
     log_cost_entry({
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -824,6 +1199,7 @@ def main(argv: list[str] | None = None) -> int:
         "kind": args.kind,
         "budget_tier": args.budget,
         "budget_usd_cap": cap,
+        "effort": args.effort,
         "depth": depth_next,
         "cost_usd": cost_usd,
         "duration_ms": duration_ms,
@@ -836,6 +1212,7 @@ def main(argv: list[str] | None = None) -> int:
         "extractor_model": marker_extract.model() if extraction is not None else None,
         "extractor_degraded": extraction.degraded if extraction is not None else None,
         "extraction_reason": extraction.reason if extraction is not None else None,
+        "outcome_class": outcome_class,
         **_spawn_tags(),
     })
 
@@ -867,7 +1244,7 @@ def main(argv: list[str] | None = None) -> int:
     if parsed_marker:
         summary_bits.append(f"marker={parsed_marker}")
     if not ok:
-        summary_bits.append("MALFORMED")
+        summary_bits.append(child_outcome if child_outcome != CHILD_ANSWERED else "MALFORMED")
     print(" ".join(summary_bits), file=sys.stderr)
 
     return completed.returncode

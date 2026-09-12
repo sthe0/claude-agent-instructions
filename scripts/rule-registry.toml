@@ -289,6 +289,16 @@ delivery_marker = "agentctl question-raise"
 delivery_note = "gates.premise; no un-dispositioned premise survives approve."
 
 [[rule]]
+id = "own-research-precedes-escalation"
+tier = 1
+locator_heading = "### Escalation to the user"
+locator_phrase = "Own research precedes escalation"
+kernel_reason = ""
+delivery_kind = "agentctl_construct"
+delivery_marker = "agentctl question-research"
+delivery_note = "premise.validate_questions refuses --to escalated on empty own_research, but binds only the premise bag at plan_approval; this rule extends the same three acts to questions arising mid-execution and at plan review."
+
+[[rule]]
 id = "doubt-own-snapshot-before-escalating"
 tier = 0
 locator_heading = "### Escalation to the user"
@@ -303,6 +313,16 @@ id = "ask-user-question-mandatory-for-choices"
 tier = 0
 locator_heading = "### Escalation to the user"
 locator_phrase = "Use `AskUserQuestion` for every confirmation"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = ""
+
+[[rule]]
+id = "hedge-phrase-not-a-question"
+tier = 0
+locator_heading = "### Escalation to the user"
+locator_phrase = "A hedge phrase is not a question"
 kernel_reason = "NOT-NOTICING"
 delivery_kind = ""
 delivery_marker = ""
@@ -456,6 +476,16 @@ kernel_reason = ""
 delivery_kind = "agentctl_construct"
 delivery_marker = "agentctl record-result"
 delivery_note = "agentctl.effort.divergence, evaluated at cmd_record_result and cmd_verify_final; a fire transitions VERIFYING -> DIAGNOSING and returns marker OVERCOME-DIFFICULTY with an effort_divergence payload. The marker is a COARSE proxy in the over-reading direction: record-result runs on every stage result, divergent or not, so an observed count is an upper bound on deliveries, not a firing count. A true firing signal lives in the directive's data payload (tool_use OUTPUT), which this report does not read. Env kill-switch AGENTCTL_EFFORT=0 suppresses evaluation entirely with no observable trace."
+
+[[rule]]
+id = "replans-scale-second-firing-ask-user"
+tier = 0
+locator_heading = "### When the work is stuck"
+locator_phrase = "Two re-entry signals warrant a direct user question"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = "Prose-only interim rule; the structural round-release valve for the replans scale is out of this plan's scope (sibling plan enumerate-round-budget). No engine delivery exists yet."
 
 # ---------------------------------------------------------------------------
 # ### When the user corrects agent behavior

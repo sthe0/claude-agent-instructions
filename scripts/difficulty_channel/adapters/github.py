@@ -19,7 +19,13 @@ import urllib.request
 from pathlib import Path
 from typing import Callable
 
-from ..port import DifficultyChannel, DifficultyRecord, Severity, register_channel
+from ..port import (
+    DifficultyChannel,
+    DifficultyRecord,
+    Severity,
+    StreamUnsupported,
+    register_channel,
+)
 
 REPO = "sthe0/claude-agent-instructions"
 API_BASE = "https://api.github.com"
@@ -28,6 +34,10 @@ TOKEN_PATH = Path.home() / ".github-token"
 # Always-present label so the digest can filter difficulty records in one query.
 DIFFICULTY_LABEL = "difficulty"
 BACKLOG_LABEL = "backlog"
+
+# Stream name -> the label that selects it. Shared by submit() (via record_to_fields) and
+# pull_stream() so both sides of the channel agree on one vocabulary.
+STREAM_LABELS = {"report": DIFFICULTY_LABEL, "backlog": BACKLOG_LABEL}
 
 
 def record_to_fields(record: DifficultyRecord, stream: str = "report") -> dict:
@@ -38,7 +48,8 @@ def record_to_fields(record: DifficultyRecord, stream: str = "report") -> dict:
         f"**Functional ground:** {record.functional_ground}\n"
         f"**Severity:** {record.severity.value}\n"
         f"**Reporter:** {record.reporter}\n"
-        f"**Observed:** {record.ts}\n\n"
+        f"**Observed:** {record.ts}\n"
+        f"**Cost:** {record.cost_estimate}\n\n"
         f"**Evidence:**\n{record.evidence}"
     )
     stream_label = BACKLOG_LABEL if stream == "backlog" else DIFFICULTY_LABEL
@@ -202,10 +213,10 @@ class GitHubChannel(DifficultyChannel):
         resp = self._http("POST", url, self._headers(), body)
         return resp.get("html_url", "")
 
-    def pull(self, since: str | None = None) -> list[DifficultyRecord]:
+    def _pull_by_label(self, label: str, since: str | None) -> list[DifficultyRecord]:
         url = (
             f"{API_BASE}/repos/{REPO}/issues"
-            f"?labels={DIFFICULTY_LABEL}&state=open&per_page=100"
+            f"?labels={label}&state=open&per_page=100"
         )
         if since:
             url += f"&since={since}"
@@ -217,6 +228,14 @@ class GitHubChannel(DifficultyChannel):
         if since:
             records = [r for r in records if r.ts >= since]
         return records
+
+    def pull(self, since: str | None = None) -> list[DifficultyRecord]:
+        return self._pull_by_label(DIFFICULTY_LABEL, since)
+
+    def pull_stream(self, stream: str = "report", since: str | None = None) -> list[DifficultyRecord]:
+        if stream not in STREAM_LABELS:
+            raise StreamUnsupported(f"GitHubChannel does not support stream {stream!r}")
+        return self._pull_by_label(STREAM_LABELS[stream], since)
 
 
 def _parse_body_field(body: str, field: str) -> str:
@@ -255,6 +274,7 @@ def _issue_to_record(issue: dict) -> DifficultyRecord:
         or (issue.get("user") or {}).get("login", "unknown")
     )
     ts = _parse_body_field(body, "Observed") or issue.get("created_at", "")
+    cost_estimate = _parse_body_field(body, "Cost")
 
     evidence = ""
     body_lines = body.splitlines()
@@ -263,6 +283,7 @@ def _issue_to_record(issue: dict) -> DifficultyRecord:
             evidence = "\n".join(body_lines[i + 1:]).strip()
             break
 
+    ref = issue.get("html_url") or f"{REPO}#{issue.get('number', '')}"
     return DifficultyRecord(
         ts=ts,
         layer=layer,
@@ -271,6 +292,8 @@ def _issue_to_record(issue: dict) -> DifficultyRecord:
         severity=severity,
         reporter=reporter,
         evidence=evidence,
+        cost_estimate=cost_estimate,
+        ref=ref,
     )
 
 

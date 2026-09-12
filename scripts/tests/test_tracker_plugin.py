@@ -22,6 +22,7 @@ from agentctl import cli, plugins
 from agentctl import plugins_tracker as tp
 from agentctl.directive import Directive
 from agentctl.state import Node, Partition, PartitionUnit, SessionState, WeightClass
+from conftest import STAGE_OBSERVATIONS
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 HOOK_SCRIPT = SCRIPTS_DIR / "hook-tracker-publish-reminder.py"
@@ -149,6 +150,20 @@ def test_approve_emits_start_progress_and_publish_plan_snapshot():
     assert publish["data"]["plan_snapshot_path"] != state.plan_path
     # the nudge names the skip route so a backend without the verb degrades honestly
     assert "--skipped" in publish["detail"]
+    # the comment body must be a reader-facing rendering, never the raw snapshot bytes
+    assert "rendering" in publish["detail"]
+    assert "dialogue language" in publish["detail"]
+    assert "publish the approved plan SNAPSHOT to the ticket" not in publish["detail"]
+
+
+def test_publish_plan_details_never_instruct_pasting_snapshot_bytes():
+    state = _new_state()
+    plugins.activate(state, "tracker", {"tracker_key": "ABC-1"})
+    submit_fired = plugins.fire("submit_plan", state, Directive(True, state.node, "submit_plan"))
+    for bad in ("post the plan to the ticket", "publish the approved plan snapshot",
+                "post the snapshot"):
+        assert bad not in submit_fired[0]["detail"].lower()
+    assert "rendering" in submit_fired[0]["detail"]
 
 
 def test_approve_publish_plan_snapshot_path_empty_when_unset():
@@ -361,9 +376,10 @@ def _drive_to_resolution(capsys, root, sid, plan, *, activate_tracker):
     _run(capsys, root, "submit-plan", "--session", sid, "--plan", plan)
     _run(capsys, root, "approve", "--session", sid, "--by", "user")
     _run(capsys, root, "partition", "--session", sid)
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         _run(capsys, root, "next-stage", "--session", sid)
-        _run(capsys, root, "record-result", "--session", sid, "--status", "passed", "--actual", "ok", "--control", "reviewed: ok")
+        _run(capsys, root, "record-result", "--session", sid, "--status", "passed", "--actual", "ok",
+             "--control", "reviewed: ok", "--observation", observation)
     _run(capsys, root, "verify-final", "--session", sid)
     # experience auto-activates for every substantive session; satisfy its gate so
     # these tests isolate the tracker plugin's own gating behavior

@@ -26,6 +26,7 @@ When you're about to issue Bash for any of these *classes* of operation, **pause
 | Secrets / vault | a secrets-manager skill |
 | Tickets / tracker / search | a ticket-tracker skill |
 | Code search in a large monorepo | an indexed code-search skill (faster than recursive grep on a large tree) |
+| Reading/scoping an `agentctl` plan TOML (a field, a section, which stages a replan actually changed) | `agentctl plan-render --stage N --plan <path>`, `plan-review-delta`, `question-list --format md` — the typed plan model, not grep over the TOML text |
 | Data warehouse / analytics queries | a data-warehouse / query-engine skill |
 | Job / workflow orchestration | an orchestration-platform skill |
 | Backend logs / alerts | a logs/alerting skill |

@@ -90,6 +90,11 @@ if [[ -d "$REPO/skills" ]]; then
   done
 fi
 
+if [[ -x "$REPO/cursor/scripts/cursor-doctor.sh" ]]; then
+  echo "=== Cursor readiness ==="
+  "$REPO/cursor/scripts/cursor-doctor.sh" || FAIL=1
+fi
+
 if [[ -d "$REPO/skills/specializations" ]]; then
   for d in "$REPO/skills/specializations/"*/; do
     [[ -d "$d" ]] || continue

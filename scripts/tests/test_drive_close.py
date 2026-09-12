@@ -3,11 +3,13 @@ call each, with the two human gates (plan-approval, resolution) never auto-cross
 
 All cases drive cmd_* directly through the fake `store` fixture — no real `claude -p`
 and no filesystem-of-record. The substantive fixture's stages are spawn:developer, so
-recording a passed result needs a --control attestation (close threads it)."""
+recording a passed result needs a --control attestation and — since Defect 2 widened the
+observation gate to every substantive stage — an --observation too; close threads both."""
 from argparse import Namespace
 
 from agentctl import cli
 from agentctl.state import Node
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
@@ -28,8 +30,8 @@ def _drive_ns(session, **over):
 
 
 def _close_ns(session, **over):
-    base = dict(session=session, status=None, actual="", control=None, confirmed_by=None,
-                quality=None, quality_by=None, quality_note=None)
+    base = dict(session=session, status=None, actual="", control=None, observation="",
+                confirmed_by=None, quality=None, quality_by=None, quality_note=None)
     base.update(over)
     return Namespace(**base)
 
@@ -120,7 +122,8 @@ def test_close_blocked_on_unpassed_stage(store, fixtures_dir):
     """Recording stage 1 leaves stage 2 pending; close reports more-stages-remain and
     does NOT fabricate the rest or reach resolution."""
     _drive_to_executing(store, "c1", fixtures_dir)
-    d = cli.cmd_close(_close_ns("c1", status="passed", control="reviewed: ok"), store=store)
+    d = cli.cmd_close(_close_ns("c1", status="passed", control="reviewed: ok",
+                                observation=STAGE_OBSERVATIONS[0]), store=store)
     assert d.action == "next_stage"
     assert "more stages remain" in d.detail
     assert store.load("c1").node == Node.VERIFYING.value
@@ -131,10 +134,12 @@ def test_close_blocked_on_plugin_phase(store, fixtures_dir):
     resolve-probe stays at RESOLUTION and surfaces the [experience] blocker."""
     _drive_to_executing(store, "c2", fixtures_dir)
     # stage 1
-    cli.cmd_close(_close_ns("c2", status="passed", control="reviewed: ok"), store=store)
+    cli.cmd_close(_close_ns("c2", status="passed", control="reviewed: ok",
+                            observation=STAGE_OBSERVATIONS[0]), store=store)
     # advance to stage 2 and record it
     cli.cmd_next_stage(ns(session="c2"), store=store)
-    cli.cmd_close(_close_ns("c2", status="passed", control="reviewed: ok"), store=store)
+    cli.cmd_close(_close_ns("c2", status="passed", control="reviewed: ok",
+                            observation=STAGE_OBSERVATIONS[1]), store=store)
     # now at RESOLUTION; close without a confirmer probes resolve and reports blockers
     d = cli.cmd_close(_close_ns("c2"), store=store)
     assert d.ok is False
@@ -146,9 +151,11 @@ def test_close_blocked_on_plugin_phase(store, fixtures_dir):
 def test_close_resolves_when_clean(store, fixtures_dir):
     """Experience phases recorded + an explicit --confirmed-by resolves the session."""
     _drive_to_executing(store, "c3", fixtures_dir)
-    cli.cmd_close(_close_ns("c3", status="passed", control="reviewed: ok"), store=store)
+    cli.cmd_close(_close_ns("c3", status="passed", control="reviewed: ok",
+                            observation=STAGE_OBSERVATIONS[0]), store=store)
     cli.cmd_next_stage(ns(session="c3"), store=store)
-    cli.cmd_close(_close_ns("c3", status="passed", control="reviewed: ok"), store=store)
+    cli.cmd_close(_close_ns("c3", status="passed", control="reviewed: ok",
+                            observation=STAGE_OBSERVATIONS[1]), store=store)
     cli.cmd_plugin_record(ns(session="c3", plugin="experience", phase="searched", note=None), store=store)
     cli.cmd_plugin_record(ns(session="c3", plugin="experience", phase="recorded", note=None), store=store)
     d = cli.cmd_close(_close_ns("c3", confirmed_by="Fedor", quality=4), store=store)
@@ -172,9 +179,11 @@ def test_close_with_confirmer_but_plugin_blocking(store, fixtures_dir):
     """A non-empty --confirmed-by does not override real resolution blockers: with the
     experience phases unrecorded, close reports fix_stages with the real blockers."""
     _drive_to_executing(store, "c6", fixtures_dir)
-    cli.cmd_close(_close_ns("c6", status="passed", control="reviewed: ok"), store=store)
+    cli.cmd_close(_close_ns("c6", status="passed", control="reviewed: ok",
+                            observation=STAGE_OBSERVATIONS[0]), store=store)
     cli.cmd_next_stage(ns(session="c6"), store=store)
-    cli.cmd_close(_close_ns("c6", status="passed", control="reviewed: ok"), store=store)
+    cli.cmd_close(_close_ns("c6", status="passed", control="reviewed: ok",
+                            observation=STAGE_OBSERVATIONS[1]), store=store)
     d = cli.cmd_close(_close_ns("c6", confirmed_by="Fedor"), store=store)
     assert d.ok is False
     assert d.action == "fix_stages"

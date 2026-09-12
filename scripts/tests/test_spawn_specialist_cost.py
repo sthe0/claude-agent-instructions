@@ -39,6 +39,8 @@ def test_stage_index_accepted_by_parser(tmp_path):
         "--plan", str(plan),
         "--done-criterion", "tests green",
         "--criterion-type", "measurable",
+        "--complexity", "medium",
+        "--effort", "medium",
         "--stage-index", "4",
     ])
     assert args.stage_index == 4
@@ -52,6 +54,8 @@ def test_stage_index_defaults_to_none(tmp_path):
         "--plan", str(plan),
         "--done-criterion", "tests green",
         "--criterion-type", "measurable",
+        "--complexity", "medium",
+        "--effort", "medium",
     ])
     assert args.stage_index is None
 

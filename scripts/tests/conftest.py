@@ -13,6 +13,68 @@ if str(SCRIPTS_DIR) not in sys.path:
 from agentctl.store import FileStateStore  # noqa: E402
 from lib import judge_ledger  # noqa: E402
 
+# The plan-level places a SUBSTANTIVE plan owes the submission seam, as TOML an author
+# would write. Every fixture plan in the suite that expects to SUBMIT CLEAN splices these
+# in; a fixture testing a plan-level refusal writes its own defective form instead.
+#
+# Shared rather than copied into each test module because the substantive grade keeps
+# growing — `external_research`, then `knowledge`/`preconditions`, now the order — and a
+# grade whose fixture is duplicated eight times is a grade nobody can extend without
+# finding all eight. `_SUBSTANTIVE_META_FIELDS`/`_ORDER_PARTS` in submission.py are the
+# requirement; this is the one compliant answer the suite writes against.
+#
+# `requirements` is spelled as [[meta.order.requirements]] array-of-tables rather than the
+# inline `{ id = "...", text = "..." }` form the real plans use — the two parse identically,
+# and the inline form's braces would be read as fields by the `.format()` calls several of
+# these templates make.
+SUBSTANTIVE_ORDER = """
+[meta.order]
+customer_id = "user"
+customer = "the position that posed this fixture's task"
+functional_place = "the norm governing an act of activity, in a test"
+
+[[meta.order.requirements]]
+id = "R1"
+text = "the fixture plan meets the substantive grade"
+
+[meta.order.coverage]
+R1 = ["stage 1 verify_command"]
+"""
+
+# What a controller would report having SEEN at each stage of the `plan_two_stage*`
+# fixture family, indexed by stage index - 1. The plain and _refined plans stop at stage 2
+# ("Scaffold module", "Add tests"); _substantive adds the third ("Wire CI") — so a two-stage
+# driver takes STAGE_OBSERVATIONS[:2] and only a _substantive one reaches [2].
+#
+# Each string is true of ITS stage's done_criterion, and no more: stage 3 asks only that the
+# CI config reference test_mod, so its observation reads the config — it does not claim a
+# push or a CI run, neither of which any fixture here performs.
+#
+# Defect 2 broadened the observation requirement from acceptance_review stages to EVERY
+# stage of a substantive session: `record-result --status passed` now refuses a stage that
+# records no comparison of the achieved result against the stage's goal, and refuses one
+# that merely echoes the expected image back. So every module driving this fixture to
+# PASSED owes a real observation.
+#
+# Shared for the same reason as SUBSTANTIVE_ORDER above: two dozen modules each inventing
+# their own is two dozen edits the next time this gate widens, and an invented one decays
+# into "ok" — re-creating inside the suite the exact defect the gate removes from the
+# engine.
+STAGE_OBSERVATIONS = (
+    "mod.py is on disk and importing it in a fresh interpreter raised nothing",
+    "ran pytest over tests/test_mod.py: every case passed, none failed",
+    "grepped .github/workflows/ci.yml: it names test_mod in the step that runs the suite",
+)
+
+# A plan-level end-to-end check, likewise required of a substantive plan. Written to be
+# spliced at the END of a plan (a top-level array-of-tables closes any table context), and
+# deliberately trivial: fixtures that care what a final_check DOES declare their own.
+SUBSTANTIVE_FINAL_CHECK = """
+[[final_check]]
+command = "true"
+expected_exit = 0
+"""
+
 
 @pytest.fixture(autouse=True)
 def _isolate_task_quality_ledger(tmp_path, monkeypatch):
@@ -133,6 +195,66 @@ def _code_review_gate_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stage_review_gate_off_by_default(monkeypatch):
+    """Default the per-stage judge-corroboration gate OFF for the suite at large,
+    the same accommodation as `_code_review_gate_off_by_default` above and for the
+    same reason: `gates.stage_review_active` falls back to weight_class ==
+    SUBSTANTIVE when AGENTCTL_STAGE_REVIEW is unset, and Defect 2 broadened the
+    record-result observation requirement from acceptance_review-only to every
+    stage of a SUBSTANTIVE session — so any substantive-flow test that now
+    supplies `--observation` on an ordinary measurable stage would otherwise also
+    invoke the cheap judge via this gate, on machinery it is not testing.
+    AGENTCTL_STAGE_REVIEW=0 is the documented force-off knob — byte-identical to
+    the gate being absent. Its real block/pass/stale/override/killswitch
+    behaviour is proven end-to-end by test_acceptance_review_gate.py and
+    test_acceptance_gate_rehearsal.py, which explicitly re-enable it."""
+    monkeypatch.setenv("AGENTCTL_STAGE_REVIEW", "0")
+
+
+@pytest.fixture(autouse=True)
+def _acceptance_gate_off_by_default(monkeypatch):
+    """Default the plan-level acceptance/resolution gate OFF for the suite at
+    large, the same accommodation as `_code_review_gate_off_by_default` above and
+    for the same reason: `gates.acceptance_active` falls back to weight_class ==
+    SUBSTANTIVE when AGENTCTL_ACCEPTANCE is unset, and `resolution_blockers`
+    folds in a requirement (Defect 2) that every SUBSTANTIVE session have a
+    complete, fresh, all-pass AcceptanceReview before verify-final/resolve —
+    but the overwhelming majority of substantive-flow tests (final_check, venue
+    lifecycle, tracker plugin, the stage-review rehearsal, …) drive a session to
+    VERIFYING/RESOLUTION to exercise unrelated machinery and never call
+    `agentctl accept`. AGENTCTL_ACCEPTANCE=0 is the documented force-off knob —
+    byte-identical to the gate being absent. Its real block/pass/stale/bypass
+    behaviour is proven end-to-end by test_acceptance_verdict.py, which
+    explicitly re-enables it."""
+    monkeypatch.setenv("AGENTCTL_ACCEPTANCE", "0")
+
+
+@pytest.fixture(autouse=True)
+def _advisor_off_by_default(monkeypatch):
+    """Default the advisory judge OFF for the suite at large, the same accommodation as
+    `_plan_review_gate_off_by_default` above and for the same reason.
+
+    `advisor.resolve_enabled` falls back to config.md's `advisor-mode` (this repo's is
+    `substantive`) whenever AGENTCTL_ADVISOR is unset, so any SUBSTANTIVE-weight-class
+    session resolves the advisor live. That fallback is what `cmd_submit_plan`,
+    `cmd_approve` and `cmd_replan` now resolve a runner through (the
+    `run = runner if runner is not None else advisor.subprocess_runner` idiom, matching
+    the pre-existing ledger/question/acceptance-review call sites) so the echo-warning
+    judge is reachable in production — but those three commands are the ones the
+    overwhelming majority of substantive-flow tests drive, almost none of them about the
+    advisor. AGENTCTL_ADVISOR=0 is the documented force-off knob — byte-identical to the
+    advisor being absent.
+
+    The advisor's real enabled/fail-open/warning behaviour is proven end-to-end by
+    test_advisor.py, test_result_image_echo.py and the other files that already set this
+    var explicitly (test_acceptance_review_gate.py, test_code_review.py,
+    test_plan_review_gate.py, test_confirm_delivery.py), which override this default —
+    their own `monkeypatch.setenv`/`delenv` calls run after this fixture's within the same
+    test and win."""
+    monkeypatch.setenv("AGENTCTL_ADVISOR", "0")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_self_diagnose_store(tmp_path, monkeypatch):
     """Redirect the self-diagnose findings store to tmp for the suite at large.
 
@@ -162,6 +284,23 @@ def _isolate_judge_ledger(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_task_accumulator(tmp_path, monkeypatch):
+    """Redirect the cross-session task accumulator to tmp for the suite at large.
+
+    task_accumulator.py has no per-call `root` plumbed through from cli.py (unlike
+    the unit tests in test_task_accumulator.py, which pass `root=tmp_path`
+    directly) -- cmd_approve/cmd_replan/cmd_record_result/cmd_verify_final all call
+    it with the default root. Without this override every test that drives one of
+    those commands reads and writes the SAME real `~/.claude-agent/agentctl/
+    task-accumulators/` file for whatever task_id it happens to share with other
+    tests (a common fixture default), so counts leak across unrelated tests and
+    accumulate past `effort-replan-absolute` until `effort.divergence` fires and
+    routes an otherwise-passing `cmd_record_result` into DIAGNOSING instead of
+    VERIFYING. Same accommodation as `_isolate_judge_ledger`."""
+    monkeypatch.setenv("AGENTCTL_TASK_ACCUMULATOR_DIR", str(tmp_path / "task-accumulators"))
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_recursion_depth(monkeypatch):
     """Drop the ambient AGENT_RECURSION_DEPTH for the suite at large.
 
@@ -188,6 +327,13 @@ def _no_ambient_project_dir(monkeypatch):
     (test_hook_wiring, test_dispatch_witness) set the variable themselves,
     which overrides this."""
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+
+
+
+@pytest.fixture(autouse=True)
+def _default_claude_runtime_host(monkeypatch):
+    """Default CLAUDE_CODE_SESSION_ID so runtime_host.detect_host() resolves to claude."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "agentctl-test-session")
 
 
 @pytest.fixture

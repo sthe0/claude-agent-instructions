@@ -1,0 +1,515 @@
+# Plan: effort-divergence trigger.
+#
+# Authored by the `planner` specialization, 2026-08-04, from .agent-scratch/brief.md.
+# Revised 2026-08-04 by the root coordinator after the `thinker` plan review returned
+# VERDICT: revise with 6 blocking and 10 should-fix concerns. Every concern is addressed
+# below; the three design changes the review forced are:
+#   (1) all four actuals are now measured from the ARMING POINT (a baseline vector
+#       snapshotted at approve), and the wall-clock actual is ACTIVE minutes, not elapsed —
+#       the review showed estimate and actual were measuring different domains (C1, C3);
+#   (2) the interactions estimate no longer varies on acceptance-review stages, whose
+#       reviewer may be a cheap judge and cost no user interaction at all (C2);
+#   (3) the three numeric floors are DROPPED in favour of a non-degeneracy rule, because
+#       each computed to a value the 5x multiple already implies (C13) — a disclosed
+#       deviation from the brief's "absolute floor", with the arithmetic in stage 2.
+#
+# Delivery worktree: /Users/the0/claude-agent-instructions-effort-divergence-trigger
+#
+# The five architectural questions the brief demanded be ANSWERED, not deferred, are
+# answered inside this file: Q1 in stage 4's method + principle; Q2 in stage 2; Q3 in
+# stage 3; Q4 in stage 2's method (the constants); Q5 in stage 4.
+
+[meta]
+task_id = "effort-divergence-trigger"
+goal = """
+When a task's ACTUAL effort diverges from the CURRENT plan's re-derived ESTIMATE by a \
+significant multiple, the agentctl engine must automatically enter the existing \
+declare -> investigate -> critique -> replan difficulty cycle, on the reasoning that the \
+chosen norm is visibly missing something essential about the real situation. Four scales: \
+spend, count of user interactions, wall-clock, replan count. The terminal is ALWAYS \
+diagnose -- never block-and-ask -- because the standing requirement behind the order is \
+that the user stop having to supervise the agent, and a breaker that asks for permission \
+reinstates exactly the supervision it was built to remove.
+"""
+done_criterion = """
+A live agentctl session whose accumulated actual effort exceeds its current plan's \
+re-derived estimate past the configured multiple transitions itself from VERIFYING to \
+DIAGNOSING with a pre-framed Difficulty declaration naming the scale and the multiple, at \
+both fire sites (record-result and verify-final); every actual is measured from the arming \
+point, so no pre-approval prompt and no idle interval can produce a fire; the estimate is \
+re-derived on all three replan branches and at sub-plan push/pop, and the accumulated actual \
+survives both; the trigger is silent after firing until a replan sets a new estimate; the \
+estimate and actual vectors land in the quality ledger, which is the brief's own named \
+mitigation for the self-set estimate; and the FULL scripts/tests suite plus \
+verify-agentctl.py, lint-prose-length.py, verify-leaf-structure.py and verify-doc-concepts.py \
+pass in the delivery worktree.
+"""
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+delivery_worktree = "/Users/the0/claude-agent-instructions-effort-divergence-trigger"
+external_research = """
+Internal-first, and deliberately bounded to the repo's own surfaces, because the artifact \
+being changed is this agent's own coordination engine -- no external library, RFC or public \
+best practice governs it, and the honest reuse material is the engine's own precedent set. \
+Read in full: scripts/agentctl/machine.py (TRANSITIONS -- the proof that DIAGNOSING has \
+exactly one outbound edge), plan.py (the validator whose rules this file obeys), plugins.py \
++ plugins_obligations.py + plugins_review_dispatch.py (the plugin scope fence and the \
+closest proactive-blocking precedent), cost.py (the spend reader that already exists), \
+state.py (schema 24, Actor/Outcome/CostRollup/PlanFrame/Difficulty), cli.py (cmd_replan, \
+cmd_record_result, cmd_dispatch, cmd_resolve's quality_row, cmd_push_subplan/cmd_pop_subplan, \
+_apply_refined_stage_fields, _fire_plugins, and _diagnose_venue_refusal -- the EXISTING \
+VERIFYING -> DIAGNOSING router this design mirrors verbatim), scripts/agentctl/README.md \
+(§ Plugins scope fence, § Check venue), scripts/hook-engine-start.py (the raw-JSON \
+prompt-stamp seam), config.md (the constants table and its basis-sentence house style), and \
+memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md. \
+EXTERNAL research decided NOT warranted, with one exception considered and rejected: circuit- \
+breaker / bulkhead literature (Nygard, Release It!) was checked mentally for applicability and \
+does not transfer -- every published breaker terminates in REFUSE-AND-SURFACE, which is the \
+precise terminal the user rejected; borrowing its vocabulary would smuggle back the crutch. \
+The reused in-repo idea instead is Fowler's Rule of Three, already the recorded basis for \
+config.md's principle-promotion-threshold, applied here to the replan-count scale. \
+One additional internal review pass is part of the research record: an independent `thinker` \
+plan review against the engine source, whose 16 concerns are folded into this revision.
+"""
+
+# End-to-end gate. All of these run in the DELIVERY worktree: pre-landing the change is
+# absent from repo_root, so a repo_root-anchored check would observe the wrong tree and
+# false-fail. The plan does not assert landing (landing is the coordinator's resolution-gate
+# act per CLAUDE.md § landing discipline), so no `verify_venue_at_final` pairing is needed.
+#
+# The FULL suite runs, not just the new files: this change edits cmd_approve, cmd_dispatch,
+# cmd_record_result, cmd_verify_final, cmd_resolve, three cmd_replan branches,
+# cmd_push_subplan / cmd_pop_subplan, plan.py, state.py and hook-engine-start.py, so a
+# new-files-only check would leave the entire blast radius unverified.
+
+[[final_check]]
+label = "full agentctl test suite"
+command = "cd /Users/the0/claude-agent-instructions-effort-divergence-trigger && python3 -m pytest scripts/tests -q"
+expected_exit = 0
+
+[[final_check]]
+label = "engine self-verification (purity, wiring, obligations pin)"
+command = "cd /Users/the0/claude-agent-instructions-effort-divergence-trigger && python3 scripts/verify-agentctl.py"
+expected_exit = 0
+
+[[final_check]]
+label = "prose ceilings (CLAUDE.md lines/chars, README, skills)"
+command = "cd /Users/the0/claude-agent-instructions-effort-divergence-trigger && python3 scripts/lint-prose-length.py"
+expected_exit = 0
+
+[[final_check]]
+label = "memory-leaf structure (leaf/v1 + difficulty/v1)"
+command = "cd /Users/the0/claude-agent-instructions-effort-divergence-trigger && python3 scripts/verify-leaf-structure.py"
+expected_exit = 0
+
+[[final_check]]
+label = "registered-concept docs (README § Effort divergence)"
+command = "cd /Users/the0/claude-agent-instructions-effort-divergence-trigger && python3 scripts/verify-doc-concepts.py"
+expected_exit = 0
+
+
+# ---------------------------------------------------------------------------
+# Stage 1 -- the first small task in the worktree: correct the record that
+# still prescribes the rejected A/B/C.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 1
+title = "Rewrite the 2026-08-04 experience leaf's `## Order & criterion` to the divergence-trigger design"
+executor = "in_thread"
+material = "memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md — currently untracked in the worktree; its `## Order & criterion` section still prescribes the three-part A/B/C proposal (spend circuit breaker at 2x, review-round cap at two, forced re-classification on contraction) and an acceptance check written in those terms."
+means = "The `difficulty/v1` leaf schema and the existing section headings; `record-experience.py`'s file conventions; the Edit tool. No new format is introduced — the leaf's other sections stay byte-identical."
+method = "Replace the body of `## Order & criterion` with the agreed design: one order sentence (track accumulated actual against the CURRENT plan's re-derived estimate across four scales — spend, user interactions, active wall-clock, replan count — measured from the arming point, and enter declare/investigate/critique automatically past the configured multiple), a sentence naming re-derivation-at-replan as the load-bearing detail, and a sentence recording that A/B/C were rejected as crutches because they are three proxies for one quantity and two of them terminate in block-and-ask. Replace the `**Acceptance check:**` line with one stated in the new terms. Then `git add` the leaf and commit on the worktree branch."
+conditions = "Runs in the delivery worktree only; the canonical checkout is read-only to this session (hook-guard-canon-readonly.py). The leaf is a memory write, exempt from the production-edit gate, so this stage can run before the engine reaches EXECUTING if needed."
+invariants = "Every other section of the leaf (`## Difficulty`, `## Contexts`, `## Cost`, the frontmatter including `resolution_confirmed_by_user`, `created`, `last_verified`) is unchanged; the file still validates as `difficulty/v1`; the rewrite records what the user DECIDED, never re-proposes A/B/C."
+capability_required = "Read/Edit on the worktree tree; git; familiarity with the difficulty/v1 leaf schema."
+expected_result_image = "The `## Order & criterion` section names all four scales AND the two design terms that distinguish the accepted design from the rejected one (re-derivation at replan; diagnose as the terminal), and contains none of the three rejected-proposal markers; the leaf is committed on the worktree branch."
+criterion_type = "measurable"
+done_criterion = "The leaf's `## Order & criterion` prescribes the divergence trigger and no longer prescribes the rejected A/B/C."
+verify_command = "cd /Users/the0/claude-agent-instructions-effort-divergence-trigger && python3 -c \"import re,sys; t=open('memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md').read(); s=re.search(r'## Order & criterion(.*?)\\n## ', t, re.S).group(1).lower(); bad=[w for w in ('circuit breaker','review-round cap','re-classification') if w in s]; need=[w for w in ('spend','interaction','wall-clock','replan','re-deriv','diagnos') if w not in s]; sys.exit(1 if bad or need else 0)\""
+expected_exit = 0
+depends_on = []
+output_artifacts = ["memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md"]
+
+[stage.principle]
+statement = "A difficulty record that prescribes a remedy the user has since rejected is worse than no record: it will be retrieved by `record-experience.py search` and re-applied verbatim by a future session that has no access to the dialogue in which it was rejected."
+source = "memory-global/leaves/recording-experience.md (the leaf is the retrievable norm, not a diary) and the brief's own instruction that this section 'must be rewritten to the design above'."
+derivation = "The recording-experience norm makes leaves an INPUT to future planning (retrieval-augmented planning retrieves them by keyword), so leaf content has the force of a standing instruction; a standing instruction contradicting a user decision therefore propagates the rejected design forward, which is a strictly worse state than the absence of the leaf."
+confidence = "high"
+refutation = "Find a future session that retrieves this leaf and correctly ignores its `## Order & criterion` — i.e. show that leaf prescriptions are treated as historical narrative rather than as norms. Retrieval-augmented planning in planner/SKILL.md prescribes the opposite."
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 -- the DECLARATION surface: what the estimate is made of. (Answers Q2 and Q4.)
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 2
+title = "Declare the estimate: optional `Actor.cost_tier`, dispatch wiring, and the constants in config.md"
+executor = "spawn:developer"
+material = "scripts/agentctl/plan.py (Stage/Actor parsing, `_SUBSTANTIVE_STAGE_FIELDS`, `stage_carry_key`, `stage_question_key`, `_structural_signature`), scripts/agentctl/state.py (the `Actor` dataclass at state.py:569-572 and `Stage.from_dict` at state.py:798-817), scripts/agentctl/cli.py::cmd_dispatch (`budget=getattr(args, 'budget', 'medium')` at cli.py:2169 and the `--budget` argparse default at cli.py:4034) and cli.py::_apply_refined_stage_fields (cli.py:214-231), scripts/agentctl/config.py::budget_usd, and config.md's constants table. The brief ASSUMED a per-stage cost tier already exists; it does not — the tier is a dispatch-time CLI argument, so today's plans declare no estimate at all."
+means = "The schema-24 `verify_venue_at_final` precedent for a tolerant optional field (parse it, default None, contribute to no identity key unless declared, so every existing plan and every persisted SessionState loads byte-identically); config.md's existing constants table with its one-basis-sentence-per-row house style; config.py's existing tier->dollar lookup and its `substantive_wall_clock_min` property."
+method = """
+(a) Add `cost_tier: str | None = None` to the `Actor` dataclass (state.py:569), values \
+small|medium|large, and parse it in plan.py beside `executor`. It goes on `Actor` \
+DELIBERATELY, for two reasons: semantically the tier is a property of the actor's \
+engagement, and mechanically `Stage.from_dict`'s grouped branch rebuilds this group by \
+SPLAT (`Actor(**d["actor"])`, state.py:806) rather than by keyword, so the field persists \
+across a state reload with no from_dict edit — whereas a top-level Stage field would be \
+silently dropped by the enumerated keyword branch and every subsequent estimate would be \
+computed from the default. Verify that splat claim in code before relying on it; if it \
+does not hold, add the field to `from_dict` explicitly. Undeclared stays None so \
+`stage_carry_key`, `stage_question_key` and `_structural_signature` stay byte-identical \
+for plans that omit it.
+(b) Add `cur.actor.cost_tier = refined.actor.cost_tier` to `_apply_refined_stage_fields` \
+(cli.py:214-231), which copies a FIXED field set; without this a replan that changes a \
+declared tier reaches neither the carry key (by design, (a)) nor the live `state.stages` \
+that the re-derivation reads, and the estimate would silently keep the old tier.
+(c) Wire dispatch on BOTH paths: change the `--budget` argparse default (cli.py:4034) from \
+"medium" to None AND change `budget=getattr(args, "budget", "medium")` (cli.py:2169) to \
+`getattr(args, "budget", None)`, then resolve `tier = args.budget or stage.actor.cost_tier \
+or "medium"`. The getattr fallback is the one that actually binds for every in-process \
+Namespace caller, so changing only the argparse default would leave the declared tier \
+unconsulted on that path.
+(d) Bump SCHEMA_VERSION 24 -> 25 UNCONDITIONALLY and stamp every field this plan adds \
+(`Actor.cost_tier` here; `effort_estimate`, `effort_actuals`, `effort_baseline`, \
+`effort_fires`, `user_prompt_count`, `session_started_ts`, `last_active_stamp` in stage 3) \
+in the schema-history comment style state.py already uses for `verify_venue_at_final`/24, \
+`plan_presentations`/20 and `code_reviews`/21. One bump covers both stages; stage 3 adds \
+its fields under the same version.
+(e) Add the constants to config.md, each with a basis sentence:
+  effort-divergence-multiple = 5.0 -- the low end of the user's stated 5-10x band. Taking
+    the low end is deliberate because the terminal is a diagnosis, not a refusal; the honest
+    cost of a false positive is one full difficulty cycle (declare/investigate/critique/
+    normalize/failure-address plus a fresh plan review, and if the replan is substantive, a
+    user approval at PLAN_READY), while the cost of a false negative is the entire remaining
+    overrun. 5x, not 2x, precisely because that cycle is not free.
+  effort-stage-minutes-small = 10, -medium = 25, -large = 60 -- the wall-clock companions of
+    the existing dollar telemetry labels (single-file work / multi-file-with-tests / cross-
+    cutting). Like the dollar labels these are declared expectations, not measurements; the
+    calibration data lands in the quality ledger (stage 4), which is the mechanism's own
+    correction path.
+  effort-replan-absolute = 3 -- the Rule of Three already recorded as the basis for
+    principle-promotion-threshold: two replans may be ordinary refinement, a third
+    establishes that the plan's model of the situation is recurrently wrong. This scale has
+    NO ratio: a plan's intended replan count is structurally 0, so the multiple is undefined
+    and the trigger is an absolute count. State that asymmetry in the row itself.
+  NO numeric floor rows are added, and the row for effort-divergence-multiple must say why,
+    because the brief asked for "an absolute floor" and this is a disclosed deviation. The
+    floor exists to stop a tiny estimate turning noise into a fire; but each scale's estimate
+    is bounded below by construction, and 5x of that lower bound already IS the floor the
+    brief wanted: spend 1 x budget-small-usd -> $5.00; interactions 2 -> 10 prompts;
+    wall-clock 10 min -> 50 ACTIVE minutes. A separate constant would either restate those
+    numbers or contradict them. What replaces the floor is a NON-DEGENERACY rule: a scale
+    whose estimate is 0 is INAPPLICABLE and never fires (it is also the division-by-zero
+    guard). The idle cap the wall-clock actual needs reuses the existing
+    substantive-wall-clock-min rather than adding a row.
+(f) Add `scripts/tests/test_effort_declaration.py`: a plan omitting cost_tier produces \
+identical carry/question/signature keys to today; a plan declaring it round-trips through \
+`Stage.from_dict` unchanged; `_apply_refined_stage_fields` carries a changed tier; dispatch \
+resolves flag > declaration > default on BOTH the argparse path and the in-process \
+Namespace path.
+"""
+conditions = "Runs in the delivery worktree. config.md here is the REPO copy — the live `~/.claude-agent/config.md` is a symlink into the canonical checkout, outside this session's write scope, and is picked up automatically once the branch lands."
+invariants = "No existing plan fixture changes meaning; `diff_plans` returns `no_change` for a plan that only gains an undeclared-equivalent field; gates.py stays pure (this stage touches no guardian); a persisted state written under schema 24 still loads."
+capability_required = "Python; the agentctl plan/state schema-evolution convention (tolerant optional field, identity-preserving default)."
+expected_result_image = "`python3 -m pytest scripts/tests -q` exits 0 (not just the new file), and config.md contains one table row per constant above, each ending in a basis sentence, plus the stated reason no floor rows exist."
+criterion_type = "measurable"
+done_criterion = "A stage may declare its cost tier, dispatch honours it on both call paths, it survives a state reload and a refinement replan, and every threshold constant exists in config.md with a stated basis."
+verify_command = "cd /Users/the0/claude-agent-instructions-effort-divergence-trigger && python3 -m pytest scripts/tests -q"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/tests/test_effort_declaration.py"]
+
+[stage.principle]
+statement = "The estimate must be a DECLARATION carried by the plan, not a quantity inferred at comparison time, because the trigger's whole claim is that the actor's chosen norm was wrong — and an inferred estimate is not a norm anyone chose."
+source = "memory-global/leaves/plan-activity-ontology.md element 3 (control criterion) and element 7 (refutable principle); the brief's own framing 'выбранная норма явно не учитывает существенные моменты'."
+derivation = "Element 3 makes the control criterion part of the plan the actor commits to, and element 7 makes each commitment refutable; a quantity the engine invents at comparison time satisfies neither, so a divergence against it would indict the engine's guess rather than the actor's norm and would carry no diagnostic content."
+confidence = "high"
+refutation = "Show a derivation of the estimate from the plan's existing fields alone that a reviewer would accept as the actor's own commitment — e.g. if stage count plus executor kind predicted actual spend within the 5x band across the quality ledger's recorded tasks, the declaration would be redundant."
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 -- the pure comparator. (Answers Q3 and the re-arm half of Q4.)
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 3
+title = "`scripts/agentctl/effort.py`: pure estimate / actual / divergence over an arming-relative window"
+executor = "spawn:developer"
+material = "A new module scripts/agentctl/effort.py; scripts/agentctl/state.py (new SessionState fields under schema 25); scripts/agentctl/cost.py (attribute_stage / rollup_plan — the spend reader that already exists); scripts/hook-engine-start.py::_stamp_prompt_ts (the existing raw-JSON patch seam, already called on both branches of main() and already holding the previous prompt's timestamp)."
+means = "cost.py's existing attribution (no new cost reader is written); state.history's existing `replan` events (cmd_replan already logs every one); hook-engine-start.py's existing best-effort raw-JSON patch, extended rather than duplicated; config.py's existing `substantive_wall_clock_min` property; the gates.py purity style (pure `(state, now) -> value` functions, no subprocess, no network, no clock read) so the module could later be folded into a guardian without rework."
+method = """
+THE WINDOW, and why every scale shares it. Each actual is compared over the window that \
+OPENS AT ARMING (cmd_approve), because that is the only window the estimate describes: the \
+estimate is derived from the approved plan's stages, all of which execute after approval. \
+A whole-session actual against a plan-execution estimate compares two different domains and \
+produces a meaningless ratio — the reason the spend scale already excludes the main thread. \
+Mechanically: `state.effort_baseline` is a snapshot of the actual vector taken at arming, \
+and every comparison uses `actual - baseline`. This single rule is what makes the \
+interactions and wall-clock scales sound; without it a pre-classify prompt or an overnight \
+idle interval fires the trigger.
+
+PER-SCALE ESTIMATE, derived from the CURRENT plan:
+  spend      = sum of config.budget_usd(stage.actor.cost_tier or "medium") over `spawn:*`
+               stages ONLY. in_thread stages are excluded from BOTH sides, because cost.py
+               attributes no cost to them at all; including them in the estimate but not the
+               actual would systematically deflate the ratio. A plan with zero spawn stages
+               has estimate 0 and the spend scale is INAPPLICABLE.
+  interactions = len(stages) + 1. Derivation, and it deliberately does NOT vary on
+               acceptance-review stages: `StageReview.reviewer` may be an automated judge
+               (`judge:haiku`, state.py:414-415), so an acceptance-review stage need cost no
+               user interaction at all, while a stage boundary always surfaces one — the
+               engine returns a directive after record-result and the coordinator's next
+               dispatch is driven by the user's next turn. The `+1` is the terminal
+               `resolve --by`. `approve --by` is NOT counted: it happens AT arming and is
+               therefore in the baseline, not in the window.
+  wall-clock = sum over ALL stages of effort-stage-minutes-<tier>, with in_thread stages
+               priced at the small row (in_thread work consumes wall-clock even though it
+               consumes no attributable spend — the one scale where the executor kinds are
+               symmetric).
+  replans    = structurally 0; this scale carries no ratio (see stage 2).
+PER-SCALE ACTUAL, and where each comes from:
+  spend      -> a NEW monotone field state.effort_actuals["spend_usd"], incremented in
+               cmd_record_result by max(0.0, newly_attributed - previously_attributed_for
+               _this_stage), where the previous value is read from the stage's own
+               Outcome.cost_usd. The max() clamp is load-bearing, not defensive:
+               cost.attribute_stage matches rows on (plan_path, stage_index) (cost.py:62-65)
+               and cmd_replan REWRITES state.plan_path on both the refinement (cli.py:3154)
+               and the substantive (cli.py:3182) branch, so a stage re-recorded under the
+               new path attributes 0 against a non-zero prior and the raw delta is negative.
+               Clamping keeps the accumulator monotone across a plan-path change; the spend
+               already booked is never un-booked.
+               It must be session-level and monotone, NOT a fold over state.stages: a
+               substantive replan drops stages, and rollup_plan is literally such a fold
+               (cost.py:93-100), so it would erase the very spend the brief's scenario
+               depends on ("the accumulated actual keeps running").
+  interactions -> a NEW field state.user_prompt_count, incremented inside
+               hook-engine-start.py::_stamp_prompt_ts's existing patch (one extra key in a
+               write that already happens on every prompt; best-effort, so a missed
+               increment only under-counts).
+  wall-clock -> a NEW monotone field state.effort_actuals["active_minutes"], accumulated in
+               the SAME patch as ACTIVE time, not elapsed: on each prompt add
+               min(now - state.last_active_stamp, substantive-wall-clock-min) and restamp.
+               The cap is what makes it active rather than elapsed — a session left open
+               overnight contributes at most one cap's worth, so idle time cannot fire the
+               trigger. The cap reuses the existing substantive-wall-clock-min (30) with a
+               stated basis: by the repo's own scale a gap of that length is a whole
+               substantive task's worth of time and therefore cannot be one turn's thinking.
+               `session_started_ts` is stamped once, if-absent, by the same patch, for the
+               ledger row only — it is NOT the wall-clock actual. Alternatives rejected:
+               (now - session_started_ts) counts idle time (the review's C3); state.history[0]
+               carries no timestamp at all (state.log appends `{"event": ..., **fields}`).
+  replans    -> len([h for h in state.history if h["event"] == "replan"]) — fully existing,
+               and the same predicate cmd_resolve already uses (cli.py:2748).
+FIRE RULE. Fire iff, for some scale with a non-degenerate estimate (> 0):
+  (actual - baseline) / estimate >= effort-divergence-multiple, or for `replans`:
+  (actual - baseline) >= effort-replan-absolute. There is no separate numeric floor; see
+  stage 2 (e) for why, and for the arithmetic showing 5x of each scale's structural minimum
+  reproduces the floors that were dropped.
+RE-ARM, two belts, both required:
+  (1) `effort_baseline` is REBASED to the actual vector at each firing, so the loop that
+      would otherwise re-fire the moment the corrected plan is smaller than the accumulated
+      actual is structurally impossible;
+  (2) a fire additionally requires >= 1 `replan` event logged after the previous fire —
+      the brief's "silent until a replan sets a new estimate" read literally.
+  Both, because the rebase alone would let a fire recur at the next record-result if the new
+  estimate were tiny, and the replan requirement alone would let it recur immediately after
+  any replan. `state.effort_fires` records each firing (scale, ratio, ts, history length).
+DELIVERABLES: `effort.estimate(state) -> dict`, `effort.actual(state) -> dict`,
+  `effort.divergence(state) -> Divergence | None` (scale, actual, estimate, multiple, a
+  one-sentence framing) as pure functions of state alone — no clock read inside the pure
+  layer, since the time accumulation happens in the hook — plus `effort.rederive(state)`
+  which recomputes and stores the estimate vector, and `effort.arm(state)` which rederives
+  and snapshots the baseline.
+Tests in scripts/tests/test_effort.py: each estimate derivation; the in_thread exclusion and
+  the zero-spawn inapplicability; the baseline window (a pre-arming prompt and a pre-arming
+  spend both fail to move the ratio); the idle cap (a 10-hour gap contributes <= 30 min);
+  the monotone accumulator surviving a stage drop, a stage retry, and a plan_path rewrite;
+  non-degeneracy-blocks-fire; threshold-blocks-fire; the rebase; the replan-required belt;
+  and an AST purity assertion that effort.py imports no subprocess/socket.
+"""
+conditions = "Runs in the delivery worktree, after stage 2 (the constants, the schema bump and cost_tier must exist). Any `now` a test needs is injected as a parameter; the pure layer never reads a clock."
+invariants = "effort.py stays pure — no subprocess, no network, no filesystem, no clock — so tests/test_ast_purity.py's contract extends to it unchanged; no existing SessionState field changes meaning; a state file lacking the new fields loads with zeros (never a KeyError); hook-engine-start.py stays best-effort and silent on every error path, so a hook fault can still never wedge the workflow."
+capability_required = "Python; the agentctl state/cost model; the gates.py purity discipline."
+expected_result_image = "`python3 -m pytest scripts/tests -q` exits 0 with a test per scale, per belt, and for the baseline-window, idle-cap, drop-a-stage, retry-a-stage and plan-path-rewrite cases."
+criterion_type = "measurable"
+done_criterion = "A pure, tested module answers 'by what multiple is this session, SINCE ARMING, over its current plan's estimate, on which scale' from state alone, with a re-arm rule that cannot loop."
+verify_command = "cd /Users/the0/claude-agent-instructions-effort-divergence-trigger && python3 -m pytest scripts/tests -q"
+expected_exit = 0
+depends_on = [2]
+output_artifacts = ["scripts/agentctl/effort.py", "scripts/tests/test_effort.py"]
+
+[stage.principle]
+statement = "An actual and an estimate must be measured over the same window and the same domain, or the ratio between them is not a measurement of anything — and the accumulated actual must be a monotone accumulator over that window, never a fold over the current stage list, because the exact case the mechanism exists to catch — a plan contracting under the actual — is the case in which the fold erases its own evidence."
+source = "The brief's recorded scenario ('the moment the user dropped stages 2-4, the remaining plan was worth ~$3 against an actual already far past it'); cost.py's own note that attribution is per-stage; and the thinker plan review's concerns 1-3, which found exactly this domain mismatch on the interactions and wall-clock scales."
+derivation = "A fold over state.stages reads only stages that survive the replan; the brief's scenario deletes three of four stages, so a fold would report the actual of the one surviving stage against the contracted estimate — a ratio near 1 — at precisely the moment the true ratio is largest. Symmetrically, an actual counted over the whole session against an estimate derived from post-approval stages measures planning dialogue and idle time as if they were plan execution, which fires on every substantive task regardless of divergence. Monotone accumulation over an arming-relative window is therefore not a convenience but a precondition for the mechanism measuring anything at all."
+confidence = "high"
+refutation = "Construct a replan in which the dropped stages' spend SHOULD be forgiven — e.g. work genuinely handed to another task — and show the monotone accumulator produces a false fire there. If such cases are common, the accumulator needs an explicit transfer operation rather than pure monotonicity. Separately: if a task's real overrun regularly happens BEFORE approval (in planning), the arming-relative window hides it and a second, planning-phase window would be needed."
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 -- the core-spine wiring. (Answers Q1 and Q5.)
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 4
+title = "Wire the trigger into the core spine: two fire sites, arming at approve, re-derivation and accumulator custody on every replan and sub-plan path"
+executor = "spawn:developer"
+material = "scripts/agentctl/cli.py — cmd_approve (arming), cmd_record_result (fire site 1 + the spend accumulator), cmd_verify_final (fire site 2), cmd_replan (all three branches: the no_change saves at cli.py:3132-3133 and 3138-3139, the refinement save at cli.py:3160-3161, the substantive branch at cli.py:3182-3188), cmd_push_subplan (cli.py:3300-3326) / cmd_pop_subplan, cmd_resolve's quality_row (cli.py:2733-2757); scripts/agentctl/state.py::PlanFrame (state.py:700-722); and the existing helper _diagnose_venue_refusal at cli.py:458."
+means = "_diagnose_venue_refusal — the EXISTING VERIFYING -> DIAGNOSING router, reused verbatim in shape: `state.node = transition(state.node, 'diagnose'); state.difficulty = Difficulty(); store.save(state); return Directive(..., 'declare', marker='OVERCOME-DIFFICULTY')`. No new node, no new gate, no new terminal state, no new plugin."
+method = """
+Q1 — CORE EDIT, option (b), NOT a plugin and NOT a hybrid. Three facts decide it:
+  (i) plugins.py's scope fence (README § Plugins) forbids a plugin from introducing a new
+      Node or gate; entering DIAGNOSING is a control-flow TRANSITION, which is exactly what
+      the fence reserves for the core spine.
+  (ii) a plugin observer runs in _fire_plugins AFTER the command has already computed and
+      returned its Directive, so mutating state.node from an observer would emit a directive
+      contradicting the state just saved — the same class of bug plugins_review_dispatch.py
+      documents when it explains why it deliberately does not observe `replan`.
+  (iii) the "coordinator must not be able to silently skip it" requirement is ALREADY met by
+      the core transition alone: machine.TRANSITIONS gives DIAGNOSING exactly one outbound
+      edge (`replan_refine`: DIAGNOSING -> VERIFYING) plus cmd_replan's direct set to
+      PLAN_READY on a substantive replan, while `final` requires VERIFYING and `resolve`
+      requires RESOLUTION. A session parked at DIAGNOSING therefore CANNOT reach RESOLVED
+      without passing `replan`, which is itself gated on a complete difficulty record
+      (gates.difficulty_blockers), normalization, failure-address and plan-review.
+  Consequence, stated so it is not silently assumed: an obligations-ledger belt (a blocking
+  PluginDirective registered in plugins_obligations._DISCHARGE) is REJECTED as redundant. It
+  would buy no additional unskippability — the ledger only blocks the `resolution` gate,
+  which is already unreachable — while costing a third _DISCHARGE entry and a forced update
+  to verify-agentctl.py::check_obligations' static pin. Neither is spent.
+FIRE SITES — both at node == VERIFYING, the only node from which `diagnose` is legal:
+  1. cmd_record_result, immediately after `state.node = transition(state.node, "verify")` on
+     the PASSED path: every actual has just been refreshed (cost attribution runs there).
+     On the FAILED path the session is already entering DIAGNOSING, so the trigger does NOT
+     transition again — it attaches its framing to the directive data and marks itself fired
+     and rebased, because the terminal it wants (the difficulty cycle) is already happening.
+  2. cmd_verify_final, before the `final` transition. This site is NOT optional: the brief's
+     own scenario (a plan contracting to stages that already PASSED) reaches resolution
+     without another record-result — finalize_partitioned (machine.py:60, fired at
+     cli.py:2092-2100) reaches VERIFYING with no further record-result — so site 1 alone
+     would never evaluate it. It is the last node at which `diagnose` is still legal.
+  Both sites call one helper `_diagnose_effort_divergence(state, store, divergence)` modelled
+  on _diagnose_venue_refusal, whose message pre-frames the declaration: actual effort exceeds
+  the plan's re-derived estimate by Nx on scale S, therefore the plan's model of the situation
+  is missing something — find what.
+Q5 — RE-DERIVATION, per code path, each named individually because cmd_replan has NO shared
+  tail (the branches save separately):
+  cmd_approve: first arming — effort.arm(state) (rederive + snapshot the baseline).
+  cmd_replan / `no_change` branch: after _apply_refined_stage_fields + _sync_venue_from_plan,
+    before EACH of that branch's two save sites (cli.py:3132-3133 inside `if diagnosing:` and
+    cli.py:3138-3139) — a single insertion covering only one of them silently leaves the
+    other path stale.
+  cmd_replan / `refinement` branch: before its own save at cli.py:3160-3161.
+  cmd_replan / `substantive` branch: AFTER state.stages is replaced and PASSED stages are
+    carried forward by stage_carry_key, before the save at cli.py:3182-3188 — the estimate
+    must reflect the NEW stage list, which is the whole point.
+  In all replan cases the ESTIMATE is re-derived and the BASELINE is left alone: the
+  accumulated actual keeps running across a replan by design.
+  A REJECTED replan early-returns WITHOUT store.save, so no re-derivation happens — correct,
+  because the plan did not change. Named residual: an observer-based design could not have
+  had this property, which is a second reason the wiring is a core edit and not a plugin.
+SUB-PLAN CUSTODY — both cmd_push_subplan and PlanFrame enumerate their fields EXPLICITLY
+  (cli.py:3300-3326 zeroes a listed set; state.py:700-722 snapshots a listed set), so a new
+  field that is in neither leaks the parent's accumulated actual into the child and produces
+  a guaranteed spurious fire inside every service sub-plan. Therefore:
+  push: add effort_estimate / effort_actuals / effort_baseline / effort_fires to PlanFrame's
+    snapshot list AND zero all four in the reset list; the child arms at its own approve.
+    user_prompt_count and the active-minutes accumulator are session-level counters and are
+    NOT zeroed — the child's baseline captures them at its own arming, which is what makes
+    its window its own.
+  pop: restore the parent's four fields, then ADD the child's consumption to the parent's
+    additive accumulators (spend_usd and active_minutes) — effort spent inside a service
+    sub-plan is effort spent on the parent's task, and forgiving it would hide exactly the
+    overrun the brief describes. The child's replan count is NOT added (it is per-plan).
+    Stated consequence, so it is not a surprise: a parent may fire immediately after a pop.
+    That is correct behaviour, not a bug — an expensive sub-plan IS the signal.
+THE BRIEF'S NAMED MITIGATION — extend cmd_resolve's quality_row (cli.py:2733-2757) with
+  effort_estimate, effort_actual, effort_ratio_max and effort_fires. The brief makes "estimate
+  and actual both land in the quality ledger" THE answer to the self-set-estimate weakness,
+  and the floors-precalibration disposition rests on it; without this row the mitigation is
+  described in prose and implemented nowhere, and the constants have no calibration path.
+KILL SWITCH: `AGENTCTL_EFFORT=0` disables FIRING only, never accounting, so an exempted
+  session still writes its ledger row.
+Tests in scripts/tests/test_effort_trigger.py, driving the real CLI end to end: a session that
+  overruns fires from record-result; a session that overruns only after contraction fires from
+  verify-final; a fired session does not re-fire at the next record-result; it re-arms after a
+  replan; a FAILED record does not double-transition; the rejected-replan path leaves the
+  estimate untouched; each of the three replan branches re-derives; a sub-plan push/pop does
+  not leak the parent's actual into the child and does return the child's spend to the parent;
+  the quality row carries both vectors; AGENTCTL_EFFORT=0 suppresses the transition but not
+  the row; and the pre-framed Difficulty declaration is present at DIAGNOSING.
+"""
+conditions = "Runs in the delivery worktree, after stage 3."
+invariants = "No new Node and no new entry in machine.TRANSITIONS; gates.py is not touched, so its purity contract and tests/test_ast_purity.py hold unchanged; plugins_obligations._DISCHARGE is unchanged, so verify-agentctl.py::check_obligations' pinned set needs no update; the FAILED path's existing behaviour is byte-identical; NO FIRE SITE ASKS THE USER ANYTHING — stated precisely, because the difficulty cycle a fire enters may itself reach PLAN_READY on a substantive replan, whose approval gate is a user interaction: that gate is the engine's existing behaviour for every difficulty, not a block this mechanism introduces, and the invariant is about the fire site and its directive."
+capability_required = "Python; the agentctl state machine and CLI command structure; the discipline of mirroring an existing helper rather than inventing a parallel one."
+expected_result_image = "`python3 -m pytest scripts/tests -q` exits 0, and `python3 scripts/verify-agentctl.py` exits 0 with no obligations-pin drift."
+criterion_type = "measurable"
+done_criterion = "A live session that exceeds its current plan's estimate past the multiple enters DIAGNOSING by itself, from either fire site, with the difficulty pre-framed and no user question asked at the fire; the estimate is re-derived on every replan branch; a sub-plan neither inherits nor discards effort; and both vectors reach the quality ledger."
+verify_command = "cd /Users/the0/claude-agent-instructions-effort-divergence-trigger && python3 -m pytest scripts/tests -q && python3 scripts/verify-agentctl.py"
+expected_exit = 0
+depends_on = [3]
+output_artifacts = ["scripts/tests/test_effort_trigger.py"]
+
+[stage.principle]
+statement = "Unskippability is a property of the transition graph, not of a guard bolted beside it: because DIAGNOSING's only exit is a precondition-gated `replan`, moving the node IS the enforcement, and any additional blocking ledger entry is cost without effect."
+source = "scripts/agentctl/machine.py TRANSITIONS (read in full) and README § Nodes' DIAGNOSING row: '`replan` is the sole exit and is precondition-gated on a complete Difficulty record'."
+derivation = "Reachability analysis of the table: RESOLVED is entered only by `resolve` (from RESOLUTION), RESOLUTION only by `final` (from VERIFYING), and DIAGNOSING's outbound set is {replan_refine -> VERIFYING} plus cmd_replan's direct set to PLAN_READY; therefore every path from DIAGNOSING to RESOLVED passes through cmd_replan, whose preconditions include a complete difficulty record. No second mechanism can strengthen a property that already holds by construction."
+confidence = "high"
+refutation = "Exhibit a command that writes state.node directly, bypassing `transition`, and opens a DIAGNOSING -> RESOLVED path. Three such direct writers exist today — `reset --force`, cmd_block/cmd_unblock (cli.py:3198/3209) and cmd_replan's substantive branch (cli.py:3188) — and none of them opens that path, so the conclusion holds while the basis is narrower than 'reset is the only one'. If a future command adds an edge out of DIAGNOSING, the graph argument weakens and a ledger belt becomes worth its cost."
+
+
+# ---------------------------------------------------------------------------
+# Stage 5 -- the engine's own documentation.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 5
+title = "Document the mechanism in scripts/agentctl/README.md and cross-reference the constants"
+executor = "spawn:developer"
+material = "scripts/agentctl/README.md (the Nodes table's DIAGNOSING row, and a new section beside § Plugins / § Check venue); config.md's new rows from stage 2; scripts/verify-doc-concepts.py's registered-concept list."
+means = "README.md's existing section conventions — a difficulty-led opening, a mechanism paragraph, an honest-limits paragraph, which is how § Check venue and § Plugins are already written. No new documentation format."
+method = "Add a § Effort divergence section: the difficulty it removes; the four scales with their estimate derivation and actual source in a table; the arming-relative window and why it exists; the multiple / non-degeneracy / re-arm rule pointing at config.md by KEY not by value (the repo's constant-reference convention); the two fire sites and why verify-final is not optional; the explicit statement that the terminal is diagnose and never a user question at the fire site, with the honest note that a substantive replan downstream still meets the ordinary approval gate; and an Honest limits paragraph naming (1) the estimate is declared by the same actor it constrains, mitigated only by both vectors landing in the quality ledger, (2) main-thread and in_thread tokens are not attributed, so the spend scale under-reads a task whose overrun is entirely in the main thread — the interaction and wall-clock scales are what cover that case, (3) a missed hook stamp under-counts interactions and active minutes, and (4) the arming-relative window means a planning-phase overrun before approval is invisible to the mechanism. Update the DIAGNOSING row to name the new automatic entry path alongside the existing FAILED-stage and reject paths. Register the section with verify-doc-concepts.py if that script's concept list is the mechanism for it. Add scripts/tests/test_effort_docs.py asserting the section exists, names all four scales, references each constant by key, and that every key it names is present in config.md."
+conditions = "Runs in the delivery worktree after stage 4, so the documentation describes shipped behaviour rather than intent."
+invariants = "README.md stays within its own length conventions; the constants are referenced by key so config.md remains the single source of truth for values; no behavioural claim appears in the docs that is not covered by a test from stages 2-4."
+capability_required = "Python; technical writing in the README's established voice."
+expected_result_image = "`python3 -m pytest scripts/tests -q` and `python3 scripts/verify-doc-concepts.py` both exit 0; the README's § Effort divergence names all four scales, the window, both fire sites, and four honest limits."
+criterion_type = "measurable"
+done_criterion = "A reader of scripts/agentctl/README.md alone can state what fires the trigger, on which scale, over which window, with which constant, and what it does not cover."
+verify_command = "cd /Users/the0/claude-agent-instructions-effort-divergence-trigger && python3 -m pytest scripts/tests -q && python3 scripts/verify-doc-concepts.py"
+expected_exit = 0
+depends_on = [4]
+output_artifacts = ["scripts/tests/test_effort_docs.py"]
+
+[stage.principle]
+statement = "An automatic transition the coordinator did not request must be documented with its honest limits, or the first time it fires it will be read as an engine bug and worked around rather than diagnosed."
+source = "memory-global/leaves/docs-accompany-architectural-change.md; and README § Check venue's own precedent of shipping an Honest limits paragraph beside every gate."
+derivation = "The docs-accompany rule makes the read-first surface part of delivery for a coordination-model change; a trigger that moves the node by itself changes the coordination model as the coordinator experiences it, so the undocumented case is precisely the one where the coordinator's model and the engine's diverge — which is a difficulty the mechanism itself would then fire on."
+confidence = "medium"
+refutation = "Show a coordinator session encountering an undocumented automatic transition and correctly diagnosing it from the directive text alone. If the directive's pre-framed message is self-sufficient, the README section is redundant and only the constants cross-reference is load-bearing."
+
+
+# ---------------------------------------------------------------------------
+# Stage 6 -- the minimum norm text that makes the mechanism discoverable.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 6
+title = "Minimum norm text: one CLAUDE.md clause and a memory leaf, within the prose ceilings"
+executor = "in_thread"
+material = "CLAUDE.md § When the work is stuck (where the difficulty-cycle entry signals are enumerated) and memory-global/MEMORY.md + a new leaf memory-global/leaves/effort-divergence-trigger.md."
+means = "The existing leaf/v1 schema (## Difficulty / ## Guidance / ## See also) and MEMORY.md's one-line pointer convention; the existing ceilings claude-md-max-lines and claude-md-max-chars enforced by scripts/lint-prose-length.py."
+method = "Add ONE clause to CLAUDE.md § When the work is stuck naming the third automatic entry into the difficulty cycle (effort divergence past the configured multiple on any of four scales, measured from plan approval), pointing at the leaf — no numbers inline, since config.md owns them. Write the leaf: the difficulty (a task can run many times over its own plan and nothing in the system notices, so the only detector is the user's attention — the resource the system exists to spend less of); the guidance (the four scales, the arming-relative window, what re-derivation at replan means, why the terminal is diagnose and not a question, and the honest weakness that the estimate is self-set with the quality ledger as the only calibration); and See also links to function-place-difficulty.md, policy-effectiveness-tracking.md and the 2026-08-04 experience leaf. Add the MEMORY.md pointer line. Then re-run lint-prose-length.py and verify-leaf-structure.py and, if CLAUDE.md is over either ceiling, cut from the clause rather than from any other rule."
+conditions = "Runs last, in the delivery worktree. CLAUDE.md is a production instruction file, so this stage runs only at an execution node; the leaf and MEMORY.md are memory writes and are gate-exempt."
+invariants = "CLAUDE.md stays under claude-md-max-lines and claude-md-max-chars; no existing rule's text is deleted to make room; the leaf validates as leaf/v1 with the temporal frontmatter (created / last_verified) tool-stamped; numeric values live only in config.md."
+capability_required = "Read/Edit; the leaf/v1 schema and the repo's prose-ceiling discipline."
+expected_result_image = "`python3 scripts/lint-prose-length.py` and `python3 scripts/verify-leaf-structure.py` and `python3 scripts/verify-memory-index.py` all exit 0; CLAUDE.md names the effort-divergence entry path in one clause."
+criterion_type = "measurable"
+done_criterion = "A coordinator reading only CLAUDE.md can discover that the engine may enter the difficulty cycle on effort divergence, and one hop reaches the full rule."
+verify_command = "cd /Users/the0/claude-agent-instructions-effort-divergence-trigger && python3 scripts/lint-prose-length.py && python3 scripts/verify-leaf-structure.py && python3 scripts/verify-memory-index.py"
+expected_exit = 0
+depends_on = [5]
+output_artifacts = ["memory-global/leaves/effort-divergence-trigger.md"]
+
+[stage.principle]
+statement = "A mechanism that changes the coordinator's own control flow needs a clause in the always-loaded surface, not only a section in the engine README, because the coordinator does not read the README on the turn the mechanism fires."
+source = "config.md's always-loaded-surface-advisory-chars row (the always-loaded surface is what is in context every turn, unlike a skill body or a README) and CLAUDE.md § When the work is stuck, which already enumerates the difficulty-cycle entry signals."
+derivation = "The surface distinction the config row draws is exactly between text present at decision time and text requiring a read; the trigger fires without warning inside another activity, so the coordinator's only in-context description of it is whatever is on the always-loaded surface — one clause there, with the detail one hop away, is the minimum that keeps the firing legible without growing the surface materially."
+confidence = "medium"
+refutation = "If the directive returned at firing is itself sufficient for a coordinator with no prior knowledge to proceed correctly — which stage 4's pre-framed declaration is designed to make true — then the CLAUDE.md clause is pure surface cost and only the leaf is needed."

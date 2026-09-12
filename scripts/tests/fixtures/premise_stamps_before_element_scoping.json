@@ -1,0 +1,927 @@
+{
+ "provenance": "Stage declarations and the premise question bag of a real live session, copied out of its state file before that session was reset. Every disposed_at_key here was stamped by the engine as it stood before question invalidation was scoped to the targeted element, so these are the only stamps no migration could ever rewrite.",
+ "whole_stage_keys": {
+  "1": "23a90127bfb121ef3fcc161bbc74032f6dba10ecbf6a96c3f14fbe0c17e4a276",
+  "2": "97669ccc1c4d4b5a86bef5ea6b9f2d28c043129e7373fb01f78a21891f8eba63",
+  "3": "2de2dd4f15dc2dc24084cf08129215eccf1f4f6a8465358c27e80de3902dfcfa",
+  "4": "c5206e0b3dc722e4d530f1277082954ad71e87eeac5cc1e54708a5d5db33006d",
+  "5": "da2066da23207460c1cbf365a2a9681bd82df34197104cb61ef27c79d917d81c",
+  "6": "58b9c29812c6b549c82e36045707353db67c84f0e0ad5f0b9976ff1829ab0327",
+  "7": "b7fe1204f47584a925e698084e997d97f807c8f502c676d13bf35c1c9cbc4e35",
+  "8": "25ba3f05ab9e02fe76d0d391bc1705796e660cd8b16ae907d4185999cd1e15ce",
+  "9": "3430b34f5a8c820625f1a48eb9724074709925457bb9437a810b72da3cb9ccd3"
+ },
+ "stages": [
+  {
+   "actor": {
+    "capability_required": "git worktree operations; running the pytest suite; writing under the plans directory",
+    "cost_tier": "small",
+    "executor": "spawn:developer"
+   },
+   "conditions": "The remote origin is reachable, so `pull` observes the real tip rather than silently keeping a\nstale one. The working tree is clean, so nothing local is mistaken for baseline state. The\nsuite is runnable end to end at roughly 4.5 minutes and its result is deterministic enough\nthat a re-run reproduces the same failure set.\n",
+   "control": null,
+   "criterion": {
+    "criterion_type": "measurable",
+    "done_criterion": "the baseline record exists and carries a worktree path, the pinned main SHA, a measured pass count and the name of every red test",
+    "expected_exit": 0,
+    "landed": null,
+    "observation": "",
+    "verify_command": "test -s /Users/the0/.claude-agent/plans/unlanded-branch-triage-baseline.txt && grep -qE '^worktree[[:space:]]+/' /Users/the0/.claude-agent/plans/unlanded-branch-triage-baseline.txt && grep -qE '^main_sha[[:space:]]+[0-9a-f]{7,40}$' /Users/the0/.claude-agent/plans/unlanded-branch-triage-baseline.txt && grep -qE '^baseline_passed[[:space:]]+[0-9]+$' /Users/the0/.claude-agent/plans/unlanded-branch-triage-baseline.txt && grep -qE '^known_red[[:space:]]+[^[:space:]]' /Users/the0/.claude-agent/plans/unlanded-branch-triage-baseline.txt",
+    "verify_kind": "shell",
+    "verify_venue": "delivery",
+    "verify_venue_at_final": null
+   },
+   "index": 1,
+   "knowledge": "That this repository's canon is mutated only by sync-instructions-repo.sh and never by a\nsession's own git commands; that session-isolate.sh prints the new workspace root as its final\nstdout line, so the path is captured from that line and not guessed; and that the suite's\nexpected red is test_hook_wiring.py::test_an_unsearchable_chain_member_is_unaccounted_for_not_absent.\n",
+   "means": {
+    "means": "scripts/session-isolate.sh; scripts/sync-instructions-repo.sh pull; python3 -m pytest",
+    "method": "The baseline must be a MEASUREMENT recorded to disk before any ref is touched, not a figure\ncarried over from the brief. The suite's known-red test is identified by name in the record,\nso a later run can distinguish 'the same one test still fails' from 'a different test now\nfails' — a bare count cannot make that distinction and so cannot support the regression\njudgement stages 4-8 rest on. Refreshing the canonical checkout precedes measuring it, since a\nbaseline taken against a stale main describes a tree no later stage will ever observe.\n",
+    "procedure": "1. Run scripts/sync-instructions-repo.sh pull to refresh the canonical checkout and its remote refs.\n2. Record main's resolved SHA as the `main_sha` line.\n3. Run scripts/session-isolate.sh unlanded-branch-triage; capture its final stdout line (the workspace root) as the `worktree` line.\n4. In the canonical checkout, run python3 -m pytest scripts/tests -q and record the summary counts as `baseline_passed` / `baseline_failed`.\n5. Record each failing test's node id on its own `known_red` line.\n6. Run scripts/verify-all.sh and record its pass/warn tally as `verify_all`.\n"
+   },
+   "outcome": {
+    "actual": null,
+    "cost_usd": null,
+    "delivered_head": null,
+    "duration_ms": null,
+    "fail_digests": [],
+    "spawn_count": 0,
+    "status": "PENDING"
+   },
+   "output_artifacts": [
+    "/Users/the0/.claude-agent/plans/unlanded-branch-triage-baseline.txt"
+   ],
+   "preconditions": "The engine session is at an execution node, so the developer may write files at all.",
+   "principle": {
+    "confidence": "high",
+    "derivation": "The brief supplies that baseline as prose from an earlier session. Nine later stages in this\nplan each need to answer 'did my landing break anything', and each would otherwise answer it\nagainst the brief's remembered figure — which by then is several landings old and describes a\ntree none of them observes. Writing the measurement to disk at a known main SHA converts a\nrecollection shared by reference into an artifact each stage can compare against, which is the\nonly form in which the comparison is checkable by anyone other than its author.\n",
+    "refutation": "Refuted if the suite's failure set proves non-deterministic across runs at one SHA — then a\nsingle pinned record is not a base at all and the regression control would have to become a\nstatistical one over repeated runs.\n",
+    "source": "The brief's own constraint paragraph, which reports the baseline as 4660 passed / 3 skipped / 1 failed with one named expected red.",
+    "statement": "A regression verdict is only as good as the base it is asserted against, so the base must be measured and written down before the first mutation, not reconstructed afterwards."
+   },
+   "subject": {
+    "invariants": "main's ref is unchanged by this stage; no remote branch is created, moved or deleted; the\ncanonical checkout's working tree and index are left exactly as they were found.\n",
+    "knowledge_refs": [
+     "scripts/session-isolate.sh",
+     "scripts/sync-instructions-repo.sh"
+    ],
+    "material": "The canonical checkout at /Users/the0/claude-agent-instructions (read-only to a live session)\nand its current test state, which is at this point known only from the brief's report rather\nthan from a measurement this task made.\n",
+    "material_refs": [
+     "/Users/the0/.claude-agent/plans/unlanded-branch-triage-baseline.txt"
+    ],
+    "result": "An isolated linked worktree exists for this task, and a baseline record on disk names that\nworktree's absolute path, main's SHA at the moment of pinning, and the suite's pass/fail\ncounts measured before any branch was touched. Every later regression judgement is relative\nto this record rather than to anyone's recollection of it.\n"
+   },
+   "supplies": [],
+   "title": "Isolate a worktree and pin the pre-landing test baseline"
+  },
+  {
+   "actor": {
+    "capability_required": "reading a git object database; writing the ledger under the plans directory",
+    "cost_tier": "medium",
+    "executor": "spawn:developer"
+   },
+   "conditions": "main is at the SHA stage 1 pinned, so a cherry-mark verdict is relative to a known upstream\nrather than to a moving one. The remote is reachable, so the enumerated branch set is the real\none. No branch is landed or deleted while this pass runs, so the domain does not shift under\nthe enumeration.\n",
+   "control": null,
+   "criterion": {
+    "criterion_type": "measurable",
+    "done_criterion": "the ledger holds seventeen uniquely-named branch rows, each with a valid disposition, and every discard row names a patch-id command",
+    "expected_exit": 0,
+    "landed": null,
+    "observation": "",
+    "verify_command": "awk -F'\\t' '!/^#/ && NF>=4 && $1!=\"main\" {n++; if ($2 !~ /^(land|discard|file-as-task)$/) bad++; if (seen[$1]++) dup++; if ($2==\"discard\" && $3 !~ /cherry/) noprecond++} END {exit !(n==17 && bad==0 && dup==0 && noprecond==0)}' /Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv",
+    "verify_kind": "shell",
+    "verify_venue": "delivery",
+    "verify_venue_at_final": null
+   },
+   "index": 2,
+   "knowledge": "That `git cherry` and `git log --cherry-mark` compute the same patch-id equivalence, and that\n`git log --cherry-mark --right-only` is the form available here; that a three-dot diff\n`main...origin/<b>` shows only branch-side changes since the merge base and therefore says\nNOTHING about whether those changes also exist on main, so it must not be read as a landedness\nsignal; and that a git pathspec is cwd-relative.\n",
+   "means": {
+    "means": "git log --cherry-mark --right-only --oneline; git ls-remote --heads origin; git diff --name-only",
+    "method": "Landedness must be decided by PATCH-ID equivalence, never by commit subject. The discriminator\nis `git log --cherry-mark --right-only --oneline main...origin/<branch>`, which marks each\ncommit `=` when an equivalent patch exists on main and `+` when none does; it therefore sees\nthrough both a rebase (which changes the SHA) and a reword (which changes the subject), the two\ntransformations that defeat subject matching in opposite directions. The asymmetry of the\nresult must be respected rather than flattened: `=` is trustworthy evidence FOR discard, while\n`+` is only the absence of an identical patch and never by itself proof that content is\nmissing, because a commit that landed squashed or conflict-resolved also reads `+`. So an\nall-`=` branch may be dispositioned discard from this pass alone, and any branch with at least\none `+` may not be dispositioned discard here at all. Path arguments to git must be written\ntop-relative (`:(top)path` or a path from the repository root), because a pathspec resolves\nagainst the caller's cwd and a subdirectory cwd silently turns a real path into a nonexistent\none, producing an empty diff that reads as 'no residual'.\n",
+    "procedure": "1. Enumerate the live remote branches with git ls-remote --heads origin and subtract main, so the domain comes from the remote rather than from the brief's table and carries no row for trunk itself.\n2. For each, run git log --cherry-mark --right-only --oneline main...origin/<branch> and record the `=` and `+` counts.\n3. Write a ledger row per branch: branch, disposition, precondition command, evidence.\n4. Disposition all-`=` and zero-ahead branches as discard, citing the cherry-mark command as the precondition.\n5. Disposition every branch carrying `+` commits as land or file-as-task, leaving the land-versus-file call for stages 6-8 where the rebase cost is visible.\n6. For each branch with `+` commits, record its touched files (git diff --name-only main...origin/<branch>) in the evidence column, so stages 6-8 can order landings by file overlap.\n7. Re-state in the ledger header which branches the brief's subject-match table mis-classified, so the correction is durable rather than buried in a reply.\n"
+   },
+   "outcome": {
+    "actual": null,
+    "cost_usd": null,
+    "delivered_head": null,
+    "duration_ms": null,
+    "fail_digests": [],
+    "spawn_count": 0,
+    "status": "PENDING"
+   },
+   "output_artifacts": [
+    "/Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv"
+   ],
+   "preconditions": "A baseline record exists naming the pinned main SHA that every cherry-mark comparison is taken against.",
+   "principle": {
+    "confidence": "high",
+    "derivation": "The brief's subject-match table classifies that branch FULLY-LANDED-BY-REBASE on a 43-of-43\nsubject match, which is the strongest signal its method can emit; the patch-id test run on the\nsame refs finds five commits with no equivalent patch upstream. Since a discard acts on\nexactly this verdict, the method that produced the stronger-looking answer would have deleted\nfive commits of work — so the measurement establishes not merely that the two methods differ\nbut that the cheaper one is wrong in the direction that loses data. Conversely the same test\nconfirms grant-merge-verbs genuinely landed (its one commit marks `=`, equivalent to 7fe9a4d),\nso patch-id also supplies the positive evidence a discard needs.\n",
+    "refutation": "Refuted for any commit that landed with modified content — squashed, partially applied, or\nconflict-resolved differently — since its patch-id differs and it reads `+` though its content\nis upstream. This is why `+` licenses no discard here and every `+` branch is adjudicated in\nstages 6-8 instead.\n",
+    "source": "Measured in this planning session against main=90a6f08: `git log --cherry-mark --right-only\n--oneline main...origin/org-neutralize-core` returns 38 commits marked `=` and 5 marked `+`\n(d754c76, 9dbca6e, a511f7d, 7f036c9, 633bd1e).\n",
+    "statement": "A verdict must be reached by a test that covers the ways its subject can vary; subject matching does not cover rebase or reword, and patch-id equivalence covers both."
+   },
+   "subject": {
+    "invariants": "No ref is created, moved or deleted by this stage — it is pure measurement. main stays at the\npinned SHA. The two branches measured at zero commits ahead are recorded, not silently dropped\nfor being uninteresting.\n",
+    "knowledge_refs": [
+     "/Users/the0/.claude-agent/plans/unlanded-branch-triage-baseline.txt"
+    ],
+    "material": "The seventeen remote branches of origin and their commits. Fifteen carry commits absent from\nmain by the brief's count; two — judge-import-blindness and solved-marker-007 — are absent\nfrom the brief's inventory entirely and measured at zero commits ahead, making them stale refs\nrather than unlanded work.\n",
+    "material_refs": [
+     "/Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv"
+    ],
+    "result": "A tab-separated ledger holds one row per branch for all seventeen, each row carrying the\nbranch name, one of the three dispositions, the content-level command that established its\nprecondition, and the evidence that command produced. The rows for branches whose every\ncommit has an equivalent patch upstream say discard; the rows for branches carrying unique\ncommits say land or file-as-task. Nothing in the ledger rests on a commit-subject comparison.\n"
+   },
+   "supplies": [
+    {
+     "artifact": null,
+     "element": "conditions",
+     "on": 1
+    }
+   ],
+   "title": "Classify all seventeen branches by patch-id equivalence into the disposition ledger"
+  },
+  {
+   "actor": {
+    "capability_required": "curl against api.github.com with the token in ~/.github-token, with issue-comment and issue-close rights; reading the ADR",
+    "cost_tier": "medium",
+    "executor": "spawn:developer"
+   },
+   "conditions": "~/.github-token exists and carries issue-write scope on the repository. The public repository\nis reachable. The\nissue set #73-#82 still exists and has not been renumbered. The ADR section is present in the\ntree at the pinned main SHA.\n",
+   "control": null,
+   "criterion": {
+    "criterion_type": "measurable",
+    "done_criterion": "each of the ten issue numbers 73-82 has a reconciliation row carrying a non-empty verdict",
+    "expected_exit": 0,
+    "landed": null,
+    "observation": "",
+    "verify_command": "awk -F'\\t' '!/^#/ && NF>=3 {seen[$1]=1; if ($3==\"\") bad++} END {for (i=73;i<=82;i++) if (!((\"\" i) in seen)) miss++; exit !(miss==0 && bad==0)}' /Users/the0/.claude-agent/plans/unlanded-branch-triage-issues.tsv",
+    "verify_kind": "shell",
+    "verify_venue": "delivery",
+    "verify_venue_at_final": null
+   },
+   "index": 3,
+   "knowledge": "That origin/marker-emphasis-tolerance carries exactly one commit, 1560e3e, whose 237\ninsertions across scripts/agentctl/dispatch.py, scripts/lib/planner_plan_check.py,\nscripts/spawn-cursor-escape.py, scripts/tests/test_marker_dispatch.py and the new\nscripts/tests/test_marker_emphasis.py constitute a complete and tested fix for the\nemphasis-wrapped return-marker defect filed as open; and that the Core issue venue is PUBLIC,\nso a comment must carry no org-internal identifier.\n",
+   "means": {
+    "means": "curl against api.github.com with the token in ~/.github-token (the gh CLI is NOT installed here — measured exit 127); docs/adr/0005-activity-act-functional-places.md; the stage 2 ledger",
+    "method": "The defect set must be enumerated MECHANICALLY from the two authorities — a GET on /issues for\nwhat is published and the ADR section for what was recorded — and then joined against the\nledger by the files each branch touches. Enumeration from either source alone is insufficient:\nthe ADR says what was found, the tracker says what was claimed, and only their join exposes a\nclaim that no longer matches the repository. A public issue's text may be contradicted only by\na branch whose fix is COMPLETE and tested; an unlanded partial attempt is not grounds for\ntelling the world a defect is fixed, and the reconciliation verdict must distinguish the two.\nEvery write to a public issue is an outward-facing act and is put to the user before it is\nmade, individually, with the exact comment text shown.\n",
+    "procedure": "1. GET /repos/sthe0/claude-agent-instructions/issues/N once per N in 73..82 with the ~/.github-token bearer, recording number, title, state and labels. Ten individual GETs rather than one list call, because a list call is subject to pagination and state filtering and could silently return nine of the ten, which is the one failure this enumeration must not have.\n2. Read the eight-engine-defects section of docs/adr/0005-activity-act-functional-places.md and map each filed issue to the defect it records.\n3. For each issue, search the ledger's evidence column for a branch touching the files that defect names.\n4. For each candidate pair, read the branch's diff and decide whether its fix is complete and tested, or partial.\n5. Write a row per issue: number, candidate branch (or none), verdict.\n6. Draft one comment per falsified issue, naming the branch, its commit, and what the fix covers.\n7. Put the drafted comments to the user for approval, then post the approved ones.\n8. Record each posted comment's URL in the reconciliation row, and confirm by re-reading the issue that the comment is actually visible.\n"
+   },
+   "outcome": {
+    "actual": null,
+    "cost_usd": null,
+    "delivered_head": null,
+    "duration_ms": null,
+    "fail_digests": [],
+    "spawn_count": 0,
+    "status": "PENDING"
+   },
+   "output_artifacts": [
+    "/Users/the0/.claude-agent/plans/unlanded-branch-triage-issues.tsv"
+   ],
+   "preconditions": "A ledger exists whose evidence column records, per branch, the files it touches — the join key this reconciliation needs.",
+   "principle": {
+    "confidence": "high",
+    "derivation": "The fix for the emphasis-marker defect is complete and tested on a branch while its issue is\npublished open, so the tracker asserts something the repository falsifies. Correcting the\nclaim needs only the observation that the branch exists — it is independent of the rebase,\nreview and user-gated push that landing requires, all of which can fail or be deferred. Two\nacts of different cost and different failure modes are therefore separated, and the cheap\nindependent one is not held hostage to the expensive dependent one. Ordering it after landing\nwould leave the misleading claim standing for exactly as long as the landing takes.\n",
+    "refutation": "Refuted if reading the branch shows the fix incomplete relative to what the issue describes —\nthen there is no false claim to correct, and the row's verdict records a partial attempt\ninstead.\n",
+    "source": "The brief's § Confirmed overlap paragraph, and commit 1560e3e's stat measured this session: 5 files, 237 insertions, including a new 150-line test_marker_emphasis.py.",
+    "statement": "A false outward-facing claim is corrected before the work that makes it true, because the claim misleads readers for as long as it stands and the correction does not depend on the fix."
+   },
+   "subject": {
+    "invariants": "No issue is closed by this stage — a comment records what is true, and closing follows the fix\nactually landing, which stage 4 then does for the emphasis defect and stage 9 for the rest. So\nthis invariant defers the closing act, it does not withhold it from the plan. No branch is\nlanded, discarded or created. No org-internal identifier enters a public comment.\n",
+    "knowledge_refs": [
+     "docs/adr/0005-activity-act-functional-places.md",
+     "/Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv"
+    ],
+    "material": "The ten public issues #73-#82 on github.com/sthe0/claude-agent-instructions — nine of them the\nengine defects recorded in docs/adr/0005-activity-act-functional-places.md under its\neight-engine-defects section, plus #82, the file-difficulty.py submit gate that is blind to\n--stream/--queue — together with the ledger stage 2 produced.\n",
+    "material_refs": [
+     "/Users/the0/.claude-agent/plans/unlanded-branch-triage-issues.tsv"
+    ],
+    "result": "A reconciliation record carries a row for each of the ten issues #73-#82 naming the branch (if\nany) that already fixes it and the verdict reached; and for every issue whose public text is\nfalsified by an unlanded branch, a comment saying so is visible on the issue itself. A reader\nof the public tracker can no longer be misled into re-implementing a fix that already exists.\n"
+   },
+   "supplies": [
+    {
+     "artifact": "/Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv",
+     "element": "knowledge",
+     "on": 2
+    }
+   ],
+   "title": "Reconcile public issues #73-#82 against the ledger and correct the false claims"
+  },
+  {
+   "actor": {
+    "capability_required": "git rebase with conflict resolution; running the suite; a user-gated push to main",
+    "cost_tier": "medium",
+    "executor": "spawn:developer"
+   },
+   "conditions": "main is at the SHA the rebase was performed against at the moment of the push, so the\nfast-forward precondition still holds; a competing landing in between invalidates it and the\nrebase is redone. The user is present to answer the push gate. The suite's failure set after\nrebase differs from the baseline's in no test other than ones this fix is meant to change.\n",
+   "control": null,
+   "criterion": {
+    "criterion_type": "measurable",
+    "done_criterion": "origin/main contains the commit this stage delivered",
+    "expected_exit": 0,
+    "landed": {
+     "delivered_stage": 4,
+     "remote": "origin",
+     "target": "main"
+    },
+    "observation": "",
+    "verify_command": null,
+    "verify_kind": "landed",
+    "verify_venue": "repo_root",
+    "verify_venue_at_final": null
+   },
+   "index": 4,
+   "knowledge": "That land-branch.py is fast-forward-only and ref-only, refuses with exit 2 rather than forcing,\nand deletes the remote branch, the local branch and the linked worktree as PART of landing\nunless --keep-branch is passed; that no branch in this repository is currently\nfast-forwardable, so a rebase is required before any landing; and that a commit hook must\nnever be bypassed with --no-verify.\n",
+   "means": {
+    "means": "git rebase in the isolated worktree; scripts/land-branch.py --check then land; python3 -m pytest",
+    "method": "The branch must reach a genuinely fast-forwardable state before landing, and it must reach it\nby REBASE onto current main in the isolated worktree — not by a merge, and never by\nhand-rolled checkout/reset/clean, since land-branch.py refuses rather than forces and the\ncanonical checkout is read-only to this session. Conflict is expected rather than exceptional:\nmain has moved on both scripts/lib/planner_plan_check.py and scripts/agentctl/dispatch.py\nsince this branch was cut, so a clean rebase is the surprising outcome and a conflicted one is\nthe normal path. The rebased result is tested before it is offered for landing, because a\nrebase that resolves cleanly can still be semantically wrong. The push to main is put to the\nuser at the moment of the push, and landability is confirmed with --check first so the user is\nanswering a question whose mechanical half is already settled.\n",
+    "procedure": "1. In the isolated worktree, create a working branch at origin/marker-emphasis-tolerance.\n2. Rebase it onto main, resolving conflicts in planner_plan_check.py and dispatch.py in favour of main's newer structure while preserving the emphasis-tolerance behaviour.\n3. Run python3 -m pytest scripts/tests -q and compare the failure set against the stage 1 baseline record.\n4. Run scripts/verify-all.sh and compare against the baseline tally.\n5. Run scripts/land-branch.py --check --branch <working-branch> and read back the exact commands it would run.\n6. Put the push to the user with the --check output as the evidence.\n7. On approval, run scripts/land-branch.py --branch <working-branch>, which pushes to main and deletes the branch and its worktree.\n8. Update the branch's ledger row to land, with the resulting main SHA and the literal token gate:approved as evidence, so the ledger records that a gate was actually held and not merely declared.\n9. In the SAME user gate as the push, close the emphasis-defect issue with a closing comment naming the landed main SHA, and record the closure in the issues record's fourth column. The push and the closure are one decision because a landed fix and an issue still asserting the defect open are the same falsehood the stage exists to remove.\n"
+   },
+   "outcome": {
+    "actual": null,
+    "cost_usd": null,
+    "delivered_head": null,
+    "duration_ms": null,
+    "fail_digests": [],
+    "spawn_count": 0,
+    "status": "PENDING"
+   },
+   "output_artifacts": [],
+   "preconditions": "The public issue for this defect carries a reconciliation verdict, so landing closes a loop that has already been made visible rather than one nobody has been told about.",
+   "principle": {
+    "confidence": "high",
+    "derivation": "Every landing in this plan carries the same mechanical cost structure — rebase, test, gated\npush — so cost does not order them. What differs is what each landing retires. This one is a\nsingle commit, so its rebase risk is the lowest available, and it answers an issue the public\ntracker currently states as open, so it is also the highest-value; the two normally-competing\ncriteria coincide here, which makes it first without a trade-off. The landing also converts the\nstage 3 comment from a promissory note into a closable issue.\n",
+    "refutation": "Refuted if the rebase onto main turns out to conflict irreducibly — if main's newer\nplanner_plan_check.py has already restructured the marker sites the fix depends on — in which\ncase this stops being the cheapest landing and is re-adjudicated with the heavyweights in\nstage 8.\n",
+    "source": "scripts/land-branch.py's module docstring, read this session; and the cherry-mark measurement showing 1560e3e is the sole commit on the branch and marks `+`.",
+    "statement": "Among equally-valid orderings, the branch that discharges an outward-facing false claim is landed first, because its landing retires a published defect rather than only reducing a ref count."
+   },
+   "subject": {
+    "invariants": "The emphasis-tolerance behaviour the branch's tests pin survives the rebase unchanged. No\nother branch's refs are touched. The canonical checkout's working tree is never mutated by\ncheckout, reset or clean. Comments are not added to the code the rebase touches.\n",
+    "knowledge_refs": [
+     "scripts/land-branch.py",
+     "/Users/the0/.claude-agent/plans/unlanded-branch-triage-baseline.txt"
+    ],
+    "material": "origin/marker-emphasis-tolerance at 1560e3e — one commit, 5 files, 237 insertions — and main at the pinned SHA, which is not an ancestor of it.",
+    "material_refs": [
+     "scripts/agentctl/dispatch.py",
+     "scripts/lib/planner_plan_check.py",
+     "scripts/spawn-cursor-escape.py",
+     "scripts/tests/test_marker_dispatch.py",
+     "scripts/tests/test_marker_emphasis.py"
+    ],
+    "result": "main contains the emphasis-tolerance fix; the branch and its worktree are gone from origin and\nfrom the local repository; the new test_marker_emphasis.py runs as part of the suite; and the\npublic issue that reported the defect can now be closed on the strength of trunk rather than of\na branch.\n"
+   },
+   "supplies": [
+    {
+     "artifact": "/Users/the0/.claude-agent/plans/unlanded-branch-triage-issues.tsv",
+     "element": "conditions",
+     "on": 3
+    }
+   ],
+   "title": "Land marker-emphasis-tolerance onto main"
+  },
+  {
+   "actor": {
+    "capability_required": "authenticated push access to origin for ref deletion",
+    "cost_tier": "small",
+    "executor": "spawn:developer"
+   },
+   "conditions": "The remote is reachable and the refs still point where stage 2 saw them. No unlanded work has\nbeen pushed onto any of the three since they were measured. The user is available to authorize\nthe batch.\n",
+   "control": null,
+   "criterion": {
+    "criterion_type": "measurable",
+    "done_criterion": "none of the three branch names resolves on origin any more",
+    "expected_exit": 0,
+    "landed": null,
+    "observation": "",
+    "verify_command": "git ls-remote --heads origin main | grep -q 'refs/heads/main$' || exit 1; test -z \"$(git ls-remote --heads origin grant-merge-verbs judge-import-blindness solved-marker-007)\"",
+    "verify_kind": "shell",
+    "verify_venue": "delivery",
+    "verify_venue_at_final": null
+   },
+   "index": 5,
+   "knowledge": "That a branch measuring zero commits ahead of main is fully merged and its ref is litter\nrather than work; that `=` under cherry-mark means an equivalent patch is upstream even though\nthe SHA differs; and that a deletion built from an unguarded shell variable can collapse onto\nan unintended target, so literal names are used.\n",
+   "means": {
+    "means": "git push origin --delete; git ls-remote --heads origin; git log --cherry-mark",
+    "method": "Each deletion is licensed individually by a re-run of the patch-id check at the moment of\ndeletion, not by the ledger row written earlier — main has moved since stage 2, and a check\nwhose result is read from a file records what was true then rather than what is true now. A\nbranch is deleted only when its every commit marks `=` or it is zero commits ahead; a single\n`+` withdraws it from this stage and sends it to stage 8. Deletion is of the REMOTE ref by\nname, with the literal name spelled out rather than interpolated from a variable, so an empty\nexpansion cannot widen the target.\n",
+    "procedure": "1. Re-run git log --cherry-mark --right-only --oneline main...origin/<branch> for each of the three, and confirm no `+` remains.\n2. Confirm each ref's tip SHA still matches what stage 2 recorded, so nothing was pushed to it since.\n3. Put the three deletions to the user as one batched decision, showing the per-branch evidence.\n4. On approval, push an archive/<branch> tag at each ref's tip, with literal names, so the commit object stays reachable after the ref is gone.\n5. Run git push origin --delete <branch> for each, with literal branch names.\n6. Run git worktree list to confirm no linked worktree has the ref checked out; where one does, release that worktree first, then delete the corresponding local ref.\n7. Record the deletion, its licensing evidence and the archive tag in each ledger row.\n"
+   },
+   "outcome": {
+    "actual": null,
+    "cost_usd": null,
+    "delivered_head": null,
+    "duration_ms": null,
+    "fail_digests": [],
+    "spawn_count": 0,
+    "status": "PENDING"
+   },
+   "output_artifacts": [],
+   "preconditions": "The ledger carries a patch-id verdict for each of these three branches, so the deletion is re-confirming an established finding rather than deciding one for the first time.",
+   "principle": {
+    "confidence": "high",
+    "derivation": "Deleting a remote ref is the one irreversible act in this plan — a landed branch can be\nre-landed, but a deleted ref whose commits were not upstream is recoverable only from a\nreflog that origin does not keep for the caller. The gap between stage 2's measurement and\nthis stage's action spans stage 4's landing, which moves main and therefore changes what\n`main...origin/<b>` means. Re-running the check costs one command per branch; trusting the\nrecorded verdict costs the difference between a correct and an incorrect deletion, with no\nmechanism in between to catch the error.\n",
+    "refutation": "Refuted if origin is configured to retain deleted-branch refs recoverably (a server-side\nreflog or protected-ref retention the caller can reach), which would make the deletion\nreversible and the re-check merely tidy rather than load-bearing.\n",
+    "source": "Measured this session: grant-merge-verbs' commit 99d8a49 marks `=` against 7fe9a4d on main; judge-import-blindness and solved-marker-007 each return 0 from git rev-list --count main..origin/<branch>.",
+    "statement": "A destructive act re-establishes its own precondition at the moment it acts, because a precondition recorded earlier describes a state that may since have changed."
+   },
+   "subject": {
+    "invariants": "main is unchanged — this stage deletes refs and lands nothing. No branch carrying a `+` commit\nis deleted. Each deleted ref's tip is preserved as an archive/<branch> tag pushed BEFORE the\ndeletion: patch-id equivalence means main carries an equivalent patch, not the same object, so\ngrant-merge-verbs' 99d8a49 becomes unreachable and GC-eligible the moment its ref goes. The\ncontent survives without the tag; the commit does not.\n",
+    "knowledge_refs": [
+     "/Users/the0/.claude-agent/plans/unlanded-branch-triage-baseline.txt"
+    ],
+    "material": "Three remote refs: grant-merge-verbs, whose single commit 99d8a49 marks `=` against the\nequivalent 7fe9a4d on main; and judge-import-blindness and solved-marker-007, each measured at\nzero commits ahead of main and each absent from the brief's fifteen-branch inventory.\n",
+    "material_refs": [
+     "/Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv"
+    ],
+    "result": "The three refs whose commits all have equivalent patches on main — grant-merge-verbs, plus the\ntwo zero-ahead refs the brief's inventory omits — no longer exist on origin, and the ledger\nrecords for each the command whose output licensed the deletion. The remaining ref namespace\ncontains only branches with genuinely unique content.\n"
+   },
+   "supplies": [
+    {
+     "artifact": "/Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv",
+     "element": "knowledge",
+     "on": 2
+    }
+   ],
+   "title": "Delete the three branches whose content is provably redundant"
+  },
+  {
+   "actor": {
+    "capability_required": "git rebase with conflict resolution; worktree release; six user-gated pushes to main",
+    "cost_tier": "large",
+    "executor": "spawn:developer"
+   },
+   "conditions": "main is fast-forwardable from each rebased branch at its own moment of push, which requires\nre-rebasing after each preceding landing in this stage moves main. The user is available for\nsix separate push gates. The suite remains runnable between landings.\n",
+   "control": null,
+   "criterion": {
+    "criterion_type": "measurable",
+    "done_criterion": "each of the six branches has either left the remote by landing or carries a file-as-task ledger row with a task reference",
+    "expected_exit": 0,
+    "landed": null,
+    "observation": "",
+    "verify_command": "set -o pipefail; L=/Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv; test -s \"$L\" || exit 1; R=$(git ls-remote --heads origin) || exit 1; test -n \"$R\" || exit 1; B=\"reply-register-calques si/outcome-format-labels-ui-link si/baseline-diff-granularity de448-planner-plan-file-split si/lang-agnostic-judge host-isolated-spawn\"; for b in $B; do if printf '%s\\n' \"$R\" | grep -q \"refs/heads/$b$\"; then awk -F'\\t' -v b=\"$b\" '$1==b && $2==\"file-as-task\" && $4 ~ /#[0-9]+/ {ok=1} END {exit ok?0:1}' \"$L\" || exit 1; fi; done",
+    "verify_kind": "shell",
+    "verify_venue": "delivery",
+    "verify_venue_at_final": null
+   },
+   "index": 6,
+   "knowledge": "That /Users/the0/claude-agent-instructions-grant is a linked worktree holding\nreply-register-calques, so deleting that branch requires releasing the worktree first; that\nland-branch.py removes a branch's worktree as part of landing; and that each landing moves main\nand therefore invalidates the next branch's rebase.\n",
+   "means": {
+    "means": "git rebase in the isolated worktree; scripts/land-branch.py; python3 -m pytest; scripts/verify-all.sh",
+    "method": "The branches are handled ONE AT A TIME, each rebased, tested and landed to completion before\nthe next is started, so a failure is attributable to a single branch rather than to a batch.\nOrdering runs from the narrowest file surface to the widest, so the cheapest evidence about how\nbadly main has drifted arrives first and can inform whether the wider ones are worth\nattempting. Any branch whose rebase conflicts beyond straightforward resolution, or whose\nrebased state regresses the baseline, is WITHDRAWN to file-as-task rather than forced — the\ngroup's cheapness is its justification, and a branch that stops being cheap has left the\ngroup. reply-register-calques is additionally checked out in a second worktree, which must be\nreleased before its ref can be deleted. Each push to main is separately put to the user.\n",
+    "procedure": "1. Order the six by touched-file count: reply-register-calques and si/outcome-format-labels-ui-link (1), si/baseline-diff-granularity (4), de448-planner-plan-file-split, si/lang-agnostic-judge (18), host-isolated-spawn (28).\n2. For each in turn: branch from the remote ref in the isolated worktree, rebase onto current main.\n3. If the rebase conflicts beyond straightforward resolution, mark the branch file-as-task and move to the next.\n4. Run the suite and verify-all.sh; compare the failure set against the baseline record.\n5. Run land-branch.py --check, put the push to the user, and land on approval.\n6. For reply-register-calques, release the /Users/the0/claude-agent-instructions-grant worktree before its ref is deleted.\n7. Record the outcome and the resulting main SHA in the ledger row before starting the next branch.\n"
+   },
+   "outcome": {
+    "actual": null,
+    "cost_usd": null,
+    "delivered_head": null,
+    "duration_ms": null,
+    "fail_digests": [],
+    "spawn_count": 0,
+    "status": "PENDING"
+   },
+   "output_artifacts": [],
+   "preconditions": "A landing has already been performed and verified in stage 4, so the rebase-test-gate-land sequence is known to work in this repository before it is applied six more times.",
+   "principle": {
+    "confidence": "medium",
+    "derivation": "These six are grouped for one reason: one commit each on a narrow surface, so the expected\nrebase cost is small and a batch amortizes the setup. That reason is a prediction about the\nrebase, not a property of the branch — and main has moved substantially since all six were\ncut, so some prediction in the group will be wrong. If a branch that turns out to need\ndeep conflict resolution stays in the batch, it is worked on under a cost expectation that no\nlonger holds, and the effort spent is invisible against a group budget sized for cheap work.\nEjecting it to file-as-task keeps the group's premise true of every branch still in it.\n",
+    "refutation": "Refuted if the rebases prove uniformly trivial — if main's drift does not touch these files at\nall — in which case the ejection rule never fires and the ordering by file count was\nunnecessary caution.\n",
+    "source": "Measured file counts per branch this session via git diff --name-only main...origin/<branch>, and the single-`+`-commit counts from the cherry-mark pass.",
+    "statement": "A branch admitted to a batch on the grounds of being cheap must be ejected from it the moment it stops being cheap, or the batch's justification silently stops applying to its members."
+   },
+   "subject": {
+    "invariants": "No branch is force-pushed and no landing is forced past a refusal. The baseline failure set is\nnot enlarged by any landing in this group. A withdrawn branch keeps its remote ref intact so\nits work stays recoverable.\n",
+    "knowledge_refs": [
+     "scripts/land-branch.py",
+     "/Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv"
+    ],
+    "material": "Six branches with one unique commit each: reply-register-calques (2b5fb27, 1 file, also\nchecked out in the worktree /Users/the0/claude-agent-instructions-grant),\nsi/baseline-diff-granularity (978173a, 4 files), si/lang-agnostic-judge (5affb11, 18 files),\nsi/outcome-format-labels-ui-link (c041d6d, 1 file), de448-planner-plan-file-split (70f692f,\nthe one of its two commits that did not land), and host-isolated-spawn (f226f75, 28 files).\n",
+    "material_refs": [
+     "scripts/lib/planner_plan_check.py"
+    ],
+    "result": "Each of the six branches carrying a single unique commit on a narrow file surface has either\nreached main and been deleted, or has been withdrawn to file-as-task with the reason recorded\n— and the ledger says which, per branch. No branch in this group is left in an undecided\nstate.\n"
+   },
+   "supplies": [
+    {
+     "artifact": null,
+     "element": "method",
+     "on": 4
+    }
+   ],
+   "title": "Land the six low-risk single-commit branches"
+  },
+  {
+   "actor": {
+    "capability_required": "git rebase with deep conflict resolution; running the registry generator; two user-gated pushes to main",
+    "cost_tier": "large",
+    "executor": "spawn:developer"
+   },
+   "conditions": "gen_crutch_registry.py runs successfully against the merged tree and is verified deterministic by the repeated run in step 2 rather than assumed from the word generated, so the\nregenerated artifact is stable rather than differing per run. The canon guard remains\nfunctional throughout, since it is the mechanism protecting the checkout being worked in. main\nis fast-forwardable at each of the two pushes.\n",
+   "control": null,
+   "criterion": {
+    "criterion_type": "measurable",
+    "done_criterion": "each of the two branches has either left the remote by landing or carries a file-as-task ledger row with a task reference",
+    "expected_exit": 0,
+    "landed": null,
+    "observation": "",
+    "verify_command": "set -o pipefail; L=/Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv; test -s \"$L\" || exit 1; R=$(git ls-remote --heads origin) || exit 1; test -n \"$R\" || exit 1; B=\"followup/guard-and-enumerate-residuals heredoc-body-spans\"; for b in $B; do if printf '%s\\n' \"$R\" | grep -q \"refs/heads/$b$\"; then awk -F'\\t' -v b=\"$b\" '$1==b && $2==\"file-as-task\" && $4 ~ /#[0-9]+/ {ok=1} END {exit ok?0:1}' \"$L\" || exit 1; fi; done",
+    "verify_kind": "shell",
+    "verify_venue": "delivery",
+    "verify_venue_at_final": null
+   },
+   "index": 7,
+   "knowledge": "That scripts/crutch_registry.toml is generated by scripts/gen_crutch_registry.py and is\nroughly 19500 lines, so it is never hand-merged; that the two branches are independent rather\nthan stacked, which is why an order must be chosen rather than inherited; and that main last\ntouched this subsystem at a8dbf64, so both rebases meet real drift.\n",
+   "means": {
+    "means": "git rebase; scripts/gen_crutch_registry.py; scripts/land-branch.py; python3 -m pytest",
+    "method": "The two branches land SEQUENTIALLY in age order — the older, larger followup branch first,\nthen heredoc-body-spans rebased onto the result — because they are independent edits to one\nsubsystem and the younger branch's four commits are the ones that must be reconciled against\nan already-reconciled base rather than the reverse. scripts/crutch_registry.toml is a\nGENERATED artifact of scripts/gen_crutch_registry.py: its conflicts are resolved by\nregenerating it from the merged tree, never by merging its hunks, because a hand-merged\ngenerated file records a state its generator would not produce and the next regeneration\nsilently reverts the merge. The guard under change is the mechanism that protects the\ncanonical checkout, so its own tests are the acceptance evidence and are run against the\nmerged result, not merely against each branch.\n",
+    "procedure": "1. Rebase followup/guard-and-enumerate-residuals onto current main in the isolated worktree, taking main's side on crutch_registry.toml conflicts.\n2. Regenerate the registry with scripts/gen_crutch_registry.py, run it a second time and confirm the artifact is byte-identical, then commit it. The second run is the determinism check the resolution rests on: if regeneration is not a function of the tree alone, resolving a conflict by regenerating is not a resolution and the divergence is a difficulty to declare rather than commit.\n3. Run the guard and lexer test files, then the whole suite; compare against the baseline record.\n4. Land it through land-branch.py behind a user gate.\n5. Rebase heredoc-body-spans onto the new main, reconciling its shell_tokens.py and hook-guard-canon-readonly.py changes against the just-landed versions.\n6. Regenerate the registry again and re-run the same tests.\n7. Land it behind its own user gate, and record both outcomes in the ledger.\n"
+   },
+   "outcome": {
+    "actual": null,
+    "cost_usd": null,
+    "delivered_head": null,
+    "duration_ms": null,
+    "fail_digests": [],
+    "spawn_count": 0,
+    "status": "PENDING"
+   },
+   "output_artifacts": [],
+   "preconditions": "The six single-commit branches are disposed, so this stage's conflict resolution happens against a main that has stopped moving for reasons unrelated to this subsystem.",
+   "principle": {
+    "confidence": "high",
+    "derivation": "Four of the branches to be landed all modify this one file, so conflicts in it are certain\nrather than possible, and at roughly 19500 lines a hand resolution is both expensive and\nunreviewable. The file has a generator in the same tree, which means its correct content is a\nFUNCTION of the merged source rather than a merge of two prior contents — so the merge\noperation is not merely costly but ill-defined: any hand-resolved version that differs from\nthe generator's output is wrong by construction and will be silently overwritten the next time\nanyone regenerates. Regeneration is therefore both the cheaper and the only correct\nresolution.\n",
+    "refutation": "Refuted if the registry turns out to carry hand-maintained content the generator does not\nreproduce — a manually-curated section or a committed ground annotation — in which case\nregeneration would destroy it and the conflict needs a real merge of the curated part.\n",
+    "source": "Measured this session: scripts/crutch_registry.toml appears in the touched-file set of followup/guard-and-enumerate-residuals, heredoc-body-spans, perm-self-grant and si/differential-verify, and scripts/gen_crutch_registry.py is its generator, itself modified on the followup branch.",
+    "statement": "A conflict in a generated file is resolved by re-running its generator, because a hand-merged artifact encodes a state its generator would not produce and the next regeneration discards the merge."
+   },
+   "subject": {
+    "invariants": "The canon guard's protection of the canonical checkout is never disabled to make a rebase\neasier. The regenerated registry is the generator's own output, unedited by hand. Neither\nbranch's behavioural pins are dropped to resolve a conflict.\n",
+    "knowledge_refs": [
+     "scripts/gen_crutch_registry.py",
+     "scripts/land-branch.py"
+    ],
+    "material": "Two independent branches editing one subsystem: followup/guard-and-enumerate-residuals (14\nunique commits, 2026-08-04) and heredoc-body-spans (4 unique commits, 2026-08-13). Neither is\nan ancestor of the other. They share four files —\nscripts/hook-guard-canon-readonly.py, scripts/lib/shell_tokens.py,\nscripts/tests/test_guard_canon_bash_writes.py and\nscripts/tests/test_shell_tokens_nonwidening.py — and both also touch the generated\nscripts/crutch_registry.toml. main has moved on this subsystem too, most recently at a8dbf64.\n",
+    "material_refs": [
+     "scripts/hook-guard-canon-readonly.py",
+     "scripts/lib/shell_tokens.py",
+     "scripts/lib/git_cwd.py",
+     "scripts/lib/bash_write_targets.py",
+     "scripts/crutch_registry.toml",
+     "scripts/tests/test_guard_canon_bash_writes.py",
+     "scripts/tests/test_shell_tokens_nonwidening.py"
+    ],
+    "result": "The guard and shell-lexer work from both branches is on main in an order that preserves each\nbranch's intent, with the generated crutch registry REGENERATED from the merged tree rather\nthan conflict-merged, and the guard's own test suites green. The two branches that were\nindependently editing one subsystem no longer exist as competing versions of it.\n"
+   },
+   "supplies": [
+    {
+     "artifact": null,
+     "element": "conditions",
+     "on": 6
+    }
+   ],
+   "title": "Land the canon-guard shell-lexer stack in age order"
+  },
+  {
+   "actor": {
+    "capability_required": "reading substantial diffs; measuring rebase cost; filing public issues; user-gated pushes",
+    "cost_tier": "large",
+    "executor": "spawn:developer"
+   },
+   "conditions": "main has absorbed stages 4, 6 and 7, so the rebase costs measured here are against the tree\nthese branches would actually land on. The public issue venue is reachable for filing. Each\nbranch's remote ref still exists and is unmodified since stage 2.\n",
+   "control": null,
+   "criterion": {
+    "criterion_type": "measurable",
+    "done_criterion": "all five heavyweight ledger rows carry non-empty adjudication evidence",
+    "expected_exit": 0,
+    "landed": null,
+    "observation": "",
+    "verify_command": "awk -F'\\t' '$1==\"perm-self-grant\" || $1==\"bench-v2/spawn-cost-ledger\" || $1==\"si/differential-verify\" || $1==\"control-authoring-defect-class\" || $1==\"org-neutralize-core\" {n++; if ($4==\"\") bad++} END {exit !(n==5 && bad==0)}' /Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv",
+    "verify_kind": "shell",
+    "verify_venue": "delivery",
+    "verify_venue_at_final": null
+   },
+   "index": 8,
+   "knowledge": "That org-neutralize-core is 38-of-43 landed with five specific residual commits, so its\napparent 221-file, 43-commit size overstates the work by an order of magnitude; that\nscripts/agentctl/plan.py is touched by both si/differential-verify and\ncontrol-authoring-defect-class, so landing both requires reconciling them with each other and\nnot only with main; and that the Core issue venue is public, so a filed task carries no\norg-internal identifier.\n",
+   "means": {
+    "means": "git log --cherry-mark; git diff; git rebase --dry-run equivalents; curl against api.github.com with the token in ~/.github-token; scripts/file-difficulty.py",
+    "method": "Each branch is adjudicated on three questions answered in order, stopping at the first that\ndecides it: is its purpose still live given what main has since gained; is its unique content\nrecoverable as a rebase at proportionate cost; and does landing it now serve a filed need. A\nbranch that fails any of these becomes file-as-task with the reasoning recorded — filing is a\nreal disposition here, not a euphemism for abandonment, and the filed task must carry enough\ndetail that the work is recoverable without re-deriving it from the diff. org-neutralize-core\nis adjudicated as its five residual commits rather than as a branch, since 38 of its 43 already\nlanded and treating it whole would mis-state both its cost and its value. Where a branch's work\noverlaps a filed public issue, that issue is the place the task is filed against rather than a\nnew one.\n",
+    "procedure": "1. For each of the five, re-run the patch-id pass against current main — several landings have moved it since stage 2.\n2. Read each branch's unique commits and summarize what is on it that main lacks.\n3. Attempt a rebase onto current main in a scratch branch to measure conflict cost without committing to landing.\n4. Decide land or file-as-task per branch against the three questions.\n5. For a land decision, follow the stage 4 sequence: test, --check, user gate, land.\n6. For a file-as-task decision, file against the existing public issue where one matches, else create one carrying the branch name, its unique commits and the rebase cost measured in step 3.\n7. Record the adjudication and its evidence in each ledger row.\n"
+   },
+   "outcome": {
+    "actual": null,
+    "cost_usd": null,
+    "delivered_head": null,
+    "duration_ms": null,
+    "fail_digests": [],
+    "spawn_count": 0,
+    "status": "PENDING"
+   },
+   "output_artifacts": [],
+   "preconditions": "The cheap and mid-cost branches are disposed, so the effort spent here is not competing with landings that would have moved main underneath it.",
+   "principle": {
+    "confidence": "high",
+    "derivation": "Reading the branch whole gives 43 commits and 221 files, which prices it as the largest item in\nthe backlog and would justify either a major effort or an abandonment. Reading its residual\ngives five commits, which is comparable to the singletons in stage 6. Both figures describe the\nsame ref, and the decision they support is opposite — so pricing by branch rather than by\nresidual does not merely lose precision, it inverts the disposition. The same correction\napplies to bench-v2/spawn-cost-ledger, priced at 7 commits but carrying 6 unique.\n",
+    "refutation": "Refuted where a branch's residual commits depend on its landed ones in a way that makes them\nunrebasable in isolation — then the residual cannot be lifted alone and the branch's real cost\nis closer to its whole size after all.\n",
+    "source": "Measured this session: org-neutralize-core shows 43 commits and 221 files against main, of which the cherry-mark pass marks 38 `=` and only 5 `+`.",
+    "statement": "A branch's cost and value are properties of its unique commits, not of the branch, so a partially-landed branch is adjudicated as its residual rather than as its whole."
+   },
+   "subject": {
+    "invariants": "No branch is deleted by this stage unless it was landed — a file-as-task disposition leaves the\nremote ref intact so the work stays recoverable. No org-internal identifier enters a public\nissue. The baseline failure set is not enlarged by any landing.\n",
+    "knowledge_refs": [
+     "docs/adr/0005-activity-act-functional-places.md",
+     "scripts/file-difficulty.py"
+    ],
+    "material": "Five branches whose unique work is substantial: perm-self-grant (10 commits, 15 files, a\npermission-decision library trio), followup-adjacent si/differential-verify (5 commits, 9\nfiles, touching agentctl plan.py/state.py/gates.py), control-authoring-defect-class (5\ncommits, 9 files, adding check-controls), bench-v2/spawn-cost-ledger (6 unique of 7 commits,\n32 files, a spawn cost ledger), and the five commits of org-neutralize-core that the patch-id\npass showed did NOT land (d754c76, 9dbca6e, a511f7d, 7f036c9, 633bd1e) though 38 of its 43\ndid.\n",
+    "material_refs": [
+     "scripts/agentctl/plan.py",
+     "scripts/lib/denial_arming.py",
+     "scripts/lib/permission_entry_match.py",
+     "scripts/lib/permission_surface.py",
+     "scripts/agentctl/differential.py",
+     "/Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv"
+    ],
+    "result": "Each of the five branches carrying substantial unique work has a written adjudication — the\nscope of what is unique to it, the rebase cost against current main, whether its purpose is\nstill live, and the resulting disposition — and its ledger row carries that evidence. The\norg-neutralize residual is adjudicated as the five specific commits that did not land, not as\nthe 43-commit branch it appears to be.\n"
+   },
+   "supplies": [
+    {
+     "artifact": null,
+     "element": "conditions",
+     "on": 7
+    }
+   ],
+   "title": "Adjudicate the five heavyweight branches into land or file-as-task"
+  },
+  {
+   "actor": {
+    "capability_required": "filing public issues; reading the remote ref namespace",
+    "cost_tier": "medium",
+    "executor": "spawn:developer"
+   },
+   "conditions": "The remote is reachable so the enumeration is of the real namespace. The issue venue accepts\nnew tasks. No landing or deletion is in flight while the enumeration runs.\n",
+   "control": null,
+   "criterion": {
+    "criterion_type": "measurable",
+    "done_criterion": "every file-as-task ledger row carries a task reference, every land row carries a main SHA and a held-gate token, and every landed issue is recorded closed",
+    "expected_exit": 0,
+    "landed": null,
+    "observation": "",
+    "verify_command": "awk -F'\\t' '!/^#/ && $2==\"file-as-task\" {if ($4 !~ /(#[0-9]+|https?:\\/\\/)/) bad++} !/^#/ && $2==\"land\" {if ($4 !~ /[0-9a-f]{7,40}/ || $4 !~ /gate:approved/) bad++} END {exit !(bad==0)}' /Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv && awk -F'\\t' '!/^#/ && NF>=3 && $3 ~ /landed/ {if ($4 !~ /closed/) bad++} END {exit !(bad==0)}' /Users/the0/.claude-agent/plans/unlanded-branch-triage-issues.tsv",
+    "verify_kind": "shell",
+    "verify_venue": "delivery",
+    "verify_venue_at_final": null
+   },
+   "index": 9,
+   "knowledge": "That a universally-quantified claim — every branch disposed — cannot be established by\nchecking the branches that were touched, because a branch nobody looked at leaves no trace in\nthe record of what was done; the domain must be enumerated from the remote itself.\n",
+   "means": {
+    "means": "curl against api.github.com with the token in ~/.github-token for creating, commenting and closing; git ls-remote --heads origin; the stage 2 ledger",
+    "method": "The residue is enumerated from the LIVE remote rather than from the ledger, and the ledger is\nthen checked to account for what the enumeration found — the direction matters, because\nenumerating from the ledger can only confirm rows that exist and is blind to a branch nobody\nwrote a row for. Every remaining branch gets a task reference recorded in its row; a branch on\norigin with no filed task is the precise failure this stage exists to prevent, since it is\nindistinguishable from the state the whole task set out to end.\n",
+    "procedure": "1. Enumerate live remote branches with git ls-remote --heads origin.\n2. Subtract main; for each remaining branch, look up its ledger row.\n3. For any branch with no row, or a row lacking a task reference, file the task and record the reference.\n4. For any branch whose row says land or discard yet which still exists on origin, re-open the discrepancy as a difficulty rather than editing the row to match.\n5. Re-read the ledger and confirm every file-as-task row carries a reference.\n6. Collect every issue whose reconciliation verdict says its fix has now landed and which is still open, and put them to the user as ONE batched gate showing each closing comment's text; on approval close them and record each closure in the issues record's fourth column. Batched rather than per-issue because user attention is an optimization axis and the decision is the same decision ten times over.\n"
+   },
+   "outcome": {
+    "actual": null,
+    "cost_usd": null,
+    "delivered_head": null,
+    "duration_ms": null,
+    "fail_digests": [],
+    "spawn_count": 0,
+    "status": "PENDING"
+   },
+   "output_artifacts": [],
+   "preconditions": "Every branch has received a disposition in stages 4-8, so this stage is accounting for decisions already made rather than making the last of them.",
+   "principle": {
+    "confidence": "high",
+    "derivation": "This plan's criterion is universal over branches. The instances this task touched are recorded\nin the ledger, so a ledger-driven check can confirm each recorded disposition but is\nstructurally unable to detect a branch that was never recorded — the very case the brief\nalready exhibited by omitting judge-import-blindness and solved-marker-007 from a table of\nfifteen. Enumerating from git ls-remote makes the remote, not the record of our own work, the\nauthority on what exists, which is the only direction in which an omission shows up.\n",
+    "refutation": "Refuted if branches can be created on origin by other actors during the task, since then even\na live enumeration is a snapshot and completeness holds only as of its instant rather than\ndurably.\n",
+    "source": "planner SKILL.md § Understand the problem first, which requires a mechanical enumerator of the quantified domain plus a negative end-state check for any 'all X / no Y remains' criterion.",
+    "statement": "A universally-quantified done criterion is established by enumerating its domain from the authority that defines it, plus a negative end-state check — never by inspecting the instances that were acted on."
+   },
+   "subject": {
+    "invariants": "A discrepancy between the ledger and the remote is reported, never papered over by editing the\nledger to agree with the remote. No branch is deleted by this stage.\n",
+    "knowledge_refs": [
+     "/Users/the0/.claude-agent/plans/unlanded-branch-triage-issues.tsv"
+    ],
+    "material": "The ledger's file-as-task rows, and whichever branches remain on origin after stages 4-8.",
+    "material_refs": [
+     "/Users/the0/.claude-agent/plans/unlanded-branch-triage-ledger.tsv"
+    ],
+    "result": "Every branch still present on origin has a filed, referenced task explaining why it is still\nthere, and the ledger's file-as-task rows each carry that reference. A reader of the ledger can\naccount for the whole remote namespace without consulting the ref graph.\n"
+   },
+   "supplies": [
+    {
+     "artifact": null,
+     "element": "result",
+     "on": 8
+    }
+   ],
+   "title": "File the residue and close the ledger against the live remote"
+  }
+ ],
+ "questions": [
+  {
+   "answer": "The measured set wins. Stage 1 writes its own measurement to the baseline artifact and every later regression verdict compares against that file, not against the brief's prose; the brief's named test is a prior that stage 1 either confirms or replaces.",
+   "basis": "",
+   "derivation": "If the base is by construction the measurement rather than the recollection, a discrepancy between them is a fact about the brief, not a failure of the criterion; the criterion is 'no NEW red relative to the pinned file', which is well-defined for a red set of any size.",
+   "disposed_at_key": "",
+   "disposition": "researched",
+   "id": "red-test-multiplicity",
+   "own_research": "Ran the full suite this session: 4660 passed, 3 skipped, 1 failed, the single red being test_hook_wiring.py::test_an_unsearchable_chain_member_is_unaccounted_for_not_absent. Read stage 1's method and control to confirm the comparison base is the written file rather than the brief's prose, and tightened its verify_command to require the known_red line.",
+   "question": "If stage 1's own measurement finds a red set other than the single named test, what satisfies the regression criterion — the brief's name or the measured set?",
+   "reason": "",
+   "risk": "",
+   "source": "The plan's stage-1 principle: 'A regression verdict is only as good as the base it is asserted against, so the base must be measured and written down before the first mutation, not reconstructed afterwards.'",
+   "target": "plan.done_criterion"
+  },
+  {
+   "answer": "",
+   "basis": "Stage 2 writes one row per branch at classification time and stages 6-8 rewrite the row when they adjudicate, so the value stage 2 writes for a '+' branch is the pre-adjudication value file-as-task, which stage 6, 7 or 8 may narrow to land. This reading is my reconstruction; the plan does not state it.",
+   "derivation": "",
+   "disposed_at_key": "97669ccc1c4d4b5a86bef5ea6b9f2d28c043129e7373fb01f78a21891f8eba63",
+   "disposition": "assumed",
+   "id": "ledger-pending-literal",
+   "own_research": "Read stage 2's verify_command and its procedure steps 4-6, and the closed literal set the awk enforces (land|discard|file-as-task). No fourth literal appears anywhere in the plan; the ambiguity is whether a not-yet-adjudicated + branch is written file-as-task or something else, which the plan does not state.",
+   "question": "Which literal disposition value does stage 2 write for a '+'-carrying branch that stages 6-8 have not yet adjudicated, given the ledger verify_command requires one of a closed set?",
+   "reason": "",
+   "risk": "If a fourth literal such as pending was intended, stage 2's own verify_command rejects stage 2's output and the stage fails on its first run — one edit to fix, no data lost.",
+   "source": "",
+   "target": "stage:2.procedure"
+  },
+  {
+   "answer": "They coincide here, and cherry-mark is authoritative. Both branches return 0 from rev-list --count and empty output from cherry-mark, so the commit set is empty and has no non-equivalent member.",
+   "basis": "",
+   "derivation": "An empty set satisfies all-= vacuously, so the stage-5 deletion precondition holds under either reading; naming cherry-mark authoritative removes the ambiguity for any future branch where the two could differ.",
+   "disposed_at_key": "97669ccc1c4d4b5a86bef5ea6b9f2d28c043129e7373fb01f78a21891f8eba63",
+   "disposition": "researched",
+   "id": "zero-ahead-vs-all-equal",
+   "own_research": "Measured both branches directly at main=90a6f08: git rev-list --count main..origin/judge-import-blindness and ..origin/solved-marker-007 both return 0, and git log --cherry-mark --right-only --oneline returns empty for both, so the two tests coincide on exactly these refs.",
+   "question": "Is 'zero commits ahead' the same case as 'all commits marked =', and if rev-list --count and cherry-mark could disagree, which is authoritative for an irreversible delete?",
+   "reason": "",
+   "risk": "",
+   "source": "Measured 2026-08-17 against main=90a6f08: git rev-list --count main..origin/<b> = 0 and git log --cherry-mark --right-only --oneline main...origin/<b> empty, for judge-import-blindness and solved-marker-007.",
+   "target": "stage:2.method"
+  },
+  {
+   "answer": "Confirmed by patch-id, not by subject match: one commit is equivalent to one already on main, the other is not.",
+   "basis": "",
+   "derivation": "The verdict rests on the same test stage 2 applies to every other branch, so it does not inherit the brief's subject-match weakness, and the unlanded commit is named by SHA rather than by count. Stage 6 keeps de448 and stage 8 no longer counts it.",
+   "disposed_at_key": "ebea4399d41d7991bae7f619a61216bdc82992fbae7c0c92d29a2073445b5636",
+   "disposition": "researched",
+   "id": "de448-landed-claim",
+   "own_research": "Ran git log --cherry-mark --right-only --oneline main...origin/de448-planner-plan-file-split, which returns '= e34cd1e' and '+ 70f692f' — the partial verdict is patch-id confirmed, not subject-matched, and the unlanded commit is identified by SHA.",
+   "question": "Is de448-planner-plan-file-split's already-landed commit confirmed by patch-id, or only asserted from a subject match?",
+   "reason": "",
+   "risk": "",
+   "source": "Measured 2026-08-17: git log --cherry-mark --right-only --oneline main...origin/de448-planner-plan-file-split returns '= e34cd1e' and '+ 70f692f'.",
+   "target": "stage:6.material"
+  },
+  {
+   "answer": "",
+   "basis": "The set is #73-#82 because that is the batch this session filed: #73-#81 are the nine defects (eight ADR-0005 engine defects plus the interpreter-relative hook_wiring one) and #82 is the tenth, the stream-blind submit gate in file-difficulty.py. No rule links an arbitrary open issue to an in-scope branch.",
+   "derivation": "",
+   "disposed_at_key": "",
+   "disposition": "assumed",
+   "id": "issue-set-completeness",
+   "own_research": "Read the brief's overlap section and the ADR's engine-defect section to see how the ten issues were constituted. The set is defined by the filing batch, not by a rule over defects, so an in-scope branch answering an issue outside #73-#82 is possible and the plan would not see it.",
+   "question": "Why is the reconciliation set exactly #73-#82 — could an in-scope branch also answer an open issue outside that range?",
+   "reason": "",
+   "risk": "An in-scope branch could carry a fix for an older open issue outside the range, and stage 3 would not notice; the residue is a still-open issue whose fix has landed, which is the same class of wrong public claim the task exists to remove, one instance narrower.",
+   "source": "",
+   "target": "plan.goal"
+  },
+  {
+   "answer": "control-authoring-defect-class lands before si/differential-verify, on age.",
+   "basis": "",
+   "derivation": "Equal commit counts leave age as the only signal the plan licenses, and the earlier branch was authored against an earlier main, so landing it first means the later branch rebases onto a tree that already contains it instead of conflicting with it twice.",
+   "disposed_at_key": "66928a80ffc5eff052d77893875d9a0e80e02ae3d4ccafb79f0c0f504cfce7bd",
+   "disposition": "researched",
+   "id": "plan-py-landing-order",
+   "own_research": "Measured git log -1 --format=%ci on both refs (control-authoring-defect-class 2026-08-04 11:50, si/differential-verify 2026-08-04 15:20) and git rev-list --count main..origin/<b> = 5 for both, so age is decidable and is the only signal that distinguishes them.",
+   "question": "Which of si/differential-verify and control-authoring-defect-class lands first, given both touch plan.py, and on what basis?",
+   "reason": "",
+   "risk": "",
+   "source": "Measured 2026-08-17: git log -1 --format=%ci gives 2026-08-04 11:50 and 2026-08-04 15:20 respectively; git rev-list --count main..origin/<b> = 5 for both.",
+   "target": "stage:8.knowledge"
+  },
+  {
+   "answer": "",
+   "basis": "The ledger is the current record, not a history: a stage that revises a disposition rewrites the row in the same act, so at the time stage 9 reads it a land row means the landing is believed done. A land row beside a live remote ref is therefore a contradiction rather than a revision, which is why stage 9 step 4 reports it instead of editing it.",
+   "derivation": "",
+   "disposed_at_key": "1cb080670bfe1a06afecbdabb817c034d624ce7637a8b6487fabc6f4086cc516",
+   "disposition": "assumed",
+   "id": "revision-vs-failure",
+   "own_research": "Read stage 9 step 4 against stage 6's and stage 8's methods, which both permit a disposition to be revised to file-as-task mid-flight. The plan gives no field distinguishing a revised row from a stale one, so the discrimination rests on the ledger being rewritten at revision time.",
+   "question": "How does stage 9 step 4 distinguish a disposition legitimately revised mid-flight from the failure case it targets — a branch recorded landed or discarded that is still present on the remote?",
+   "reason": "",
+   "risk": "If a landing stage revises its verdict without rewriting the row, stage 9 reports a difficulty that is really a bookkeeping lag — a false alarm that costs one investigation, and the ledger row is corrected at that point. Stage 9's new step 6 does not touch this: it reads issue closure, not branch dispositions.",
+   "source": "",
+   "target": "stage:9.procedure"
+  },
+  {
+   "answer": "",
+   "basis": "The bar is the one stage 3's method names — the fix covers the defect the issue describes AND carries tests pinning the covered behaviour — with the emphasis branch as the worked example: commit 1560e3e, 5 files, 237 insertions, including a new 150-line test_marker_emphasis.py. Anything less is recorded partial, which the method forbids from contradicting a public claim. Unaffected by the step-1 change from a list call to ten per-number GETs, which alters how issues are enumerated, not how a fix is judged.",
+   "derivation": "",
+   "disposed_at_key": "2de2dd4f15dc2dc24084cf08129215eccf1f4f6a8465358c27e80de3902dfcfa",
+   "disposition": "assumed",
+   "id": "completeness-bar",
+   "own_research": "Read stage 3's method, which requires a fix to be COMPLETE and tested to contradict a public claim, and measured the emphasis branch's commit 1560e3e: 5 files, 237 insertions, including a new 150-line test_marker_emphasis.py. That gives a worked example of the bar but not a general rule.",
+   "question": "What bar makes a branch's fix 'complete and tested' rather than partial, for the purpose of a reconciliation verdict on an issue?",
+   "reason": "",
+   "risk": "A complete fix with thin tests is recorded partial, so a true correction is withheld — the conservative direction, and stage 9's batched closing gate is where such a branch resurfaces.",
+   "source": "",
+   "target": "stage:3.method"
+  },
+  {
+   "answer": "",
+   "basis": "Two kinds of gate, batchable differently. The nine-or-so pushes to main cannot be batched: the brief requires confirmation AT THE MOMENT of the push, and each push is a distinct irreversible act against a main that has moved since the last one, so one up-front blanket approval would approve a state nobody has seen. The public-issue writes can be and now are batched: stage 3 posts its correction comments in one approval showing all texts, stage 4 folds the emphasis issue's closing into the same gate as its push, and stage 9 step 6 closes every remaining landed issue in one batched gate. That takes the implied interaction count from roughly 25 down to roughly 12.",
+   "derivation": "",
+   "disposed_at_key": "",
+   "disposition": "assumed",
+   "id": "gate-count-attention",
+   "own_research": "Counted the gates the plan actually implies by reading every stage's procedure: pushes to main in stages 4, 6, 7 and 8, plus issue writes in stages 3, 4 and 9. Then folded the issue writes into batched approvals (stage 3 one approval for all comments, stage 4 closing inside its push gate, stage 9 step 6 one batched closing) and left the per-push gates intact because the brief requires confirmation at the moment of each push.",
+   "question": "How many separate user interactions does the plan actually cost, and which of them can be batched without weakening the gate they implement?",
+   "reason": "",
+   "risk": "Roughly a dozen interactions is still a real attention cost, and it is the floor the order sets rather than one the plan chose. If the user would rather trade the per-push gate for fewer interruptions, that is a change to the order and must be asked at the approval gate, not assumed here.",
+   "source": "",
+   "target": "plan.done_criterion"
+  },
+  {
+   "answer": "",
+   "basis": "The repository is the user's own and the token is the user's, so a comment appears as the repo owner — the party whose claim is being corrected, which is the correct author for a correction. Every comment passes a user gate showing its exact text before it is posted.",
+   "derivation": "",
+   "disposed_at_key": "2de2dd4f15dc2dc24084cf08129215eccf1f4f6a8465358c27e80de3902dfcfa",
+   "disposition": "assumed",
+   "id": "token-attribution",
+   "own_research": "Read stage 3's conditions and means after my own edit replaced the gh CLI with curl, and confirmed the repository github.com/sthe0/claude-agent-instructions is the user's own and ~/.github-token is the user's token; the comment therefore appears as the repo owner, not as a bot.",
+   "question": "Under whose identity does a comment posted with the ~/.github-token bearer appear, and is that attribution appropriate for a public correction?",
+   "reason": "",
+   "risk": "If the token belongs to a bot or a secondary account, the correction reads as coming from a third party on someone else's repo; visible immediately in the posted comment, and one edit to fix.",
+   "source": "",
+   "target": "stage:3.conditions"
+  },
+  {
+   "answer": "",
+   "basis": "The number is not known now and does not need to be: stage 3 establishes the issue-to-defect mapping by ten per-number GETs and writes it to the issues record, and stage 4's closing step reads that record. If stage 3 finds no issue for the defect, stage 4's closing step is a no-op, the landing still happens, and final_check 3's first disjunct is satisfied by the fix reaching main.",
+   "derivation": "",
+   "disposed_at_key": "179105ba3ef7611c00944c9670426a67056b85cc713ad9e5bb2a887832eacc25",
+   "disposition": "assumed",
+   "id": "emphasis-issue-mapping",
+   "own_research": "Read the brief's overlap section, which dates the filing to 2026-08-17 within the #73-#81 batch and identifies the defect as ADR-0005 engine defect 7, but does not give the issue number; the number is established by stage 3's per-number GET, not by me now.",
+   "question": "Which issue among #73-#82 is the emphasis-tolerance defect, and what does stage 4's closing step do if stage 3 finds no matching issue?",
+   "reason": "",
+   "risk": "If stage 3's mapping is wrong, stage 4 closes the wrong issue — an outward-facing error, reversible by reopening, and gated by a user who sees the closing comment text first.",
+   "source": "",
+   "target": "stage:4.material"
+  },
+  {
+   "answer": "",
+   "basis": "Assumed only for the duration of the plan's construction: stage 7 step 2 now runs the generator twice and requires the artifact to be byte-identical, so the assumption is converted into a checked precondition inside the stage that depends on it.",
+   "derivation": "",
+   "disposed_at_key": "65f321750a32374373b529efb276486966c034cf65981911f02e4f1f96e0a98e",
+   "disposition": "assumed",
+   "id": "generator-determinism",
+   "own_research": "Could not run the generator: the canonical checkout is read-only from a live session and the generator writes scripts/crutch_registry.toml, so the check belongs inside stage 1's isolated worktree. I added the repeated-run byte-comparison to stage 7 step 2 instead of assuming determinism.",
+   "question": "Is gen_crutch_registry.py's output a function of the tree alone, as resolving a conflict by regeneration requires?",
+   "reason": "",
+   "risk": "If the generator reads anything outside the tree, the second run differs and stage 7 declares a difficulty instead of committing — the failure is loud and costs one diagnosis rather than a silently wrong registry on main.",
+   "source": "",
+   "target": "stage:7.conditions"
+  },
+  {
+   "answer": "",
+   "basis": "A branch appearing between stage 2 and stage 9 is treated the same way regardless of who pushed it: stage 9 files a task for it and records the reference. Filing a task for someone else's branch is harmless and leaves the ref untouched, since stage 9 deletes nothing.",
+   "derivation": "",
+   "disposed_at_key": "1cb080670bfe1a06afecbdabb817c034d624ce7637a8b6487fabc6f4086cc516",
+   "disposition": "assumed",
+   "id": "foreign-branch",
+   "own_research": "Read stage 9's method and step 4, and checked the repository's collaborator situation from the brief: this is a single-author fleet repository, so a branch appearing between stage 2 and stage 9 is far more likely one of ours pushed mid-flight than a third party's.",
+   "question": "If a branch appears on origin after stage 2's enumeration because another actor pushed it, does stage 9's file-as-task treatment apply to it?",
+   "reason": "",
+   "risk": "A third party's branch acquires a task nobody asked for — noise, not damage, and stage 9's report-rather-than-edit rule surfaces it for a human to read.",
+   "source": "",
+   "target": "stage:9.knowledge"
+  },
+  {
+   "answer": "",
+   "basis": "The token makes a missing gate visible as a missing marker, and the actual proof lives in the session transcript and the engine history, which the user can read and the executor cannot rewrite.",
+   "derivation": "",
+   "disposed_at_key": "179105ba3ef7611c00944c9670426a67056b85cc713ad9e5bb2a887832eacc25",
+   "disposition": "assumed",
+   "id": "gate-token-self-attestation",
+   "own_research": "Read stage 4 step 8 and stage 9's control: the token is a marker inside an artifact the executor writes, so it cannot itself prove a gate was held. The independent trail is outside the plan — the AskUserQuestion call in the session transcript and the engine's own history event for the approval — and the plan's control checks that the marker is present rather than that the gate happened.",
+   "question": "The gate:approved token is written by the same executor that asked for the approval — what independently records that the user actually approved?",
+   "reason": "",
+   "risk": "An executor could write the token without holding the gate; no artifact inside the plan can detect that, which is a ceiling of a self-recorded control rather than a defect this plan can close.",
+   "source": "",
+   "target": "stage:4.procedure"
+  },
+  {
+   "answer": "",
+   "basis": "A hunk where the two directives genuinely contradict is one the stage's own refutation classifies as an unresolvable rebase, so the exit is withdrawal to file-as-task rather than a precedence rule; final_check 3 accepts that outcome.",
+   "derivation": "",
+   "disposed_at_key": "179105ba3ef7611c00944c9670426a67056b85cc713ad9e5bb2a887832eacc25",
+   "disposition": "assumed",
+   "id": "rebase-directive-precedence",
+   "own_research": "Read stage 4's method, its refutation clause and final_check 3: the stage already provides for a rebase that cannot be resolved (withdraw to file-as-task) and the final check accepts either disjunct of R5, so a genuinely conflicting hunk has a licensed exit that does not require guessing a precedence.",
+   "question": "When a single hunk in the rebase requires both favouring main's newer structure and preserving the emphasis-tolerance behaviour, which directive takes precedence?",
+   "reason": "",
+   "risk": "The executor silently prefers one directive and lands a fix whose meaning main's newer structure has already changed, with the suite too coarse to notice.",
+   "source": "",
+   "target": "stage:4.procedure"
+  },
+  {
+   "answer": "Yes, if the script is invoked from anywhere other than the isolated worktree itself; the plan now requires the invocation cwd to be inside that worktree at stage 4 step 7, and stages 6 and 7 point at that step.",
+   "basis": "",
+   "derivation": "The guard returns early only when realpath(worktree-holding-the-branch) equals realpath(repo_root), so equality is the only invocation that cannot remove the plan's own working tree.",
+   "disposed_at_key": "179105ba3ef7611c00944c9670426a67056b85cc713ad9e5bb2a887832eacc25",
+   "disposition": "researched",
+   "id": "land-cwd-worktree-loss",
+   "own_research": "Read _worktree_for_branch and _cleanup_local_branch in scripts/land-branch.py (lines 158-215): the script locates whatever linked worktree has the landed branch checked out and runs git worktree remove on it, sparing it only when its realpath equals the invocation repo's realpath. Every landing stage rebases the branch inside the isolated worktree, so that worktree is the one holding the branch and an invocation from the canonical checkout would remove it mid-plan.",
+   "question": "Since land-branch.py removes the landed branch's linked worktree, can landing delete the stage-1 isolated worktree that stages 5-9 still depend on?",
+   "reason": "",
+   "risk": "",
+   "source": "scripts/land-branch.py lines 158-215 (_worktree_for_branch, _cleanup_local_branch), read 2026-08-17.",
+   "target": "stage:4.knowledge"
+  },
+  {
+   "answer": "",
+   "basis": "The scratch-branch rebase in step 3 turns the cost into an observation before any commitment, and the alternative to landing is file-as-task rather than abandonment, so an over-strict or over-generous reading costs a deferral, not a loss.",
+   "derivation": "",
+   "disposed_at_key": "66928a80ffc5eff052d77893875d9a0e80e02ae3d4ccafb79f0c0f504cfce7bd",
+   "disposition": "assumed",
+   "id": "conflict-cost-proportionality",
+   "own_research": "Read stage 8's method and procedure step 3: the stage measures conflict cost by attempting the rebase on a scratch branch before committing to landing, so the judgement is made against a measurement rather than an estimate. No numeric threshold exists anywhere in the plan or the repository's tooling.",
+   "question": "What decides that a rebase's conflict cost is proportionate rather than not, and what evidence establishes that a branch's original purpose is still live?",
+   "reason": "",
+   "risk": "An expensive rebase is attempted because proportionate was read generously, spending the heavyweight stage's budget on one branch.",
+   "source": "",
+   "target": "stage:8.method"
+  },
+  {
+   "answer": "",
+   "basis": "Measured: the red set is exactly one test, and stage 1 records the full set by node id, so a discrepancy surfaces at stage 1 rather than at final verification. Deselecting by name is deliberate — it makes a rename show up as RED instead of silently widening the tolerance.",
+   "derivation": "",
+   "disposed_at_key": "",
+   "disposition": "assumed",
+   "id": "known-red-deselection-hardcoded",
+   "own_research": "Ran the full suite this session: 4660 passed, 3 skipped, 1 failed, the single red being test_hook_wiring.py::test_an_unsearchable_chain_member_is_unaccounted_for_not_absent. Read stage 1 procedure step 5, which records EVERY failing node id on its own known_red line, and stage 1's control, which requires at least one such line, so a larger red set is visible in the pinned baseline long before final_check 2 runs.",
+   "question": "final_check 2 deselects one known-red test by name; if stage 1 measures more than one known red, who widens the exclusion and does the done criterion still hold?",
+   "reason": "",
+   "risk": "If the red set grows mid-plan, final_check 2 fails for a reason unrelated to regression and the deselection has to be widened by hand, which is a false FAILED rather than a missed one.",
+   "source": "",
+   "target": "plan.done_criterion"
+  },
+  {
+   "answer": "",
+   "basis": "Stage 3 records candidates per issue and stage 9 step 6 now demands all of them have landed, so a partially-landed fix cannot mark an issue closable; the closing itself is a user gate that shows each comment's exact text.",
+   "derivation": "",
+   "disposed_at_key": "2de2dd4f15dc2dc24084cf08129215eccf1f4f6a8465358c27e80de3902dfcfa",
+   "disposition": "assumed",
+   "id": "issue-branch-many-to-many",
+   "own_research": "Read stage 3's method against the new stage 9 step 6: the mapping matters because step 6 derives a landed token from the ledger rows of the branches named in an issue's candidate column. I closed the worst case in the plan itself — step 6 requires every candidate branch on a row to have landed before the row can read as closable — and stage 3's method already requires a fix to be complete and tested before it may contradict a public claim.",
+   "question": "When a branch's touched files match more than one open issue, or an issue's defect spans files touched by more than one branch, which candidate becomes the branch recorded for that issue?",
+   "reason": "",
+   "risk": "Two issues sharing one branch could both be marked landed when only one issue's defect surface was actually fixed, leaving the user's reading of the closing comment as the last check.",
+   "source": "",
+   "target": "stage:3.method"
+  },
+  {
+   "answer": "This session owns it; releasing it is safe and does not strand another session's work.",
+   "basis": "",
+   "derivation": "A no-live-process foothold does not prove absence of an owner, so ownership has to come from the durable session record rather than from ps; the edit log is that record and it names only this session.",
+   "disposed_at_key": "ebea4399d41d7991bae7f619a61216bdc82992fbae7c0c92d29a2073445b5636",
+   "disposition": "researched",
+   "id": "grant-worktree-ownership",
+   "own_research": "Ran git worktree list (the worktree sits at 2b5fb27 on reply-register-calques) and grepped the agentctl edit log for that path: every write to it carries session_id 4597c2b0-b94e-463b-901c-6f30f60677f9, this session, from the grant-merge-verbs work earlier today. No other session id appears against it.",
+   "question": "Who owns the second worktree /Users/the0/claude-agent-instructions-grant that holds reply-register-calques, and is releasing it safe?",
+   "reason": "",
+   "risk": "",
+   "source": "git worktree list plus /Users/the0/.claude-agent/agentctl/edit-log.jsonl entries for /Users/the0/claude-agent-instructions-grant, all stamped session_id 4597c2b0-b94e-463b-901c-6f30f60677f9, read 2026-08-17.",
+   "target": "stage:6.material"
+  },
+  {
+   "answer": "Public is the right destination for Core-tier content, but only after scripts/check-org-neutral.py passes on the body; anything it flags is split by tier instead of published, which both stages now say.",
+   "basis": "",
+   "derivation": "Publishing is not reversible by deletion once indexed, so the check belongs before the post rather than after it.",
+   "disposed_at_key": "66928a80ffc5eff052d77893875d9a0e80e02ae3d4ccafb79f0c0f504cfce7bd",
+   "disposition": "researched",
+   "id": "public-venue-neutrality",
+   "own_research": "Checked that scripts/check-org-neutral.py exists in this repository and that the standing rule for this tracker is that the Core venue is public and every issue body passes that check before publication. The plan did not invoke it, so I added the check to stage 8 step 6 and stage 9 step 3 rather than leaving the obligation implicit.",
+   "question": "Is the public GitHub tracker the right destination for every file-as-task disposition, given some branch content may be org-internal?",
+   "reason": "",
+   "risk": "",
+   "source": "scripts/check-org-neutral.py present in the repository; the Core-venue-is-public rule in memory-global/leaves/instruction-dev-queues.md.",
+   "target": "stage:8.procedure"
+  },
+  {
+   "answer": "",
+   "basis": "A flaky red produces a set difference at a later stage, which is a false FAILED routed into the difficulty cycle rather than a silent pass; the baseline is a comparison base, not an authority that can hide a regression.",
+   "derivation": "",
+   "disposed_at_key": "23a90127bfb121ef3fcc161bbc74032f6dba10ecbf6a96c3f14fbe0c17e4a276",
+   "disposition": "assumed",
+   "id": "baseline-determinism",
+   "own_research": "Ran the suite once this session (4660 passed, 3 skipped, 1 failed) and read stage 1's procedure: the baseline records every failing node id, and every later stage compares its failure SET against that file rather than a count, so a flake shows up as a set difference.",
+   "question": "What if the suite proves non-deterministic at the pinned SHA, given every later regression judgement rests on this one baseline?",
+   "reason": "",
+   "risk": "A flaky test that happens to pass during the baseline run and fail later costs one diagnosis cycle per occurrence.",
+   "source": "",
+   "target": "stage:1.conditions"
+  }
+ ]
+}

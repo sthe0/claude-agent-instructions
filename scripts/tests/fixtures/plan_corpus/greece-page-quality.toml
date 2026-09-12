@@ -1,0 +1,80 @@
+[meta]
+task_id = "greece-europe-2026-09-options"
+goal = "Пересобрать публичную страницу greece-europe-2026-09: (1) починить невидимую карту; (2) переписать все тексты живым, естественным русским в стиле популярных тревел-блогеров, убрать символьный шум; (3) для каждого сегмента/остановки с равнозначными опциями дать явный лаконичный сравнительный ряд, не сужая до топ-1; (4) поднять визуальное оформление шаблона до уровня трэвел-блогов. Сохранить анти-галлюцинацию (источники+даты, ⚠️ на непроверенном). Автобронирования нет."
+done_criterion = "site рендерится без ошибок; карта грузится (верный SRI-хеш leaflet.js в HTML); options.md обоих вариантов содержат явный сравнительный ряд равнозначных опций; тексты переписаны (нет прежнего символьного шума в decision.md/options.md); render_site.py CSS обновлён; публичная страница передеплоена и отдаёт 200"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/projects/trips"
+external_research = "Warranted (light): собрать приёмы визуального оформления у популярных русскоязычных/мировых тревел-блогов (hero, типографика, карточки, «воздух») как референс для редизайна шаблона — read-only, без влияния на факты маршрута."
+
+[[stage]]
+index = 1
+title = "Починить карту (SRI leaflet.js) + подготовить рендер"
+executor = "in_thread"
+expected_result_image = "scripts/render_site.py содержит корректный integrity-хеш leaflet.js (sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=), прежний битый хеш удалён; render_site.py прогоняется без ошибок и test_render_site.py зелёный"
+criterion_type = "measurable"
+done_criterion = "верный хеш в render_site.py, битый отсутствует, рендер и юнит-тесты проходят"
+verify_command = "cd /Users/the0/projects/trips && grep -q 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=' scripts/render_site.py && ! grep -q 'ANHXPxb2X' scripts/render_site.py && python3 scripts/render_site.py journeys/greece-europe-2026-09 >/dev/null && python3 scripts/test_render_site.py >/dev/null 2>&1"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/render_site.py"]
+material = "diagnosed SRI mismatch: code JS hash != unpkg leaflet@1.9.4 actual"
+means = "Edit, Bash"
+method = "заменить битый integrity-хеш leaflet.js на корректный; прогнать рендер и тесты"
+conditions = "unpkg leaflet@1.9.4 доступен; coords.json на месте"
+invariants = "markdown остаётся единственным источником; HTML не редактируется руками"
+capability_required = "python/frontend debugging"
+
+[stage.principle]
+statement = "Пустая карта при наличии данных точек = заблокированный SRI-скрипт; чинить хеш, а не данные"
+source = "openssl dgst сверка: JS-хеш в коде != реальный unpkg"
+confidence = "high"
+refutation = "если карта пуста и при верном хеше — искать в высоте контейнера/CSP/порядке загрузки"
+
+[[stage]]
+index = 2
+title = "Переписать тексты живым русским + вынести равнозначные опции по сегментам"
+executor = "in_thread"
+expected_result_image = "decision.md, оба options.md, оба cost.md, оба itinerary.md переписаны естественным русским в стиле тревел-блога (связные абзацы вместо телеграфного символьного шума); в options.md обоих вариантов добавлен явный сравнительный ряд равнозначных опций по сегментам (перелёт vs паром на Икарию, хаб возврата, Греция→Италия паром vs авиа, отели Матеры и т.п.) с лаконичным сравнением цена/время/риск/вайб; источники и ⚠️-пометки сохранены"
+criterion_type = "measurable"
+done_criterion = "оба options.md содержат раздел равнозначных опций; decision.md содержит сводку развилок; символьный шум снижен; источники на месте"
+verify_command = "cd /Users/the0/projects/trips && grep -qi 'равнознач\\|развилк' journeys/greece-europe-2026-09/alternatives/a-economy/options.md && grep -qi 'равнознач\\|развилк' journeys/greece-europe-2026-09/alternatives/b-comfort/options.md && grep -qi 'развилк\\|равнознач' journeys/greece-europe-2026-09/decision.md && grep -q 'http' journeys/greece-europe-2026-09/alternatives/a-economy/options.md && python3 scripts/render_site.py journeys/greece-europe-2026-09 >/dev/null"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["journeys/greece-europe-2026-09/decision.md", "journeys/greece-europe-2026-09/alternatives/a-economy/options.md", "journeys/greece-europe-2026-09/alternatives/a-economy/cost.md", "journeys/greece-europe-2026-09/alternatives/a-economy/itinerary.md", "journeys/greece-europe-2026-09/alternatives/b-comfort/options.md", "journeys/greece-europe-2026-09/alternatives/b-comfort/cost.md", "journeys/greece-europe-2026-09/alternatives/b-comfort/itinerary.md"]
+material = "текущее содержимое greece markdown (факты+источники) как фактбаза; предпочтение surface-all-equivalent-options"
+means = "Read, Edit, Write"
+method = "переписать каждый файл связной блогерской прозой; развилки, уже лежащие в сносках/фолбэках, поднять в явные сравнительные ряды; факты и URL не менять"
+conditions = "не переисследовать факты; новые опции только с источником+датой или помечать ⚠️"
+invariants = "single-entry Шенген (маршрут внутри зоны); анти-галлюцинация; лидера помечаем, но сопоставимые опции остаются видимыми"
+capability_required = "русскоязычный копирайтинг + доменная логика поездки"
+
+[stage.principle]
+statement = "Равнозначные опции показывать все и лаконично сравнивать, не сужать до одного победителя"
+source = "прямое предпочтение пользователя (surface-all-equivalent-options) + запрос живого блогерского русского"
+confidence = "high"
+refutation = "если сравнительных рядов слишком много и страница тонет — свернуть в компактные таблицы/аккордеон"
+
+[[stage]]
+index = 3
+title = "Визуальный редизайн шаблона + рендер + деплой"
+executor = "in_thread"
+expected_result_image = "render_site.py CSS/лейаут подтянут к уровню тревел-блога (крупный герой, дышащая типографика, карточки, аккуратные сравнительные блоки, читаемая карта); страница перерендерена; задеплоена на Cloudflare Pages; все 3 URL отдают 200 и в задеплоенном HTML присутствует верный SRI-хеш карты"
+criterion_type = "measurable"
+done_criterion = "рендер обновлён новым CSS; публичные URL (index/a-economy/b-comfort) отдают 200; в HTML index присутствует корректный leaflet-хеш и div карты"
+verify_command = "cd /Users/the0/projects/trips && grep -q 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=' journeys/greece-europe-2026-09/site/index.html && grep -q 'leaflet-map' journeys/greece-europe-2026-09/site/index.html && for p in '' '/a-economy' '/b-comfort'; do test \"$(curl -s -o /dev/null -w '%{http_code}' --retry 3 https://trips-greece-europe-2026-09.pages.dev$p)\" = 200 || exit 1; done"
+expected_exit = 0
+depends_on = [2]
+output_artifacts = ["scripts/render_site.py", "journeys/greece-europe-2026-09/site/index.html"]
+material = "референсы оформления тревел-блогов (research) + текущий CSS в render_site.py"
+means = "WebSearch, WebFetch, Edit, Bash"
+method = "собрать 3-5 приёмов оформления у популярных тревел-блогов; применить к CSS/шаблону; render_site.py; deploy_site.sh (нужны CF-креды); проверить живые URL"
+conditions = "CF API-токен + account_id доступны на момент деплоя (file-drop как раньше)"
+invariants = "хостинг Cloudflare Pages, не GitHub пользователя; markdown — источник; HTML не править руками"
+capability_required = "frontend/визуальный дизайн + деплой"
+
+[stage.principle]
+statement = "Оформление уровня тревел-блога — это воздух, типографика и визуальная иерархия, а не украшательство поверх плотного текста"
+source = "запрос пользователя: стиль популярных русскоязычных/мировых тревел-блогеров"
+confidence = "medium"
+refutation = "если редизайн жрёт читаемость на мобиле — откатить к более простому, но чистому лейауту"

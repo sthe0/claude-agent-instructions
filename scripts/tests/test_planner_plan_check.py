@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import sys
 
+import pytest
+
 from lib import config_root, planner_plan_check as MOD
-from lib.marker_extract import Extraction
+from lib.marker_extract import Extraction, _SMOKE_CASES
 
 
 # --- extract_marker: the label is read on ANY line ---------------------------
@@ -36,6 +38,78 @@ def test_marker_on_any_line_accepted_by_the_unified_validate_marker():
     # marker on a line other than the first — the property both wrappers depend on.
     _, ok = MOD.validate_marker("preamble one\npreamble two\nCOMPLETED: done")
     assert ok is True
+
+
+# --- extract_marker: decoration stripping (issue #79) ------------------------
+#
+# The legacy scan is line-start-anchored, so markdown emphasis, backticks,
+# heading marks, blockquotes and list bullets all defeat it today. These cases
+# widen the scan on DECORATION only — the regex stays anchored and unrelaxed.
+
+@pytest.mark.parametrize(
+    "label,text,expected",
+    _SMOKE_CASES,
+    ids=[c[0] for c in _SMOKE_CASES],
+)
+def test_extract_marker_matches_the_shared_smoke_cases(label, text, expected):
+    # The same three fixtures marker_extract.py's model pass is held to, so the
+    # legacy scan and the model pass are graded on one fixture source.
+    assert MOD.extract_marker(text) == expected
+
+
+@pytest.mark.parametrize(
+    "decorated",
+    [
+        "**COMPLETED:** done",
+        "__COMPLETED:__ done",
+        "`COMPLETED:` done",
+        "## COMPLETED: done",
+        "> COMPLETED: done",
+        "- COMPLETED: done",
+        "  > ## **COMPLETED:** done",  # combination, with leading whitespace
+    ],
+    ids=["bold", "underscore", "backtick", "heading", "blockquote", "bullet", "combo"],
+)
+def test_extract_marker_recognises_each_decoration_shape(decorated):
+    assert MOD.extract_marker(decorated) == "COMPLETED"
+
+
+def test_extract_marker_last_wins_when_two_marker_lines_agree():
+    # marker-protocol.md tolerates a summary BEFORE the marker, never after —
+    # so when two lines both carry the SAME marker, the terminal one governs.
+    text = "COMPLETED: draft note, still refining\nmore detail\nCOMPLETED: final, shipped"
+    assert MOD.extract_marker(text) == "COMPLETED"
+
+
+def test_extract_marker_terminal_marker_wins_over_an_emphasised_verdict_headline():
+    # Corpus-dominant shape (49% of the transcript corpus's changed readings): a
+    # code-reviewer's emphasis-wrapped verdict headline precedes its true terminal
+    # marker. The headline must not beat the terminal line.
+    text = "**REVIEW: revise**\nprose about the diff\nCOMPLETED: reviewed the stage diff"
+    assert MOD.extract_marker(text) == "COMPLETED"
+
+
+def test_extract_marker_accepts_a_later_decoy_marker_line_as_terminal():
+    # The accepted cost of last-hit resolution, asserted so it can never be
+    # mistaken for an oversight: a correct marker followed later by a decoy
+    # marker line (discussing a hypothetical the specialist did not take)
+    # resolves to that LATER line rather than to None — what this scan refuses
+    # is discarding the whole output, not picking between two readings.
+    text = (
+        "COMPLETED: shipped it, tests pass.\n\n"
+        "(Had the tests failed I would have returned\n"
+        "REPLAN: revise the approach\n"
+        "but they passed.)"
+    )
+    assert MOD.extract_marker(text) == "REPLAN"
+
+
+def test_extract_marker_word_mid_sentence_still_not_matched_after_stripping():
+    # Decoration stripping widens SHAPE, not SCOPE: a decorated marker word
+    # discussed mid-sentence, even with its colon, must still not match — the
+    # anchor stays a whole-line match, never a search.
+    text = "I considered whether to *ESCALATE:* this but did not in the end"
+    assert MOD.extract_marker(text) is None
 
 
 # --- planner-deliverable contract: TOML via the engine, no .md branch --------
@@ -356,11 +430,11 @@ def test_emphasised_marker_passes_with_the_extraction_pass():
     assert marker == "COMPLETED"
 
 
-def test_the_same_output_is_malformed_under_the_kill_switch():
+def test_the_same_output_now_passes_under_the_kill_switch_too():
     # The other direction of the same control: with the pass off (extraction=None,
-    # what the kill switch produces), the legacy line-start scan still cannot see
-    # a marker under emphasis — the regression this stage exists to remove.
+    # what the kill switch produces), the hardened legacy line-start scan now ALSO
+    # sees the marker under emphasis — the exact regression this stage removes.
     forwarded, ok, marker = MOD.check_planner_return(_EMPHASISED, "developer")
-    assert ok is False
-    assert marker is None
-    assert forwarded.startswith("MALFORMED:")
+    assert ok is True
+    assert marker == "COMPLETED"
+    assert forwarded == _EMPHASISED  # legacy path: unchanged, no canonicalisation

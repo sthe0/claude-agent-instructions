@@ -18,7 +18,7 @@ from __future__ import annotations
 from argparse import Namespace
 
 from agentctl import cli, plugins, plugins_premise, premise
-from agentctl.plan import load_plan, stage_question_key
+from agentctl.plan import load_plan, plan_meta_element_key, stage_question_key
 from agentctl.state import SessionState
 
 
@@ -177,18 +177,23 @@ def test_dispose_stamps_bound_stage_key(store, tmp_path):
 
     doc = load_plan(str(plan_path))
     stage1 = next(s for s in doc.stages if s.index == 1)
-    assert _q(store, "s", "Q1")["disposed_at_key"] == stage_question_key(stage1)
+    assert _q(store, "s", "Q1")["disposed_at_key"] == stage_question_key(stage1, "result")
     assert _q(store, "s", "Q1")["disposed_at_key"] != ""
 
 
-def test_dispose_goal_target_stamps_empty_key(store, tmp_path):
+def test_dispose_goal_target_stamps_plan_meta_key(store, tmp_path):
+    """plan.goal binds to `plan_meta_element_key`, not "" (#123) — the plan-level
+    twin of test_dispose_stamps_bound_stage_key, so a later change to plan.goal's
+    text is visible to staleness invalidation the same way a stage edit is."""
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
     _state(store, plan_path=plan_path)
     _raise(store, "s", id="Q1", target="plan.goal")
     _research(store, "s", id="Q1", attempted="x")
     _dispose(store, "s", id="Q1", to="assumed", basis="stated by user", risk="none")
-    # plan.goal has no per-stage key to bind to -> ""
-    assert _q(store, "s", "Q1")["disposed_at_key"] == ""
+
+    doc = load_plan(str(plan_path))
+    assert _q(store, "s", "Q1")["disposed_at_key"] == plan_meta_element_key(doc, "goal")
+    assert _q(store, "s", "Q1")["disposed_at_key"] != ""
 
 
 # --- the laundering regression: a later dispose never restamps an earlier one ---
@@ -220,7 +225,7 @@ def test_key_stamp_not_laundered_by_later_dispose(store, tmp_path):
     # and it still matches stage 1's (unchanged) key
     doc = load_plan(str(plan_path))
     stage1 = next(s for s in doc.stages if s.index == 1)
-    assert _q(store, "s", "Q1")["disposed_at_key"] == stage_question_key(stage1)
+    assert _q(store, "s", "Q1")["disposed_at_key"] == stage_question_key(stage1, "result")
 
 
 # --- rebind clears blocker 12 (bound stage definition changed) ------------------
@@ -236,17 +241,17 @@ def test_rebind_clears_key_blocker(store, tmp_path):
     # change stage 1's definition -> Q1's stamped key no longer matches (blocker 12)
     _write_plan(plan_path, [(1, "img-one-EDITED"), (2, "img-two")])
     blockers_before = _check(store, "s").data["blockers"]
-    assert any("definition\nchanged" in b or "definition changed" in b for b in blockers_before)
+    assert any("changed since this question was disposed" in b for b in blockers_before)
 
     d = _rebind(store, "s", id="Q1", reason="re-read against the new stage 1; still holds")
     assert d.ok is True
 
     blockers_after = _check(store, "s").data["blockers"]
-    assert not any("definition changed" in b for b in blockers_after)
+    assert not any("changed since this question was disposed" in b for b in blockers_after)
     # the stamp now matches the CURRENT stage 1 key
     doc = load_plan(str(plan_path))
     stage1 = next(s for s in doc.stages if s.index == 1)
-    assert _q(store, "s", "Q1")["disposed_at_key"] == stage_question_key(stage1)
+    assert _q(store, "s", "Q1")["disposed_at_key"] == stage_question_key(stage1, "result")
 
 
 # --- retire clears the dangling-edge blocker (rule 2) --------------------------
@@ -314,12 +319,12 @@ def test_dispose_plan_flag_stamps_against_the_named_plan(store, tmp_path):
 
     doc_corrected = load_plan(str(corrected))
     stage1_corrected = next(s for s in doc_corrected.stages if s.index == 1)
-    assert _q(store, "s", "Q1")["disposed_at_key"] == stage_question_key(stage1_corrected)
+    assert _q(store, "s", "Q1")["disposed_at_key"] == stage_question_key(stage1_corrected, "result")
 
     # NOT the session's own (unedited) plan's stage 1 key
     doc_current = load_plan(str(current))
     stage1_current = next(s for s in doc_current.stages if s.index == 1)
-    assert _q(store, "s", "Q1")["disposed_at_key"] != stage_question_key(stage1_current)
+    assert _q(store, "s", "Q1")["disposed_at_key"] != stage_question_key(stage1_current, "result")
 
 
 def test_rebind_plan_flag_stamps_against_the_named_plan(store, tmp_path):
@@ -339,7 +344,7 @@ def test_rebind_plan_flag_stamps_against_the_named_plan(store, tmp_path):
 
     doc_corrected = load_plan(str(corrected))
     stage1_corrected = next(s for s in doc_corrected.stages if s.index == 1)
-    assert _q(store, "s", "Q1")["disposed_at_key"] == stage_question_key(stage1_corrected)
+    assert _q(store, "s", "Q1")["disposed_at_key"] == stage_question_key(stage1_corrected, "result")
 
 
 # --- default path (no --plan) is byte-identical to before the flag existed ------
@@ -351,7 +356,7 @@ def test_dispose_omitting_plan_flag_reproduces_previous_behaviour(store, tmp_pat
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
     doc = load_plan(str(plan_path))
     stage1 = next(s for s in doc.stages if s.index == 1)
-    expected = stage_question_key(stage1)
+    expected = stage_question_key(stage1, "result")
 
     _state(store, sid="explicit-none", plan_path=plan_path)
     _raise(store, "explicit-none", id="Q1", target="stage:1.result")
@@ -374,7 +379,7 @@ def test_rebind_omitting_plan_flag_reproduces_previous_behaviour(store, tmp_path
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
     doc = load_plan(str(plan_path))
     stage1 = next(s for s in doc.stages if s.index == 1)
-    expected = stage_question_key(stage1)
+    expected = stage_question_key(stage1, "result")
 
     _state(store, sid="explicit-none", plan_path=plan_path)
     _raise(store, "explicit-none", id="Q1", target="stage:1.result")

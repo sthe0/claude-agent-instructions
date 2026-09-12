@@ -22,6 +22,8 @@ from agentctl.state import (
 )
 from agentctl.store import FileStateStore
 
+from conftest import SUBSTANTIVE_ORDER
+
 
 def ns(**kw):
     return Namespace(**kw)
@@ -160,6 +162,7 @@ weight_class = "substantive"
 external_research = "checked wiki; none applies"
 repo_root = "{repo_root}"
 delivery_worktree = "{worktree}"
+{SUBSTANTIVE_ORDER}
 
 [[stage]]
 index = 1
@@ -170,9 +173,14 @@ criterion_type = "measurable"
 done_criterion = "d"
 verify_command = "pytest -q"
 material = "m"
+material_refs = ["m"]
+knowledge_refs = ["k"]
+knowledge = "kn"
 means = "bash"
 method = "run"
+procedure = "1. read the fixture. 2. apply the edit. 3. re-check the seam"
 conditions = "c"
+preconditions = "p"
 invariants = "n"
 capability_required = "cap"
 

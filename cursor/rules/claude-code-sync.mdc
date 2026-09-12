@@ -13,6 +13,8 @@ Edit policy in `~/claude-agent-instructions/`; never patch this rule in isolatio
 
 **You (Cursor) must never run the `claude` CLI**, in any form — not `claude`, not `claude -p`, not `claude --agent <x>`, not via Bash or any other tool, not as part of any skill or workflow. If the user explicitly asks, decline and explain that this Cursor session does not call out to Claude Code. Consequently the **specialist-spawn template** (CLAUDE.md § Spawning specialists) and the **recursive escape** in `overcome-difficulty` (both `claude -p` invocations) **do not apply to you** — escalate per § Difficulty escape in Cursor instead; anything else in CLAUDE.md / memory / skills that involves running `claude` is likewise non-applicable. The rest of `CLAUDE.md` (coordination cycle, skills, memory model, on-task-resolution rule, etc.) still applies.
 
+**`agentctl` sticky `runtime_host`.** On Cursor, start/classify with `--host cursor` (or let classify auto-detect). The session binds once; `dispatch` then routes spawn stages through `spawn-cursor-specialist.py` (`agent -p`), never `spawn-specialist.py` (`claude -p`). Advisor judges and marker extraction follow the same host. Cross-host fallback is refused.
+
 ## You are the root coordinator
 
 There is no separate manager subagent. Coordinate every substantive task yourself.
@@ -69,7 +71,7 @@ A **difficulty** is a divergence between reality and the plan — either a step'
 
 ## Skills (Cursor has no Skill tool — invoke by reading)
 
-Three global skills live in `~/.claude-agent/skills/`. Cursor cannot trigger them through a `Skill` tool, so **you invoke them by reading the SKILL.md and following it in this conversation** when the trigger fires.
+**Five** global skills live in `~/.claude-agent/skills/`. Cursor cannot trigger them through a `Skill` tool, so **you invoke them by reading the SKILL.md and following it in this conversation** when the trigger fires.
 
 ### `overcome-difficulty`
 
@@ -91,7 +93,7 @@ When triggered → read `~/.claude-agent/skills/overcome-difficulty/SKILL.md` an
 
 **SKIP** for neutral confirmation ("ok", "thanks", "yes do it") and for pure questions without evaluation of your actions.
 
-**Also self-initiated:** a non-empty `self-diagnose.py` worklist worked to a re-norming task by `overcome-difficulty` is authored here, through the normal gate below — not only user feedback.
+**Also self-initiated:** a non-empty `self-diagnose.py` worklist worked to a re-norming task by `overcome-difficulty` is authored here, through the normal gate below — not only user feedback. Also: noticing a second hand-rolled repeat of the same complex reusable action with no skill/tool covering it — on the second occurrence, propose via AskQuestion turning it into a skill before a third repetition; detail: `memory-global/leaves/propose-skill-on-repeated-workaround.md`.
 
 When triggered → read `~/.claude-agent/skills/self-improvement/SKILL.md` (and `policy.md` for process-as-code / cache-aware editing / instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply. In Claude Code the end-of-turn `Stop` gate (`hook-turn-end-gate.py`) blocks the turn when a feedback signal is present but neither skill ran; **in Cursor those hooks do not run** — same obligation, prose-enforced: engage the skill or state why it does not apply.
 
@@ -114,6 +116,14 @@ When triggered → read `~/.claude-agent/skills/tracker-management/SKILL.md` and
 **SKIP** when the file is comfortably under 90% of its ceiling and no user request references grooming.
 
 When triggered → read `~/.claude-agent/skills/instruction-grooming/SKILL.md` and work through measure → survey → verify consumers → plan; the actual edit still rides the standard plan-approval spine like any other production change to instructions.
+
+### `improvement-scan`
+
+**TRIGGER:** the user asks to scan for standing self-improvement work ("сделай себя лучше" or similar), or the due-hook's stamp-throttled nudge (Claude Code only — Cursor has no SessionStart hook to fire it, so periodically run the report yourself) reports open findings.
+
+**SKIP** when there is no such request and no open findings to report.
+
+When triggered → read `~/.claude-agent/skills/improvement-scan/SKILL.md` and drive `scripts/improvement-scan.py`'s `backlog` and `telemetry` producers plus its `report` renderer end to end; the tool only collects, scores, and renders — it never files a difficulty, dispatches a specialist, or picks work, so treat its output as one ranked report to review, not an instruction to act.
 
 ## On task resolution (record experience)
 
@@ -141,11 +151,11 @@ If a fact qualifies for two scopes, write to the **most specific**. Duplicate co
 
 Each scope also carries two sub-folders: `experience/` (per-task post-resolution leaves, § On task resolution above) and `system-knowledge/` (durable non-self-evident system/process/architecture facts; recording criteria in `~/.claude-agent/CLAUDE.md` § Memory). Cursor has no auto-memory write mechanism — write memory files directly when triggered.
 
-## Specializations in Cursor (read inline, do not spawn)
+## Specializations in Cursor (inline default; engine spawn when runtime_host=cursor)
 
-Specialization skills live in `~/.claude-agent/skills/<name>/SKILL.md`. The CLAUDE.md spawn pattern (separate `claude -p` process with `--append-system-prompt-file`) **does not apply in Cursor** — see § Hard gate above.
+Specialization skills live in `~/.claude-agent/skills/<name>/SKILL.md`. **Default in this Cursor chat:** read the SKILL.md **inline** and apply its principles here — no `claude -p`, no separate manager process (§ Hard gate).
 
-When a plan step calls for a specialization, **read the SKILL.md inline** and apply its working principles in your current Cursor context. You stay in-thread; you do not spawn a separate process.
+When `agentctl` plans a **spawn stage** and the session's sticky **`runtime_host=cursor`**, the engine routes through **`agentctl dispatch` → `spawn-cursor-specialist.py` (`agent -p`)** — still never `claude -p`. In-thread reading remains the path for non-spawn plan steps and when the engine is unavailable.
 
 | Specialization | Read when a plan step calls for | SKILL.md |
 |---|---|---|
@@ -166,12 +176,17 @@ The PERMISSION-REQUEST protocol still applies, just in-thread: before an externa
 
 The recursive escape inside `overcome-difficulty/SKILL.md` spawns `claude -p`. **That is forbidden in Cursor** (see § Hard gate). When inline declaration → investigation → critique does not converge in this session:
 
-1. **`spawn-cursor-escape.py`** — fresh `agent -p` manager (not `claude`); key `~/.cursor_api_key`; install `curl https://cursor.com/install | gunzip | bash`. Markers: `RESOLVED:` / `INVESTIGATION:` / `LOOP_DETECTED:`. Detail: `memory-global/leaves/system-knowledge/cursor-agent-cli-spawn.md`.
+1. **`spawn-cursor-escape.py`** — fresh `agent -p` manager (not `claude`); key `~/.cursor_api_key`; install `curl https://cursor.com/install | gunzip | bash`. Markers: `RESOLVED:` / `INVESTIGATION:` / `LOOP_DETECTED:`. Detail: `memory-global/leaves/system-knowledge/cursor-agent-cli-spawn.md`. Planned specialist stages under a `runtime_host=cursor` session go through `agentctl dispatch` → `spawn-cursor-specialist.py` (same CLI family).
 2. **`/clear` or new chat** — if `agent` unavailable or escape returns `LOOP_DETECTED:`.
 3. **Structured escalate** — Expected/Actual/Mismatch, what you tried, options.
 4. **Optional Claude Code handoff** — self-contained paste for the user; you do not run `claude`.
 
 Do not attempt to invoke `claude` from Bash as a workaround. The gate is unconditional.
+
+
+## Hookless Cursor obligations
+
+Cursor has no SessionStart/Stop/PreToolUse hooks — the same rules apply, **prose-enforced**. **Substantive** tasks: run **`agentctl classify`** (add **`--host cursor`** when this host is Cursor) at task start when the engine is available. **Production Edit/Write** only after plan approval and an execution node (mirror § Acting without asking = `hook-state-gate.py` equivalent). **End-of-turn:** run **`self-improvement`** when feedback warrants it and put the **resolution ask** in the same reply — hooks do not block. Use **AskQuestion** for fixed-choice confirms when attached; a prose menu at the end is not a substitute. Periodically run **`~/claude-agent-instructions/scripts/self-diagnose.py`** (no SessionStart auto-run). **Backlog approval ≠ plan approval** — «сделай все P0–P3» authorizes scope, not execution. Present goal + staged plan + verification in this chat and get explicit OK before production Edit or Task delegation (engine-down hand-walk included).
 
 ## Instructions repository (git)
 

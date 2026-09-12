@@ -52,6 +52,10 @@ class DifficultyRecord:
     severity: Severity
     reporter: str      # who/what submitted it
     evidence: str = ""  # free-text: quote, log line, link
+    cost_estimate: str = ""  # free-text: what the problem costs, or "not estimable: <reason>"
+    ref: str = ""      # stable external identity (e.g. a GitHub issue URL) — never mutated by
+                        # content edits, unlike target/functional_ground; "" when a channel has
+                        # no such handle (e.g. a freshly-submitted record with no ref back yet)
 
     def __post_init__(self) -> None:
         # Validate/normalise the severity enum even if a raw string slipped in.
@@ -74,6 +78,15 @@ class DifficultyRecord:
         return "\n".join(values)
 
 
+class StreamUnsupported(Exception):
+    """Raised by ``pull_stream`` when an adapter has no support for the requested stream.
+
+    Never returns an empty list for an unsupported stream: an empty result reads to the
+    caller as "this source has no items on this stream", which would silently under-cover
+    a multi-channel board built from ``pull_stream`` results.
+    """
+
+
 class DifficultyChannel(abc.ABC):
     """Transport-agnostic submit/pull port. Adapters subclass this; the port knows nothing
     about any concrete tracker."""
@@ -86,12 +99,29 @@ class DifficultyChannel(abc.ABC):
     def pull(self, since: str | None = None) -> list[DifficultyRecord]:
         """Return records submitted at/after ``since`` (ISO-8601); all records if None."""
 
+    def pull_stream(self, stream: str = "report", since: str | None = None) -> list[DifficultyRecord]:
+        """Return records on ``stream`` (e.g. "report", "backlog") submitted at/after ``since``.
+
+        Default implementation delegates to ``pull`` for the "report" stream (every adapter
+        already supports it) and raises ``StreamUnsupported`` for anything else. An adapter
+        opts into a further stream by overriding this method.
+        """
+        if stream == "report":
+            return self.pull(since=since)
+        raise StreamUnsupported(
+            f"{type(self).__name__} does not support stream {stream!r}"
+        )
+
 
 class NullChannel(DifficultyChannel):
     """In-memory test double / no-op sink. Round-trips records without external I/O."""
 
     def __init__(self) -> None:
-        self._store: list[DifficultyRecord] = []
+        self._streams: dict[str, list[DifficultyRecord]] = {}
+
+    @property
+    def _store(self) -> list[DifficultyRecord]:
+        return self._streams.setdefault("report", [])
 
     def submit(self, record: DifficultyRecord) -> str:
         self._store.append(record)
@@ -101,6 +131,18 @@ class NullChannel(DifficultyChannel):
         if since is None:
             return list(self._store)
         return [r for r in self._store if r.ts >= since]
+
+    def pull_stream(self, stream: str = "report", since: str | None = None) -> list[DifficultyRecord]:
+        records = self._streams.get(stream, [])
+        if since is not None:
+            records = [r for r in records if r.ts >= since]
+        return list(records)
+
+    def submit_to_stream(self, record: DifficultyRecord, stream: str = "report") -> str:
+        """Test helper: seed a specific stream without going through ``submit``."""
+        bucket = self._streams.setdefault(stream, [])
+        bucket.append(record)
+        return f"mem-{stream}-{len(bucket) - 1}"
 
 
 # Config-routed registry: channel name -> factory. Adapters register themselves (or are

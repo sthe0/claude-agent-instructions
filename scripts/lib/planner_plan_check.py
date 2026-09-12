@@ -39,17 +39,41 @@ RETURN_MARKERS = (
 MARKER_RE = re.compile(rf"^({'|'.join(RETURN_MARKERS)}):")
 PLAN_PATH_RE = re.compile(r"^\s*Plan\s*:\s*(.+?)\s*$", re.MULTILINE)
 
+# Markdown/quoting decoration a specialist's terminal marker is commonly wrapped
+# in: emphasis (* / _), backticks, heading marks (#), blockquotes (>) and list
+# bullets (-), plus the whitespace around any of them. Stripped from EACH END of
+# a line only — never from the middle — so the anchored MARKER_RE still matches
+# the whole line rather than searching within it. Derived from the same
+# decoration set marker_extract._labelled already strips when reading the model
+# extractor's own reply, widened to also cover underscore emphasis and the
+# blockquote/bullet marks a specialist's markdown terminal line can carry.
+_DECORATION_CHARS = " `*_#>-"
+
+
+def _strip_decoration(line: str) -> str:
+    return line.strip(_DECORATION_CHARS)
+
 
 def extract_marker(result_text: str) -> str | None:
-    """The label of the specialist's message: the marker word on the FIRST line that
-    carries a known ``^MARKER:`` — matching ``validate_marker``'s any-line contract, so a
-    specialist writing a summary before the marker is read correctly (both for plan
-    dispatch and for telemetry). ``None`` if no line carries a known marker."""
-    for line in result_text.splitlines():
-        m = MARKER_RE.match(line.strip())
-        if m:
-            return m.group(1)
-    return None
+    """The label of the specialist's message: the marker word on the LAST line that
+    carries a known ``^MARKER:`` after decoration stripping — matching
+    ``validate_marker``'s any-line contract, so a specialist writing a summary before the
+    marker is read correctly (both for plan dispatch and for telemetry), and a marker
+    wrapped in markdown emphasis, backticks, a heading, a blockquote or a list bullet is
+    still recognised. marker-protocol.md tolerates a summary BEFORE the marker and never
+    after it, so when more than one line carries a marker the terminal (last) one governs
+    — even when an earlier marker line disagrees with it. This scan is the automatic
+    fallback other paths fall back TO, so its posture is to accept the best available
+    reading rather than refuse one it can make; it never returns ``None`` merely because
+    two marker lines disagree. ``None`` only when no line carries a known marker."""
+    found = [
+        m.group(1)
+        for line in result_text.splitlines()
+        if (m := MARKER_RE.match(_strip_decoration(line)))
+    ]
+    if not found:
+        return None
+    return found[-1]
 
 
 def validate_marker(result_text: str) -> tuple[str, bool]:

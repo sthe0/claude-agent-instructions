@@ -1,0 +1,118 @@
+{
+  "pr_proposing": [
+    {
+      "i": 0,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.73
+    },
+    {
+      "i": 1,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.62
+    },
+    {
+      "i": 2,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.98
+    },
+    {
+      "i": 3,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 5.09
+    },
+    {
+      "i": 4,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 5.69
+    },
+    {
+      "i": 5,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.48
+    },
+    {
+      "i": 6,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 3.88
+    },
+    {
+      "i": 7,
+      "verdict": true,
+      "reason": "",
+      "ok": true,
+      "latency_s": 5.03
+    }
+  ],
+  "direct_push": [
+    {
+      "i": 0,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.62
+    },
+    {
+      "i": 1,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 6.37
+    },
+    {
+      "i": 2,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.94
+    },
+    {
+      "i": 3,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 6.0
+    },
+    {
+      "i": 4,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.45
+    },
+    {
+      "i": 5,
+      "verdict": true,
+      "reason": "",
+      "ok": false,
+      "latency_s": 4.68
+    },
+    {
+      "i": 6,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 15.38
+    },
+    {
+      "i": 7,
+      "verdict": false,
+      "reason": "",
+      "ok": true,
+      "latency_s": 4.99
+    }
+  ]
+}

@@ -32,6 +32,7 @@ _CONFIG_TEMPLATE = """\
 | `policy-md-max-lines` | `50` | . |
 | `skill-description-max-chars` | `850` | . |
 | `always-loaded-surface-advisory-chars` | `100000` | . |
+| `memory-index-max-bytes` | `1000` | . |
 """
 
 
@@ -42,6 +43,11 @@ def _make_repo(tmp: Path, claude_lines: int, claude_line_width: int = 5) -> None
     (tmp / "README.md").write_text("readme\n", encoding="utf-8")
     (tmp / "cursor" / "rules").mkdir(parents=True)
     (tmp / "cursor" / "rules" / "claude-code-sync.mdc").write_text("m\n", encoding="utf-8")
+
+
+def _write_memory_index(tmp: Path, body: str) -> None:
+    (tmp / "memory-global").mkdir(parents=True, exist_ok=True)
+    (tmp / "memory-global" / "MEMORY.md").write_text(body, encoding="utf-8")
 
 
 def _write_skill(tmp: Path, name: str, description: str) -> None:
@@ -110,6 +116,50 @@ def test_fail_above_ceiling_still_fatal(tmp_path, capsys):
     assert "CLAUDE.md: 101 lines, limit 100" in out
 
 
+def test_memory_index_over_byte_ceiling_fails(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+    _write_memory_index(tmp_path, "m" * 1000 + "\n")  # 1001 bytes vs the 1000 ceiling
+    rc, out = _run(tmp_path, capsys)
+    assert rc == 1
+    assert "FAIL" in out
+    assert "memory-global/MEMORY.md: 1001 bytes, limit 1000 (memory-index-max-bytes)" in out
+
+
+def test_memory_index_warn_at_90_percent_exits_zero(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+    _write_memory_index(tmp_path, "m" * 949 + "\n")  # 950 bytes = 95% of the ceiling
+    rc, out = _run(tmp_path, capsys)
+    assert rc == 0
+    assert (
+        "WARN — memory-global/MEMORY.md: 950 bytes, 95% of limit 1000 "
+        "(memory-index-max-bytes)" in out
+    )
+    assert "OK" in out
+
+
+def test_memory_index_under_ceiling_silent(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+    _write_memory_index(tmp_path, "m" * 99 + "\n")  # 100 bytes = 10% of the ceiling
+    rc, out = _run(tmp_path, capsys)
+    assert rc == 0
+    assert "memory-global/MEMORY.md" not in out
+
+
+def test_memory_index_byte_unit_not_char_unit_cyrillic(tmp_path, capsys):
+    # The discriminating case, and the reason this check exists at all: 600
+    # Cyrillic characters plus a newline are 601 CHARACTERS — comfortably under
+    # the 1000 ceiling, so a len(read_text()) implementation reports OK — but
+    # 1201 UTF-8 BYTES, which is the axis the harness truncates on.
+    _make_repo(tmp_path, claude_lines=50)
+    body = "б" * 600 + "\n"
+    _write_memory_index(tmp_path, body)
+    assert len(body) < 1000  # sanity: a char-measured check would pass this
+    assert len(body.encode("utf-8")) > 1000
+    rc, out = _run(tmp_path, capsys)
+    assert rc == 1
+    assert "memory-global/MEMORY.md: 1201 bytes, limit 1000 (memory-index-max-bytes)" in out
+
+
 def test_skill_description_over_cap_fails(tmp_path, capsys):
     _make_repo(tmp_path, claude_lines=50)
     _write_skill(tmp_path, "toolong", "x" * 900)
@@ -149,7 +199,10 @@ def test_surface_report_consistency(tmp_path, capsys):
     assert reported_total == breakdown_total
 
 
-def test_surface_report_no_transcript_io_without_include_dynamic(tmp_path, capsys):
+def test_surface_report_no_dynamic_scan_without_include_dynamic(tmp_path, capsys):
+    # scan_dynamic_injection() is gated by --include-dynamic; the separate
+    # PRICE block (price_window_stats()) is NOT gated by that flag and reads
+    # transcripts unconditionally — see the module docstring.
     _make_repo(tmp_path, claude_lines=50)
 
     mod = _load_mod()
@@ -160,7 +213,92 @@ def test_surface_report_no_transcript_io_without_include_dynamic(tmp_path, capsy
         raise AssertionError("scan_dynamic_injection must not run without --include-dynamic")
 
     mod.scan_dynamic_injection = _boom
+    mod.price_window_stats = lambda n_days=mod.PRICE_WINDOW_DAYS: None
     rc = mod.main(["--surface-report"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "DYNAMIC" not in out
+
+
+def test_surface_report_price_block_renders(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+
+    mod = _load_mod()
+    mod.REPO_ROOT = tmp_path
+    mod.CONFIG_MD = tmp_path / "config.md"
+    mod.price_window_stats = lambda n_days=mod.PRICE_WINDOW_DAYS: {
+        "n_days": 14,
+        "n_steps": 1000,
+        "total_tokens": 1_000_000,
+    }
+    rc = mod.main(["--surface-report"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "tokens per step" in out
+    assert "charsPerToken" in out
+    assert "14 days" in out
+    assert "1000 steps" in out
+    assert "per 1000 chars" in out
+    assert "% of the measured 14-day window" in out
+
+
+def test_surface_report_price_no_transcript_data_degrades(tmp_path, capsys):
+    _make_repo(tmp_path, claude_lines=50)
+
+    mod = _load_mod()
+    mod.REPO_ROOT = tmp_path
+    mod.CONFIG_MD = tmp_path / "config.md"
+    mod.price_window_stats = lambda n_days=mod.PRICE_WINDOW_DAYS: None
+    rc = mod.main(["--surface-report"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "no transcript data — cannot price" in out
+
+
+def test_compute_price_margin_scales_linearly():
+    mod = _load_mod()
+    p1 = mod.compute_price(
+        90_000, n_days=14, n_steps=1000, total_tokens=1_000_000, margin_chars=1000
+    )
+    p2 = mod.compute_price(
+        90_000, n_days=14, n_steps=1000, total_tokens=1_000_000, margin_chars=2000
+    )
+    assert p2["margin_tokens_per_step"] == 2 * p1["margin_tokens_per_step"]
+    assert p2["margin_share_pct"] == 2 * p1["margin_share_pct"]
+
+
+def test_compute_price_pins_absolute_values():
+    # Hand-computed from the inputs: 90000 chars / charsPerToken 3 = 30000 tokens,
+    # which is also the per-step cost (the surface rides every step); 30000 * 1000
+    # steps / 1000000 window tokens = 3000%. Pinned as literals because a scaling
+    # test alone cannot catch a factor that is held constant within it.
+    mod = _load_mod()
+    price = mod.compute_price(
+        90_000, n_days=14, n_steps=1000, total_tokens=1_000_000, margin_chars=1000
+    )
+    margin_tokens = 1000 / 3
+    assert price["surface_tokens"] == 30_000.0
+    assert price["tokens_per_step"] == 30_000.0
+    assert price["share_pct"] == 3000.0
+    assert price["margin_tokens_per_step"] == margin_tokens
+    assert price["margin_share_pct"] == margin_tokens * 1000 / 1_000_000 * 100
+
+
+def test_compute_price_share_tracks_step_count():
+    # Doubling the step count doubles both shares: n_steps enters nowhere else, so
+    # dropping it from the numerator would leave every other assertion green.
+    mod = _load_mod()
+    one = mod.compute_price(90_000, n_days=14, n_steps=1000, total_tokens=1_000_000)
+    two = mod.compute_price(90_000, n_days=14, n_steps=2000, total_tokens=1_000_000)
+    assert two["share_pct"] == 2 * one["share_pct"]
+    assert two["margin_share_pct"] == 2 * one["margin_share_pct"]
+    assert two["tokens_per_step"] == one["tokens_per_step"]
+
+
+def test_compute_price_zero_total_tokens_no_zerodiv():
+    mod = _load_mod()
+    price = mod.compute_price(90_000, n_days=14, n_steps=0, total_tokens=0)
+    assert price["share_pct"] == 0.0
+    assert price["margin_share_pct"] == 0.0

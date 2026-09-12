@@ -64,8 +64,28 @@ _hook_script_path = _sd_mod._hook_script_path
 # (event, matcher-or-None, script-basename [+ optional args], timeout)
 DESIRED = [
     ("UserPromptSubmit", None,    "hook-context-growth-reminder.py", 5),
+    # The fast-burn companion to policy-scorecard.py's 7-day spend flag, which by
+    # construction can only fire after the window it would report on has closed.
+    # Warns (never blocks) when the last 15 min AND the last 3 h are both past the
+    # scorecard's own calibrated multiple of the declared medium-tier rate. 5 =
+    # the advisory default; its heaviest step is importing policy-scorecard.py for
+    # that constant, measured at ~40 ms. The transcript read in front of it is
+    # bounded by the 3 h window rather than by session length (transcript_cost's
+    # tail read), so this timeout does not need to grow with a long session.
+    ("UserPromptSubmit", None,    "hook-burn-rate-guard.py",         5),
     ("UserPromptSubmit", None,    "hook-engine-start.py",            5),
-    ("UserPromptSubmit", None,    "hook-resolution-reminder.py",     5),
+    # Turn-driven half of the effort-divergence trigger, which otherwise only ever
+    # compares inside a command the coordinator chose to run. Drives the read-only
+    # `agentctl effort-check` in a subprocess — a state load plus a cost-ledger read,
+    # with the hook's own CHECK_TIMEOUT_S (8 s) bounding it from the inside; 10 here
+    # so the outer timeout cannot pre-empt that inner one and lose its silence.
+    ("UserPromptSubmit", None,    "hook-effort-divergence-watch.py", 10),
+    # 22 = the hook's own _LANDING_DISCIPLINE_JUDGE_BUDGET_S, raised from the prior
+    # flat 5 once this hook grew a landing-discipline judge consult (see the
+    # PreToolUse/AskUserQuestion registration below) — hook_wiring.TIMEOUT_
+    # REQUIREMENTS is keyed by bare basename, so the floor binds both of this
+    # hook's registrations even though only the other one calls the judge.
+    ("UserPromptSubmit", None,    "hook-resolution-reminder.py",     22),
     ("UserPromptSubmit", None,    "hook-self-improvement-reminder.py", 5),
     ("UserPromptSubmit", None,    "hook-tracker-reminder.py",        5),
     ("UserPromptSubmit", None,    "hook-tracker-publish-reminder.py", 5),
@@ -82,17 +102,26 @@ DESIRED = [
     # Hard gate: deny a plan-approval AskUserQuestion issued the same turn the
     # plan was submitted — pre-tool-call text may never render, so the click-
     # question would arrive with nothing behind it ("Я не вижу плана").
-    ("PreToolUse",       "AskUserQuestion", "hook-plan-delivery-gate.py", 5),
+    # 35 = the hook's own _APPROVAL_ASK_JUDGE_BUDGET_S=30 plus interpreter-start
+    # headroom, the same shape as the three gates below. The previous 18 was
+    # sized off approval-sample.json alone (n=32, max 11.42s); a second n=32
+    # sample taken after production started recording timed_out:true rows
+    # against that ceiling (approval2-sample.json) ran 14.12-19.14s, entirely
+    # above the first sample's max, so the merged population's own ceiling
+    # (lib/judge_latency.py, approval_ask row) moved to 21s and this
+    # registration is sized off the hook's new 30s budget instead.
+    ("PreToolUse",       "AskUserQuestion", "hook-plan-delivery-gate.py", 35),
     # Pre-emptive primary gate: deny an AskUserQuestion that escalates an external-
     # service failure to the user WITHOUT a recorded diagnosis (present-tense outage
     # cue + user-facing ask, and neither overcome-difficulty invoked nor a declared
     # difficulty). Reproduce with the real client + enumerate hypotheses first.
-    # 35 = the hook's own _JUDGE_BUDGET_S=30 plus interpreter-start headroom, the
+    # 65 = the hook's own _JUDGE_BUDGET_S=60 plus interpreter-start headroom, the
     # same shape as the deferring gate below; at 5 the harness killed the hook
-    # mid-judge on every single call, and the superseded 25 still sat below this
-    # judge's own p90 (19.16s over n=16, lib/judge_latency.py) once the hook's
-    # budget was raised to cover it.
-    ("PreToolUse",       "AskUserQuestion", "hook-escalation-diagnosis-gate.py", 35),
+    # mid-judge on every single call, and the superseded 35 still sat below this
+    # judge's own re-sampled ceiling (ceil(max)+1 = 55s over n=48,
+    # lib/judge_latency.py) once outage_escalation's row was re-derived and its
+    # budget raised to clear that ceiling with head-room.
+    ("PreToolUse",       "AskUserQuestion", "hook-escalation-diagnosis-gate.py", 65),
     # Hard gate: deny an AskUserQuestion whose EVERY option defers or refuses work
     # the agent holds the rights and the diagnosis to do now (ticket / backlog /
     # "leave as is"), with no branch that does it and no stated reason it cannot.
@@ -102,6 +131,14 @@ DESIRED = [
     # (lib/judge_latency.py), so the harness cap was binding below the hook's own
     # decide() deadline and killing the call before any verdict came back.
     ("PreToolUse",       "AskUserQuestion", "hook-deferring-disposition-gate.py", 50),
+    # Hard gate: deny an AskUserQuestion, raised while the resolution gate is
+    # open, whose menu proposes a PR/merge-review delivery path in a repo where
+    # this machine holds direct push rights (direct_push_no_pr_hint's condition
+    # for the sibling UserPromptSubmit hint above) — no keyword prefilter gates
+    # the judge consult itself, only the gate-open + hint-active precondition.
+    # 27 = the hook's own _LANDING_DISCIPLINE_JUDGE_BUDGET_S=22 plus interpreter-
+    # start headroom, the same shape as the three gates above.
+    ("PreToolUse",       "AskUserQuestion", "hook-resolution-reminder.py",     27),
     # session_scope: deny/warn on a LIVE cross-session filesystem-scope overlap
     # (Component B wiring). Runs AFTER the plan-approval gate above; blocks only a
     # gated path already held by another live session, otherwise warns — silent
@@ -129,6 +166,18 @@ DESIRED = [
     # stay deterministic. Fail-open otherwise.
     ("PreToolUse",       "Edit|Write", "hook-guard-canon-readonly.py", 5),
     ("PreToolUse",       "Bash",  "hook-guard-canon-readonly.py", 5),
+    # Hard gate: deny a Bash publication call (gh/tracker-cli.sh comment, PR
+    # create, issue edit, or a machine-local seam verb) whose text body has no
+    # tech-writer witness bound to it in the transcript -- see
+    # scripts/hook-published-text-writer-gate.py's module docstring.
+    # 60 = this hook's own _PUBLISHED_TEXT_JUDGE_BUDGET_S, at or above
+    # judge_latency.LAST_RESORT_CEILING_S + SIZE_HEADROOM_S since the
+    # published_attachment judge is UNMEASURED (n=0) and has no per-judge
+    # floor to size a tighter budget against. That ceiling is a running max
+    # over measured rows and can grow, so this margin is re-checked live by
+    # test_each_hooks_budget_covers_the_calls_it_declares rather than pinned
+    # to a specific ceiling value here.
+    ("PreToolUse",       "Bash",  "hook-published-text-writer-gate.py", 60),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
     # Nudge when an AskUserQuestion answer is free text rather than an offered
     # option label: a correction delivered this way bypasses the
@@ -155,6 +204,12 @@ DESIRED = [
     # file near its ceiling) and surface any worklist to stderr. Self-throttled,
     # fail-open — never blocks or slows session start.
     ("SessionStart",     None,    "hook-self-diagnose-due.py",   5),
+    # Throttled nudge (once/7d): counts open, improvement-scan-sourced rows
+    # already in the durable findings store and, if any are open, prints an
+    # instruction to invoke the `improvement-scan` skill. Never runs the scan
+    # itself — that is a full live-session task the hook deliberately defers.
+    # Fail-open, never blocks or slows session start.
+    ("SessionStart",     None,    "hook-improvement-scan-due.py",   5),
     # Fail-loud detector: the gate-bearing hooks are present in the repo but NOT
     # wired into the root THIS session loads from — i.e. canon may silently be
     # writable and the spine's gates silently off. Reports on stdout, so the
@@ -169,6 +224,13 @@ DESIRED = [
     # + reclaimable all satisfied). Establishes its own write-once baseline
     # stamp; never reimplements the predicate. Fail-open, never blocks.
     ("SessionStart",     None,    "hook-phase3-due.py",  10),
+    # Throttled nudge (once/7d): runs judge-usage-report.py --check-drift
+    # (DEFAULT mode only) and speaks only when a judge's live latency has
+    # drifted up to meet its declared ceiling — the detector half of the
+    # ceiling-drift plan closes here, since a ceiling correctly derived today
+    # says nothing about whether tomorrow's call population still fits under
+    # it. Fail-open, never blocks.
+    ("SessionStart",     None,    "hook-judge-ceiling-drift-due.py", 15),
     # End-of-turn GATE (not advisory): a loop-safe shell running a registry of
     # pure turn-boundary guardians. Blocks a stop when any guardian reports an
     # unmet obligation (today: the last user message carried an agent-behavior-
@@ -176,13 +238,15 @@ DESIRED = [
     # engaged this turn). Loop-guarded (stop_hook_active + a durable per-message
     # marker under state/turn-gate/) and blockers from every guardian aggregate
     # into one block, so the worst case is exactly one extra model turn.
-    # 57 = the hook's own _TURN_JUDGE_BUDGET_S=52 plus interpreter-start headroom.
-    # It runs up to THREE judges in one invocation, so its whole-invocation budget
-    # is larger than the single-judge gates'; at 5 every one of them was killed,
-    # and the superseded 30/35 pair covered barely two of the three medians
-    # (11.86 + 7.46 + 10.89, lib/judge_latency.py) before the outage judge's own
-    # floor was reached.
-    ("Stop",             None,    "hook-turn-end-gate.py",   57),
+    # 110 = the hook's own _TURN_JUDGE_BUDGET_S=105 plus interpreter-start
+    # headroom. It runs up to FOUR judges in one invocation, so its
+    # whole-invocation budget is larger than the single-judge gates'; at 5
+    # every one of them was killed, and the superseded 74 no longer covered
+    # the worst-case-safe posture once silent_closure was added:
+    # ceil(feedback's ceiling) + ceil(binary_ask's ceiling) +
+    # ceil(silent_closure's ceiling) + outage's floor + head-room =
+    # 21 + 21 + 36 + 26 + 1 = 105 (lib/judge_latency.py).
+    ("Stop",             None,    "hook-turn-end-gate.py",   110),
     # Advisory (not a gate): nudge when a launched run/graph URL appeared in
     # this session's tool output but was never surfaced to the user in a chat
     # message — the structural guard for CLAUDE.md long-running-jobs /

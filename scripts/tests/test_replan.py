@@ -14,6 +14,18 @@ from agentctl.plan import diff_plans, load_plan
 from agentctl.state import (
     Actor, Criterion, LandedSpec, Means, Node, Stage, StageStatus, Subject, Supply,
 )
+from conftest import STAGE_OBSERVATIONS
+
+
+@pytest.fixture(autouse=True)
+def _no_replan_authorization_gate(monkeypatch):
+    """This module predates the replan-authorization gate (stage 5 of the
+    plan-review-override-customer-id fix) and exercises SUBSTANTIVE,
+    non-DIAGNOSING sessions expecting a bare refinement/no_change replan to
+    apply without a user-facing diff presentation. That gate's own scoping and
+    behavior are covered directly in test_replan_authorization.py; here it is
+    switched off so this module keeps testing what it was written to test."""
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
 
 
 def ns(**kw):
@@ -529,12 +541,14 @@ def test_next_stage_finalizes_partitioned_when_replan_preserved_all_passed(store
     _to_executing_stage1(store, sid, plan)
 
     d = cli.cmd_record_result(ns(session=sid, status="passed", actual="mod scaffolded",
-                               control="reviewed: ok"), store=store)
+                               control="reviewed: ok",
+                               observation=STAGE_OBSERVATIONS[0]), store=store)
     assert d.action == "next_stage"
     d = cli.cmd_next_stage(ns(session=sid), store=store)
     assert d.node == Node.EXECUTING.value
     d = cli.cmd_record_result(ns(session=sid, status="passed", actual="tests added",
-                               control="reviewed: ok"), store=store)
+                               control="reviewed: ok",
+                               observation=STAGE_OBSERVATIONS[1]), store=store)
     assert d.action == "verify_final"
     state = store.load(sid)
     assert state.node == Node.VERIFYING.value
@@ -625,7 +639,8 @@ def _to_passed_stage1_via_dispatch(store, sid, plan_path):
                         dry_run=False, constraints=""), store=store,
                      runner=lambda argv, **kw: RunResult(0, stdout="COMPLETED: done\n"))
     cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                             control="reviewed: ok", observation=""), store=store)
+                             control="reviewed: ok",
+                             observation=STAGE_OBSERVATIONS[0]), store=store)
 
 
 def _submit_edit_approve(store, sid, plan_path, edited_text):
@@ -853,9 +868,12 @@ def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_repl
     cli.cmd_submit_plan(ns(session=sid, plan=base), store=store)
     assert "premise" in store.load(sid).plugins  # gate really is live
 
-    # a question bound to stage 1, disposed against the BASE plan's stage 1 key
-    cli.cmd_question_raise(ns(session=sid, id="Q1", target="stage:1.result",
-                              question="does the scaffold need a __init__.py?"),
+    # a question bound to stage 1, disposed against the BASE plan's stage 1 key.
+    # `order` keys to the whole stage, so the retitle below moves it; a `result`-bound
+    # question would rightly survive an edit that leaves stage 1's result alone.
+    cli.cmd_question_raise(ns(session=sid, id="Q1", target="stage:1.order",
+                              question="is scaffolding the module the first thing "
+                              "this plan must do?"),
                            store=store)
     cli.cmd_question_research(ns(session=sid, id="Q1", attempted="checked the fixture"),
                               store=store)
@@ -874,7 +892,8 @@ def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_repl
     # the deadlock itself: Q1's stamp is bound to the OLD (unretitled) stage 1
     blocked = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
     assert blocked.ok is False
-    assert any("definition changed" in b for b in blocked.data.get("blockers", []))
+    assert any("changed since this question was disposed" in b
+               for b in blocked.data.get("blockers", []))
     assert store.load(sid).node == Node.EXECUTING.value  # nothing moved
 
     # the route out: rebind Q1 against the corrected plan by name, and enumerate
@@ -887,6 +906,14 @@ def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_repl
     assert d.ok is True
     d = cli.cmd_question_enumerate(ns(session=sid, plan=corrected), store=store,
                                    runner=_silent_advisor)
+    assert d.ok is True
+
+    # the retitle also moves O1's covering-stage key (order coverage tracks the
+    # whole-stage key, #123) — re-cover against the corrected plan by name, the
+    # same escape order-dispose now supports for the identical reason --plan was
+    # added to question-dispose/-rebind
+    d = cli.cmd_order_dispose(ns(session=sid, id="O1", as_="covered", stage=1,
+                                 reason="", plan=corrected), store=store)
     assert d.ok is True
 
     d = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
@@ -923,8 +950,9 @@ def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_re
     cli.cmd_submit_plan(ns(session=sid, plan=base), store=store)
     assert "premise" in store.load(sid).plugins  # gate really is live
 
-    cli.cmd_question_raise(ns(session=sid, id="Q1", target="stage:1.result",
-                              question="does the scaffold need a __init__.py?"),
+    cli.cmd_question_raise(ns(session=sid, id="Q1", target="stage:1.order",
+                              question="is scaffolding the module the first thing "
+                              "this plan must do?"),
                            store=store)
     cli.cmd_question_research(ns(session=sid, id="Q1", attempted="checked the fixture"),
                               store=store)
@@ -942,20 +970,27 @@ def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_re
 
     blocked = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
     assert blocked.ok is False
-    assert any("definition changed" in b for b in blocked.data.get("blockers", []))
+    assert any("changed since this question was disposed" in b
+               for b in blocked.data.get("blockers", []))
     assert store.load(sid).node == Node.EXECUTING.value
 
     # the route out: the retitle prompted a genuinely different answer, so this is
     # a fresh disposition rather than a mere rebind — and it must stamp against
     # the corrected plan, named directly, in the same act
     d = cli.cmd_question_dispose(ns(session=sid, id="Q1", to="researched",
-                                    answer="yes — the revised scaffold packages "
-                                    "as a namespace package", source="fixture",
-                                    derivation="split-module layout needs it",
+                                    answer="yes — the revised scaffold is what the "
+                                    "wiring stage now depends on", source="fixture",
+                                    derivation="the added CI stage reaches back to it",
                                     basis="", risk="", plan=corrected), store=store)
     assert d.ok is True
     d = cli.cmd_question_enumerate(ns(session=sid, plan=corrected), store=store,
                                    runner=_silent_advisor)
+    assert d.ok is True
+
+    # the retitle also moves O1's covering-stage key (order coverage tracks the
+    # whole-stage key, #123) — re-cover against the corrected plan by name
+    d = cli.cmd_order_dispose(ns(session=sid, id="O1", as_="covered", stage=1,
+                                 reason="", plan=corrected), store=store)
     assert d.ok is True
 
     d = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
@@ -1024,3 +1059,101 @@ def test_replan_refresh_delivery_worktree(store, fixtures_dir, tmp_path, kind):
     state = store.load(sid)
     assert state.delivery_worktree == expected
     assert state.repo_root == repo
+
+
+def test_apply_refined_carries_verify_venue_at_final():
+    """Regression test: verify_venue_at_final added to Criterion schema (v24) after
+    _apply_refined_stage_fields was written. A stage declaring verify_venue_at_final
+    must carry that value after the copy, not drop it to None."""
+    cur = Stage(
+        index=1,
+        title="live stage",
+        subject=Subject(material="m", result="r-old", invariants="i"),
+        means=Means(means="means", method="method"),
+        actor=Actor(executor="spawn:test"),
+        criterion=Criterion(
+            criterion_type="measurable",
+            done_criterion="done",
+            verify_venue="delivery",
+            verify_venue_at_final=None,
+        ),
+        conditions="c",
+        supplies=[],
+    )
+    refined = Stage(
+        index=1,
+        title="refined",
+        subject=Subject(material="m", result="r-new", invariants="i"),
+        means=Means(means="means", method="method"),
+        actor=Actor(executor="spawn:test"),
+        criterion=Criterion(
+            criterion_type="measurable",
+            done_criterion="done",
+            verify_venue="delivery",
+            verify_venue_at_final="repo_root",
+        ),
+        conditions="c",
+        supplies=[],
+    )
+
+    cli._apply_refined_stage_fields(cur, refined)
+    assert cur.criterion.verify_venue_at_final == "repo_root"
+
+
+def test_apply_refined_copies_all_criterion_fields_except_engine_written():
+    """A new Criterion field added after this function was written must not be silently dropped."""
+    from dataclasses import fields as dc_fields
+
+    def _criterion_with_tag(tag):
+        return Criterion(
+            criterion_type=f"measurable-{tag}",
+            done_criterion=f"done-{tag}",
+            verify_command=f"cmd-{tag}",
+            expected_exit=1 if tag == "src" else 2,
+            observation=f"obs-{tag}",
+            verify_venue=f"delivery-{tag}" if tag == "src" else "repo_root",
+            verify_kind=f"shell-{tag}" if tag == "src" else "landed",
+            landed=LandedSpec(target=f"target-{tag}", delivered_stage=1 if tag == "src" else 2),
+            verify_venue_at_final=f"final-{tag}" if tag == "src" else None,
+        )
+
+    cur = Stage(
+        index=1,
+        title="cur",
+        subject=Subject(material="m", result="r", invariants="i"),
+        means=Means(means="means", method="method"),
+        actor=Actor(executor="spawn:test"),
+        criterion=_criterion_with_tag("cur"),
+        conditions="c",
+        supplies=[],
+    )
+    refined = Stage(
+        index=1,
+        title="refined",
+        subject=Subject(material="m", result="r", invariants="i"),
+        means=Means(means="means", method="method"),
+        actor=Actor(executor="spawn:test"),
+        criterion=_criterion_with_tag("src"),
+        conditions="c",
+        supplies=[],
+    )
+
+    assert all(getattr(cur.criterion, f.name) != getattr(refined.criterion, f.name)
+               for f in dc_fields(Criterion)), \
+        "Fixtures must differ in every field"
+
+    pre_copy_values = {f.name: getattr(cur.criterion, f.name) for f in dc_fields(Criterion)}
+    cli._apply_refined_stage_fields(cur, refined)
+
+    expected_engine_written = {"observation"}
+    for field in dc_fields(Criterion):
+        result_val = getattr(cur.criterion, field.name)
+        refined_val = getattr(refined.criterion, field.name)
+        if field.name in expected_engine_written:
+            assert result_val == pre_copy_values[field.name], \
+                f"Engine-written field {field.name} should not be copied"
+        else:
+            assert result_val == refined_val, \
+                f"Field {field.name} should be copied but was not"
+
+    assert cli._CRITERION_ENGINE_WRITTEN_FIELDS == expected_engine_written

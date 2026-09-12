@@ -48,6 +48,8 @@ def _load_hook(filename: str):
 _TURN_END = _load_hook("hook-turn-end-gate.py")
 _DEFERRING = _load_hook("hook-deferring-disposition-gate.py")
 _ESCALATION = _load_hook("hook-escalation-diagnosis-gate.py")
+_APPROVAL = _load_hook("hook-plan-delivery-gate.py")
+_RESOLUTION_REMINDER = _load_hook("hook-resolution-reminder.py")
 
 
 def _samples(row: judge_latency.Row) -> "list[float]":
@@ -153,11 +155,43 @@ def test_a_call_started_at_the_floor_could_have_finished_the_fastest_run():
 _DERIVED_CONSTANTS = [
     (_ESCALATION, "_JUDGE_MIN_CALL_S", "outage_escalation", judge_latency.call_floor_s),
     (_DEFERRING, "_ASK_JUDGE_MIN_CALL_S", "deferring_disposition", judge_latency.call_floor_s),
+    (_APPROVAL, "_APPROVAL_ASK_JUDGE_MIN_CALL_S", "approval_ask", judge_latency.call_floor_s),
+    (_RESOLUTION_REMINDER, "_LANDING_DISCIPLINE_JUDGE_MIN_CALL_S", "landing_discipline",
+     judge_latency.call_floor_s),
+    # _APPROVAL_ASK_JUDGE_BUDGET_S is deliberately ABSENT from this table now.
+    # It used to be listed here, tied by EQUALITY to call_ceiling_s("approval_ask")
+    # — this hook's own claim, not a family rule, per the comment that used to
+    # sit above this entry. That tie broke the tie's own reason for existing:
+    # the ceiling was computed from a 32-call population, the population then
+    # moved (a second sample taken after production timeouts ran entirely above
+    # the first sample's max), and an equality-pinned budget would have had to
+    # be re-derived and re-pinned on every such move with zero headroom in
+    # between. The budget now sits ABOVE the ceiling instead, joining the other
+    # two single-call hooks' `>=` shape — see
+    # test_a_single_call_hooks_budget_is_never_what_truncates_its_call below
+    # (still covers all three, unweakened) and
+    # test_the_approval_ask_budgets_headroom_over_its_ceiling_is_real (which
+    # pins the reason: the headroom itself, not a coincidence).
     (_TURN_END, "_TURN_FEEDBACK_MIN_CALL_S", "feedback_signal", judge_latency.call_floor_s),
-    (_TURN_END, "_TURN_FEEDBACK_CALL_CAP_S", "feedback_signal", judge_latency.call_ceiling_s),
     (_TURN_END, "_TURN_BINARY_ASK_MIN_CALL_S", "binary_ask", judge_latency.call_floor_s),
-    (_TURN_END, "_TURN_BINARY_ASK_CALL_CAP_S", "binary_ask", judge_latency.call_ceiling_s),
+    (_TURN_END, "_TURN_SILENT_CLOSURE_MIN_CALL_S", "silent_closure", judge_latency.call_floor_s),
     (_TURN_END, "_TURN_OUTAGE_MIN_CALL_S", "outage_escalation", judge_latency.call_floor_s),
+]
+
+# The turn-end per-call CEILINGS moved off this equality table at the
+# 2026-09-02 replan, onto the `>=` shape below — the same move ca7c7e0 already
+# made for hook-plan-delivery-gate.py's budget. An equality-pinned ceiling has
+# no head-room at all against a population that has now been observed to move
+# twice (approval_ask, then binary_ask/feedback_signal/outage_escalation); a
+# `>=` ceiling absorbs an upward drift up to whatever slack it carries instead
+# of converting the very next slow call into a timeout. The FLOOR constants
+# above are deliberately left at equality: a floor above its own p90 would
+# refuse calls the remainder could in fact have carried, which is the opposite
+# failure mode and has no slack argument in its favour.
+_DERIVED_CEILING_CONSTANTS = [
+    (_TURN_END, "_TURN_FEEDBACK_CALL_CAP_S", "feedback_signal", judge_latency.call_ceiling_s),
+    (_TURN_END, "_TURN_BINARY_ASK_CALL_CAP_S", "binary_ask", judge_latency.call_ceiling_s),
+    (_TURN_END, "_TURN_SILENT_CLOSURE_CALL_CAP_S", "silent_closure", judge_latency.call_ceiling_s),
     (_TURN_END, "_TURN_OUTAGE_CALL_CAP_S", "outage_escalation", judge_latency.call_ceiling_s),
 ]
 
@@ -193,6 +227,40 @@ def test_every_per_call_constant_moves_when_its_row_moves(hook, attr, judge, rul
     assert rule(judge) != getattr(hook, attr)
 
 
+@pytest.mark.parametrize(
+    "hook,attr,judge,rule",
+    _DERIVED_CEILING_CONSTANTS,
+    ids=[f"{attr}" for _h, attr, _j, _r in _DERIVED_CEILING_CONSTANTS],
+)
+def test_every_per_call_ceiling_constant_is_at_least_what_the_table_computes(hook, attr, judge, rule):
+    assert getattr(hook, attr) >= rule(judge), (
+        f"{attr} must be >= {rule.__name__}({judge!r}) = {rule(judge)}"
+    )
+
+
+@pytest.mark.parametrize(
+    "hook,attr,judge,rule",
+    _DERIVED_CEILING_CONSTANTS,
+    ids=[f"{attr}" for _h, attr, _j, _r in _DERIVED_CEILING_CONSTANTS],
+)
+def test_every_per_call_ceiling_constant_stops_covering_a_large_enough_row_move(
+    hook, attr, judge, rule, monkeypatch
+):
+    """The mutation proof for the `>=` shape: unlike an equality pin, a small
+    row move must NOT break the constant (that is the whole point of the
+    slack), but a row move large enough must still be detectable — otherwise
+    the `>=` check would silently tolerate an unbounded drift forever. A
+    mutation of +1000s makes the computed ceiling exceed any plausible hard-
+    coded constant, so the hook's fixed literal must fail to cover it."""
+    row = judge_latency.row(judge)
+    much_slower = judge_latency.Row(
+        judge=row.judge, n=row.n, min_s=row.min_s, median_s=row.median_s,
+        p90_s=row.p90_s + 1000, max_s=row.max_s + 1000, provenance=row.provenance,
+    )
+    monkeypatch.setitem(judge_latency.rows(), judge, much_slower)
+    assert rule(judge) > getattr(hook, attr)
+
+
 def test_a_single_call_hooks_budget_is_never_what_truncates_its_call():
     """At the declared K=1 the whole-invocation budget IS the per-call ceiling,
     so the budget must clear the ceiling the table computes — otherwise the only
@@ -201,6 +269,8 @@ def test_a_single_call_hooks_budget_is_never_what_truncates_its_call():
     single = {
         "hook-escalation-diagnosis-gate.py": _ESCALATION._JUDGE_BUDGET_S,
         "hook-deferring-disposition-gate.py": _DEFERRING._ASK_JUDGE_BUDGET_S,
+        "hook-plan-delivery-gate.py": _APPROVAL._APPROVAL_ASK_JUDGE_BUDGET_S,
+        "hook-resolution-reminder.py": _RESOLUTION_REMINDER._LANDING_DISCIPLINE_JUDGE_BUDGET_S,
     }
     for hook, budget in single.items():
         sequence = judge_latency.HOOK_CALL_SEQUENCE[hook]
@@ -208,10 +278,29 @@ def test_a_single_call_hooks_budget_is_never_what_truncates_its_call():
         assert budget >= judge_latency.call_ceiling_s(sequence[0]), hook
 
 
+def test_the_approval_ask_budgets_headroom_over_its_ceiling_is_real():
+    """Pins the REASON _APPROVAL_ASK_JUDGE_BUDGET_S dropped its equality tie to
+    call_ceiling_s, not just the `>=` fact test_a_single_call_hooks_budget_is_
+    never_what_truncates_its_call already covers: the 9s gap between the 30s
+    budget and the 21s ceiling this row currently computes must be headroom
+    over a real measurement, not an artifact of a budget nobody re-checked
+    against a moved row. A budget that happened to clear the ceiling only
+    because the ceiling itself had drifted out from under it would pass the
+    plain `>=` check just as happily — this is a headroom assertion, not a
+    claim that the tail can never move again."""
+    ceiling = judge_latency.call_ceiling_s("approval_ask")
+    headroom = _APPROVAL._APPROVAL_ASK_JUDGE_BUDGET_S - ceiling
+    assert headroom > 0, (
+        f"budget {_APPROVAL._APPROVAL_ASK_JUDGE_BUDGET_S} must clear the "
+        f"measured ceiling {ceiling}"
+    )
+
+
 def test_the_turn_end_budgets_own_floor_is_the_least_restrictive_of_its_three():
     """The budget object's constructor floor is a fallback for a future call site
-    that forgets to name its judge's floor. It must be the SMALLEST of the three:
-    a larger fallback would skip a call the remainder could in fact have carried."""
+    that forgets to name its judge's floor. It must be the SMALLEST of the four
+    (name kept for history; the hook now calls four judges): a larger fallback
+    would skip a call the remainder could in fact have carried."""
     floors = [judge_latency.call_floor_s(j)
               for j in judge_latency.HOOK_CALL_SEQUENCE["hook-turn-end-gate.py"]]
     assert _TURN_END._TURN_JUDGE_MIN_CALL_S == min(floors)
@@ -226,18 +315,23 @@ def test_the_last_resort_ceiling_is_the_family_maximum_plus_one():
     assert judge_latency.LAST_RESORT_CEILING_S == math.ceil(slowest) + 1
     for constant in (advisor._BINARY_ASK_TIMEOUT_S,
                      advisor._DEFERRING_DISPOSITION_TIMEOUT_S,
-                     advisor._ACCEPTANCE_JUDGE_TIMEOUT_S):
+                     advisor._ACCEPTANCE_JUDGE_TIMEOUT_S,
+                     advisor._APPROVAL_ASK_TIMEOUT_S,
+                     advisor._LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S,
+                     advisor._PUBLISHED_ATTACHMENT_TIMEOUT_S,
+                     advisor._SILENT_CLOSURE_TIMEOUT_S):
         assert constant == judge_latency.LAST_RESORT_CEILING_S
 
 
 def test_required_budget_covers_the_preceding_medians_and_the_last_floor():
-    feedback, binary_ask, outage = (
+    feedback, binary_ask, silent_closure, outage = (
         judge_latency.row("feedback_signal"),
         judge_latency.row("binary_ask"),
+        judge_latency.row("silent_closure"),
         judge_latency.row("outage_escalation"),
     )
     assert judge_latency.required_budget_s("hook-turn-end-gate.py") == pytest.approx(
-        feedback.median_s + binary_ask.median_s
+        feedback.median_s + binary_ask.median_s + silent_closure.median_s
         + judge_latency.call_floor_s("outage_escalation")
         + judge_latency.SIZE_HEADROOM_S
     )
@@ -249,15 +343,20 @@ def test_required_budget_covers_the_preceding_medians_and_the_last_floor():
 
 # --- every judge call carries a timeout of its own ---------------------------
 
-# The five judge entry points and the constant each one's default must be. Every
+# The six judge entry points and the constant each one's default must be. Every
 # one is called with an explicit timeout from inside a hook; the default is what
 # a caller OUTSIDE a hook gets, and `test_advisor.py` reads it structurally.
 _JUDGE_CALLS = {
     "judge_binary_ask": (lambda run: advisor.judge_binary_ask("Продолжаем?", run, enabled=True)),
     "judge_feedback_signal": (lambda run: advisor.judge_feedback_signal("не так", run, enabled=True)),
     "judge_outage_escalation": (lambda run: advisor.judge_outage_escalation("500 от API", run, enabled=True)),
+    "judge_silent_closure": (lambda run: advisor.judge_silent_closure("готово", run, enabled=True)),
     "judge_deferring_disposition": (lambda run: advisor.judge_deferring_disposition("меню", run, enabled=True)),
+    "judge_landing_discipline_ask": (lambda run: advisor.judge_landing_discipline_ask("меню", run, enabled=True)),
     "acceptance_judge": (lambda run: advisor.acceptance_judge("наблюдение", "ожидание", run, enabled=True)),
+    "judge_published_attachment": (
+        lambda run: advisor.judge_published_attachment("notes.md", "some prose", run, enabled=True)
+    ),
 }
 
 

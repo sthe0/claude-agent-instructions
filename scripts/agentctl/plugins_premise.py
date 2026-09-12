@@ -28,8 +28,8 @@ Adding a terminal here would reopen, at the plugin layer, the hole being closed 
 the CLI layer. This plugin is `scope='task'`, retired only at the task boundary."""
 from __future__ import annotations
 
-import hashlib
 import os
+import time
 
 from . import advisor, gates, plan, premise
 from .plugins import Plugin, PluginDirective, register
@@ -191,33 +191,125 @@ def escape_counts(bag, content_digest) -> dict:
 def _plan_content_digest(doc: "plan.PlanDoc") -> str:
     """A digest of the plan's PARSED content (post-tomllib), so a TOML comment-only
     edit — which tomllib never surfaces as a field — is already a no-op here
-    without any extra comment-stripping logic. Reuses `stage_question_key` per
-    stage rather than re-deriving a parallel notion of 'stage bytes'."""
-    payload = repr((
-        doc.meta.goal,
-        doc.meta.done_criterion,
-        doc.meta.criterion_type,
-        doc.meta.weight_class,
-        doc.meta.repo_root,
-        tuple(sorted((s.index, plan.stage_question_key(s)) for s in doc.stages)),
-    ))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    without any extra comment-stripping logic. Reuses the per-stage whole-stage key
+    rather than re-deriving a parallel notion of 'stage bytes', and
+    `plan.order_place` for the order rather than re-deriving a notion of 'order
+    bytes': it is the wider of the two order keys, so a re-wording, an added or
+    renamed requirement id, and a coverage-key change all move the digest. A
+    question is raised against the statement of what the plan is FOR; an order
+    rewritten under a discharged enumeration is exactly the staleness this digest
+    exists to catch.
+
+    The composition lives in `plan.plan_content_digest` beside the per-part digests
+    it recomposes; this name is what the escape rows, the launch window and every
+    persisted `enumerated_at` were written against, so it stays."""
+    return plan.plan_content_digest(doc)
+
+
+def enumeration_baseline(bag) -> dict:
+    """The per-part digests the recorded enumeration ran against, in the shape
+    `plan.changed_parts` compares against."""
+    return {
+        "meta": bag.get("enumerated_meta_at") or "",
+        "stages": bag.get("enumerated_stage_at") or {},
+    }
+
+
+def stale_enumeration_parts(bag, doc) -> tuple[bool, set[int]]:
+    """Which parts of `doc` the recorded enumeration no longer speaks for.
+
+    A bag carrying NEITHER part digest predates the per-part split and can only be
+    judged whole: reading its empty maps as "no part enumerated" would flip every
+    already-discharged live session to _ENUMERATE_STALE on its next call."""
+    baseline = enumeration_baseline(bag)
+    if not baseline["meta"] and not baseline["stages"]:
+        if bag.get("enumerated_at") == plan.plan_content_digest(doc):
+            return False, set()
+        return True, set(plan.plan_stage_digests(doc))
+    return plan.changed_parts(doc, baseline)
+
+
+def enumeration_is_stale(bag, doc) -> bool:
+    meta_stale, stale_stages = stale_enumeration_parts(bag, doc)
+    return meta_stale or bool(stale_stages)
+
+
+def enumeration_run_scope(bag, doc) -> tuple[bool, set[int]]:
+    """The parts a re-run must cover — `(whole_plan, {stage indices})`.
+
+    Narrowed to the stages that moved only when a pass has landed and the plan's
+    meta is unchanged; every other case reads the whole plan, so a first pass and an
+    explicitly re-requested one behave exactly as they did before the split. A moved
+    goal / done criterion / order re-opens every stage's fit to it, which is why a
+    meta move widens rather than adding a part."""
+    meta_stale, stale_stages = stale_enumeration_parts(bag, doc)
+    if stale_stages and not meta_stale and bag.get("enumerated"):
+        return False, stale_stages
+    return True, set(plan.plan_stage_digests(doc))
+
+
+def _enumeration_in_flight(bag) -> bool:
+    """Whether a background enumeration launch is outstanding right now: armed (a
+    launch actually went out), not yet landed, and still inside its deadline. This
+    is the disclosure half of #60's residual gap — cmd_approve's escape-deadline
+    logic already blocks correctly on this exact window (_ENUMERATE_NOT_RUN /
+    _ENUMERATE_STALE), so nothing here changes what `approve` allows; the gap was
+    that a reader of the presented essence had no signal a background pass could
+    still add premise questions before approval is reachable.
+
+    Deliberately silent on a launch whose deadline has already elapsed: that
+    window is `enumeration_not_landed`'s to name (via
+    `question-enumerate-escape`), not this disclosure line's — conflating the two
+    would claim a pass is "in flight" for one that has, in fact, gone missing."""
+    launch = int(bag.get("enumerate_launch") or 0)
+    if launch <= 0 or bag.get("enumerated"):
+        return False
+    deadline = bag.get("enumerate_deadline")
+    if deadline is None:
+        return False
+    return time.time() < float(deadline)
+
+
+def _enumeration_in_flight_line(bag) -> str:
+    launch = int(bag.get("enumerate_launch") or 0)
+    return (
+        f"- enumeration in flight: background cross-check (launch {launch}) has "
+        "not landed yet — approving now may miss questions it would still raise; "
+        "wait for it to land, or run `agentctl question-enumerate` to run it "
+        "synchronously"
+    )
 
 
 def coverage_block(state, bag, *, doc=None) -> str | None:
     """The scope-coverage block the presented essence must carry — the plan's stage
-    count plus what it does with each element of the order — or None when no plan is
-    submitted yet (nothing to size, nothing to cover). `doc` is an already-loaded
-    PlanDoc when the caller has one (premise_blockers does), so the block is derived
-    from the same bytes its other checks used. premise.render_coverage_block is the
-    single generator; this only supplies its two inputs."""
+    count, what it does with each element of the order, every LIVE risk
+    acceptance discharging a `revise` concern, and (when one is outstanding) the
+    in-flight-enumeration disclosure line — or None when no plan is submitted yet
+    (nothing to size, nothing to cover). `doc` is an already-loaded PlanDoc when the
+    caller has one (premise_blockers does), so the block is derived from the same
+    bytes its other checks used. premise.render_coverage_block generates the
+    scope/order/risk lines; the in-flight line is appended here because it reads
+    bag fields (enumerate_launch/enumerated/enumerate_deadline) render_coverage_block
+    has no access to — same division of labour as the risk-staleness filtering
+    below (premise.py cannot do this itself — it has no access to gates/state/plan).
+    Appended the same way coverage_block_missing_lines already picks up every other
+    line: mechanical containment of engine-generated text, never a semantic read."""
     plan_path = getattr(state, "plan_path", None)
     if not plan_path:
         return None
     if doc is None:
         doc = plan.load_plan(plan_path)
     elements = premise.order_elements_from_dicts(bag.get("order_elements", []))
-    return premise.render_coverage_block(elements, len(doc.stages))
+    accepted_risks = [
+        (ra.scope, ra.concern_id, ra.concern_text, ra.basis, ra.risk, ra.author,
+         gates._risk_acceptance_superseded(ra, state))
+        for ra in getattr(state, "risk_acceptances", [])
+        if not gates._risk_acceptance_stale(ra, doc)
+    ]
+    block = premise.render_coverage_block(elements, len(doc.stages), accepted_risks=accepted_risks)
+    if _enumeration_in_flight(bag):
+        block += "\n" + _enumeration_in_flight_line(bag)
+    return block
 
 
 def coverage_block_missing_lines(block: str, rendering_text: str) -> list[str]:
@@ -258,10 +350,10 @@ def premise_blockers(state, bag) -> list[str]:
        set-but-unparseable path is not a state this gate needs to defend against.
     2. candidate disposition-completeness (premise.validate_question_candidates);
     3. the enumeration cross-check has RUN at all (bag['enumerated']) and, if it
-       has, that it ran against the plan content AS IT CURRENTLY STANDS
-       (bag['enumerated_at'] == the live content digest) — otherwise one
-       enumerate call would silently discharge the flag forever across every
-       later replan — and that the run it recorded did not FAIL. The three are
+       has, that no PART of the plan has moved since the pass that covered it
+       (stale_enumeration_parts) — otherwise one enumerate call would silently
+       discharge the flag forever across every later replan — and that the run it
+       recorded did not FAIL. The three are
        one if/elif chain, not three independent tests, because a relaunch clears
        `enumerated` back to not-run while leaving the SUPERSEDED pass's
        `enumerated_runner_ok` behind: firing the runner-failure blocker there
@@ -270,8 +362,11 @@ def premise_blockers(state, bag) -> list[str]:
        landed against the content now under evaluation; the relaunch window is
        _ENUMERATE_NOT_RUN's, with `enumeration_not_landed` as its route out.
        Both escapable branches clear on an escape bound to the LIVE digest;
-       _ENUMERATE_STALE has no escape and needs none — re-running the check is
-       always available and always cheaper than recording a reason.
+       _ENUMERATE_STALE has no escape below the round budget — re-running the
+       check is available and cheaper than recording a reason. At or above it
+       (`gates.plan_enumerate_round_release_active`) the branch routes to the
+       round-release message instead, and `enumerate_rounds_exhausted` is its
+       escape: re-running clears staleness per step but re-arms it over the loop.
     4. order coverage (premise.validate_order_elements): every element of the order
        is covered by a stage the CURRENT plan contains, or cut with a reason. Unlike
        (1) an EMPTY bag blocks here, but only once a plan exists — before
@@ -290,11 +385,13 @@ def premise_blockers(state, bag) -> list[str]:
     plan_path = getattr(state, "plan_path", None)
     if plan_path:
         doc = plan.load_plan(plan_path)
-        stage_keys = {s.index: plan.stage_question_key(s) for s in doc.stages}
+        stage_keys = {s.index: plan.stage_element_keys(s) for s in doc.stages}
+        meta_keys = plan.plan_meta_element_keys(doc)
         content_digest = _plan_content_digest(doc)
     else:
         doc = None
         stage_keys = {}
+        meta_keys = {}
         content_digest = None
 
     questions = premise.questions_from_dicts(bag.get("questions", []))
@@ -302,18 +399,32 @@ def premise_blockers(state, bag) -> list[str]:
     # `.get` with a default, not `bag["order_elements"]`: a premise bag minted before
     # the order-coverage half existed must load, not KeyError.
     order_elements = premise.order_elements_from_dicts(bag.get("order_elements", []))
-    blockers = premise.validate_questions(questions, stage_keys=stage_keys)
+    blockers = premise.validate_questions(
+        questions, stage_keys=stage_keys, meta_keys=meta_keys
+    )
     blockers += premise.validate_question_candidates(candidates, questions)
     blockers += premise.validate_order_elements(
-        order_elements, stage_indices=set(stage_keys), plan_present=bool(plan_path)
+        order_elements,
+        stage_indices=set(stage_keys),
+        plan_present=bool(plan_path),
+        stage_keys=stage_keys,
     )
 
     if not bag.get("enumerated"):
         if not escape_recorded(bag, content_digest,
                                (premise.ESCAPE_ENUMERATION_NOT_LANDED,)):
             blockers.append(_ENUMERATE_NOT_RUN)
-    elif content_digest is not None and bag.get("enumerated_at") != content_digest:
-        blockers.append(_ENUMERATE_STALE)
+    elif content_digest is not None and enumeration_is_stale(bag, doc):
+        if gates.plan_enumerate_round_release_active(bag):
+            if not escape_recorded(bag, content_digest,
+                                   (premise.ESCAPE_ENUMERATE_ROUNDS_EXHAUSTED,)):
+                blockers.append(
+                    gates.PLAN_ENUMERATE_ROUND_RELEASE_MESSAGE.format(
+                        passes=int(bag.get("enumerate_pass") or 0)
+                    )
+                )
+        else:
+            blockers.append(_ENUMERATE_STALE)
     elif bag.get("enumerated_runner_ok") is False:
         # `is False`, never `is not True`: None means the advisor was ABSENT (also what
         # `.get` yields for a bag minted before this field existed, and what the suite's
@@ -374,6 +485,13 @@ register(
             "order_elements": [],
             "enumerated": False,
             "enumerated_at": "",
+            # The per-part digests the recorded pass covered: the plan's meta/order,
+            # and one entry per stage index (as a string — these round-trip through
+            # JSON). Both empty means "no part enumerated" for a bag minted since the
+            # split and "judge by enumerated_at alone" for one minted before it; the
+            # two are told apart in stale_enumeration_parts, which is the only reader.
+            "enumerated_meta_at": "",
+            "enumerated_stage_at": {},
             "enumerated_runner_ok": None,
             # The failed run's own stderr, carried from the pass that produced
             # enumerated_runner_ok so the blocker can pre-select the escape reason

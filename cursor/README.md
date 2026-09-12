@@ -22,3 +22,4 @@ Installers:
 - `cursor/scripts/apply-cursor-config.sh` — merge CLI policy base + permissions symlink
 - `cursor/scripts/link-project-cursor-agents.sh` — per-project `<project_root>/.cursor/agents/*`
 - `cursor/scripts/migrate-cursor-namespace.sh` — global + optional `--all-configured-roots`
+- `cursor/scripts/cursor-doctor.sh` — read-only Cursor host readiness (symlinks, CLI, agentctl); also run from `verify-instructions-sync.sh`

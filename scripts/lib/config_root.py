@@ -265,6 +265,20 @@ def skill_first_classes_file() -> Path:
     return agent_home() / "skill-first-classes.local"
 
 
+def publication_tools_file() -> Path:
+    """Machine-local publication verb/tool seam for the published-text gate
+    (``<root>/publication-tools.local``, JSON array of ``{"name", "kind"}``
+    objects — ``kind`` one of ``bash_verb`` / ``mcp_tool``, an optional
+    ``body_shape`` marking an attachment verb). Org-neutral by construction,
+    the same way ``skill_first_classes_file()`` is: Core code only ever sees
+    an opaque verb/tool name, never an org-specific tracker product. Honors a
+    ``$CLAUDE_PUBLICATION_TOOLS_FILE`` override."""
+    override = os.environ.get("CLAUDE_PUBLICATION_TOOLS_FILE")
+    if override:
+        return Path(override).expanduser()
+    return agent_home() / "publication-tools.local"
+
+
 def agentctl_scopes_dir() -> Path:
     """Session-scope registry directory (``<root>/agentctl/scopes`` — see
     session_scope/registry.py)."""
@@ -294,6 +308,17 @@ def agentctl_enumerate_sidecar_dir() -> Path:
     and discarded by the next ``approve``/``replan`` rather than by the worker itself
     calling ``store.save()``."""
     return agentctl_dir() / "enumerate-sidecars"
+
+
+def agentctl_task_accumulator_dir() -> Path:
+    """Cross-session per-task effort accumulator directory (``<root>/agentctl/
+    task-accumulators`` — see agentctl/task_accumulator.py). One file per
+    ``task_id`` (hashed), surviving `reset` and session close alike — only the
+    dedicated `task-reset` subcommand clears an entry. Honors an
+    ``$AGENTCTL_TASK_ACCUMULATOR_DIR`` override at the call site
+    (task_accumulator.py's `_root()`), mirroring `agentctl_edit_log()`'s role
+    for edit-log.jsonl."""
+    return agentctl_dir() / "task-accumulators"
 
 
 def plans_dir() -> Path:

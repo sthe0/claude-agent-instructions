@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import advisor, cli
+from agentctl import advisor, cli, premise
 from agentctl.config import Thresholds
 from agentctl.dispatch import RunResult
 from agentctl.state import (
@@ -163,6 +163,86 @@ class TestSubprocessRunner:
         monkeypatch.setattr(_subprocess, "run", raise_timeout)
         result = advisor.subprocess_runner(["claude", "-p", "x"], timeout=1)
         assert result.returncode != 0
+
+    def test_runs_isolated_via_host_llm(self, monkeypatch):
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setenv("HOST_LLM_ISOLATION_SENTINEL", "present")
+        advisor.subprocess_runner(["claude", "-p", "x"], timeout=5)
+        assert captured["env"]["HOST_LLM_ISOLATION_SENTINEL"] == "present"
+        assert "claude-judge-sandbox" in captured["env"]["CLAUDE_CONFIG_DIR"]
+        assert "claude-judge-sandbox" in captured["cwd"]
+
+    # ── the credential label: produced from an unauthenticated WORLD ──────────
+    #
+    # Isolation pins CLAUDE_CONFIG_DIR, and the client resolves auth from that
+    # root — so the seam can itself leave the child with no way to authenticate.
+    # These three drive the real seam over a real (empty or env-authenticated)
+    # config root rather than restating the literal, so a drift between what
+    # subprocess_runner writes and what classify_runner_failure reads fails here.
+
+    def _unauthenticated_world(self, monkeypatch, tmp_path):
+        """An ambient config root holding no credential file, and no auth left in
+        the environment either: the apiKeyHelper machine shape, plus a lost
+        stored credential."""
+        from lib import host_llm
+
+        monkeypatch.setattr(host_llm, "harness_config_root", lambda: tmp_path)
+        for var in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+            monkeypatch.delenv(var, raising=False)
+
+    def _failing_run(self, monkeypatch, stderr="Invalid API key · Please run /login"):
+        def fake_run(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr=stderr)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+    def test_a_failed_call_from_an_unauthenticated_child_is_labelled(
+            self, monkeypatch, tmp_path):
+        self._unauthenticated_world(monkeypatch, tmp_path)
+        self._failing_run(monkeypatch)
+
+        result = advisor.subprocess_runner(["claude", "-p", "x"], timeout=5)
+
+        assert advisor.classify_runner_failure(result.stderr) == \
+            premise.ESCAPE_ADVISOR_CREDENTIAL
+        assert "Invalid API key" in result.stderr, "the child's own diagnostic survives"
+
+    def test_a_successful_call_is_never_labelled_a_credential_failure(
+            self, monkeypatch, tmp_path):
+        """The label is a failure classification, not a machine audit: a child
+        that answered is authenticated by demonstration, whatever this side
+        believed it had to lend."""
+        self._unauthenticated_world(monkeypatch, tmp_path)
+
+        def fake_run(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 0, stdout="YES", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = advisor.subprocess_runner(["claude", "-p", "x"], timeout=5)
+
+        assert result.returncode == 0
+        assert advisor._CREDENTIAL_STDERR_PREFIX not in result.stderr
+
+    def test_an_env_authenticated_child_that_fails_keeps_the_generic_reason(
+            self, monkeypatch, tmp_path):
+        """The machine shape that must never be mislabelled: no stored credential
+        to borrow, but a plain environment API key the child inherits. Its
+        failures are ordinary failures, and telling its operator to fix a
+        credential would send them after a file that was never involved."""
+        self._unauthenticated_world(monkeypatch, tmp_path)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fixture")
+        self._failing_run(monkeypatch, stderr="claude: unexpected error")
+
+        result = advisor.subprocess_runner(["claude", "-p", "x"], timeout=5)
+
+        assert advisor.classify_runner_failure(result.stderr) == \
+            premise.ESCAPE_ADVISOR_ERROR
 
 
 # ── cmd_classify wiring ───────────────────────────────────────────────────────
@@ -473,6 +553,56 @@ class TestJudgeBinaryAsk:
         assert advisor.judge_binary_ask("**Готово.**", _raising_runner)[0] is False
 
 
+class TestJudgePublishedAttachment:
+    def test_yes(self):
+        result = advisor.judge_published_attachment(
+            "notes.md", "Hey team, here is a summary of what we decided today.",
+            _fake_runner("YES"),
+        )
+        assert result == (True, "")
+
+    def test_no(self):
+        result = advisor.judge_published_attachment(
+            "run.log", "2026-09-02T10:00:00Z INFO starting worker\n", _fake_runner("NO"),
+        )
+        assert result == (False, "")
+
+    def test_raising_runner_fails_open(self):
+        result = advisor.judge_published_attachment("notes.md", "some prose", _raising_runner)
+        assert result[0] is False and result[1]
+
+    def test_disabled_fails_open(self):
+        result = advisor.judge_published_attachment(
+            "notes.md", "some prose", _fake_runner("YES"), enabled=False,
+        )
+        assert result[0] is False and result[1]
+
+    def test_no_runner_fails_open(self):
+        result = advisor.judge_published_attachment("notes.md", "some prose", None)
+        assert result[0] is False and result[1]
+
+    def test_no_content_fails_open_without_calling_runner(self):
+        result = advisor.judge_published_attachment("notes.md", "", _raising_runner)
+        assert result[0] is False and result[1]
+
+    def test_timeout_expired_fails_open(self):
+        def timing_out_runner(argv, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 0))
+
+        result = advisor.judge_published_attachment("notes.md", "some prose", timing_out_runner)
+        assert result[0] is False and result[1]
+
+    def test_argv_carries_judge_model(self):
+        seen = {}
+
+        def recording_runner(argv, **kwargs):
+            seen["argv"] = argv
+            return RunResult(0, stdout="NO", stderr="")
+
+        advisor.judge_published_attachment("notes.md", "some prose", recording_runner)
+        assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
+
+
 class TestJudgeFeedbackSignal:
     def test_yes(self):
         assert advisor.judge_feedback_signal("you shouldn't have done that", _fake_runner("YES"))[0] is True
@@ -557,6 +687,48 @@ class TestJudgeOutageEscalation:
         assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
 
 
+class TestJudgeSilentClosure:
+    def test_yes(self):
+        assert advisor.judge_silent_closure("I'll go with the JWT approach. Implementing now.", _fake_runner("YES"))[0] is True
+
+    def test_no(self):
+        assert advisor.judge_silent_closure("This hook detects silent closures via regex.", _fake_runner("NO"))[0] is False
+
+    def test_disabled(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _fake_runner("YES"), enabled=False)[0] is False
+
+    def test_no_runner(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", None)[0] is False
+
+    def test_empty_text_skips_runner(self):
+        assert advisor.judge_silent_closure("", _raising_runner)[0] is False
+
+    def test_non_string_text_skips_runner(self):
+        assert advisor.judge_silent_closure(None, _raising_runner)[0] is False
+
+    def test_non_zero_exit_fails_open(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _fake_runner("YES", code=1))[0] is False
+
+    def test_empty_stdout_fails_open(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _fake_runner("  \n  "))[0] is False
+
+    def test_unparseable_answer_fails_open(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _fake_runner("unclear"))[0] is False
+
+    def test_raising_runner_fails_open(self):
+        assert advisor.judge_silent_closure("Готово, задача решена.", _raising_runner)[0] is False
+
+    def test_argv_carries_judge_model(self):
+        seen = {}
+
+        def recording_runner(argv, **kwargs):
+            seen["argv"] = argv
+            return RunResult(0, stdout="NO", stderr="")
+
+        advisor.judge_silent_closure("some text", recording_runner)
+        assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
+
+
 class TestJudgeDeferringDisposition:
     _ASK = "Что делать с дефектом?\nЗавести отдельной задачей\nНе трогать"
 
@@ -615,6 +787,78 @@ class TestJudgeDeferringDisposition:
         assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
 
 
+class TestJudgeLandingDisciplineAsk:
+    """Fail-open contract for the semantic judge behind
+    hook-resolution-reminder.py's PreToolUse landing-discipline check. No real
+    model call in this class — samples/judge-latency/sample_landing_discipline.py
+    is the one place that costs real calls, per its own docstring."""
+
+    _MENU = (
+        "Задача решена, ветка запушена. Как приземляем?\n"
+        "Открыть PR (Рекомендую)\n"
+        "Открываю pull request и жду ревью перед мержем.\n"
+        "Прямой push в trunk\n"
+        "Мержу сейчас без ревью."
+    )
+
+    def test_yes_menu_proposes_pr(self):
+        assert advisor.judge_landing_discipline_ask(self._MENU, _fake_runner("YES"))[0] is True
+
+    def test_no_menu_proposes_direct_push(self):
+        assert advisor.judge_landing_discipline_ask(self._MENU, _fake_runner("NO"))[0] is False
+
+    def test_disabled(self):
+        result = advisor.judge_landing_discipline_ask(
+            self._MENU, _fake_runner("YES"), enabled=False
+        )
+        assert result[0] is False and result[1]
+
+    def test_no_runner(self):
+        result = advisor.judge_landing_discipline_ask(self._MENU, None)
+        assert result[0] is False and result[1]
+
+    def test_empty_text_skips_runner(self):
+        result = advisor.judge_landing_discipline_ask("", _raising_runner)
+        assert result[0] is False and result[1]
+
+    def test_non_string_text_skips_runner(self):
+        result = advisor.judge_landing_discipline_ask(None, _raising_runner)
+        assert result[0] is False and result[1]
+
+    def test_non_zero_exit_fails_open(self):
+        result = advisor.judge_landing_discipline_ask(self._MENU, _fake_runner("YES", code=1))
+        assert result[0] is False and result[1]
+
+    def test_empty_stdout_fails_open(self):
+        result = advisor.judge_landing_discipline_ask(self._MENU, _fake_runner("  \n  "))
+        assert result[0] is False and result[1]
+
+    def test_unparseable_answer_fails_open(self):
+        result = advisor.judge_landing_discipline_ask(self._MENU, _fake_runner("unclear"))
+        assert result[0] is False and result[1]
+
+    def test_raising_runner_fails_open(self):
+        result = advisor.judge_landing_discipline_ask(self._MENU, _raising_runner)
+        assert result[0] is False and result[1]
+
+    def test_timeout_expired_fails_open(self):
+        def timing_out_runner(argv, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 0))
+
+        result = advisor.judge_landing_discipline_ask(self._MENU, timing_out_runner)
+        assert result[0] is False and result[1]
+
+    def test_argv_carries_judge_model(self):
+        seen = {}
+
+        def recording_runner(argv, **kwargs):
+            seen["argv"] = argv
+            return RunResult(0, stdout="NO", stderr="")
+
+        advisor.judge_landing_discipline_ask(self._MENU, recording_runner)
+        assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
+
+
 # ── each judge's default timeout names ITS OWN constant (structural) ──────────
 
 # judge function -> the module constant its `timeout` default must NAME.
@@ -631,9 +875,12 @@ class TestJudgeDeferringDisposition:
 # hook's constant) is a NAMING defect, visible in the source and nowhere else.
 _JUDGE_TIMEOUT_CONSTANTS = {
     "judge_binary_ask": "_BINARY_ASK_TIMEOUT_S",
+    "judge_published_attachment": "_PUBLISHED_ATTACHMENT_TIMEOUT_S",
     "judge_feedback_signal": "_BINARY_ASK_TIMEOUT_S",
     "judge_outage_escalation": "_BINARY_ASK_TIMEOUT_S",
+    "judge_silent_closure": "_SILENT_CLOSURE_TIMEOUT_S",
     "judge_deferring_disposition": "_DEFERRING_DISPOSITION_TIMEOUT_S",
+    "judge_landing_discipline_ask": "_LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S",
     "acceptance_judge": "_ACCEPTANCE_JUDGE_TIMEOUT_S",
 }
 
@@ -703,3 +950,153 @@ def test_the_last_resort_defaults_are_computed_from_the_measurements():
             f"advisor.{const_name} is {getattr(advisor, const_name)}, but the "
             f"measured family ceiling is {ceiling}"
         )
+
+
+class TestRuntimeHostArgv:
+    @pytest.fixture(autouse=True)
+    def _pin_cursor_binary(self, monkeypatch):
+        from lib import host_llm
+        monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/agent" if name == "agent" else None)
+
+    def _recording_runner(self, seen, stdout="YES\nreason"):
+        def runner(argv, **kwargs):
+            seen.append(argv)
+            return RunResult(0, stdout=stdout, stderr="")
+        return runner
+
+    def test_judge_cursor_host_builds_agent_argv(self):
+        seen = []
+        advisor.judge(
+            "weight_classification", {}, self._recording_runner(seen, "concern"),
+            enabled=True, runtime_host="cursor",
+        )
+        argv = seen[0]
+        assert argv[0] == "/usr/bin/agent"
+        assert "claude" not in argv
+        assert "--model" not in argv
+
+    def test_enumerate_claims_cursor_host_builds_agent_argv(self):
+        seen = []
+        advisor.enumerate_claims(
+            "some deliverable text", self._recording_runner(seen, "claim one"), runtime_host="cursor",
+        )
+        assert seen[0][0] == "/usr/bin/agent"
+
+    def test_acceptance_judge_cursor_host_builds_agent_argv(self):
+        seen = []
+        advisor.acceptance_judge(
+            "observation", "expected", self._recording_runner(seen), enabled=True, runtime_host="cursor",
+        )
+        assert seen[0][0] == "/usr/bin/agent"
+        assert "--model" not in seen[0]
+
+    def test_default_runtime_host_is_claude_for_backward_compat(self):
+        seen = []
+        advisor.judge("weight_classification", {}, self._recording_runner(seen, "concern"), enabled=True)
+        assert seen[0][0] == "claude"
+
+    def test_prompt_argv_dispatches_lean_true_for_a_judge_complexity_call(self, monkeypatch):
+        """Pins `_prompt_argv`'s own dispatch line, not just `build_launch_argv`'s
+        response to an explicit `lean` value — a spy on `build_launch_argv` proves
+        the ternary actually passes `lean=True` for a `_JUDGE_COMPLEXITY` call.
+        An inverted or mistyped ternary here would silently route a
+        `_ADVISOR_COMPLEXITY` list-output call through the binary-classifier
+        system-prompt override in production, and nothing else in this stage
+        would catch it."""
+        from lib import host_llm
+
+        seen_lean = []
+        real_build = host_llm.build_launch_argv
+
+        def spy(*args, **kwargs):
+            seen_lean.append(kwargs.get("lean", False))
+            return real_build(*args, **kwargs)
+
+        monkeypatch.setattr(host_llm, "build_launch_argv", spy)
+        advisor.judge_binary_ask("do X or Y?", self._recording_runner([], "1\nreason"), enabled=True)
+        assert seen_lean == [True]
+
+    def test_prompt_argv_dispatches_lean_false_for_an_advisor_complexity_call(self, monkeypatch):
+        from lib import host_llm
+
+        seen_lean = []
+        real_build = host_llm.build_launch_argv
+
+        def spy(*args, **kwargs):
+            seen_lean.append(kwargs.get("lean", False))
+            return real_build(*args, **kwargs)
+
+        monkeypatch.setattr(host_llm, "build_launch_argv", spy)
+        advisor.enumerate_claims("some deliverable text", self._recording_runner([], "claim one"))
+        assert seen_lean == [False]
+
+
+# ── the prompt must never ride argv: E2BIG regression ─────────────────────────
+#
+# A judge/enumerate prompt built from a whole plan or artifact can exceed Linux
+# MAX_ARG_STRLEN (32 * PAGE_SIZE = 131072 bytes, the per-argv-string ceiling);
+# execve then rejects the launch with OSError errno E2BIG before the child even
+# starts. `_fake_kernel_run` below reproduces that kernel behaviour faithfully
+# (raising E2BIG for any argv element over the ceiling), so these tests are red
+# on the old argv-embedded-prompt path and green on the stdin-delivery path
+# without spawning a real child.
+
+MAX_ARG_STRLEN = 131072  # Linux: 32 * PAGE_SIZE
+
+
+def _fake_kernel_run(argv, *, input="", **kwargs):
+    for a in argv:
+        if len(a.encode()) > MAX_ARG_STRLEN:
+            raise OSError(7, "Argument list too long", argv[0] if argv else None)
+    return subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+
+
+class TestOversizePromptDeliveredViaStdin:
+    def test_subprocess_runner_delivers_an_oversize_prompt_via_stdin_not_argv(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(subprocess, "run", _fake_kernel_run)
+        oversize_prompt = "x" * (MAX_ARG_STRLEN + 50_000)
+
+        result = advisor.subprocess_runner(
+            ["claude", "-p", "--model", "sonnet"], timeout=5, stdin=oversize_prompt
+        )
+
+        assert result.returncode == 0
+
+    def test_subprocess_runner_raises_e2big_if_the_prompt_rides_argv(self, monkeypatch):
+        """Control: proves `_fake_kernel_run` actually reproduces the defect this
+        stage removes -- the old call shape (prompt appended to argv) still fails."""
+        monkeypatch.setattr(subprocess, "run", _fake_kernel_run)
+        oversize_prompt = "x" * (MAX_ARG_STRLEN + 50_000)
+
+        with pytest.raises(OSError):
+            advisor.subprocess_runner(
+                ["claude", "-p", "--model", "sonnet", oversize_prompt], timeout=5
+            )
+
+    def test_judge_binary_ask_end_to_end_survives_an_oversize_observation(
+        self, monkeypatch
+    ):
+        """`judge_binary_ask`'s prompt embeds the caller's observation text; with an
+        oversize observation the old argv-embedded-prompt path raised E2BIG before
+        the fake kernel's stdout ("ok") could even be produced. The runner is
+        called directly (no try/except around the OSError at this call site), so a
+        raised OSError would propagate out of this call -- asserting a normal
+        return proves it no longer does."""
+        monkeypatch.setattr(subprocess, "run", _fake_kernel_run)
+        oversize_observation = "x" * (MAX_ARG_STRLEN + 50_000) + "?"
+
+        verdict, reason = advisor.judge_binary_ask(
+            oversize_observation, advisor.subprocess_runner, enabled=True, timeout=5
+        )
+
+        assert reason != "judge raised (fail-open)"
+
+    def test_enumerate_claims_end_to_end_survives_an_oversize_artifact(self, monkeypatch):
+        monkeypatch.setattr(subprocess, "run", _fake_kernel_run)
+        oversize_artifact = "x" * (MAX_ARG_STRLEN + 50_000)
+
+        claims = advisor.enumerate_claims(oversize_artifact, advisor.subprocess_runner)
+
+        assert claims == ["ok"]

@@ -1,13 +1,13 @@
 ---
 name: investigate-cited-precedent
-description: When the user points at a specific prior success/precedent (ticket, run, commit, PR) as evidence, read HOW that precedent actually did it before theorizing from the current code snapshot — the present state may have diverged from the precedent's. This includes the **implicit** precedent — when the current task repeats or extends measurement/analysis work in a ticket that already holds prior runs, read those prior artifacts before reconstructing the method from first principles, even if the user never explicitly pointed at them.
+description: When the user points at a specific prior success/precedent (ticket, run, commit, PR) as evidence, read HOW that precedent actually did it before theorizing from the current code snapshot — the present state may have diverged from the precedent's. This includes the **implicit** precedent — when the current task repeats or extends measurement/analysis work in a ticket that already holds prior runs, read those prior artifacts before reconstructing the method from first principles, even if the user never explicitly pointed at them — and the **self-invoked** precedent, where you reach for a prior case unprompted to settle a decision (which queue/venue/channel/tool to route to, or which system/codebase actually owns an entity under investigation) purely by topical or surface similarity, and must re-derive the governing rule or verify ownership directly instead of repeating the destination.
 type: feedback
 schema: leaf/v1
 created: 2026-07-03
-last_verified: 2026-07-08
+last_verified: 2026-09-03
 ---
 
-# Investigate a user-cited precedent before theorizing from the current snapshot
+# Investigate a cited precedent before theorizing from the current snapshot
 
 ## Difficulty
 
@@ -25,6 +25,24 @@ A precedent-type norm ("we did X at param P=v and it worked") often silently dep
 
 Two traps make this fail. (a) An *ambient default* the precedent silently relied on may have **drifted** since — the invariant held then because a default supplied a factor you never set, and that default is no longer what it was. (b) A same-named parameter may be supplied by a **different code path** than the one you are inspecting: a default you found by grep in one module is not necessarily the default the failing path actually read (different loaders, config layers, or pipelines can each carry their own same-named field). So trace each factor of the invariant from the failing frame back to the real config source it read, and match it against the **observed values** — the error's own numbers — before naming a cause. Reproducing only the surface knob you remember reproduces the setting, not the invariant; and a plausible default on the wrong path is a decoy, not the cause.
 
+### A precedent you reach for yourself is not a rule — re-derive the rule
+
+The sections above cover precedents the user cites and precedents the ticket implies. The same trap fires when **you** reach for a precedent unprompted, on two distinct kinds of decision: **routing** (which queue, venue, channel, or tool an artifact goes to) and **ownership attribution** (which system or codebase actually owns the entity under investigation). In both, the precedent supplies a *destination* — a place, or a system — while the rule supplies a *criterion*; repeating the destination is following the surface knob, and the invariant is the criterion (or the actual fact of ownership) that made the precedent true in the first place.
+
+Before repeating a routing decision by analogy: state the rule's criterion, apply it to the item at hand, and only then check whether the precedent's own driver still applies. If the two disagree, the precedent was an **exception** — name what made it one, in the same reply, rather than leaving the divergence implicit.
+
+Before attributing an entity to a system by analogy (two systems share vocabulary — "OpenHands fork", "CodeAct format", "the same team built both"): that shared vocabulary is a *surface* match, not evidence of *ownership*. Run one cheap, direct check — grep the entity's own name/id in the codebase actually in scope, or ask which runtime owns it — **before** spending research budget inside the other system. A topical match is a hypothesis to verify, not a destination to reuse.
+
+Concrete instance — routing (2026-08-19): a finished-but-parked plan for a **Core** artifact was routed to the org tracker because the two prior parked plans had gone there. The tier rule sends Core backlog to GitHub Issues under the `backlog` label ([[instruction-dev-queues]]); the prior two went to the tracker only because they needed **file attachments**, which the GitHub issue API cannot accept. The driver was a capability constraint, not the tier — and one user question ("why there and not the other venue?") exposed it. The rule had been read in the same session; it was the analogy, not the ignorance, that produced the wrong venue.
+
+Concrete instance — ownership attribution (2026-08-19): investigating a block-parsing defect in one internal agent platform's coding agent, a research agent was spawned into a **second, unrelated** internal platform — a different codebase, different team — solely because a project-local memory leaf about that second platform's layout pattern-matched on shared vocabulary ("same upstream framework fork, same structured-output block format"). The agent's actual code was never checked against the second platform's runtime before the spawn. The user caught it directly, naming the mismatch by project. A single local grep for the entity's own identifiers inside the actual project in scope immediately confirmed every reference lived in that project's own tree — the second platform was never involved. The misdirected agent was stopped and re-spawned correctly scoped. The fix that would have caught this before spending any research budget: the one-grep ownership check above, run *before* reaching into a differently-scoped memory leaf.
+
+### A precedent may live in the artifact's own thread, not just the live dialogue
+
+A cited precedent need not reach you through the live conversation to be binding. When the task is tracked in a ticket, PR, or review thread you are actively managing, another participant's comment in that thread — a suggested reproduction path, a workaround, a diagnosis — is exactly as load-bearing as something the user says out loud, and just as easy to miss if you re-read the thread only for status, not for prior proposals. Before devising your own alternative approach to a blocker tracked in such a thread, re-read the full thread for an already-suggested path from **any** participant, not only the user, and try that path before inventing a new one.
+
+Concrete instance (2026-09-03): a comment on a tracked ticket from a third party suggested reproducing a bug through a specific existing entry point (a web form). Before working through that specific path, several rounds were spent devising alternative one-off approaches (a hand-written client mimicking an internal auth exchange, with a hardcoded client secret) — the already-suggested path was investigated only after the user pointed back at it. The thread itself, not only the live dialogue, was the source of the missed precedent — user correction 2026-09-03.
+
 ### The precedent may be implicit — a repeat/extend task carries its own baseline
 
 The precedent need not be user-cited to be load-bearing. When the current task **repeats or extends** measurement/analysis work (another model, period, basket, cohort) inside a ticket that already holds prior runs, the prior run's artifacts — its output tables, scoring script, result comment — **are** the precedent. Read them *first*, before any first-principles investigation of "how is X measured / where does this number come from / what mechanism produces it here". The last run already answers those in its own output.
@@ -36,3 +54,4 @@ Signal you skipped this: you find yourself grepping product code for a billing/m
 - [[doubt-own-snapshot]] — the requirement-side twin (refresh your own source before doubting).
 - [[workflow-debug-investigation]] — reference-baseline pass; a known-good run is a cited precedent.
 - [[reasoning-and-task-solving]] — understand before acting.
+- [[instruction-dev-queues]] — the tier→venue rule a self-invoked routing precedent must be re-derived against.

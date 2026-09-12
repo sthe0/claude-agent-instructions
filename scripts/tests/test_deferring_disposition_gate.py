@@ -123,6 +123,22 @@ def test_defective_ask_is_denied(monkeypatch, capsys):
     assert calls, "the judge must be consulted before a deny"
 
 
+def test_silent_inside_a_judge_child(monkeypatch, capsys):
+    """The ask that denies above, driven again with the judge-child marker set.
+    A judge subprocess's own AskUserQuestion is not a user-facing ask, and this
+    hook consults a judge — so reaching it from inside one is the recursion the
+    marker exists to stop. Silence must come from the guard, not from a quiet
+    fixture, hence the same DEFECTIVE payload and a runner that would answer."""
+    calls: list = []
+    assert _run_main(_payload(DEFECTIVE), _runner("YES", calls), monkeypatch, capsys) == "deny"
+
+    monkeypatch.setenv(_mod.JUDGE_CHILD_ENV_VAR, "1")
+    calls.clear()
+
+    assert _run_main(_payload(DEFECTIVE), _runner("YES", calls), monkeypatch, capsys) == "allow"
+    assert calls == [], "the guard must return before any judge call"
+
+
 def test_defective_ask_deny_carries_actionable_reason():
     decision = _mod.decide(_payload(DEFECTIVE), runner=_runner("YES"))
     reason = decision["hookSpecificOutput"]["permissionDecisionReason"]

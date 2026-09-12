@@ -77,6 +77,67 @@ CODE_PARTITIONS = [
         "controlled inputs (including deliberately adversarial ones) but are not "
         "themselves gates guarding production behaviour.",
     ),
+    # Mechanics of the two judge-guarded rows below, kept OUT of the emitted ground
+    # (which wants the classification reason, not the generator's implementation):
+    #   * It is a partition row, not a CODE_ID_OVERRIDES entry, because the override
+    #     table is keyed by scope and is skipped for the file-rollup
+    #     (`_code_disposition` consults it only when scope_or_none is not None) — an
+    #     override would leave the rollup carrying the structural ground below.
+    #   * First matching predicate wins, so it must precede `scripts/agentctl/**`.
+    #   * What this row does NOT buy: verify-semantic-gates.py condition (c) skips
+    #     these sites regardless of class, because it only examines entries whose
+    #     `outcome_class` is in its `_HARD_SINK_CLASSES` and every site in this file
+    #     classifies `none`. Worse, the guard lives ONE FILE AWAY: `judge_guarded` is
+    #     set by a CALL to a `judge_*` name, and `judge_echo` is defined here but
+    #     called from submission.py, which the enumerator cannot see. So the day this
+    #     file gains a hard-sink-named function, `semantic-guarded` would make (c)
+    #     report JUDGE-GUARD-REVERTED against a guard that does exist. This row's
+    #     actual and only value is correcting a ground that asserts the opposite of
+    #     what the file is.
+    (
+        "scripts/agentctl/result_image.py (judge-guarded)",
+        lambda f: f == "scripts/agentctl/result_image.py",
+        "semantic-guarded",
+        "keep",
+        "The one file in the engine whose subject IS free-text meaning: it decides "
+        "whether a stage's expected_result_image restates the check that judges it. "
+        "Its regexes are `echo_prefilter`, a high-recall structural PREFILTER whose "
+        "every consumer (`submission.submission_advice`) gates it behind `judge_echo` "
+        "before anything is said — the prefilter alone produces no output at all. So "
+        "the `scripts/agentctl/**` row below, which grounds its structural verdict on "
+        "the engine's regexes reading the engine's own syntax rather than free-text "
+        "meaning, states the opposite of what is true here.",
+    ),
+    (
+        "scripts/agentctl/conditions.py (judge-guarded)",
+        lambda f: f == "scripts/agentctl/conditions.py",
+        "semantic-guarded",
+        "keep",
+        "The second file in the engine whose subject IS free-text meaning: it decides "
+        "whether a stage's `conditions` are exhausted by restating `depends_on`. Its "
+        "regexes are `restatement_prefilter`, a high-recall structural PREFILTER whose "
+        "only consumer (`submission._conditions_restatement`) gates it behind "
+        "`judge_restatement` before any violation is emitted — the prefilter alone "
+        "refuses nothing. Same correction as the result_image.py row above, and a "
+        "stronger case for it: here the guarded decision drives a REFUSAL, not a "
+        "warning, so a `structural` ground would misdescribe the one site in the engine "
+        "where a model's reading of free text can block a plan.",
+    ),
+    (
+        "scripts/agentctl/procedure.py (judge-guarded)",
+        lambda f: f == "scripts/agentctl/procedure.py",
+        "semantic-guarded",
+        "keep",
+        "The third file in the engine whose subject IS free-text meaning: it decides "
+        "whether a stage's `procedure` says anything its `method` does not — whether "
+        "an author has written the requirement twice instead of writing a requirement "
+        "and a sequence. Its regexes and its token overlap are `collapse_prefilter`, a "
+        "high-recall structural PREFILTER whose only consumer "
+        "(`submission._procedure_collapse`) gates it behind `judge_collapse` before any "
+        "violation is emitted — the prefilter alone refuses nothing. Same correction as "
+        "the two rows above, and it stands with conditions.py on the stronger side of "
+        "them: the guarded decision drives a REFUSAL, not a warning.",
+    ),
     (
         "scripts/agentctl/**",
         lambda f: f.startswith("scripts/agentctl/"),
@@ -112,6 +173,20 @@ CODE_PARTITIONS = [
         "without an allowlist ground. The regex only widens recall over deferral "
         "vocabulary; whether the options actually leave the work undone is the "
         "judge's call.",
+    ),
+    (
+        "scripts/hook-resolution-reminder.py (judge-guarded)",
+        lambda f: f == "scripts/hook-resolution-reminder.py",
+        "semantic-guarded",
+        "keep",
+        "decide()'s PreToolUse/AskUserQuestion branch runs "
+        "agentctl.advisor.judge_landing_discipline_ask (fail-open semantic judge) "
+        "before building the deny payload, and — unlike the other judge-guarded "
+        "rows above — deliberately WITHOUT a keyword prefilter gating whether the "
+        "judge is even consulted: an explicit correction (2026-08-27) that an "
+        "arbitrary-content regex is a fragile classifier even demoted to a "
+        "filter, so this hook always asks the judge whenever its gate-open + "
+        "hint-active precondition holds, and only the judge's verdict decides.",
     ),
     (
         "scripts/hook-*.py (other guardian hooks)",
@@ -167,6 +242,22 @@ CODE_PARTITIONS = [
         "Channel adapter selection keyed on machine-local config identity, not "
         "free-text meaning.",
     ),
+    # Same purpose as the judge-guarded rows above: the catch-all's ground names
+    # the regexes IT inspected (markdown headings, frontmatter delimiters, shell
+    # command prefixes), so a file that parses something else inherits a ground
+    # that is false of it. This file's three regexes parse the fixed control-name
+    # grammar of `[meta.order.coverage]`, nothing else.
+    (
+        "scripts/check-order-coverage.py",
+        lambda f: f == "scripts/check-order-coverage.py",
+        "structural",
+        "keep",
+        "The three regexes match the closed control-name grammar this resolver "
+        "accepts (`stage <n> verify_command` / `final_check <n>` / `stage <n> "
+        "landed assertion`), by prefix, to look the named control up in the plan's "
+        "own stages — a lookup key, not a reading of what the control means; the "
+        "free-prose parenthetical an author may append is deliberately ignored.",
+    ),
     (
         "scripts/*.py (other top-level scripts)",
         lambda f: True,  # catch-all, must stay last
@@ -189,6 +280,24 @@ CODE_PARTITIONS = [
 # per the stage-2 method's step 3 ("every semantic-unguarded code site... must
 # be individually named, not hidden in a partition").
 CODE_ID_OVERRIDES = {
+    # hook-published-text-writer-gate.py's deny_with is reached from decide()'s
+    # two branches, only one of which is a semantic judge call: _decide_text's
+    # deny is a structural fact-check (writer_pass.bind against the harness's
+    # own transcript -- did the tech-writer pass actually run on these exact
+    # bytes, no free-text classification involved), while _decide_attachment's
+    # deny is gated by agentctl.advisor.judge_published_attachment (fail-open,
+    # UNMEASURED by design per lib/judge_latency.py) behind a structural
+    # _recognized_artifact_kind prefilter. Neither path reaches deny_with via
+    # an unguarded regex on free-text meaning -- confirmed by reading decide(),
+    # _decide_text(), and _decide_attachment() at source. Mirrors
+    # hook-escalation-diagnosis-gate.py's identical deny_with shape below.
+    ("scripts/hook-published-text-writer-gate.py", "deny_with"): (
+        "semantic-guarded", "keep",
+        "decide() dispatches to _decide_text (structural transcript-witness "
+        "check) or _decide_attachment (judge_published_attachment behind a "
+        "structural prefilter); deny_with only emits the reason either branch "
+        "already decided -- no regex-classified free text reaches this sink.",
+    ),
     # hook-turn-end-gate.py: per-scope split against the prior audit's row
     # granularity (regex-not-for-semantic-classification.md lists 5 of this
     # file's TURN_GUARDIANS individually). The 4 scopes below actually consume

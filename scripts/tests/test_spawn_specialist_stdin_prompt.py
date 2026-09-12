@@ -77,7 +77,7 @@ def _run_main(monkeypatch, tmp_path, prompt_size):
 
     argv = ["spawn-specialist.py", "--kind", "developer", "--plan", str(plan),
             "--done-criterion", "done", "--criterion-type", "measurable",
-            "--model", "haiku"]
+            "--model", "haiku", "--effort", "medium"]
     monkeypatch.setattr(sys, "argv", argv)
     rc = mod.main()
     return rc, captured

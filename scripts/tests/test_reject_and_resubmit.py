@@ -1,12 +1,15 @@
 """#14: `reject` is the resolution gate's negative exit — re-opens the difficulty
 cycle and marks stage(s) FAILED so a reject is never a structural no-op.
 #15: a corrected plan may be resubmitted at PLAN_READY (pre-approval) via the
-`revise_plan` edge, without `reset --force`, and unconditionally invalidates any
-recorded thinker review so the plan-review gate re-arms."""
+`revise_plan` edge, without `reset --force`. A resubmission invalidates a recorded
+thinker review only where the review no longer covers the new bytes (stage 5) —
+a review whose meta/order didn't move survives an unrelated stage edit; one bound
+to bytes whose meta DID move is cleared, same as before per-part keying existed."""
 from argparse import Namespace
 
 from agentctl import cli
 from agentctl.state import Node, StageStatus
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
@@ -29,10 +32,11 @@ def _to_resolution(store, sid, plan):
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                                  control="reviewed: ok"), store=store)
+                                  control="reviewed: ok",
+                                  observation=observation), store=store)
     cli.cmd_verify_final(ns(session=sid), store=store)
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="recorded"), store=store)
@@ -116,15 +120,35 @@ def test_resubmit_at_plan_ready_uses_revise_plan_edge(store, fixtures_dir):
     assert not state.approval.passed
 
 
-def test_resubmit_clears_recorded_plan_review(store, fixtures_dir):
-    """A resubmission invalidates any recorded thinker-review verdict so the
-    plan-review gate re-arms for the newly submitted plan version."""
+def test_resubmit_of_an_unrelated_stage_edit_keeps_the_review(store, fixtures_dir):
+    """plan_two_stage_substantive_stage1_retitled.toml differs from
+    plan_two_stage_substantive.toml only in stage 1's title — the review's own
+    recorded meta digest still matches the resubmitted plan, so it survives
+    (stage 5's selective clearing, replacing the old unconditional clear)."""
     sid = "rev2"
-    original = str(fixtures_dir / "plan_two_stage.toml")
-    corrected = str(fixtures_dir / "plan_two_stage_refined.toml")
+    original = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    corrected = str(fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
     _to_plan_ready(store, sid, original)
 
-    cli.cmd_plan_review(ns(session=sid, target=None, verdict="pass",
+    cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="pass",
+                           reviewer="thinker", concerns=[], note=""), store=store)
+    assert store.load(sid).plan_review is not None
+
+    cli.cmd_submit_plan(ns(session=sid, plan=corrected), store=store)
+    state = store.load(sid)
+    assert state.plan_review is not None
+
+
+def test_resubmit_of_a_meta_edit_clears_the_review(store, fixtures_dir):
+    """plan_two_stage_donecriterion_changed.toml changes the plan's done_criterion
+    — a meta field — so the resubmitted bytes no longer match what the review's
+    reviewed_meta_digest recorded, and the review is cleared."""
+    sid = "rev2b"
+    original = str(fixtures_dir / "plan_two_stage.toml")
+    corrected = str(fixtures_dir / "plan_two_stage_donecriterion_changed.toml")
+    _to_plan_ready(store, sid, original)
+
+    cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="pass",
                            reviewer="thinker", concerns=[], note=""), store=store)
     assert store.load(sid).plan_review is not None
 

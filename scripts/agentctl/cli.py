@@ -20,33 +20,55 @@ import shlex
 import subprocess
 import sys
 import time
+from dataclasses import fields
 from pathlib import Path
 
 import proc_tree
 from lib import argv_text, config_root
 
-from . import advisor, continuations, cost, delivery, effort, enumerate_sidecar, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, solved_marker
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
 from .checkrun import format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
-from .directive import Directive
-from .dispatch import Runner, dispatch_stage, parse_marker, subprocess_runner
+from .directive import Directive, DIRECTIVE_ESCALATE_TO_USER
+from .dispatch import (
+    CHILD_EXHAUSTED,
+    CHILD_INFRA_FAILURE,
+    Runner,
+    dispatch_stage,
+    parse_marker,
+    subprocess_runner,
+)
 from .machine import transition
 from .plan import (
+    META_PART,
     PlanDoc,
     PlanError,
+    changed_parts,
     check_venue_warnings,
     load_plan,
+    plan_meta_digest,
+    plan_meta_element_key,
+    plan_meta_element_keys,
+    plan_stage_digests,
+    stage_element_keys,
+    stage_part,
     stage_question_key,
+    stage_reattest_digest,
     verify_command_reachability_blockers,
     verify_command_scope_warnings,
 )
-from .render import cmd_plan_render
+from .text_shape import WHOLE_STAGE_ELEMENT
+from .render import cmd_plan_render, render_plan_md, render_stages_md
+from .submission import submission_advice, submission_violations
 from .state import (
     _EXECUTION_NODES,
     _MAX_PLAN_STACK,
     Actor,
+    AcceptanceBypass,
+    AcceptanceReview,
+    AUTHORIZE_REPLAN_MARKER,
     CheckKind,
     CheckVenue,
     CodeReview,
@@ -67,15 +89,24 @@ from .state import (
     Means,
     Node,
     Normalization,
+    NORMALIZATION_DESTINATIONS,
     NORMALIZATION_LEVELS,
+    Outcome,
     PermissionRequest,
     PLAN_PRESENTATION_KIND_ESSENCE,
     PLAN_PRESENTATION_KIND_FULL,
+    PLAN_PRESENTATION_KIND_REPLAN_DIFF,
     PLAN_PRESENTATION_KINDS,
     PLAN_PRESENTATION_RENDERING_CAP_BYTES,
     PlanFrame,
     PlanPresentation,
     PlanReview,
+    plan_review_concern_ids,
+    plan_review_scope_for_stage,
+    plan_review_scope_stage_index,
+    ReattestStash,
+    RequirementVerdict,
+    RiskAcceptance,
     Route,
     SessionState,
     SHOW_FULL_PLAN_MARKER,
@@ -97,6 +128,21 @@ TASK_QUALITY_LOG = Path.home() / ".local" / "log" / "claude-task-quality.jsonl"
 _GIT_HEAD_TIMEOUT_S = 5
 _VALID_QUALITY_RATINGS = (1, 2, 3, 4, 5)
 
+# The required observation shape, stated once and referenced everywhere an
+# observation is authored or its rejection explained (GitHub issue #95):
+# a rubric's success form must live at the authoring point, not only at the
+# refusal point. Kept short and length-bounded because the acceptance-judge
+# leaf's empirical finding is that long, cumulative observations are what
+# drives the fail-open rate up, not just the revise rate.
+OBSERVATION_CONTRACT = (
+    "attest in the present tense what you observed: name the artifact "
+    "(file, command, output) and state what reading it showed. Do not "
+    "narrate what had been wrong or how it was fixed — a defect history is "
+    "not an observation. Keep it short and targeted (~400-500 chars); a "
+    "long cumulative observation makes the judge both more likely to move "
+    "the goalposts and more likely to time out."
+)
+
 
 def _digest(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
@@ -107,6 +153,9 @@ def _plan_file_sha256(target: str | None) -> str:
 
     Best-effort by design: an unreadable/absent target yields '' so the plan-review
     gate degrades to path-only binding rather than wedging on a transient I/O error.
+    That degradation is the NOTHING-ATTESTED case only — cmd_plan_review turns the
+    empty result into a refusal when the caller did supply a --plan-digest, since a
+    digest it cannot compare is not evidence the reviewer read anything.
     cmd_plan_review records this over the reviewed bytes; gates.plan_review_blockers
     inlines the same sha256-of-bytes recompute (it cannot import cli — circular)."""
     if not target:
@@ -171,6 +220,18 @@ def _judge_bypassed_surface(state: SessionState) -> list[dict]:
     ]
 
 
+def _acceptance_bypass_surface(state: SessionState) -> dict | None:
+    """The recorded plan-level acceptance bypass as a plain dict, for verify-final and
+    the resolution summary to surface verbatim (None when no bypass is in force).
+    Mirrors _judge_bypassed_surface's role but for the singular AcceptanceBypass —
+    see AcceptanceBypass's docstring for why resolution_blockers itself never reads
+    this field."""
+    b = state.acceptance_bypass
+    if b is None:
+        return None
+    return {"reason": b.reason, "reviewer": b.reviewer, "note": b.note}
+
+
 def _record_bypass(state: SessionState, bypass: JudgeBypass) -> None:
     """Append a JudgeBypass (never cleared by a later passing review) so verify-final
     and the resolution summary can surface every acceptance pass that skipped a genuine
@@ -208,6 +269,21 @@ def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str
     return str(snap), digest
 
 
+def _replan_baseline_path(state: SessionState) -> str | None:
+    """The comparison baseline every replan-family diff is taken against: the
+    approved-plan snapshot when one exists on disk, else state.plan_path (the
+    legacy, pre-snapshot fallback — see _snapshot_approved_plan). Extracted from
+    the three call sites that repeated this derivation (cmd_replan,
+    _renormalize_replan, cmd_check_coverage) so they cannot drift apart; carries
+    ONLY the derivation, not _renormalize_replan's snapshot backfill, which that
+    path performs deliberately and the other two do not."""
+    snap = state.plan_snapshot_path
+    return snap if (snap and Path(snap).exists()) else state.plan_path
+
+
+_CRITERION_ENGINE_WRITTEN_FIELDS = frozenset({"observation"})
+
+
 def _apply_refined_stage_fields(cur, refined) -> None:
     """Copy the definition fields of a freshly-loaded stage onto the matching live
     stage. Shared by both replan branches that re-materialize from a corrected plan
@@ -221,30 +297,35 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     the live stage stale against the plan bytes and re-arms a stage whose plan text
     never changed. `test_refresh_covers_every_carry_key_field` pins the relation, so
     a field added to the key but not here fails there rather than as an unexplained
-    re-arm later.
+    re-arm later. COVER is a lower bound, not an equality: `subject.material` is
+    copied although no key reads it, because the live stage is also what `status`
+    and every stage-reading report render — leaving one prose field pinned to the
+    pre-edit bytes while its siblings track the file is a discrepancy with no
+    reason behind it.
 
     Some of the copied fields (executor, supplies, done_criterion, criterion_type)
     are `_structural_signature`'s per-stage tuple, so a change to one classifies the
     replan substantive: copying them is a no-op for the two replan callers and
     load-bearing only for the approve-time refresh, which absorbs an in-place edit
     made at plan-mutable PLAN_READY."""
+
     cur.title = refined.title
+    cur.subject.material = refined.subject.material
     cur.subject.result = refined.subject.result
     cur.means.means = refined.means.means
     cur.means.method = refined.means.method
+    cur.means.procedure = refined.means.procedure
     cur.subject.invariants = refined.subject.invariants
+    cur.subject.material_refs = list(refined.subject.material_refs)
+    cur.subject.knowledge_refs = list(refined.subject.knowledge_refs)
+    cur.knowledge = refined.knowledge
     cur.conditions = refined.conditions
-    cur.criterion.verify_command = refined.criterion.verify_command
-    cur.criterion.expected_exit = refined.criterion.expected_exit
-    cur.criterion.done_criterion = refined.criterion.done_criterion
-    cur.criterion.criterion_type = refined.criterion.criterion_type
-    cur.criterion.verify_venue = refined.criterion.verify_venue
-    cur.criterion.verify_kind = refined.criterion.verify_kind
-    cur.criterion.landed = refined.criterion.landed
+    cur.preconditions = refined.preconditions
+    for field in fields(Criterion):
+        if field.name not in _CRITERION_ENGINE_WRITTEN_FIELDS:
+            setattr(cur.criterion, field.name, getattr(refined.criterion, field.name))
     cur.actor.executor = refined.actor.executor
     cur.actor.cost_tier = refined.actor.cost_tier
-    # depends_on is a read-only projection over `supplies`, so the backing edges
-    # are what must be copied for the key's deps element to track the plan.
     cur.supplies = list(refined.supplies)
 
 
@@ -279,6 +360,25 @@ def _sync_venue_from_plan(state: SessionState, doc: "PlanDoc | None" = None) -> 
     state.delivery_worktree = doc.meta.delivery_worktree
 
 
+def _plan_venue_pair(path: str | None) -> tuple[str, str] | None:
+    """Read exactly the two [meta] fields _sync_venue_from_plan reads off a plan
+    file, as a plain pair — None on any read failure (absent path, unreadable or
+    unparseable file), distinct from a successful read of two empty fields.
+
+    Exists so cmd_push_subplan and cmd_pop_subplan compare the SAME two values
+    the venue-resolution seam actually uses, and can tell "the file could not be
+    read" apart from "the file has no venue declared" — the latter is the
+    majority plan shape, not an edge case, so collapsing it into None would make
+    the venue-substitution guard blind exactly where a plan is least specified."""
+    if not path:
+        return None
+    try:
+        doc = load_plan(path, strict=False)
+    except (OSError, PlanError):
+        return None
+    return (doc.meta.repo_root or "", doc.meta.delivery_worktree or "")
+
+
 def _restore_current_stage(state: SessionState) -> None:
     """Derive state.current_stage from the restored stages' own status, rather
     than trusting whatever the frame snapshotted or hardcoding None.
@@ -295,9 +395,43 @@ def _restore_current_stage(state: SessionState) -> None:
     state.current_stage = active[0].index if len(active) == 1 else None
 
 
-def _refresh_caches_from_plan_path(state: SessionState) -> None:
-    """Re-load state.plan_path and refresh state.final_check plus each live
-    stage's prose/criterion fields from those bytes.
+def _stamp_accepted_plan_digest(state: SessionState, plan_path: str) -> None:
+    """Record the sha256 of the ACCEPTED plan bytes on the session.
+
+    Called from the three submission seams' commands and nowhere else, and only past every
+    refusal path of the command that stamps — at approve that includes the plan_approval
+    gate itself, which sits BELOW the seam — so state.accepted_plan_digest always names
+    bytes the session actually took. Best-effort like its neighbours: an unreadable file
+    leaves the previous digest in place rather than raising out of a command that has
+    already decided to accept."""
+    try:
+        state.accepted_plan_digest = hashlib.sha256(Path(plan_path).read_bytes()).hexdigest()
+    except OSError:
+        return
+
+
+def _refresh_caches_from_plan_path(
+    state: SessionState,
+    *,
+    runner: Runner | None = None,
+    advice: list[str] | None = None,
+) -> list[str]:
+    """SUBMISSION SEAM (c). Re-load state.plan_path, validate it at submission grade, and
+    — only if it is clean — refresh state.final_check plus each live stage's
+    prose/criterion fields from those bytes. Returns the violation list; [] == refreshed.
+
+    The seam's non-refusing channel is an OUT-PARAMETER rather than a second return value:
+    the violation list is what this function's caller branches on, and advice must never
+    become part of that decision. Pass a list to collect it; pass nothing (every caller
+    that has no Directive to hang it on) and the seam behaves exactly as before.
+
+    The seam is here rather than in `cmd_approve` directly because this is already the one
+    place that re-reads plan_path at approve time, and a second read would let the two
+    disagree. Nothing is mutated when the plan is dirty: the caller refuses with a
+    Directive and the session keeps the state it had, so a rejected approve is not also a
+    half-applied edit. The refusal must NOT be a raised PlanError — approve is where the
+    plan_approval gate is armed, and an exception escaping there strands the session at
+    PLAN_READY with no edge back.
 
     Approve snapshots and hashes plan_path, but the plan-review cycle answers a
     REVISE verdict by editing plan_path IN PLACE at PLAN_READY (deliberately
@@ -317,16 +451,25 @@ def _refresh_caches_from_plan_path(state: SessionState) -> None:
     `cur` against itself post-copy, which always matches and would let a
     genuinely stale PASSED outcome survive unnoticed.
 
-    Best-effort like `_snapshot_approved_plan`: an absent plan_path or a plan
-    file that fails to load leaves the existing cache untouched rather than
-    raising out of approve."""
+    An absent plan_path still returns [] — "there is nothing to refresh" is not a
+    submission violation, and the plan_approval gate already refuses a session with no
+    plan artifact. A plan_path that is set but no longer LOADS is different: it is a
+    session whose approve is about to attest to bytes nobody can read, so it is reported
+    as a violation rather than swallowed. The old silent return let approve pass on the
+    stale pre-edit cache — the very "attests to a plan it never actually executes" failure
+    this function's own docstring names."""
     if not state.plan_path:
-        return
+        return []
     from .plan import PlanError, load_plan as _load, stage_carry_key
     try:
         refreshed = _load(state.plan_path)
-    except (OSError, PlanError):
-        return
+    except (OSError, PlanError) as exc:
+        return [f"cannot load the plan at {state.plan_path!r}: {exc}"]
+    violations = _submission_problems(refreshed, runner, state.weight_class)
+    if violations:
+        return violations
+    if advice is not None:
+        advice.extend(_submission_advice(refreshed, runner, state.weight_class))
     for rs in refreshed.stages:
         try:
             cur = state.stage(rs.index)
@@ -338,6 +481,11 @@ def _refresh_caches_from_plan_path(state: SessionState) -> None:
             cur.outcome.status = StageStatus.PENDING.value
     state.final_check = refreshed.meta.final_check
     _sync_venue_from_plan(state, refreshed)
+    # The digest is NOT stamped here. A clean submission is not yet an accepted plan at this
+    # seam: `cmd_approve` still has the plan_approval gate to compose, and a blocked approve
+    # must not leave the session naming bytes it refused. The stamp is the caller's, placed
+    # past that refusal.
+    return []
 
 
 def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bool) -> None:
@@ -391,16 +539,81 @@ def _write_quality_row(row: dict) -> None:
 
 
 def _attach_advisories(d: Directive, kind: str, payload: dict, runner: Runner | None,
-                       *, weight_class: str | None = None) -> None:
+                       *, weight_class: str | None = None,
+                       runtime_host_: str = runtime_host.HOST_CLAUDE) -> None:
     """Attach warn-only advisory strings to d.data['advisories']. Never changes d.ok or d.node.
 
     Single chokepoint for the enabled resolution: env override, else config-mode +
     weight_class (advisor.resolve_enabled) — every call site threads its session's
     weight_class through here rather than re-deriving the rule per site."""
     enabled = advisor.resolve_enabled(weight_class)
-    advisories = advisor.judge(kind, payload, runner, enabled=enabled)
+    advisories = advisor.judge(kind, payload, runner, enabled=enabled, runtime_host=runtime_host_)
     if advisories:
         d.data.setdefault("advisories", []).extend(advisories)
+
+
+def _with_advisories(d: Directive, advisories: list[str]) -> Directive:
+    """Attach warn-only strings to a Directive on its way out. Never touches d.ok/d.node."""
+    if advisories:
+        d.data.setdefault("advisories", []).extend(advisories)
+    return d
+
+
+def _submission_advice(doc, runner: Runner | None, weight_class: str | None) -> list[str]:
+    """The submission seam's non-refusing channel, resolved the same way advisories are.
+
+    Warn-only by construction — `submission_advice` never refuses — so every seam attaches
+    these to d.data['advisories'] and leaves d.ok alone. Same enabled rule and same runner
+    handling as `_attach_advisories`: `advisor.resolve_enabled` decides, and the caller's
+    runner is passed STRAIGHT THROUGH.
+
+    Pass-through matters more here than at the other advisory sites, because these seams
+    are `submit_plan`, `approve` and `replan` — the commands most of this engine's tests
+    drive. `advisor.subprocess_runner`'s own docstring reserves itself for "a caller that
+    wants a live advisor", precisely so `runner=None` stays byte-identical to advisor-
+    absent; substituting it here would put a real `claude -p` behind every substantive
+    session's plan submission. Injecting it is an ENTRY-POINT decision (the shape
+    hook-turn-end-gate.py and hook-escalation-diagnosis-gate.py use at their `__main__`),
+    not one to take inside a helper.
+
+    Fail-open at the HELPER boundary, not only inside `judge_echo`. `resolve_enabled`
+    builds `Thresholds()` -> `parse_config_md()` -> `read_text()`, and that read sits
+    outside its own `except KeyError`: an unreadable config.md would otherwise raise out
+    of `cmd_approve`, a path that never called `resolve_enabled` before this seam existed,
+    and strand the session at PLAN_READY with no edge back. A warn-only channel must never
+    be able to refuse a command by exception."""
+    try:
+        return submission_advice(
+            doc,
+            judge_runner=runner,
+            judge_enabled=advisor.resolve_enabled(weight_class),
+        )
+    except Exception:
+        return []
+
+
+def _submission_problems(doc, runner: Runner | None, weight_class: str | None) -> list[str]:
+    """The submission seam's REFUSING channel, with its judge resolved the way the advice
+    channel's is — one place per channel, so no seam re-derives the enabled rule.
+
+    Unlike `_submission_advice` this may NOT swallow its result: these strings refuse a
+    plan, and dropping them on an unrelated error would pass bytes nobody validated. Only
+    the ENABLED resolution is caught, and only because `advisor.resolve_enabled` reaches
+    config.md through `parse_config_md` -> `read_text` outside its own `except KeyError` —
+    an unreadable config.md must not raise out of `cmd_approve` and strand the session at
+    PLAN_READY with an armed gate and no edge back. Falling back to enabled=False keeps
+    every violation the plan's own bytes support and drops only the one that needed a
+    judge, which is the direction that judge already fails in."""
+    try:
+        enabled = advisor.resolve_enabled(weight_class)
+    except Exception:
+        enabled = False
+    return submission_violations(
+        doc,
+        session_weight_class=weight_class,
+        judge_runner=runner,
+        judge_enabled=enabled,
+    )
 
 
 def _run_check(command: str, expected_exit: int, runner: Runner | None, cwd: str | None = None):
@@ -510,6 +723,40 @@ def _diagnose_venue_refusal(
     )
 
 
+def _diagnose_acceptance_rejection(
+    state: SessionState, store: StateStore, failing_ids: list[str],
+) -> Directive:
+    """Route a verify-final resolution refusal caused by a FAILING AcceptanceReview
+    verdict into the ordinary DIAGNOSING cycle, instead of stranding the session at
+    VERIFYING with no reachable difficulty cycle (declare/investigate/critique all
+    require DIAGNOSING; only `reject` reaches it, and only from RESOLUTION — a node
+    this session never gets to when acceptance already failed before every stage
+    finished being verified). Mirrors _diagnose_venue_refusal's transition/save/
+    Directive shape, and cmd_reject's declaration pre-seed (state.py Difficulty):
+    a customer rejection recorded after every stage already PASSED is categorically
+    the same event reject already handles at RESOLUTION — expected==pass, actual==
+    the failing verdict(s), mismatch==the order's customer rejected the delivery —
+    just reached one gate earlier, before an AcceptanceReview was ever able to pass.
+    No effort-divergence data is attached here (see this stage's Method note: doing
+    so would require hoisting refresh_spend/divergence earlier in cmd_verify_final
+    for a defense-in-depth nicety, not the core fix)."""
+    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
+    state.difficulty = Difficulty(declaration=Declaration(
+        expected="every [meta.order] requirement accepted (verdict pass)",
+        actual=f"requirement id(s) {failing_ids} recorded as fail",
+        mismatch="the order's customer rejected part of the delivery after every "
+                  "stage already PASSED",
+    ))
+    store.save(state)
+    return Directive(
+        False, state.node, "declare",
+        f"AcceptanceReview carries a non-pass verdict on requirement id(s) "
+        f"{failing_ids}; run overcome-difficulty — declare the divergence, then "
+        "investigate, then critique; replan is blocked until the cycle is complete",
+        marker="OVERCOME-DIFFICULTY",
+    )
+
+
 def _diagnose_effort_divergence(
     state: SessionState, store: StateStore, div: "effort.Divergence", fire: dict,
 ) -> Directive:
@@ -531,6 +778,25 @@ def _diagnose_effort_divergence(
         marker="OVERCOME-DIFFICULTY",
         data={"effort_divergence": fire},
     )
+
+
+def _effort_fire_escalation_data(state: SessionState) -> dict:
+    """The fire-context payload attached to every gates.effort_fire_blockers refusal
+    (dispatch/replan/submit_plan) — the last (unacknowledged) entry of
+    state.effort_fires plus the identifiers a coordinator needs to call
+    `agentctl fire-acknowledge` against the right session. Shared by all three call
+    sites so the payload shape never drifts between them."""
+    fire = state.effort_fires[-1] if state.effort_fires else {}
+    return {
+        "task_id": state.task_id,
+        "session_id": state.session_id,
+        "scale": fire.get("scale"),
+        "kind": fire.get("kind"),
+        "actual": fire.get("actual"),
+        "estimate": fire.get("estimate"),
+        "multiple": fire.get("multiple"),
+        "ts": fire.get("ts"),
+    }
 
 
 def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) -> None:
@@ -648,6 +914,7 @@ def cmd_start(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         overall_criterion_type=getattr(args, "criterion_type", CriterionType.MEASURABLE.value),
         recursion_depth=int(getattr(args, "recursion_depth", 0) or 0),
     )
+    runtime_host.bind_runtime_host(state, getattr(args, "host", None), require=False)
     state.log("start", task=state.task_id)
     store.save(state)
     return Directive(True, state.node, "classify", "session registered; run classify next")
@@ -657,7 +924,16 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     """Re-arm a session for a NEW task once its prior task is closed. Refuses to
     discard a live prior task (not RESOLVED/ROUTED/BLOCKED) unless --force, so a
     new prompt cannot silently wipe in-flight work. Otherwise builds a fresh
-    CLASSIFIED SessionState from the same args cmd_start uses."""
+    CLASSIFIED SessionState from the same args cmd_start uses.
+
+    Second refusal, for the opposite case: re-entering a task that already reached
+    RESOLVED. RESOLVED has no outgoing edge but `pop_subplan`, so this command is the
+    only way back into a closed order — and the fresh SessionState it builds zeroes the
+    effort baseline, the replan count and every round-release counter, so an unbounded
+    reopen loop pays nothing and nobody is ever asked whether the order still stands.
+    `gates.resolved_reentry_blockers` requires a recorded reason, and past
+    `effort-replan-absolute` reopens a recorded user decision; the count it reads lives
+    in the cross-session accumulator precisely because this command discards state."""
     prior = store.load(args.session)
     if (
         prior is not None
@@ -669,6 +945,26 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
             f"prior task '{prior.task_id}' is live at node={prior.node}; "
             "resolve/block it or pass --force to discard",
         )
+    reopen_reason = (getattr(args, "reopen_reason", None) or "").strip()
+    reopen_decision = (getattr(args, "reopen_user_decision", None) or "").strip()
+    reopening = prior is not None and prior.node == Node.RESOLVED.value and prior.task_id == args.task
+    reentry_count = (
+        int(task_accumulator.get(prior.task_id)["per_axis_totals"].get("resolved_reentry", 0) or 0)
+        if reopening else 0
+    )
+    reentry_blockers = gates.resolved_reentry_blockers(
+        prior.node if prior is not None else None,
+        task_id=args.task,
+        same_task=reopening,
+        reopen_count=reentry_count,
+        reason=reopen_reason,
+        user_decision=reopen_decision,
+    )
+    if reentry_blockers:
+        return Directive(
+            False, prior.node, "noop", "; ".join(reentry_blockers),
+            data={"blockers": reentry_blockers, "resolved_reentry_count": reentry_count},
+        )
     new = SessionState(
         session_id=args.session,
         task_id=args.task,
@@ -677,7 +973,21 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         overall_criterion_type=getattr(args, "criterion_type", CriterionType.MEASURABLE.value),
         recursion_depth=int(getattr(args, "recursion_depth", 0) or 0),
     )
+    runtime_host.bind_runtime_host(new, getattr(args, "host", None), require=False)
     new.log("reset", task=new.task_id, prior_task=(prior.task_id if prior else None))
+    if reopening:
+        # Counted in the accumulator, which survives this command; logged on the new
+        # state, which is what a reader of THIS task's history will open. Neither
+        # substitutes for the other: the log carries the reason, the accumulator
+        # carries the count the ceiling compares.
+        task_accumulator.add(
+            new.task_id, "resolved_reentry", 1,
+            session_id=new.session_id, now=_utcnow(),
+        )
+        new.log(
+            "resolved_reentry", reason=reopen_reason,
+            user_decision=reopen_decision or None, prior_reopens=reentry_count,
+        )
     store.save(new)
     # Hygiene, not a security boundary (delivery.delete_stamp's own docstring):
     # a stale stamp cannot silently clear a later task's gate since the gate
@@ -688,7 +998,32 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     if state_file is not None:
         delivery.delete_stamp(state_file)
     return Directive(
-        True, new.node, "classify", "session re-armed for new task; run classify",
+        True, new.node, "classify",
+        (f"resolved task re-opened (reopen #{reentry_count + 1}); run classify"
+         if reopening else "session re-armed for new task; run classify"),
+        data={"resolved_reentry_count": reentry_count + 1} if reopening else {},
+    )
+
+
+def cmd_task_reset(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Explicit renegotiation: zero the cross-session task accumulator (item B)
+    for `--task`. `cmd_reset` deliberately does NOT clear it, since the
+    accumulator is task-scoped, not session-scoped: a fresh session re-armed
+    on the same stuck task must inherit its prior friction, not silently
+    forgive it (that would defeat the accumulator's entire purpose).
+    Session-independent by design (no `--session`, no state load) — the
+    accumulator lives outside any single session's state file — and requires
+    `--reason` so this is never a casual one-flag habit; a user genuinely
+    renegotiating a task's scope states why. A second, in-session path exists
+    for the same explicit-renegotiation act: `cmd_replan`'s
+    `--renegotiation-decision continue|rescope` (see
+    `task_accumulator.reset`'s own docstring) — that path folds the reset into
+    an already-required customer decision instead of a separate command."""
+    task_accumulator.reset(args.task)
+    return Directive(
+        True, "(task-scoped)", "noop",
+        f"cross-session task accumulator reset for task {args.task!r}: {args.reason}",
+        data={"task": args.task, "reason": args.reason},
     )
 
 
@@ -930,7 +1265,9 @@ def cmd_ledger_enumerate(args, *, store: StateStore, runner: Runner | None = Non
         return Directive(False, state.node, "noop",
                          f"cannot read artifact {args.artifact!r}: {exc}")
     run = runner if runner is not None else advisor.enumerate_subprocess_runner
-    statements = advisor.enumerate_claims(text, run)
+    statements = advisor.enumerate_claims(
+        text, run, runtime_host=state.runtime_host or runtime_host.HOST_CLAUDE
+    )
     candidates = bag.setdefault("candidates", [])
     raised: list[str] = []
     for i, statement in enumerate(statements):
@@ -992,13 +1329,16 @@ def _enumeration_escape_counts(state, doc: "PlanDoc | None" = None) -> dict | No
 
 
 def _bound_stage_key(state, question: "premise.Question", plan_path: str | None = None) -> str:
-    """The current stage_question_key of the stage a Question is bound to — the
-    value dispose/rebind stamp into `disposed_at_key`. Returns "" for
-    plan.goal / plan.done_criterion targets (no per-goal key repeats under a stage
-    index), for an unparseable target, and when no plan has been submitted yet
-    (`state.plan_path` empty) — exactly the cases premise.validate_questions
-    exempts from the key-mismatch check. Reads only; the WRITE lives in the two
-    disposing verbs so the package-wide single-writer scan stays exact.
+    """The current stage_question_key of the ELEMENT a Question is bound to — the
+    value dispose/rebind stamp into `disposed_at_key`. Scoped to the element rather
+    than the whole stage so that editing one place of a stage's definition leaves the
+    questions answered against its other places dispositioned. For a `plan.goal` /
+    `plan.done_criterion` target, returns `plan_meta_element_key(doc, kind)` instead
+    (#123) — the plan-level twin of the per-stage key. Returns "" for an
+    unparseable target and when no plan has been submitted yet (`state.plan_path`
+    empty) — exactly the cases premise.validate_questions exempts from the
+    key-mismatch check. Reads only; the WRITE lives in the two disposing verbs so
+    the package-wide single-writer scan stays exact.
 
     `plan_path`, when given, is read INSTEAD of `state.plan_path` — for the
     CORRECTED plan of a replan, which is not `state.plan_path` until that replan
@@ -1012,39 +1352,170 @@ def _bound_stage_key(state, question: "premise.Question", plan_path: str | None 
     parsed = premise.parse_target(question.target)
     if parsed is None:
         return ""
-    kind, stage_index, _element = parsed
+    kind, stage_index, element = parsed
+    if plan_path is None:
+        plan_path = getattr(state, "plan_path", None)
+    if not plan_path:
+        return ""
+    doc = load_plan(plan_path)
+    if kind in ("goal", "done_criterion"):
+        return plan_meta_element_key(doc, kind)
     if kind != "stage":
+        return ""
+    keys = {s.index: stage_question_key(s, element) for s in doc.stages}
+    return keys.get(stage_index, "")
+
+
+def _bound_order_stage_key(
+    state, element: "premise.OrderElement", plan_path: str | None = None
+) -> str:
+    """The current whole-stage key of the stage an OrderElement is marked 'covered'
+    by — the value cmd_order_dispose stamps into `content_digest` (#123), the
+    order-coverage twin of `_bound_stage_key`. Whole-stage rather than per-element:
+    an order element cites a stage's OUTCOME, not one of its named fields, so any
+    edit to that stage should be visible as coverage drift. Returns "" when
+    `element.stage` is None or no plan has been submitted yet — the cases
+    premise.validate_order_elements exempts from the key-mismatch check.
+
+    `plan_path`, when given, is read INSTEAD of `state.plan_path` — the same
+    CORRECTED-plan escape `_bound_stage_key` documents: re-covering during a
+    blocked replan must stamp against `args.plan`, not the stale `state.plan_path`,
+    or the staleness check just added for OrderElement would deadlock replan with
+    no route out, the same defect #48(b) fixed for questions."""
+    if element.stage is None:
         return ""
     if plan_path is None:
         plan_path = getattr(state, "plan_path", None)
     if not plan_path:
         return ""
     doc = load_plan(plan_path)
-    keys = {s.index: stage_question_key(s) for s in doc.stages}
-    return keys.get(stage_index, "")
+    keys = {s.index: stage_element_keys(s) for s in doc.stages}
+    stage_keys = keys.get(element.stage)
+    if not stage_keys:
+        return ""
+    return stage_keys.get(WHOLE_STAGE_ELEMENT, "")
+
+
+def _materiality_doc(state, named_plan) -> "tuple[PlanDoc | None, str]":
+    """(plan a raised question's control is resolved against, refusal). Both empty
+    when no plan exists yet: 'does this control exist in this plan' is undecidable
+    before there is a plan, and refusing every pre-submission question would close
+    the channel exactly where a plan's construction raises the most of them.
+
+    A NAMED --plan that cannot be loaded refuses instead of skipping — otherwise
+    naming any unreadable path is a one-flag bypass of the whole check."""
+    if named_plan:
+        try:
+            return load_plan(named_plan), ""
+        except (OSError, PlanError) as exc:
+            return None, f"cannot load the plan named by --plan ({named_plan!r}): {exc}"
+    plan_path = getattr(state, "plan_path", None)
+    if not plan_path:
+        return None, ""
+    try:
+        return load_plan(plan_path), ""
+    except (OSError, PlanError):
+        return None, ""
+
+
+def _materiality_advisories(control: str, question: str, doc, state, runner) -> list[str]:
+    """The PERCEPTION half of the materiality check, warn-only. The engine has
+    already decided the rule half — the control resolves against this plan — and a
+    judge may not reopen it; all that is left is whether the answer could MOVE the
+    control, which no document decides.
+
+    A judged NO is surfaced; a fail-open False is not. The reason field is what
+    separates them, and here that distinction is the whole safety property: the
+    advisory asserts the plan's own controls are indifferent to this question, and
+    a False produced by a killed subprocess asserts nothing."""
+    try:
+        enabled = advisor.resolve_enabled(getattr(state, "weight_class", None))
+    except Exception:
+        return []
+    run = runner if runner is not None else advisor.subprocess_runner
+    try:
+        verdict, reason = advisor.judge_question_materiality(
+            control, question, run, enabled=enabled,
+            control_text=controls.control_text(
+                control, doc, grammars=controls.MATERIALITY_GRAMMARS),
+        )
+    except Exception:
+        return []
+    if verdict or reason:
+        return []
+    return [
+        f"advisory (never blocking): the judge reads {control!r} as unable to change "
+        f"its verdict on this question's answer — re-check that this is the control "
+        f"the question really bears on"
+    ]
 
 
 def cmd_question_raise(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Record (or re-declare) one OPEN question arising during plan construction.
-    Permissive exactly like ledger-add: a malformed target is stored as-is and the
-    GATE (premise.validate_questions) reports it, so the moment-of-arising record is
-    never lost to an argparse rejection. UPSERT by --id, last write wins — re-raising
-    resets the entry to open. state.log stamps the act; that timestamp IS the
-    moment-of-arising record and is why questions live in state, not the plan file."""
+    Permissive exactly like ledger-add about its TARGET: a malformed one is stored
+    as-is and the GATE (premise.validate_questions) reports it, so the moment-of-
+    arising record is never lost to an argparse rejection. UPSERT by --id, last
+    write wins — re-raising resets the entry to open. state.log stamps the act; that
+    timestamp IS the moment-of-arising record and is why questions live in state,
+    not the plan file.
+
+    NOT permissive about --control, and this is the one seam that is not: a question
+    must name the control of this plan its answer could flip, and a name that
+    resolves to nothing here is refused. The refusal lives at this WRITE seam rather
+    than at the gate on purpose — every question persisted before the requirement
+    existed carries no control name, and a gate demanding one would convert each of
+    them into a blocker on a session that can no longer go back and answer it.
+    Enforced here, the requirement binds every question raised from now on and none
+    raised before.
+
+    `--plan` names the plan the control is resolved against, defaulting to
+    `state.plan_path`, for the CORRECTED plan of a replan — the same deadlock
+    `question-dispose`/`question-rebind` carry the flag for (#48(b)): without it a
+    question about a stage that exists only in the correction could never be
+    raised."""
     state, bag = _question_bag(store, args.session)
     if bag is None:
         return Directive(False, state.node, "noop", "plugin 'premise' is not active")
+    named_plan = getattr(args, "plan", None)
+    if named_plan is not None and not str(named_plan).strip():
+        return Directive(False, state.node, "noop",
+                         "--plan was given an empty path; omit the flag to raise "
+                         "against the session's own plan, or name a real one")
+    control = getattr(args, "control", None)
+    if control is not None:
+        control = str(control).strip()
+        if not control:
+            return Directive(False, state.node, "noop",
+                             "--control was given an empty name; name the control of "
+                             "this plan whose verdict the answer could change")
+    doc, refusal = _materiality_doc(state, named_plan)
+    if refusal:
+        return Directive(False, state.node, "noop", refusal)
+    if control and doc is not None:
+        problem = controls.resolve_control(
+            control, doc, grammars=controls.MATERIALITY_GRAMMARS)
+        if problem:
+            return Directive(
+                False, state.node, "noop",
+                f"--control names no control of this plan — {problem}",
+                data={"control": control},
+            )
     questions = premise.questions_from_dicts(bag.get("questions", []))
     questions = [q for q in questions if q.id != args.id]
-    questions.append(premise.Question(id=args.id, target=args.target, question=args.question or ""))
+    questions.append(premise.Question(id=args.id, target=args.target,
+                                      question=args.question or "", control=control or ""))
     bag["questions"] = premise.questions_to_dicts(questions)
     state.log("question_raise", question=args.id, target=args.target)
     store.save(state)
-    return Directive(
+    advisories = (
+        _materiality_advisories(control, args.question or "", doc, state, runner)
+        if control and doc is not None else []
+    )
+    return _with_advisories(Directive(
         True, state.node, "continue",
         f"question {args.id!r} raised (open) against {args.target!r}",
-        data={"questions": [q.id for q in questions]},
-    )
+        data={"questions": [q.id for q in questions], "control": control or ""},
+    ), advisories)
 
 
 def cmd_question_research(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -1198,26 +1669,40 @@ def cmd_question_retire(args, *, store: StateStore, runner: Runner | None = None
 def cmd_question_list(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Read-only render of the question bag. `--format md` is the THINKER'S read
     surface (state is canonical and so invisible to a reviewer who reads only the
-    plan): a markdown table of target | question | disposition | own_research |
-    source | derivation. A PROJECTION, exactly like the plan-render — never a second
-    source of truth. Does not mutate state."""
+    plan): a markdown table of target | control | question | disposition |
+    own_research | source | derivation. A PROJECTION, exactly like the plan-render —
+    never a second source of truth. Does not mutate state.
+
+    `control` is rendered because it is the column a reviewer can DISAGREE with: it
+    claims which of the plan's own controls the answer moves, and the engine only
+    checked that the control exists."""
     state, bag = _question_bag(store, args.session)
     if bag is None:
         return Directive(False, state.node, "noop", "plugin 'premise' is not active")
     questions = premise.questions_from_dicts(bag.get("questions", []))
     if getattr(args, "format", None) == "md":
         rows = [
-            "| target | question | disposition | own_research | source | derivation |",
-            "|---|---|---|---|---|---|",
+            "| target | control | question | disposition | own_research | source | derivation |",
+            "|---|---|---|---|---|---|---|",
         ]
         for q in questions:
+            disp = q.disposition + (f" — {q.stale_note}" if q.stale_note else "")
             rows.append(
-                f"| {q.target} | {q.question} | {q.disposition} | "
+                f"| {q.target} | {q.control} | {q.question} | {disp} | "
                 f"{q.own_research} | {q.source} | {q.derivation} |"
+            )
+        if bag.get("enumeration_refused_oversize"):
+            rows.append(
+                "\n**enumeration refused (oversize)** — plan too large for judge "
+                "subprocess argv (E2BIG); split the plan or record "
+                "`agentctl question-enumerate-escape --reason advisor_oversize --note <text>`"
             )
         detail = "\n".join(rows)
     else:
-        detail = "; ".join(f"{q.id}={q.disposition}" for q in questions) or "no questions"
+        detail = "; ".join(
+            f"{q.id}={q.disposition}" + (" [stale]" if q.stale_note else "")
+            for q in questions
+        ) or "no questions"
     return Directive(
         True, state.node, "inspect", detail,
         data={"questions": premise.questions_to_dicts(questions)},
@@ -1266,6 +1751,11 @@ def cmd_order_dispose(args, *, store: StateStore, runner: Runner | None = None) 
     match.disposition = args.as_
     match.stage = args.stage if args.as_ == "covered" else None
     match.reason = args.reason if args.as_ == "cut" else ""
+    match.content_digest = (
+        _bound_order_stage_key(state, match, plan_path=getattr(args, "plan", None))
+        if args.as_ == "covered" else ""
+    )
+    match.stale_note = ""
     bag["order_elements"] = premise.order_elements_to_dicts(elements)
     state.log("order_dispose", element=args.id, disposition=args.as_)
     store.save(state)
@@ -1277,10 +1767,13 @@ def cmd_order_dispose(args, *, store: StateStore, runner: Runner | None = None) 
 
 
 def cmd_order_list(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
-    """Read-only render of the order bag. `--format md` IS
-    premise.render_coverage_block — the same text the essence must carry — so the
-    coordinator pastes what the gate will check rather than composing a second
-    rendering of its own. A PROJECTION, never a source of truth. Does not mutate."""
+    """Read-only render of the order bag. `--format md` IS the gate's own block,
+    via the same plugins_premise.coverage_block the essence check re-derives — so
+    the coordinator pastes what the gate will check rather than composing a second
+    rendering of its own. Calling render_coverage_block directly here would be that
+    second rendering: it would silently omit the live risk acceptances the gate
+    demands, and the pasted essence would be rejected for lines this command never
+    showed. A PROJECTION, never a source of truth. Does not mutate."""
     state, bag = _question_bag(store, args.session)
     if bag is None:
         return Directive(False, state.node, "noop", "plugin 'premise' is not active")
@@ -1288,9 +1781,13 @@ def cmd_order_list(args, *, store: StateStore, runner: Runner | None = None) -> 
     plan_path = getattr(state, "plan_path", None)
     stage_count = len(load_plan(plan_path).stages) if plan_path else 0
     if getattr(args, "format", None) == "md":
-        detail = premise.render_coverage_block(elements, stage_count)
+        detail = plugins_premise.coverage_block(state, bag) or premise.render_coverage_block(
+            elements, stage_count)
     else:
-        detail = "; ".join(f"{e.id}={e.disposition}" for e in elements) or "no order elements"
+        detail = "; ".join(
+            f"{e.id}={e.disposition}" + (" [stale]" if e.stale_note else "")
+            for e in elements
+        ) or "no order elements"
     return Directive(
         True, state.node, "inspect", detail,
         data={"order_elements": premise.order_elements_to_dicts(elements),
@@ -1359,20 +1856,102 @@ def cmd_question_candidate_dispose(args, *, store: StateStore, runner: Runner | 
     )
 
 
+_LEGACY_ENUMERATION_ID = re.compile(r"^qenum-\d+$")
+
+
+def _enumeration_part(target: str) -> str:
+    """Which part of the plan a raised pair belongs to. A target that does not parse
+    as a stage address belongs to the plan-level part — including a malformed one,
+    which is the safe direction: `meta` is covered by every whole-plan pass, so a
+    question the advisor addressed badly is still raised somewhere rather than
+    dropped."""
+    parsed = premise.parse_target(target)
+    if parsed is not None and parsed[0] == "stage":
+        return stage_part(parsed[1])
+    return META_PART
+
+
+def _candidate_immateriality(target: str, doc) -> str:
+    """The reason to record an enumerated candidate as already dismissed, "" to
+    raise it. A candidate the engine can see is addressed to no control of this
+    plan is not a question the coordinator has to sit down and disposition: it
+    cannot move any verdict this plan will reach.
+
+    Only a STAGE target carries a derivable control — that stage's own
+    done_criterion. A plan-level or unparseable target is raised, the same safe
+    direction `_enumeration_part` takes on the same input and for the same reason:
+    a badly-addressed question is still a question, and dismissing it on the
+    strength of an address WE could not parse would discard it silently."""
+    parsed = premise.parse_target(target)
+    if parsed is None or parsed[0] != "stage":
+        return ""
+    control = f"stage {parsed[1]} done_criterion"
+    unresolved = controls.resolve_control(
+        control, doc, grammars=controls.MATERIALITY_GRAMMARS)
+    return premise.CANDIDATE_IMMATERIAL if unresolved else ""
+
+
+def _inherit_disposition(existing: dict, entry: dict, preserve: bool) -> dict:
+    # Matched on the statement text, never the (coarser) target: two passes can
+    # both address "goal" (same target, same id-slot) with different wording, and
+    # only the statement tells them apart. `statement` is populated on every
+    # candidate dict regardless of whether "target" is present, so there is no
+    # legacy row this would fail to match — see _apply_enumeration_result's own
+    # docstring ("Preservation is keyed on the statement being IDENTICAL, not on
+    # the id alone").
+    match = preserve and existing.get("statement") == entry.get("statement")
+    if match and existing.get("disposition") != "raised":
+        return dict(existing)
+    return entry
+
+
+def _upsert_candidate(candidates: list, entry: dict, *, preserve_disposition: bool) -> None:
+    for j, existing in enumerate(candidates):
+        if existing.get("id") == entry["id"]:
+            candidates[j] = _inherit_disposition(existing, entry, preserve_disposition)
+            return
+    # A candidate raised under the pre-part id scheme is the SAME question when its
+    # statement is identical, so it is taken over rather than left standing beside its
+    # own successor — otherwise a session carried across the change meets both, and the
+    # disposition it already recorded protects neither.
+    for j, existing in enumerate(candidates):
+        if (_LEGACY_ENUMERATION_ID.match(existing.get("id") or "")
+                and existing.get("statement") == entry["statement"]):
+            taken_over = _inherit_disposition(existing, entry, preserve_disposition)
+            candidates[j] = {**taken_over, "id": entry["id"]}
+            return
+    candidates.append(entry)
+
+
 def _apply_enumeration_result(
     bag: dict, doc: PlanDoc, plan_path, pairs: list[tuple[str, str]], runner_ok: bool | None,
-    *, preserve_disposition: bool = False, stderr: str = "",
+    *, parts: tuple[bool, set[int]] | None = None,
+    preserve_disposition: bool = False, stderr: str = "",
 ) -> list[str]:
-    """Upsert `pairs` as 'raised' QuestionCandidates (last-wins by deterministic
-    qenum-N id) and stamp the bag's enumerated/enumerated_at/enumerated_plan/
-    enumerated_runner_ok/enumerated_runner_stderr/enumerated_count fields from ONE
-    enumeration pass's result. `stderr` is the failed pass's own diagnostic: the
-    runner-failure blocker reads it back to pre-select an escape reason, so it must
-    travel with the runner_ok it explains and not be re-derived later from a run
-    nobody kept.
+    """Upsert `pairs` as QuestionCandidates (last-wins by a deterministic
+    `qenum-<part>-N` id) — 'raised', except that a pair the engine can see is
+    addressed to no control of this plan is written 'dismissed' with the one
+    countable immateriality reason (see `_candidate_immateriality`), because a
+    candidate that cannot move any verdict is not work for the coordinator —
+    and stamp the bag's enumerated/enumerated_at/enumerated_plan/
+    enumerated_runner_ok/enumerated_runner_stderr/enumerated_count fields plus the
+    per-part digests the pass covered, from ONE enumeration pass's result. `stderr` is
+    the failed pass's own diagnostic: the runner-failure blocker reads it back to
+    pre-select an escape reason, so it must travel with the runner_ok it explains and
+    not be re-derived later from a run nobody kept.
     Shared by the synchronous cmd_question_enumerate path and the detached-worker
     sidecar fold (cmd_approve/cmd_replan) so both apply identical upsert semantics
     to the SAME bag shape regardless of which path produced the pairs.
+
+    `parts` is what the pass actually read — `(whole_plan, {stage indices})` from
+    plugins_premise.enumeration_run_scope, None for a whole-plan pass. Only those
+    parts' digests are refreshed, so a stage nobody re-read stays recorded against
+    the bytes it WAS read at, and only those parts' candidate ids are renumbered:
+    another part's candidates, and the dispositions recorded against them, are left
+    exactly as they stand. A pass may still raise a pair about a part outside its
+    scope — a cross-cutting question is the thing a narrowed reading is most likely
+    to surface — and that pair is upserted into its own part rather than dropped;
+    what it does not do is refresh that part's digest.
 
     `preserve_disposition` is what separates the two callers. A human running
     `question-enumerate` ASKED for a fresh pass, so re-raising a candidate they had
@@ -1381,29 +1960,38 @@ def _apply_enumeration_result(
     recorded `dismissed`+reason or `recorded`+question link there would discard the
     user's own disposition and refuse the approve that disposition existed to
     unblock. Preservation is keyed on the statement being IDENTICAL, not on the id
-    alone: `qenum-3` of a later pass is a different question than `qenum-3` of an
-    earlier one unless its text says otherwise, and inheriting a disposition across
-    a changed statement would silently discharge a question nobody read."""
+    alone: `qenum-s1-3` of a later pass is a different question than `qenum-s1-3` of
+    an earlier one unless its text says otherwise, and inheriting a disposition
+    across a changed statement would silently discharge a question nobody read."""
+    live_stages = plan_stage_digests(doc)
+    meta_covered, stage_scope = parts if parts is not None else (True, set(live_stages))
+
+    by_part: dict[str, list[tuple[str, str]]] = {}
+    for target, question in pairs:
+        by_part.setdefault(_enumeration_part(target), []).append((target, question))
+
     candidates = bag.setdefault("candidates", [])
     raised: list[str] = []
-    for i, (target, question) in enumerate(pairs):
-        cid = f"qenum-{i + 1}"
-        entry = {"id": cid, "statement": f"[{target}] {question}", "disposition": "raised",
-                 "reason": "", "question": ""}
-        for j, c in enumerate(candidates):
-            if c.get("id") == cid:
-                if (preserve_disposition
-                        and c.get("statement") == entry["statement"]
-                        and c.get("disposition") != "raised"):
-                    entry = c
-                candidates[j] = entry
-                break
-        else:
-            candidates.append(entry)
-        raised.append(cid)
+    for part, part_pairs in by_part.items():
+        for i, (target, question) in enumerate(part_pairs):
+            immaterial = _candidate_immateriality(target, doc)
+            entry = {"id": f"qenum-{part}-{i + 1}",
+                     "statement": f"[{target}] {question}",
+                     "disposition": "dismissed" if immaterial else "raised",
+                     "reason": immaterial, "question": "", "target": target}
+            _upsert_candidate(candidates, entry, preserve_disposition=preserve_disposition)
+            raised.append(entry["id"])
 
     bag["enumerated"] = True
     bag["enumerated_at"] = plugins_premise._plan_content_digest(doc)
+    if meta_covered:
+        bag["enumerated_meta_at"] = plan_meta_digest(doc)
+    recorded = bag.get("enumerated_stage_at") or {}
+    bag["enumerated_stage_at"] = {
+        str(index): (digest if index in stage_scope else recorded[str(index)])
+        for index, digest in live_stages.items()
+        if index in stage_scope or str(index) in recorded
+    }
     bag["enumerated_plan"] = str(plan_path)
     bag["enumerated_runner_ok"] = runner_ok
     bag["enumerated_runner_stderr"] = stderr
@@ -1417,13 +2005,16 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
     bounded advisor pass (advisor.enumerate_questions_health, `claude -p --model sonnet`,
     cost-bounded) re-reads goal + done_criterion + the full plan text and RAISES the
     questions the plan's construction should have provoked but left implicit, each UPSERT
-    as a 'raised' QuestionCandidate (last-wins by a deterministic `qenum-N` id), then
+    as a 'raised' QuestionCandidate (last-wins by a deterministic `qenum-<part>-N` id), then
     flips bag['enumerated']=True and stamps bag['enumerated_at'] with the CURRENT plan
     content digest so a later content change re-blocks approve (the staleness check).
 
-    ONE call over the whole plan, not one per element: the questions worth raising are
-    overwhelmingly cross-element, and per-element fan-out would multiply cost by the
-    element count for no recall gain (argued in enumerate_questions_health).
+    ONE call, not one per element: the questions worth raising are overwhelmingly
+    cross-element, and per-element fan-out would multiply cost by the element count for
+    no recall gain (argued in enumerate_questions_health). That one call reads the whole
+    plan unless a landed pass already covers every part but a few moved STAGES, in which
+    case it reads those stages (plugins_premise.enumeration_run_scope) and leaves the
+    other parts' candidates and dispositions untouched.
 
     The flag is flipped REGARDLESS of the pair count — never gated on a non-empty
     result. A count-gate is the tempting inversion and it is WRONG: a genuinely
@@ -1484,20 +2075,32 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
         return Directive(False, state.node, "noop",
                          f"cannot parse plan {plan_path!r}: {exc}")
 
+    whole_plan, stage_scope = plugins_premise.enumeration_run_scope(bag, doc)
+    if not whole_plan:
+        plan_text = render_stages_md(doc, stage_scope)
+
     run = runner if runner is not None else advisor.enumerate_subprocess_runner
     runner_ok, pairs, stderr = advisor.enumerate_questions_health(
         doc.meta.goal, doc.meta.done_criterion, plan_text, run)
 
-    raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok, stderr=stderr)
-    state.log("question_enumerate", raised=len(raised), runner_ok=runner_ok, via="command")
+    raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok, stderr=stderr,
+                                       parts=(whole_plan, stage_scope))
+    state.log("question_enumerate", raised=len(raised), runner_ok=runner_ok, via="command",
+              stages=sorted(stage_scope) if not whole_plan else None)
     store.save(state)
 
+    scope_note = "" if whole_plan else (
+        " (narrowed to stage(s) "
+        + ", ".join(str(index) for index in sorted(stage_scope))
+        + " — the only parts whose content moved since the last pass)")
     d = Directive(
         True, state.node, "continue",
-        f"question enumeration cross-check ran; raised {len(raised)} candidate(s) — "
-        "disposition each with `agentctl question-candidate-dispose --id <qenum-N> "
+        f"question enumeration cross-check ran; raised {len(raised)} candidate(s)"
+        f"{scope_note} — "
+        "disposition each with `agentctl question-candidate-dispose --id qenum-<part>-N "
         "--as recorded --question <qid> | --as dismissed --reason <text>`",
-        data={"raised": raised, "enumerated": True, "runner_ok": runner_ok},
+        data={"raised": raised, "enumerated": True, "runner_ok": runner_ok,
+              "whole_plan": whole_plan, "stages": sorted(stage_scope)},
     )
     # THREE arms, because runner_ok is three-valued and the three states now have
     # three different truths. `False` no longer discharges anything — the gate
@@ -1525,6 +2128,17 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
             "done_criterion + every stage by hand for smuggled premises before approving"
         )
     return d
+
+
+def _parse_stage_scope(raw) -> set[int] | None:
+    """`--stages 3,7` -> {3, 7}; absent, empty or unreadable -> None, meaning the whole
+    plan. A hand-typed nonsense value widens the reading rather than narrowing it to
+    nothing, so the worst a bad value costs is the cross-check the engine ran before
+    scoping existed."""
+    tokens = [token.strip() for token in str(raw or "").split(",") if token.strip()]
+    if not tokens or not all(token.isdigit() for token in tokens):
+        return None
+    return {int(token) for token in tokens}
 
 
 def cmd_question_enumerate_worker(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -1569,6 +2183,10 @@ def cmd_question_enumerate_worker(args, *, store: StateStore, runner: Runner | N
             f"does not match the content digest of {args.plan!r} ({recomputed[:12]}…) — the "
             "plan changed after the launch, or this worker was invoked by hand")
 
+    stage_scope = _parse_stage_scope(getattr(args, "stages", None))
+    if stage_scope is not None:
+        plan_text = render_stages_md(doc, stage_scope)
+
     run = runner if runner is not None else advisor.enumerate_subprocess_runner
     runner_ok, pairs, stderr_text = advisor.enumerate_questions_health(
         doc.meta.goal, doc.meta.done_criterion, plan_text, run)
@@ -1579,6 +2197,9 @@ def cmd_question_enumerate_worker(args, *, store: StateStore, runner: Runner | N
         "stderr": stderr_text,
         "content_digest": args.digest,
         "plan_path": str(args.plan),
+        # Absent (None) means the whole plan, which is also what a sidecar written
+        # before the scope existed says by saying nothing.
+        "stages": sorted(stage_scope) if stage_scope is not None else None,
     })
     return Directive(True, "worker", "noop",
                       f"enumeration worker finished; {len(pairs)} pair(s) written to sidecar")
@@ -1632,8 +2253,12 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
     branches are (a) a landed pass whose runner FAILED — escaped by the four
     runner-failure reasons — and (b) an enumeration that has not landed at all,
     escaped by `enumeration_not_landed` once the launch deadline has passed. A
-    stale enumeration is deliberately not escapable and needs no escape: re-running
-    the check clears it, always.
+    stale enumeration is escapable only once the round budget is spent: re-running
+    the check clears staleness per step, but each re-run surfaces questions whose
+    disposition edits the plan and stales the enumeration again, so per-step
+    clearing is not loop termination. Below the budget, re-running is the route
+    out; at or above it `plan_enumerate_round_release_active` fires and
+    `enumerate_rounds_exhausted` is the additional escape.
 
     Admissibility is checked against the bag rather than trusted from the operator:
     a runner-failure reason offered while the last pass reports healthy (or absent —
@@ -1739,6 +2364,16 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
                     "nothing was raised in its place; run `agentctl question-raise` for what "
                     "the hand re-reading found (or dispose of the pass with the reason that "
                     "names the failure)")
+    elif reason == premise.ESCAPE_ENUMERATE_ROUNDS_EXHAUSTED:
+        if not gates.plan_enumerate_round_release_active(bag):
+            passes = int(bag.get("enumerate_pass") or 0)
+            threshold = Thresholds().effort_replan_absolute()
+            return Directive(
+                False, state.node, "noop",
+                f"--reason {reason} is admissible only once the enumerate round budget is "
+                f"exhausted ({passes}/{threshold} pass(es) applied so far) — run "
+                "`agentctl question-enumerate` to advance the count, or re-run until the "
+                "budget is spent")
     else:
         if bag.get("enumerated"):
             return Directive(
@@ -1775,7 +2410,7 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
     # premise_blockers consults for this branch, not over `(reason,)` alone.
     family = (
         premise.ENUMERATION_RUNNER_FAILURE_REASONS if reason in premise.ENUMERATION_RUNNER_FAILURE_REASONS
-        else (premise.ESCAPE_ENUMERATION_NOT_LANDED,)
+        else (reason,)
     )
     already = plugins_premise.escape_recorded(bag, digest, family)
     escapes.append({
@@ -1809,6 +2444,10 @@ def cmd_question_enumerate_escape(args, *, store: StateStore, runner: Runner | N
 
 def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
+    try:
+        runtime_host.bind_runtime_host(state, getattr(args, "host", None), require=True)
+    except (runtime_host.HostAmbiguousError, runtime_host.HostConflictError) as exc:
+        return Directive(False, state.node, "noop", str(exc))
     thr = Thresholds()
     sig = Signals(
         is_chat=bool(getattr(args, "chat", False)),
@@ -1866,7 +2505,8 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     d = Directive(True, state.node, action, detail, data={"reasons": result.reasons})
     _attach_advisories(d, "weight_classification",
                        {"goal": state.goal, "weight_class": state.weight_class, "route": state.route},
-                       runner, weight_class=state.weight_class)
+                       runner, weight_class=state.weight_class,
+                       runtime_host_=state.runtime_host or runtime_host.HOST_CLAUDE)
     return d
 
 
@@ -1915,7 +2555,9 @@ def _launch_enumeration(state: SessionState, bag: dict, doc: PlanDoc, plan_path)
     Clearing enumerated/enumerated_at back to not-run (rather than leaving a
     still-True flag pinned to a now-superseded digest) routes the outstanding-child
     window onto the escapable _ENUMERATE_NOT_RUN blocker instead of the inescapable
-    _ENUMERATE_STALE one — see plugins_premise.premise_blockers.
+    _ENUMERATE_STALE one — see plugins_premise.premise_blockers. The PER-PART digests
+    survive that clear: a narrowed launch reads only the stages that moved, so the
+    record its fold completes is the one holding what every other part was read at.
 
     Fire-and-forget by design: launch_supervised's child is detached
     (start_new_session=True, stdio to DEVNULL) and this process never reaps it —
@@ -1928,6 +2570,8 @@ def _launch_enumeration(state: SessionState, bag: dict, doc: PlanDoc, plan_path)
     fleet-wide rise in the `not_landed` escape bucket, and the success rows give that
     bucket a denominator. The log runs before the caller's store.save(), which every
     call site performs."""
+    # The scope is derived from the very record the clear below destroys.
+    whole_plan, stage_scope = plugins_premise.enumeration_run_scope(bag, doc)
     digest = plugins_premise._plan_content_digest(doc)
     bag["enumerated"] = False
     bag["enumerated_at"] = ""
@@ -1936,10 +2580,13 @@ def _launch_enumeration(state: SessionState, bag: dict, doc: PlanDoc, plan_path)
     bag["enumerate_deadline"] = (
         time.time() + advisor.ENUMERATE_TIMEOUT_S + _ENUMERATE_LAUNCH_MARGIN_S)
     scripts_dir = Path(__file__).resolve().parent.parent
+    argv = [sys.executable, "-m", "agentctl", "question-enumerate-worker",
+            "--session", state.session_id, "--plan", str(plan_path), "--digest", digest]
+    if not whole_plan:
+        argv += ["--stages", ",".join(str(index) for index in sorted(stage_scope))]
     try:
         _spawn_enumeration_worker(
-            [sys.executable, "-m", "agentctl", "question-enumerate-worker",
-             "--session", state.session_id, "--plan", str(plan_path), "--digest", digest],
+            argv,
             cwd=str(scripts_dir),
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
@@ -1992,9 +2639,20 @@ def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> b
         return False
     pairs = [tuple(p) for p in payload.get("pairs", [])]
     runner_ok = payload.get("runner_ok")
+    sidecar_stages = payload.get("stages")
+    parts = ((True, set(plan_stage_digests(doc))) if sidecar_stages is None
+             else (False, set(sidecar_stages)))
     raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok,
-                                       preserve_disposition=True,
+                                       parts=parts, preserve_disposition=True,
                                        stderr=payload.get("stderr", ""))
+    # Surface the oversize escape explicitly so question-list --format md shows
+    # "enumeration refused (oversize)" rather than a silent absence or a generic
+    # advisor_error bucket entry — the split-the-plan work item is different from
+    # a runner-health alarm and must be visible to the reviewer reading the bag.
+    if runner_ok is False:
+        _fold_escape = advisor.classify_runner_failure(payload.get("stderr", ""))
+        if _fold_escape == premise.ESCAPE_ADVISOR_OVERSIZE:
+            bag["enumeration_refused_oversize"] = True
     # `via` is stated on BOTH producers rather than encoded as this one's presence:
     # a distinction carried by an absent field reads as a forgotten field to the
     # next person grepping the history, and these rows now have three readers.
@@ -2004,6 +2662,15 @@ def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> b
 
 def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
+    efblock = gates.effort_fire_blockers(state)
+    _log_gate(state, "effort_fire", efblock, passed=not efblock)
+    if efblock:
+        return Directive(
+            False, state.node, "fire_acknowledge",
+            "submit_plan blocked by an unacknowledged effort-divergence fire",
+            marker=DIRECTIVE_ESCALATE_TO_USER,
+            data={"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)},
+        )
     plan_path = args.plan
     # #15: a resubmission — the coordinator revised the plan at PLAN_READY (after a
     # thinker `revise` verdict, or the user's own pre-approval edit) and re-runs
@@ -2027,7 +2694,21 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     if not state.overall_done_criterion:
         state.overall_done_criterion = doc.meta.done_criterion
     state.plan_verified = True
-    problems: list[str] = []
+    # Submission seam (a): the first entry of these bytes into the session. The session's
+    # weight class is passed in so this seam and the reachability gate immediately below
+    # arm on the same condition — before, the seam keyed on the plan's own [meta] and the
+    # gate on the session's, so a substantive session submitting a plan that simply omits
+    # `weight_class` cleared the seam and not the gate.
+    # Entry-point fallback (the run=runner-if-not-None-else-advisor.subprocess_runner idiom
+    # used at the other advisor call sites): production's cmd_submit_plan is always invoked
+    # with runner=None, so without this the judge is unreachable outside tests regardless of
+    # advisor.resolve_enabled — which stays the actual kill switch, unaffected by this line.
+    # Resolved HERE rather than beside the advice channel below because the seam's own
+    # judged refusal (a `conditions` that merely restates depends_on) is part of `problems`,
+    # and a refusal cannot be computed after the return that acts on it. The binding itself
+    # costs nothing; only a prefilter hit spends a judge call.
+    run = runner if runner is not None else advisor.subprocess_runner
+    problems: list[str] = _submission_problems(doc, run, state.weight_class)
     if state.weight_class == WeightClass.SUBSTANTIVE.value:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
@@ -2038,11 +2719,10 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
                 doc.stages, doc.meta.final_check, doc.meta.repo_root
             )
         )
-        if problems:
-            state.plan_verified = False
+    if problems:
+        state.plan_verified = False
 
     state.plan_path = plan_path
-
     if not state.plan_verified:
         # Stay at PLANNING — do NOT transition or arm the gate. Advancing to
         # PLAN_READY on a failed structure check strands the session there with
@@ -2053,13 +2733,39 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         store.save(state)
         return Directive(False, state.node, "fix_plan", "plan failed verification", data={"problems": problems})
 
+    # Past the refusal, so these bytes were ACCEPTED — which is the only thing
+    # accepted_plan_digest ever records.
+    _stamp_accepted_plan_digest(state, plan_path)
     state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     if resubmitting:
-        # The plan changed, so any recorded thinker review examined a now-stale
-        # version — clear it unconditionally so the plan-review gate re-arms for the
-        # new plan (a same-path in-place edit would slip a plan_path-bound check).
-        state.plan_review = None
+        # The counter (read by gates.plan_review_round_release_active, reset by
+        # cmd_approve) advances per resubmission made while a review record STANDS —
+        # redrafts of a plan nobody reviewed are not rounds. Read before the staleness
+        # clear below, which ends the round.
+        if state.plan_review is not None or state.plan_stage_reviews:
+            state.plan_review_rounds += 1
+        # The plan changed, so any recorded thinker review that no longer covers
+        # the resubmitted bytes must clear so the plan-review gate re-arms for
+        # them. "No longer covers" is decided per review record via the SAME
+        # plan.changed_parts a review's own recorded digests feed the coverage
+        # gate with — a review recorded before this field existed (empty
+        # reviewed_meta_digest/reviewed_stage_keys) compares as "everything
+        # moved" against ANY doc, reproducing the old unconditional clear for
+        # every legacy record without a special case.
+        def _still_covers(pr: PlanReview) -> bool:
+            meta_moved, moved = changed_parts(
+                doc, {"meta": pr.reviewed_meta_digest, "stages": pr.reviewed_stage_keys})
+            if meta_moved:
+                return False
+            idx = plan_review_scope_stage_index(pr.scope)
+            return True if idx is None else idx not in moved
+
+        if state.plan_review is not None and not _still_covers(state.plan_review):
+            state.plan_review = None
+        state.plan_stage_reviews = {
+            scope: pr for scope, pr in state.plan_stage_reviews.items() if _still_covers(pr)
+        }
     state.plan_submitted_ts = time.time()
     state.log("submit_plan", plan=plan_path, verified=True, revised=resubmitting)
     bag = state.plugins.get("premise")
@@ -2074,7 +2780,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     _attach_advisories(d, "plan_completeness",
                        {"plan": plan_path, "stage_count": len(state.stages),
                         "titles": [s.title for s in state.stages]},
-                       runner, weight_class=state.weight_class)
+                       runner, weight_class=state.weight_class,
+                       runtime_host_=state.runtime_host or runtime_host.HOST_CLAUDE)
     # Deterministic scope lint (experience leaf 2026-06-29) — always runs,
     # independent of the optional LLM advisor above; warn-only, never blocks.
     d.data.setdefault("advisories", []).extend(
@@ -2087,6 +2794,17 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # stage in a plan that asserts landing, which will refuse at verify-final.
     d.data.setdefault("advisories", []).extend(
         check_venue_warnings(doc.stages, doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
+    )
+    # Submission seam (a)'s advice channel: a stage whose expected_result_image merely
+    # restates its own check. Warn-only at all three seams — see submission.submission_advice.
+    # Rides the same `run` resolved at the seam above (see its comment for why the fallback
+    # exists at all). The `plan_completeness` advisory above is DELIBERATELY left on the raw
+    # `runner`, i.e. inert in production, so the two adjacent advisor call sites in this
+    # function behave oppositely on purpose: giving it the same fallback would add a second
+    # live `claude -p` to every submit, which no stage has sized or measured. Read "is the
+    # advisor reachable?" per call site, not by generalizing from either one.
+    d.data.setdefault("advisories", []).extend(
+        _submission_advice(doc, run, state.weight_class)
     )
     # Predsubmit check-run observation (C.2) — actually RUNS each stage's
     # verify_command in its declared venue, warn-only, same advisories channel.
@@ -2113,16 +2831,42 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     return d
 
 
+# Kinds superseded by KIND ALONE, ignoring plan_path — see
+# _record_plan_presentation's docstring for why replan_diff differs from
+# essence/full. An explicit set, not an inline special case, so a future
+# kind must choose its supersede key deliberately rather than inherit one
+# by falling through an if/else.
+_SUPERSEDE_BY_KIND_ALONE = frozenset({PLAN_PRESENTATION_KIND_REPLAN_DIFF})
+
+
 def _record_plan_presentation(state: SessionState, presentation: PlanPresentation) -> None:
-    """Store a PlanPresentation, one per (plan_path, kind) — SUPERSEDE, not
-    append. Mirrors _record_stage_review's replace-then-append idiom: a later
-    presentation of the same plan/kind fully replaces the prior receipt, so
+    """Store a PlanPresentation — SUPERSEDE, not append. Mirrors
+    _record_stage_review's replace-then-append idiom: a later presentation
+    fully replaces the prior receipt for the same key, so
     gates._plan_presentation_for's last-wins scan never has to choose between
-    a stale and a fresh receipt for the same (plan_path, kind)."""
-    state.plan_presentations = [
-        p for p in state.plan_presentations
-        if not (p.plan_path == presentation.plan_path and p.kind == presentation.kind)
-    ]
+    a stale and a fresh receipt.
+
+    The supersede KEY splits by kind: essence/full supersede on
+    (plan_path, kind), unchanged since these kinds always present
+    state.plan_path — a session only ever runs one plan at a time, so the
+    path component never actually discriminates for them. replan_diff
+    (`_SUPERSEDE_BY_KIND_ALONE`) supersedes on kind ALONE: cmd_present_plan
+    resolves its target from `--plan`, which varies across replan attempts
+    against different candidate plan files, so keying on plan_path would let
+    a receipt for a path the session has since moved off linger forever
+    (unbounded rendering_text growth, and a stale entry surviving in
+    last-wins scans across paths) instead of being replaced the moment a
+    fresh diff is presented — only one proposed-diff receipt is ever
+    current, and a receipt for an abandoned path is dead by definition."""
+    if presentation.kind in _SUPERSEDE_BY_KIND_ALONE:
+        state.plan_presentations = [
+            p for p in state.plan_presentations if p.kind != presentation.kind
+        ]
+    else:
+        state.plan_presentations = [
+            p for p in state.plan_presentations
+            if not (p.plan_path == presentation.plan_path and p.kind == presentation.kind)
+        ]
     state.plan_presentations.append(presentation)
 
 
@@ -2176,17 +2920,40 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             False, state.node, "noop",
             f"unknown presentation kind {kind!r}; expected one of {PLAN_PRESENTATION_KINDS}",
         )
+    explicit_plan = getattr(args, "plan", None)
+    if explicit_plan and kind != PLAN_PRESENTATION_KIND_REPLAN_DIFF:
+        # --plan is a degree of freedom only replan_diff needs (the proposed
+        # plan is a different file than state.plan_path): widening it to
+        # essence/full would let a receipt be stamped for a file the session
+        # is not executing, which plan_presentation_blockers never checks for.
+        return Directive(
+            False, state.node, "noop",
+            f"--plan is only accepted with --kind {PLAN_PRESENTATION_KIND_REPLAN_DIFF!r}; "
+            f"essence/full always present state.plan_path ({state.plan_path!r})",
+        )
+    target = explicit_plan or state.plan_path
     if kind == PLAN_PRESENTATION_KIND_ESSENCE:
         # essence is the receipt an approval ask is assembled from — gate it on
         # the same plan_review_blockers precondition as approve/replan, so a
         # thinker review must exist BEFORE that receipt can be stamped, not only
         # before the terminal approve. `full` is the detailed on-request view,
         # not the approval trigger, so it stays ungated.
-        prblock = gates.plan_review_blockers(state, state.plan_path)
+        prblock = gates.plan_review_blockers(state, target)
         _log_gate(state, "plan_review", prblock, passed=not prblock)
         if prblock:
             return Directive(
                 False, state.node, "noop", "cannot present essence",
+                data={"blockers": prblock},
+            )
+    elif kind == PLAN_PRESENTATION_KIND_REPLAN_DIFF:
+        # A proposed diff must itself have cleared thinker review before it can
+        # be shown as the authorization prompt — the same precondition essence
+        # pays, over the PROPOSED bytes rather than state.plan_path.
+        prblock = gates.plan_review_blockers(state, target)
+        _log_gate(state, "plan_review", prblock, passed=not prblock)
+        if prblock:
+            return Directive(
+                False, state.node, "noop", "cannot present replan_diff",
                 data={"blockers": prblock},
             )
     rendering_file = getattr(args, "rendering_file", None)
@@ -2234,6 +3001,26 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             )
 
     if kind == PLAN_PRESENTATION_KIND_ESSENCE:
+        # Fold any landed enumerator sidecar BEFORE computing the coverage block,
+        # so candidates are in the bag when the receipt is stamped (#60). The fold
+        # is idempotent: a second call from cmd_approve at the same digest is a
+        # no-op (the same-digest guard in _fold_enumeration_sidecar fires). A failed
+        # plan load is swallowed — it surfaces moments later via the coverage_block
+        # check below which also loads the plan.
+        _fold_pres_bag = state.plugins.get("premise")
+        if _fold_pres_bag is not None:
+            try:
+                _fold_pres_doc = load_plan(state.plan_path)
+                if _fold_enumeration_sidecar(state, _fold_pres_doc, state.plan_path):
+                    store.save(state)
+            except (OSError, PlanError):
+                # The same load-plan failure modes every other `load_plan` call site
+                # in this file narrows to (a malformed plan, or a TOCTOU race on the
+                # plan file underneath this exact race window) — swallowed here
+                # because it surfaces moments later via the coverage_block check
+                # below, which also loads the plan. Anything else is a bug in the
+                # fold itself and must not be hidden behind it.
+                pass
         # The scope-coverage block must be IN the essence — checked the same
         # mechanical way the `full` branch above checks stage anchors (containment
         # of engine-generated lines, never a read of the essence's own prose).
@@ -2258,15 +3045,15 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                 )
 
     presentation = PlanPresentation(
-        plan_path=state.plan_path,
+        plan_path=target,
         kind=kind,
-        plan_sha256=_plan_file_sha256(state.plan_path),
+        plan_sha256=_plan_file_sha256(target),
         rendering_sha256=hashlib.sha256(raw).hexdigest(),
         rendering_text=text,
         presented_ts=time.time(),
     )
     _record_plan_presentation(state, presentation)
-    state.log("present_plan", plan=state.plan_path, kind=kind,
+    state.log("present_plan", plan=target, kind=kind,
               rendering_sha256=presentation.rendering_sha256)
     store.save(state)
 
@@ -2297,6 +3084,31 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
         }
         return Directive(True, state.node, "continue", detail, data=data)
 
+    if kind == PLAN_PRESENTATION_KIND_REPLAN_DIFF:
+        # Mirrors the essence choreography above exactly, substituting the
+        # replan-authorization marker for the approval one — this is the
+        # rendering a non-substantive replan's diff-authorization ask is
+        # assembled from, gated by gates.replan_authorization_blockers.
+        next_steps = [
+            "arm a `sleep 2` background timer now (atomic with deferring the ask)",
+            "emit THIS exact rendering as the turn's FINAL text message — zero "
+            "tool calls after it",
+            "next turn, open directly with the replan-authorization "
+            "AskUserQuestion (zero preceding text) carrying an option whose "
+            f"label or description embeds the literal marker {AUTHORIZE_REPLAN_MARKER!r}",
+        ]
+        detail = (
+            "presentation receipt recorded (kind=replan_diff). Next: "
+            + " Then, ".join(f"({i}) {step}" for i, step in enumerate(next_steps, 1))
+        )
+        data = {
+            "rendering_sha256": presentation.rendering_sha256,
+            "plan_sha256": presentation.plan_sha256,
+            "authorize_replan_marker": AUTHORIZE_REPLAN_MARKER,
+            "next_steps": next_steps,
+        }
+        return Directive(True, state.node, "continue", detail, data=data)
+
     return Directive(
         True, state.node, "continue",
         f"presentation receipt recorded (kind={kind}); emit this exact rendering "
@@ -2320,14 +3132,28 @@ def cmd_confirm_delivery(args, *, store: StateStore, runner: Runner | None = Non
     manual override), never to gate WHO may approve. cmd_present_plan and the
     delivery hook must never call this themselves; it is reachable only as a
     human-initiated command, enforced by rejecting `--by hook` outright.
+
+    `--kind` (default essence) selects WHICH presentation receipt this stamp
+    binds to — essence/full back the plan-approval gate
+    (gates.plan_presentation_blockers), replan_diff backs the replan-
+    authorization gate (gates.replan_authorization_blockers). Without this,
+    the replan_diff gate would have no reachable escape at all: the same
+    disabled/uninstalled-hook brick this command exists to prevent for
+    approval would apply to every non-substantive replan on such a machine.
     """
     state = _require(store, args.session)
-    receipt = gates._plan_presentation_for(state, PLAN_PRESENTATION_KIND_ESSENCE)
+    kind = getattr(args, "kind", None) or PLAN_PRESENTATION_KIND_ESSENCE
+    if kind not in PLAN_PRESENTATION_KINDS:
+        return Directive(
+            False, state.node, "noop",
+            f"unknown presentation kind {kind!r}; expected one of {PLAN_PRESENTATION_KINDS}",
+        )
+    receipt = gates._plan_presentation_for(state, kind)
     if receipt is None:
         return Directive(
             False, state.node, "noop",
-            "no essence presentation receipt exists yet — run present-plan "
-            "--kind essence before confirm-delivery has anything to bind to",
+            f"no {kind} presentation receipt exists yet — run present-plan "
+            f"--kind {kind} before confirm-delivery has anything to bind to",
         )
     by = (getattr(args, "by", "") or "").strip()
     note = (getattr(args, "note", "") or "").strip()
@@ -2380,13 +3206,50 @@ def cmd_confirm_delivery(args, *, store: StateStore, runner: Runner | None = Non
         escape_reason=escape_reason,
     )
     delivery.write_stamp(state_file, stamp)
-    state.log("confirm_delivery", by=by, note=note, escape_reason=escape_reason)
+    state.log("confirm_delivery", by=by, note=note, escape_reason=escape_reason, kind=kind)
     store.save(state)
     return Directive(
         True, state.node, "continue",
-        f"delivery override recorded by {by!r}; the plan-presentation gate is "
-        "now satisfied for this receipt",
+        f"delivery override recorded by {by!r}; the {kind} presentation's gate "
+        "is now satisfied for this receipt",
     )
+
+
+def _note_round_release(state, review_blockers, store: StateStore) -> dict | None:
+    """The round-release payload for a refusal, plus its once-per-round telemetry event.
+
+    Shared by every command whose refusal can carry the release — approve, plan-review
+    and replan — because the valve firing is only useful if the coordinator reading THAT
+    refusal sees it. The log event is the metric this valve's reachability was measured
+    with, so a command that surfaces the release but never logs it would leave the metric
+    reading 0 after the fix. Deduped on the round number: the same round can be refused
+    many times, and each refusal must not add a fresh event.
+
+    Checks the SOLO plan-review axis OR the combined cross-axis ceiling (item A):
+    `gates.plan_review_blockers` substitutes the release message into its own
+    returned blockers on EITHER condition, so a guard that only checked the solo
+    axis would miss a cross-axis-only release and report None here while the
+    caller's blockers already carry the substituted message. The payload shape
+    itself is unchanged by this — still keyed only on `rounds` — so existing
+    exact-dict assertions against the solo-axis path keep passing.
+
+    Returns None when neither valve is active, which is also the payload callers put
+    on the Directive — an explicit "no release here" rather than a missing key.
+    """
+    if not (
+        review_blockers
+        and (gates.plan_review_round_release_active(state) or gates.cross_axis_friction_release_active(state))
+    ):
+        return None
+    already_logged = any(
+        e.get("event") == "plan_review_round_release"
+        and e.get("rounds") == state.plan_review_rounds
+        for e in state.history
+    )
+    if not already_logged:
+        state.log("plan_review_round_release", rounds=state.plan_review_rounds)
+        store.save(state)
+    return {"rounds": state.plan_review_rounds}
 
 
 def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -2401,7 +3264,19 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
 
     The reviewer must pass --plan-digest <hex> (the sha256 of its OWN read of the
     plan); it is cross-checked against the live bytes and stored as the attested
-    plan_sha256. A passing verdict does NOT bind without a matching attestation."""
+    plan_sha256. A passing verdict does NOT bind without a matching attestation,
+    and an attestation the engine cannot cross-check — because the target is
+    unreadable — is REFUSED rather than stored on the caller's word.
+
+    --scope 'stage:<n>' binds the review to one stage instead of the whole plan
+    (stage 5): the record also carries the engine's OWN digests of the plan's
+    meta and per-stage parts at this moment (plan_meta_digest/plan_stage_digests),
+    which gates.plan_review_blockers compares against the live plan via
+    plan.changed_parts to decide whether this review still covers what it once
+    covered. Recording those digests requires a LOADABLE plan — a whole-plan
+    review degrades gracefully to a digest-less record on a parse failure (still
+    useful as a path/content-hash-bound record), but a stage-scoped review REFUSES:
+    it cannot confirm the named stage even exists without parsing the plan."""
     state = _require(store, args.session)
     target = getattr(args, "target", None) or state.plan_path
     if not target:
@@ -2409,11 +3284,37 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             False, state.node, "noop",
             "no plan to review: submit a plan first, or pass --target <plan.toml>",
         )
+    scope = (getattr(args, "scope", None) or "").strip()
+    doc = None
+    parse_error = None
+    try:
+        doc = load_plan(target)
+    except (OSError, PlanError) as e:
+        parse_error = str(e)
+    if scope:
+        stage_index = plan_review_scope_stage_index(scope)
+        if stage_index is None:
+            return Directive(
+                False, state.node, "noop",
+                f"--scope {scope!r} is not a recognized scope (expected 'stage:<n>')",
+            )
+        if doc is None:
+            return Directive(
+                False, state.node, "noop",
+                f"cannot validate --scope {scope!r}: {target} failed to load: {parse_error}",
+            )
+        if not any(s.index == stage_index for s in doc.stages):
+            return Directive(
+                False, state.node, "noop",
+                f"--scope {scope!r}: no stage {stage_index} in {target}",
+            )
     # An override is the USER's escape from a reviewer's `revise` deadlock — the
     # reviewer who issued the blocking verdict cannot override themselves. Checked
     # here, before the record is overwritten and the prior reviewer's identity lost.
+    # Scope-aware: an override of a STAGE-scoped revise compares against the prior
+    # review of that SAME scope, never against the whole-plan record.
     if args.verdict == gates._PLAN_REVIEW_OVERRIDE:
-        prev = state.plan_review
+        prev = state.plan_stage_reviews.get(scope) if scope else state.plan_review
         new_reviewer = (getattr(args, "reviewer", "") or "").strip()
         if (
             prev is not None
@@ -2428,6 +3329,19 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                 "reviewer whose 'revise' verdict it would override (the user is the "
                 "expected override author)",
             )
+        # An override is the plan's CUSTOMER overruling a reviewer's blocking verdict —
+        # not an escape hatch for any caller to self-record one under an arbitrary
+        # --reviewer string. Mirrors cmd_accept's author/customer_id check: both records
+        # are only valid when authored by the customer of record. Degrades to a
+        # pass-through (no check) when the plan has no [meta.order] or an empty
+        # customer_id, same as cmd_accept.
+        order = doc.meta.order if doc is not None else None
+        if order is not None and order.customer_id and new_reviewer != order.customer_id:
+            return Directive(
+                False, state.node, "noop",
+                f"override reviewer {new_reviewer!r} does not match order customer_id "
+                f"{order.customer_id!r}; record it as the customer of record, or correct --reviewer",
+            )
     # --plan-digest is the sha256 the REVIEWER computed from its OWN read of the
     # target plan file. Cross-check it against the engine's live digest and REFUSE
     # to record on mismatch (a reviewer that read a different/stale file must not
@@ -2436,40 +3350,91 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     # ABSENT --plan-digest yields plan_sha256="" (unattested); the pass path of
     # gates.plan_review_blockers then BLOCKS on the empty hash (see the inversion
     # note there), so a reviewer that could not read the plan cannot bind a pass.
+    #
+    # An UNREADABLE target refuses too, because an attestation the engine cannot
+    # cross-check is not an attestation: the stored plan_sha256 is what
+    # gates._binds_across_path_change accepts as proof a review of some OTHER path
+    # examined this plan's bytes, so recording an unverified one lets any caller
+    # bind a plan by naming a path nobody read (#195). The absent-digest case keeps
+    # its fail-open degradation — nothing was claimed, so nothing needs checking.
     attested = (getattr(args, "plan_digest", None) or "").strip().lower()
     if attested:
         live = _plan_file_sha256(target)
-        if live and attested != live:
+        if not live:
+            return Directive(
+                False, state.node, "noop",
+                f"--plan-digest {attested!r} cannot be cross-checked: {target!r} is "
+                "unreadable, so the engine cannot confirm the reviewer read it; "
+                "re-run plan-review once the plan file is readable (or omit "
+                "--plan-digest to record an unattested review that does not bind)",
+            )
+        if attested != live:
             return Directive(
                 False, state.node, "noop",
                 f"--plan-digest {attested!r} does not match the live plan bytes "
                 f"({live!r}) at {target!r}: the reviewer read a different or stale "
                 "plan; re-read the current plan and re-run plan-review",
             )
-    state.plan_review = PlanReview(
+    review = PlanReview(
         plan_path=target,
         verdict=args.verdict,
         reviewer=getattr(args, "reviewer", "") or "",
         concerns=list(getattr(args, "concerns", None) or []),
         note=getattr(args, "note", "") or "",
         plan_sha256=attested,
+        scope=scope,
+        reviewed_meta_digest=plan_meta_digest(doc) if doc is not None else "",
+        reviewed_stage_keys=(
+            {str(k): v for k, v in plan_stage_digests(doc).items()} if doc is not None else {}
+        ),
+        concern_ids=list(getattr(args, "concern_ids", None) or []),
     )
+    if scope:
+        state.plan_stage_reviews[scope] = review
+    else:
+        state.plan_review = review
+    # POST-APPROVAL round counting. cmd_submit_plan's increment covers only the
+    # pre-approval resubmission loop; review cycles overwhelmingly recur AFTER
+    # approval, on the `replan` path, where the same thinker review is demanded and
+    # nothing advanced the counter — leaving the round-release valve unreachable
+    # exactly where it is needed. The two increments are disjoint in time, not by
+    # convention: cmd_submit_plan sets approval.passed = False BEFORE its own
+    # increment, so no single call can satisfy both conditions.
+    #
+    # The unit is a plan VERSION, not a verdict — see plan_review_counted_digest's
+    # field comment in state.py for why counting verdicts would fire the release
+    # inside a legitimate stage-coverage pass and retire reviews nobody performed.
+    #
+    # An UNREADABLE plan does not count and leaves the marker untouched. That is the
+    # conservative direction here even though over-counting is the usual fail-safe:
+    # because the release SUBSTITUTES the outstanding blockers rather than adding to
+    # them, an over-count can cancel a review requirement nobody satisfied, whereas an
+    # under-count only leaves the user's existing one-sentence override as the exit.
+    #
+    # Placed BEFORE the blockers call so the verdict that exhausts the budget surfaces
+    # the release in its own Directive, rather than one round later.
+    if state.approval is not None and state.approval.passed:
+        counted = _plan_file_sha256(target)
+        if counted and counted != state.plan_review_counted_digest:
+            state.plan_review_rounds += 1
+            state.plan_review_counted_digest = counted
     blockers = gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)
-    state.log("plan_review", target=target, verdict=args.verdict,
-              reviewer=state.plan_review.reviewer,
-              plan_sha256=state.plan_review.plan_sha256,
+    state.log("plan_review", target=target, verdict=args.verdict, scope=scope,
+              reviewer=review.reviewer,
+              plan_sha256=review.plan_sha256,
               plan_bytes=_plan_file_bytes(target),
-              concerns=state.plan_review.concerns,
-              note=state.plan_review.note,
+              concerns=review.concerns,
+              note=review.note,
               findings_blocking=getattr(args, "findings_blocking", None),
               findings_nonblocking=getattr(args, "findings_nonblocking", None))
     store.save(state)
     if blockers:
+        round_release = _note_round_release(state, blockers, store)
         return Directive(
             False, state.node, "plan_review",
             "thinker review recorded but does not clear the gate",
-            data={"blockers": blockers},
+            data={"blockers": blockers, "plan_review_round_release": round_release},
         )
     return Directive(
         True, state.node, "continue",
@@ -2478,23 +3443,184 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     )
 
 
+def cmd_risk_accept(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record a customer-facing acceptance of ONE named PlanReview concern's risk —
+    the alternative to editing the plan to make a `revise` concern go away. Purely a
+    recorder, mirroring cmd_plan_review: gates.plan_review_blockers re-derives
+    discharge itself at approve/replan by reading state.risk_acceptances, so a
+    mis-bound acceptance recorded here simply fails to clear the gate rather than
+    erroring.
+
+    `--basis`/`--risk` mirror premise.py's `assumed` question disposition exactly:
+    both are required free text, and neither may be a bare placeholder (see
+    gates._PLACEHOLDER_SET). Bound to the plan version at record time via the SAME
+    meta/stage-digest snapshot a PlanReview itself carries — gates._risk_acceptance_stale
+    reads them via plan.changed_parts identically."""
+    state = _require(store, args.session)
+    target = state.plan_path
+    if not target:
+        return Directive(
+            False, state.node, "noop",
+            "no plan to accept a risk against: submit a plan first",
+        )
+    scope = (getattr(args, "scope", None) or "").strip()
+    concern_id = (getattr(args, "concern_id", "") or "").strip()
+    basis = (getattr(args, "basis", "") or "").strip()
+    risk = (getattr(args, "risk", "") or "").strip()
+    author = (getattr(args, "author", "") or "").strip()
+    missing = [name for name, value in
+               (("concern-id", concern_id), ("basis", basis), ("risk", risk), ("author", author))
+               if not value]
+    if missing:
+        return Directive(
+            False, state.node, "noop",
+            "risk-accept requires a non-empty --" + " and --".join(missing),
+        )
+    for value, flag in ((basis, "--basis"), (risk, "--risk")):
+        if gates._normalize_string(value) in gates._PLACEHOLDER_SET:
+            return Directive(
+                False, state.node, "noop",
+                f"{flag} {value!r} reads as a placeholder, not a reason — say what concretely",
+            )
+    try:
+        doc = load_plan(target)
+    except (OSError, PlanError) as e:
+        return Directive(
+            False, state.node, "noop",
+            f"cannot record a risk acceptance: {target} failed to load: {e}",
+        )
+    if scope:
+        stage_index = plan_review_scope_stage_index(scope)
+        if stage_index is None:
+            return Directive(
+                False, state.node, "noop",
+                f"--scope {scope!r} is not a recognized scope (expected 'stage:<n>')",
+            )
+        if not any(s.index == stage_index for s in doc.stages):
+            return Directive(
+                False, state.node, "noop",
+                f"--scope {scope!r}: no stage {stage_index} in {target}",
+            )
+    review = state.plan_stage_reviews.get(scope) if scope else state.plan_review
+    if review is None:
+        return Directive(
+            False, state.node, "noop",
+            f"no thinker review recorded at scope {scope!r} — nothing there to accept a concern from",
+        )
+    valid_ids = plan_review_concern_ids(review)
+    if concern_id not in valid_ids:
+        return Directive(
+            False, state.node, "noop",
+            f"concern {concern_id!r} is not among scope {scope!r}'s recorded concerns "
+            f"{valid_ids!r} — check --concern-id against the review",
+        )
+    if valid_ids.count(concern_id) > 1:
+        return Directive(
+            False, state.node, "noop",
+            f"concern {concern_id!r} appears {valid_ids.count(concern_id)} times in scope "
+            f"{scope!r}'s recorded concerns {valid_ids!r} — ambiguous which one this "
+            "acceptance binds to; the review must give each concern a distinct --concern-id",
+        )
+    acceptance = RiskAcceptance(
+        scope=scope,
+        concern_id=concern_id,
+        plan_path=target,
+        basis=basis,
+        risk=risk,
+        author=author,
+        meta_digest=plan_meta_digest(doc),
+        stage_keys={str(k): v for k, v in plan_stage_digests(doc).items()},
+        concern_text=review.concerns[valid_ids.index(concern_id)],
+    )
+    state.risk_acceptances.append(acceptance)
+    blockers = gates.plan_review_blockers(state, target)
+    _log_gate(state, "plan_review", blockers, passed=not blockers)
+    state.log("risk_accept", target=target, scope=scope, concern_id=concern_id,
+              author=author, basis=basis, risk=risk)
+    store.save(state)
+    if blockers:
+        return Directive(
+            False, state.node, "plan_review",
+            "risk acceptance recorded but does not clear the gate",
+            data={"blockers": blockers},
+        )
+    return Directive(
+        True, state.node, "continue",
+        f"risk acceptance recorded for {target} (scope={scope!r} concern={concern_id!r}); "
+        "the plan-review gate is now satisfied for this plan version",
+    )
+
+
+def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Read-only: what a reviewer needs to look at in the plan RIGHT NOW, given
+    what's already been reviewed — the brief `plan-review` itself does not need,
+    but a human/thinker preparing to run it does. Replaces hand-computing this
+    from a raw digest dump: `data['stages']` names the moved stages, and the
+    Directive's markdown is their actual current rendering via render_stages_md
+    (or the whole plan via render_plan_md when a meta/order change, or the
+    absence of any prior review, means nothing narrower will do)."""
+    state = _require(store, args.session)
+    target = getattr(args, "plan", None) or state.plan_path
+    if not target:
+        return Directive(
+            False, state.node, "noop",
+            "no plan to diff: submit a plan first, or pass --plan <plan.toml>",
+        )
+    try:
+        doc = load_plan(target)
+    except (OSError, PlanError) as e:
+        return Directive(False, state.node, "noop", f"{target} failed to load: {e}")
+    whole_plan_needed, stage_indices = gates.plan_review_delta(state, doc)
+    stages = sorted(stage_indices)
+    if whole_plan_needed:
+        md = render_plan_md(doc)
+        detail = (
+            f"whole-plan review needed for {target}: its meta/order changed since "
+            "the last whole-plan review, or none has been recorded yet"
+        )
+    elif stages:
+        md = render_stages_md(doc, stages)
+        detail = f"stage-scoped review needed for stage(s) {stages} in {target}"
+    else:
+        md = ""
+        detail = f"no review gap: every part of {target} is covered by its current review"
+    return Directive(
+        True, state.node, "inspect", detail,
+        data={"markdown": md, "whole_plan": whole_plan_needed, "stages": stages},
+    )
+
+
 def cmd_stage_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
-    """Record a manual review of the active acceptance_review stage's observation,
-    backing the acceptance-review gate. Mirrors cmd_plan_review — purely a recorder; the
+    """Record a manual review of the active stage's observation, backing the
+    acceptance-review judge gate. Mirrors cmd_plan_review — purely a recorder; the
     COGNITION (a human judging, or authoring an override) happens outside. The verdict is
     bound to the observation bytes passed via --observation (defaulting to the stage's
     current observation), so gates.acceptance_review_blockers can reject a drift. The
     automated cheap judge writes an equivalent record inline in record-result; this
-    command is the human path (chiefly the override deadlock escape)."""
+    command is the human path (chiefly the override deadlock escape).
+
+    Scope is gates.stage_review_active(state) — the SAME predicate the gate itself
+    consumes — not criterion_type. This is a deliberate widening (GitHub issue #145):
+    the gate was already broadened past acceptance_review-only stages (Defect 2: control
+    compares result with goal at every stage of a SUBSTANTIVE session, see
+    cmd_record_result's observation gate), but this escape hatch had not followed, so a
+    measurable-criterion stage judge-deadlocked with NO scoped override at all — only the
+    session-wide AGENTCTL_STAGE_REVIEW=0 kill switch, which records a strictly weaker,
+    unattributed JudgeBypass(kind='killswitch') instead of this command's
+    reviewer+note-bound JudgeBypass(kind='override'). Widening the escape to the gate's
+    own scope strictly improves auditability; narrowing the gate back down would
+    contradict that deliberate broadening instead of resolving the mismatch."""
     state = _require(store, args.session)
     stage = state.active_stage()
     if stage is None:
         return Directive(False, state.node, "next_stage", "no active stage to review")
-    if stage.criterion.criterion_type != CriterionType.ACCEPTANCE_REVIEW.value:
+    if not gates.stage_review_active(state):
         return Directive(
             False, state.node, "noop",
-            f"stage {stage.index} is not acceptance_review; stage-review applies only to "
-            "acceptance stages",
+            f"the acceptance-judge gate is not active for this session "
+            f"(weight_class={state.weight_class}, "
+            f"AGENTCTL_STAGE_REVIEW={os.environ.get('AGENTCTL_STAGE_REVIEW', '<unset>')}); "
+            "stage-review records an override of that gate and has nothing to override here",
         )
     observation = getattr(args, "observation", None)
     if observation is None:
@@ -2542,6 +3668,11 @@ def cmd_code_review(args, *, store: StateStore, runner: Runner | None = None) ->
             "only to developer-produced code",
         )
     code_ref = getattr(args, "code_ref", None) or None
+    if gates._code_review_for(state, stage.index) is not None:
+        # A re-review of a stage already reviewed once — the code-review axis's
+        # round-release counter (item A / issue #96), mirroring plan_review_rounds'
+        # per-resubmission increment; reset by cmd_approve/cmd_replan alongside it.
+        state.code_review_rounds += 1
     _record_code_review(
         state,
         CodeReview(
@@ -2563,6 +3694,154 @@ def cmd_code_review(args, *, store: StateStore, runner: Runner | None = None) ->
     )
 
 
+def _parse_verdicts(raw_verdicts: list[str]) -> tuple[list[RequirementVerdict], list[str]]:
+    """Parse repeatable ``--verdict '<requirement_id>|<pass|fail>[|<note>]'`` specs into
+    typed RequirementVerdict objects. Returns ``(verdicts, errors)`` — a non-empty
+    ``errors`` list means the caller must reject with a failing Directive and record
+    nothing. Mirrors ``_parse_partition_units``'s pipe-delimited shape and
+    ``(parsed, errors)`` return contract.
+
+    Deliberately does NOT cross-check requirement ids against the order here — that
+    check is completeness, not parse well-formedness, and belongs to
+    ``gates.resolution_blockers`` (which re-reads the order fresh at resolution time
+    rather than at write time; see AcceptanceReview's docstring)."""
+    verdicts: list[RequirementVerdict] = []
+    errors: list[str] = []
+    seen: dict[str, int] = {}  # requirement id -> owning position (1-based)
+    for pos, spec in enumerate(raw_verdicts, start=1):
+        parts = spec.split("|")
+        if len(parts) < 2:
+            errors.append(
+                f"verdict {pos}: expected '<requirement_id>|<pass|fail>[|<note>]', got {spec!r}"
+            )
+            continue
+        req_id = parts[0].strip()
+        verdict = parts[1].strip()
+        note = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else ""
+        if not req_id:
+            errors.append(f"verdict {pos}: empty requirement id")
+        if verdict not in ("pass", "fail"):
+            errors.append(f"verdict {pos}: verdict must be 'pass' or 'fail', got {verdict!r}")
+        if req_id in seen:
+            errors.append(
+                f"verdict {pos}: requirement id {req_id!r} already verdicted at position "
+                f"{seen[req_id]} (one verdict per requirement)"
+            )
+        else:
+            seen[req_id] = pos
+        verdicts.append(RequirementVerdict(requirement_id=req_id, verdict=verdict, note=note))
+    return verdicts, errors
+
+
+def cmd_accept(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record the plan-level AcceptanceReview: the ORDER's customer comparing the
+    delivered PRODUCT against every declared requirement, once — the acceptance half
+    of Defect 2 (control checks result-against-goal per stage, repeatedly;
+    acceptance checks product-against-order, once, and is recorded).
+
+    Author-matched at WRITE time against [meta.order].customer_id (a mismatch is
+    refused outright — this is not a gate to degrade past, it is a wrong-person
+    writing the record). Completeness (every declared requirement id covered) and
+    negative-verdict blocking are deferred to gates.resolution_blockers, which
+    re-reads the order fresh rather than trusting what was true at write time.
+
+    Corroboration mirrors the stage-level acceptance path: the cheap fail-open judge
+    (advisor.acceptance_judge) is consulted unless --bypass is given; an unreachable
+    judge refuses the write and directs the caller to --bypass --bypass-reason rather
+    than silently waving the review through. A --bypass is recorded as an
+    AcceptanceBypass alongside the AcceptanceReview (never standalone — see
+    AcceptanceBypass's docstring for why resolution_blockers never reads it)."""
+    state = _require(store, args.session)
+    # Guarded exactly like _refresh_venue_fields: an absent or unreadable plan_path is a
+    # refusal Directive, never a PlanError escaping the CLI. Acceptance IS the comparison
+    # against the order that plan declares, so with no plan there is nothing to record
+    # against — and gates.resolution_blockers refuses the same shape from the other side.
+    doc = None
+    if state.plan_path:
+        try:
+            doc = load_plan(state.plan_path, strict=False)
+        except (OSError, PlanError):
+            doc = None
+    if doc is None:
+        return Directive(
+            False, state.node, "noop",
+            "cannot read the plan to accept against "
+            f"({state.plan_path or 'no plan_path on this session'}); acceptance compares the "
+            "delivered product with the order that plan declares",
+        )
+    order = doc.meta.order
+    author = getattr(args, "author", "") or ""
+    if order is not None and order.customer_id and author != order.customer_id:
+        return Directive(
+            False, state.node, "noop",
+            f"acceptance author {author!r} does not match order customer_id "
+            f"{order.customer_id!r}; record it as the customer of record, or correct --author",
+        )
+    verdicts, verdict_errors = _parse_verdicts(getattr(args, "verdict", None) or [])
+    if verdict_errors:
+        return Directive(
+            False, state.node, "noop",
+            "invalid --verdict argument(s): " + "; ".join(verdict_errors),
+            data={"errors": verdict_errors},
+        )
+    bypass = bool(getattr(args, "bypass", False))
+    bypass_reason = getattr(args, "bypass_reason", "") or ""
+    note = getattr(args, "note", "") or ""
+    if bypass and not bypass_reason:
+        return Directive(
+            False, state.node, "noop",
+            "--bypass requires --bypass-reason (a bypass is a reasoned override, not a shrug)",
+        )
+    if not verdicts:
+        # Not a bypass-only rule: a verdictless review on the ordinary path records that
+        # nothing was compared, and resolution's completeness check cannot catch it —
+        # `missing` is empty whenever the review omits nothing because the order declares
+        # nothing. Refuse at write time, where the emptiness is still visible.
+        return Directive(
+            False, state.node, "noop",
+            "a bypass requires an accompanying AcceptanceReview: supply at least one --verdict"
+            if bypass else
+            "acceptance requires at least one --verdict: a review with no verdicts compares "
+            "nothing against the order",
+        )
+    judge_reason = "no judge attempted (--bypass)"
+    if not bypass:
+        expected_text = "; ".join(
+            f"{r.id}: {r.text}" if r.text else r.id for r in (order.requirements if order else [])
+        )
+        observed_text = note or "; ".join(
+            f"{v.requirement_id}:{v.verdict}" for v in verdicts
+        )
+        judge_runner = runner if runner is not None else advisor.subprocess_runner
+        verdict, judge_reason = advisor.acceptance_judge(
+            observed_text, expected_text, judge_runner, enabled=True,
+            timeout=advisor._ACCEPTANCE_JUDGE_TIMEOUT_S,
+        )
+        if verdict is None:
+            return Directive(
+                False, state.node, "noop",
+                f"acceptance judge unreachable ({judge_reason}); re-run with "
+                "--bypass --bypass-reason '<why this acceptance stands without judge "
+                "corroboration>'",
+                data={"reason": judge_reason},
+            )
+    state.acceptance_review = AcceptanceReview(
+        author=author, verdicts=verdicts, note=note,
+        plan_sha256=state.accepted_plan_digest or "",
+    )
+    if bypass:
+        state.acceptance_bypass = AcceptanceBypass(
+            reason=bypass_reason, reviewer=author, note=note,
+        )
+    state.log("accept", author=author, verdicts=len(verdicts), bypass=bypass)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"acceptance review recorded ({len(verdicts)} verdict(s), bypass={bypass}); "
+        "resolution will re-check completeness, verdicts, and plan-digest freshness",
+    )
+
+
 def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     # plan_presentation_blockers is fail-open on the RECEIPT side (mirrors
     # plan_review_blockers) but fail-CLOSED on the DELIVERY side: approval — the
@@ -2571,6 +3850,34 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # because confirm-delivery is a reachable, audit-logged escape (gates.py's
     # plan_presentation_blockers docstring has the full justification).
     state = _require(store, args.session)
+    # Submission seam (c), BEFORE _log_gate: the coordinator may have edited plan_path in
+    # place at plan-mutable PLAN_READY, so the bytes approve is about to attest to have
+    # never been through submission validation. Refusing here — as a fix_plan Directive,
+    # never a raised PlanError — keeps the gate row out of the log entirely rather than
+    # writing a failed plan_approval for a plan that was never really put to the gate; the
+    # coordinator fixes the file and re-runs approve from the same node.
+    #
+    # The whole REFRESH, not only its refusal, now precedes the gate, and that widening is
+    # the contract rather than an accident of placement: every plan_approval blocker below
+    # — core, plugin, review, presentation — is evaluated against the POST-refresh session,
+    # so an in-place PLAN_READY edit can flip a blocker's verdict within a single approve
+    # call. That is the intent (the gate must judge the bytes it is about to attest to, not
+    # the pre-edit cache); a blocker that must instead see the cache as submitted has no
+    # place on this gate. `test_plan_approval_blockers_see_the_refreshed_state` asserts it.
+    echo_advice: list[str] = []
+    # Entry-point fallback — see cmd_submit_plan's identical comment. cmd_approve is the
+    # entry point (_refresh_caches_from_plan_path is a private single-caller helper), so
+    # the runner is resolved here and threaded down.
+    run = runner if runner is not None else advisor.subprocess_runner
+    submission = _refresh_caches_from_plan_path(state, runner=run, advice=echo_advice)
+    if submission:
+        return Directive(False, state.node, "fix_plan",
+                         "cannot approve: the plan at plan_path does not meet submission "
+                         "requirements (edit it and re-run approve)",
+                         data={"problems": submission})
+    # Folded AFTER seam (c)'s refusal above, so a plan that fails submission validation
+    # is never folded into and never persisted: the fold's store.save would otherwise
+    # write a premise bag for bytes this command is about to reject.
     _approved_doc = None
     if state.plan_path:
         try:
@@ -2580,15 +3887,16 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         if _approved_doc is not None and _fold_enumeration_sidecar(
                 state, _approved_doc, state.plan_path):
             # Persist BEFORE the gate is evaluated, not after: the blockers below
-            # are computed from the folded bag and name its `qenum-N` candidates,
-            # and this function returns on any blocker WITHOUT reaching its own
-            # store.save() — so a fold left in memory would refuse the approve
-            # while `question-candidate-dispose --id qenum-1` had nothing to find.
+            # are computed from the folded bag and name its `qenum-<part>-N`
+            # candidates, and this function returns on any blocker WITHOUT reaching
+            # its own store.save() — so a fold left in memory would refuse the approve
+            # while `question-candidate-dispose --id qenum-meta-1` had nothing to find.
             store.save(state)
+    review_blockers = gates.plan_review_blockers(state, state.plan_path)
     blockers = (
         gates.blockers(state, "plan_approval")
         + plugins.plugin_gate_blockers(state, "plan_approval")
-        + gates.plan_review_blockers(state, state.plan_path)
+        + review_blockers
         + gates.plan_presentation_blockers(state, state.plan_path)
     )
     if not args.by or not args.by.strip():
@@ -2599,23 +3907,52 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # is the one person who both can see the number and is about to decide what to
         # do about it — and if the blocker below is the enumeration one, the decision
         # is literally whether to add to that count.
-        return Directive(False, state.node, "fix_plan", "cannot approve", data={
-            "blockers": blockers,
-            "enumeration_escapes": _enumeration_escape_counts(state, _approved_doc),
-        })
-    _refresh_caches_from_plan_path(state)
+        round_release = _note_round_release(state, review_blockers, store)
+        return _with_advisories(
+            Directive(False, state.node, "fix_plan", "cannot approve", data={
+                "blockers": blockers,
+                "enumeration_escapes": _enumeration_escape_counts(state, _approved_doc),
+                "plan_review_round_release": round_release,
+            }),
+            echo_advice)
+    # Seam (c)'s stamp, past BOTH of this command's refusals — the submission check above and
+    # the plan_approval gate. The refresh helper that owns the seam cannot stamp it: it runs
+    # before the gate by contract, so a blocked approve would leave the session carrying a
+    # digest for bytes it did not approve.
+    _stamp_accepted_plan_digest(state, state.plan_path)
     effort.arm(state)  # opens the effort-divergence window — see effort.py's ARMED-ONLY
+    # Fold this session's review-round counts into the cross-session task accumulator
+    # (item B) BEFORE the reset-to-0 below — approval is the reset point, so this is
+    # the last moment these session-local counts are readable.
+    task_accumulator.add(
+        state.task_id, "plan_review_rounds", state.plan_review_rounds,
+        session_id=state.session_id, now=_utcnow(),
+    )
+    task_accumulator.add(
+        state.task_id, "code_review_rounds", state.code_review_rounds,
+        session_id=state.session_id, now=_utcnow(),
+    )
     state.approval = GateRecord("plan_approval", armed=True, passed=True, by=args.by)
+    state.plan_review_rounds = 0
+    # Cleared with the counter, not merely alongside it: the marker is what makes the
+    # NEXT post-approval review count as round 1. Left carrying the approved plan's
+    # digest, a first replan-time review of that same unedited plan would be read as
+    # "already counted" and skipped.
+    state.plan_review_counted_digest = ""
+    # Reset alongside plan_review_rounds (item A) — approval starts a fresh execution
+    # against the newly-approved plan, so friction spent reviewing code under the
+    # PRIOR plan version should not count against this one.
+    state.code_review_rounds = 0
     state.node = transition(state.node, "approve")
     snap = _snapshot_approved_plan(store, state)
     if snap:
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
     state.log("approve", by=args.by)
     store.save(state)
-    return Directive(
+    return _with_advisories(Directive(
         True, state.node, "partition",
         "approved; assess partition (M1–M4) before execution",
-    )
+    ), echo_advice)
 
 
 def _parse_partition_units(
@@ -2836,25 +4173,185 @@ def _continuation_worktree(state: SessionState, stage: Stage) -> str | None:
     return None
 
 
+def _reattest_stash_for(state: SessionState, stage_index: int) -> ReattestStash | None:
+    """The most-recently-built ReattestStash entry for `stage_index`, or None.
+
+    Last-wins, mirroring gates._stage_review_for / _code_review_for — though in
+    practice cmd_replan's substantive branch replaces state.reattest_stash
+    wholesale each time, so at most one entry per stage_index ever exists at
+    once; the scan is written to match the family's convention rather than
+    because duplicates are expected."""
+    match = [r for r in state.reattest_stash if r.stage_index == stage_index]
+    return match[-1] if match else None
+
+
+def _try_reattest(
+    state: SessionState, stage: Stage, store: StateStore, runner: Runner | None,
+) -> Directive | None:
+    """Stage 6: re-arm a PASSED stage that a substantive replan re-armed, via a
+    fresh control re-run, instead of paying for a full specialist re-spawn.
+
+    Returns a terminal Directive on success. Returns None on ANY refusal, after
+    logging the specific failing condition via state.log("reattest_declined", ...)
+    — the caller (cmd_dispatch) falls through to the existing, unmodified dispatch
+    path on None, so refusal always degrades to a normal (byte-identical) dispatch
+    rather than stranding the session. The three conditions, checked in order:
+
+      1. a ReattestStash exists for this stage (built only for a stage that had a
+         prior PASSED outcome at replan time — see cmd_replan);
+      2. the replan that built the stash did not touch the stage's operative
+         surface (stash.operative_surface_matched), AND nothing has re-edited the
+         stage since (the live stage_reattest_digest still matches the digest
+         stashed at replan time — a plan edit made during the PLAN_READY window
+         is caught here rather than trusted stale);
+      3. the stage's own control — its verify_command/landed check, in its
+         declared venue — passes when RE-RUN NOW. Reuses the exact primitives
+         cmd_record_result uses for a measurable stage, so a re-attest pass is
+         held to the identical bar as a normal pass; a stale prior PASS is never
+         carried forward on faith.
+
+    Gate preservation: the code-review gate reads state.code_reviews directly
+    (keyed by stage_index, untouched by replan), so calling gates.code_review_
+    blockers here — exactly as cmd_record_result does — is naturally fresh with
+    no stash of its own; a stage cannot reach PASSED via this route that
+    couldn't reach PASSED via the normal one.
+    """
+    stash = _reattest_stash_for(state, stage.index)
+    if stash is None:
+        state.log("reattest_declined", stage=stage.index,
+                   reason="no prior PASSED outcome recorded for this stage")
+        return None
+    if not stash.operative_surface_matched:
+        state.log("reattest_declined", stage=stage.index,
+                   reason="replan touched the stage's operative surface "
+                          "(method/control criterion/expected result image/executor/done criterion)")
+        return None
+    if stage_reattest_digest(stage) != stash.reattest_digest:
+        state.log("reattest_declined", stage=stage.index,
+                   reason="stage was edited again after the re-attest stash was built")
+        return None
+
+    crit = stage.criterion
+    if crit.criterion_type == CriterionType.MEASURABLE.value and crit.verify_kind == CheckKind.LANDED.value:
+        ok, refusal, _result = _landed_check_result(state, crit.landed, runner)
+        if refusal:
+            state.log("reattest_declined", stage=stage.index,
+                       reason=f"landed check refused: {refusal}")
+            return None
+        if not ok:
+            state.log("reattest_declined", stage=stage.index,
+                       reason="control failed on re-run (landed check: delivered commit "
+                              "not (yet) contained in the declared target)")
+            return None
+    else:
+        cwd = None
+        if crit.verify_command and crit.criterion_type == CriterionType.MEASURABLE.value:
+            cwd, refusal = _resolve_or_refuse(state, crit.verify_venue)
+            if refusal:
+                state.log("reattest_declined", stage=stage.index,
+                           reason=f"verify_command refused: {refusal}")
+                return None
+        ok, result = _verify_command_result(stage, runner, cwd=cwd)
+        if not ok:
+            state.log("reattest_declined", stage=stage.index,
+                       reason=f"control failed on re-run (exit {result.returncode} != "
+                              f"expected {crit.expected_exit}: {crit.verify_command})")
+            return None
+
+    if stage.needs_control() and not (stash.prior_control or "").strip():
+        state.log("reattest_declined", stage=stage.index,
+                   reason="stage needs a control attestation but the stashed prior "
+                          "control is empty")
+        return None
+    if stage.needs_control() and gates.code_review_active(state):
+        crb = gates.code_review_blockers(state, stage)
+        if crb:
+            state.log("reattest_declined", stage=stage.index,
+                       reason=f"code review gate: {'; '.join(crb)}")
+            return None
+
+    # All three conditions hold: carry the prior Outcome AND control attestation
+    # forward instead of re-spawning to reproduce them — marking the record with
+    # an explicit [re_attested] tag so the saving is countable/auditable.
+    stage.outcome = stash.prior_outcome
+    stage.control = stash.prior_control
+    marker = "[re_attested]"
+    stage.outcome.actual = (
+        f"{stage.outcome.actual}\n{marker}" if stage.outcome.actual else marker
+    )
+    stage.outcome.status = StageStatus.PASSED.value
+    state.current_stage = None
+    state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
+    state.log("reattest", stage=stage.index)
+    store.save(state)
+    if state.all_stages_passed():
+        return Directive(True, state.node, "verify_final",
+                          f"stage {stage.index} re-attested; all stages passed")
+    return Directive(True, state.node, "next_stage",
+                      f"stage {stage.index} re-attested; more stages ready")
+
+
+# cmd_dispatch's fallback when neither --effort nor a per-stage reasoning-effort
+# field (there is no such field on Actor, unlike cost_tier) supplies one. Mirrors
+# the cost_tier -> budget relationship one rung down: a stage costed "large"
+# is presumed to warrant deeper reasoning than one costed "small". Unmapped or
+# absent cost_tier falls through to the dict's .get default of "medium", same
+# as the --budget resolution just above.
+_EFFORT_BY_COST_TIER = {"small": "low", "medium": "medium", "large": "high"}
+
+
 def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                  perm_checker=None) -> Directive:
     state = _require(store, args.session)
+    efblock = gates.effort_fire_blockers(state)
+    _log_gate(state, "effort_fire", efblock, passed=not efblock)
+    if efblock:
+        return Directive(
+            False, state.node, "fire_acknowledge",
+            "dispatch blocked by an unacknowledged effort-divergence fire",
+            marker=DIRECTIVE_ESCALATE_TO_USER,
+            data={"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)},
+        )
+    try:
+        host = runtime_host.require_bound_host(state)
+    except runtime_host.HostAmbiguousError as exc:
+        return Directive(False, state.node, "noop", str(exc))
     stage = state.active_stage()
     if stage is None:
         return Directive(False, state.node, "next_stage", "no active stage to dispatch")
     if not stage.is_spawn():
         return Directive(True, state.node, "execute_in_thread", f"stage {stage.index} is in-thread; no spawn")
+    # Stage 6: an explicit, OPT-IN re-attest request. Absent --re-attest this
+    # branch never runs — cmd_dispatch's behavior stays byte-identical to
+    # before. On refusal _try_reattest has already logged the specific failing
+    # condition; falling through below runs the existing, unmodified dispatch.
+    if bool(getattr(args, "re_attest", False)):
+        directive = _try_reattest(state, stage, store, runner)
+        if directive is not None:
+            return directive
     dry_run = bool(getattr(args, "dry_run", False))
     # Tier resolution order: explicit --budget flag > the stage's declared
     # Actor.cost_tier > the "medium" default — same precedence on the argparse
     # path (getattr(args, "budget", None)) and any in-process Namespace caller
     # that also omits --budget.
     tier = getattr(args, "budget", None) or stage.actor.cost_tier or "medium"
+    # Same resolution order as --budget above: explicit --effort flag > a
+    # cost_tier-derived default > "medium". spawn-specialist.py now hard-requires
+    # --effort (no inherit-the-parent fallback there either), so dispatch_stage
+    # must always hand it a value — never omit the flag and let the child's own
+    # argparse refuse with "the following arguments are required: --effort".
+    # There is no plan-declared per-stage reasoning-effort field (unlike
+    # cost_tier on Actor), so the derived default reuses the same three-tier
+    # cost_tier already on the stage rather than inventing a new plan field.
+    effort_tier = getattr(args, "effort", None) or _EFFORT_BY_COST_TIER.get(
+        stage.actor.cost_tier, "medium"
+    )
     result = dispatch_stage(
         stage, state.plan_path or "",
         runner=runner,
         budget=tier,
         complexity=getattr(args, "complexity", "medium"),
+        effort=effort_tier,
         continue_worktree=_continuation_worktree(state, stage),
         constraints=getattr(args, "constraints", "") or "",
         dry_run=dry_run,
@@ -2864,6 +4361,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         # "delivery" — dispatch has no verify_venue/venue of its own to read,
         # and delivery is where a spawned developer must write.
         cwd=state.resolve_check_venue(CheckVenue.DELIVERY.value),
+        runtime_host=host,
     )
     if dry_run:
         # #10: a dry-run is a pure preview — no event log, no state save, no
@@ -2954,6 +4452,28 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             f"stage {stage.index} requests permission: {action}",
             marker="PERMISSION-REQUEST",
             data={**base, "action": action, "options": ["once", "project", "global", "deny"]},
+        )
+    if marker == CHILD_INFRA_FAILURE:
+        # A transient condition about the RUN, never a judgement about the
+        # output — named directive only, no automatic re-spawn: the
+        # coordinator still spends the money on the retry.
+        store.save(state)
+        return Directive(
+            False, state.node, "retry_dispatch",
+            f"stage {stage.index} spawn never reached (or lost) the API — "
+            "transient; recommend retrying the same dispatch",
+            marker="CHILD_INFRA_FAILURE", data={**base, "reason": body},
+        )
+    if marker == CHILD_EXHAUSTED:
+        # A resource condition about the RUN — the child was refused for size
+        # before it could answer. Recommend a reduced brief or the re-attest
+        # path (stage 6); again a directive only, no automatic re-spawn.
+        store.save(state)
+        return Directive(
+            False, state.node, "reduce_brief_or_reattest",
+            f"stage {stage.index} spawn was refused for size before it could "
+            "answer — recommend a reduced brief or the re-attest path",
+            marker="CHILD_EXHAUSTED", data={**base, "reason": body},
         )
     if marker is None and result.returncode != 0:
         store.save(state)
@@ -3052,26 +4572,42 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 data={"blockers": crb},
             )
 
-    # Acceptance-review observation gate: recording a PASSED acceptance stage requires
-    # a non-empty observation that differs (normalized) from the expected image.
-    # An echoed target ("I saw the expected result") is no observation at all.
+    # Observation gate: recording a PASSED stage requires a non-empty observation that
+    # differs (normalized) from the expected image — CONTROL comparing the actual RESULT
+    # against the stage's own goal, not just a program's exit code. Originally scoped to
+    # acceptance_review stages only; broadened (Defect 2) to every stage of a SUBSTANTIVE
+    # session, because "the result was checked against the goal" is a claim every stage
+    # makes, not a criterion-type-specific one — a measurable stage's exit-code check
+    # (further below) proves the PROGRAM ran clean, never that anyone looked at what it
+    # produced. Non-substantive sessions (chat/small-change) keep the pre-Defect-2
+    # behaviour: only acceptance_review stages pay this cost. An echoed target ("I saw
+    # the expected result") is no observation at all.
     observation = getattr(args, "observation", None) or ""
-    if passed and stage.criterion.criterion_type == CriterionType.ACCEPTANCE_REVIEW.value:
+    is_acceptance_review = stage.criterion.criterion_type == CriterionType.ACCEPTANCE_REVIEW.value
+    requires_observation = is_acceptance_review or (
+        state.weight_class == WeightClass.SUBSTANTIVE.value
+    )
+    if passed and requires_observation:
         norm_obs = gates._normalize_string(observation)
         norm_img = gates._normalize_string(stage.subject.result)
+        reason = (
+            "is acceptance_review" if is_acceptance_review
+            else "is a substantive-session stage (Defect 2: control compares result "
+                 "with goal at every stage)"
+        )
         if not norm_obs:
             return Directive(
                 False, state.node, "attest_observation",
-                f"stage {stage.index} is acceptance_review; acceptance pass requires "
-                "recording WHAT you observed, distinct from the expected image "
+                f"stage {stage.index} {reason}; pass requires recording an observation — "
+                f"{OBSERVATION_CONTRACT} "
                 "(supply: record-result --observation '<what you observed>')",
             )
         if norm_obs == norm_img:
             return Directive(
                 False, state.node, "attest_observation",
-                f"stage {stage.index} is acceptance_review; acceptance pass requires "
-                "recording WHAT you observed, distinct from the expected image — "
-                "echoing the target does not count "
+                f"stage {stage.index} {reason}; pass requires recording an observation, "
+                "not echoing the target — "
+                f"{OBSERVATION_CONTRACT} "
                 "(supply: record-result --observation '<what you observed>')",
             )
 
@@ -3086,7 +4622,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         stage.criterion.observation = observation
         if gates.stage_review_active(state):
             judge_runner = runner if runner is not None else advisor.subprocess_runner
-            verdict, reason = advisor.acceptance_judge(
+            verdict, judge_reason = advisor.acceptance_judge(
                 observation, stage.subject.result, judge_runner, enabled=True,
                 timeout=advisor._ACCEPTANCE_JUDGE_TIMEOUT_S)
             if verdict is not None:
@@ -3094,18 +4630,31 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                     state,
                     StageReview(
                         stage_index=stage.index, verdict=verdict,
-                        reviewer=advisor.JUDGE_REVIEWER, note=reason,
+                        reviewer=advisor.JUDGE_REVIEWER, note=judge_reason,
                         observation_sha256=_observation_sha256(observation),
                     ),
                     from_judge=True,
                 )
+            else:
+                # Fail-open: the judge CALL ITSELF failed (disabled/errored/timed out),
+                # leaving no StageReview — acceptance_review_blockers below then reports
+                # "no acceptance judge verdict recorded", wording that reads as "the
+                # observation is weak, judge it again" rather than "the judge was
+                # unreachable". Log the judge's own reason so a session review can tell
+                # the two apart even if the caller only looks at the blocking Directive.
+                state.log("acceptance_judge_fail_open", stage=stage.index, reason=judge_reason)
             ab = gates.acceptance_review_blockers(state, stage)
             if ab:
                 store.save(state)
+                detail = f"stage {stage.index} acceptance pass blocked by the judge gate"
+                data = {"blockers": ab}
+                if verdict is None:
+                    detail += f" (judge call failed: {judge_reason})"
+                    data["judge_reason"] = judge_reason
                 return Directive(
                     False, state.node, "attest_observation",
-                    f"stage {stage.index} acceptance pass blocked by the judge gate",
-                    data={"blockers": ab},
+                    detail,
+                    data=data,
                 )
             # Cleared: if it cleared via an override, that is a bypass of a genuine
             # passing verdict — record it visibly (never cleared by a later review).
@@ -3193,7 +4742,9 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     # unconditionally — only ACTING on a fire is gated by gates.effort_active — see
     # effort.py's module docstring and gates.effort_active's docstring.
     effort.refresh_spend(state, _rows, state.plan_path)
-    div = effort.divergence(state)
+    div = effort.divergence(
+        state, cross_session_totals=task_accumulator.get(state.task_id)["per_axis_totals"],
+    )
 
     state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
 
@@ -3220,7 +4771,8 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 and not gates.stage_review_active(state)):
             _attach_advisories(d, "acceptance_observation",
                                {"expected": stage.subject.result, "observation": observation},
-                               runner, weight_class=state.weight_class)
+                               runner, weight_class=state.weight_class,
+                       runtime_host_=state.runtime_host or runtime_host.HOST_CLAUDE)
         return d
 
     # failed: loop guard — same stage failing twice on the same actual digest -> escalate
@@ -3290,6 +4842,9 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     blockers = gates.blockers(state, "resolution")
     _log_gate(state, "resolution", blockers, passed=not blockers)
     if blockers:
+        failing_ids = gates.failing_acceptance_requirements(state)
+        if failing_ids:
+            return _diagnose_acceptance_rejection(state, store, failing_ids)
         return Directive(False, state.node, "fix_stages", "not ready for resolution", data={"blockers": blockers})
     # Effort-divergence spend refresh (call site 2) + divergence computation — fire
     # site 2. Hoisted here, ahead of the stage-verification loop below, so a venue
@@ -3301,7 +4856,9 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # plan_path (including engine-mandated review spawns no stage attributes), the
     # rollup needs only what record-result already stamped onto each Outcome.
     effort.refresh_spend(state, _cost_rows(args), state.plan_path)
-    div = effort.divergence(state)
+    div = effort.divergence(
+        state, cross_session_totals=task_accumulator.get(state.task_id)["per_axis_totals"],
+    )
     # Final-gate execution (defense in depth): re-run every measurable stage's
     # verify_command — a later stage may have regressed an earlier one. Any
     # non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
@@ -3423,6 +4980,10 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     if bypasses:
         data["judge_bypassed"] = bypasses
         detail += f"; WARNING: {len(bypasses)} acceptance judge bypass(es) recorded (see judge_bypassed)"
+    acceptance_bypass = _acceptance_bypass_surface(state)
+    if acceptance_bypass is not None:
+        data["acceptance_bypass"] = acceptance_bypass
+        detail += "; WARNING: acceptance recorded via bypass, not judge corroboration (see acceptance_bypass)"
     return Directive(True, state.node, "await_user_confirmation", detail, data=data)
 
 
@@ -3535,6 +5096,10 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if bypasses:
         data["judge_bypassed"] = bypasses
         detail += f" (with {len(bypasses)} acceptance judge bypass(es); see judge_bypassed)"
+    acceptance_bypass = _acceptance_bypass_surface(state)
+    if acceptance_bypass is not None:
+        data["acceptance_bypass"] = acceptance_bypass
+        detail += " (acceptance recorded via bypass; see acceptance_bypass)"
     return Directive(True, state.node, "done", detail, marker="COMPLETED", data=data)
 
 
@@ -3696,7 +5261,8 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
         "hypotheses": inv.hypotheses if inv else [],
         "declaration": {"expected": decl.expected, "actual": decl.actual, "mismatch": decl.mismatch}
         if decl else {},
-    }, runner, weight_class=state.weight_class)
+    }, runner, weight_class=state.weight_class,
+       runtime_host_=state.runtime_host or runtime_host.HOST_CLAUDE)
     return d
 
 
@@ -3705,7 +5271,10 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
     a reproducible factor left un-normed re-fails, so replan is blocked (see
     gates.normalization_blockers) until this records the factor, or the user takes the
     explicit --normalization-waiver escape for a genuinely one-off factor. The LEVEL
-    (note/leaf/principle) is payoff-gated and may be omitted."""
+    (note/leaf/principle) is payoff-gated and may be omitted, and so may the DESTINATION —
+    the functional place the act lands on. The two are ORTHOGONAL: `--level` says how
+    generally the record is written down, `--destination` says what is being repaired, and
+    every destination is recordable at every level."""
     state = _require(store, args.session)
     bad = _require_diagnosing(state)
     if bad:
@@ -3725,16 +5294,134 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
         return Directive(False, state.node, "normalize",
                          f"normalize --level must be one of {list(NORMALIZATION_LEVELS)} or "
                          f"omitted (payoff-gated by rediscovery-threshold-min), got {level!r}")
-    d.normalization = Normalization(factor=factor, level=level)
-    state.log("normalize", factor=factor, level=level)
+    destination = getattr(args, "destination", None)
+    if destination is not None and destination not in NORMALIZATION_DESTINATIONS:
+        return Directive(False, state.node, "normalize",
+                         f"normalize --destination must be one of "
+                         f"{list(NORMALIZATION_DESTINATIONS)} or omitted (the functional "
+                         f"place the renorming lands on), got {destination!r}")
+    d.normalization = Normalization(factor=factor, level=level, destination=destination)
+    state.log("normalize", factor=factor, level=level, destination=destination)
     store.save(state)
     return Directive(True, state.node, "replan",
                      "renorming recorded; replan is now unblocked")
 
 
+def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -> Directive:
+    """The light path: the executor replaces his own SEQUENCE of operations.
+
+    `Means.method` is the REQUIREMENT on the way of acting — the planner's and the
+    customer's, moved only through the review and approval a replan re-arms. `Means.
+    procedure` is the sequence proposed for meeting it, and it is the EXECUTOR's:
+    reading the code routinely shows a better order, and making him buy that order at
+    the price of a re-approval is what produces the two failures the field split exists
+    to remove — an executor who follows a worse sequence because it is written down, or
+    one who quietly rewrites what he is held to, neither visible in the diff as what it
+    is.
+
+    `--renormalize` is therefore a TYPED CLAIM, not a verdict of `diff_plans`: the
+    executor says "the procedure is the only thing I changed", and the engine checks it
+    (`gates.renormalization_blockers`) rather than inferring it. Keeping it off
+    `diff_plans` leaves that function's three-word vocabulary and every caller intact,
+    and makes the refusal message able to name the norm the claim turned out to touch.
+
+    Three things this path deliberately does NOT do, each because it is not a replan:
+
+    * It does not run `_apply_refined_stage_fields`. Only `means.procedure` is copied
+      onto the live stages, so the claim the engine just verified stays true of the live
+      state too — no recorded `criterion.observation`, no `outcome`, no status is
+      disturbed, and the comparison stage 8 requires of a passed stage keeps standing.
+    * It does not re-arm a FAILED stage or leave DIAGNOSING. Working a difficulty
+      through is a separate obligation with its own record; re-sequencing inside a
+      stage does not discharge it.
+    * It logs `renormalize`, not `replan`, so `effort.replan_count` — which fires the
+      divergence trigger at three — counts norm revisions and not an executor using the
+      authority the plan gave him.
+
+    It DOES re-stamp `accepted_plan_digest`: that field must name the bytes the session
+    is executing, and after this call those are `args.plan`'s. The one consequence is
+    that an AcceptanceReview recorded before a renormalization goes stale — the
+    fail-closed direction, and nearly unreachable in practice since an acceptance is
+    recorded once every stage has already passed."""
+    from .plan import load_plan as _load
+
+    # Backfill a snapshot for a legacy (pre-snapshot) session BEFORE this path rewrites
+    # plan_path, exactly as the no_change branch of cmd_replan does and for a sharper
+    # reason: without it `old_path` falls back to plan_path, which after one
+    # renormalization holds the RENORMALIZED bytes, and the walk-in-small-steps this
+    # branch claims to prevent would be open on precisely the sessions that have no
+    # snapshot. Best-effort (see _snapshot_approved_plan); a None leaves the prior
+    # fallback, so nothing here can refuse a renormalization.
+    if not (state.plan_snapshot_path and Path(state.plan_snapshot_path).exists()):
+        backfilled = _snapshot_approved_plan(store, state)
+        if backfilled:
+            state.plan_snapshot_path, state.plan_snapshot_hash = backfilled
+    old_path = _replan_baseline_path(state)
+    # Lenient OLD / strict NEW, for the reason cmd_replan's own loads document: the
+    # comparison baseline may be a snapshot frozen before a newer trunk tightened the
+    # schema, and only the incoming plan is held to today's submission grade. Comparing
+    # against the SNAPSHOT (not plan_path) is also what makes successive renormalizations
+    # honest: each is measured against the bytes that were approved, so a norm edit
+    # cannot be walked to in small steps.
+    old = _load(old_path, strict=False)
+    new = _load(args.plan)
+    run = runner if runner is not None else advisor.subprocess_runner
+    submission = _submission_problems(new, run, state.weight_class)
+    if submission:
+        return Directive(False, state.node, "fix_plan",
+                         "renormalization blocked: the corrected plan does not meet "
+                         "submission requirements",
+                         data={"problems": submission})
+    refusals = gates.renormalization_blockers(old, new)
+    _log_gate(state, "renormalization", refusals, passed=not refusals)
+    if refusals:
+        return Directive(False, state.node, "replan",
+                         "not a renormalization: this edit reaches the norm, not just "
+                         "the sequence of operations — drop --renormalize and replan it "
+                         "through the review and approval it is owed",
+                         data={"blockers": refusals})
+    changed: list[int] = []
+    for ns in new.stages:
+        try:
+            cur = state.stage(ns.index)
+        except KeyError:
+            continue
+        if cur.means.procedure != ns.means.procedure:
+            changed.append(ns.index)
+        cur.means.procedure = ns.means.procedure
+    state.plan_path = args.plan
+    _stamp_accepted_plan_digest(state, args.plan)
+    state.log("renormalize", stages=changed, plan=args.plan)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        "renormalized: the procedure of "
+        + (f"stage(s) {changed}" if changed else "no stage")
+        + " was replaced; every norm the plan sets is unchanged",
+        data={"stages": changed})
+
+
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load, stage_carry_key
+
+    # precondition: an unacknowledged effort-divergence fire (whether it forced this
+    # DIAGNOSING entry itself via the passing-diagnose path, or merely rode along on
+    # a failing stage/final-check's Directive) must be explicitly decided via
+    # `agentctl fire-acknowledge` before the plan may be re-sequenced — this is the
+    # gap the FAILING branches of record_result/verify_final left open (they attach
+    # the fire data but never force a decision on it). Checked FIRST, ahead of
+    # difficulty_blockers, since it is orthogonal to the declare/investigate/
+    # critique/normalize cycle that difficulty_blockers governs.
+    efblock = gates.effort_fire_blockers(state)
+    _log_gate(state, "effort_fire", efblock, passed=not efblock)
+    if efblock:
+        return Directive(
+            False, state.node, "fire_acknowledge",
+            "replan blocked by an unacknowledged effort-divergence fire",
+            marker=DIRECTIVE_ESCALATE_TO_USER,
+            data={"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)},
+        )
 
     # precondition: inside the DIAGNOSING cycle, the difficulty record must be
     # complete before a plan may be re-normed (variant (b) — internal command
@@ -3744,6 +5431,109 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     if dblock:
         return Directive(False, state.node, "declare", "replan blocked by incomplete difficulty record",
                          data={"blockers": dblock})
+
+    if not state.plan_path:
+        return Directive(False, state.node, "submit_plan", "no current plan to replan against")
+
+    # diagnosing-replan renegotiation gate (GitHub #177): once this task's
+    # cross-session replan_count reaches the Rule-of-Three ceiling
+    # (`effort-replan-absolute`) while inside DIAGNOSING, a further replan is
+    # refused until the order's customer has made an explicit renegotiation
+    # decision. [] (and this whole block a no-op) outside DIAGNOSING and below
+    # the ceiling — gates.diagnosing_replan_blockers itself returns [] there.
+    # Placed AFTER effort_fire_blockers/difficulty_blockers (an unacknowledged
+    # fire or an incomplete difficulty record must still be resolved through the
+    # ordinary path first) and BEFORE normalization_blockers/failure_address_
+    # blockers/plan_review_blockers/renormalize (those are properties of the
+    # CORRECTED PLAN or of the sequence it changes; this gate is about whether
+    # another replan should happen at all, a strictly prior question).
+    cross_replan_count = int(
+        task_accumulator.get(state.task_id).get("per_axis_totals", {}).get("replan_count", 0) or 0
+    )
+    rrblock = gates.diagnosing_replan_blockers(state, task_replan_count=cross_replan_count)
+    _log_gate(state, "diagnosing_replan", rrblock, passed=not rrblock)
+    if rrblock:
+        decision = getattr(args, "renegotiation_decision", None)
+        if not decision:
+            return Directive(
+                False, state.node, "renegotiate", "replan blocked: " + rrblock[0],
+                marker=DIRECTIVE_ESCALATE_TO_USER,
+                data={"blockers": rrblock, "replan_count": cross_replan_count},
+            )
+        renegotiated_by = (getattr(args, "renegotiated_by", None) or "").strip()
+        if not renegotiated_by:
+            return Directive(
+                False, state.node, "renegotiate",
+                "--renegotiation-decision requires a non-empty --renegotiated-by",
+                data={"blockers": rrblock},
+            )
+        renegotiation_note = (getattr(args, "renegotiation_note", None) or "").strip()
+        if not renegotiation_note:
+            return Directive(
+                False, state.node, "renegotiate",
+                "--renegotiation-decision requires a non-empty --renegotiation-note",
+                data={"blockers": rrblock},
+            )
+        try:
+            order_doc = _load(args.plan, strict=False)
+        except (OSError, PlanError):
+            order_doc = None
+        order = order_doc.meta.order if order_doc is not None else None
+        if order is not None and order.customer_id and renegotiated_by != order.customer_id:
+            return Directive(
+                False, state.node, "renegotiate",
+                f"renegotiation author {renegotiated_by!r} does not match order "
+                f"customer_id {order.customer_id!r}; record it as the customer of "
+                "record, or correct --renegotiated-by",
+                data={"blockers": rrblock},
+            )
+        state.renegotiations.append({
+            "decision": decision,
+            "note": renegotiation_note,
+            "by": renegotiated_by,
+            "ts": _utcnow(),
+            "task_replan_count_at_decision": cross_replan_count,
+        })
+        state.log("renegotiation", decision=decision, by=renegotiated_by)
+        if decision == "abandon":
+            # mirrors cmd_block's own bypass-transition idiom (and fire-acknowledge's
+            # "abandon" decision) — parks reversibly via unblock, never RESOLVED, and
+            # never touches args.plan.
+            state.blocked_from = state.node
+            state.node = Node.BLOCKED.value
+            state.log("block", reason=f"renegotiation abandoned: {renegotiation_note}")
+            store.save(state)
+            return Directive(
+                True, state.node, "unblock",
+                "session abandoned after DIAGNOSING-replan renegotiation; unblock to resume",
+                marker="ESCALATE",
+                data={"renegotiation": state.renegotiations[-1]},
+            )
+        # continue/rescope: fold this renegotiation's effect the same way task-reset
+        # does (task_accumulator.reset is now a deliberate second caller — see its
+        # docstring) and fall through to the rest of this command unchanged. This is
+        # also the concrete fix for GitHub #201: effort.py's own REPLANS-scale
+        # effective_deltas() reads this exact accumulator field against the same
+        # static ceiling and never resets it itself, which is why an unbounded
+        # renegotiation-free loop could re-fire on every subsequent replan; zeroing
+        # it here means the closing replan starts the scale's next Rule-of-Three
+        # budget from zero instead.
+        task_accumulator.reset(state.task_id)
+
+    # The renormalization branch sits HERE deliberately: after difficulty_blockers (a
+    # renormalization offers a whole plan, and offering one while the difficulty record
+    # is still incomplete is how a difficulty gets re-plannned away rather than worked
+    # through) and after the no-plan check it needs a baseline from, but BEFORE the two
+    # CLOSURE preconditions below and the plan-review and plan_approval gates after them.
+    # The closure preconditions are conditions of LEAVING the DIAGNOSING cycle, and this
+    # path does not leave it: blocking a re-sequencing on them demanded a re-norming as
+    # the price of an act that closes nothing, and — worse — a `--normalization-waiver`
+    # passed with the flag would have been spent, and logged, on a call that never
+    # discharged the difficulty. The gates below govern the NORM, which is the very thing
+    # this path is refused for touching: making an executor re-arm a review to reorder his
+    # own operations is the cost the field split exists to remove.
+    if getattr(args, "renormalize", False):
+        return _renormalize_replan(args, state, store, runner)
 
     # closure precondition: a difficulty exposed a norm-failure; closing it (leaving the
     # DIAGNOSING cycle) REQUIRES re-norming the reproducible factor. Mandatory-if-
@@ -3783,9 +5573,6 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                          "обеспечение (re-run critique with --failure-address)",
                          data={"blockers": fablock})
 
-    if not state.plan_path:
-        return Directive(False, state.node, "submit_plan", "no current plan to replan against")
-
     # plan-review gate: the corrected plan (args.plan) must carry a thinker review
     # with a passing/overridden verdict BOUND to it before it may be applied. Gates
     # EVERY replan kind (refinement and substantive alike, per the user decision),
@@ -3794,10 +5581,71 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     prblock = gates.plan_review_blockers(state, args.plan)
     _log_gate(state, "plan_review", prblock, passed=not prblock)
     if prblock:
-        return Directive(False, state.node, "plan_review",
-                         "replan blocked: the corrected plan needs a thinker review "
-                         "(run: plan-review --target " + args.plan + ")",
-                         data={"blockers": prblock})
+        # With the round-release valve active the blockers ARE the release message,
+        # which says no further review is required — so the refusal must stop
+        # prescribing one, or the engine would name as the cure the very act the
+        # valve just retired, and the loop would have no exit. This is the path the
+        # valve exists for: post-approval replan is where review cycles recur.
+        round_release = _note_round_release(state, prblock, store)
+        message = (
+            "replan blocked: the review-round budget is spent, so the decision is "
+            "yours — see blockers"
+            if round_release
+            else "replan blocked: the corrected plan needs a thinker review "
+                 "(run: plan-review --target " + args.plan + ")"
+        )
+        return Directive(False, state.node, "plan_review", message,
+                         data={"blockers": prblock,
+                               "plan_review_round_release": round_release})
+
+    # Submission seam (b): the single NEW-side load and the check it feeds. Its placement
+    # answers two separate orderings at once.
+    # Before the enumeration/plan_approval block below, because `_launch_enumeration` there
+    # is destructive and PERSISTED: it clears the premise bag's enumeration record back to
+    # not-run, bumps the launch counter, pins `enumerate_launch_digest` to the PROPOSED
+    # bytes, stamps a deadline and spawns a detached worker over them — and the
+    # `enumeration_bag_dirty` save below writes all of that to disk. Refusing after that
+    # would destroy the live session's bag in the name of a plan this command rejected,
+    # leaving the still-current plan blocked on an enumeration axis it was never at fault
+    # for. A command that refuses must not mutate persisted state. Both siblings already
+    # read this way: cmd_submit_plan validates before its own `_launch_enumeration`, and
+    # cmd_approve folds only after seam (c)'s refusal, for the same stated reason.
+    # Before diff_plans further down, so all three diff outcomes are covered by one check —
+    # a no_change replan re-materializes live stages from these bytes just as a refinement
+    # does, so "unchanged" is no reason to let an unvalidated plan in.
+    # Entry-point fallback — see cmd_submit_plan's identical comment. Bound here rather
+    # than below the refusals because this seam's own judged refusal needs it; binding a
+    # callable spends nothing, and the judge is reached only on a prefilter hit.
+    run = runner if runner is not None else advisor.subprocess_runner
+    new = _load(args.plan)
+    submission = _submission_problems(new, run, state.weight_class)
+    if submission:
+        return Directive(False, state.node, "fix_plan",
+                         "replan blocked: the corrected plan does not meet submission "
+                         "requirements",
+                         data={"problems": submission})
+
+    # replan-authorization gate: outside DIAGNOSING, a non-substantive edit
+    # (refinement or no_change) to an ALREADY APPROVED plan must have been
+    # presented to the user as a diff and proven delivered before it may be
+    # applied — the write-side twin of plan_presentation_blockers (see that
+    # gate's docstring on state.py's PlanPresentation). The kind fed to the
+    # gate is computed from the SAME baseline this command's own diff (below)
+    # uses, via _replan_baseline_path, so the kind the gate reasons about is
+    # the kind that will actually be applied. Placed strictly after the
+    # submission refusal above (a plan that does not meet submission grade is
+    # not worth authorizing) and strictly before the plan_approval PLUGIN
+    # block below, whose enumeration folding is destructive and PERSISTED —
+    # nothing that may refuse can follow it; this command has still written
+    # nothing to disk at this point.
+    auth_kind = diff_plans(_load(_replan_baseline_path(state), strict=False), new)
+    arblock = gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)
+    _log_gate(state, "replan_authorization", arblock, passed=not arblock)
+    if arblock:
+        return Directive(False, state.node, "present_plan",
+                         "replan blocked: this plan edit has not been authorized by "
+                         "the user",
+                         data={"blockers": arblock})
 
     # plan_approval PLUGIN gate: mirror cmd_approve's plugins.plugin_gate_blockers
     # composition so a refinement/no_change replan cannot rotate the plan bytes back
@@ -3831,7 +5679,12 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                 # expiry, is in docs/operations/detached-enumeration-design.md.
                 outstanding = (not bag.get("enumerated")
                                and bag.get("enumerate_launch_digest") == proposed_digest)
-                if proposed_digest != bag.get("enumerated_at") and not outstanding:
+                # Owed when a PART moved, not when the whole-plan digest did: a plan
+                # whose composite rotated because a stage was deleted introduces no
+                # bytes anyone has yet to read.
+                owed = (not bag.get("enumerated")
+                        or plugins_premise.enumeration_is_stale(bag, proposed))
+                if owed and not outstanding:
                     _launch_enumeration(state, bag, proposed, args.plan)
                     enumeration_bag_dirty = True
         pblock = plugins.plugin_gate_blockers(state, "plan_approval")
@@ -3840,12 +5693,33 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     if enumeration_bag_dirty:
         # AFTER the finally restored plan_path — a save inside the swapped block
         # would persist the PROPOSED plan as the session's current one. Before the
-        # pblock return below, because this path refuses without reaching any of
+        # pblock return below, because that path refuses without reaching any of
         # cmd_replan's own save sites: unsaved, the deadline stamp Stage 5's escape
         # reads would never exist on disk, and the not-run clear would leave the
         # bag pinned to the superseded digest — i.e. the inescapable
         # _ENUMERATE_STALE, the exact routing the clear exists to prevent.
+        # What this save may legitimately persist is bounded from ABOVE, not here:
+        # seam (b) has already accepted these bytes, so every refusal still ahead
+        # (pblock, critique coverage) is one the session reached on a plan that met
+        # submission requirements — never on bytes it was about to reject outright.
         store.save(state)
+    # Invalidate dispositions whose cited stage fields moved in the proposed plan so
+    # the mismatch is visible in question-list output even when this replan is blocked
+    # by the gate (#123). Runs here — after the try-finally restored plan_path and
+    # before the pblock return — so a blocked replan still surfaces stale notes on disk.
+    _inv_bag = state.plugins.get("premise")
+    if _inv_bag is not None:
+        _inv_stage_keys = {s.index: stage_element_keys(s) for s in new.stages}
+        _inv_meta_keys = plan_meta_element_keys(new)
+        _inv_changed = premise.invalidate_stale_dispositions(
+            _inv_bag, _inv_stage_keys, meta_keys=_inv_meta_keys
+        )
+        _inv_changed = (
+            premise.invalidate_stale_order_dispositions(_inv_bag, _inv_stage_keys)
+            or _inv_changed
+        )
+        if _inv_changed:
+            store.save(state)
     _log_gate(state, "plan_approval_plugin", pblock, passed=not pblock)
     if pblock:
         # The escape counts ride THIS refusal for cmd_approve's reason — the coordinator
@@ -3874,16 +5748,14 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # #8: diff against the plan AS APPROVED (the immutable snapshot), not plan_path —
     # which the coordinator may have edited in place. Absent a snapshot (legacy
     # session, or an approve that predates the field) fall back to plan_path.
-    snap = state.plan_snapshot_path
-    old_path = snap if (snap and Path(snap).exists()) else state.plan_path
+    old_path = _replan_baseline_path(state)
     # OLD side is a read-only comparison baseline: a snapshot frozen before a
     # newer trunk tightened the schema (free-text executors #7, or a later-required
     # substantive field like [stage.principle].derivation) must stay diffable — the
     # lenient load keeps the structural parse but skips every submission-grade
-    # check. Only the NEW side (and submit-plan) is strict.
+    # check. Only the NEW side — loaded strictly at seam (b) above — and submit-plan
+    # are strict.
     old = _load(old_path, strict=False)
-    new = _load(args.plan)
-
     # coverage gate: inside the difficulty flow, the corrected plan must CARRY the
     # critique's similarities into conditions/invariants and CHANGE a means/method
     # for the declared differences. Empty split -> [] -> behaves exactly as before.
@@ -3905,6 +5777,57 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             _log_gate(state, "replan_coverage_waiver", cov, passed=True)
 
     kind = diff_plans(old, new)
+    # The replan-loop counterpart of cmd_approve's reset: a replan that gets this far has
+    # applied a corrected plan, so the rounds spent arguing about the previous one are
+    # settled and the next loop starts from zero. Placed here — past every refusal of this
+    # command and common to all three of its success branches — so a REFUSED replan never
+    # silently refills the budget it was blocked by.
+    #
+    # The `--renormalize` early return above is deliberately NOT reset: that path changes
+    # the sequence without touching the norm under review (it demands no review at all and
+    # logs `renormalize` precisely so the effort trigger does not read it as a norm
+    # revision), so the rounds already spent still belong to the same norm and stay
+    # against it.
+    #
+    # Fold into the cross-session task accumulator (item B) before the reset, same
+    # reasoning as cmd_approve's fold above.
+    task_accumulator.add(
+        state.task_id, "plan_review_rounds", state.plan_review_rounds,
+        session_id=state.session_id, now=_utcnow(),
+    )
+    task_accumulator.add(
+        state.task_id, "code_review_rounds", state.code_review_rounds,
+        session_id=state.session_id, now=_utcnow(),
+    )
+    state.plan_review_rounds = 0
+    state.plan_review_counted_digest = ""
+    # Reset alongside the pair above (item A) — same reasoning: rounds spent
+    # code-reviewing the previous plan version are settled once a corrected plan lands.
+    state.code_review_rounds = 0
+    # Stamped HERE and not up at the seam: every refusal path of this command is now behind
+    # us — the last of them being the critique-coverage gate just above — so like seam (a)
+    # the digest only ever names bytes the session ACCEPTED. (Not an enumeration: this
+    # command refuses in eight or so places, and a new one added below this line would
+    # break the property no matter how the list above it reads.)
+    # (The load of args.plan can also raise out of the command, but it raises AT seam (b)
+    # itself — the seam IS that load and the check it feeds — so no placement inside this
+    # range answers for it.)
+    # Stamping at seam (b) itself is now positively WRONG, not merely fragile: the
+    # enumeration block's `store.save` sits between that seam and the refusals above, so a
+    # digest stamped up there can be persisted for a plan the pblock or coverage gate
+    # then rejects — whenever that save runs at all. Placement, not the absence of an intervening save, is what carries the
+    # invariant — and the leak would be a silently wrong digest, not a crash.
+    _stamp_accepted_plan_digest(state, args.plan)
+
+    # Seam (b)'s advice channel, attached to whichever of this command's several success
+    # Directives is returned — an echo never changes which one that is. Computed HERE, on
+    # the same "every refusal is behind us" property the digest stamp just above relies on,
+    # and not up at the seam it belongs to: the judge costs live `claude -p` calls per
+    # flagged stage, so a replan blocked by submission or by critique coverage must not pay
+    # for advice that is then discarded. Placement is about cost only — the advice is
+    # warn-only and cannot influence any decision above it either way. (`run` is bound at
+    # the seam above; only this CALL is deferred, which is where the cost is.)
+    echo_advice = _submission_advice(new, run, state.weight_class)
 
     # if we are exiting the DIAGNOSING cycle (difficulty complete), the failed
     # stage is re-armed and we leave the cycle back to VERIFYING so next_stage can
@@ -3937,6 +5860,14 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         # FILE changed relative to what was cached at submit-plan/last replan.
         state.final_check = new.meta.final_check
         _sync_venue_from_plan(state, new)
+        # …and plan_path follows the bytes too, as it does on the refinement and
+        # substantive branches. "no_change" names the DIFF, not the file: the stages,
+        # final_check and venue above were all just re-materialized from `args.plan`, so
+        # leaving plan_path on the previous file would leave the session executing one
+        # path's content while every later fresh load (the premise gate, verify-final,
+        # the next replan's baseline) reads a different path — and accepted_plan_digest,
+        # stamped on `args.plan`, would name bytes plan_path does not point at.
+        state.plan_path = args.plan
         # Backfill a snapshot for a legacy (pre-snapshot) session so the NEXT replan
         # diffs against real approved bytes instead of self-diffing plan_path.
         if not (state.plan_snapshot_path and Path(state.plan_snapshot_path).exists()):
@@ -3950,15 +5881,21 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             state.difficulty = None
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
             state.log("replan", kind="no_change", exited_diagnosing=True)
+            task_accumulator.add(
+                state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
+            )
             effort.rederive(state)  # re-derive AFTER logging so this in-flight replan is counted
             store.save(state)
             if state.ready_stages():
-                return Directive(True, state.node, "next_stage",
-                                 "difficulty worked through; plan unchanged — retry the re-armed stage")
-            return Directive(True, state.node, "continue", "difficulty worked through; resume execution")
+                return _with_advisories(Directive(
+                    True, state.node, "next_stage",
+                    "difficulty worked through; plan unchanged — retry the re-armed stage"), echo_advice)
+            return _with_advisories(Directive(
+                True, state.node, "continue", "difficulty worked through; resume execution"), echo_advice)
         effort.rederive(state)  # re-derive the estimate from the (possibly refined) stages
         store.save(state)
-        return Directive(True, state.node, "continue", "replan is a no-op; plan unchanged")
+        return _with_advisories(Directive(
+            True, state.node, "continue", "replan is a no-op; plan unchanged"), echo_advice)
 
     if kind == "refinement":
         # apply prose refinements and re-arm any FAILED stage for another attempt
@@ -3980,11 +5917,16 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             state.difficulty = None
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
         state.log("replan", kind="refinement", exited_diagnosing=diagnosing)
+        task_accumulator.add(
+            state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
+        )
         effort.rederive(state)  # re-derive AFTER logging so this replan is counted
         store.save(state)
         if state.node == Node.VERIFYING.value and state.ready_stages():
-            return Directive(True, state.node, "next_stage", "refinement applied; retry the ready stage")
-        return Directive(True, state.node, "continue", "refinement applied; resume execution")
+            return _with_advisories(Directive(
+                True, state.node, "next_stage", "refinement applied; retry the ready stage"), echo_advice)
+        return _with_advisories(Directive(
+            True, state.node, "continue", "refinement applied; resume execution"), echo_advice)
 
     # substantive: re-arm the plan-approval gate, reload stages, return to PLAN_READY.
     # #12: carry PASSED status forward for any stage whose FULL definition is
@@ -3992,7 +5934,38 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # work to PENDING and force needless re-verification. Compare each new stage
     # against the LIVE stage (what actually ran) by the full-fidelity carry key; an
     # unchanged, previously-PASSED stage keeps its recorded Outcome intact.
+    # Stage 6: build the re-attest stash FRESH alongside the carry-forward pass
+    # above — same PASSED gating, a NARROWER key (method/control criterion/
+    # expected result image/executor/done criterion, not the stage's whole
+    # definition). This never accumulates across replans: each substantive
+    # replan replaces state.reattest_stash wholesale, so a stage re-armed two
+    # replans ago and never re-dispatched since simply has no entry — the only
+    # cost of that gap is one unnecessary full dispatch, never an incorrect
+    # PASS, and `dispatch --re-attest` treats a missing entry as condition-1
+    # failure (no prior PASSED to re-attest against) rather than an error.
     live_by_index = {s.index: s for s in state.stages}
+    reattest_stash: list[ReattestStash] = []
+    for ns in new.stages:
+        prev = live_by_index.get(ns.index)
+        if prev is None or prev.outcome.status != StageStatus.PASSED.value:
+            continue
+        matched = stage_reattest_digest(prev) == stage_reattest_digest(ns)
+        reattest_stash.append(ReattestStash(
+            stage_index=ns.index,
+            operative_surface_matched=matched,
+            prior_outcome=Outcome(
+                status=prev.outcome.status,
+                actual=prev.outcome.actual,
+                fail_digests=list(prev.outcome.fail_digests),
+                cost_usd=prev.outcome.cost_usd,
+                duration_ms=prev.outcome.duration_ms,
+                spawn_count=prev.outcome.spawn_count,
+                delivered_head=prev.outcome.delivered_head,
+            ),
+            prior_control=prev.control,
+            reattest_digest=stage_reattest_digest(ns),
+        ))
+    state.reattest_stash = reattest_stash
     for ns in new.stages:
         prev = live_by_index.get(ns.index)
         if (prev is not None
@@ -4010,13 +5983,75 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
     state.log("replan", kind="substantive")
+    task_accumulator.add(
+        state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
+    )
     effort.rederive(state)  # re-derive AFTER logging so this replan is counted
     store.save(state)
-    return Directive(
+    return _with_advisories(Directive(
         True, state.node, "await_user_approval",
         "substantive replan; HARD GATE — re-approval required",
         marker="PLAN-READY",
-    )
+    ), echo_advice)
+
+
+def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """The synchronous decision `gates.effort_fire_blockers` refuses dispatch/replan/
+    submit_plan without: appends an "ack" onto the LAST entry of state.effort_fires
+    (never deletes — the append-only audit trail is preserved) recording who decided
+    and what. Three decisions:
+
+    - "continue": accept the overrun and keep executing the current plan as-is. No
+      node change — whatever node the fire's own diagnose transition already put the
+      session in (always DIAGNOSING, since every record_fire call site forces that
+      transition in the same call) is left untouched; the coordinator proceeds
+      through the ordinary declare/investigate/critique/normalize/replan cycle next.
+    - "abandon": the order no longer warrants continuing. Parks the session at
+      BLOCKED — the same bypass-transition() idiom cmd_block itself uses — rather
+      than RESOLVED: a mid-execution fire routinely fires with stages still
+      PENDING, and check_invariants refuses RESOLVED unless every stage is
+      PASSED, so RESOLVED would be a lie for exactly the sessions this decision
+      exists to stop. cmd_unblock remains the (audited) way back in, same as an
+      ordinary block.
+    - "revise": the plan itself needs to change in response to the overrun. No node
+      change needed for the same reason as "continue" (already DIAGNOSING); the
+      difference is purely in the human decision recorded, informing what the
+      coordinator does next.
+    """
+    state = _require(store, args.session)
+    if not state.effort_fires:
+        return Directive(False, state.node, "noop", "no effort-divergence fire recorded")
+    last = state.effort_fires[-1]
+    if last.get("ack") is not None:
+        return Directive(True, state.node, "noop", "fire already acknowledged", data={"fire": last})
+    decision = args.decision
+    if decision not in ("continue", "abandon", "revise"):
+        return Directive(False, state.node, "noop", f"invalid --decision {decision!r}: "
+                         "must be one of continue, abandon, revise")
+    if not args.by or not args.by.strip():
+        return Directive(False, state.node, "noop", "empty --by: must name who decided")
+    last["ack"] = {
+        "by": args.by,
+        "decision": decision,
+        "ts": _utcnow(),
+        "note": getattr(args, "note", None),
+    }
+    state.log("fire_acknowledge", by=args.by, decision=decision)
+    if decision == "abandon":
+        state.blocked_from = state.node
+        state.node = Node.BLOCKED.value
+        state.log("block", reason="user-abandoned-after-fire")
+        store.save(state)
+        return Directive(True, state.node, "unblock",
+                         "session abandoned after unacknowledged effort-divergence fire; "
+                         "unblock to resume",
+                         marker="ESCALATE",
+                         data={"fire": last})
+    store.save(state)
+    next_action = "declare" if state.difficulty is not None else "next_stage"
+    return Directive(True, state.node, next_action,
+                     f"fire acknowledged (decision={decision}); resuming",
+                     data={"fire": last})
 
 
 def cmd_block(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -4053,8 +6088,7 @@ def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None)
     state = _require(store, args.session)
     if not (state.difficulty and state.difficulty.critique):
         return Directive(True, state.node, "inspect", "no active critique; nothing to cover")
-    snap = state.plan_snapshot_path
-    old_path = snap if (snap and Path(snap).exists()) else state.plan_path
+    old_path = _replan_baseline_path(state)
     old = load_plan(old_path, strict=False)
     new = load_plan(args.new)
     blockers = gates.replan_coverage_blockers(old, new, state.difficulty.critique)
@@ -4063,6 +6097,97 @@ def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None)
                          "coverage blockers: " + "; ".join(blockers),
                          data={"coverage_blockers": blockers})
     return Directive(True, state.node, "inspect", "OK — coverage clear")
+
+
+def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Read-only effort-divergence report: where does this session stand against the
+    norm its approved plan declared, on each of the four scales?
+
+    Exists because the trigger only ever fires INSIDE a command the coordinator chose
+    to run (`record-result`, `verify-final`, or the `gates.effort_fire_blockers` refusal
+    on `dispatch`/`submit-plan`/`replan`). A session that runs long WITHOUT reaching one
+    of those — a stage the coordinator keeps working, a specialist that never returns —
+    diverges unobserved, however far past the multiple it goes. This command is the
+    observation that does not depend on such a call arriving, and it is what the
+    UserPromptSubmit watch hook drives on every prompt.
+
+    STRICTLY READ-ONLY, and `ok=True` on every path including a refusal-shaped answer:
+    it never transitions, never seeds a difficulty, never appends to `state.effort_fires`
+    and never calls `store.save`. A read command with a side effect would be a SECOND,
+    hidden fire site — it would consume the one-fire-per-replan budget belt 2 keeps
+    (`effort._replans_since_last_fire`) without anyone having diagnosed anything, and
+    the real fire site would then fall silent. `effort.refresh_spend` does mutate the
+    loaded `SessionState` in memory (that is how the spend accumulator is read at all);
+    with no save, the on-disk state is untouched, which the test asserts on the bytes.
+
+    Deliberately does NOT call `effort.rederive`: the fire sites compare against the
+    STORED estimate, so re-deriving here would report a divergence against a comparand
+    no gate uses — a watch that disagrees with the gate it watches is worse than none.
+    The same rule is why every per-scale row is computed from `effort.effective_deltas`
+    / `effective_ratios` with the same cross-session totals `divergence()` is handed:
+    `at_or_past_threshold` (what the hook speaks on) and `would_fire` (what a fire site
+    would act on) must be answers about one vector, not two."""
+    state = store.load(args.session) if getattr(args, "session", None) else None
+    if state is None:
+        return Directive(True, "(none)", "start", "no session state; nothing to check",
+                         data={"armed": False, "scales": []})
+    if not effort.armed(state):
+        return Directive(
+            True, state.node, "inspect",
+            "effort trigger not armed (no approved-plan baseline); no scale can diverge",
+            data={"armed": False, "active": gates.effort_active(state), "scales": []},
+        )
+    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
+    thr = Thresholds()
+    multiple = thr.effort_divergence_multiple()
+    # The SAME cross-session totals the fire sites pass, read once and used for both
+    # halves of this report. Reporting the session-local vector while `would_fire` was
+    # decided on the cross-session one is how a watch goes silent on exactly the case it
+    # exists for: a resolved re-entry hands the fresh SessionState a replan count of 0
+    # while the accumulator still holds the prior laps. See effort.effective_deltas.
+    cross_totals = task_accumulator.get(state.task_id)["per_axis_totals"]
+    local = effort.deltas(state)
+    delta = effort.effective_deltas(state, cross_session_totals=cross_totals)
+    comparand = effort.comparands(state, thr)
+    ratio = effort.effective_ratios(state, thr, cross_session_totals=cross_totals)
+    scales = []
+    for scale in effort.SCALE_ORDER:
+        label, unit = effort.describe(scale)
+        kind = "ratio" if scale in effort.RATIO_SCALES else "absolute"
+        trigger = multiple if kind == "ratio" else 1.0
+        observed = ratio[scale]
+        scales.append({
+            "scale": scale, "label": label, "unit": unit, "kind": kind,
+            "actual": delta[scale], "comparand": comparand[scale], "ratio": observed,
+            # Normalized "how far past its OWN line", so the four scales rank against
+            # each other — the same footing effort.divergence puts them on.
+            "past_own_trigger": (observed / trigger) if observed is not None else None,
+            "at_or_past_threshold": observed is not None and observed >= trigger,
+            # Whether the accumulator, not this session's own history, supplied the
+            # number — so a reader of the line knows the count is the TASK's, not the
+            # session's, without having to open the accumulator to find out.
+            "cross_session": delta[scale] > local[scale],
+        })
+    div = effort.divergence(state, thr, cross_session_totals=cross_totals)
+    over = [s["scale"] for s in scales if s["at_or_past_threshold"]]
+    detail = (
+        f"effort divergence on {', '.join(over)}" if over
+        else "no scale at or past its threshold"
+    )
+    return Directive(
+        True, state.node, "inspect", detail,
+        data={
+            "armed": True,
+            # Whether a fire site WOULD act on this: gates.effort_active is the same
+            # predicate they consult, so a report that omitted it would read as an
+            # alarm on a session where the trigger is switched off.
+            "active": gates.effort_active(state),
+            "over_threshold": over,
+            "would_fire": div.scale if div is not None else None,
+            "framing": div.framing if div is not None else None,
+            "scales": scales,
+        },
+    )
 
 
 def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -4105,6 +6230,13 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     child_plan = args.plan
     child_task = getattr(args, "task", None) or f"sub:{Path(child_plan).stem}"
 
+    # Snapshot the venue pair the PARENT plan file declares right now, at push time —
+    # the comparand cmd_pop_subplan's venue-substitution guard checks the file against
+    # later. A read failure here (unreadable/malformed parent) leaves the pair
+    # uncaptured, which is exactly the signal that tells pop "nothing to compare;
+    # re-derive as always".
+    parent_pair = _plan_venue_pair(state.plan_path)
+
     frame = PlanFrame(
         plan_path=state.plan_path,
         node=state.node,
@@ -4128,6 +6260,12 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
         effort_actuals=dict(state.effort_actuals),
         effort_fires=list(state.effort_fires),
         effort_spend_seen=dict(state.effort_spend_seen),
+        plan_review_rounds=state.plan_review_rounds,
+        plan_review_counted_digest=state.plan_review_counted_digest,
+        code_review_rounds=state.code_review_rounds,
+        parent_repo_root=parent_pair[0] if parent_pair is not None else "",
+        parent_delivery_worktree=parent_pair[1] if parent_pair is not None else "",
+        parent_venue_captured=parent_pair is not None,
     )
     state.plan_stack.append(frame)
     # Reset to a fresh child cycle — the child re-classifies and plans normally.
@@ -4165,6 +6303,13 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     state.effort_actuals = {}
     state.effort_fires = []
     state.effort_spend_seen = {}
+    # Review-round custody (schema 30), on the same reasoning as the effort block above:
+    # the frame holds the parent's pair, so the child argues about its own plan on its own
+    # budget and cannot spend — or be charged for — the parent's rounds.
+    state.plan_review_rounds = 0
+    state.plan_review_counted_digest = ""
+    # Code-review round custody (item A, schema 33) — same reasoning, same frame.
+    state.code_review_rounds = 0
     state.log("push_subplan", child_plan=child_plan, originating_stage=originating, depth=len(state.plan_stack))
     store.save(state)
     return Directive(
@@ -4214,12 +6359,41 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     state.effort_baseline = frame.effort_baseline
     state.effort_fires = frame.effort_fires
     state.effort_spend_seen = frame.effort_spend_seen
+    # Review-round custody (schema 30). Restored, NOT merged like effort_actuals: rounds
+    # are argument about a particular plan, and the child's rounds were spent arguing
+    # about the child's plan, which no longer exists once the parent resumes.
+    state.plan_review_rounds = frame.plan_review_rounds
+    state.plan_review_counted_digest = frame.plan_review_counted_digest
+    # Code-review round custody (item A, schema 33) — same restore-not-merge reasoning.
+    state.code_review_rounds = frame.code_review_rounds
     state.node = new_node
     # The parent PLAN FILE is authoritative for the venue, so re-derive it here
     # rather than trust the frame: a frame captured after the value was already
     # lost would keep it lost. The frame fields stay as the fallback the helper
     # leaves in place when that file cannot be read.
-    _sync_venue_from_plan(state)
+    #
+    # BUT: re-deriving unconditionally trusts the file even when it moved out from
+    # under the pushed child — the one other post-approval route from an edited plan
+    # FILE to live state. So re-derive only when there is nothing to compare against
+    # (a legacy frame, or the parent was unreadable at push); when the parent's venue
+    # pair was captured, compare it against a fresh read now and keep the frame's
+    # (already-restored, two lines up) venue if either field moved. A missing venue
+    # kept is a lesser-of-two-evils choice, not a clean stop: it is never refused, it
+    # just runs in whatever cwd is ambient, which is safer than silently adopting a
+    # venue nobody approved at plan_approval time.
+    venue_source = "plan-file"
+    if frame.parent_venue_captured:
+        current_pair = _plan_venue_pair(state.plan_path)
+        venue_substituted = (
+            current_pair is not None
+            and current_pair != (frame.parent_repo_root, frame.parent_delivery_worktree)
+        )
+        if venue_substituted:
+            venue_source = "frame (parent plan venue changed while pushed)"
+        else:
+            _sync_venue_from_plan(state)
+    else:
+        _sync_venue_from_plan(state)
     # Mark the originating stage as satisfied, THEN derive the active-stage
     # pointer from stage status — order is load-bearing: deriving first would
     # re-point at a stage this same call is about to mark PASSED.
@@ -4231,14 +6405,15 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
         pass
     _restore_current_stage(state)
     state.log("pop_subplan", child_task_id=child_task_id, originating_stage=frame.originating_stage,
-              depth=len(state.plan_stack))
+              depth=len(state.plan_stack), venue_source=venue_source)
     store.save(state)
     return Directive(
         True, state.node, "next_stage",
         f"sub-plan {child_task_id!r} resolved; parent restored at EXECUTING; "
-        f"stage {frame.originating_stage} satisfied — run next-stage to continue",
+        f"stage {frame.originating_stage} satisfied — run next-stage to continue "
+        f"(venue: {venue_source})",
         data={"originating_stage": frame.originating_stage, "child_task_id": child_task_id,
-              "stack_depth": len(state.plan_stack)},
+              "stack_depth": len(state.plan_stack), "venue_source": venue_source},
     )
 
 
@@ -4488,8 +6663,11 @@ COMMANDS = {
     "present-plan": cmd_present_plan,
     "confirm-delivery": cmd_confirm_delivery,
     "plan-review": cmd_plan_review,
+    "plan-review-delta": cmd_plan_review_delta,
+    "risk-accept": cmd_risk_accept,
     "stage-review": cmd_stage_review,
     "code-review": cmd_code_review,
+    "accept": cmd_accept,
     "approve": cmd_approve,
     "partition": cmd_partition,
     "partition-units": cmd_partition_units,
@@ -4505,7 +6683,9 @@ COMMANDS = {
     "resolve": cmd_resolve,
     "reject": cmd_reject,
     "replan": cmd_replan,
+    "fire-acknowledge": cmd_fire_acknowledge,
     "check-coverage": cmd_check_coverage,
+    "effort-check": cmd_effort_check,
     "block": cmd_block,
     "unblock": cmd_unblock,
     "status": cmd_status,
@@ -4513,6 +6693,7 @@ COMMANDS = {
     "close": cmd_close,
     "push-subplan": cmd_push_subplan,
     "pop-subplan": cmd_pop_subplan,
+    "task-reset": cmd_task_reset,
 }
 
 
@@ -4552,11 +6733,12 @@ _SESSION_COMMANDS = (
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
     "plan-render", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
-    "stage-review", "code-review", "approve", "partition", "partition-units",
+    "plan-review-delta", "risk-accept",
+    "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "record-result", "declare",
     "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
-    "replan", "check-coverage", "block", "unblock", "status", "drive", "close",
-    "push-subplan", "pop-subplan",
+    "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status",
+    "drive", "close", "push-subplan", "pop-subplan", "task-reset",
 )
 
 # (dest, subcommands that declare it)
@@ -4564,19 +6746,19 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("goal", ("start", "reset")),
     ("done_criterion", ("start", "reset")),
     ("note", ("plugin-record", "confirm-delivery", "plan-review", "stage-review", "code-review",
-              "question-enumerate-escape")),
+              "accept", "question-enumerate-escape", "fire-acknowledge")),
     ("statement", ("ledger-add", "ledger-candidate")),
     ("source", ("ledger-add", "question-dispose")),
     ("premises", ("ledger-add",)),
-    ("basis", ("ledger-add", "question-dispose")),
+    ("basis", ("ledger-add", "question-dispose", "risk-accept")),
     ("reason", ("ledger-dispose", "question-retire", "question-candidate-dispose",
-                "order-dispose", "reject", "block")),
+                "order-dispose", "reject", "block", "task-reset")),
     ("element", ("order-raise",)),
     ("question", ("question-raise", "question-candidate-dispose")),
     ("attempted", ("question-research",)),
     ("answer", ("question-dispose",)),
     ("derivation", ("question-dispose",)),
-    ("risk", ("question-dispose",)),
+    ("risk", ("question-dispose", "risk-accept")),
     ("confirm_still_valid", ("question-rebind",)),
     ("concerns", ("plan-review", "stage-review", "code-review")),
     ("observation", ("stage-review", "record-result", "close")),
@@ -4595,13 +6777,17 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("quality_note", ("resolve", "close")),
     ("coverage_waiver", ("replan",)),
     ("normalization_waiver", ("replan",)),
+    ("renegotiation_note", ("replan",)),
+    ("bypass_reason", ("accept",)),
+    ("reopen_reason", ("reset",)),
+    ("reopen_user_decision", ("reset",)),
 )
 
 # (dest, subcommands that declare it, why '@' means nothing here)
 _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("state_root", (_ROOT,), "directory path the state store is rooted at"),
     ("session", _SESSION_COMMANDS, "session id — the slug state is keyed by"),
-    ("task", ("start", "reset", "push-subplan"), "task slug, not a description"),
+    ("task", ("start", "reset", "push-subplan", "task-reset"), "task slug, not a description"),
     ("criterion_type", ("start", "reset"), "one of two fixed verification kinds"),
     ("plugin", ("plugin-activate", "plugin-deactivate", "plugin-record"), "plugin registry name"),
     ("phase", ("plugin-record",), "plugin phase name from a fixed vocabulary"),
@@ -4613,26 +6799,43 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("claim", ("ledger-dispose",), "id of the grounding claim, not its text"),
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
     ("target", ("question-raise", "plan-review"), "plan element address or plan file path"),
-    ("plan", ("plan-render", "submit-plan", "replan", "drive", "push-subplan",
-              "question-enumerate", "question-enumerate-worker",
+    ("control", ("question-raise",),
+     "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
+     "grammar-bound name, never the prose --control of record-result/close"),
+    ("plan", ("plan-render", "plan-review-delta", "submit-plan", "replan", "drive",
+              "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
-              "question-rebind"), "plan file path"),
+              "question-rebind", "question-raise", "present-plan", "order-dispose"),
+     "plan file path"),
     ("digest", ("question-enumerate-worker",),
      "plan content digest the launcher computed — the sidecar's key, passed down "
      "verbatim rather than a narrative"),
+    ("stages", ("question-enumerate-worker",),
+     "comma-separated stage indices the launcher narrowed the pass to"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
-    ("by", ("confirm-delivery", "approve", "resolve"), "who acted — a name, not a narrative"),
+    ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge"), "who acted — a name, not a narrative"),
+    # --decision is NOT listed here: argparse `choices=` already makes it a non-candidate
+    # for the @<path> partition (test_argv_text_call_sites.py's _is_candidate excludes any
+    # action with choices set), so classifying it would be a stale entry the moment it's added.
     ("escape_reason", ("confirm-delivery",),
      "one token from delivery.DELIVERY_ESCAPE_REASONS — the narrative half of "
      "the escape is --note, which is RESOLVE"),
     ("reviewer", ("plan-review", "stage-review", "code-review"), "reviewer name"),
     ("plan_digest", ("plan-review",), "sha256 the review binds to"),
+    ("scope", ("plan-review", "risk-accept"), "'' or 'stage:<n>' — the review's binding, not narrative"),
+    ("concern_ids", ("plan-review",),
+     "explicit stable ids for --concern, positionally paired — ids, not narrative"),
+    ("concern_id", ("risk-accept",), "the concern id this acceptance answers — an id, not narrative"),
     ("code_ref", ("code-review", "record-result"), "commit / PR reference the verdict binds to"),
     ("unit", ("partition", "partition-units"), "'|'-delimited partition-unit record"),
+    ("author", ("accept", "risk-accept"), "acceptance author id — an identity token, not narrative"),
+    ("renegotiated_by", ("replan",), "who made the renegotiation decision — a name, not a narrative"),
+    ("verdict", ("accept",), "'|'-delimited requirement-verdict record"),
     ("budget", ("dispatch",), "budget tier name"),
     ("complexity", ("dispatch",), "complexity tier name"),
-    ("cost_log", ("record-result", "resolve", "verify-final", "replan"), "cost log file path (test override)"),
+    ("cost_log", ("record-result", "resolve", "verify-final", "replan", "effort-check"),
+     "cost log file path (test override)"),
     ("quality_by", ("resolve", "close"), "how the quality rating was obtained — a fixed token"),
     ("confirmed_by", ("close",), "who confirmed — a name, not a narrative"),
     ("approved_by", ("drive",), "who approved — a name, not a narrative"),
@@ -4700,12 +6903,28 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--criterion-type", dest="criterion_type", default=CriterionType.MEASURABLE.value)
     sp.add_argument("--recursion-depth", dest="recursion_depth", type=int, default=0)
     sp.add_argument("--if-absent", dest="if_absent", action="store_true")
+    sp.add_argument("--host", choices=runtime_host.HOSTS, default=None,
+                    help="coordination host this session dispatches through (claude|cursor); auto-detected when omitted (best-effort; classify is the hard gate)")
 
     sp = add("reset"); sp.add_argument("--session", required=True); sp.add_argument("--task", required=True)
     sp.add_argument("--goal", default=""); sp.add_argument("--done-criterion", dest="done_criterion", default="")
     sp.add_argument("--criterion-type", dest="criterion_type", default=CriterionType.MEASURABLE.value)
     sp.add_argument("--recursion-depth", dest="recursion_depth", type=int, default=0)
     sp.add_argument("--force", action="store_true")
+    sp.add_argument("--reopen-reason", dest="reopen_reason", default="",
+                    help="why a task that already RESOLVED is being re-entered — required by "
+                         "gates.resolved_reentry_blockers, because reset is the only way back "
+                         "into a closed order and it discards the effort baseline, the replan "
+                         "count and every round-release counter on the way in")
+    sp.add_argument("--reopen-user-decision", dest="reopen_user_decision", default="",
+                    help="the user's answer to whether this order still warrants continuing. "
+                         "Required IN ADDITION to --reopen-reason once the task has been "
+                         "re-opened `effort-replan-absolute` times: past that count a reason "
+                         "the coordinator wrote for itself is no longer enough, but it is "
+                         "still owed — the reason says what is being re-opened, the decision "
+                         "says who authorized re-opening it again")
+    sp.add_argument("--host", choices=runtime_host.HOSTS, default=None,
+                    help="coordination host this session dispatches through (claude|cursor); auto-detected when omitted (best-effort; classify is the hard gate)")
 
     sp = add("plugin-activate"); sp.add_argument("--session", required=True)
     sp.add_argument("--plugin", required=True)
@@ -4753,6 +6972,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the plan element the question arose against: plan.goal, "
                          "plan.done_criterion, or stage:<n>.<element>")
     sp.add_argument("--question", default="", help="the question text")
+    sp.add_argument("--control", required=True,
+                    help="the control of this plan whose verdict the answer could flip: "
+                         "'stage <n> verify_command', 'stage <n> done_criterion', "
+                         "'stage <n> landed assertion', 'final_check <n>', or "
+                         "'order requirement <id>'. Refused when it names nothing this "
+                         "plan contains")
+    sp.add_argument("--plan", default=None,
+                    help="resolve --control against this plan instead of the session's "
+                         "current plan_path (use when raising against a CORRECTED plan)")
 
     sp = add("question-research"); sp.add_argument("--session", required=True)
     sp.add_argument("--id", required=True, help="question id to attach the research attempt to")
@@ -4810,9 +7038,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--digest", required=True,
                     help="plan content digest the launcher computed (plugins_premise."
                          "_plan_content_digest) — the sidecar write's key")
+    sp.add_argument("--stages", default="",
+                    help="comma-separated stage indices to read instead of the whole "
+                         "plan, when only those stages moved; omit for the whole plan")
 
     sp = add("question-candidate-dispose"); sp.add_argument("--session", required=True)
-    sp.add_argument("--id", required=True, help="candidate id (qenum-N) to disposition")
+    sp.add_argument("--id", required=True,
+                    help="candidate id (qenum-<part>-N) to disposition")
     sp.add_argument("--as", dest="as_", required=True, choices=["recorded", "dismissed"])
     sp.add_argument("--reason", default="", help="required when --as dismissed")
     sp.add_argument("--question", default="",
@@ -4832,6 +7064,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--stage", type=int, default=None,
                     help="the stage that covers this element, required when --as covered")
     sp.add_argument("--reason", default="", help="why the element is cut, required when --as cut")
+    sp.add_argument("--plan", default=None,
+                    help="stamp content_digest against this plan instead of the session's "
+                         "current plan_path (use when re-covering against a CORRECTED plan)")
 
     sp = add("order-list"); sp.add_argument("--session", required=True)
     sp.add_argument("--format", dest="format", default="", choices=["", "md"],
@@ -4852,11 +7087,17 @@ def build_parser() -> argparse.ArgumentParser:
                     choices=["", "reasoning", "code", "ops", "mixed"],
                     help="what kind of artifact this task produces; 'reasoning'/'mixed' "
                          "arms the claim-provenance ledger plugin on a SUBSTANTIVE session")
+    sp.add_argument("--host", choices=runtime_host.HOSTS, default=None,
+                    help="coordination host this session dispatches through (claude|cursor); "
+                         "required (or ambient-detectable) at classify — sticky thereafter")
 
     sp = add("plan"); sp.add_argument("--session", required=True)
     sp = add("plan-render"); sp.add_argument("--plan", required=True,
         help="TOML plan to render to a markdown prose view on demand (a projection, "
              "never written to disk — the TOML is the single source of truth)")
+    sp.add_argument("--stage", type=int, default=None,
+        help="render only this stage index as a brief projection, instead of "
+             "the whole plan (the spawn prompt's per-dispatch projection)")
     # Accept (and ignore) --session so the harness-session auto-injection
     # (_inject_default_session) is a no-op here: rendering is a pure, session-free
     # read of the plan file, unlike every other verb which drives session state.
@@ -4865,13 +7106,23 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("present-plan"); sp.add_argument("--session", required=True)
     sp.add_argument("--kind", choices=list(PLAN_PRESENTATION_KINDS), default=PLAN_PRESENTATION_KIND_ESSENCE,
                     help="essence = free-form summary, no completeness check; "
-                         "full = every [stage N] anchor required, stage-enumerated")
+                         "full = every [stage N] anchor required, stage-enumerated; "
+                         "replan_diff = proposed-diff rendering for a non-substantive "
+                         "replan against a candidate plan file (see --plan)")
+    sp.add_argument("--plan", default=None,
+                    help="candidate plan file the presentation is stamped against; "
+                         "only legal with --kind replan_diff (defaults to the session's "
+                         "current plan_path there too), refused for essence/full which "
+                         "always target the session's own plan")
     sp.add_argument("--rendering-file", dest="rendering_file", default=None,
                     help="file containing the exact bytes shown to the user")
     sp.add_argument("--emit-skeleton", dest="emit_skeleton", action="store_true",
                     help="print the [stage N] anchor scaffold for a `full` rendering; "
                          "stamps nothing")
     sp = add("confirm-delivery"); sp.add_argument("--session", required=True)
+    sp.add_argument("--kind", choices=list(PLAN_PRESENTATION_KINDS), default=PLAN_PRESENTATION_KIND_ESSENCE,
+                    help="which presentation's delivery this override confirms — must "
+                         "match the --kind used at present-plan time")
     sp.add_argument("--by", required=True,
                     help="the human who confirms delivery (must not be 'hook')")
     sp.add_argument("--note", required=True,
@@ -4888,6 +7139,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="who performed the review (the user, for an override)")
     sp.add_argument("--concern", dest="concerns", action="append", default=None,
                     help="a blocking concern the thinker raised (repeatable; audit trail)")
+    sp.add_argument("--concern-id", dest="concern_ids", action="append", default=None,
+                    help="stable id for the --concern at the same position (repeatable, "
+                         "positionally paired); omitted concerns get a derived id "
+                         "(c0, c1, ...) via state.plan_review_concern_ids — risk-accept "
+                         "binds to this id, never to the concern's prose")
     sp.add_argument("--note", default="",
                     help="override justification, or a free-text note")
     sp.add_argument("--target", default=None,
@@ -4898,11 +7154,34 @@ def build_parser() -> argparse.ArgumentParser:
                          "plan; cross-checked against the live bytes and stored as the "
                          "attested plan_sha256. A passing verdict does NOT bind without "
                          "it — a reviewer that could not read the plan cannot attest.")
+    sp.add_argument("--scope", default=None,
+                    help="'stage:<n>' to bind this review to one stage instead of the "
+                         "whole plan; omitted (or '') means whole-plan, the only kind "
+                         "that existed before stage 5")
     sp.add_argument("--findings-blocking", dest="findings_blocking", type=int, default=None,
                     help="count of blocking findings this round produced (audit trail)")
     sp.add_argument("--findings-nonblocking", dest="findings_nonblocking", type=int,
                     default=None,
                     help="count of non-blocking findings this round produced (audit trail)")
+    sp = add("plan-review-delta"); sp.add_argument("--session", required=True)
+    sp.add_argument("--plan", default=None,
+                    help="plan file to diff against recorded reviews (defaults to the "
+                         "session's current plan_path)")
+    sp = add("risk-accept"); sp.add_argument("--session", required=True)
+    sp.add_argument("--scope", default=None,
+                    help="'' or 'stage:<n>' — the review scope the accepted concern was "
+                         "raised in (must match a recorded plan-review's --scope)")
+    sp.add_argument("--concern-id", dest="concern_id", default="",
+                    help="the concern id this acceptance answers (see plan-review's "
+                         "--concern-id, or its derived c0/c1/... form)")
+    sp.add_argument("--basis", default="",
+                    help="why the risk is being accepted rather than fixed — mirrors "
+                         "question-dispose --disposition assumed's --basis")
+    sp.add_argument("--risk", default="",
+                    help="what could go wrong by accepting rather than fixing — mirrors "
+                         "question-dispose --disposition assumed's --risk")
+    sp.add_argument("--author", default="",
+                    help="who is accepting the risk — an identity token, not narrative")
     sp = add("stage-review"); sp.add_argument("--session", required=True)
     sp.add_argument("--verdict", choices=list(gates.STAGE_REVIEW_VERDICTS), required=True,
                     help="pass = clears the acceptance gate; revise = blocks; override = "
@@ -4929,6 +7208,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--code-ref", dest="code_ref", default=None,
                     help="the reviewed-code revision/digest the reviewer names; binds the "
                          "verdict so a later record-result with a different --code-ref is stale")
+    sp = add("accept"); sp.add_argument("--session", required=True)
+    sp.add_argument("--author", default="",
+                    help="acceptance author id; must match [meta.order].customer_id when set")
+    sp.add_argument("--verdict", dest="verdict", action="append", default=None,
+                    help="requirement verdict as '<requirement_id>|<pass|fail>[|<note>]'; "
+                         "repeatable, one per declared order requirement")
+    sp.add_argument("--note", default="",
+                    help="free-text note on the acceptance review as a whole")
+    sp.add_argument("--bypass", action="store_true",
+                    help="record an AcceptanceBypass alongside the review, for when the "
+                         "acceptance judge is unreachable; requires --bypass-reason and "
+                         "at least one --verdict")
+    sp.add_argument("--bypass-reason", dest="bypass_reason", default="",
+                    help="why this acceptance stands without judge corroboration "
+                         "(required with --bypass)")
     sp = add("approve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
     _UNIT_HELP = ("delivery unit as '<mode>|<stages csv>|<title>[|<ref>]' "
                   "(mode: inline|spawn|subtask); repeatable")
@@ -4946,11 +7240,25 @@ def build_parser() -> argparse.ArgumentParser:
     # explicitly set to medium" and fall through to the stage's declared cost_tier
     # before the "medium" default.
     sp.add_argument("--budget", default=None); sp.add_argument("--complexity", default="medium")
+    # None (not e.g. "medium"), same reason as --budget above: lets cmd_dispatch
+    # tell "omitted" apart from "explicitly medium" and fall through to the
+    # cost_tier-derived default (_EFFORT_BY_COST_TIER) before "medium". Choices
+    # mirror spawn-specialist.py's own --effort (the child this argv reaches).
+    sp.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"), default=None,
+                    help="claude -p reasoning-effort level for the dispatched child. Optional: "
+                    "defaults from the stage's cost_tier (small->low, medium->medium, "
+                    "large->high) rather than requiring the caller to classify twice.")
     sp.add_argument("--constraints", default="",
                     help="clarification for the spawned specialist that bounds HOW it does "
                          "the already-approved stage — never a scope or done-criterion change; "
                          "long text as '@<path>' (forwarded, resolved by the specialist itself)")
     sp.add_argument("--dry-run", action="store_true")
+    # Stage 6, OPT-IN: re-enter a stage recorded PASSED and re-armed by a
+    # substantive replan without paying for a full (re-)spawn, when the replan
+    # left the stage's operative surface untouched AND its own control passes
+    # NOW. Absent, behavior is byte-identical to today — refusal is the default,
+    # never an automatic route.
+    sp.add_argument("--re-attest", action="store_true")
     sp = add("resolve-permission"); sp.add_argument("--session", required=True)
     sp.add_argument("--decision", choices=["granted", "denied"], required=True)
     sp.add_argument("--scope", choices=["once", "project", "global"], default="once")
@@ -4961,8 +7269,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="control-criterion attestation (required for spawn:developer stages "
                          "when recording passed; accepted on any stage)")
     sp.add_argument("--observation", default="",
-                    help="for acceptance_review stages: what you actually observed "
-                         "(required when recording passed; must differ from the expected image)")
+                    help=f"{OBSERVATION_CONTRACT} (required when recording passed on an "
+                         "acceptance_review stage, or on any stage of a substantive session)")
     sp.add_argument("--code-ref", dest="code_ref", default=None,
                     help="for spawn:developer stages: the reviewed-code revision/digest, to "
                          "cross-check against the bound CodeReview's --code-ref (drift -> stale)")
@@ -5000,6 +7308,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--level", dest="level", default=None, choices=list(NORMALIZATION_LEVELS),
                     help="recording level (payoff-gated by rediscovery-threshold-min); omit "
                          "for an in-head note below the leaf threshold")
+    sp.add_argument("--destination", dest="destination", default=None,
+                    choices=list(NORMALIZATION_DESTINATIONS),
+                    help="the functional place the renorming lands on — материал | средство "
+                         "| норма | способ | знание; ORTHOGONAL to --level (any destination "
+                         "at any level), omit when the place is not being recorded")
     sp = add("verify-final"); sp.add_argument("--session", required=True)
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG)")
@@ -5028,12 +7341,42 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--normalization-waiver", dest="normalization_waiver", default=None,
                     help="close a difficulty WITHOUT a re-norming record when the exposed factor "
                          "is genuinely one-off; a recorded reason (refused if empty)")
+    sp.add_argument("--renormalize", action="store_true",
+                    help="claim the corrected plan changes only stage `procedure` — the "
+                         "SEQUENCE of operations, which is the executor's to replace; skips "
+                         "the plan-review and plan_approval gates and is REFUSED the moment "
+                         "the edit reaches a method, a criterion, a result image or the goal")
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG)")
+    sp.add_argument("--renegotiation-decision", dest="renegotiation_decision", default=None,
+                    choices=["continue", "rescope", "abandon"],
+                    help="clear the diagnosing_replan round-release ceiling (Rule-of-Three "
+                         "replans out of DIAGNOSING): continue/rescope zero the cross-session "
+                         "task accumulator and let this replan proceed; abandon parks the "
+                         "session at BLOCKED without applying --plan. Requires "
+                         "--renegotiated-by and --renegotiation-note")
+    sp.add_argument("--renegotiated-by", dest="renegotiated_by", default=None,
+                    help="who made the renegotiation decision; must match "
+                         "[meta.order].customer_id when the plan declares one")
+    sp.add_argument("--renegotiation-note", dest="renegotiation_note", default=None,
+                    help="what the customer decided and why (refused if empty)")
+    sp = add("fire-acknowledge"); sp.add_argument("--session", required=True)
+    sp.add_argument("--by", required=True, help="who decided — a name, not a narrative")
+    sp.add_argument("--decision", required=True, choices=["continue", "abandon", "revise"],
+                    help="continue: accept the overrun, keep executing; abandon: park the "
+                         "session at BLOCKED (via blocked_from, same as cmd_block) with "
+                         "reason 'user-abandoned-after-fire' — never RESOLVED, since a "
+                         "mid-execution fire routinely leaves stages PENDING and "
+                         "check_invariants refuses RESOLVED unless every stage PASSED; "
+                         "revise: route to the ordinary DIAGNOSING replan cycle")
+    sp.add_argument("--note", default=None)
     sp = add("check-coverage"); sp.add_argument("--session", required=True)
     sp.add_argument("--new", required=True,
                     help="corrected plan file to check against the active critique, "
                          "BEFORE spending a thinker plan-review on it")
+    sp = add("effort-check"); sp.add_argument("--session", required=True)
+    sp.add_argument("--cost-log", dest="cost_log", default=None,
+                    help="cost log file path (test override)")
     sp = add("block"); sp.add_argument("--session", required=True); sp.add_argument("--reason", default="")
     sp = add("unblock"); sp.add_argument("--session", required=True)
     sp = add("status"); sp.add_argument("--session", required=False)
@@ -5070,8 +7413,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--actual", default="")
     sp.add_argument("--control", default=None)
     sp.add_argument("--observation", default="",
-                    help="for acceptance_review stages: what you actually observed "
-                         "(threaded to record-result)")
+                    help=f"{OBSERVATION_CONTRACT} (threaded to record-result; see "
+                         "record-result --observation)")
     sp.add_argument("--confirmed-by", dest="confirmed_by", default=None,
                     help="human token authorizing the wrapper to cross the resolution "
                          "gate; pass ONLY after explicit user confirmation")
@@ -5088,6 +7431,18 @@ def build_parser() -> argparse.ArgumentParser:
                          "(defaults to state.current_stage)")
 
     sp = add("pop-subplan"); sp.add_argument("--session", required=True)
+
+    sp = add("task-reset", help="explicit renegotiation: zero the cross-session "
+             "task accumulator (item B) for --task — never called from `reset`")
+    # Session-independent by design (cmd_task_reset's own docstring), but
+    # _inject_default_session unconditionally appends --session <harness> when
+    # $CLAUDE_CODE_SESSION_ID is set (i.e. every real invocation inside a
+    # Claude Code session) — mirror plan-render's suppressed-absorb pattern so
+    # that injection doesn't crash argparse with "unrecognized arguments".
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp.add_argument("--task", required=True, help="task_id whose accumulator to zero")
+    sp.add_argument("--reason", required=True,
+                    help="why this task's accumulated cross-session friction is being forgiven")
     return p
 
 

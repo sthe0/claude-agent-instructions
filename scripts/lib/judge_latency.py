@@ -105,23 +105,132 @@ MEASURED: "dict[str, dict[str, Row]]" = {
         ),
         "outage_escalation": Row(
             judge="outage_escalation",
-            n=16, min_s=7.19, median_s=10.89, p90_s=19.16, max_s=25.96,
+            # Merged across the same two regimes as the two rows below, and read
+            # for a different purpose: this judge was re-sampled not because its
+            # own rate had gone pathological but because required_budget_s takes
+            # its p90 as the trailing term of the turn-end inequality, and the
+            # live ledger had already produced two kills at ~27.03s against the
+            # 25.96 max the old series alone declared. The new series settles
+            # that: it reaches 27.13 and 30.26 on its own, so the kills were
+            # drift and not a stuck subprocess. Movement from the old series
+            # alone is large — median 10.89 -> 18.58, p90 19.16 -> 25.96, max
+            # 25.96 -> 53.42.
+            #
+            # That max is ONE observation (53.42) sitting at more than 1.7x the
+            # next slowest call in the same arm (30.26), with no neighbour
+            # between them. It is the same never-returned shape the plan tracks
+            # as residual A, and `ceil(max) + 1` propagates it into a 55s
+            # per-call ceiling that no turn-end budget can hold. Recorded here
+            # rather than trimmed: dropping an inconvenient observation from the
+            # population is exactly the failure this table exists to prevent.
+            # Whether the ceiling rule should be applied to it is stage 3's
+            # decision, made against a number it can see.
+            n=48, min_s=7.19, median_s=18.58, p90_s=25.96, max_s=53.42,
             provenance=(("latency-sample.json", "outage"),
-                        ("ab-sample.json", "outage_std")),
+                        ("ab-sample.json", "outage_std"),
+                        ("drift-sample.json", "outage"),
+                        ("drift-sample.json", "not_outage")),
         ),
         "feedback_signal": Row(
             judge="feedback_signal",
-            n=26, min_s=10.73, median_s=11.86, p90_s=13.34, max_s=14.05,
+            # Two regimes, like approval_ask below, and for a stronger reason
+            # than a slower model: the new series ran through the LEAN judge
+            # invocation (host_llm.build_prompt_argv(..., lean=True)) while the
+            # old one ran through the bare `claude -p` that loads the ambient
+            # CLAUDE.md. This judge's own question topically collides with that
+            # content, and under the bare invocation it stopped answering at all
+            # — 0/3 in a contention-free A/B, against 3/3 lean. So the old
+            # series does not merely describe a faster machine, it describes a
+            # different call path; it stays in the provenance because it remains
+            # a valid observation of that path and keeps min conservative.
+            # Old series alone: median 11.86, p90 13.34, max 14.05. Merged, the
+            # median moves modestly (+1.45, the old regime being half the
+            # population) but p90 and max move materially (+4.20 and +5.54) —
+            # the tail is where the regime change shows.
+            n=58, min_s=10.73, median_s=13.30, p90_s=17.54, max_s=19.59,
             provenance=(("latency-sample.json", "feedback"),
-                        ("topup2-sample.json", "feedback")),
+                        ("topup2-sample.json", "feedback"),
+                        ("drift-sample.json", "feedback"),
+                        ("drift-sample.json", "not_feedback")),
+        ),
+        "silent_closure": Row(
+            judge="silent_closure",
+            # One process, 8 signal (genuine fork-point decision / completion,
+            # no question) + 8 not_signal (near-misses that still trip the
+            # prefilter: a real question despite the wording, a
+            # only-one-option decision, a routine sub-step, or a status
+            # naming remaining work) calls, alternating arms — see
+            # sample_silent_closure.py. 15/16 matched the arm's expected
+            # verdict; the one miss (signal[2], a genuine decision whose text
+            # also said "moving on to the next file") is real data kept
+            # standing, not trimmed, same discipline the outage_escalation
+            # row's own comment states for its own single-observation max.
+            n=16, min_s=3.30, median_s=4.40, p90_s=6.66, max_s=34.78,
+            provenance=(("silent-closure-sample.json", "signal"),
+                        ("silent-closure-sample.json", "not_signal")),
         ),
         "binary_ask": Row(
             judge="binary_ask",
-            n=16, min_s=5.93, median_s=7.46, p90_s=11.06, max_s=11.52,
-            provenance=(("topup2-sample.json", "binary_ask"),),
+            # Same two regimes and the same lean/bare split as feedback_signal,
+            # but this judge answered correctly under both invocations (5/5 std,
+            # 5/5 lean in the same A/B) — for it the regime difference is
+            # latency alone, and the ranges are disjoint: the old series ran
+            # 5.93-11.52 and the new one 13.40-19.20. Everything moved and by a
+            # lot (median 7.46 -> 15.755, p90 11.06 -> 18.57, max 11.52 ->
+            # 19.20, i.e. the whole distribution roughly doubled), which is why
+            # the live ledger showed this judge killed on 69 of 76 calls at the
+            # ceiling of 13 that the old series alone computed.
+            n=48, min_s=5.93, median_s=15.75, p90_s=18.57, max_s=19.20,
+            provenance=(("topup2-sample.json", "binary_ask"),
+                        ("drift-sample.json", "binary_ask"),
+                        ("drift-sample.json", "not_binary_ask")),
+        ),
+        "landing_discipline": Row(
+            judge="landing_discipline",
+            # 8 pr_proposing + 8 direct_push calls in one file, one merged
+            # population: unlike approval_ask's two-regime merge, both arms ran
+            # in the same session with no observed contention or timeout-driven
+            # regime shift, so a single combined row is the plain, not the
+            # exceptional, case.
+            n=16, min_s=3.88, median_s=4.96, p90_s=6.37, max_s=15.38,
+            provenance=(("landing-discipline-sample.json", "pr_proposing"),
+                        ("landing-discipline-sample.json", "direct_push")),
+        ),
+        "approval_ask": Row(
+            judge="approval_ask",
+            # Merges two non-overlapping regimes: approval-sample.json's 32
+            # calls ran 5.88-11.42s; approval2-sample.json's 32 calls, taken
+            # after the judge was observed timing out in production against
+            # that first sample's ceiling, ran 14.12-19.14s with an empty gap
+            # between the two ranges. The merged median (12.77) therefore
+            # falls IN that gap and describes no call that ever ran. That is
+            # safe to leave standing only because this judge's median is never
+            # used for sizing a ceiling or a floor — required_budget_s sums the
+            # medians of the calls PRECEDING the last one on a shared budget,
+            # and HOOK_CALL_SEQUENCE declares K=1 for hook-plan-delivery-gate.py
+            # (see samples/judge-latency/README.md), so only p90_s and max_s
+            # ever reach a constant. approval-sample.json stays in the
+            # provenance rather than being dropped: it is a valid observation
+            # of an earlier regime (unlike topup-sample.json, taken under
+            # contended load), and keeping it is what keeps max_s conservative.
+            n=64, min_s=5.88, median_s=12.77, p90_s=17.29, max_s=19.14,
+            provenance=(("approval-sample.json", "approval"),
+                        ("approval-sample.json", "not_approval"),
+                        ("approval2-sample.json", "approval"),
+                        ("approval2-sample.json", "not_approval")),
         ),
         "acceptance_judge": Row(
             judge="acceptance_judge",
+            n=0, min_s=None, median_s=None, p90_s=None, max_s=None,
+            provenance=(), note=UNMEASURED_NOTE,
+        ),
+        "question_materiality": Row(
+            judge="question_materiality",
+            n=0, min_s=None, median_s=None, p90_s=None, max_s=None,
+            provenance=(), note=UNMEASURED_NOTE,
+        ),
+        "published_attachment": Row(
+            judge="published_attachment",
             n=0, min_s=None, median_s=None, p90_s=None, max_s=None,
             provenance=(), note=UNMEASURED_NOTE,
         ),
@@ -202,7 +311,10 @@ LAST_RESORT_CEILING_S = last_resort_ceiling_s()
 HOOK_CALL_SEQUENCE: "dict[str, tuple[str, ...]]" = {
     "hook-escalation-diagnosis-gate.py": ("outage_escalation",),
     "hook-deferring-disposition-gate.py": ("deferring_disposition",),
-    "hook-turn-end-gate.py": ("feedback_signal", "binary_ask", "outage_escalation"),
+    "hook-turn-end-gate.py": ("feedback_signal", "binary_ask", "silent_closure", "outage_escalation"),
+    "hook-plan-delivery-gate.py": ("approval_ask",),
+    "hook-resolution-reminder.py": ("landing_discipline",),
+    "hook-published-text-writer-gate.py": ("published_attachment",),
 }
 
 # Head-room the whole-invocation budget must keep beyond the calls it plans, for

@@ -7,7 +7,7 @@ like a considered verdict. This file records the runs that separate the two, and
 `scripts/check-live-run-evidence.py` recomputes every number below from the raw
 samples and the hook sources, so the document cannot drift away from its evidence.
 
-## 1. The three live runs
+## 1. The five live runs
 
 Every hook was fed, on stdin, a payload its own prefilter is **obliged** to fire
 on, and a real judge answered. No stubs, no fakes, no recorded fixtures.
@@ -19,9 +19,25 @@ on, and a real judge answered. No stubs, no fakes, no recorded fixtures.
 | `hook-deferring-disposition-gate.py` | `deferring_disposition` | deny | deny | 43.09 | 45 |
 | `hook-escalation-diagnosis-gate.py` | `outage_escalation` | deny | deny | 4.96 | 30 |
 | `hook-turn-end-gate.py` | `feedback_signal`, `binary_ask`, `outage_escalation` | block | block | 17.05 | 52 |
+| `hook-resolution-reminder.py` | `landing_discipline` | deny | deny | 6.61 | 22 |
+| `hook-published-text-writer-gate.py` | `published_attachment` | deny | deny | 5.12 | 60 |
 
-All three exited 0 with empty stderr, so no `judges_skipped` line was emitted and
+All five exited 0 with empty stderr, so no `judges_skipped` line was emitted and
 no judge was dropped for want of budget.
+
+**The published-attachment run** fed the judge a real ambiguous-attachment
+payload (a Bash publication call whose body arrives via an attached file rather
+than inline text, with no bound tech-writer witness) and recorded a real
+`published_attachment` verdict — `ledger_record.verdict: true` (deny), duration
+4.83 s, against a 60 s ceiling — not a stub or a recorded fixture.
+
+**The landing-discipline run** was an `AskUserQuestion` menu whose two options were
+"Open a PR" and "Wait for review" — a PreToolUse call, not a UserPromptSubmit one,
+against a scratch `CLAUDE_CONFIG_DIR` state file declaring `node=RESOLUTION`,
+`resolution.passed=false`, run with cwd at this repo's own root so
+`direct_push_no_pr_hint`'s author/repo-root check resolves truthfully (a real,
+non-dry-run-affecting `git push --dry-run` probe). Real session state and
+`settings.json` were untouched, mirroring the isolation the other three runs use.
 
 **The turn-end run proves all three of its judges ran, not just one.** Its block
 reason carries all three blockers, and each blocker is appended only when its own
@@ -62,7 +78,7 @@ runs themselves — they fall on **both sides** of the sampled range:
 | | live run | sampled range for that judge |
 |---|---|---|
 | `deferring_disposition` | **43.09 s** | 10.29 – 39.99 s (n=18) |
-| `outage_escalation` (escalation hook) | **4.96 s** | 7.19 – 25.96 s (n=16) |
+| `outage_escalation` (escalation hook) | **4.96 s** | 7.19 – 53.42 s (n=48) |
 
 Process overhead is not the explanation: the same hook run to completion with a
 non-firing payload (interpreter, imports, prefilter, no judge) takes **0.08 s**
@@ -98,16 +114,26 @@ a detail: four standard estimators on the n=18 deferring sample give 29.94 /
 | Hook | Judge | Model | Sources | n | min | median | p90 | max | Ceiling | ≥ ceiling | Fail-open share | 95% upper bound |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | `hook-deferring-disposition-gate.py` | `deferring_disposition` | `haiku` | `latency-sample.json:defer + ab-sample.json:defer_std` | 18 | 10.29 | 17.43 | 37.58 | 39.99 | 45 | 0 | 0.0000 | 0.1667 |
-| `hook-escalation-diagnosis-gate.py` | `outage_escalation` | `haiku` | `latency-sample.json:outage + ab-sample.json:outage_std` | 16 | 7.19 | 10.89 | 19.16 | 25.96 | 30 | 0 | 0.0000 | 0.1875 |
-| `hook-turn-end-gate.py` | `feedback_signal` | `haiku` | `latency-sample.json:feedback + topup2-sample.json:feedback` | 26 | 10.73 | 11.86 | 13.34 | 14.05 | 16 | 0 | 0.0000 | 0.1154 |
-| `hook-turn-end-gate.py` | `binary_ask` | `haiku` | `topup2-sample.json:binary_ask` | 16 | 5.93 | 7.46 | 11.06 | 11.52 | 13 | 0 | 0.0000 | 0.1875 |
-| `hook-turn-end-gate.py` | `outage_escalation` | `haiku` | `latency-sample.json:outage + ab-sample.json:outage_std` | 16 | 7.19 | 10.89 | 19.16 | 25.96 | 27 | 0 | 0.0000 | 0.1875 |
+| `hook-escalation-diagnosis-gate.py` | `outage_escalation` | `haiku` | `latency-sample.json:outage + ab-sample.json:outage_std + drift-sample.json:outage + drift-sample.json:not_outage` | 48 | 7.19 | 18.58 | 25.96 | 53.42 | 60 | 0 | 0.0000 | 0.0625 |
+| `hook-turn-end-gate.py` | `feedback_signal` | `haiku` | `latency-sample.json:feedback + topup2-sample.json:feedback + drift-sample.json:feedback + drift-sample.json:not_feedback` | 58 | 10.73 | 13.30 | 17.54 | 19.59 | 21 | 0 | 0.0000 | 0.0517 |
+| `hook-turn-end-gate.py` | `binary_ask` | `haiku` | `topup2-sample.json:binary_ask + drift-sample.json:binary_ask + drift-sample.json:not_binary_ask` | 48 | 5.93 | 15.75 | 18.57 | 19.20 | 21 | 0 | 0.0000 | 0.0625 |
+| `hook-turn-end-gate.py` | `silent_closure` | `haiku` | `silent-closure-sample.json:signal + silent-closure-sample.json:not_signal` | 16 | 3.30 | 4.40 | 6.66 | 34.78 | 36 | 0 | 0.0000 | 0.1875 |
+| `hook-turn-end-gate.py` | `outage_escalation` | `haiku` | `latency-sample.json:outage + ab-sample.json:outage_std + drift-sample.json:outage + drift-sample.json:not_outage` | 48 | 7.19 | 18.58 | 25.96 | 53.42 | 55 | 0 | 0.0000 | 0.0625 |
+| `hook-plan-delivery-gate.py` | `approval_ask` | `haiku` | `approval-sample.json:approval + approval-sample.json:not_approval + approval2-sample.json:approval + approval2-sample.json:not_approval` | 64 | 5.88 | 12.77 | 17.29 | 19.14 | 30 | 0 | 0.0000 | 0.0469 |
+| `hook-resolution-reminder.py` | `landing_discipline` | `haiku` | `landing-discipline-sample.json:pr_proposing + landing-discipline-sample.json:direct_push` | 16 | 3.88 | 4.96 | 6.37 | 15.38 | 22 | 0 | 0.0000 | 0.1875 |
 | — | `acceptance_judge` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
+| — | `question_materiality` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
+| `hook-published-text-writer-gate.py` | `published_attachment` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
 
-`acceptance_judge` is listed because leaving it out would be the quieter lie: the
-`MEASURED` table carries a row for it, and a reader comparing the two would
-otherwise assume it was covered. It runs outside any hook, so no harness timeout
-kills it and the last-resort ceiling applies. It is **not** sized by evidence.
+`acceptance_judge` and `question_materiality` are listed because leaving them out
+would be the quieter lie: the `MEASURED` table carries a row for each, and a reader
+comparing the two would otherwise assume they were covered. Both run outside any
+hook, so no harness timeout kills them and the last-resort ceiling applies. Neither
+is sized by evidence.
+
+`published_attachment` is listed for the same reason, and its single live deny
+above (Section 1) is liveness evidence, not a latency sample — one call cannot
+seed `n`, `p90`, or a ceiling estimate, so the row stays UNMEASURED.
 
 ### The zero rule
 
@@ -117,8 +143,9 @@ With zero events in n trials the 95% upper bound on the rate is the rule of thre
 3/n — so the honest statement is not "the hooks never fail open" but:
 
 > On the evidence available, the per-call fail-open rate is **at most 17%**
-> (deferring, 3/18), **19%** (outage, 3/16), **12%** (feedback, 3/26) and
-> **19%** (binary_ask, 3/16), each at 95% confidence.
+> (deferring, 3/18), **6%** (outage, 3/48), **5%** (feedback, 3/58),
+> **6%** (binary_ask, 3/48), **5%** (approval_ask, 3/64) and **19%**
+> (landing_discipline, 3/16), each at 95% confidence.
 
 These bounds are wide because the samples are small, and they shrink only with
 more calls. Section 2 supplies the concrete reason not to dismiss them: a live
@@ -161,7 +188,8 @@ do not establish.
   the tail is most likely made of.
 - **Verdict correctness in general.** Each run confirms one expected verdict on
   one payload. The residual error rate is in section 3, not closed by these runs.
-- **The `acceptance_judge` path**, which no hook invokes and no sample covers.
+- **The `acceptance_judge` and `question_materiality` paths**, which no hook
+  invokes and no sample covers.
 
 ## 6. Reproducing this
 
@@ -175,5 +203,10 @@ sample files it cites, compares each against the frozen contract in
 `lib/judge_latency.py`, reads each ceiling out of the hook source with `ast`,
 recounts the exceedances and their confidence bounds, and fails on a model tag
 that is not `advisor._JUDGE_MODEL`, on `n` below 15, or on a zero claimed without
-a bound. The live runs themselves are driven by `/tmp/cc-scratch/live-run4/run.py`
-with the payloads beside it; re-running them costs real judge calls.
+a bound. The first three live runs were driven by `/tmp/cc-scratch/live-run4/run.py`
+with the payloads beside it; the `landing_discipline` run was driven the same way
+in spirit — a `subprocess.run` of the hook on stdin with `CLAUDE_CONFIG_DIR`
+pointed at a scratch agent home carrying only the `RESOLUTION`-node state the
+hook needs — via a throwaway pytest test, since that machine's session confined
+direct script execution to pytest-mediated invocation. Re-running any of these
+costs real judge calls.

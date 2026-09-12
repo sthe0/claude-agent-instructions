@@ -68,7 +68,7 @@ def test_denied_term_in_ground_is_blocked(no_plugin_dir, monkeypatch, tmp_path, 
     dc.register_channel("null-guard-1", lambda: ch)
 
     rc = _run("--target", "CLAUDE.md", "--ground", "mentions zorblex right here",
-              "--channel", "null-guard-1")
+              "--channel", "null-guard-1", "--cost", "$1/week")
 
     assert rc == 1
     out = capsys.readouterr()
@@ -82,7 +82,8 @@ def test_denied_term_in_evidence_is_blocked(no_plugin_dir, monkeypatch, tmp_path
     dc.register_channel("null-guard-2", lambda: ch)
 
     rc = _run("--target", "CLAUDE.md", "--ground", "something",
-              "--evidence", "log line mentions zorblex", "--channel", "null-guard-2")
+              "--evidence", "log line mentions zorblex", "--channel", "null-guard-2",
+              "--cost", "$1/week")
 
     assert rc == 1
     assert ch.pull() == []
@@ -96,7 +97,7 @@ def test_denied_term_in_layer_is_blocked(no_plugin_dir, monkeypatch, tmp_path, c
     dc.register_channel("null-guard-5", lambda: ch)
 
     rc = _run("--target", "CLAUDE.md", "--ground", "gate wording ambiguous",
-              "--layer", "zorblex", "--channel", "null-guard-5")
+              "--layer", "zorblex", "--channel", "null-guard-5", "--cost", "$1/week")
 
     assert rc == 1
     assert "zorblex" in capsys.readouterr().err
@@ -109,7 +110,7 @@ def test_denied_term_in_reporter_is_blocked(no_plugin_dir, monkeypatch, tmp_path
     dc.register_channel("null-guard-6", lambda: ch)
 
     rc = _run("--target", "CLAUDE.md", "--ground", "gate wording ambiguous",
-              "--reporter", "zorblex-bot", "--channel", "null-guard-6")
+              "--reporter", "zorblex-bot", "--channel", "null-guard-6", "--cost", "$1/week")
 
     assert rc == 1
     assert "zorblex" in capsys.readouterr().err
@@ -138,7 +139,7 @@ def test_clean_body_files_successfully(no_plugin_dir, monkeypatch, tmp_path, cap
     dc.register_channel("null-guard-3", lambda: ch)
 
     rc = _run("--target", "CLAUDE.md", "--ground", "gate wording ambiguous",
-              "--channel", "null-guard-3")
+              "--channel", "null-guard-3", "--cost", "$1/week")
 
     assert rc == 0
     assert "mem-" in capsys.readouterr().out
@@ -151,7 +152,7 @@ def test_zero_rulesets_prints_unchecked_and_still_files(no_plugin_dir, monkeypat
     dc.register_channel("null-guard-4", lambda: ch)
 
     rc = _run("--target", "CLAUDE.md", "--ground", "mentions zorblex right here",
-              "--channel", "null-guard-4")
+              "--channel", "null-guard-4", "--cost", "$1/week")
 
     assert rc == 0
     out = capsys.readouterr().out

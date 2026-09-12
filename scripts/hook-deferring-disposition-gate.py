@@ -62,6 +62,7 @@ try:
     from agentctl import advisor  # noqa: E402
     from lib import ask_text  # noqa: E402
     from lib import judge_budget  # noqa: E402
+    from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
 except BaseException as exc:
     judge_ledger.import_failed("deferring_disposition", f"{type(exc).__name__}: {exc}")
     raise
@@ -249,6 +250,8 @@ def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
 
 
 def main() -> int:
+    if os.environ.get(JUDGE_CHILD_ENV_VAR):
+        return 0  # a sandboxed judge subprocess, not a real user turn — allow, no opinion
     judge_ledger.hook_start("deferring_disposition")
     try:
         payload = json.load(sys.stdin)

@@ -69,6 +69,26 @@ def test_c_stale_review_blocks(gate_on):
     assert blockers and "stale" in blockers[0]
 
 
+def test_path_rename_content_match_not_stale(gate_on, tmp_path):
+    """Issue #195: a byte-identical plan re-saved under a new filename must bind
+    via content identity (sha256), not fail on the path check alone."""
+    plan = tmp_path / "renamed.toml"
+    plan.write_text("same content")
+    digest = _sha256_file(plan)
+    s = _subst(plan_review=PlanReview("/OLD.toml", "pass", "thinker", plan_sha256=digest))
+    assert gates.plan_review_blockers(s, str(plan)) == []
+
+
+def test_path_rename_unreadable_target_still_blocks(gate_on, tmp_path):
+    """C1: when the path differs and a digest is present but the target plan is
+    unreadable, the gate must still block — not silently fail open by inheriting
+    _plan_review_content_stale's same-path fail-open semantics."""
+    missing = tmp_path / "does-not-exist.toml"
+    s = _subst(plan_review=PlanReview("/OLD.toml", "pass", "thinker", plan_sha256="ab12"))
+    blockers = gates.plan_review_blockers(s, str(missing))
+    assert blockers and "stale" in blockers[0]
+
+
 def test_d_revise_blocks(gate_on):
     s = _subst(plan_review=PlanReview("/plan.toml", "revise", "thinker"))
     blockers = gates.plan_review_blockers(s, "/plan.toml")
@@ -347,6 +367,72 @@ def test_plan_digest_absent_pass_does_not_bind(store, fixtures_dir, tmp_path, ga
     assert d.node == Node.PLAN_READY.value  # blocked, not APPROVED
 
 
+def test_plan_digest_attested_over_unreadable_target_refuses(store, fixtures_dir, tmp_path, gate_on):
+    """(e) An attestation the engine cannot cross-check is not an attestation: a
+    --plan-digest supplied against a target whose live read FAILS is refused, and
+    nothing is recorded. Without this, the cross-check below (`if live and ...`)
+    silently skipped on an empty `live` and stored the caller's word as verified."""
+    sid = "pdunreadable"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                               concerns=None, note="", target=str(tmp_path / "NOPE.toml"),
+                               plan_digest=_sha256_file(plan)), store=store)
+    assert d.ok is False and "cannot be cross-checked" in d.detail
+    assert store.load(sid).plan_review is None  # nothing recorded
+
+
+def test_plan_digest_absent_over_unreadable_target_still_records(store, fixtures_dir, tmp_path, gate_on):
+    """(f) The no-digest degradation survives the refusal above unchanged: with
+    NOTHING attested, an unreadable target still records (an unattested pass that
+    blocks at the gate), rather than wedging on a transient I/O error."""
+    sid = "pdunreadablenodigest"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                               concerns=None, note="", target=str(tmp_path / "NOPE.toml"),
+                               plan_digest=None), store=store)
+    # ok=False here reports the UNATTESTED gate, not a refusal: the record lands.
+    assert "cannot be cross-checked" not in d.detail
+    s = store.load(sid)
+    assert s.plan_review is not None
+    assert s.plan_review.plan_sha256 == ""
+
+
+def test_plan_digest_attested_over_readable_explicit_target_records(store, fixtures_dir, tmp_path, gate_on):
+    """(g) The positive direction of (e) on the same explicit-`--target` path: a
+    readable target whose bytes hash to the attested digest still records and binds."""
+    sid = "pdexplicittarget"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                               concerns=None, note="", target=str(plan),
+                               plan_digest=_sha256_file(plan)), store=store)
+    assert d.ok is True
+    assert store.load(sid).plan_review.plan_sha256 == _sha256_file(plan)
+    assert cli.cmd_approve(ns(session=sid, by="user"), store=store).node == Node.APPROVED.value
+
+
+def test_unread_path_cannot_borrow_the_real_plans_digest(store, fixtures_dir, tmp_path, gate_on):
+    """(h) The end-to-end shape (e) closes: reviewing a NONEXISTENT path while
+    passing the REAL plan's sha256 used to record a review that then bound the real
+    plan by byte identity (#195's cross-path binding), carrying it to APPROVED. The
+    real plan must stay blocked."""
+    sid = "pdborrow"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                           concerns=None, note="", target=str(tmp_path / "NOPE.toml"),
+                           plan_digest=_sha256_file(plan)), store=store)
+    s = store.load(sid)
+    assert gates.plan_review_blockers(s, str(plan))  # the real plan is NOT bound
+    assert cli.cmd_approve(ns(session=sid, by="user"), store=store).node == Node.PLAN_READY.value
+
+
 def test_override_binds_without_digest(store, fixtures_dir, tmp_path, gate_on):
     """(d) An override (the deadlock escape) still binds with no --plan-digest — the
     attestation requirement lives only in the pass branch."""
@@ -359,6 +445,115 @@ def test_override_binds_without_digest(store, fixtures_dir, tmp_path, gate_on):
                            plan_digest=None), store=store)
     d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert d.node == Node.APPROVED.value
+
+
+# --- override reviewer must match [meta.order].customer_id (issue: a fabricated
+# --reviewer let anyone self-record an override) --------------------------------
+# plan_two_stage.toml (used everywhere above) declares no [meta.order], so it cannot
+# exercise this check at all -- it needs its own order-bearing plan, modeled on
+# test_meta_order.py's/_write_plan and test_acceptance_verdict.py's _PLAN/_write_plan.
+
+ORDER_PLAN = """
+[meta]
+task_id = "ov"
+goal = "prove the override customer_id check"
+done_criterion = "override reviewer must match order customer_id"
+criterion_type = "measurable"
+weight_class = "substantive"
+external_research = "n/a; internal engine gate test"
+
+[meta.order]
+customer_id = "{customer_id}"
+customer = "the position that posed this fixture's task"
+functional_place = "the norm governing an act of activity, in a test"
+
+[[meta.order.requirements]]
+id = "R1"
+text = "the fixture plan meets the substantive grade"
+
+[meta.order.coverage]
+R1 = ["stage 1 verify_command"]
+
+[[final_check]]
+command = "true"
+expected_exit = 0
+
+[[stage]]
+index = 1
+title = "the stage under test"
+executor = "in_thread"
+expected_result_image = "n/a"
+criterion_type = "measurable"
+done_criterion = "d1"
+verify_command = "true"
+material = "m1"
+means = "bash"
+method = "run"
+conditions = "none"
+preconditions = "none"
+invariants = "none"
+capability_required = "cap"
+material_refs = ["scripts/agentctl/cli.py"]
+knowledge_refs = ["scripts/agentctl/gates.py"]
+knowledge = "n/a"
+[stage.principle]
+statement = "s"
+source = "src"
+derivation = "der"
+confidence = "high"
+refutation = "r"
+"""
+
+
+def _write_order_plan(tmp_path: Path, *, customer_id: str = "user") -> str:
+    path = tmp_path / f"order_{customer_id or 'empty'}.toml"
+    path.write_text(ORDER_PLAN.format(customer_id=customer_id), encoding="utf-8")
+    return str(path)
+
+
+def test_override_reviewer_must_match_order_customer_id(store, tmp_path, gate_on):
+    """A --verdict override authored under a --reviewer that does not match the
+    plan's declared [meta.order].customer_id is refused before the record is
+    written; the SAME override authored as the customer of record succeeds."""
+    sid = "ovcust"
+    plan = _write_order_plan(tmp_path, customer_id="user")
+    _to_plan_ready(store, sid, plan)
+    before = store.load(sid).plan_review
+    d = cli.cmd_plan_review(ns(session=sid, verdict="override", reviewer="root-coordinator",
+                               concerns=None, note="self-stamp", target=None,
+                               plan_digest=None), store=store)
+    assert d.ok is False and "customer_id" in d.detail
+    assert store.load(sid).plan_review == before  # record unchanged
+
+    d = cli.cmd_plan_review(ns(session=sid, verdict="override", reviewer="user",
+                               concerns=None, note="user escape", target=None,
+                               plan_digest=None), store=store)
+    assert d.ok is True
+    assert store.load(sid).plan_review.reviewer == "user"
+
+
+def test_pass_verdict_unaffected_by_order_customer_id(store, tmp_path, gate_on):
+    """The customer_id check binds only the override branch: an ordinary pass
+    verdict authored by a reviewer that does not match customer_id is untouched."""
+    sid = "ovpass"
+    plan = _write_order_plan(tmp_path, customer_id="user")
+    _to_plan_ready(store, sid, plan)
+    d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
+                               concerns=None, note="", target=None,
+                               plan_digest=_sha256_file(plan)), store=store)
+    assert d.ok is True
+
+
+def test_override_with_empty_customer_id_degrades_gracefully(store, tmp_path, gate_on):
+    """A plan whose [meta.order] declares an empty customer_id gets no check at
+    all -- same pass-through behavior as a plan with no [meta.order]."""
+    sid = "ovempty"
+    plan = _write_order_plan(tmp_path, customer_id="")
+    _to_plan_ready(store, sid, plan)
+    d = cli.cmd_plan_review(ns(session=sid, verdict="override", reviewer="root-coordinator",
+                               concerns=None, note="user escape", target=None,
+                               plan_digest=None), store=store)
+    assert d.ok is True
 
 
 # --- four live spine walks (subprocess, gate ON) -----------------------------

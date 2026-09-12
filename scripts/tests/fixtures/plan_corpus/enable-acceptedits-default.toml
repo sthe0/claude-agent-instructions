@@ -1,0 +1,31 @@
+[meta]
+task_id = "enable-acceptedits-default"
+goal = "Set permissions.defaultMode = acceptEdits in ~/.claude/settings.json so claude starts in auto-accept-edits mode"
+done_criterion = "jq '.permissions.defaultMode' ~/.claude/settings.json == \"acceptEdits\" and JSON valid"
+criterion_type = "measurable"
+weight_class = "substantive"
+external_research = "Not warranted: setting is documented in the loaded update-config SKILL.md settings schema (permissions.defaultMode enum incl. acceptEdits); no external prior art needed."
+
+[[stage]]
+index = 1
+title = "Merge defaultMode acceptEdits into permissions"
+executor = "in_thread"
+expected_result_image = "settings.json permissions object gains defaultMode=acceptEdits; allow array and hooks/env/model untouched; valid JSON"
+criterion_type = "measurable"
+done_criterion = "jq -e '.permissions.defaultMode == \"acceptEdits\"' ~/.claude/settings.json"
+verify_command = "jq -e '.permissions.defaultMode == \"acceptEdits\"' /Users/the0/.claude/settings.json"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["/Users/the0/.claude/settings.json"]
+material = "~/.claude/settings.json permissions table (currently only allow[])"
+means = "Edit tool, single-key merge"
+method = "Add \"defaultMode\": \"acceptEdits\" sibling to allow[] without touching other keys"
+conditions = "agentctl at execution node so hook-state-gate permits the gated settings.json edit; user approved via AskUserQuestion"
+invariants = "allow[] preserved; env/hooks/model preserved; agentctl PreToolUse gate stays independent of permission mode"
+capability_required = "edit access to user settings.json"
+
+[stage.principle]
+statement = "Permission mode (harness prompts) is orthogonal to the agentctl coordinator gate (PreToolUse hook); enabling acceptEdits removes per-action prompts but not the plan/path gate."
+source = "settings schema (update-config SKILL.md) + CLAUDE.md coordination-spine: gate is a PreToolUse hook, not a permission rule"
+confidence = "high"
+refutation = "If after enabling acceptEdits a gated production edit proceeds at a non-execution node without denial, the orthogonality claim is false."

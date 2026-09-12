@@ -959,6 +959,295 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Test 13 — offer to register the cwd as a project on empty-context (rc=2)
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- offer to register project on empty-context (rc=2) ---\n'
+
+# Stub enter-task: fails with rc=2 (enter-task's empty-context-guard exit code,
+# --key/--new only) on its FIRST invocation, succeeds (prints ET_DIR) on every
+# call after — models a real enter-task.sh whose empty-context guard clears
+# once the offer helper registers the project. ET_RETRY_COUNTER is a per-case
+# file so each case starts its own fail-then-succeed sequence.
+FAKE_ET_RETRY="$TMP/fake-et-retry.sh"
+cat >"$FAKE_ET_RETRY" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$ET_CALLS"
+_n=0
+[[ -f "$ET_RETRY_COUNTER" ]] && _n="$(cat "$ET_RETRY_COUNTER")"
+_n=$((_n + 1))
+printf '%s' "$_n" > "$ET_RETRY_COUNTER"
+if [[ "$_n" -eq 1 ]]; then
+  printf 'enter-task: no project resolved from context (cwd=%s)\n' "$PWD" >&2
+  exit 2
+fi
+printf '%s\n' "$ET_DIR"
+SCRIPT
+chmod +x "$FAKE_ET_RETRY"
+
+# Isolated, empty registry roots so project_resolve/project_get_fields never
+# see the real machine registry from inside this test process.
+PROJ_EMPTY_SHARED="$TMP/offer-empty-shared.d"
+PROJ_EMPTY_LOCAL="$TMP/offer-empty-local.d"
+mkdir -p "$PROJ_EMPTY_SHARED" "$PROJ_EMPTY_LOCAL"
+
+# A plain, unregistered candidate directory — its basename becomes the offered key.
+CAND_DIR="$TMP/candidate-proj"
+mkdir -p "$CAND_DIR"
+CAND_DIR="$(cd "$CAND_DIR" && pwd -P)"
+CAND_KEY="$(basename "$CAND_DIR")"
+
+# Case (c): non-interactive (</dev/null), no ASSUME_YES, via --key -> the
+# helper aborts without registering; the pre-existing failure surfacing is
+# unchanged and enter-task is invoked exactly once (no retry, no --register).
+reset_logs
+: >"$TMP/ctr-c"
+_se_c="$TMP/stderr-13c.txt"
+(
+  cd "$CAND_DIR" || exit 1
+  _LAUNCHERS_ENTER_TASK="$FAKE_ET_RETRY"
+  CLAUDE_PROJECTS_DIR="$PROJ_EMPTY_SHARED"
+  CLAUDE_PROJECTS_LOCAL_DIR="$PROJ_EMPTY_LOCAL"
+  export ET_RETRY_COUNTER="$TMP/ctr-c"
+  CLAUDE_SKIP_ONBOARD=1 claude-task PROJ-9 </dev/null >/dev/null 2>"$_se_c"
+)
+_rc_c=$?
+if [[ "$_rc_c" -ne 0 ]]; then
+  ok "13c: non-interactive --key with unresolved project fails"
+else
+  fail "13c: expected failure when no project resolves and no gate is set"
+fi
+if [[ "$(wc -l <"$ET_CALLS")" -eq 1 ]]; then
+  ok "13c: enter-task invoked exactly once (no retry, no register)"
+else
+  fail "13c: expected exactly 1 enter-task invocation (et-calls: $(cat "$ET_CALLS"))"
+fi
+if grep -q 'workspace entry failed' "$_se_c"; then
+  ok "13c: pre-existing failure message surfaced unchanged"
+else
+  fail "13c: failure message missing (stderr: $(cat "$_se_c"))"
+fi
+
+# Case (c2): the PRE-EXISTING --new non-interactive-without-gate message still
+# fires unchanged (it aborts before ever reaching the new helper).
+reset_logs
+_se_c2="$TMP/stderr-13c2.txt"
+CLAUDE_SKIP_ONBOARD=1 claude-task --new 'Some Title' </dev/null >/dev/null 2>"$_se_c2" || true
+if [[ -s "$ET_CALLS" ]]; then
+  fail "13c2: --new without gate should NOT call enter-task (et-calls: $(cat "$ET_CALLS"))"
+else
+  ok "13c2: --new non-interactive without gate: enter-task not called"
+fi
+if grep -q 'CLAUDE_LAUNCH_ASSUME_YES=1' "$_se_c2"; then
+  ok "13c2: pre-existing gate message still names CLAUDE_LAUNCH_ASSUME_YES=1"
+else
+  fail "13c2: pre-existing gate message changed/missing (stderr: $(cat "$_se_c2"))"
+fi
+
+# Case (d): ASSUME_YES=1 + CLAUDE_TRACKER_QUEUE=Q-TEST -> auto-registers with
+# no prompt, the --register call carries --queue Q-TEST, dispatch proceeds.
+reset_logs
+: >"$TMP/ctr-d"
+(
+  cd "$CAND_DIR" || exit 1
+  _LAUNCHERS_ENTER_TASK="$FAKE_ET_RETRY"
+  CLAUDE_PROJECTS_DIR="$PROJ_EMPTY_SHARED"
+  CLAUDE_PROJECTS_LOCAL_DIR="$PROJ_EMPTY_LOCAL"
+  export ET_RETRY_COUNTER="$TMP/ctr-d"
+  CLAUDE_SKIP_ONBOARD=1 CLAUDE_LAUNCH_ASSUME_YES=1 CLAUDE_TRACKER_QUEUE=Q-TEST \
+    claude-task PROJ-10 </dev/null >/dev/null 2>/dev/null
+)
+_rc_d=$?
+if [[ "$_rc_d" -eq 0 ]]; then
+  ok "13d: ASSUME_YES=1 auto-registers and dispatch proceeds"
+else
+  fail "13d: expected success after auto-register (et-calls: $(cat "$ET_CALLS"))"
+fi
+if grep -qF -- "--register $CAND_DIR --as $CAND_KEY --queue Q-TEST" "$ET_CALLS"; then
+  ok "13d: --register call carries --as <key> --queue Q-TEST"
+else
+  fail "13d: --register call missing/wrong args (et-calls: $(cat "$ET_CALLS"))"
+fi
+if [[ "$(grep -cF -- '--key PROJ-10' "$ET_CALLS")" -eq 2 ]]; then
+  ok "13d: original --key call retried exactly once after registration"
+else
+  fail "13d: expected exactly 2 --key PROJ-10 invocations (et-calls: $(cat "$ET_CALLS"))"
+fi
+
+# Case (d2): same, but CLAUDE_TRACKER_QUEUE unset -> registers with NO
+# --queue, and stderr names the exact follow-up --queue command.
+reset_logs
+: >"$TMP/ctr-d2"
+_se_d2="$TMP/stderr-13d2.txt"
+(
+  cd "$CAND_DIR" || exit 1
+  _LAUNCHERS_ENTER_TASK="$FAKE_ET_RETRY"
+  CLAUDE_PROJECTS_DIR="$PROJ_EMPTY_SHARED"
+  CLAUDE_PROJECTS_LOCAL_DIR="$PROJ_EMPTY_LOCAL"
+  export ET_RETRY_COUNTER="$TMP/ctr-d2"
+  unset CLAUDE_TRACKER_QUEUE
+  CLAUDE_SKIP_ONBOARD=1 CLAUDE_LAUNCH_ASSUME_YES=1 \
+    claude-task PROJ-11 </dev/null >/dev/null 2>"$_se_d2"
+)
+_rc_d2=$?
+if [[ "$_rc_d2" -eq 0 ]]; then
+  ok "13d2: ASSUME_YES=1 with no queue env still auto-registers"
+else
+  fail "13d2: expected success (et-calls: $(cat "$ET_CALLS"))"
+fi
+if grep -qF -- "--register $CAND_DIR --as $CAND_KEY" "$ET_CALLS" && ! grep -qF -- '--queue' "$ET_CALLS"; then
+  ok "13d2: --register call carries no --queue"
+else
+  fail "13d2: --register call unexpectedly carries --queue, or is missing (et-calls: $(cat "$ET_CALLS"))"
+fi
+if grep -qF -- "--register $CAND_DIR --as $CAND_KEY --queue" "$_se_d2"; then
+  ok "13d2: stderr names the exact follow-up --queue command"
+else
+  fail "13d2: no-queue follow-up hint missing (stderr: $(cat "$_se_d2"))"
+fi
+
+# Case (e): CLAUDE_LAUNCH_DRYRUN set -> no registration attempted, no prompt,
+# no retry.
+reset_logs
+: >"$TMP/ctr-e"
+(
+  cd "$CAND_DIR" || exit 1
+  _LAUNCHERS_ENTER_TASK="$FAKE_ET_RETRY"
+  CLAUDE_PROJECTS_DIR="$PROJ_EMPTY_SHARED"
+  CLAUDE_PROJECTS_LOCAL_DIR="$PROJ_EMPTY_LOCAL"
+  export ET_RETRY_COUNTER="$TMP/ctr-e"
+  CLAUDE_SKIP_ONBOARD=1 CLAUDE_LAUNCH_DRYRUN=1 \
+    claude-task PROJ-12 </dev/null >/dev/null 2>/dev/null
+)
+if grep -qF -- '--register' "$ET_CALLS"; then
+  fail "13e: CLAUDE_LAUNCH_DRYRUN must not attempt registration (et-calls: $(cat "$ET_CALLS"))"
+else
+  ok "13e: CLAUDE_LAUNCH_DRYRUN: no registration attempted"
+fi
+if [[ "$(wc -l <"$ET_CALLS")" -eq 1 ]]; then
+  ok "13e: no retry attempted under dry-run"
+else
+  fail "13e: unexpected extra enter-task invocation under dry-run (et-calls: $(cat "$ET_CALLS"))"
+fi
+
+# Case (f): collision guard — the candidate key is already registered at a
+# DIFFERENT path -> aborts, no overwrite, regardless of ASSUME_YES.
+PROJ_COLLIDE_LOCAL="$TMP/offer-collide-local.d"
+mkdir -p "$PROJ_COLLIDE_LOCAL/$CAND_KEY"
+printf '{"workspace_path":"%s"}\n' "$TMP/some-other-project-path" \
+  >"$PROJ_COLLIDE_LOCAL/$CAND_KEY/agent-project.json"
+reset_logs
+: >"$TMP/ctr-f"
+_se_f="$TMP/stderr-13f.txt"
+(
+  cd "$CAND_DIR" || exit 1
+  _LAUNCHERS_ENTER_TASK="$FAKE_ET_RETRY"
+  CLAUDE_PROJECTS_DIR="$PROJ_EMPTY_SHARED"
+  CLAUDE_PROJECTS_LOCAL_DIR="$PROJ_COLLIDE_LOCAL"
+  export ET_RETRY_COUNTER="$TMP/ctr-f"
+  CLAUDE_SKIP_ONBOARD=1 CLAUDE_LAUNCH_ASSUME_YES=1 \
+    claude-task PROJ-13 </dev/null >/dev/null 2>"$_se_f"
+)
+_rc_f=$?
+if [[ "$_rc_f" -ne 0 ]]; then
+  ok "13f: collision guard aborts the launch"
+else
+  fail "13f: expected failure on key collision"
+fi
+if grep -qF -- '--register' "$ET_CALLS"; then
+  fail "13f: collision guard must not register (et-calls: $(cat "$ET_CALLS"))"
+else
+  ok "13f: collision guard: no registration attempted"
+fi
+if grep -q 'already registered' "$_se_f"; then
+  ok "13f: collision message surfaced"
+else
+  fail "13f: collision message missing (stderr: $(cat "$_se_f"))"
+fi
+
+# Case (g): ancestor guard — a registered project's workspace_path is a parent
+# of the stubbed $PWD -> aborts naming that ancestor project, no registration,
+# no prompt, regardless of ASSUME_YES.
+ANC_PARENT="$TMP/anc-parent"
+mkdir -p "$ANC_PARENT"
+ANC_PARENT="$(cd "$ANC_PARENT" && pwd -P)"
+ANC_CHILD="$ANC_PARENT/child/grandchild"
+mkdir -p "$ANC_CHILD"
+PROJ_ANC_LOCAL="$TMP/offer-anc-local.d"
+mkdir -p "$PROJ_ANC_LOCAL/parentproj"
+printf '{"workspace_path":"%s"}\n' "$ANC_PARENT" >"$PROJ_ANC_LOCAL/parentproj/agent-project.json"
+reset_logs
+: >"$TMP/ctr-g"
+_se_g="$TMP/stderr-13g.txt"
+(
+  cd "$ANC_CHILD" || exit 1
+  _LAUNCHERS_ENTER_TASK="$FAKE_ET_RETRY"
+  CLAUDE_PROJECTS_DIR="$PROJ_EMPTY_SHARED"
+  CLAUDE_PROJECTS_LOCAL_DIR="$PROJ_ANC_LOCAL"
+  export ET_RETRY_COUNTER="$TMP/ctr-g"
+  CLAUDE_SKIP_ONBOARD=1 CLAUDE_LAUNCH_ASSUME_YES=1 \
+    claude-task PROJ-14 </dev/null >/dev/null 2>"$_se_g"
+)
+_rc_g=$?
+if [[ "$_rc_g" -ne 0 ]]; then
+  ok "13g: ancestor guard aborts the launch"
+else
+  fail "13g: expected failure when an ancestor is already a registered project"
+fi
+if grep -qF -- '--register' "$ET_CALLS"; then
+  fail "13g: ancestor guard must not register (et-calls: $(cat "$ET_CALLS"))"
+else
+  ok "13g: ancestor guard: no registration attempted"
+fi
+if grep -q 'parentproj' "$_se_g"; then
+  ok "13g: ancestor guard names the ancestor project"
+else
+  fail "13g: ancestor project name missing (stderr: $(cat "$_se_g"))"
+fi
+
+# Case (h): key-path-offer call-shape guard — non-interactive + ASSUME_YES=1
+# -> exactly ONE failed real call, ONE --register call, ONE identical retry
+# (the _offered latch fires at most once; the retry is byte-identical to the
+# original call, proving it re-runs the SAME spec rather than a new one).
+reset_logs
+: >"$TMP/ctr-h"
+(
+  cd "$CAND_DIR" || exit 1
+  _LAUNCHERS_ENTER_TASK="$FAKE_ET_RETRY"
+  CLAUDE_PROJECTS_DIR="$PROJ_EMPTY_SHARED"
+  CLAUDE_PROJECTS_LOCAL_DIR="$PROJ_EMPTY_LOCAL"
+  export ET_RETRY_COUNTER="$TMP/ctr-h"
+  CLAUDE_SKIP_ONBOARD=1 CLAUDE_LAUNCH_ASSUME_YES=1 \
+    claude-task PROJ-15 </dev/null >/dev/null 2>/dev/null
+)
+_rc_h=$?
+_lines_h="$(wc -l <"$ET_CALLS")"
+if [[ "$_rc_h" -eq 0 && "$_lines_h" -eq 3 ]]; then
+  ok "13h: exactly one failed call + one --register call + one identical retry"
+else
+  fail "13h: unexpected invocation shape, rc=$_rc_h lines=$_lines_h (et-calls: $(cat "$ET_CALLS"))"
+fi
+if [[ "$(sed -n '1p' "$ET_CALLS")" == "$(sed -n '3p' "$ET_CALLS")" ]]; then
+  ok "13h: retried call is identical to the original failed call"
+else
+  fail "13h: retry args diverge from the original call (et-calls: $(cat "$ET_CALLS"))"
+fi
+
+# Case (i): happy-path regression guard — default always-succeeds stub, a
+# --key launch still records exactly ONE enter-task invocation (the helper
+# adds no call at all when nothing fails).
+reset_logs
+(
+  cd "$CAND_DIR" || exit 1
+  CLAUDE_SKIP_ONBOARD=1 claude-task PROJ-16 </dev/null >/dev/null 2>/dev/null
+)
+_rc_i=$?
+if [[ "$_rc_i" -eq 0 && "$(wc -l <"$ET_CALLS")" -eq 1 ]]; then
+  ok "13i: happy path unaffected — exactly one enter-task invocation, no offer"
+else
+  fail "13i: happy path regressed, rc=$_rc_i (et-calls: $(cat "$ET_CALLS"))"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

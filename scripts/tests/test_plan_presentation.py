@@ -205,6 +205,7 @@ def test_emitted_essence_marker_satisfies_hook(store, fixtures_dir, tmp_path, ga
         receipt_stale_reason=None,
         delivered_texts=[("Summary of the plan.", 105.0)],
         has_show_full_plan_option=False,
+        is_approval_ask=True,
     )
     assert decision == "deny"
     assert reason == hook._NO_MARKER_REASON

@@ -21,6 +21,7 @@ CHECKS: list[str] = [
     "lint-settings-base",
     "verify-cross-refs",
     "lint-cursor-mirror",
+    "lint-cursor-mirror-cochange",
     "lint-prose-length",
     "verify-experience-leaf",
     "verify-leaf-structure",
@@ -36,18 +37,26 @@ CHECKS: list[str] = [
     "rule-salience-report",
     "verify-terms",
     "verify-semantic-gates",
+    "check-live-run-evidence",
+    "check-in-harness-observation",
 ]
 
 # Checks whose main() takes its own flags instead of the shared --staged.
 # rule-salience-report's default mode prints a report and never gates; only
 # --check-registry runs the drift gate, so the aggregator must pass it.
+# check-live-run-evidence's main(argv) requires exactly two positional
+# elements (script name, artifact path) rather than following the shared
+# mod.main(sub_argv) convention -- reproduces its one existing caller
+# (scripts/tests/test_check_live_run_evidence.py) verbatim rather than
+# changing the checker's own argv handling.
 CHECK_ARGS: dict[str, list[str]] = {
     "rule-salience-report": ["--check-registry"],
+    "check-live-run-evidence": ["check-live-run-evidence.py", "live-run-evidence.md"],
 }
 
 
 def load_check(name: str, scripts_dir: Path):
-    if name == "lint-cursor-mirror":
+    if name.startswith("lint-cursor-mirror"):
         path = scripts_dir.parent / "cursor" / "scripts" / f"{name}.py"
     else:
         path = scripts_dir / f"{name}.py"

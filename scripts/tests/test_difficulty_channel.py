@@ -62,6 +62,28 @@ def test_severity_enum_validates_and_carries_mass():
         dc.Severity.parse("catastrophic")
 
 
+def test_cost_estimate_defaults_empty_and_is_settable():
+    r = _rec()
+    assert r.cost_estimate == ""
+    r2 = dc.DifficultyRecord(
+        ts="t", layer="core", target="x", functional_ground="g",
+        severity=dc.Severity.LOW, reporter="r", cost_estimate="$3/week",
+    )
+    assert r2.cost_estimate == "$3/week"
+
+
+def test_scan_text_covers_cost_estimate_generically():
+    """scan_text() enumerates dataclasses.fields(self) generically (no per-field allowlist),
+    so a new field is covered by the pre-publication term gate without an edit to scan_text()
+    itself — pin that property directly rather than leave it an unverified claim."""
+    r = dc.DifficultyRecord(
+        ts="t", layer="core", target="x", functional_ground="g",
+        severity=dc.Severity.LOW, reporter="r",
+        cost_estimate="ORG_INTERNAL_TOKEN_MARKER",
+    )
+    assert "ORG_INTERNAL_TOKEN_MARKER" in r.scan_text()
+
+
 def test_empty_functional_ground_rejected():
     with pytest.raises(ValueError):
         dc.DifficultyRecord(
@@ -136,3 +158,52 @@ def test_load_adapter_builtin_noop_with_no_plugin_dir_configured(monkeypatch, tm
     adapters.load_adapter("github")  # must not raise, must never look at the plugin dir
 
     assert isinstance(dc.get_channel("github"), adapters.GitHubChannel)
+
+
+def test_load_adapter_plugin_import_error_wrapped_as_broken(monkeypatch, tmp_path):
+    """A plugin that fails at import time (e.g. references an unmerged module) raises
+    AdapterPluginBroken, not a bare ImportError — the message must name the plugin file, the
+    original exception, and that the destination is unaffected."""
+    plugin_dir = tmp_path / "difficulty-channel-plugins"
+    (plugin_dir / "adapters").mkdir(parents=True)
+    (plugin_dir / "adapters" / "brokenimport.py").write_text(
+        "from difficulty_channel.port import this_does_not_exist\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("CLAUDE_DIFFICULTY_PLUGIN_DIR", str(plugin_dir))
+
+    with pytest.raises(adapters.AdapterPluginBroken) as exc_info:
+        adapters.load_adapter("brokenimport")
+
+    msg = str(exc_info.value)
+    assert "brokenimport.py" in msg
+    assert "ImportError" in msg
+    assert "destination" in msg
+    assert isinstance(exc_info.value.__cause__, ImportError)
+
+
+def test_load_adapter_plugin_other_exception_wrapped_as_broken(monkeypatch, tmp_path):
+    """A plugin that raises some other exception at import time (not ImportError) is wrapped
+    the same way."""
+    plugin_dir = tmp_path / "difficulty-channel-plugins"
+    (plugin_dir / "adapters").mkdir(parents=True)
+    (plugin_dir / "adapters" / "brokenruntime.py").write_text(
+        "raise ValueError('bad config in plugin')\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("CLAUDE_DIFFICULTY_PLUGIN_DIR", str(plugin_dir))
+
+    with pytest.raises(adapters.AdapterPluginBroken) as exc_info:
+        adapters.load_adapter("brokenruntime")
+
+    msg = str(exc_info.value)
+    assert "brokenruntime.py" in msg
+    assert "ValueError" in msg
+    assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+def test_load_adapter_missing_plugin_still_raises_file_not_found(monkeypatch, tmp_path):
+    """The unchanged missing-plugin path: absent file still raises FileNotFoundError, not
+    AdapterPluginBroken."""
+    monkeypatch.setenv("CLAUDE_DIFFICULTY_PLUGIN_DIR", str(tmp_path))  # no adapters/ subdir
+
+    with pytest.raises(FileNotFoundError, match="still-missing"):
+        adapters.load_adapter("still-missing")

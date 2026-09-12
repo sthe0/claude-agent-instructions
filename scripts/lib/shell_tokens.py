@@ -82,6 +82,12 @@ hand-written span formula is correct only once it is checked against the walk
 that already knows where these constructs are, and by then it was pointless to
 write a second one.
 
+`heredoc_bodies` reads the same list a third way, reporting the body BYTES to a
+caller that needs them rather than needs them gone. A region deliberately spans
+the construct's syntax as well as its body, so this reader trims that syntax
+back off (`_region_body_text`) -- narrowing an already-located span, never
+searching for one, which is why it does not reopen the failure mode above.
+
 Neutralization answers a narrower question than stripping does -- WHERE a
 construct is, not whether its body may be trusted away -- so it relaxes two of
 the seven clauses and leaves the rest untouched. Clause (iv)'s allowlist widens
@@ -436,6 +442,44 @@ def _blank_region(command: str, start: int, end: int) -> str:
     return "".join(ch if ch == "\n" else " " for ch in command[start:end])
 
 
+# The three `collapse_text` values `_removal_regions` emits, read back as a
+# region's KIND. It emits no others, so matching on them discriminates its
+# output totally rather than heuristically.
+_HERE_STRING_REGION = " "
+_HEREDOC_OPERATOR_REGION = ""
+_HEREDOC_BODY_REGION = "\n"
+
+
+def _region_body_text(command: str, start: int, end: int, collapse: str) -> str | None:
+    """The body text inside one `_removal_regions` region, or `None` for a
+    region that carries no body (a here-document's operator+delimiter token).
+
+    A region spans the construct's SYNTAX as well as its body -- `<<<` and the
+    operand's quotes, the newline/terminator line/trailing newline bracketing a
+    here-document body -- because removal and blanking both need the whole
+    construct gone. Recovering the body alone therefore means trimming that
+    syntax back off, and each branch below reproduces exactly the slice
+    `_removal_regions` already handed to `_body_inert` for that construct,
+    reached from the region bounds instead of from the walk's local variables.
+
+    This is trimming, not locating: it never searches `command` for a
+    construct, only narrows one the single walk has already found, so it does
+    not reintroduce the second span-finding walk the module docstring forbids.
+    """
+    if collapse == _HEREDOC_OPERATOR_REGION:
+        return None
+    if collapse == _HERE_STRING_REGION:
+        operand = command[start + len("<<<"):end].lstrip(" ")
+        if operand[:1] in ("'", '"'):
+            return operand[1:-1]
+        return operand
+    inner = command[start + 1:end]  # drop the newline that opens the region
+    if inner.endswith("\n"):
+        inner = inner[:-1]  # drop the newline after the terminator line
+    body, _, _terminator_line = inner.rpartition("\n")
+    return body
+
+
 def _strip_bodies(command: str) -> str:
     """Remove the first here-document body / here-string operand, or return
     `command` unchanged on any doubt. Fail-closed is the safe direction here: the
@@ -459,6 +503,33 @@ def strip_heredoc_bodies(command: str) -> str:
     if residue != command and _holds_multiple_statements(residue):
         return command
     return residue
+
+
+def heredoc_bodies(command: str) -> list[str]:
+    """Every here-document body / here-string operand `strip_heredoc_bodies`
+    would remove from `command`, in extraction order -- or `[]` when `command`
+    falls outside the recognized shape, or when nothing is actually stripped.
+
+    Reads the SAME `_removal_regions` walk under the SAME `CONSUMERS` that
+    `strip_heredoc_bodies` removes, and repeats clause (v) against the same
+    residue, so this extractor and the stripper cannot disagree about which
+    bytes are body text. A caller that needs the BYTES (rather than merely
+    needing them gone) uses this instead of re-deriving the recognizer against
+    `strip_heredoc_bodies`'s return value.
+
+    A non-empty region list always shortens `command` (every region replaces at
+    least its operator with shorter collapse text), so "nothing was stripped"
+    and "no regions" are the same condition -- checked here as the latter.
+    """
+    if not _recognized(command):
+        return []
+    regions = _removal_regions(command, CONSUMERS)
+    if not regions:
+        return []
+    if _holds_multiple_statements(_apply_regions(command, regions)):
+        return []
+    bodies = (_region_body_text(command, *region) for region in regions)
+    return [body for body in bodies if body is not None]
 
 
 def neutralize_heredoc_constructs(command: str) -> str:

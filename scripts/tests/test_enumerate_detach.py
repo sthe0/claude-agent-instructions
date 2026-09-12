@@ -25,7 +25,7 @@ Covers:
     touches a concurrent worker's `.tmp-*.json`;
   - the fold end to end through `cmd_approve` and against `store.load()`, not
     an in-memory bag: a landed sidecar is folded, PERSISTED, and refuses the
-    approve on its own `qenum-N` candidates -- which are then dispositionable,
+    approve on its own `qenum-<part>-N` candidates -- which are then dispositionable,
     the whole point of persisting before the gate is evaluated -- plus its two
     dispositions-are-not-resurrected halves (a no-op at an already-enumerated
     digest; a statement-keyed re-raise when the plan moved on);
@@ -37,7 +37,11 @@ Covers:
     worker over the corrected plan (proven via the bag mutation and the
     recorded launch argv, not merely via the gate's blocker list); a
     digest-UNCHANGED (final_check-only) replan clears nothing, launches
-    nothing, and touches no deadline.
+    nothing, and touches no deadline;
+  - and the refusal case that ordering implies: a replan whose corrected plan
+    fails submission validation leaves the persisted premise bag byte-identical
+    and spawns no worker -- a command that refuses must not mutate persisted
+    state.
 """
 from __future__ import annotations
 
@@ -209,7 +213,7 @@ class TestEnumerateRunnerTimeoutBinding:
     def test_enumerate_subprocess_runner_delegates_at_enumerate_timeout(self, monkeypatch):
         calls = []
 
-        def fake_subprocess_runner(argv, *, timeout=None):
+        def fake_subprocess_runner(argv, *, timeout=None, stdin=""):
             calls.append((argv, timeout))
             return RunResult(0, "", "")
 
@@ -371,7 +375,7 @@ class TestJudgeFallbackUnaffectedByEnumerateTimeout:
 
         calls = []
 
-        def fake_run(argv, *, capture_output, text, timeout):
+        def fake_run(argv, *, capture_output, text, timeout, input=None, **kwargs):
             calls.append(timeout)
             return SimpleNamespace(returncode=0, stdout="YES\nlooks concrete", stderr="")
 
@@ -626,6 +630,12 @@ class TestDetachedRelaunchOnReplan:
         digest entirely), so nothing should be cleared, nothing relaunched, and
         the deadline must be untouched."""
         monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+        # This test predates the replan-authorization gate (stage 5 of the
+        # plan-review-override-customer-id fix) and expects a bare refinement
+        # replan on a SUBSTANTIVE session to apply without a user-facing diff
+        # presentation; that gate's own scoping is covered directly in
+        # test_replan_authorization.py, so it is switched off here.
+        monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
         sid = "no-clear"
         base = str(fixtures_dir / "plan_two_stage_finalcheck.toml")
         changed = str(fixtures_dir / "plan_two_stage_finalcheck_changed.toml")
@@ -661,7 +671,7 @@ class TestDetachedRelaunchOnReplan:
         the CORRECTED plan's digest before a retried `replan` runs must be folded
         AND PERSISTED, not merely mutated on the in-memory `state` object --
         cmd_replan's own store.save() sites are all past the early return this
-        refusing path takes. An unpersisted fold would name qenum-N candidates
+        refusing path takes. An unpersisted fold would name qenum-<part>-N candidates
         that exist nowhere on disk, and `question-candidate-dispose` could not
         address them -- the central case for detaching on the replan side: replan
         against a corrected plan, launch, _ENUMERATE_NOT_RUN, wait, retry replan
@@ -703,15 +713,81 @@ class TestDetachedRelaunchOnReplan:
         blocked = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
 
         assert blocked.ok is False
-        assert any("qenum-1" in b for b in blocked.data.get("blockers", []))
+        assert any("qenum-meta-1" in b for b in blocked.data.get("blockers", []))
         # a matching sidecar folds in place of a redundant relaunch
         assert launches == []
 
         bag = store.load(sid).plugins["premise"]
         assert bag["enumerated"] is True
         assert bag["enumerated_at"] == digest
-        assert [c["id"] for c in bag["candidates"]] == ["qenum-1", "qenum-2"]
+        assert [c["id"] for c in bag["candidates"]] == ["qenum-meta-1", "qenum-meta-2"]
         assert all(c["disposition"] == "raised" for c in bag["candidates"])
+
+    def test_a_replan_refused_at_submission_leaves_the_premise_bag_untouched(
+            self, store, fixtures_dir, tmp_path, monkeypatch):
+        """A refusal must not cost the session its enumeration record.
+
+        `_launch_enumeration` is destructive and its caller PERSISTS it: it clears
+        `enumerated`/`enumerated_at` back to not-run, bumps `enumerate_launch`, pins
+        `enumerate_launch_digest` to the PROPOSED bytes and stamps a new deadline.
+        With that block ahead of submission seam (b), a replan carrying a plan that
+        fails submission validation was refused *after* the bag had already been
+        destroyed and saved -- so the plan still current, and never at fault, was
+        left blocked on the enumeration axis with a launch digest naming bytes the
+        session had just rejected, plus a detached worker running over them.
+
+        Asserted as a PROPERTY, not as line order: every enumeration field of the
+        RELOADED bag is byte-identical across the refused call, and no worker was
+        spawned. Mutation-proof (run): moving `cmd_replan`'s `submission =
+        _submission_problems(...)` refusal back below the `_saved_plan_path =
+        state.plan_path` block turns this red on `enumerated` (False on disk where
+        the pre-call bag had True), while the rest of the suite stays green."""
+        monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+        sid = "refused-submission-keeps-bag"
+        base = str(fixtures_dir / "plan_two_stage.toml")
+        # a plan that STRICT-LOADS (it never claims the substantive grade, so
+        # `plan._validate_substantive_stage` never runs) yet fails submission for a
+        # SUBSTANTIVE session, which refuses silence about the grade. Derived from the
+        # shipped fixture so only the declaration under test differs.
+        corrected = tmp_path / "corrected_no_weight_class.toml"
+        corrected.write_text(
+            Path(fixtures_dir / "plan_two_stage_substantive.toml")
+            .read_text(encoding="utf-8")
+            .replace('weight_class = "small_change"\n', ""),
+            encoding="utf-8")
+        corrected = str(corrected)
+        assert load_plan(corrected).meta.weight_class is None
+        # and the bytes really would have driven the enumeration block: a digest-
+        # UNCHANGED replan clears and launches nothing anyway, which would make the
+        # assertions below vacuous.
+        assert (plugins_premise._plan_content_digest(load_plan(corrected))
+                != plugins_premise._plan_content_digest(load_plan(base)))
+
+        launches = []
+        monkeypatch.setattr(
+            cli, "_spawn_enumeration_worker",
+            lambda cmd, **kw: launches.append(cmd),
+        )
+
+        _to_executing_stage1_with_premise(store, sid, base)
+        bag_before = dict(store.load(sid).plugins["premise"])
+        launches.clear()  # discard the submit_plan-time launch
+
+        refused = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
+
+        assert refused.ok is False
+        # the property, asserted BEFORE the refusal's shape: under the defect the call
+        # still refuses (on `close_questions`, for the enumeration it had just cleared),
+        # so a shape assertion placed first would hide which claim the ordering carries.
+        bag_after = store.load(sid).plugins["premise"]
+        for field in ("enumerated", "enumerated_at", "enumerate_launch",
+                      "enumerate_launch_digest", "enumerate_deadline"):
+            assert bag_after[field] == bag_before[field], field
+        assert launches == []
+        # and it is seam (b) the command refuses at, not something downstream
+        assert refused.action == "fix_plan"
+        assert any("weight_class is not declared" in p
+                   for p in refused.data.get("problems", []))
 
 
 # --- the fold itself, end to end through cmd_approve ---------------------------
@@ -733,7 +809,7 @@ class TestFoldThroughApprove:
         """The ordinary happy path of detaching: the worker lands pairs, `approve`
         folds them, refuses naming them, and the coordinator disposes them and
         approves. Every step of that is on disk — the refusing `approve` returns
-        before its own store.save(), so an unpersisted fold would name `qenum-N`
+        before its own store.save(), so an unpersisted fold would name `qenum-<part>-N`
         ids `question-candidate-dispose` could not find, and a destructive read
         would leave no sidecar to re-fold and no launch site on the approve path:
         `_ENUMERATE_NOT_RUN` forever, escapable only by the 480 s synchronous
@@ -750,18 +826,18 @@ class TestFoldThroughApprove:
 
         blocked = cli.cmd_approve(ns(session=sid, by="user"), store=store)
         assert blocked.ok is False
-        assert any("qenum-1" in b for b in blocked.data["blockers"])
+        assert any("qenum-meta-1" in b for b in blocked.data["blockers"])
 
         bag = store.load(sid).plugins["premise"]
         assert bag["enumerated"] is True
         assert bag["enumerated_at"] == digest
         assert bag["enumerated_runner_ok"] is True
-        assert [c["id"] for c in bag["candidates"]] == ["qenum-1", "qenum-2"]
+        assert [c["id"] for c in bag["candidates"]] == ["qenum-meta-1", "qenum-meta-2"]
         assert all(c["disposition"] == "raised" for c in bag["candidates"])
         # idempotent: the matching sidecar survives the refusing fold
         assert enumerate_sidecar.sidecar_path(sid, digest, root=root).exists()
 
-        for cid in ("qenum-1", "qenum-2"):
+        for cid in ("qenum-meta-1", "qenum-meta-2"):
             d = cli.cmd_question_candidate_dispose(
                 ns(session=sid, id=cid, as_="dismissed", reason="answered in the goal",
                    question=None), store=store)
@@ -788,7 +864,7 @@ class TestFoldThroughApprove:
             runner=lambda argv, **_kw: RunResult(0, "\n".join(f"{t}\t{q}" for t, q in pairs), ""),
         )
         assert cli.cmd_question_candidate_dispose(
-            ns(session=sid, id="qenum-1", as_="dismissed", reason="answered in the goal",
+            ns(session=sid, id="qenum-meta-1", as_="dismissed", reason="answered in the goal",
                question=None), store=store).ok is True
 
         _land_sidecar(store, sid, plan, pairs)
@@ -819,7 +895,7 @@ class TestFoldThroughApprove:
             runner=lambda argv, **_kw: RunResult(0, "goal\tthe question the coordinator saw", ""),
         )
         assert cli.cmd_question_candidate_dispose(
-            ns(session=sid, id="qenum-1", as_="dismissed", reason="answered", question=None),
+            ns(session=sid, id="qenum-meta-1", as_="dismissed", reason="answered", question=None),
             store=store).ok is True
         digest = _land_sidecar(store, sid, plan,
                                [("stage 2", "a question the worker asked instead")])
@@ -836,7 +912,7 @@ class TestFoldThroughApprove:
 
     def test_fold_re_raises_a_candidate_whose_statement_changed(
             self, store, fixtures_dir, tmp_path, monkeypatch):
-        """Preservation is keyed on the statement, not the id: `qenum-1` of a pass
+        """Preservation is keyed on the statement, not the id: `qenum-meta-1` of a pass
         over corrected plan content is a DIFFERENT question, and inheriting the old
         disposition would discharge a question nobody read. Here the bag's prior
         enumeration is stale (a digest-changing replan cleared it), so the fold runs
@@ -852,7 +928,7 @@ class TestFoldThroughApprove:
             runner=lambda argv, **_kw: RunResult(0, "goal\tthe OLD question", ""),
         )
         assert cli.cmd_question_candidate_dispose(
-            ns(session=sid, id="qenum-1", as_="dismissed", reason="answered", question=None),
+            ns(session=sid, id="qenum-meta-1", as_="dismissed", reason="answered", question=None),
             store=store).ok is True
         # simulate the not-run clear a digest-changing relaunch leaves behind, so the
         # fold is not short-circuited by the same-digest no-op
@@ -866,7 +942,7 @@ class TestFoldThroughApprove:
         blocked = cli.cmd_approve(ns(session=sid, by="user"), store=store)
 
         assert blocked.ok is False
-        assert any("qenum-1" in b for b in blocked.data["blockers"])
+        assert any("qenum-meta-1" in b for b in blocked.data["blockers"])
         cand = store.load(sid).plugins["premise"]["candidates"][0]
         assert cand["disposition"] == "raised"
         assert "a DIFFERENT question" in cand["statement"]
@@ -1103,9 +1179,10 @@ def test_enumerate_runner_signature_matches_what_the_entry_points_pass(entry, mo
     nothing."""
     seen: dict = {}
 
-    def fake_subprocess_runner(argv, *, timeout=None):
+    def fake_subprocess_runner(argv, *, timeout=None, stdin=""):
         seen["argv"] = argv
         seen["timeout"] = timeout
+        seen["stdin"] = stdin
         return RunResult(0, "", "")
 
     monkeypatch.setattr(advisor, "subprocess_runner", fake_subprocess_runner)

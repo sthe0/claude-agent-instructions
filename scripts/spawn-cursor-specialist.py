@@ -33,7 +33,8 @@ from pathlib import Path
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # kept for Extraction typing / telemetry; Cursor path does not invoke it (see _build_extraction)
-from lib.config_root import skills_dir  # config-root resolver (isolated system root)
+from lib.config_root import skills_dir
+from lib.runtime_models import CURSOR_COMPLEXITY_MODEL  # config-root resolver (isolated system root)
 from lib.planner_plan_check import (  # single shared home for return-marker + plan checks
     MARKER_RE,
     PLAN_PATH_RE,
@@ -137,6 +138,19 @@ def assemble_prompt(
     if cursor_bootstrap:
         sections += ["## Cursor specialist bootstrap", "", cursor_bootstrap, ""]
     sections += ["## Specialization instructions", "", skill_body, ""]
+    continue_worktree = getattr(args, "continue_worktree", None)
+    if continue_worktree:
+        sections += [
+            "## Continue the prior stage — do NOT fork fresh",
+            "",
+            f"This stage depends on a prior stage whose committed-but-un-landed work "
+            f"lives in the linked worktree `{continue_worktree}` (build on its branch). "
+            f"`cd` into that worktree and continue on its branch, creating the worktree "
+            f"only if it is absent — never `git worktree add` a fresh branch off "
+            f"origin/main for this stage, or you will fork away from and lose the prior "
+            f"stage's work.",
+            "",
+        ]
     sections += ["## Working plan", "", plan, ""]
     sections += [
         "## Done criterion for this step",
@@ -199,7 +213,7 @@ def resolve_api_key(api_key_file: Path) -> str | None:
 def build_agent_cmd(
     agent_bin: str,
     workspace: Path,
-    model: str,
+    model: str | None,
     timeout_sec: int,
 ) -> list[str]:
     # The prompt is NOT an argv element: with the plan inlined it exceeds Linux
@@ -218,9 +232,9 @@ def build_agent_cmd(
         str(workspace.resolve()),
         "--output-format",
         "text",
-        "--model",
-        model,
     ]
+    if model is not None:
+        cmd += ["--model", model]
     timeout_bin = shutil.which("timeout")
     if timeout_bin and timeout_sec > 0:
         cmd = [timeout_bin, str(timeout_sec)] + cmd
@@ -270,7 +284,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path.cwd(),
         help="workspace directory for the agent (default: cwd)",
     )
-    p.add_argument("--model", default="composer-2.5", help="agent model id (default: composer-2.5)")
+    p.add_argument(
+        "--complexity",
+        choices=tuple(CURSOR_COMPLEXITY_MODEL),
+        help="task difficulty tier (Cursor Auto when model omitted)",
+    )
+    p.add_argument("--model", default=None, help="explicit agent model id (wins over --complexity)")
+    p.add_argument("--stage-index", type=int, default=None, help="plan stage index for cost attribution")
+    p.add_argument(
+        "--continue-worktree",
+        default=None,
+        help="prior stage worktree/branch to continue instead of forking fresh",
+    )
     p.add_argument(
         "--timeout-sec",
         type=int,
@@ -290,6 +315,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="installation smoke: minimal prompt expecting COMPLETED: ping",
     )
     return p
+
+
+def resolve_model(args) -> str | None:
+    if args.model:
+        return args.model
+    if args.complexity:
+        return CURSOR_COMPLEXITY_MODEL[args.complexity]
+    return CURSOR_COMPLEXITY_MODEL["medium"]
 
 
 def _build_extraction(result_text: str, kind: str) -> "marker_extract.Extraction | None":
@@ -368,7 +401,8 @@ def main(argv: list[str] | None = None) -> int:
         prompt = assemble_prompt(args, depth_next, perms, skill_body, cursor_bootstrap)
 
     agent_bin = find_agent_binary()
-    cmd = build_agent_cmd(agent_bin or "agent", workspace, args.model, timeout_sec)
+    model = resolve_model(args)
+    cmd = build_agent_cmd(agent_bin or "agent", workspace, model, timeout_sec)
 
     if args.dry_run:
         print("=== assembled prompt (delivered via stdin) ===")
@@ -442,7 +476,7 @@ def main(argv: list[str] | None = None) -> int:
         "budget_tier": args.budget,
         "timeout_sec": timeout_sec,
         "depth": depth_next,
-        "model": args.model,
+        "model": model,
         "workspace": str(workspace),
         "duration_ms": duration_ms,
         "return_marker": parsed_marker,
@@ -460,7 +494,7 @@ def main(argv: list[str] | None = None) -> int:
         f"budget={args.budget}",
         f"timeout_sec={timeout_sec}",
         f"depth={depth_next}",
-        f"model={args.model}",
+        f"model={model}",
         f"duration_ms={duration_ms}",
     ]
     if parsed_marker:

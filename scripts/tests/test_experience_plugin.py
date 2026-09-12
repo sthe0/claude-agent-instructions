@@ -16,6 +16,7 @@ from pathlib import Path
 from agentctl import cli, plugins
 from agentctl.directive import Directive
 from agentctl.state import Node, SessionState, WeightClass
+from conftest import STAGE_OBSERVATIONS
 
 
 def _new_state(sid="s", **kw):
@@ -123,9 +124,10 @@ def _drive_to_resolution(capsys, root, sid, plan, *, chat=False):
     _run(capsys, root, "submit-plan", "--session", sid, "--plan", plan)
     _run(capsys, root, "approve", "--session", sid, "--by", "user")
     _run(capsys, root, "partition", "--session", sid)
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         _run(capsys, root, "next-stage", "--session", sid)
-        _run(capsys, root, "record-result", "--session", sid, "--status", "passed", "--actual", "ok", "--control", "reviewed: ok")
+        _run(capsys, root, "record-result", "--session", sid, "--status", "passed",
+             "--actual", "ok", "--control", "reviewed: ok", "--observation", observation)
     _run(capsys, root, "verify-final", "--session", sid)
 
 

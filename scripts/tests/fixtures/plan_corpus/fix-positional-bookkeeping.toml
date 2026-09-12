@@ -1,0 +1,185 @@
+[meta]
+task_id = "fix-positional-bookkeeping"
+goal = "Stop a doc-reference allowlist pin from false-failing on a purely positional line shift, by anchoring each pin to the referenced line's CONTENT; give verify-semantic-gates the remediation line it lacks"
+done_criterion = "A simulated pure line shift (text byte-identical, line number moved) leaves verify-config-root-refs.py green and self-relocating, while a CHANGED reference line still fails; verify-semantic-gates FAIL output names its regenerator; verify-all 19/19 and pytest at the main baseline"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+delivery_worktree = "/Users/the0/claude-agent-instructions-anchor"
+external_research = "none needed — the mechanism is local and was reproduced directly this session: shifting one pin (docs/operations/guards.md:48 -> :47) makes scan() emit BOTH a non-allowlisted occurrence at :48 AND a stale entry at :47, with no indication the two are the same reference, and remediation prose that invites re-authoring the reason instead of re-pinning. Empirically checked and REJECTED as a second target: crutch_registry.toml drift — re-running gen_crutch_registry.py against current main produced a byte-identical file (git status clean), so the registry is in sync and its id (file + scope name) is not positionally anchored at all. Reviewed by a spawned thinker 2026-08-04 (verdict revise, five required revisions, all folded in below); its two load-bearing concerns were then settled by direct enumeration: (1) SINGLE PARSER CONFIRMED — a repo-wide grep for 'config-root-refs-allowlist' outside the file itself returns only verify-config-root-refs.py, its test module (which writes fixtures, not a parser) and three prose mentions in experience leaves, so no hook, generator or tsv worklist parses the grammar and the rewrite cannot silently break a second reader; (2) STAGE-5 PIN-SHIFT REFUTED — both files stage 5 touches (the target experience leaf and memory-global/leaves/experience/MEMORY.md) are already the allowlist's two whole-file glob entries, chosen for exactly this append-only reason, so the append shifts no pin at all."
+
+[[stage]]
+index = 1
+title = "Add an optional content anchor to the pin grammar"
+executor = "in_thread"
+expected_result_image = "verify-config-root-refs.py accepts a third pin field: `path:line:<sha8>` where sha8 is the first 8 hex of sha256 over the referenced line's stripped text. The candidate set an anchor resolves against is the file's OCCURRENCE lines — the lines find_occurrences already emits — never all lines of the file; that is the mechanism's own domain and it keeps ambiguity rare. Five resolution outcomes, each covered by a test: (i) anchor matches at the pinned line -> covered, exactly as today; (ii) anchor does not match at the pinned line but matches EXACTLY ONE other occurrence line -> RELOCATED: covered, not stale, not unallowed, and a notice naming old->new line is printed on the DEFAULT run (not only under --repin), so a reference that travels a long way is visible in the check's own output; (iii) anchor matches no occurrence line -> stale, the existing hard failure; (iv) anchor matches MORE THAN ONE occurrence line -> ambiguous, hard failure naming the candidates, never a silent guess; (v) cross-entry: two entries for the same file resolving to the SAME occurrence -> hard failure, because otherwise one entry silently double-covers while the other occurrence surfaces as unallowed with no stated cause. A bare `path:line` entry keeps today's behaviour byte-identical. A `--repin` flag rewrites the allowlist in place with relocated line numbers and freshly-computed anchors, preserving each entry's reason text verbatim."
+criterion_type = "measurable"
+done_criterion = "pytest on the verifier's own test module passes — the five resolution-outcome tests, a back-compat test that an unanchored pin behaves as before, and the anti-vacuity test below — AND the real 87-entry allowlist still verifies green through the unchanged no-flag path"
+verify_command = "set -o pipefail && python3 -m pytest -q scripts/tests/test_verify_config_root_refs.py::test_anchor_matches_at_pinned_line scripts/tests/test_verify_config_root_refs.py::test_anchor_relocates_to_single_other_occurrence scripts/tests/test_verify_config_root_refs.py::test_anchor_matching_no_occurrence_is_stale scripts/tests/test_verify_config_root_refs.py::test_anchor_matching_two_occurrences_is_ambiguous scripts/tests/test_verify_config_root_refs.py::test_two_entries_resolving_to_same_occurrence_fail scripts/tests/test_verify_config_root_refs.py::test_unanchored_pin_behaves_as_before scripts/tests/test_verify_config_root_refs.py::test_anchor_definition_matches_independent_literal && python3 scripts/verify-config-root-refs.py && python3 -m pytest scripts/tests/test_verify_config_root_refs.py -q 2>&1 | tail -3"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/verify-config-root-refs.py", "scripts/tests/test_verify_config_root_refs.py"]
+material = "scripts/verify-config-root-refs.py (329 lines: parse_allowlist / _covers / find_stale_entries / scan) and its 199-line test module. Enumerated and confirmed this session: these two files are the ONLY readers of the pin grammar in the repo — no hook, generator or worklist parses the allowlist, so the grammar extension has exactly one consumer to keep honest."
+means = "Edit + pytest in the delivery worktree"
+method = "Extend the pin regex to an optional third `:<hex8>` group; compute anchors with a single _line_anchor(text) helper; resolve each anchored entry against the file's occurrence lines before find_unallowed/find_stale_entries run, so both consumers see the resolved line; add --repin writing through a parse-preserving rewrite. ANTI-VACUITY: because --repin writes anchors with _line_anchor and the validator reads them with _line_anchor, a self-consistently wrong helper (whitespace mismatch, or degenerately constant) would make every downstream green vacuously — so one test pins the anchor definition against an INDEPENDENTLY computed literal: a hard-coded hex constant in the test body for a known line text, obtained without calling _line_anchor."
+conditions = "All edits in /Users/the0/claude-agent-instructions-anchor; the canonical checkout stays read-only"
+invariants = "An unanchored `path:line` entry must behave EXACTLY as today — the migration must be opt-in at the grammar level, not a flag day. Relocation is only ever silent-safe when the line text is byte-identical; anything else fails loudly. Never auto-rewrite the allowlist outside explicit --repin, and --repin must not disturb the existing accepted-and-ignored --staged flag or the no-flag path verify-all.py invokes. --repin rewrites IN PLACE, not from parsed entries: the 12-line comment header (lines 1-12, with line 13 blank), every blank line, and the raw two-space separator before `#` all survive byte-identical, or stage 2's diff review is worthless and the file loses its own documentation. ACCEPTED NAMED LIMIT: a byte-identical line cut and pasted into a DIFFERENT section relocates silently while a section-scoped reason (guards.md:48, :50, autocompact-threshold-policy.md:60 are worded that way) quietly goes stale. Anchoring over `nearest preceding heading + line` was considered and rejected: most reasons here are section-independent boilerplate (26 identical `keep:harness-owned` lines), so heading-scoping would churn the many to guard the few. The default-run relocation notice is the mitigation, and the limit is stated in the header rather than left to be rediscovered."
+capability_required = "none beyond local repo access"
+
+[stage.principle]
+statement = "A pin whose identity is positional must carry the content it points at, or it cannot tell 'the reference changed' from 'something above it moved'"
+source = "the allowlist's own header — 'Prefer the line pin: a stale pin forces a human to re-read the reference'"
+derivation = "The header states the pin's purpose is to force a re-read when the reference changes. A bare line number cannot observe the reference at all: it fires on any insertion above (no re-read value) and stays silent when the pinned line's text is rewritten while still matching the legacy pattern (re-read needed, none forced). Adding the content anchor makes the mechanism serve exactly the purpose the header claims for it, in both directions — which is why this is a strengthening, not a relaxation."
+confidence = "high"
+refutation = "if the repo wanted the pin to fire on ANY edit to the governing file, the anchor would defeat that intent — but the header names the reference, not the file, as the thing to re-read, and the whole-file escape form already exists for files where the ordinal is not the identity"
+
+[[stage]]
+index = 2
+title = "Migrate the 85 line-pin allowlist entries to anchored pins"
+executor = "in_thread"
+expected_result_image = "Every `path:line` entry in config-root-refs-allowlist.txt carries an anchor, written by `--repin` (not by hand), with all reason text byte-identical to before; the two whole-file glob entries are untouched. The verifier is green. A regression test asserts the ACTUAL difficulty is gone: given the real allowlist and a synthetic one-line insertion above a pinned reference, scan() returns 0 and reports the relocation, whereas the same fixture with the pinned line's TEXT edited still returns 1."
+criterion_type = "measurable"
+done_criterion = "verify-config-root-refs.py exits 0 on the migrated allowlist; the shift-vs-edit regression test passes; and the mechanized preservation test passes — parsing the allowlist before and after --repin yields identical (path, reason) pairs in identical order and count, plus a byte-identical comment header"
+verify_command = "set -o pipefail && python3 -m pytest -q scripts/tests/test_verify_config_root_refs.py::test_pure_line_shift_stays_green_and_relocates scripts/tests/test_verify_config_root_refs.py::test_edited_pinned_line_still_fails scripts/tests/test_verify_config_root_refs.py::test_repin_preserves_reasons_and_header && python3 scripts/verify-config-root-refs.py && python3 -m pytest scripts/tests/test_verify_config_root_refs.py -q 2>&1 | tail -3"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["scripts/config-root-refs-allowlist.txt"]
+material = "the allowlist as it stands on current main (e5ead17): 100 file lines = a 12-line comment header + 87 entries, of which 85 are line pins across CLAUDE.md, README, docs/, memory-global/, scripts/README.md, skills/, plus the 2 whole-file globs. Counted, not estimated — an earlier draft of this plan said 101/99 by conflating file lines with entries, and the worktree was one commit behind main when that count was taken."
+means = "scripts/verify-config-root-refs.py --repin; pytest"
+method = "Run --repin against the live tree; add the shift-vs-edit regression test; MECHANIZE the diff review the plan previously left as prose — a test that parses the allowlist before and after --repin and asserts identical (path, reason) pairs in identical order and count, so 'reasons preserved verbatim' is decidable rather than eyeballed. The human diff read stays, but it is no longer the evidence."
+conditions = "stage 1 merged into the worktree tree; the tree is otherwise clean so the diff is reviewable"
+invariants = "Reasons are preserved verbatim — the migration must not silently re-author a single justification, and this is asserted by test, not by review. The whole-file entries stay whole-file: they were chosen deliberately for append-only generated files. Stage 2's first verify clause is a self-check by construction (the tool that writes the anchors is the tool that reads them); it counts as evidence only because stage 1's anti-vacuity literal test pins the anchor definition independently — do not drop that test and rely on this one."
+capability_required = "none beyond local repo access"
+
+[stage.principle]
+statement = "A data migration of a hand-curated file is done by the tool that will maintain it, never by hand"
+source = "CLAUDE.md § Separate rule from perception; the repo's own 'DO NOT HAND-EDIT, re-run the generator' convention on crutch_registry.toml"
+derivation = "Computing 85 content hashes by hand is a mechanical, fully-decidable operation, and any hand-entered hash that is wrong fails in the direction of a FALSE PASS only if it accidentally matches — but far more likely produces a stale-entry failure that a tired author 'fixes' by deleting the reason. Writing --repin first and using it for the migration also proves the flag works on the real 87-entry corpus rather than on a fixture."
+confidence = "high"
+refutation = "if --repin turned out to mangle reason text, the migration would have to be reverted and the flag fixed before retrying — the diff review in the method exists to catch exactly that"
+
+[[stage]]
+index = 3
+title = "Give verify-semantic-gates a remediation line"
+executor = "in_thread"
+expected_result_image = "verify-semantic-gates.py's FAIL path prints a short remediation paragraph, in the shape verify-config-root-refs.py already uses: condition (a)/(b) are closed by re-running `python3 scripts/gen_crutch_registry.py` and re-dispositioning the new entries; condition (c) is NOT — a reverted judge guard is a real regression to restore, not a regeneration. A test asserts the FAIL output names the generator and that the OK path does not."
+criterion_type = "measurable"
+done_criterion = "pytest on the semantic-gates test module passes with the new remediation test"
+verify_command = "set -o pipefail && python3 -m pytest -q scripts/tests/test_verify_semantic_gates.py::test_fail_output_names_the_generator && python3 -m pytest scripts/tests/test_verify_semantic_gates.py -q 2>&1 | tail -3"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/verify-semantic-gates.py", "scripts/tests/test_verify_semantic_gates.py"]
+material = "scripts/verify-semantic-gates.py run_check() and its 324-line test module"
+means = "Edit + pytest in the delivery worktree"
+method = "Append a remediation block to run_check's failure path, distinguishing the regenerable conditions (a)/(b) from the non-regenerable (c); assert it in a test."
+conditions = "independent of stages 1-2; may run in any order relative to them"
+invariants = "Do not widen the check's scope, do not touch the CODE-domain restriction, and do not suggest regeneration as the remedy for condition (c) — that would turn a real guard regression into a rubber stamp. The FAIL-path assertion is the load-bearing half; the OK-path half needs a green fixture (a registry consistent with an enumerated tree), and if that proves expensive to build, DROP the OK-path assertion rather than weaken the FAIL-path one."
+capability_required = "none beyond local repo access"
+
+[stage.principle]
+statement = "A failing gate that does not name its own remedy costs every future reader the same rediscovery"
+source = "CLAUDE.md § Outcome format — a report the reader can act on without re-asking; the sibling verify-config-root-refs.py already prints one"
+derivation = "This session hit condition (a) and had to locate gen_crutch_registry.py from the registry file's header rather than from the failure that sent it there. The remedy is fully decidable from the condition that fired, so leaving it unstated is a rule-part left as perception. The sibling verifier in the same suite proves the shape is already the local convention."
+confidence = "high"
+refutation = "if conditions (a)/(b) had a remedy that depended on judgement, printing one fixed instruction would be misleading — they do not: both are closed by regeneration plus dispositioning, and (c) is explicitly excluded for exactly that reason"
+
+[[stage]]
+index = 4
+title = "Update the two docs that describe the pin grammar"
+executor = "in_thread"
+expected_result_image = "The allowlist header documents the three-field grammar, the relocate / stale / ambiguous / duplicate-resolution outcomes, the accepted cut-and-paste limit from stage 1's invariants, the whole-file glob as the documented escape when two occurrence lines in a file genuinely are byte-identical (and therefore unpinnable), and the --repin flag; scripts/README.md's verify-config-root-refs row mentions --repin. Both stay inside their prose-length ceilings."
+criterion_type = "measurable"
+done_criterion = "lint-prose-length and verify-cross-refs pass; the allowlist header names --repin. NOTE the residue honestly: grep proves the flag is NAMED, not that the outcomes are well documented — that half is acceptance-review inside a measurable wrapper, and green here must not be read as 'the grammar is documented'"
+verify_command = "python3 scripts/lint-prose-length.py && python3 scripts/verify-cross-refs.py && grep -q -- '--repin' scripts/config-root-refs-allowlist.txt && grep -q -- '--repin' scripts/README.md"
+expected_exit = 0
+depends_on = [1, 2]
+output_artifacts = ["scripts/config-root-refs-allowlist.txt", "scripts/README.md"]
+material = "the allowlist's 12-line comment header; the scripts/README.md row for verify-config-root-refs.py"
+means = "Edit + the repo's own prose linters"
+method = "Rewrite the header's grammar paragraph to cover the optional third field and the relocate/ambiguous outcomes; add --repin to the README row."
+conditions = "stages 1-2 done, so the documented behaviour is the shipped behaviour"
+invariants = "The header keeps its existing guidance (prefer the line pin; whole-file only for append-only generated files) — the anchor supplements that choice, it does not replace it."
+capability_required = "none beyond local repo access"
+
+[stage.principle]
+statement = "A changed mechanism is not delivered until the surface a reader reads first describes it"
+source = "memory-global/leaves/docs-accompany-architectural-change.md"
+derivation = "The allowlist header is the only place the pin grammar is specified, and it is read by whoever next has to add an entry — which is the exact moment the third field either helps or confuses. A grammar change shipped without it leaves the file's own documentation actively wrong, which is worse than the pre-change state."
+confidence = "high"
+refutation = "none — the header already documents the grammar, so leaving it stale is unambiguously a defect"
+
+[[stage]]
+index = 5
+title = "Record the experience"
+executor = "in_thread"
+expected_result_image = "The MOVING-SHARED-TRUNK family leaf gains one appended instance covering BOTH halves of this session: the finding (a branch parked five days goes red purely positionally while git range-diff reports both commits `=`) and the fix (content-anchored pins), plus the empirically REJECTED hypothesis about crutch_registry drift — recorded as rejected, because a future reader will form the same guess. verify-experience-leaf and verify-leaf-structure stay green."
+criterion_type = "measurable"
+done_criterion = "the leaf validators pass, the leaf actually contains a new dated instance heading (grepped, not assumed), and the allowlist is still green after the append — proving the two files this stage touches really are pin-free"
+verify_command = "python3 scripts/verify-experience-leaf.py && python3 scripts/verify-leaf-structure.py && grep -q '^### 2026-08-04' memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md && python3 scripts/verify-config-root-refs.py"
+expected_exit = 0
+depends_on = [1, 2, 3, 4]
+output_artifacts = ["memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"]
+material = "the difficulty/v1 leaf whose instance 20 (2026-07-28) named the MOVING-SHARED-TRUNK axis and whose instance 21 (2026-07-29) states the norm that caught three of this plan's own controls. Its frontmatter `instance_count: 20` is ONE BEHIND its content (instance 21 was appended without bumping it) — a pre-existing inconsistency no validator catches; this stage reconciles it to 22 rather than continuing the drift."
+means = "Edit in the worktree (memory-global is canon under the read-only guard — author here, land back)"
+method = "Append a dated instance in the leaf's established shape as INSTANCE 22; set frontmatter instance_count to 22 (correcting the pre-existing 20-vs-21 drift) and extend the description; cross-reference instance 20's range-sweep vector, which this shares a shape with, and instance 21's norm, which this session applied to its own plan."
+conditions = "stages 1-4 delivered, so the record describes what actually shipped rather than what was intended"
+invariants = "Extend the existing leaf — do not open a new one; this is the same functional ground, and record-experience.py's search step points here. The append shifts no allowlist pin: this leaf and memory-global/leaves/experience/MEMORY.md are the allowlist's only two whole-file glob entries — cited by path, deliberately not by allowlist line number, since a plan about positional fragility should not itself carry a positional citation, entered for precisely this append-only reason — verified by enumeration this session, and re-proved by the verify command rather than trusted."
+capability_required = "none beyond local repo access"
+
+[stage.principle]
+statement = "The record is written from the shipped artifact, not from the plan"
+source = "memory-global/leaves/recording-experience.md"
+derivation = "This session already produced one wrong entry in the family narrative — the crutch_registry drift hypothesis — which only the stage-0 empirical check refuted. A record authored before the fix ships would have carried that error forward into the leaf that future planners retrieve."
+confidence = "high"
+refutation = "if stages 1-4 had to be abandoned, the record would be of a rejected approach instead — still worth writing, but a different record"
+
+# Final verification. These are [[final_check]] TABLES, not prose: the previous revision wrote this
+# section as TOML comments, which plan.py never parses and cmd_verify_final therefore iterates as an
+# empty list — two of the three clauses of the top-level done_criterion would have passed vacuously.
+# All three run from the venue root (verify-all.py needs no `cd scripts`; confirmed by running it).
+# Landing onto main is deliberately NOT here and NOT a stage — it goes through the resolution gate
+# with explicit user confirmation.
+
+# verify_command_scope_warnings advisorily flags the next check as an unscoped aggregate suite (its
+# lesson: instances 17/18/19, where a pre-existing unrelated red false-failed resolution). Kept
+# deliberately and only HERE, never on a stage: the top-level done_criterion says "verify-all 19/19"
+# in so many words, verify-all.py has no scope flag to give it, and its baseline was measured green
+# (19/19) in this worktree before any stage ran — so a red here is this task's, not inherited.
+# CONTROL PRE-FLIGHT (the norm from this very leaf's instance 21: "a measurable control is not
+# authored until it has been RUN once and observed to exit as declared, with RED demonstrated against
+# a mutated WORLD, not a mutated CHECK"). Every control below and on every stage was executed against
+# the untouched worktree at e5ead17 before approval. Observed: stage 1 exit 4, stage 2 exit 4,
+# stage 3 exit 4 (pytest's code for a named test node that does not exist yet), stage 4 exit 1,
+# stage 5 exit 1 — all RED, so none can be recorded PASSED without the work actually happening.
+# final_check 1 and 2 exit 0 (they assert a baseline that is already true and must STAY true);
+# final_check 3 exits 1, which IS the difficulty, and turns green only when the fix lands.
+# This pre-flight replaced three vacuous controls found by running them: stage 1-3 originally ran the
+# whole test module and were GREEN before any work; stage 4 used `grep -q P fileA fileB`, which exits
+# 0 on a match in EITHER file (verified) and so did not assert what its criterion claimed.
+
+[[final_check]]
+label = "verify-all 19/19"
+command = "set -o pipefail && python3 scripts/verify-all.py | tail -3"
+expected_exit = 0
+
+[[final_check]]
+label = "pytest at the main baseline"
+command = "set -o pipefail && python3 -m pytest scripts/tests -q --deselect scripts/tests/test_argv_text.py::test_a_realistically_long_path_is_named_in_full 2>&1 | tail -3"
+expected_exit = 0
+
+# The deselect above is the honest form of "at the main baseline": that one test is red on main too
+# (macOS /private/var tmpdir path length), so a bare `pytest -q` with expected_exit = 0 would fail on a
+# pre-existing failure and a laxer expected_exit would stop asserting anything. Naming the deselection
+# in the command keeps it from reading as a clean run. Baseline measured in the worktree before any
+# stage ran: 3448 passed, 3 skipped, 1 deselected.
+
+[[final_check]]
+label = "the difficulty itself, on the real tree"
+command = '''set -eu; f=docs/operations/guards.md; git diff --quiet -- "$f" || { echo "probe refused: $f is dirty"; exit 9; }; trap 'git checkout -- "$f"' EXIT; python3 -c "import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.write_text(chr(10)+p.read_text())" "$f"; python3 scripts/verify-config-root-refs.py || { echo "PROBE A FAILED: a pure one-line shift must stay green and relocate"; exit 1; }; git checkout -- "$f"; python3 -c "import pathlib,sys; p=pathlib.Path(sys.argv[1]); L=p.read_text().splitlines(True); L[47]=L[47].rstrip(chr(10))+' PROBE'+chr(10); p.write_text(''.join(L))" "$f"; ! python3 scripts/verify-config-root-refs.py || { echo "PROBE B FAILED: an edit to the pinned line text must still fail"; exit 1; }; echo "probe OK: shift relocates, edit fails"'''
+expected_exit = 0
+
+# Probe A inserts one blank line at the top of docs/operations/guards.md, shifting BOTH its pins
+# (both its pins, guards.md:48 and :50) — the exact shape that reddened hook-prune-two-file.
+# Probe B appends text to the pinned line, keeping the ~/.claude occurrence but changing the content
+# the anchor attests. Self-reverting: it refuses to run if the file is already dirty, and a `trap ...
+# EXIT` restores the file on every path including failure, so a red probe never leaves a mutated tree.

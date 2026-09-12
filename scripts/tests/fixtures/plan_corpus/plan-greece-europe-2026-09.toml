@@ -1,0 +1,230 @@
+[meta]
+task_id = "plan-greece-europe-2026-09"
+goal = "Plan the greece-europe-2026-09 land trip: orchestrate domain specializations to produce two sourced, dated alternatives (a-economy / b-comfort) with itinerary/options/cost, and a decision matrix — for user review, no auto-booking. Additionally deliver each variant as a shareable, visual PUBLIC web page rendered from the canonical markdown, via a reusable workspace capability."
+done_criterion = "Both alternatives (a-economy, b-comfort) filled with day-by-day itinerary.md + options.md (every price/schedule sourced+dated or flagged unverified) + cost.md; decision.md matrix filled with a leading variant; trip.md status=planning with resolved constraints incl. RF-passport Schengen visa; INDEX.md + variants table updated. PLUS a reusable render+deploy capability exists in the workspace (scripts/render_site.py + scripts/deploy_site.sh + updated alternatives/_TEMPLATE + README), and each greece variant has a rendered self-contained site page (journeys/greece-europe-2026-09/site/<alt>.html + site/index.html) reachable at a working public Cloudflare Pages URL recorded in decision.md / INDEX.md / trip.md variants table."
+criterion_type = "acceptance-review"
+weight_class = "substantive"
+repo_root = "/Users/the0/projects/trips"
+external_research = "Required — domain anti-hallucination invariant: concrete visa rules, flight/rail/ferry fares, accommodation prices, opening seasons must come from web sources with a check date, never model memory. Spawned specialists (sonnet, web) do the research."
+
+[[stage]]
+index = 1
+title = "Fix resolved constraints in trip.md (Stage 0)"
+executor = "in_thread"
+expected_result_image = "trip.md: status=planning; travellers marked RF citizens (Russian passport); budget = two variants a-economy/b-comfort; Europe leg = Italy deep + 1 neighbour; transport = mix; charter out-of-scope; open questions resolved; home-airport flagged as assumption."
+criterion_type = "measurable"
+done_criterion = "trip.md shows planning status and RF-passport visa hard constraint"
+verify_command = "grep -q 'planning' /Users/the0/projects/trips/journeys/greece-europe-2026-09/trip.md && grep -qi 'загранпаспорт' /Users/the0/projects/trips/journeys/greece-europe-2026-09/trip.md"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["journeys/greece-europe-2026-09/trip.md"]
+material = "Q&A answers + user's RF-passport constraint"
+means = "Edit"
+method = "edit trip.md constraint/budget/open-question blocks"
+conditions = "trip.md already scaffolded"
+invariants = "no invented facts; charter kept out-of-scope"
+capability_required = "structured capture"
+
+[stage.principle]
+statement = "Freeze resolved constraints in trip.md before research so specialists share one constraint list"
+source = "workspace design: constraint extraction is step 1 (ATLAS)"
+confidence = "high"
+refutation = "none"
+
+[[stage]]
+index = 2
+title = "visa-and-entry research — RF passport Schengen (CRITICAL PATH)"
+executor = "spawn"
+expected_result_image = "Filled Entry-ограничения block: Schengen C-visa required for RF passport. Consulate choice is DECOUPLED from the real route (any itinerary may be declared at application) and optimized on: approval rate, processing time, and willingness to grant LONGER validity to RF citizens. Single-entry only for RF in 2026 (given) => route must not exit Schengen after first entry. 2026 appointment/lead-time risk; doc checklist; sources+dates."
+criterion_type = "acceptance-review"
+done_criterion = "Entry block filled with sourced visa requirements + consulate recommendation + lead-time risk"
+verify_command = ""
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["journeys/greece-europe-2026-09/trip.md"]
+material = "RF-passport constraint + route countries"
+means = "Agent (general-purpose, sonnet, web)"
+method = "spawn visa-and-entry specialist reading its SKILL.md; web research with dates"
+conditions = "constraints frozen in trip.md"
+invariants = "anti-hallucination: official sources + check date; unverified flagged"
+capability_required = "visa/entry legal-procedural research"
+
+[stage.principle]
+statement = "Consulate selection for an RF passport is a visa-strategy decision (approval% / processing time / long-visa willingness), independent of the real route; the declared application itinerary can differ from the trip. Single-entry only => route stays inside Schengen after entry."
+source = "user domain input 2026-07-01; visa-and-entry gives implicit constraints LLMs miss"
+confidence = "high"
+refutation = "If a consulate ties issuance to the declared route being taken, decoupling breaks"
+
+[[stage]]
+index = 3
+title = "destinations shortlist (Greece authentic + Italy deep + 1 neighbour)"
+executor = "spawn"
+expected_result_image = "Filled Кандидаты направлений block: 2-3 Greek off-mass regions/islands, 2-3 Italy deep regions, one recommended neighbour (S.France or Switzerland-scenic) — each tied to vibe (no crowds, small towns, local-favourite spots, unusual transport; wineries a light BONUS not the leitmotif), Sept seasonality + safety, sources+dates on specifics."
+criterion_type = "acceptance-review"
+done_criterion = "Destinations block filled with reasoned shortlist + neighbour recommendation"
+verify_command = ""
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["journeys/greece-europe-2026-09/trip.md"]
+material = "vibe/preferences + route frame"
+means = "Agent (general-purpose, sonnet, web)"
+method = "spawn destinations specialist reading its SKILL.md; web research with dates"
+conditions = "constraints frozen"
+invariants = "anti-hallucination on seasons/festivals/transport-status; wineries kept a bonus not the axis"
+capability_required = "geo/cultural off-beaten-path research"
+
+[stage.principle]
+statement = "Destination selection is research (where is interesting) distinct from route synthesis (fit to constraints)"
+source = "workspace: destinations != itinerary-architect"
+confidence = "high"
+refutation = "none"
+
+[[stage]]
+index = 4
+title = "route skeletons a-economy / b-comfort (itinerary-architect)"
+executor = "in_thread"
+expected_result_image = "Two draft itinerary.md skeletons (cities+nights, form loop/open-jaw) honouring pacing rules (<=3 cities/2wk, min 2 nights, buffers), ~3wk total (Greece few-days-week + Italy deep + neighbour), first Schengen entry Greece from Dalaman; alternative folders scaffolded."
+criterion_type = "measurable"
+done_criterion = "Both alternatives/*/itinerary.md exist with city/night skeleton"
+verify_command = "test -f /Users/the0/projects/trips/journeys/greece-europe-2026-09/alternatives/a-economy/itinerary.md && test -f /Users/the0/projects/trips/journeys/greece-europe-2026-09/alternatives/b-comfort/itinerary.md"
+expected_exit = 0
+depends_on = [2, 3]
+output_artifacts = ["journeys/greece-europe-2026-09/alternatives/a-economy/", "journeys/greece-europe-2026-09/alternatives/b-comfort/"]
+material = "destinations shortlist + visa/consulate constraint"
+means = "Edit, Write (copy alt template)"
+method = "copy alternatives/_TEMPLATE twice; draft skeletons per pacing rules"
+conditions = "destinations + visa blocks filled"
+invariants = "pacing rules; respect visa main-destination (Italy nights)"
+capability_required = "constraint-satisfaction route drafting"
+
+[stage.principle]
+statement = "Draft the route skeleton from destinations before pricing options, so option search is scoped to real legs"
+source = "workspace: itinerary-architect is iterative plan->critique->correct"
+confidence = "high"
+refutation = "none"
+
+[[stage]]
+index = 5
+title = "option providers per alternative (flights / accommodation / ground-transport)"
+executor = "spawn"
+expected_result_image = "options.md per alternative filled: flights (into Greece from Dalaman, inter-leg, home from final hub), accommodation per city, ground/ferries/rail — for the alt's budget tier, every row sourced+dated with tactic/risk noted; date-conflict check done."
+criterion_type = "acceptance-review"
+done_criterion = "options.md filled for both alternatives with sourced fares/prices"
+verify_command = ""
+expected_exit = 0
+depends_on = [4]
+output_artifacts = ["journeys/greece-europe-2026-09/alternatives/a-economy/options.md", "journeys/greece-europe-2026-09/alternatives/b-comfort/options.md"]
+material = "route skeletons + budget tiers"
+means = "Agent (general-purpose, sonnet, web) x specializations"
+method = "spawn flights/accommodation/ground-transport specialists per alt; mix transport by leg"
+conditions = "skeletons drafted"
+invariants = "anti-hallucination: fare/price source+date; name tactic risks (skiplag/self-transfer/prepay)"
+capability_required = "fare hunting + lodging + multimodal logistics"
+
+[stage.principle]
+statement = "Price real legs of a fixed skeleton rather than pricing in the abstract"
+source = "workspace: options feed itinerary-architect integration"
+confidence = "high"
+refutation = "none"
+
+[[stage]]
+index = 6
+title = "synthesis: day-by-day itinerary + cost, iterate; decision matrix; workspace hygiene"
+executor = "in_thread"
+expected_result_image = "Both itinerary.md day-by-day complete; cost.md totals vs tier + contingency; decision.md matrix (cost/fit/pace/risk/flexibility) with leading variant + open-items-before-booking; trip.md variants table + INDEX.md updated."
+criterion_type = "acceptance-review"
+done_criterion = "decision.md matrix filled with a leading variant; both cost.md totalled; INDEX + variants table updated"
+verify_command = "grep -q 'Ведёт' /Users/the0/projects/trips/journeys/greece-europe-2026-09/decision.md"
+expected_exit = 0
+depends_on = [5]
+output_artifacts = ["journeys/greece-europe-2026-09/decision.md", "journeys/greece-europe-2026-09/alternatives/", "journeys/INDEX.md"]
+material = "options + costs for both alts"
+means = "Edit, Write"
+method = "integrate options into day-by-day; total costs; build matrix; update INDEX + variants table"
+conditions = "options.md filled both alts"
+invariants = "pacing; anti-hallucination carried from options; no auto-booking"
+capability_required = "integration + comparison synthesis"
+
+[stage.principle]
+statement = "Generate the plan for user confirmation, comparing alternatives on the user's soft-preference weights — never auto-book"
+source = "workspace trust ceiling: план на подтверждение"
+confidence = "high"
+refutation = "none"
+
+[[stage]]
+index = 7
+title = "Build shareable-page capability: markdown to HTML generator + visual template + Cloudflare Pages deploy (workspace tooling)"
+executor = "spawn"
+expected_result_image = "scripts/render_site.py reads a journey dir (trip.md + alternatives/<alt>/{itinerary,options,cost}.md + decision.md) and emits journeys/<slug>/site/index.html (overview + decision matrix + variant links) and site/<alt>.html per variant. Purpose-built VISUAL template: requirements checklist (vibe facets + hard/soft + visa) mapped to how each is satisfied; route timeline + Leaflet/OSM map by city coords; cost cards/bars; sources table. Self-contained HTML (inline CSS; map via CDN, online-ok). scripts/deploy_site.sh runs wrangler pages deploy journeys/<slug>/site and prints the public pages.dev URL. alternatives/_TEMPLATE + README updated to state every variant maintains a shareable page and where the URL is recorded. Generator degrades gracefully on missing sections (renders what exists)."
+criterion_type = "measurable"
+done_criterion = "render_site.py + deploy_site.sh exist and render_site.py produces site/index.html for the greece journey without error"
+verify_command = "test -f /Users/the0/projects/trips/scripts/render_site.py && test -f /Users/the0/projects/trips/scripts/deploy_site.sh && python3 /Users/the0/projects/trips/scripts/render_site.py journeys/greece-europe-2026-09 && test -f /Users/the0/projects/trips/journeys/greece-europe-2026-09/site/index.html"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["scripts/render_site.py", "scripts/deploy_site.sh", "journeys/greece-europe-2026-09/site/", "alternatives/_TEMPLATE", "README.md"]
+material = "canonical markdown deliverable model + user hosting choice (Cloudflare Pages)"
+means = "Agent (developer): Write/Edit + Bash smoke-render"
+method = "spawn developer to build generator (structured section parser, not generic md->html), visual template/CSS, deploy script; update _TEMPLATE/README; smoke-render greece"
+conditions = "markdown deliverable model frozen (stage 1); Cloudflare Pages chosen"
+invariants = "markdown stays the single canonical source (HTML is a render-view, no dual-maintenance); anti-hallucination sources carried onto the page; no auto-booking; self-contained shareable output"
+capability_required = "static-site generation + deploy tooling (infrastructure-as-code)"
+
+[stage.principle]
+statement = "Render the shareable page FROM the canonical markdown via a reusable generator, so pages never drift from the source of truth and every future variant gets one for free"
+source = "user standing requirement 2026-07-01; single-source-of-truth over hand-authored HTML"
+confidence = "high"
+refutation = "If per-variant pages need bespoke visual layouts a generic generator cannot express, hand-authoring may be needed for those"
+
+[[stage]]
+index = 8
+title = "Render + deploy greece variant pages; record public URLs"
+executor = "in_thread"
+expected_result_image = "render_site.py run on the greece journey producing site/index.html + site/a-economy.html + site/b-comfort.html from the completed markdown; deploy_site.sh run (after one-time Cloudflare auth by the user via shell) yielding public pages.dev URLs; URLs written into decision.md, INDEX.md, and trip.md variants table as markdown links."
+criterion_type = "acceptance-review"
+done_criterion = "both variant site pages rendered and reachable at a public Cloudflare Pages URL recorded in decision.md/INDEX.md/trip.md"
+verify_command = "test -f /Users/the0/projects/trips/journeys/greece-europe-2026-09/site/a-economy.html && test -f /Users/the0/projects/trips/journeys/greece-europe-2026-09/site/b-comfort.html"
+expected_exit = 0
+depends_on = [6, 7]
+output_artifacts = ["journeys/greece-europe-2026-09/site/", "journeys/greece-europe-2026-09/decision.md", "journeys/INDEX.md"]
+material = "completed alternatives markdown + render/deploy tooling"
+means = "Bash (render + deploy), Edit (record URLs)"
+method = "run render_site.py; run deploy_site.sh after user Cloudflare auth; write URLs back into decision/INDEX/trip"
+conditions = "stages 6 (content) and 7 (tooling) complete; user Cloudflare auth done"
+invariants = "URLs presented as markdown links; privacy-by-obscurity acceptable; no auto-booking"
+capability_required = "render + deploy execution + link recording"
+
+[stage.principle]
+statement = "A deliverable is not delivered until its shareable rendered form is generated and reachable at the recorded public URL"
+source = "user standing requirement 2026-07-01"
+confidence = "high"
+refutation = "none"
+
+[[final_check]]
+label = "trip.md status=planning + RF-passport visa constraint present"
+command = "grep -q planning /Users/the0/projects/trips/journeys/greece-europe-2026-09/trip.md && grep -qi 'загранпаспорт' /Users/the0/projects/trips/journeys/greece-europe-2026-09/trip.md"
+expected_exit = 0
+
+[[final_check]]
+label = "both alternatives have itinerary/options/cost"
+command = "for a in a-economy b-comfort; do for f in itinerary options cost; do test -f /Users/the0/projects/trips/journeys/greece-europe-2026-09/alternatives/$a/$f.md || exit 1; done; done"
+expected_exit = 0
+
+[[final_check]]
+label = "decision matrix names a leading variant"
+command = "grep -q 'Ведёт' /Users/the0/projects/trips/journeys/greece-europe-2026-09/decision.md"
+expected_exit = 0
+
+[[final_check]]
+label = "render + deploy tooling exists in the workspace"
+command = "test -f /Users/the0/projects/trips/scripts/render_site.py && test -f /Users/the0/projects/trips/scripts/deploy_site.sh"
+expected_exit = 0
+
+[[final_check]]
+label = "both variant site pages rendered"
+command = "test -f /Users/the0/projects/trips/journeys/greece-europe-2026-09/site/a-economy.html && test -f /Users/the0/projects/trips/journeys/greece-europe-2026-09/site/b-comfort.html"
+expected_exit = 0
+
+[[final_check]]
+label = "a public Cloudflare Pages URL recorded for the greece journey"
+command = "grep -qi 'pages.dev' /Users/the0/projects/trips/journeys/greece-europe-2026-09/decision.md || grep -qi 'pages.dev' /Users/the0/projects/trips/journeys/INDEX.md"
+expected_exit = 0

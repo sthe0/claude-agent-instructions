@@ -76,15 +76,44 @@ def advance_remote(tmp_path: Path, origin: Path, name: str):
     git("push", "--quiet", "origin", "main", cwd=other)
 
 
+def _default_settings_path(home: Path, core_repo) -> Path:
+    """A canonical-and-clean default settings.json — every hook command's root
+    is `core_repo` itself, i.e. the canonical checkout under test — so tests
+    that are not about the canonical-root axis stay silent on it regardless."""
+    settings = home / "settings.json"
+    settings.write_text(json.dumps({
+        "hooks": {
+            "UserPromptSubmit": [
+                {"hooks": [
+                    {"command": f"{core_repo}/scripts/hook-example.py", "type": "command"},
+                ]}
+            ]
+        }
+    }))
+    return settings
+
+
 def run_hook(home: Path, core_repo, cwd: Path, settings_path: Path | None = None):
+    if settings_path is None:
+        settings_path = _default_settings_path(home, core_repo)
     env = {
         **os.environ,
         **GIT_ENV,
         "HOME": str(home),
+        # Pin agent_home()'s resolution to the fake HOME too — otherwise a
+        # CLAUDE_CONFIG_DIR/CLAUDE_AGENT_HOME inherited from the real **os.environ
+        # above would still point config_root.agent_home() (and anything derived
+        # from it, e.g. canon_roots_file()) at the machine's real config root,
+        # regardless of the fake HOME set above.
+        "CLAUDE_CONFIG_DIR": str(home),
         "CLAUDE_INSTRUCTIONS_REPO": str(core_repo),
+        # Always set explicitly: _settings_path() falls back to
+        # config_root.agent_home() / "settings.json" when unset, which (absent
+        # the CLAUDE_CONFIG_DIR pin above) reads the machine's LIVE settings.json
+        # — a real leak that made this test module's pass/fail depend on the
+        # content of whatever machine happened to run it.
+        "CLAUDE_SETTINGS_PATH": str(settings_path),
     }
-    if settings_path is not None:
-        env["CLAUDE_SETTINGS_PATH"] = str(settings_path)
     payload = json.dumps({"session_id": "s-1", "prompt": "hi", "cwd": str(cwd)})
     return subprocess.run(
         [sys.executable, str(HOOK_SCRIPT)],
@@ -181,11 +210,14 @@ def test_missing_session_id_falls_back_to_daily_key(tmp_path):
     origin, clone = make_bare_and_clone(tmp_path, "core")
     advance_remote(tmp_path, origin, "core")
 
+    settings_path = _default_settings_path(home, clone)
     env = {
         **os.environ,
         **GIT_ENV,
         "HOME": str(home),
+        "CLAUDE_CONFIG_DIR": str(home),  # see run_hook's isolation comment
         "CLAUDE_INSTRUCTIONS_REPO": str(clone),
+        "CLAUDE_SETTINGS_PATH": str(settings_path),
     }
     payload = json.dumps({"prompt": "hi", "cwd": str(clone)})  # no session_id
 
@@ -328,11 +360,13 @@ def test_off_main_branch_emits_warn(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# (h) deploy-integrity: settings.json hooks span >1 checkout root -> deploy warn
+# (h) deploy-integrity: any settings.json hook root other than the CANONICAL
+#     Core checkout -> deploy warn. len(roots) > 1 is NOT the norm — a single
+#     root that everyone agrees on is still a violation if it isn't canonical.
 # ---------------------------------------------------------------------------
 
 
-def test_multi_root_settings_emits_warn(tmp_path):
+def test_multi_non_canonical_roots_emits_warn(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     _origin, clone = make_bare_and_clone(tmp_path, "core")
@@ -353,17 +387,77 @@ def test_multi_root_settings_emits_warn(tmp_path):
 
     assert proc.returncode == 0
     assert "[instructions-deploy]" in proc.stdout
-    assert "2 distinct checkout roots" in proc.stdout
+    assert "2 non-canonical checkout root(s)" in proc.stdout
     assert "/root-a" in proc.stdout
     assert "/root-b" in proc.stdout
+    assert str(clone) in proc.stdout  # names the canonical root too
+
+
+def test_single_non_canonical_root_emits_warn(tmp_path):
+    """The case the old `len(roots) > 1` check passed silently: every hook
+    command agrees on ONE root, but it is a feature worktree, not canonical."""
+    home = tmp_path / "home"
+    home.mkdir()
+    _origin, clone = make_bare_and_clone(tmp_path, "core")
+    session_cwd = tmp_path / "session-cwd"  # kept distinct from the Core repo — see test_up_to_date_silent
+    session_cwd.mkdir()
+    feature_worktree = tmp_path / "feature-worktree"
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({
+        "hooks": {
+            "UserPromptSubmit": [
+                {"hooks": [
+                    {"command": f"{feature_worktree}/scripts/hook-one.py", "type": "command"},
+                    {"command": f"{feature_worktree}/scripts/hook-two.py", "type": "command"},
+                ]},
+            ]
+        }
+    }))
+
+    proc = run_hook(home, core_repo=clone, cwd=session_cwd, settings_path=settings)
+
+    assert proc.returncode == 0
+    assert "[instructions-deploy]" in proc.stdout
+    assert "1 non-canonical checkout root(s)" in proc.stdout
+    assert str(feature_worktree) in proc.stdout
+    assert str(clone) in proc.stdout  # names the canonical root
+
+
+def test_mixed_canonical_and_non_canonical_emits_warn(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    _origin, clone = make_bare_and_clone(tmp_path, "core")
+    session_cwd = tmp_path / "session-cwd"
+    session_cwd.mkdir()
+    feature_worktree = tmp_path / "feature-worktree"
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({
+        "hooks": {
+            "UserPromptSubmit": [
+                {"hooks": [
+                    {"command": f"{clone}/scripts/hook-one.py", "type": "command"},
+                    {"command": f"{feature_worktree}/scripts/hook-two.py", "type": "command"},
+                ]},
+            ]
+        }
+    }))
+
+    proc = run_hook(home, core_repo=clone, cwd=session_cwd, settings_path=settings)
+
+    assert proc.returncode == 0
+    assert "[instructions-deploy]" in proc.stdout
+    assert "1 non-canonical checkout root(s)" in proc.stdout
+    assert str(feature_worktree) in proc.stdout
 
 
 # ---------------------------------------------------------------------------
-# (i) deploy-integrity: on-main + single-root settings.json -> silent
+# (i) deploy-integrity: every hook root IS the canonical checkout -> silent
 # ---------------------------------------------------------------------------
 
 
-def test_homogeneous_settings_silent(tmp_path):
+def test_all_canonical_settings_silent(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     _origin, clone = make_bare_and_clone(tmp_path, "core")
@@ -375,12 +469,59 @@ def test_homogeneous_settings_silent(tmp_path):
         "hooks": {
             "UserPromptSubmit": [
                 {"hooks": [
-                    {"command": "/root-a/scripts/hook-one.py", "type": "command"},
-                    {"command": "/root-a/scripts/hook-two.py", "type": "command"},
+                    {"command": f"{clone}/scripts/hook-one.py", "type": "command"},
+                    {"command": f"{clone}/scripts/hook-two.py", "type": "command"},
                 ]},
             ]
         }
     }))
+
+    proc = run_hook(home, core_repo=clone, cwd=session_cwd, settings_path=settings)
+
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == ""
+
+
+def test_symlink_and_trailing_slash_root_silent(tmp_path):
+    """A root that differs from the canonical one only by a symlink or a
+    trailing slash must resolve equal, not warn."""
+    home = tmp_path / "home"
+    home.mkdir()
+    _origin, clone = make_bare_and_clone(tmp_path, "core")
+    session_cwd = tmp_path / "session-cwd"
+    session_cwd.mkdir()
+    symlinked_clone = tmp_path / "core-symlink"
+    symlinked_clone.symlink_to(clone, target_is_directory=True)
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({
+        "hooks": {
+            "UserPromptSubmit": [
+                {"hooks": [
+                    {"command": f"{symlinked_clone}/scripts/hook-one.py", "type": "command"},
+                    # double slash before the marker -> captured root keeps a
+                    # trailing slash; must still resolve equal to `clone`.
+                    {"command": f"{clone}//scripts/hook-two.py", "type": "command"},
+                ]},
+            ]
+        }
+    }))
+
+    proc = run_hook(home, core_repo=clone, cwd=session_cwd, settings_path=settings)
+
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == ""
+
+
+def test_no_hook_commands_silent(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    _origin, clone = make_bare_and_clone(tmp_path, "core")
+    session_cwd = tmp_path / "session-cwd"
+    session_cwd.mkdir()
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {}}))
 
     proc = run_hook(home, core_repo=clone, cwd=session_cwd, settings_path=settings)
 
@@ -507,11 +648,14 @@ def test_canon_roots_entry_emits_relocate_offer(tmp_path):
     roots_file = tmp_path / "canon-roots.local"
     roots_file.write_text(f"{anchor}\n")
 
+    settings_path = _default_settings_path(home, missing_core)
     env = {
         **os.environ,
         **GIT_ENV,
         "HOME": str(home),
+        "CLAUDE_CONFIG_DIR": str(home),  # see run_hook's isolation comment
         "CLAUDE_INSTRUCTIONS_REPO": str(missing_core),
+        "CLAUDE_SETTINGS_PATH": str(settings_path),
         "CLAUDE_CANON_ROOTS_FILE": str(roots_file),
     }
     payload = json.dumps({"session_id": "s-1", "prompt": "hi", "cwd": str(inside)})
@@ -538,11 +682,14 @@ def test_sibling_of_canon_root_no_relocate_offer(tmp_path):
     roots_file = tmp_path / "canon-roots.local"
     roots_file.write_text(f"{anchor}\n")
 
+    settings_path = _default_settings_path(home, missing_core)
     env = {
         **os.environ,
         **GIT_ENV,
         "HOME": str(home),
+        "CLAUDE_CONFIG_DIR": str(home),  # see run_hook's isolation comment
         "CLAUDE_INSTRUCTIONS_REPO": str(missing_core),
+        "CLAUDE_SETTINGS_PATH": str(settings_path),
         "CLAUDE_CANON_ROOTS_FILE": str(roots_file),
     }
     payload = json.dumps({"session_id": "s-1", "prompt": "hi", "cwd": str(sibling)})

@@ -164,12 +164,19 @@ def test_the_stage_count_rides_the_block_header(store, tmp_path, armed):
     second mechanism — and the fast-fail therefore enforces it too."""
     sid = _plan_ready(store)
     _order(store, sid, id="O1", element="the gate", as_="covered", stage=1)
-    header = _block(store, sid).splitlines()[0]
+    block_lines = _block(store, sid).splitlines()
+    header = block_lines[0]
     assert header.startswith("[scope] plan has 2 stage(s);")
 
     d = _present(store, sid, "- covered: the gate -> stage 1\n", tmp_path)
     assert d.ok is False
-    assert d.data["missing_lines"] == [header]
+    # Every block line the rendering doesn't already carry — the header, plus (when
+    # a background enumeration launch is still outstanding, cmd_submit_plan's own
+    # detached launch) the in-flight disclosure line coverage_block appends.
+    assert d.data["missing_lines"] == [
+        line for line in block_lines
+        if line.strip() and line.strip() != "- covered: the gate -> stage 1"
+    ]
 
 
 def test_present_plan_refuses_an_essence_when_the_order_bag_is_empty(store, tmp_path, armed):
@@ -179,7 +186,9 @@ def test_present_plan_refuses_an_essence_when_the_order_bag_is_empty(store, tmp_
     sid = _plan_ready(store)
     d = _present(store, sid, "no scope block here\n", tmp_path)
     assert d.ok is False
-    assert d.data["coverage_block"] == (
+    # Only the header's own content is this test's concern; a background
+    # enumeration launch may still add its own disclosure line as a later one.
+    assert d.data["coverage_block"].splitlines()[0] == (
         "[scope] plan has 2 stage(s); order: 0 element(s) — 0 covered, 0 cut")
 
 
@@ -256,6 +265,12 @@ def test_order_list_md_is_what_the_essence_must_carry(store, armed):
     _order(store, sid, id="O1", element="the gate", as_="covered", stage=1)
     d = cli.cmd_order_list(ns(session=sid, format="md"), store=store)
     assert d.detail == _block(store, sid)
+    # _block (plugins_premise.coverage_block) is render_coverage_block plus, when a
+    # background enumeration launch is still outstanding, an appended in-flight
+    # disclosure line render_coverage_block itself has no access to (see
+    # coverage_block's own docstring) -- so the two agree only on the part
+    # render_coverage_block actually produces.
     state = store.load(sid)
-    assert d.detail == premise.render_coverage_block(
+    rendered = premise.render_coverage_block(
         premise.order_elements_from_dicts(state.plugins["premise"]["order_elements"]), 2)
+    assert d.detail.startswith(rendered)

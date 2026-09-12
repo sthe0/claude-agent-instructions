@@ -527,3 +527,218 @@ def test_direct_push_no_pr_hint_absent_when_probe_times_out(monkeypatch, capsys,
 
     assert rc == 0
     assert mod.DIRECT_PUSH_NO_PR_HINT not in out
+
+
+# --- PreToolUse/AskUserQuestion branch: landing-discipline judge consult -----
+
+def _ask_payload(session_id: str, cwd: str, text: str = "Push and land now?") -> dict:
+    return {
+        "session_id": session_id,
+        "cwd": cwd,
+        "tool_name": "AskUserQuestion",
+        "tool_input": {"questions": [{"question": text, "options": [{"label": text}]}]},
+    }
+
+
+def _deny_reason(out: str):
+    if not out.strip():
+        return None
+    data = json.loads(out)
+    return data["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_pretooluse_decide_allows_when_tool_is_not_askuserquestion(monkeypatch, tmp_path):
+    """decide()'s first early-out: a payload for some other tool must never
+    reach the judge or even the resolution-gate check. This is decide()'s own
+    contract -- main() only reaches decide() for a PreToolUse/AskUserQuestion
+    event at all, since the hook is registered on that matcher; a Bash-shaped
+    payload run through the FULL main() would instead fall into the untouched
+    UserPromptSubmit body below (which keys only on session_id, not tool_name)
+    and is exercised by that body's own tests elsewhere in this file."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    called = []
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask",
+                         lambda *a, **k: called.append(1) or (True, ""))
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    decision, reason = mod.decide({
+        "session_id": session_id, "cwd": core_repo, "tool_name": "Bash",
+        "tool_input": {"command": "ls"},
+    })
+
+    assert (decision, reason) == ("allow", "")
+    assert not called
+
+
+def test_pretooluse_allows_when_resolution_gate_is_closed(monkeypatch, capsys, tmp_path):
+    """No agentctl state at all -> resolution_gate_open() is False -> allow,
+    judge never consulted."""
+    mod = _load_module()
+    _point_roots_at(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    called = []
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask",
+                         lambda *a, **k: called.append(1) or (True, ""))
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    rc, out = _run(monkeypatch, capsys, mod, _ask_payload("no-such-session", core_repo))
+
+    assert rc == 0
+    assert out == ""
+    assert not called
+
+
+def test_pretooluse_allows_when_direct_push_hint_is_inactive(monkeypatch, capsys, tmp_path):
+    """Gate open, but direct_push_no_pr_hint returns None (not the Core repo,
+    or no push rights) -> allow, judge never consulted."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    called = []
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask",
+                         lambda *a, **k: called.append(1) or (True, ""))
+    other_repo = tmp_path / "elsewhere"
+    other_repo.mkdir()
+
+    rc, out = _run(monkeypatch, capsys, mod, _ask_payload(session_id, str(other_repo)))
+
+    assert rc == 0
+    assert out == ""
+    assert not called
+
+
+def test_pretooluse_denies_when_judge_confirms_pr_proposing_menu(monkeypatch, capsys, tmp_path):
+    """Gate open + hint active + judge verdict True -> a PreToolUse deny JSON,
+    for a menu that explicitly proposes a PR -- proving the judge's verdict
+    (not a keyword prefilter) is what the deny is keyed on, since a bland ask
+    text is proven to reach the SAME judge call by the sibling test just below
+    (test_pretooluse_calls_judge_even_when_ask_text_carries_no_pr_vocabulary)."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask",
+                         lambda *a, **k: (True, ""))
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    rc, out = _run(monkeypatch, capsys, mod,
+                    _ask_payload(session_id, core_repo, text="Open a PR for review?"))
+
+    assert rc == 0
+    reason = _deny_reason(out)
+    assert reason is not None
+    assert reason == mod._LANDING_DISCIPLINE_DENY_REASON
+
+
+def test_pretooluse_calls_judge_even_when_ask_text_carries_no_pr_vocabulary(monkeypatch, capsys, tmp_path):
+    """Case (4) / principle.refutation: the judge is invoked even for an ask
+    whose text carries NO PR/merge/review vocabulary at all -- proving no
+    content-based prefilter ever short-circuits consultation. A call-tracking
+    fake records the ask text it actually received and returns a compliant
+    ("does not propose a PR") verdict; the result must be allow AND the judge
+    must have been called with the bland text flowing all the way through."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    called = []
+
+    def _tracking_judge(ask_text, *a, **k):
+        called.append(ask_text)
+        return False, ""
+
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask", _tracking_judge)
+    core_repo = str(mod.authority.REPO_ROOT)
+    bland_text = "Which logging level should we default to in staging?"
+
+    rc, out = _run(monkeypatch, capsys, mod,
+                    _ask_payload(session_id, core_repo, text=bland_text))
+
+    assert rc == 0
+    assert _deny_reason(out) is None
+    assert called
+    assert bland_text in called[0]
+
+
+def test_pretooluse_allows_when_judge_says_menu_already_proposes_direct_push(monkeypatch, capsys, tmp_path):
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask",
+                         lambda *a, **k: (False, ""))
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    rc, out = _run(monkeypatch, capsys, mod, _ask_payload(session_id, core_repo))
+
+    assert rc == 0
+    assert _deny_reason(out) is None
+
+
+def test_pretooluse_gate_is_escapable_not_a_wedge(monkeypatch, capsys, tmp_path):
+    """Case (6) / principle.refutation: the gate denies a PR-proposing menu and
+    then allows once the menu is corrected to propose a direct push instead --
+    proving the gate is escapable by construction (a corrected ask converges to
+    allow), not a wedge that denies every AskUserQuestion once armed."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask",
+                         lambda *a, **k: (True, ""))
+    rc, out = _run(monkeypatch, capsys, mod,
+                    _ask_payload(session_id, core_repo, text="Open a PR for review?"))
+    assert rc == 0
+    assert _deny_reason(out) == mod._LANDING_DISCIPLINE_DENY_REASON
+
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask",
+                         lambda *a, **k: (False, ""))
+    rc, out = _run(monkeypatch, capsys, mod,
+                    _ask_payload(session_id, core_repo, text="Push the commit directly to main now?"))
+    assert rc == 0
+    assert _deny_reason(out) is None
+
+
+def test_pretooluse_allows_when_judge_raises(monkeypatch, capsys, tmp_path):
+    """The judge call blows up (e.g. a subprocess/runner exception) -> decide()
+    propagates, main()'s outer try/except catches it, logs to the ledger as
+    discarded, and still returns 0 with no deny emitted -- fail-open."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+
+    def _boom(*a, **k):
+        raise RuntimeError("subprocess exploded")
+
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask", _boom)
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    rc, out = _run(monkeypatch, capsys, mod, _ask_payload(session_id, core_repo))
+
+    assert rc == 0
+    assert _deny_reason(out) is None
+
+
+def test_pretooluse_child_env_guard_short_circuits_before_any_judge_call(monkeypatch, capsys, tmp_path):
+    """AGENTCTL_JUDGE_CHILD set (this hook invocation is itself a judge
+    subprocess's own sandboxed child) -> main() returns 0 immediately, before
+    even parsing stdin, so the judge is never re-entered from its own call."""
+    mod = _load_module()
+    session_id = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    called = []
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask",
+                         lambda *a, **k: called.append(1) or (True, ""))
+    monkeypatch.setenv(mod.JUDGE_CHILD_ENV_VAR, "1")
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    rc, out = _run(monkeypatch, capsys, mod, _ask_payload(session_id, core_repo))
+
+    assert rc == 0
+    assert out == ""
+    assert not called

@@ -1,0 +1,38 @@
+[meta]
+task_id = "si-dialogue-search-lang"
+goal = "Norm WebSearch/WebFetch to use the dialogue language (English additive for docs/API); update planner, CLAUDE.md, and cursor mirror."
+done_criterion = "Three files updated with the dialogue-language search rule; committed in claude-agent-instructions with [self-improvement-reviewed] trailer"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "User correction 2026-07-31: search in the dialogue language, not Russian-as-special-case; prior English-default habit missed RU sources on Serva/RKN in this session."
+
+[[stage]]
+index = 1
+title = "Edit planner + CLAUDE.md + cursor mirror; commit"
+executor = "in_thread"
+expected_result_image = "planner/SKILL.md § Research gains Match search language to the dialogue language; CLAUDE.md § Acting without asking item 1 points at it; cursor/rules/claude-code-sync.mdc gains a one-line Web search language mirror; single commit with [self-improvement-reviewed]."
+criterion_type = "measurable"
+done_criterion = "git log -1 --format=%B contains [self-improvement-reviewed] AND rg -q 'dialogue language' skills/specializations/planner/SKILL.md CLAUDE.md cursor/rules/claude-code-sync.mdc"
+verify_command = "cd /Users/the0/claude-agent-instructions && git log -1 --format=%B | grep -q '\\[self-improvement-reviewed\\]' && rg -q 'dialogue language' skills/specializations/planner/SKILL.md CLAUDE.md cursor/rules/claude-code-sync.mdc && echo OK"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["skills/specializations/planner/SKILL.md", "CLAUDE.md", "cursor/rules/claude-code-sync.mdc"]
+material = "approved SI beat-1 proposal (dialogue language, not Russian-special)"
+means = "Edit, git commit"
+method = "StrReplace three files; commit with trailer"
+conditions = "user said применяй; author machine; sync pull already done"
+invariants = "English instruction prose; no Russian in repo body; push deferred to separate ask"
+capability_required = "instructions-repo edit + commit"
+
+[stage.principle]
+statement = "Search language follows dialogue language so local-corpus hits are not skipped by an English-default habit"
+source = "user 2026-07-31: не о русском в частности, а о языке общения"
+derivation = "Replies already use dialogue language; WebSearch that defaults to English systematically misses the same community's status pages and reviews — aligning query language with reply language closes that gap without making any one language special."
+confidence = "high"
+refutation = "if dialogue-language queries add noise without improving recall on locale tasks, narrow the rule to locale-bound topics only"
+
+## Final verification
+# 1. Three files contain 'dialogue language' search norm.
+# 2. HEAD commit has [self-improvement-reviewed].
+# 3. Push not done until user confirms.

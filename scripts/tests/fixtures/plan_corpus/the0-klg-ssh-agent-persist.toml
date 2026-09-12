@@ -1,0 +1,83 @@
+[meta]
+task_id = "the0-klg-ssh-agent-persist"
+goal = "Stop forwarded ssh-agent keys from falling off inside the user's long-lived mosh+tmux pane (ccgram:0.0) on the0.klg.yp-c.yandex.net, without manually re-running `ssh the0`. REVISED root cause (learned from the failed resolution check): the user's real pane is a weeks-old bash under the OLD ~/.bashrc, so a PROMPT_COMMAND self-heal added later never runs in it; and repointing the stable symlink among EPHEMERAL per-login forwarded sockets flaps (a transient target dies -> keys fall off until some external repoint fires). Correct fix: the daemon forwards the Skotty agent to a FIXED remote socket path via RemoteForward (-R) + StreamLocalBindUnlink=yes; the host symlink statically tracks that fixed path; nothing chases transient sockets. Then every pane, INCLUDING the frozen one, sees a continuously-live agent while the daemon is up, with zero pane-side changes."
+done_criterion = "In the existing frozen mosh tmux pane ccgram:0.0 (SSH_AUTH_SOCK=~/.ssh/ssh_auth_sock, unchanged), `ssh-add -l` succeeds continuously with no manual `ssh the0`; the host symlink ~/.ssh/ssh_auth_sock statically resolves to the daemon's fixed forwarded socket ~/.ssh/agent-forward.sock, which the Mac autossh LaunchAgent keeps live at all times while the Mac is up and networked (auto-rebinds via StreamLocalBindUnlink on every reconnect); no invisible Touch ID from the daemon's connects; no flapping among ephemeral sockets."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0"
+external_research = "No web research warranted. Feasibility empirically verified this session: `ssh -o StreamLocalBindUnlink=yes -o ExitOnForwardFailure=yes -R /home/the0/.ssh/test-agent-feas.sock:$HOME/.skotty/sock/default.sock -T the0.klg...` bound a 0600 the0-owned socket at the fixed path and `SSH_AUTH_SOCK=<fixed> ssh-add -l` listed keys non-interactively (no Touch ID) -> host sshd permits StreamLocal RemoteForwarding. Frozen pane confirmed: tmux pane ccgram:0.0 pid 2135643 is -bash with SSH_AUTH_SOCK=/home/the0/.ssh/ssh_auth_sock frozen at start; the symlink was seen flapping onto transient socket /tmp/ssh-sU4IhJ8XqI/agent.3357178 instead of the daemon's durable socket."
+
+[[stage]]
+index = 1
+title = "Daemon RemoteForwards the agent to a FIXED host socket path (com.the0.autossh-klg)"
+executor = "in_thread"
+expected_result_image = "On the Mac, /Users/the0/.ssh/autossh-klg.sh (LaunchAgent com.the0.autossh-klg) is re-backed-up and edited so autossh no longer uses `-A` (random forwarded path) + a remote repoint loop, but instead forwards the stable Skotty socket to a FIXED remote Unix socket: `-o StreamLocalBindUnlink=yes -R /home/the0/.ssh/agent-forward.sock:$SSH_AUTH_SOCK -N` (keeping -M 0, ServerAlive keepalives, ExitOnForwardFailure=yes, ControlMaster=no, ControlPath=none; SSH_AUTH_SOCK stays the Skotty socket $HOME/.skotty/sock/default.sock, expanded locally). Restart via `launchctl kickstart -k gui/$(id -u)/com.the0.autossh-klg`. Result: autossh alive; on the host /home/the0/.ssh/agent-forward.sock exists as a live 0600 the0-owned forwarded socket that lists the Mac agent's keys non-interactively (no Touch ID); StreamLocalBindUnlink makes reconnects rebind the same path."
+criterion_type = "measurable"
+done_criterion = "`bash -n /Users/the0/.ssh/autossh-klg.sh` passes and it contains `StreamLocalBindUnlink=yes` and `-R /home/the0/.ssh/agent-forward.sock:`; the daemon is loaded and running after restart (launchctl shows it, nonzero pid); the host shows a live forwarded socket at /home/the0/.ssh/agent-forward.sock that answers `ssh-add -l`."
+verify_command = "bash -n /Users/the0/.ssh/autossh-klg.sh && grep -q 'StreamLocalBindUnlink=yes' /Users/the0/.ssh/autossh-klg.sh && grep -q -- '-R /home/the0/.ssh/agent-forward.sock:' /Users/the0/.ssh/autossh-klg.sh && launchctl list | grep -q autossh-klg && ssh the0.klg.yp-c.yandex.net 'SSH_AUTH_SOCK=/home/the0/.ssh/agent-forward.sock ssh-add -l >/dev/null 2>&1 && echo FIXED_LIVE'"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["/Users/the0/.ssh/autossh-klg.sh", "/Users/the0/.ssh/autossh-klg.sh.bak-agentfix2"]
+material = "Existing daemon com.the0.autossh-klg + wrapper /Users/the0/.ssh/autossh-klg.sh (forwards $HOME/.skotty/sock/default.sock); autossh /opt/homebrew/bin/autossh; verified StreamLocal RemoteForward feasibility"
+means = "in-thread edit of the daemon wrapper to use RemoteForward to a fixed path + launchctl kickstart; ssh verification of the fixed socket"
+method = "Replace `-A` agent-forwarding + remote repoint loop with `-R /home/the0/.ssh/agent-forward.sock:$SSH_AUTH_SOCK -o StreamLocalBindUnlink=yes -N`, so the forwarded agent lives at a single fixed host path that reconnects rebind; restart the daemon and verify the fixed socket lists keys"
+conditions = "Runs as the user LaunchAgent (not root); reuses com.the0.autossh-klg; wrapper re-backed-up (.bak-agentfix2) before edit; daemon authenticates with the no-touch Skotty cert (already empirically touch-free); residual limitation (no forwarded socket can exist while the corp host is unreachable) accepted"
+invariants = "At least one live forwarded agent socket owned by the0 exists on the host at all times while the Mac is up and networked; daemon auto-restarts; zero interactive Touch ID from the daemon path; the forwarded socket path is FIXED (never an ephemeral /tmp/ssh-* path) so no repointing is needed"
+capability_required = "macOS launchd, autossh, ssh StreamLocal RemoteForward"
+
+[stage.principle]
+statement = "Agent forwarding needs a live origin connection; mosh provides none, so a persistent origin-side daemon is required. Forwarding to a FIXED socket path (not an ephemeral one) is what lets a frozen pane track a stable target with no per-prompt/per-login repointing."
+source = "This session: ephemeral-socket repointing flapped and could not reach the frozen pane; StreamLocal RemoteForward to a fixed path verified working."
+confidence = "high"
+refutation = "Refuted if host sshd later disallows StreamLocal forwarding or unlinks the fixed socket unexpectedly — then fall back to a symlink repointed by a daemon-side loop to the daemon's own durable socket only."
+
+[[stage]]
+index = 2
+title = "Host: static symlink to the fixed socket; stop chasing transient sockets"
+executor = "in_thread"
+expected_result_image = "On the0: ~/.ssh/ssh_auth_sock is made a STATIC symlink to the fixed path ~/.ssh/agent-forward.sock (`ln -sf $HOME/.ssh/agent-forward.sock ~/.ssh/ssh_auth_sock`). ~/.ssh/rc is simplified to only ensure that static symlink (idempotent `ln -sf` to the fixed path), no longer repointing to per-login forwarded sockets. ~/.bashrc keeps `export SSH_AUTH_SOCK=$HOME/.ssh/ssh_auth_sock` but the flapping per-prompt `_fix_ssh_auth_sock` PROMPT_COMMAND heal is removed (it never helped the frozen pane and it clobbered the symlink onto dying transient sockets). Prior backups (.bak-agentfix) are kept; new state re-backed-up as needed. Net: nothing on the host ever moves the symlink off the fixed path."
+criterion_type = "measurable"
+done_criterion = "`bash -n ~/.bashrc` and `bash -n ~/.ssh/rc` pass; ~/.ssh/ssh_auth_sock is a symlink whose target is /home/the0/.ssh/agent-forward.sock; ~/.bashrc no longer registers _fix_ssh_auth_sock into PROMPT_COMMAND; `SSH_AUTH_SOCK=~/.ssh/ssh_auth_sock ssh-add -l` succeeds (symlink resolves to the live fixed socket)."
+verify_command = "ssh the0.klg.yp-c.yandex.net 'bash -n ~/.bashrc && bash -n ~/.ssh/rc && [ \"$(readlink ~/.ssh/ssh_auth_sock)\" = /home/the0/.ssh/agent-forward.sock ] && ! grep -q \"PROMPT_COMMAND=.*_fix_ssh_auth_sock\\|_fix_ssh_auth_sock.*PROMPT_COMMAND\" ~/.bashrc && SSH_AUTH_SOCK=~/.ssh/ssh_auth_sock ssh-add -l >/dev/null 2>&1 && echo SYMLINK_STATIC_LIVE'"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["the0:~/.ssh/ssh_auth_sock", "the0:~/.bashrc", "the0:~/.ssh/rc"]
+material = "the0 dotfiles previously edited this task: ~/.bashrc (_fix_ssh_auth_sock + PROMPT_COMMAND), ~/.ssh/rc (repoint-if-dead), backups .bak-agentfix; the fixed socket ~/.ssh/agent-forward.sock from stage 1"
+means = "in-thread ssh edits of the0 dotfiles"
+method = "Point ~/.ssh/ssh_auth_sock statically at ~/.ssh/agent-forward.sock; simplify ~/.ssh/rc to only ensure that static symlink; remove the _fix_ssh_auth_sock function and its PROMPT_COMMAND registration from ~/.bashrc; keep SSH_AUTH_SOCK exported as the symlink"
+conditions = "Edits confined to the0 dotfiles; existing .bak-agentfix backups preserved; no change to ~/.tmux.conf; must leave nothing that repoints the symlink onto ephemeral sockets"
+invariants = "SSH_AUTH_SOCK in every shell stays the stable symlink path; the symlink statically targets the fixed daemon socket and is never moved onto an ephemeral socket; no per-prompt agent probing remains"
+capability_required = "bash, ssh agent-forwarding mechanics"
+
+[stage.principle]
+statement = "A frozen (already-running) pane cannot be self-healed by editing rc files it already sourced; it can only be fixed by making the path it already holds (the symlink) resolve to a durable live socket. So the symlink must be static and the liveness must come from the daemon side."
+source = "Failed resolution check: the user's ccgram:0.0 pane predates the bashrc edit and showed no keys during a flap window."
+confidence = "high"
+refutation = "Refuted if the frozen pane still shows no keys with the daemon up and the symlink static on the fixed live socket — then the pane's SSH_AUTH_SOCK is not actually the symlink and must be re-derived from /proc."
+
+[[stage]]
+index = 3
+title = "Verify in the real frozen pane ccgram:0.0 (in_thread)"
+executor = "in_thread"
+expected_result_image = "Against the user's live frozen pane bash (pid 2135643, SSH_AUTH_SOCK=/home/the0/.ssh/ssh_auth_sock): the symlink resolves to /home/the0/.ssh/agent-forward.sock, that socket is live, and `SSH_AUTH_SOCK=~/.ssh/ssh_auth_sock ssh-add -l` lists keys. A daemon restart (kickstart) rebinds the fixed socket and the pane keeps working with no manual `ssh the0` and no symlink movement. User confirms keys are usable in their pane."
+criterion_type = "measurable"
+done_criterion = "In the frozen pane's environment keys are live via the unchanged pane path; after a daemon kickstart the fixed socket is rebound and keys remain live; user confirms in their real pane."
+verify_command = "ssh the0.klg.yp-c.yandex.net 'SSH_AUTH_SOCK=~/.ssh/ssh_auth_sock ssh-add -l >/dev/null 2>&1 && echo KEYS_LIVE'"
+expected_exit = 0
+depends_on = [1, 2]
+output_artifacts = []
+material = "Stages 1+2 applied; frozen pane ccgram:0.0 pid 2135643"
+means = "in-thread ssh checks against the frozen pane's path + a daemon kickstart rebind test + user confirmation"
+method = "Confirm the frozen pane's SSH_AUTH_SOCK (from /proc) resolves through the static symlink to the live fixed socket; kickstart the daemon and re-confirm the fixed socket rebinds and keys stay live; ask the user to confirm in their pane"
+conditions = "Needs stages 1 and 2 live; daemon up and host reachable"
+invariants = "The user no longer runs `ssh the0` to heal keys; the frozen pane needs no changes"
+capability_required = "ssh, launchctl"
+
+[stage.principle]
+statement = "Verify the runtime axis in the USER'S ACTUAL frozen pane, not in a fresh test shell — the earlier failure was hidden because verification used fresh shells that had the new env, unlike the month-old pane."
+source = "CLAUDE.md verify-the-right-axis; the specific miss that broke the first resolution attempt."
+confidence = "high"
+refutation = "Refuted only if keys still fall off in the real pane while the daemon is up — then reopen with the observed timing."
+
+[final_verification]
+description = "In the user's real frozen mosh tmux pane ccgram:0.0, ssh-agent keys remain usable without any manual `ssh the0`; the host symlink statically resolves to the daemon's fixed forwarded socket which the Mac daemon keeps live and rebinds on reconnect; no flapping among ephemeral sockets and no Touch ID storm."

@@ -187,6 +187,10 @@ def _run_wrapper(tmp_path: Path, home: Path, bin_dir: Path) -> subprocess.Comple
         "stub does nothing",
         "--criterion-type",
         "measurable",
+        "--complexity",
+        "medium",
+        "--effort",
+        "medium",
     ]
     return subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=30)
 

@@ -60,6 +60,91 @@ def test_parse_marker_finds_marker_after_preamble():
     assert parse_marker("summary line\nMALFORMED: no marker\n") == ("MALFORMED", "no marker")
 
 
+def test_parse_marker_child_infra_failure():
+    m, body = parse_marker(
+        "CHILD_INFRA_FAILURE: the child spawn never reached the API "
+        "(matched 'ENOTFOUND').\n\nAPI Error: Unable to connect to API (ENOTFOUND)\n"
+    )
+    assert m == dispatch.CHILD_INFRA_FAILURE
+    assert body.startswith("the child spawn never reached the API")
+
+
+def test_parse_marker_child_exhausted():
+    m, body = parse_marker(
+        "CHILD_EXHAUSTED: the child spawn was refused for size "
+        "(matched 'Prompt is too long').\n"
+    )
+    assert m == dispatch.CHILD_EXHAUSTED
+    assert body.startswith("the child spawn was refused for size")
+
+
+def _always_failing_runner(calls):
+    def run(argv, **kwargs):
+        calls.append(argv)
+        from lib.marker_extract import RunResult
+        return RunResult(1, "", "boom")
+
+    return run
+
+
+def test_extractor_failed_falls_back_and_the_legacy_scan_finds_a_marker(monkeypatch):
+    # Stage-3 scenario: the model extractor itself never delivers a verdict
+    # (retry exhausted, outcome=EXTRACTOR_FAILED) but the legacy any-line scan
+    # the caller falls back to DOES find a marker in the specialist's own text.
+    # That marker is used, and no AGENTCTL_MARKER_EXTRACTOR instruction is
+    # surfaced — that env var only helps a FUTURE spawn, not this one.
+    from lib import host_llm, marker_extract
+    from lib.planner_plan_check import check_planner_return
+
+    monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
+    calls: list = []
+    extraction = marker_extract.build_extraction(
+        "COMPLETED: shipped it, tests green.\n",
+        kind="developer",
+        runner=_always_failing_runner(calls),
+    )
+    assert extraction.outcome == marker_extract.OUTCOME_EXTRACTOR_FAILED
+    assert extraction.degraded is True
+    assert len(calls) == marker_extract._MAX_EXTRACT_ATTEMPTS  # retried, not one-shot
+
+    forwarded, ok, marker = check_planner_return(
+        "COMPLETED: shipped it, tests green.\n", "developer", extraction=extraction
+    )
+    assert ok is True
+    assert marker == "COMPLETED"
+    assert "AGENTCTL_MARKER_EXTRACTOR" not in forwarded
+
+
+def test_extractor_failed_falls_back_and_the_legacy_scan_finds_none(monkeypatch):
+    # Same observation failure, but the specialist's own text has no marker-
+    # shaped line either: MALFORMED as today, attributed to the reader/
+    # extractor having failed to observe rather than to the child specialist's
+    # output being unparseable — and still no env-var instruction for a spawn
+    # that has already finished.
+    from lib import host_llm, marker_extract
+    from lib.planner_plan_check import check_planner_return
+
+    monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
+    calls: list = []
+    extraction = marker_extract.build_extraction(
+        "just a summary, no marker at all",
+        kind="developer",
+        runner=_always_failing_runner(calls),
+    )
+    assert extraction.outcome == marker_extract.OUTCOME_EXTRACTOR_FAILED
+    assert extraction.degraded is True
+
+    forwarded, ok, marker = check_planner_return(
+        "just a summary, no marker at all", "developer", extraction=extraction
+    )
+    assert ok is False
+    assert marker is None
+    assert parse_marker(forwarded)[0] == "MALFORMED"
+    assert "AGENTCTL_MARKER_EXTRACTOR" not in forwarded
+
+
 def test_malformed_envelope_outranks_a_marker_line_in_the_preserved_original():
     # The scan is ONE ordered pass, so the winner is the first line in DOCUMENT
     # order. A MALFORMED envelope preserves the specialist's original bytes
@@ -344,3 +429,92 @@ def test_marker_wins_over_nonzero_returncode(store, fixtures_dir):
     d = _dispatch_with(store, "m10", "CLARIFY: which path?\n", returncode=1)
     assert d.action == "answer_clarify"
     assert d.marker == "CLARIFY"
+
+
+# --- child outcome routing (stage 5, issues #78/#80) -------------------------
+#
+# spawn-specialist.py classifies the child's own terminal condition (never
+# reached/lost the API, or refused for size) BEFORE the marker question, and
+# writes CHILD_INFRA_FAILURE:/CHILD_EXHAUSTED: as the envelope's first line
+# for those cases. cmd_dispatch routes each to its own named directive —
+# never an automatic re-spawn; the coordinator still decides whether to spend
+# the money on a retry.
+
+def test_child_infra_failure_routes_to_retry_dispatch(store, fixtures_dir):
+    _to_executing(store, "m13", fixtures_dir)
+    d = _dispatch_with(
+        store, "m13",
+        "CHILD_INFRA_FAILURE: the child spawn never reached, or lost, the API "
+        "before exiting (matched 'ENOTFOUND').\n\n"
+        "API Error: Unable to connect to API (ENOTFOUND)\n",
+        returncode=1,
+    )
+    assert d.ok is False
+    assert d.action == "retry_dispatch"
+    assert d.marker == dispatch.CHILD_INFRA_FAILURE
+    assert d.node == Node.EXECUTING.value  # not blocked — a transient run condition
+    assert "retrying the same dispatch" in d.detail
+
+
+def test_child_exhausted_routes_to_reduce_brief_or_reattest(store, fixtures_dir):
+    _to_executing(store, "m14", fixtures_dir)
+    d = _dispatch_with(
+        store, "m14",
+        "CHILD_EXHAUSTED: the child spawn was refused for size "
+        "(matched 'Prompt is too long').\n\n"
+        "Error: Prompt is too long: 512000 tokens > 400000 maximum\n",
+        returncode=1,
+    )
+    assert d.ok is False
+    assert d.action == "reduce_brief_or_reattest"
+    assert d.marker == dispatch.CHILD_EXHAUSTED
+    assert d.node == Node.EXECUTING.value
+    assert "reduced brief" in d.detail
+
+
+def test_child_outcome_directives_never_recommend_an_automatic_respawn(store, fixtures_dir):
+    # Neither directive's action names a re-spawn — the decision to spend
+    # money on a retry stays with the coordinator, not the engine.
+    _to_executing(store, "m15", fixtures_dir)
+    d_infra = _dispatch_with(
+        store, "m15", "CHILD_INFRA_FAILURE: transient (matched 'ENOTFOUND').\n", returncode=1
+    )
+    assert d_infra.action not in ("respawn", "auto_respawn", "continue_spawn")
+
+    _to_executing(store, "m16", fixtures_dir)
+    d_exhausted = _dispatch_with(
+        store, "m16", "CHILD_EXHAUSTED: refused for size (matched 'Prompt is too long').\n",
+        returncode=1,
+    )
+    assert d_exhausted.action not in ("respawn", "auto_respawn", "continue_spawn")
+
+
+def test_child_outcome_precedence_a_valid_marker_always_outranks_a_signature(store, fixtures_dir):
+    # The critical precedence case: the child's stdout contains BOTH a
+    # matching CHILD_INFRA_FAILURE signature AND a valid terminal marker. The
+    # marker must win — proving the prefilter cannot suppress a real result.
+    # This is spawn-specialist.py's own envelope-writing decision under test
+    # at the dispatch boundary: because spawn-specialist.py's
+    # _resolve_child_outcome already applied the precedence rule before
+    # writing its stdout, a genuinely-answered child's stdout NEVER carries a
+    # CHILD_INFRA_FAILURE/CHILD_EXHAUSTED prefix — it carries the real marker
+    # on line one, with the signature text merely present later in the body.
+    stdout = (
+        "COMPLETED: shipped it, tests pass.\n\n"
+        "(While debugging I also hit an unrelated API Error: "
+        "Unable to connect to API (ENOTFOUND) on a different host, "
+        "but that was resolved before this run.)"
+    )
+    # Confirm the naive failure mode: parse_marker alone, scanning for a
+    # CHILD_* signature FIRST rather than deferring to spawn-specialist's own
+    # precedence-aware envelope, would find the signature text sitting in a
+    # body line — but it is not a CHILD_* PREFIX line, so parse_marker (which
+    # only matches line-leading prefixes) still resolves correctly here too.
+    m, body = parse_marker(stdout)
+    assert m == "COMPLETED"
+
+    _to_executing(store, "m17", fixtures_dir)
+    d = _dispatch_with(store, "m17", stdout, returncode=0)
+    assert d.ok is True
+    assert d.action == "record_result"
+    assert d.marker == "COMPLETED"

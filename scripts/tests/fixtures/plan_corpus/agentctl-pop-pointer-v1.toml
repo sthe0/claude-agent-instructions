@@ -1,0 +1,138 @@
+[meta]
+task_id = "agentctl-pop-pointer"
+goal = "Second service sub-plan for the parent plan prune-dangling-hook-references-v7. After the first sub-plan (agentctl-venue-propagation, landed 7b3a624) fixed the venue fields, `pop-subplan` restored the parent at EXECUTING with its venue correct — but left parent stage 2 UNREACHABLE. cmd_pop_subplan restores the parent's stages in full, including a stage still marked ACTIVE, and then unconditionally sets state.current_stage = None (cli.py:3305). No engine verb re-enters that stage: next-stage selects only PENDING stages whose deps are PASSED (state.py:1092-1099) and so reports 'no ready stages'; dispatch and record-result both act only through active_stage(), which returns None when current_stage is None (cli.py:2129-2131, 2242-2246); replan re-arms only FAILED stages, and only inside DIAGNOSING (cli.py:3098-3101, 3118-3119), which cannot be entered because entering it requires record-result on an active stage. The parent stage is therefore unreachable by every ORDINARY verb. It is not literally unrecoverable: `replan --kind substantive` (cli.py:3140-3147) rebuilds `state.stages` from a new plan file and carries forward only PASSED stages, so the ACTIVE stage would return as PENDING and `next-stage` could pick it up. That escape is real and this plan does not pretend otherwise — it is rejected on COST, not impossibility: it re-arms the parent's plan-approval hard gate, spending a full user re-approval of an unchanged 5-stage plan plus a paid thinker plan-review, to work around an engine defect that will re-wedge the next sub-plan pop. This is the SAME structural family as the defect the first sub-plan closed: two representations of one fact that must move together are moved apart. Here the pair is the stage-status ACTIVE and the redundant pointer current_stage. PlanFrame even captures current_stage (state.py:720) and its docstring promises the parent 'resumes exactly where it left off' (state.py:701-704); cmd_pop_subplan contradicts its own frame contract by discarding the field it snapshotted."
+done_criterion = "cmd_pop_subplan derives state.current_stage from the restored stages' own ACTIVE status through one named helper `_restore_current_stage`, instead of hardcoding None — so after a pop the active-stage pointer and the stage statuses agree, a stage left ACTIVE by the push is re-enterable by dispatch/record-result, and a pop whose originating stage was the active one correctly leaves no pointer (that stage is marked PASSED). Both properties are pinned by named regression tests, the agentctl README states the invariant, and the change is landed on origin/main AND local main so the canonical checkout this session invokes agentctl from runs the fixed code."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+delivery_worktree = "/Users/the0/claude-agent-instructions-pop-pointer"
+authored_against = "origin/main = 7b3a624. Every claim was read from that tree at authoring time: cli.py:3306-3312 (pop marks originating_stage PASSED, then sets current_stage = None), cli.py:3233-3246 (push requires EXECUTING and snapshots the frame), cli.py:2126-2133 (dispatch needs active_stage), cli.py:2242-2246 (record_result needs active_stage), cli.py:2049-2071 (next_stage consumes ready_stages only), cli.py:3098-3101 and 3118-3119 (replan re-arms FAILED stages under `diagnosing` only), state.py:1087-1099 (active_stage / ready_stages), state.py:700-721 (PlanFrame, including the captured current_stage its docstring promises to restore in full). Observed live on session 8264d4c3: after the first sub-plan's pop, stage 1 PASSED, stage 2 ACTIVE, current_stage None, and `next-stage` returned 'no ready stages'."
+external_research = "None warranted — the defect is entirely inside this repo's engine and was localized by reading the routes above."
+
+# ---------------------------------------------------------------------------
+# Stage 1 — a delivery vehicle; the canon is read-only to session edits.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 1
+title = "Fork a delivery worktree for the pointer fix from origin/main"
+executor = "in_thread"
+expected_result_image = "A worktree /Users/the0/claude-agent-instructions-pop-pointer exists on a new branch pop-pointer forked directly from origin/main (7b3a624), registered in `git worktree list`. It must exist BEFORE stage 2 is dispatched, because cmd_dispatch pins the spawned developer's cwd to the delivery venue and a hard-sandboxed child can only write the tree it is launched in. The parent plan's worktree /Users/the0/claude-agent-instructions-hook-prune and its branch hook-prune-two-file are left completely untouched."
+criterion_type = "acceptance-review"
+verify_venue = "repo_root"
+done_criterion = "`git worktree list` shows the pop-pointer worktree at the branch pop-pointer, observed at execution time"
+depends_on = []
+output_artifacts = ["/Users/the0/claude-agent-instructions-pop-pointer"]
+material = "the canonical checkout /Users/the0/claude-agent-instructions sitting on main at origin/main 7b3a624"
+means = "Bash: git fetch origin main, git worktree add -b pop-pointer <path> origin/main"
+method = "`git -C /Users/the0/claude-agent-instructions fetch origin main -q`, then `git -C /Users/the0/claude-agent-instructions worktree add -b pop-pointer /Users/the0/claude-agent-instructions-pop-pointer origin/main`. Report `git worktree list` output as the observation. Do NOT hand-roll rm or any variable-built destructive command anywhere in this stage."
+conditions = "The canonical checkout is on main. It carries one uncommitted memory-leaf modification (memory-global/leaves/experience/2026-07-20-agentctl-premise-gate-blocks-venue-refinement-replan.md) written by record-experience.py, which the canon guard forbids committing from a session; that file is untouched by this plan and does not block a worktree fork or a later ff pull of commits that do not touch it. This stage is deliberately acceptance-review and therefore carries NO verify_command: its product is destroyed by stage 3 by design, and verify-final re-runs every measurable stage's verify_command after completion, so a `test -d` here would be a guaranteed final-gate failure."
+invariants = "The canonical checkout is not edited — forking a worktree from it is not a session edit of its tracked files, and its one pre-existing dirty memory-leaf file is neither committed, reverted nor touched. No branch, worktree or remote ref other than the new pop-pointer pair is created, moved or deleted. No rm built from a variable."
+capability_required = "git worktree administration"
+
+[stage.principle]
+statement = "A stage whose product is deliberately destroyed by a later stage of the same plan must not assert that product's existence in a done-state instrument."
+source = "The fourth thinker review of parent plan v7, which removed a transient `test -f` conjunct for exactly this reason; re-applied here."
+derivation = "verify-final re-runs every measurable stage's verify_command after all stages complete, so an assertion about a transient artifact is evaluated in a world where the artifact is already gone by design, flipping the stage from PASSED to FAILED for doing what the plan told it to do."
+confidence = "high"
+refutation = "If verify-final is shown not to re-run measurable stages after completion, a transient assertion would be harmless and this stage could be measurable."
+
+# ---------------------------------------------------------------------------
+# Stage 2 — the fix: derive the pointer from the authoritative stage status.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 2
+title = "Derive the active-stage pointer from stage status on pop, with named regression tests"
+executor = "spawn:developer"
+expected_result_image = "scripts/agentctl/cli.py defines a module-level helper named EXACTLY `_restore_current_stage` (a binding contract identifier: stage 3's landing instrument probes for it by name). Given the live state, it sets state.current_stage from the stages themselves: the index of the single stage whose outcome.status is ACTIVE, or None when there is no such stage or more than one (fail-safe — the current, safe behaviour). cmd_pop_subplan calls it in place of today's unconditional `state.current_stage = None` (cli.py:3305), AFTER the originating stage has been marked PASSED, so a pop whose originating stage was the active one correctly ends with no pointer. The rationale belongs in the code as a short comment: the ACTIVE status on the restored stages is the authoritative record of which stage is in flight and current_stage is a redundant pointer, so the pointer is DERIVED rather than trusted — the same reasoning the sibling helper `_sync_venue_from_plan` already applies when it prefers the parent plan file over the frame snapshot, because a frame captured after a value was already lost would keep it lost. That is exactly the case here: the frame this session pushed carries current_stage = None while its stage 2 is ACTIVE, so restoring frame.current_stage verbatim would NOT unwedge the parent, and deriving from status does. scripts/agentctl/README.md gains a short sentence stating the resulting invariant, containing the literal phrase `active-stage pointer`. Tests, two binding names in scripts/tests/test_subplan.py. The FIRST carries all the discriminating power and its shape is prescribed, not incidental: `test_pop_subplan_restores_pointer_to_active_stage` must push with an originating stage that is NOT the ACTIVE one (originating 1 while stage 2 is ACTIVE — the live parent's exact shape) and with frame.current_stage None, and must assert that after the pop current_stage equals the ACTIVE stage's index, state.active_stage() returns it, and the stage is re-enterable rather than stranded. The existing coverage cannot substitute for it: scripts/tests/test_subplan.py:189 is the only assertion in the suite pinning post-pop current_stage, it uses originating == the ACTIVE stage, and so it stays green under a correct fix AND under a no-op; test_roundtrip_with_plan_stack (:194) never pops, and test_pop_subplan_rederives_venue_from_plan (:371) pops without asserting the pointer. The SECOND, `test_pop_subplan_clears_pointer_when_originating_stage_was_active`, pins the other direction — when the ACTIVE stage IS the originating one, the pop marks it PASSED and leaves current_stage None with no stage left ACTIVE — which is also what guards the ordering requirement, since a derivation placed before the PASSED marking fails exactly here."
+criterion_type = "measurable"
+verify_venue = "repo_root"
+done_criterion = "the two named regression tests exist and pass, the agentctl suites stay green, and the README states the invariant"
+verify_command = '''D=/Users/the0/claude-agent-instructions-pop-pointer; [ -d "$D" ] || D=/Users/the0/claude-agent-instructions; cd "$D" && python3 -m pytest "scripts/tests/test_subplan.py::test_pop_subplan_restores_pointer_to_active_stage" "scripts/tests/test_subplan.py::test_pop_subplan_clears_pointer_when_originating_stage_was_active" -q && python3 -m pytest scripts/tests/test_subplan.py scripts/tests/test_replan.py scripts/tests/test_check_venue.py -q && grep -q 'active-stage pointer' scripts/agentctl/README.md'''
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["scripts/agentctl/cli.py", "scripts/agentctl/README.md", "scripts/tests/test_subplan.py"]
+material = "At origin/main 7b3a624: scripts/agentctl/cli.py — cmd_pop_subplan (3306-3320, in particular the frame restore, the originating-stage PASSED marking and the `state.current_stage = None` line), cmd_push_subplan (3233-3300), cmd_dispatch (2126-2133), cmd_record_result (2242-2246), cmd_next_stage (2049-2071), and the sibling helper _sync_venue_from_plan (233) whose derive-don't-trust reasoning this fix reuses; scripts/agentctl/state.py — active_stage / ready_stages (1087-1099), StageStatus, and PlanFrame (700-721); the existing suite scripts/tests/test_subplan.py, whose fixtures already drive a full push/pop cycle in a temp state root."
+means = "Read, Edit, Write, Bash (pytest, git); scripts/agentctl/cli.py, scripts/agentctl/README.md, scripts/tests/test_subplan.py"
+method = "Read cmd_push_subplan and cmd_pop_subplan at the current tip first, and confirm from StageStatus and cmd_next_stage that at most one stage is ever ACTIVE. Write BOTH named tests RED first against unmodified cli.py and confirm each fails on its pointer assertion (an `assert None == 2`-shaped AssertionError), NOT on a collection, import or fixture error — quote both RED lines verbatim in the COMPLETED report. Reuse test_subplan.py's existing temp-state-root fixtures rather than inventing a harness. Keep the helper small and total: one scan of state.stages, one assignment, no side effects beyond that field. Commit on pop-pointer and push the branch (pre-authorized: personal working branch)."
+conditions = "Stage 1 created /Users/the0/claude-agent-instructions-pop-pointer; ALL work happens there, because the canonical checkout is read-only to session edits and is mutated only by pull — an executor that finds itself placed in the canon must refuse and return PERMISSION-REQUEST rather than edit it. The verify_command carries the `D=<worktree>; [ -d \"$D\" ] || D=<canon>` selector so it targets the worktree during execution and the canonical checkout after stage 3 has landed and removed the worktree; that is what keeps it true at the final gate."
+invariants = "The pointer is DERIVED from stage status, never restored verbatim from the frame — the frame this session must unwedge carries a None pointer next to an ACTIVE stage, so a verbatim restore would leave the parent exactly as blocked. ORDER IS LOAD-BEARING: the derivation must run AFTER the originating stage is marked PASSED at cli.py:3345. Placed before it, the common case (the originating stage IS the ACTIVE one) would re-enter an already-satisfied stage and would break the existing assertion at scripts/tests/test_subplan.py:189. The pair invariant it derives from is narrowed, deliberately, to any state CAPTURABLE IN A PlanFrame rather than asserted unconditionally: cmd_record_result's failed branch (cli.py:2484-2485) sets FAILED without clearing the pointer, so a pointer CAN reference a non-ACTIVE stage — but that write transitions to DIAGNOSING (cli.py:2496) and cmd_push_subplan refuses any node but EXECUTING (cli.py:3238-3242), so such a state can never enter a frame. Fail-safe in the ambiguous directions: zero ACTIVE stages or more than one both yield None, which is today's behaviour, so no new failure mode is introduced. The many-ACTIVE branch is dead-defensive and must NOT be claimed as tested: ACTIVE is written in exactly one place (cli.py:2082), reachable only from PARTITIONED/ROUTED/VERIFYING, never from EXECUTING, so two simultaneously-ACTIVE stages are unreachable rather than merely unobserved. No Node, no state-machine edge and no gate is added, changed or removed; the public CLI surface is unchanged; cmd_push_subplan is not touched. On this stage's own control instrument, probed CONJUNCT BY CONJUNCT rather than as a conjunction, because a short-circuiting chain hides a vacuous earlier conjunct behind a later failure: the two node-ids exit 4 today (no such tests exist); `_restore_current_stage` returns 0 hits repo-wide; `active-stage pointer` returns 0 hits in scripts/agentctl/README.md. The three-suite pytest conjunct exits 0 today and is therefore VACUOUS ON ITS OWN — it is retained only as a no-regression guard, which is why the node-id conjunct is placed FIRST."
+capability_required = "python, pytest, and the discipline to read every consumer of a field before changing who writes it"
+
+[stage.principle]
+statement = "When one fact has an authoritative representation and a redundant one, restore code must derive the redundant one from the authoritative one rather than carry both."
+source = "This defect (stage status ACTIVE vs. the current_stage pointer) and its immediate predecessor in the same function (the plan file vs. the frame's venue snapshot, fixed in 7b3a624)."
+derivation = "Two carried copies can be captured at different moments, so any snapshot taken after one copy was already corrupted preserves the corruption; the venue fix established the remedy in this very function by preferring the plan file over the frame, and the identical argument applies to the pointer, whose authoritative twin is the per-stage status the engine itself maintains."
+confidence = "high"
+refutation = "If a legitimate state can hold more than one ACTIVE stage, or an ACTIVE stage that is deliberately not the current one, then status is not authoritative for the pointer and the frame value would have to be carried and reconciled instead."
+
+# ---------------------------------------------------------------------------
+# Stage 3 — LAND: the canon must run the fixed code before the parent's pop.
+# ---------------------------------------------------------------------------
+[[stage]]
+index = 3
+title = "Land pop-pointer on main by fast-forward, pull the canonical checkout, and remove the worktree"
+executor = "in_thread"
+expected_result_image = "All work is committed on pop-pointer with a message naming the difficulty (a pop restores a stage left ACTIVE but discards the pointer to it, stranding the parent stage beyond the reach of every engine verb). The branch is a strict descendant of origin/main, so `git merge-base --is-ancestor origin/main pop-pointer` exits 0 and no merge or rebase is needed. Both named tests are green on the branch — scripts/verify-all.py runs no pytest at all (it is an 18-check aggregator), so those two named tests are the ONLY test coverage this stage asserts before landing. The branch is landed on main by fast-forward via scripts/land-branch.py --remote-only, and the canonical checkout is then brought to the landed commit with `git pull --ff-only` BEFORE this stage's result is recorded. Both origin/main and local main carry _restore_current_stage in scripts/agentctl/cli.py; the pop-pointer worktree and branch are gone locally and remotely. From this point the `python3 -m agentctl` this session invokes from the canonical checkout is the fixed code — which is the operational point of the sub-plan, because the parent's pop-subplan must recover the pointer to parent stage 2."
+criterion_type = "measurable"
+verify_venue = "repo_root"
+done_criterion = "both origin/main and local main carry the contract identifier, and the delivery worktree is gone"
+verify_command = '''cd /Users/the0/claude-agent-instructions && git fetch origin main -q && git grep -q _restore_current_stage origin/main -- scripts/agentctl/cli.py && git grep -q _restore_current_stage main -- scripts/agentctl/cli.py && ! test -d /Users/the0/claude-agent-instructions-pop-pointer'''
+expected_exit = 0
+depends_on = [2]
+output_artifacts = ["origin/main"]
+material = "the worktree /Users/the0/claude-agent-instructions-pop-pointer on branch pop-pointer forked from origin/main 7b3a624 by stage 1, and the canonical checkout sitting on main"
+means = "Bash (git fetch, merge-base, push, pull --ff-only), scripts/land-branch.py (fast-forward-only)"
+method = "Commit any remaining work in the worktree. Run `python3 scripts/verify-all.py` in the worktree as the pre-land gate HERE, in flight, where a pre-existing unrelated red can be judged against origin/main rather than silently blocking the resolution gate later — which is why it is deliberately NOT a final_check conjunct. `git -C <worktree> fetch origin main` and assert landability against the REMOTE tip: `git -C <worktree> merge-base --is-ancestor origin/main pop-pointer` must exit 0. Do NOT rely on land-branch.py --check for that judgement: its assess() tests the LOCAL trunk (land-branch.py:122,133) and prints LANDABLE for a push that cannot succeed. If origin/main has moved, rebase onto the new tip and re-run the tests — safe, because no instrument here pins a commit SHA; the landing assertion is a content probe. Push the branch, then `scripts/land-branch.py -C /Users/the0/claude-agent-instructions --branch pop-pointer --trunk main --remote origin --remote-only`, with --check first; --remote-only is required because the canonical checkout has main checked out and `git branch -f` on a checked-out branch is refused (land-branch.py:252-263). Then, BEFORE record-result, `git -C /Users/the0/claude-agent-instructions pull --ff-only` — the `main` conjunct of the verify_command exists precisely to catch a missed pull. land-branch.py performs the remote-branch, local-branch and worktree deletion itself; do not hand-roll any of them and never build an rm from a variable path."
+conditions = "Stage 2 verified. The instructions repo is sole-maintained, so a fast-forward land is appropriate and no PR review gate applies. The canonical checkout carries one uncommitted memory-leaf file that this plan never touches; a --ff-only pull of commits that do not touch it succeeds, and if git nonetheless refuses, that is a difficulty to declare, NOT a licence to revert, stash or commit that file. The pull is the only mutation of the canonical checkout in this plan, and a pull is exactly what the read-only-to-session-edits rule permits. This stage changes the engine driving the session mid-session: intended and safe, because each agentctl invocation is a fresh process that reads state.json from disk."
+invariants = "Never hand-roll checkout / reset --hard / clean on the canonical tree, and never delete a path built from a variable. The parent plan's worktree /Users/the0/claude-agent-instructions-hook-prune and branch hook-prune-two-file are left untouched — only pop-pointer is landed and deleted, and the canon's pre-existing dirty memory leaf is left exactly as found. Leave any parallel-session WIP alone. Landability is asserted against origin/main, never the local trunk. The landing instrument is a CONTENT probe on an identifier this plan introduces by contract, not a pinned SHA, so it is invariant under rebase and is false today and true only after the change reaches BOTH origin/main and local main. Probed conjunct by conjunct before submission: `git grep -q _restore_current_stage origin/main -- scripts/agentctl/cli.py` exits 1 today; the identifier has 0 hits repo-wide; the worktree does not exist yet, so its negation passes today and is retained only to assert cleanup."
+capability_required = "git, and the landing script's interface"
+
+[stage.principle]
+statement = "A fix to the machinery that is currently blocking the work must reach the copy of that machinery the session actually executes, not merely a branch."
+source = "CLAUDE.md § On task resolution — landing discipline, applied to the engine itself; established by the first sub-plan in this session."
+derivation = "This session invokes `python3 -m agentctl` from the canonical checkout, so a fix living only on a branch changes nothing about the pop-subplan that must recover the pointer to parent stage 2; the parent would resume just as wedged. Landing plus pull is therefore the operative step, not a tidiness one."
+confidence = "high"
+refutation = "If the session invoked agentctl from the delivery worktree rather than the canon, landing would still be required for durability but would not be a precondition of unblocking the parent."
+
+# ---------------------------------------------------------------------------
+# Final verification.
+# ---------------------------------------------------------------------------
+[[final_check]]
+kind = "shell"
+label = "both named regression tests pass in the canonical checkout, the invariant is documented, and the three touched agentctl suites are green"
+command = '''cd /Users/the0/claude-agent-instructions && python3 -m pytest "scripts/tests/test_subplan.py::test_pop_subplan_restores_pointer_to_active_stage" "scripts/tests/test_subplan.py::test_pop_subplan_clears_pointer_when_originating_stage_was_active" -q && python3 -m pytest scripts/tests/test_subplan.py scripts/tests/test_replan.py scripts/tests/test_check_venue.py -q && grep -q 'active-stage pointer' scripts/agentctl/README.md'''
+expected_exit = 0
+venue = "repo_root"
+
+[[final_check]]
+kind = "shell"
+label = "the fix is on origin/main and on local main, so the canonical checkout runs it"
+command = '''cd /Users/the0/claude-agent-instructions && git fetch origin main -q && git grep -q _restore_current_stage origin/main -- scripts/agentctl/cli.py && git grep -q _restore_current_stage main -- scripts/agentctl/cli.py'''
+expected_exit = 0
+venue = "repo_root"
+
+## Final verification
+# 1. Both named regression tests pass in the canonical checkout; the three touched agentctl suites stay
+#    green; scripts/agentctl/README.md states the invariant.
+# 2. _restore_current_stage is present in scripts/agentctl/cli.py on BOTH origin/main and local main,
+#    so the agentctl this session invokes from the canonical checkout is the fixed code.
+# 3. Operational observable, checked by the PARENT plan and not by this gate: after pop-subplan,
+#    `agentctl status` for the parent session shows current_stage = 2 with stage 2 still ACTIVE, and
+#    `agentctl dispatch` launches the parent's stage-2 developer in
+#    /Users/the0/claude-agent-instructions-hook-prune. That is the parent's stage-2 result, not this
+#    sub-plan's done criterion.
+#
+# NOTE on vacuity disclosure. The three-suite pytest conjunct in final_check 1 exits 0 today and is
+# therefore vacuous on its own; it is kept deliberately as a no-regression guard. The discriminating
+# power of final_check 1 rests on the two node-ids and the `active-stage pointer` grep, which are
+# false today. `scripts/verify-all.py` is deliberately NOT a final_check conjunct: it is an unscoped
+# 18-check aggregate, so an unrelated pre-existing red would false-fail the resolution gate long after
+# the fact. It runs instead inside stage 3, in flight, as the pre-land gate.
+#
+# NOTE on the originating stage. This sub-plan is pushed with --originating-stage 1, the parent stage
+# the first sub-plan already satisfied and which pop marks PASSED (idempotent here). Stage 2 must NOT
+# be named as the originating stage: cmd_pop_subplan marks the originating stage PASSED
+# unconditionally, which would falsely assert that the parent's unfinished stage 2 is done. Parent
+# stage 1's TRUE control string was captured before the first pop and is re-stated verbatim when the
+# parent's outcome is reported; the second pop overwrites it again, and no engine command can restore
+# a control after a pop (cmd_record_result acts only on state.active_stage(), cli.py:2242-2246).

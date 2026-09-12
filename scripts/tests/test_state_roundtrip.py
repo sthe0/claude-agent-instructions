@@ -449,3 +449,34 @@ def test_legacy_state_without_judge_fields_loads_with_defaults():
     loaded = SessionState.from_dict(raw)
     assert loaded.stage_reviews == []
     assert loaded.judge_bypassed == []
+
+
+def test_json_roundtrip_preserves_renegotiations():
+    """A renegotiation entry (GitHub #177) survives a full to_json/from_json cycle,
+    byte-identical, the same way effort_fires already does."""
+    entry = {
+        "decision": "continue",
+        "note": "customer confirmed the order still stands",
+        "by": "fedor",
+        "ts": "2026-09-03T00:00:00Z",
+        "task_replan_count_at_decision": 3,
+    }
+    s = SessionState(session_id="s", task_id="t", renegotiations=[entry])
+    back = SessionState.from_json(s.to_json())
+    assert back == s
+    assert back.renegotiations == [entry]
+
+
+def test_legacy_state_without_renegotiations_field_loads_with_default():
+    """A pre-#177 state dict with no renegotiations key (absent, not even null) loads
+    with renegotiations defaulting to [], the same backward-compatible default
+    effort_fires already relies on."""
+    import json
+    s = SessionState(session_id="s", task_id="t",
+                      renegotiations=[{"decision": "abandon", "note": "n", "by": "fedor",
+                                       "ts": "2026-09-03T00:00:00Z",
+                                       "task_replan_count_at_decision": 3}])
+    raw = json.loads(s.to_json())
+    raw.pop("renegotiations", None)
+    loaded = SessionState.from_dict(raw)
+    assert loaded.renegotiations == []

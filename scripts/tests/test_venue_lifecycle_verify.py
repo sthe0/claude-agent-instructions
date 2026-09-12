@@ -151,7 +151,9 @@ def test_opted_in_stage_survives_delivery_venue_removal(store, tmp_path):
 
     cap = _Capture()
     d = cli.cmd_record_result(
-        ns(session="a1", status="passed", actual="ok", control=None),
+        # a substantive stage's pass also needs an --observation (Defect 2)
+        ns(session="a1", status="passed", actual="ok", control=None,
+           observation="ran pytest -q inside the delivery worktree and it came back green"),
         store=store, runner=cap,
     )
     assert d.ok is True

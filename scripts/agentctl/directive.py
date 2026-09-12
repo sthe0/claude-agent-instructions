@@ -9,6 +9,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
+# Directive.marker value for an unacknowledged effort-divergence fire blocking
+# dispatch/replan/submit_plan: a synchronous, typed escalation the coordinator's
+# spine-follow code must satisfy via `agentctl fire-acknowledge`, distinct from the
+# strategic-escalation "ESCALATE" marker.
+DIRECTIVE_ESCALATE_TO_USER = "ESCALATE_TO_USER"
+
 
 @dataclass
 class Directive:

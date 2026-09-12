@@ -84,6 +84,10 @@ def test_wrapper_sigterm_reaps_claude_subtree(tmp_path):
         "stub does nothing",
         "--criterion-type",
         "measurable",
+        "--complexity",
+        "medium",
+        "--effort",
+        "medium",
     ]
 
     wrapper = subprocess.Popen(

@@ -35,6 +35,7 @@ CUTOFF = 1_000_000.0
 TURN_END = "hook-turn-end-gate.py"
 ESCALATION = "hook-escalation-diagnosis-gate.py"
 DEFERRING = "hook-deferring-disposition-gate.py"
+PLAN_DELIVERY = "hook-plan-delivery-gate.py"
 
 
 def _record(kind, invocation_id, *, hook, ts=CUTOFF + 10.0, source=SESSION, **fields):
@@ -361,28 +362,37 @@ def test_a_qualified_wired_timeout_blocks_because_it_is_only_a_lower_bound(
     assert "lower bound" in out and str(_MEMBER) in out
 
 
-def test_the_stage_8_configuration_is_witnessed(tmp_path, capsys):
+def test_the_stage_8_configuration_is_witnessed(tmp_path, capsys, monkeypatch):
     """The configuration stage 8 actually runs against, which no test covered:
-    two hooks wired at 5s before the change, one not registered, and
+    three hooks wired at 5s before the change, one not registered, and
     --require-all demanding that each answer for itself.
 
     The deferring hook's absence is recorded UNQUALIFIED here — established
     over the full settings scope. That is a real requirement on the capture
     step, not a convenience: with the qualified absence hook_wiring alone can
-    supply, this same run blocks (see the test above)."""
+    supply, this same run blocks (see the test above).
+
+    Pinned to the four hooks stage 8 actually wired: a later hook (e.g.
+    landing_discipline) joining WITNESSED_BASENAMES afterward does not
+    retroactively become part of "the configuration stage 8 ran against",
+    so this test scopes the witness set down to that historical four rather
+    than fabricating a fifth record for a hook stage 8 never touched."""
+    monkeypatch.setattr(mod, "WITNESSED_BASENAMES", (ESCALATION, TURN_END, DEFERRING, PLAN_DELIVERY))
     snapshot = _snapshot(tmp_path, **{
         ESCALATION: _entry(hook_wiring.WIRED, 5),
         TURN_END: _entry(hook_wiring.WIRED, 5),
         DEFERRING: _entry(hook_wiring.ABSENT),
+        PLAN_DELIVERY: _entry(hook_wiring.WIRED, 5),
     })
     records = [
         _call("a", hook="escalation_diagnosis", duration=6.0),
         _call("b", hook="turn_end", duration=6.0),
         _record("entered", "c", hook="deferring_disposition",
                 judge="deferring_disposition", prefilter_fired=True),
+        _call("d", hook="plan_delivery", duration=6.0),
     ]
     assert _run(tmp_path, records, snapshot=snapshot, extra=["--require-all"]) == 0
-    assert "3 of 3 hooks witnessed" in capsys.readouterr().out
+    assert "4 of 4 hooks witnessed" in capsys.readouterr().out
 
 
 def test_the_stage_8_configuration_fails_when_one_wired_hook_stays_silent(tmp_path):

@@ -49,12 +49,48 @@ also carry a plan-level external-research decision:
                                          # internet/intranet research found, or
                                          # why it is not warranted.
 
+a non-empty goal and done_criterion, at least one [[final_check]], and the typed
+order the plan serves:
+
+    [meta.order]
+    customer_id = "user"                 # machine-comparable identifier of the
+                                         # position the order came from
+    customer = "the user, as the position that posed the task"
+                                         # the prose that identifier names —
+                                         # a PAIR, because an acceptance author
+                                         # is compared against the identifier
+    functional_place = "the norm that governs an act of activity here"
+                                         # the place this plan's product fills,
+                                         # need being that place stripped of an
+                                         # adequate filling
+    requirements = [                     # id/text PAIRS, not sentences: the id
+      { id = "R1", text = "..." },       # is the key the coverage map and the
+      { id = "R2", text = "..." },       # acceptance verdicts range over
+    ]
+
+    [meta.order.coverage]                # requirement id -> the controls that
+    R1 = ["stage 2 verify_command"]      # decide it; every declared id needs an
+    R2 = ["final_check 1"]               # entry (totality is machine-checked,
+                                         # sufficiency is review)
+
+Those five are SUBMISSION-seam requirements (submission.py), not loader ones: the
+loader parses [meta.order] and can never refuse it, so a plan approved before the
+table existed still re-reads cleanly inside its own live session.
+
 and every stage must also carry the 8-element activity-structure fields:
 
     material = "..."
     means = "..."
-    method = "..."
-    conditions = "..."
+    method = "..."                       # the REQUIREMENT on the way of acting: what
+                                         # the transformation must be an instance of
+    procedure = "1. ... 2. ..."          # the SEQUENCE of operations proposed for
+                                         # meeting that requirement — the executor's
+                                         # own, replaceable via replan --renormalize
+    conditions = "..."                   # what must hold OF THE WORLD for the stage's
+                                         # transformation to go through
+    preconditions = "..."                # what must already be true before the stage
+                                         # may START (inherited from outside it)
+    knowledge = "..."                    # the знание the stage acts FROM
     invariants = "..."
     capability_required = "..."          # required for substantive
 
@@ -66,6 +102,10 @@ and every stage must also carry the 8-element activity-structure fields:
                                          # must differ from statement and source)
     confidence = "high"                  # high | medium | low
     refutation = "..."
+
+`procedure`, `preconditions` and `knowledge` are SUBMISSION-seam requirements too, for
+the same reason [meta.order] is: they were added after the corpus was frozen, so the
+loader parses them and can never refuse their absence.
 
 diff_plans classifies a replan as no_change / refinement / substantive, mirroring
 CLAUDE.md § Acting without asking: structural edits (stage set, dependencies,
@@ -92,6 +132,7 @@ from .state import (
     LandedSpec,
     LANDED_GIT_ERROR_EXIT,
     Means,
+    Order,
     Outcome,
     Principle,
     Stage,
@@ -101,6 +142,7 @@ from .state import (
 )
 from .text_shape import ELEMENT_NAMES as _ELEMENT_NAMES
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
+from .text_shape import WHOLE_STAGE_ELEMENT
 from .text_shape import normalize_string as _normalize_string
 
 
@@ -127,6 +169,11 @@ class PlanMeta:
     # Optional typed end-to-end checks run by verify-final after per-stage re-runs.
     # Absent => [] (back-compat). Parsed from top-level [[final_check]] tables.
     final_check: list[FinalCheck] = field(default_factory=list)
+    # The order this plan serves, typed (state.Order), parsed from [meta.order].
+    # None (the default) is every plan authored before the table existed, and the
+    # parse can never refuse: requiredness is a submission-seam grade
+    # (submission._order_violations), so the loader stays exactly as permissive.
+    order: "Order | None" = None
 
 
 @dataclass
@@ -529,17 +576,63 @@ def verify_command_scope_warnings(stages, final_check=None) -> list[str]:
 # stage declares it (a prefix of it) in output_artifacts (the machine-readable
 # answer to "which stage produces this path").
 #
-# Deliberately NARROW to keep the false-positive population empty-in-practice:
+# Deliberately NARROW, to keep the false-positive population as small as the
+# checker can make it — NOT empty: five exemptions are needed to reach the
+# population actually observed, and each is recorded here, with its why and
+# its accepted residual, so the next reader auditing a widening finds every
+# one in this one place rather than scattered across commit messages.
 #   * Only RELATIVE, literal, path-shaped tokens are considered. Absolute paths
 #     (/dev/null, /tmp/scratch written at runtime) are OUT OF SCOPE — a runtime
 #     temp file is exactly the false positive this narrowing avoids.
 #   * Globs ("*?["), shell variables ("$..."), URLs ("://"), option values
 #     ("k=v") and the program string after `-c` / module after `-m` are dropped:
 #     none is a literal filesystem path.
+#   * (A) Here-document bodies (`_strip_heredoc_bodies_for_reachability`) — a
+#     `python3 - <<'TAG'` body is source text, not shell argv.
+#   * (B) A path inside a negated `! test -f P` / `! [ -f P ]` clause (either
+#     spelling of `!`'s position) — the author is asserting ABSENCE.
+#   * (C) A candidate token's trailing `;`, `&`, `|`, `)` — shell clause
+#     syntax shlex glues onto the word, e.g. the `P;` in `for F in ... P; do`.
+#   * (D) The pattern operand of a grep-family command (`grep -qE
+#     '(review|pull)/15149870' file`) is not a path. ACCEPTED HOLE: `grep -f
+#     patterns.txt target.py` has no literal pattern operand, so the
+#     positional rule mistakes `patterns.txt` for it and silently exempts it
+#     too (the `--file=patterns.txt` spelling is worse — see the full account
+#     at (D) in `_reachability_path_tokens`'s own docstring).
+#   * (E) A path with a conventional build/test OUTPUT directory name as one
+#     of its segments (`_BUILD_OUTPUT_SEGMENTS`) — a byproduct the checked
+#     command's own build/test step writes mid-run, not a precondition. The
+#     WEAKEST of the five: convention-based, not a syntactic fact, and wide
+#     enough that a real precondition file stored under e.g. `build/` loses
+#     the check silently — see that constant's own module comment.
+# Full per-exemption detail (narrowing conditions, interaction with the other
+# exemptions, each accepted limit) lives on `_reachability_path_tokens`'s own
+# docstring, next to the code it describes; this block is the index.
+#
+# Why not reuse lib/shell_tokens.strip_heredoc_bodies for (A): that module is
+# fail-CLOSED for two SECURITY consumers (the canon guard,
+# git_cwd.effective_git_cwd) and its clause (ii) disqualifies any command
+# containing `;`, `&&`, `{`, `}` or `$(` — which every real multi-clause
+# verify_command has (measured: it strips neither offending v23 command this
+# exemption targets). This lint's polarity is the opposite of a security
+# gate's — it BLOCKS on an unreachable path, so over-stripping only means
+# fewer tokens get checked (the safe direction) — so merging the two would
+# erode the security module's non-widening argument for consumers that need
+# the opposite doubt polarity. `_strip_first_heredoc_body` above is therefore
+# lint-local by design, not an oversight.
+#
+# Why not an inline `# path-check: skip <token>` annotation instead of any of
+# the five: it was considered and rejected because it requires editing the
+# command it annotates, which is unavailable for a plan whose bytes must stay
+# frozen (e.g. an already-submitted, hash-pinned reference plan) — the
+# annotation route only works going forward, never on an existing plan this
+# lint must also judge correctly.
+#
 # Residual false-positive population (documented, not eliminated): a relative
-# path a stage's command *creates then reads within the same command* (so it is
-# neither pre-existing nor a declared cross-stage artifact). Declare such a path
-# in that stage's output_artifacts to silence the lint.
+# path a stage's command *creates then reads within the same command*, where
+# neither pre-existing on disk nor a declared cross-stage artifact NOR caught
+# by (A)-(E) above. Declare such a path in that stage's output_artifacts to
+# silence the lint.
 #
 # LIMITS, stated so the green light is not over-read:
 #   * Reachability is NOT validity: a reachable path proves the command *can*
@@ -552,6 +645,140 @@ def verify_command_scope_warnings(stages, final_check=None) -> list[str]:
 _PATH_EXTS = (".py", ".toml", ".json", ".md", ".txt", ".sh", ".cfg",
               ".ini", ".yaml", ".yml", ".csv", ".sql")
 
+# Characters that reject a candidate token outright: globs, shell variables,
+# option-values and URLs (original set), plus `(` and `|` — regex
+# metacharacters a grep-family pattern operand commonly carries even after (D)
+# below has failed to recognize it positionally, e.g. the outer
+# `(review|pull)` in `(review|pull)/15149870` — defence in depth, not the
+# primary mechanism.
+# ACCEPTED LIMIT, named rather than left implicit: a real, existing path that
+# contains `(` or `|` (mid-token — a trailing `)` is already stripped by
+# `_GLUE_CHARS` before this set is consulted) is silently excluded from
+# checking too, e.g. `test -f "report (1).csv"`. `)` was considered for this
+# set and dropped: real regex patterns pair it with `(`, so `(` alone already
+# catches every pattern this defence targets, while keeping `)` bought no
+# additional catch and doubled the false-negative surface for a filename that
+# contains `)` but not `(`, e.g. `scripts/gh)ost.py`. Accepted, like the
+# `grep -f` limit in (D) below, because it fails in the same non-blocking
+# direction as every exemption here: a real orphan path containing `(` or
+# `|` goes unchecked rather than wrongly blocked.
+_REJECT_CHARS = "*?[$=(|"
+
+# Trailing characters that are shell clause syntax glued onto a word by shlex
+# (which never splits on them), never a legal trailing character of an
+# unquoted filename — see false-positive (C) below.
+_GLUE_CHARS = ";&|)"
+
+# The one clause-terminator token (B)'s exemption below matches DIRECTLY.
+# `&&`, `||`, `;`, `|` also end the clause but are NOT members here: a token
+# made entirely of `_GLUE_CHARS` (`;`, `&`, `|`, `)`) collapses to the empty
+# string under (C)'s rstrip before this set is ever consulted, so it is the
+# trailing-glue reset (`if glued: ...`) that actually ends the clause for
+# those four spellings, not a lookup here. This set exists only for `]`, the
+# one terminator `_GLUE_CHARS` does not touch.
+_CLOSING_BRACKET = frozenset({"]"})
+
+# grep-family commands whose pattern operand is not a path — see (D) below.
+_GREP_FAMILY = frozenset({"grep", "egrep", "fgrep", "rg"})
+
+# Conventional build/test OUTPUT directory names — see (E) below. A relative
+# path token with one of these as a path SEGMENT (any component, not just the
+# last) is a byproduct the checked command's own build/test step produces as
+# it runs, not a precondition the command requires up front.
+# ACCEPTED LIMIT, named rather than left implicit: `build`, `target`, `dist`
+# and `coverage` are ordinary SOURCE directory names too, so this set is
+# genuinely wide — a project keeping a real precondition file under a
+# directory with one of these names loses the reachability check on it
+# entirely, silently. This is a convention-based judgement, not a syntactic
+# fact like (A)-(D), which makes it the WEAKEST of the five exemptions. Kept
+# wide rather than narrowed to `test-results` alone, because a narrow set
+# would be tuned to one plan and misfire on the next repo; the width is
+# compensated by (E) being self-contained (revertable in one commit without
+# touching (A)-(D)).
+_BUILD_OUTPUT_SEGMENTS = frozenset({
+    "test-results", "build", "dist", "target", "node_modules",
+    "__pycache__", ".pytest_cache", "htmlcov", "coverage",
+})
+
+# A here-document/here-string introducer: `<<`/`<<-` or `<<<` followed by an
+# optionally quoted identifier delimiter.
+_HEREDOC_START = re.compile(
+    r"<<-?\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|\"([A-Za-z_][A-Za-z0-9_]*)\"|"
+    r"([A-Za-z_][A-Za-z0-9_]*))"
+)
+
+
+def _strip_first_heredoc_body(cmd: str) -> str:
+    """Remove the body of the first here-document operator found outside quotes,
+    or return `cmd` unchanged on any doubt (no body line, no terminator line).
+    Quote-aware only — see `_strip_heredoc_bodies_for_reachability` for why a
+    fuller recognition shape is not needed here."""
+    i, n, quote = 0, len(cmd), None
+    while i < n:
+        c = cmd[i]
+        if quote:
+            if c == "\\" and quote == '"' and i + 1 < n:
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in "'\"":
+            quote = c
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if cmd.startswith("<<", i) and not cmd.startswith("<<<", i):
+            m = _HEREDOC_START.match(cmd, i)
+            if m:
+                tag = m.group(1) or m.group(2) or m.group(3)
+                line_end = cmd.find("\n", m.end())
+                if line_end == -1:
+                    return cmd  # doubt: no body line follows -> leave untouched
+                lines = cmd[line_end + 1:].split("\n")
+                terminator = next(
+                    (idx for idx, line in enumerate(lines) if line.strip() == tag),
+                    None,
+                )
+                if terminator is None:
+                    return cmd  # doubt: no terminator line -> leave untouched
+                head = cmd[:line_end]
+                tail = "\n".join(lines[terminator + 1:])
+                return head + ("\n" + tail if tail else "")
+        i += 1
+    return cmd
+
+
+def _strip_heredoc_bodies_for_reachability(cmd: str) -> str:
+    """`cmd` with every here-document body removed, so a Python/shell script
+    living inside `python3 - <<'TAG'` is never shlex-tokenized as shell argv —
+    e.g. `print("ci/tests:", ...)` would otherwise collapse into the bogus
+    path-shaped token `print(ci/tests:,`.
+
+    Deliberately LINT-LOCAL rather than a reuse of lib.shell_tokens.strip_heredoc_
+    bodies: that module is fail-CLOSED for two SECURITY consumers (the canon
+    guard and git_cwd.effective_git_cwd) and its clause (ii) disqualifies any
+    command containing `;`, `&&`, `{`, `}` or `$(` — which every real
+    verify_command with more than one clause has (measured: it strips nothing
+    from either offending v23 reference-plan command this exemption targets, nor
+    does the unlanded issue-#108 span-API follow-up, for the same clause (ii)
+    reason). Merging the two would erode the security module's non-widening
+    argument for consumers that need the opposite doubt polarity. This lint's
+    polarity is the opposite: it BLOCKS on an unreachable path, so
+    over-stripping a body only means fewer tokens get checked — the safe,
+    non-blocking direction — while under-stripping produces exactly the false
+    positive this function exists to remove. A quote-aware scan for the
+    positive `<<TAG ... TAG` shape is therefore enough; it need not carry
+    shell_tokens' full seven-clause security-grade recognition."""
+    prev = None
+    while cmd != prev:
+        prev = cmd
+        cmd = _strip_first_heredoc_body(cmd)
+    return cmd
+
 
 def _reachability_path_tokens(cmd: str) -> list[str]:
     """The relative, literal, path-shaped tokens of a shell command — the tokens
@@ -561,31 +788,170 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
     then discards, instead of being shattered on shell metacharacters that also
     occur inside it. Shell operators (`&&`, `|`, `2>&1`, `>`) survive as tokens but
     are not path-shaped, so they fall out. Tolerant: unbalanced quotes fall back to
-    a plain split rather than raising."""
+    a plain split rather than raising.
+
+    Four exemptions layered on top of that base tokenizer, each narrowed to the
+    shape that actually misfires and paired with a regression case in
+    test_verify_reachability.py pinning what must still block:
+
+    (A) Here-document bodies are stripped from `cmd` before shlex ever sees them
+        — see `_strip_heredoc_bodies_for_reachability`.
+    (B) A path token inside a `! test <flag> P` / `! [ <flag> P ]` clause, or
+        its POSIX operand-position spelling `test ! <flag> P` / `[ ! <flag> P
+        ]`, is exempt: the author is asserting ABSENCE, so demanding P be
+        producible is exactly backwards. Narrowed to arm only when `!` is
+        either the token immediately preceding `test`/`[` (command-position)
+        or the FIRST operand after a `test`/`[` command word (operand-
+        position) — `! grep ... P`, `! <anything else> P`, and a `!` anywhere
+        but the very first operand of `test`/`[` are NOT exempt. The clause
+        ends at a literal `]`, or — via the trailing-glue reset in (C), not a
+        lookup against `_CLOSING_BRACKET` — at any token made entirely of
+        `_GLUE_CHARS` (`&&`, `||`, `;`, `|`); see that set's module comment.
+        ACCEPTED LIMIT: a negated clause with NEITHER a literal `]` NOR a
+        `_GLUE_CHARS`-only token before the next clause starts is never
+        closed — e.g. `test ! -f a.txt\ntest -f scripts/ghost.py` (a bare
+        newline carries no clause-boundary information once shlex has
+        collapsed it to ordinary whitespace) silently exempts ghost.py too.
+        Not closed: doing so needs recognizing a fresh `test`/`[` command
+        word as an implicit clause end even while `command_start` is still
+        False, which risks re-arming (B) on state this lint does not track
+        elsewhere. Accepted for the same reason as the other three limits
+        named in this docstring: it fails in the non-blocking direction.
+    (C) A candidate token's TRAILING `;`, `&`, `|`, `)` characters (including
+        runs such as `;;`) are shell clause syntax glued onto the word by shlex
+        (which never splits on them) — e.g. the `P;` in
+        `for F in ... P; do ...` — and are stripped before the word is judged.
+        (C) runs before (B) reads the stream: `! test -f foo.txt;` must both end
+        (B)'s clause at the `;` AND, were it ever path-checked, be judged on the
+        bare `foo.txt` — running (B) first on the raw `foo.txt;` would leave the
+        trailing `;` unstripped, the trailing-glue reset would never fire, and
+        (B)'s exemption would run past its own clause.
+    (D) The pattern operand of a grep-family invocation (`grep`, `egrep`,
+        `fgrep`, `rg`) is not a path, even when it is `/`-shaped
+        (`grep -qE '(review|pull)/15149870'`). Recognized positionally: after
+        the command word, the operand following a flag cluster ending in
+        `e`/`E`/`P`, otherwise the first non-flag operand. FILE operands after
+        the pattern remain checked normally. `_REJECT_CHARS` gained `(` and `|`
+        as defence in depth for a pattern this positional rule fails to catch
+        — see that constant's module comment for the accepted cost and why
+        `)` was considered and dropped.
+        ACCEPTED LIMIT: `grep -f patterns.txt target.py` has no literal pattern
+        operand (it comes from a file), so the positional rule mistakes
+        `patterns.txt` for the pattern and silently exempts it, while
+        `target.py` is still checked. The `--file=patterns.txt` spelling is
+        WORSE than that: it doesn't end in `e`/`E`/`P` so the positional rule
+        never consumes it as a two-token flag+operand pair, and instead
+        mistakes the FOLLOWING token — `target.py`, the real file operand —
+        for the pattern, so neither `patterns.txt` nor `target.py` is
+        checked. Not closed: closing it needs the full grep flag grammar
+        (`-f`, repeated `-e`, `--file=`, bundled short flags) — the parser
+        this lint deliberately declines to write — and both cases fail in
+        the same non-blocking direction as every exemption here.
+    (E) A path token with a conventional build/test OUTPUT directory name as
+        one of its path segments — `test-results`, `build`, `dist`, `target`,
+        `node_modules`, `__pycache__`, `.pytest_cache`, `htmlcov`, `coverage`
+        (`_BUILD_OUTPUT_SEGMENTS`) — is exempt, e.g.
+        `library/svc/data_science/tests/test-results/py3test/ytest.report.trace`,
+        which `scripts/ya_test_textlog.py` reads only AFTER the `ya make` run
+        it itself launches has written it: a byproduct of the checked
+        command's own execution, not a precondition. See that constant's
+        module comment for the accepted width and why (E) is the WEAKEST of
+        the five exemptions.
+    """
+    cmd = _strip_heredoc_bodies_for_reachability(cmd)
     try:
         toks = shlex.split(cmd)
     except ValueError:
         toks = cmd.split()
     tokens: list[str] = []
-    skip_next = False
-    for t in toks:
-        if skip_next:
-            skip_next = False
+    i = 0
+    n = len(toks)
+    negated_clause = False  # (B): currently inside an exempt `! test`/`! [` clause
+    command_start = True    # (D): is the next token a command word?
+    prev_bang = False       # (B): previous token was exactly `!` (command-position)
+    awaiting_test_operand = False  # (B): previous token was `test`/`[` as a command
+                                    # word, waiting to see if its FIRST operand is `!`
+    while i < n:
+        raw = toks[i]
+        i += 1
+        stripped = raw.rstrip(_GLUE_CHARS)  # (C)
+        glued = stripped != raw
+
+        if prev_bang:
+            prev_bang = False
+            if stripped in ("test", "["):
+                negated_clause = True
+                command_start = False
+                if glued:
+                    negated_clause = False
+                    command_start = True
+                continue  # `test` / `[` itself is never path-shaped
+
+        if awaiting_test_operand:
+            awaiting_test_operand = False
+            if stripped == "!":
+                negated_clause = True
+                continue  # `!` itself is never path-shaped
+            # first operand wasn't `!` -- not a negated clause; this token
+            # (a flag or a path) falls through to the ordinary checks below
+
+        if stripped == "!":
+            prev_bang = True
             continue
-        if t in ("-c", "-m"):  # program string / module name follows, not a path
-            skip_next = True
+
+        if stripped in _CLOSING_BRACKET:
+            negated_clause = False
+            command_start = True
             continue
-        if t.startswith("-"):
+
+        if stripped in ("-c", "-m"):  # program string / module name follows
+            i += 1
+            command_start = False
+            if glued:
+                negated_clause = False
+                command_start = True
             continue
-        if any(ch.isspace() for ch in t):
-            continue  # a real path token has no whitespace or newline
-        head = t.split("::", 1)[0]  # drop a pytest node-id suffix
-        if not head or head.startswith("/"):
-            continue  # empty or absolute -> out of scope
-        if any(ch in head for ch in "*?[$=") or "://" in head:
-            continue  # glob / variable / option-value / URL -> not a literal path
-        if "/" in head or head.endswith(_PATH_EXTS):
-            tokens.append(head)
+
+        if command_start and not negated_clause:
+            # Neither branch below re-checks `glued` on the command word itself
+            # the way `prev_bang` and `-c`/`-m` above do -- e.g. a literal
+            # `test;` or `grep;` token (glue on the command word, not its
+            # operand) is not a realistic unquoted shell shape, so the
+            # asymmetry is harmless on any input seen so far, but it is an
+            # asymmetry: those two branches assume `glued` cannot fire here.
+            base = stripped.rsplit("/", 1)[-1]
+            if base in _GREP_FAMILY:  # (D)
+                command_start = False
+                found_pattern = False
+                while i < n and not found_pattern:
+                    nxt = toks[i].rstrip(_GLUE_CHARS)
+                    if nxt.startswith("-"):
+                        i += 1
+                        if nxt[-1:] in ("e", "E", "P") and i < n:
+                            i += 1  # this flag's operand is the pattern
+                            found_pattern = True
+                        continue
+                    i += 1  # first non-flag operand is the pattern
+                    found_pattern = True
+                continue
+            if stripped in ("test", "["):  # (B) operand-position negation
+                command_start = False
+                awaiting_test_operand = True
+                continue
+
+        command_start = False
+        if not negated_clause:
+            if not stripped.startswith("-") and not any(ch.isspace() for ch in stripped):
+                head = stripped.split("::", 1)[0]  # drop a pytest node-id suffix
+                if head and not head.startswith("/"):
+                    if not any(ch in head for ch in _REJECT_CHARS) and "://" not in head:
+                        if "/" in head or head.endswith(_PATH_EXTS):
+                            if not any(part in _BUILD_OUTPUT_SEGMENTS
+                                       for part in Path(head).parts):  # (E)
+                                tokens.append(head)
+        if glued:
+            negated_clause = False
+            command_start = True
     return tokens
 
 
@@ -840,6 +1206,18 @@ def parse_plan(
             )
         )
 
+    # Additive and unconditionally lenient, like `Order.from_dict`: a refusal here would
+    # be retroactive over every plan a live session re-reads, which is why refusals live
+    # in submission.py instead. A present, non-dict `order` is recorded as
+    # `malformed=("order",)` rather than left `None` — see `Order.malformed` for why.
+    raw_order = m.get("order")
+    if isinstance(raw_order, dict):
+        order = Order.from_dict(raw_order)
+    elif raw_order is not None:
+        order = Order(malformed=("order",))
+    else:
+        order = None
+
     meta = PlanMeta(
         task_id=str(m["task_id"]),
         goal=str(m.get("goal", "")),
@@ -850,6 +1228,7 @@ def parse_plan(
         repo_root=str(m["repo_root"]) if m.get("repo_root") else None,
         delivery_worktree=str(m["delivery_worktree"]) if m.get("delivery_worktree") else None,
         final_check=final_checks,
+        order=order,
     )
 
     is_substantive = meta.weight_class is not None and meta.weight_class.lower() == "substantive"
@@ -965,10 +1344,13 @@ def parse_plan(
                     material=str(s.get("material", "")),
                     result=str(s["expected_result_image"]),
                     invariants=str(s["invariants"]) if s.get("invariants") else None,
+                    material_refs=[str(r) for r in s.get("material_refs", [])],
+                    knowledge_refs=[str(r) for r in s.get("knowledge_refs", [])],
                 ),
                 means=Means(
                     means=str(s.get("means", "")),
                     method=str(s.get("method", "")),
+                    procedure=str(s.get("procedure", "")),
                 ),
                 actor=Actor(
                     executor=str(s["executor"]),
@@ -989,6 +1371,18 @@ def parse_plan(
                 ),
                 principle=principle,
                 conditions=str(s["conditions"]) if s.get("conditions") else None,
+                # Same permissive parse, same reason as `knowledge` below: the requirement
+                # that a substantive stage declare its starting preconditions — and the
+                # refusal of a `conditions` that only restates depends_on, which is the
+                # other half of the same defect — both live at the submission seam.
+                preconditions=(
+                    str(s["preconditions"]) if s.get("preconditions") else None
+                ),
+                # Parsed permissively on BOTH load modes — the знание requirement lives at
+                # the submission seam (submission.py), never in an `if strict:` branch
+                # here, because load_plan is re-read in-session from seven call sites and a
+                # loader-side requirement is retroactive over plans already accepted.
+                knowledge=str(s["knowledge"]) if s.get("knowledge") else None,
                 supplies=_build_supplies(s, index),
                 output_artifacts=[str(p) for p in s.get("output_artifacts", [])],
                 outcome=Outcome(status=StageStatus.PENDING.value),
@@ -1021,12 +1415,68 @@ def load_plan(
     return parse_plan(data, strict=strict, strict_executor=strict_executor)
 
 
+def order_scope(meta) -> tuple:
+    """The SCOPE-bearing half of the order, as a contribution to a change-decision key:
+    a one-element tuple holding the requirement ids and the coverage map's keys, or the
+    EMPTY tuple when the plan declares no order.
+
+    The split between this and `order_place` below is the meta-level answer to the same
+    question `_structural_signature` answers per stage — which edits need re-approval.
+    ADDING or REMOVING a requirement changes what the plan is for, so it re-arms the
+    plan-approval gate; re-wording an existing requirement, the customer prose or the
+    functional place does not, any more than re-wording a stage's `material` does.
+    Coverage KEYS ride here rather than in the prose half because a key set that no
+    longer covers the requirement ids is a scope claim, not a wording one.
+
+    Empty for an order-less plan, so every plan authored before [meta.order] existed
+    classifies exactly as it did before this field — the same contribute-only-when-
+    declared identity `knowledge_place` and `preconditions_place` keep."""
+    order = meta.order
+    if order is None:
+        return ()
+    return ((tuple(r.id for r in order.requirements), tuple(sorted(order.coverage))),)
+
+
+def order_place(meta) -> tuple:
+    """The WHOLE order as a contribution to a change-decision key, or the empty tuple
+    when none is declared — the refinement-tier companion to `order_scope`.
+
+    Deliberately a superset rather than the complement: `diff_plans` reads `order_scope`
+    first and returns 'substantive' before this is consulted, so overlap costs nothing,
+    while a complement would leave a newly added Order field belonging to NEITHER key if
+    whoever added it forgot the split. Everything the order holds is therefore covered
+    here, and the scope half is the only thing anyone has to remember to extend.
+    `malformed` and `requirements_dropped` ride here for that reason and one of their
+    own: between them they are the only trace a dropped `requirements = ["a sentence"]`
+    leaves, so an edit that turns a readable order into an unreadable one — or that
+    changes how much of it is unreadable — would otherwise move no key at all.
+
+    The membership below is a hand-written list, not a derivation over
+    `dataclasses.fields(Order)`, because each field needs its own normalization into a
+    hashable, order-stable form. So "everything the order holds" is a claim a reader
+    cannot check here; `test_order_place_exhausts_the_order_s_field_set` is what makes
+    it true, by going red the day a field is added and not listed."""
+    order = meta.order
+    if order is None:
+        return ()
+    return ((
+        order.customer_id,
+        order.customer,
+        order.functional_place,
+        tuple((r.id, r.text) for r in order.requirements),
+        tuple(sorted((k, tuple(v)) for k, v in order.coverage.items())),
+        order.malformed,
+        order.requirements_dropped,
+    ),)
+
+
 def _structural_signature(doc: PlanDoc) -> dict:
     """The fields whose change makes a replan substantive."""
     return {
         "done_criterion": doc.meta.done_criterion,
         "criterion_type": doc.meta.criterion_type,
         "weight_class": doc.meta.weight_class,
+        "order_scope": order_scope(doc.meta),
         "stages": {
             s.index: (
                 s.actor.executor,
@@ -1037,6 +1487,98 @@ def _structural_signature(doc: PlanDoc) -> dict:
             for s in doc.stages
         },
     }
+
+
+# The absent form of the знание place: no local knowledge, no refs on either projection.
+_KNOWLEDGE_PLACE_ABSENT = (None, (), ())
+
+
+def knowledge_place(stage) -> tuple:
+    """The stage's знание place — `knowledge` plus its two ref projections — as a
+    contribution to a change-decision key: a ONE-element tuple holding the group, or the
+    EMPTY tuple when the stage declares none of the three.
+
+    Shared by all three key functions (stage_carry_key, stage_question_key, diff_plans'
+    _prose) so the three cannot drift on which fields the place consists of — the coupling
+    is the point, since a field entering one key and not the others is exactly how a
+    correction gets silently dropped.
+
+    Grouped rather than spliced field-by-field for a reason the single pre-existing
+    conditional field (verify_venue_at_final) never had to face: three independently
+    conditional splices collide — (knowledge='x', refs empty) and (knowledge=None,
+    material_refs=['x']) would both flatten to ('x',). Nesting the whole place under one
+    conditional keeps every combination distinct while preserving the identity that
+    matters: a stage declaring NONE of the three contributes nothing at all, so its key is
+    byte-identical to the schema-23 key it had before this place existed. That identity is
+    load-bearing — stage_question_key is persisted in Question.disposed_at_key and compared
+    across processes, so an unconditional contribution (or a `... or ""` default) would
+    flip every disposed question of every live session to a spurious staleness blocker."""
+    place = (
+        stage.knowledge,
+        tuple(stage.subject.material_refs),
+        tuple(stage.subject.knowledge_refs),
+    )
+    return () if place == _KNOWLEDGE_PLACE_ABSENT else (place,)
+
+
+def preconditions_place(stage) -> tuple:
+    """The stage's preconditions — what must hold before it may START — as a contribution
+    to a change-decision key: a ONE-element tuple holding the value WRAPPED in a tuple of
+    its own, or the EMPTY tuple when the stage declares none.
+
+    Shared by all three key functions for the same reason `knowledge_place` is: a field
+    that enters one key and not the others is exactly how a correction gets silently
+    dropped.
+
+    Two properties carry over from `knowledge_place`, both load-bearing. Undeclared
+    contributes NOTHING, so a plan predating this field keeps the exact key it had —
+    stage_question_key is persisted in Question.disposed_at_key and compared across
+    processes, so an unconditional contribution (or a `... or ""` default) would flip every
+    disposed question of every live session to a spurious staleness blocker. And the value
+    is NESTED rather than spliced flat, because it is now the second independently
+    conditional splice in each key: a preconditions text reading "delivery" would otherwise
+    flatten to the same key element as a verify_venue_at_final of "delivery" on a stage
+    that declares the other field and not this one."""
+    return () if not stage.preconditions else ((stage.preconditions,),)
+
+
+def procedure_place(stage) -> tuple:
+    """The stage's procedure — the SEQUENCE of operations proposed for meeting the
+    method's requirement — as a contribution to a change-decision key: a ONE-element
+    tuple holding the value TAGGED with this field's name inside a tuple of its own, or
+    the EMPTY tuple when the stage declares none.
+
+    Shared by all three key functions for the reason its two siblings are: a field that
+    enters one key and not the others is how a correction gets silently dropped. Here the
+    consequence is sharper than "dropped", because a whole branch depends on it —
+    `diff_plans` classifies an edit that touches only the procedure as `no_change` unless
+    this place is in `_prose`, and a `no_change` replan never reaches the renormalization
+    the field exists to admit.
+
+    Declared-only, for the reason `preconditions_place` documents: a plan predating the
+    field keeps the exact key it had (stage_question_key is persisted in
+    Question.disposed_at_key and compared across processes, so `... or ""` would flip
+    every disposed question of every live session to a spurious staleness blocker).
+
+    TAGGED, which its two siblings are not, and the tag is what nesting alone turned out
+    not to buy. Nesting stops a value flattening into the splices beside it; it does not
+    stop two INDEPENDENTLY-conditional splices from producing the same element. This is
+    the third conditional splice of `stage_question_key` and `stage_carry_key`, so
+    `preconditions = "delivery"` and `procedure = "delivery"` both reduced to
+    `(("delivery",),)` and a stage that MOVED one sentence from the first place to the
+    second carried its PASSED outcome forward as though nothing had changed. Tagging
+    only the new place fixes that without touching either older encoding — the keys of
+    every already-disposed question stay byte-identical, which a retrofit of all three
+    would not.
+
+    `diff_plans._prose` splices five conditional components rather than three, and its
+    two extra ones (`verify_venue_at_final` and `cost_tier`) are BOTH bare strings, so
+    the same collision was reachable there between two fields neither of which is this
+    one. It is closed at that site instead of here, by tagging them in `_prose` only:
+    `_prose` is computed live between two documents and never persisted, so a tag costs
+    nothing there, while retagging `verify_venue_at_final` in the two KEYS would flip
+    every already-disposed question of every live session."""
+    return () if not stage.means.procedure else (("procedure", stage.means.procedure),)
 
 
 def stage_carry_key(stage) -> tuple:
@@ -1073,13 +1615,147 @@ def stage_carry_key(stage) -> tuple:
         # stage_question_key where this identity is load-bearing across processes.
         *((_normalize_string(stage.criterion.verify_venue_at_final),)
           if stage.criterion.verify_venue_at_final else ()),
+        *knowledge_place(stage),
+        *preconditions_place(stage),
+        *procedure_place(stage),
     )
 
 
-def stage_question_key(stage) -> str:
-    """Stable digest of a stage's FULL definition, used by premise.py to decide
-    whether a disposed Question bound to `stage:<n>.<element>` still targets the
-    same bytes it was answered against.
+def stage_reattest_key(stage) -> tuple:
+    """Narrow "operative surface" identity for the stage-6 re-attest route: a prior
+    PASSED control attestation is still trustworthy without re-running the actor
+    that produced it only if this key is unchanged — method, control criterion,
+    expected result image, executor, and done criterion.
+
+    Deliberately NARROWER than `stage_carry_key` (which gates the FREE, no-cost
+    Outcome carry-forward on a stage's WHOLE definition — title/conditions/
+    invariants included) and differently scoped than `gates._operative_surface`
+    (a whole-PLAN function answering the refinement-vs-substantive question,
+    which for that reason excludes done_criterion/expected_result_image as
+    prose). Re-attest still pays for a fresh control re-run (the third of its
+    three conditions), so this key only needs to rule out a replan that moved
+    WHAT the stage is being held to — a title/conditions/knowledge edit elsewhere
+    in the stage is safe to re-attest through.
+    """
+    return (
+        stage.means.method,
+        stage.actor.executor,
+        stage.subject.result,
+        stage.criterion.criterion_type,
+        stage.criterion.done_criterion,
+        stage.criterion.verify_command,
+        stage.criterion.expected_exit,
+        _normalize_string(stage.criterion.verify_venue),
+        _normalize_string(stage.criterion.verify_kind),
+        stage.criterion.landed,
+        *((_normalize_string(stage.criterion.verify_venue_at_final),)
+          if stage.criterion.verify_venue_at_final else ()),
+    )
+
+
+def stage_reattest_digest(stage) -> str:
+    """Stable sha256 hex digest of `stage_reattest_key(stage)` — persisted on a
+    `ReattestStash` at replan time and recomputed against the LIVE stage at
+    dispatch time, so a further plan edit made during the PLAN_READY window
+    (after the stash was built but before `dispatch --re-attest` runs) is
+    caught rather than trusted stale. A digest, not the raw tuple, for the same
+    reason `stage_question_key` returns one: it is compared across processes."""
+    return hashlib.sha256(repr(stage_reattest_key(stage)).encode("utf-8")).hexdigest()
+
+
+_WHOLE_STAGE_DEFINITION: tuple[str, ...] | None = None
+
+# Which stage fields constitute each name of the question-target vocabulary, as dotted
+# leaf paths of `Stage`. TOTAL over text_shape.ELEMENT_NAMES by construction — a name
+# absent here raises KeyError rather than degrading to the whole-stage digest, and
+# `test_question_key_scope.py` goes red the moment the vocabulary gains one. Its
+# companion test also pins the COMPLEMENT: every leaf of `Stage` is either claimed by a
+# name here or recorded there as deliberately unclaimed, so a field added to `Stage`
+# cannot end up invalidating nothing by default.
+_ELEMENT_FIELDS: dict[str, tuple[str, ...] | None] = {
+    "material": ("subject.material", "subject.material_refs",
+                 "supplies.on", "supplies.element", "supplies.artifact"),
+    "result": ("subject.result",),
+    "invariants": ("subject.invariants",),
+    "knowledge": ("knowledge", "subject.knowledge_refs"),
+    "means": ("means.means",),
+    "method": ("means.method",),
+    "procedure": ("means.procedure",),
+    "executor": ("actor.executor",),
+    "capability": ("actor.capability_required",),
+    "criterion": ("criterion.criterion_type", "criterion.done_criterion",
+                  "criterion.verify_command", "criterion.expected_exit",
+                  "criterion.verify_venue", "criterion.verify_kind",
+                  "criterion.landed.target", "criterion.landed.delivered_stage",
+                  "criterion.landed.remote", "criterion.verify_venue_at_final"),
+    "done_criterion": ("criterion.done_criterion",),
+    "principle": ("principle.statement", "principle.source", "principle.derivation",
+                  "principle.confidence", "principle.refutation"),
+    "conditions": ("conditions",),
+    "preconditions": ("preconditions",),
+    "control": _WHOLE_STAGE_DEFINITION,
+    "order": _WHOLE_STAGE_DEFINITION,
+    "requirements": _WHOLE_STAGE_DEFINITION,
+}
+
+
+def _leaf_values(stage, path: str) -> tuple:
+    """Values reached by a dotted leaf path from a Stage, always as a tuple.
+
+    A list-valued segment PROJECTS rather than terminating: `supplies.on` yields every
+    supply's `on`, in declaration order, so the tuple is sensitive to a reordering as
+    well as to a rewrite. A None owner short-circuits to `(None,)`, which is why the
+    optional structs (`principle`, `criterion.landed`) can be addressed leaf-by-leaf
+    without a presence test at every call site — and is unambiguous only because neither
+    struct is constructible with all of its own leaves None (`LandedSpec.target` and
+    `Principle.statement` are required)."""
+    owners: tuple = (stage,)
+    for name in path.split("."):
+        reached: list = []
+        for owner in owners:
+            value = None if owner is None else getattr(owner, name)
+            if isinstance(value, list):
+                reached.extend(value)
+            else:
+                reached.append(value)
+        owners = tuple(reached)
+    return owners
+
+
+def stage_element_keys(stage) -> dict[str, str]:
+    """Every change-decision key a question bound to this stage can be checked against:
+    one per name of the question-target vocabulary, plus the reserved WHOLE_STAGE_ELEMENT
+    entry holding the whole-stage digest.
+
+    Which of the two a given stamp is allowed to match is premise.py's decision, not this
+    module's — see `premise._accepted_keys`."""
+    keys = {WHOLE_STAGE_ELEMENT: stage_question_key(stage)}
+    for name in sorted(_ELEMENT_NAMES):
+        keys[name] = stage_question_key(stage, name)
+    return keys
+
+
+def stage_question_key(stage, element: str | None = None) -> str:
+    """Stable digest of a stage's FULL definition — or, given an `element`, of just that
+    element's contribution — used by premise.py to decide whether a disposed Question
+    bound to `stage:<n>.<element>` still targets the same bytes it was answered against.
+
+    With no `element` (and for the three names `_ELEMENT_FIELDS` maps to
+    `_WHOLE_STAGE_DEFINITION`) the digest covers the whole stage, byte-for-byte as it did
+    before element scoping existed — the identity the back-compatibility of every already
+    persisted `disposed_at_key` rests on. With an `element` it hashes that element's
+    fields TAGGED with the element's own name, so two elements whose text happens to
+    coincide cannot produce one digest (the collision this key family has already been
+    bitten by twice — see `procedure_place`).
+
+    The element form is deliberately the STRICTER of the two on the venue fields: it
+    hashes `verify_venue` / `verify_kind` / `verify_venue_at_final` raw where the
+    whole-stage payload normalizes them, so a whitespace-only edit invalidates a
+    `criterion` question that the whole-stage digest would have let stand. Erring toward
+    re-confirmation is the safe direction here (the reachable route out is
+    `question-rebind --confirm-still-valid`), and matching the normalization would mean
+    threading it per path through a walker that has no business knowing which fields are
+    prose.
 
     A THIRD member of the key family beside `_structural_signature` (drives
     replan refinement-vs-substantive classification) and `stage_carry_key` (drives
@@ -1089,11 +1765,18 @@ def stage_question_key(stage) -> str:
     "answer different questions and must evolve independently"), it is a new
     function rather than an extension of `stage_carry_key`.
 
-    Unlike `stage_carry_key`, this covers every field a Question.target can
-    legally name (text_shape.ELEMENT_NAMES: material, result, invariants, means,
-    method, executor, capability, criterion, done_criterion, principle,
-    conditions) — including `principle` and `supplies`, which `stage_carry_key`
-    omits because carry-forward never needed them. A question targeting
+    Unlike `stage_carry_key`, this covers every STAGE FIELD a Question.target can
+    legally name — including `principle` and `supplies`, which `stage_carry_key`
+    omits because carry-forward never needed them. The vocabulary is not restated
+    here (it is text_shape.ELEMENT_NAMES, and a copy of a list rots): read it there.
+    Three of its names have no stage field for this key to cover, so a question
+    targeting one of those binds to the rest of the stage's definition: `order` and
+    `requirements` (both on `[meta.order]`) and `control` (written only by
+    `record-result --control`, never parsed from plan TOML). `procedure` was the
+    fourth and is one no longer: `Means.procedure` exists, so it is covered here like
+    any other field, through `procedure_place`. They are named rather than described
+    as a class, because a class with no extension is a standing licence not to cover
+    the next member. A question targeting
     `stage:<n>.principle` must be invalidated when that principle is rewritten;
     `stage_carry_key` would not notice, so it cannot be reused for this purpose.
 
@@ -1101,6 +1784,11 @@ def stage_question_key(stage) -> str:
     Question.disposed_at_key and compared across processes, so it must survive a
     JSON round-trip byte-for-byte (a tuple would not, once JSON turns it into a
     list)."""
+    if element is not None:
+        paths = _ELEMENT_FIELDS[element]
+        if paths is not _WHOLE_STAGE_DEFINITION:
+            payload = repr((element, tuple(_leaf_values(stage, p) for p in paths)))
+            return hashlib.sha256(payload.encode("utf-8")).hexdigest()
     principle = stage.principle
     principle_tuple = (
         (principle.statement, principle.source, principle.derivation,
@@ -1135,8 +1823,113 @@ def stage_question_key(stage) -> str:
         # live session to a spurious "stage definition changed" blocker).
         *((_normalize_string(stage.criterion.verify_venue_at_final),)
           if stage.criterion.verify_venue_at_final else ()),
+        # `knowledge` is a legal Question.target (it is in ELEMENT_NAMES), and
+        # material_refs is material's structural projection — a question answered
+        # against the old material must be invalidated when the refs are redrawn.
+        *knowledge_place(stage),
+        # `preconditions` is the other half of the `conditions` place, which IS a legal
+        # Question.target: a question answered against conditions that carried the
+        # starting requirements must be invalidated when they move to their own field.
+        *preconditions_place(stage),
+        # `procedure` is a legal Question.target too, and the reason it must be covered
+        # is the sharper one: it is the field an executor may replace WITHOUT
+        # re-approval, so an answer given against the old sequence is exactly the kind
+        # that goes stale without anyone being asked.
+        *procedure_place(stage),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+META_PART = "meta"
+
+
+def stage_part(index: int) -> str:
+    return f"s{index}"
+
+
+def plan_meta_digest(doc: PlanDoc) -> str:
+    """Digest of everything the plan states about itself outside its stages — the goal,
+    the done criterion and the order. Its own function rather than a slice of the
+    composite below, because a question raised against the goal goes stale on exactly
+    these bytes and on no stage's."""
+    payload = repr((
+        doc.meta.goal,
+        doc.meta.done_criterion,
+        doc.meta.criterion_type,
+        doc.meta.weight_class,
+        doc.meta.repo_root,
+    ) + order_place(doc.meta))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def plan_meta_element_key(doc: PlanDoc, element: str) -> str:
+    """Digest of a single plan-level field a Question can target — 'goal' or
+    'done_criterion' — narrower than `plan_meta_digest`, which bundles goal,
+    done_criterion, criterion_type, weight_class, repo_root and the order into
+    ONE hash and would invalidate a goal-bound question on an unrelated
+    done_criterion edit (or vice versa). Tagged with the element name, mirroring
+    `stage_question_key`'s element form, so a goal and a done_criterion that
+    happen to hold identical text cannot collide.
+
+    Returns a stable sha256 hex digest for the same reason `stage_question_key`
+    does: the value is persisted in Question.disposed_at_key and compared across
+    processes."""
+    value = doc.meta.goal if element == "goal" else doc.meta.done_criterion
+    payload = repr((element, value))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def plan_meta_element_keys(doc: PlanDoc) -> dict[str, str]:
+    """Both plan-level element keys, in the {element: key} shape premise.py
+    already uses per stage (`stage_element_keys`)."""
+    return {
+        "goal": plan_meta_element_key(doc, "goal"),
+        "done_criterion": plan_meta_element_key(doc, "done_criterion"),
+    }
+
+
+def plan_stage_digests(doc: PlanDoc) -> dict[int, str]:
+    return {s.index: stage_element_keys(s)[WHOLE_STAGE_ELEMENT] for s in doc.stages}
+
+
+def plan_content_digest(doc: PlanDoc) -> str:
+    """The whole-plan digest, recomposed from the same per-stage values
+    `plan_stage_digests` reports.
+
+    The payload is byte-for-byte the one this function produced before the per-part
+    split, and must stay so: escapes, launch windows and every already-persisted
+    `enumerated_at` bind to this value, so a changed payload would void a live
+    session's escape and re-arm a discharged cross-check. `test_enumeration_keying`
+    pins the value for a fixture plan. The order stays SPLICED (`+ order_place(...)`)
+    rather than taking a slot in the tuple: `order_place` is empty for an order-less
+    plan, which is what keeps such a plan's payload the one this produced before the
+    order field existed."""
+    payload = repr((
+        doc.meta.goal,
+        doc.meta.done_criterion,
+        doc.meta.criterion_type,
+        doc.meta.weight_class,
+        doc.meta.repo_root,
+        tuple(sorted(
+            (s.index, stage_element_keys(s)[WHOLE_STAGE_ELEMENT]) for s in doc.stages)),
+    ) + order_place(doc.meta))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def changed_parts(doc: PlanDoc, baseline_digests: dict) -> tuple[bool, set[int]]:
+    """Which parts of `doc` have moved since `baseline_digests` — `(meta_moved,
+    {stage indices})`, given `{'meta': <digest>, 'stages': {index: <digest>}}`.
+
+    The baseline is a PARAMETER rather than something read out of a particular
+    record, so the same comparison serves a premise bag's enumeration record and a
+    plan review's own recorded keys. Stage indices are compared as strings: the
+    baseline typically arrives from JSON, which has no integer keys."""
+    recorded = {str(k): v for k, v in (baseline_digests.get("stages") or {}).items()}
+    moved = {
+        index for index, digest in plan_stage_digests(doc).items()
+        if recorded.get(str(index)) != digest
+    }
+    return (baseline_digests.get("meta") or "") != plan_meta_digest(doc), moved
 
 
 def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
@@ -1173,9 +1966,30 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              _normalize_string(s.criterion.verify_venue),
              _normalize_string(s.criterion.verify_kind),
              s.criterion.landed,
-             *((_normalize_string(s.criterion.verify_venue_at_final),)
+             # Both TAGGED, for the reason `procedure_place`'s docstring gives: they are
+             # two independently-conditional splices of the same type, so untagged a
+             # `cost_tier` and a `verify_venue_at_final` carrying the same word reduce to
+             # the same element and an edit MOVING between them diffs as `no_change`.
+             # Tagged here and not in the two persisted keys, where `cost_tier` does not
+             # appear at all and a retag would flip every disposed question's key.
+             *((("verify_venue_at_final",
+                 _normalize_string(s.criterion.verify_venue_at_final)),)
                if s.criterion.verify_venue_at_final else ()),
-             *((s.actor.cost_tier,) if s.actor.cost_tier else ()))
+             *((("cost_tier", s.actor.cost_tier),) if s.actor.cost_tier else ()),
+             # Without this a knowledge-only correction — the exact edit an
+             # overcome-difficulty replan makes when the fault addressed знание —
+             # diffs to 'no_change' and is silently dropped.
+             *knowledge_place(s),
+             # Same argument one field over: moving a stage's starting requirements out of
+             # `conditions` and into `preconditions` is a real correction, and without this
+             # the two edits cancel in the diff and the replan reads as 'no_change'.
+             *preconditions_place(s),
+             # And one field further, where the omission would be self-defeating rather
+             # than merely lossy: replacing ONLY the sequence of operations is the edit
+             # the renormalization branch exists to admit, so without this place here
+             # that edit diffs as 'no_change' and the branch is unreachable by
+             # construction.
+             *procedure_place(s))
             for s in doc.stages
         ]
     def _fc(doc: PlanDoc):
@@ -1184,8 +1998,14 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              _normalize_string(fc.venue), _normalize_string(fc.kind), fc.landed)
             for fc in doc.meta.final_check
         ]
+    # `order_place` is the meta-level sibling of the `knowledge_place`/`preconditions_place`
+    # splices above, and it is here for the identical reason: without it a re-worded
+    # requirement, a corrected functional place or a coverage entry pointed at a different
+    # control would diff as 'no_change' and be silently dropped. Its scope half is already
+    # in `_structural_signature`, so what reaches this line is only the wording.
     if (_prose(old) != _prose(new) or old.meta.goal != new.meta.goal
             or old.meta.repo_root != new.meta.repo_root
-            or _fc(old) != _fc(new)):
+            or _fc(old) != _fc(new)
+            or order_place(old.meta) != order_place(new.meta)):
         return "refinement"
     return "no_change"

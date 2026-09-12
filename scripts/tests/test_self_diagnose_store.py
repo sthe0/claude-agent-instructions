@@ -30,6 +30,7 @@ import pytest
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+import difficulty_channel as dc  # noqa: E402
 import self_diagnose_store as sds  # noqa: E402
 
 
@@ -525,6 +526,7 @@ def test_default_filer_argv_shape_and_success(tmp_path, monkeypatch):
         "--severity": "low",
         "--stream": "backlog",
         "--reporter": "self-diagnose",
+        "--cost-not-estimable": "machine-detected self-friction; not measured at detection time",
     }
 
 
@@ -547,6 +549,51 @@ def test_default_filer_bounds_the_subprocess(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_run)
     assert sds._default_filer({"path": "/core/x.md", "kind": "k", "detail": "d"}) == (1, "")
     assert seen["timeout"] == 60
+
+
+def _load_file_difficulty():
+    spec = importlib.util.spec_from_file_location(
+        "file_difficulty_real_gate", SCRIPTS_DIR / "file-difficulty.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_default_filer_argv_passes_the_real_cost_gate(monkeypatch):
+    """The stub-based tests above pin _default_filer's argv shape but never run it
+    against the REAL file-difficulty.py, so a new required flag stranding this
+    in-repo caller (exactly what happened here) would pass them silently. This
+    captures the actual argv _default_filer builds, then drives that argv through
+    the real CLI logic (loaded the way test_file_difficulty.py does) with
+    authority.is_author patched False and a NullChannel standing in for the
+    channel — offline, no network, no real submission — and asserts the cost
+    gate accepts the invocation rather than exiting 2."""
+    captured = {}
+
+    def _capture_run(argv, **kwargs):
+        captured["argv"] = argv
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _Result()
+
+    monkeypatch.setattr(subprocess, "run", _capture_run)
+    sds._default_filer({"path": "/core/x.md", "kind": "near-duplicate", "detail": "d"})
+    real_args = captured["argv"][2:]  # drop [sys.executable, .../file-difficulty.py]
+
+    file_difficulty = _load_file_difficulty()
+    monkeypatch.setattr(file_difficulty.authority, "is_author", lambda: False)
+    ch = dc.NullChannel()
+    dc.register_channel("self-diagnose-real-gate-test", lambda: ch)
+
+    rc = file_difficulty.main(real_args + ["--channel", "self-diagnose-real-gate-test"])
+    assert rc == 0
+    [r] = ch.pull()
+    assert "not estimable" in r.cost_estimate
 
 
 # --- presentation: one line per condition ------------------------------------

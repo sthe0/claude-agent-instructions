@@ -101,6 +101,21 @@ def test_option_text_drives_detection(monkeypatch, capsys):
     assert _run_main(payload, monkeypatch, capsys) == "deny"
 
 
+# --- re-entrancy guard --------------------------------------------------------
+
+def test_judge_child_marker_short_circuits_before_ledger_write(monkeypatch):
+    """The re-entrancy guard (env var set by host_llm.isolated_run_kwargs on every
+    sandboxed judge subprocess) must fire BEFORE judge_ledger.hook_start — a judge
+    child must leave no trace, not merely fail to block."""
+    monkeypatch.setenv(_mod.JUDGE_CHILD_ENV_VAR, "1")
+    calls = []
+    monkeypatch.setattr(_mod.judge_ledger, "hook_start", lambda hook: calls.append(hook))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_ask_payload(ESC_BODY))))
+    rc = _mod.main()
+    assert rc == 0
+    assert calls == []
+
+
 # --- fail-open ---------------------------------------------------------------
 
 def test_malformed_payload_allows(monkeypatch, capsys):

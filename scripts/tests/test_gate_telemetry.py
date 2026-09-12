@@ -2,12 +2,13 @@
 GATE_LOG, fail-open (an I/O error never blocks a transition). Covers the shape of
 the appended row, fail-open behaviour on an unwritable path, and a walkthrough
 that counts exactly one log line per gate evaluation across a realistic session
-(plan_approval, resolution x2, difficulty_blockers, replan_coverage)."""
+(effort_fire, plan_approval, resolution x2, difficulty_blockers, replan_coverage)."""
 import json
 from argparse import Namespace
 
 from agentctl import cli
 from agentctl.state import Node, StageStatus
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
@@ -111,10 +112,12 @@ def test_walkthrough_logs_one_event_per_gate_evaluation(store, monkeypatch, tmp_
     _to_executing_stage1(store, sid, plan)
 
     cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                             control="reviewed: ok", observation=""), store=store)
+                             control="reviewed: ok",
+                             observation=STAGE_OBSERVATIONS[0]), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)
     cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                             control="reviewed: ok", observation=""), store=store)
+                             control="reviewed: ok",
+                             observation=STAGE_OBSERVATIONS[1]), store=store)
     cli.cmd_verify_final(ns(session=sid), store=store)
     # the experience plugin auto-activates on the substantive spine and gates
     # resolve until its phases are recorded — complete them like a real session
@@ -127,8 +130,11 @@ def test_walkthrough_logs_one_event_per_gate_evaluation(store, monkeypatch, tmp_
 
     rows = _read_gate_log(log_path)
     gates_fired = [r["gate"] for r in rows]
-    assert gates_fired == ["plan_approval", "resolution", "resolution"]
-    assert [r["passed"] for r in rows] == [True, True, True]
+    # Stage 7 (item C) adds an "effort_fire" precondition check ahead of
+    # cmd_submit_plan (inside _to_executing_stage1) — one more evaluation than
+    # before, passing (no fire recorded in this walkthrough).
+    assert gates_fired == ["effort_fire", "plan_approval", "resolution", "resolution"]
+    assert [r["passed"] for r in rows] == [True, True, True, True]
     assert store.load(sid).node == Node.RESOLVED.value
 
 
@@ -162,20 +168,40 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
 
     rows = _read_gate_log(log_path)
     gates_fired = [r["gate"] for r in rows]
-    # The completed replan logs the closure gates in order — normalization_blockers
-    # (re-norming) then failure_address_blockers (goal-failure routing) — between the
-    # passing difficulty_blockers and the plan_review evaluation (vacuous, gate off by
-    # default in the suite), then the plan_approval PLUGIN gate (stage 3: cmd_replan
-    # now composes plugins.plugin_gate_blockers(state, "plan_approval") just as
-    # cmd_approve does — vacuous here, premise force-off in the suite), then the
-    # replan_coverage check.
-    assert gates_fired == ["plan_approval", "difficulty_blockers",
-                           "difficulty_blockers", "normalization_blockers",
+    # Stage 7 (item C) adds an "effort_fire" precondition check ahead of both
+    # cmd_submit_plan (inside _to_executing_stage1) and every cmd_replan call —
+    # three more evaluations than before, all passing (no fire recorded in this
+    # walkthrough). The completed replan then logs the closure gates in order —
+    # diagnosing_replan (GitHub #177's renegotiation gate — vacuous here, the
+    # seeded task's cross-session replan_count is below the Rule-of-Three
+    # ceiling, so it only logs a passing evaluation and never asks for a
+    # renegotiation decision), then normalization_blockers (re-norming) then
+    # failure_address_blockers (goal-failure routing) — between the passing
+    # difficulty_blockers and the plan_review evaluation (vacuous, gate off by
+    # default in the suite), then stage 5 (item B)'s replan_authorization gate
+    # (vacuous here: the session is DIAGNOSING with a complete difficulty
+    # record, one of the gate's own unconditional exemptions), then the
+    # plan_approval PLUGIN gate (stage 3: cmd_replan now composes
+    # plugins.plugin_gate_blockers(state, "plan_approval") just as cmd_approve does —
+    # vacuous here, premise force-off in the suite), then the replan_coverage check.
+    assert gates_fired == ["effort_fire", "plan_approval",
+                           "effort_fire", "difficulty_blockers",
+                           "effort_fire", "difficulty_blockers",
+                           "diagnosing_replan",
+                           "normalization_blockers",
                            "failure_address_blockers", "plan_review",
+                           "replan_authorization",
                            "plan_approval_plugin", "replan_coverage"]
-    assert rows[1]["passed"] is False  # premature: record incomplete
-    assert rows[2]["passed"] is True   # cycle complete
-    assert rows[3]["passed"] is True   # normalization recorded
-    assert rows[4]["passed"] is True   # failure_address routed
-    assert rows[5]["passed"] is True   # plan_review evaluated (vacuous, gate off)
-    assert rows[6]["passed"] is True   # coverage satisfied
+    assert rows[0]["passed"] is True   # effort_fire: no fire yet, submit_plan
+    assert rows[1]["passed"] is True   # plan_approval
+    assert rows[2]["passed"] is True   # effort_fire: no fire, premature replan
+    assert rows[3]["passed"] is False  # premature: record incomplete
+    assert rows[4]["passed"] is True   # effort_fire: no fire, completed replan
+    assert rows[5]["passed"] is True   # cycle complete
+    assert rows[6]["passed"] is True   # diagnosing_replan evaluated (vacuous, below ceiling)
+    assert rows[7]["passed"] is True   # normalization recorded
+    assert rows[8]["passed"] is True   # failure_address routed
+    assert rows[9]["passed"] is True   # plan_review evaluated (vacuous, gate off)
+    assert rows[10]["passed"] is True  # replan_authorization evaluated (vacuous, DIAGNOSING exempt)
+    assert rows[11]["passed"] is True  # plan_approval_plugin evaluated (vacuous)
+    assert rows[12]["passed"] is True  # coverage satisfied

@@ -1,0 +1,95 @@
+[meta]
+task_id = "autocompact-install-time"
+goal = "Make Claude Code context auto-compaction settings a structural, install-time part of Core: every `apply-settings.sh` run (invoked by `setup-symlinks.sh`) actively pins the auto-compact window to 210000 from the shared base AND prunes the two deprecated env keys (CLAUDE_CODE_DISABLE_1M_CONTEXT, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE) from the live `~/.claude/settings.json`, so no machine has to be hand-fixed. Fix THIS macOS machine as a side-effect of running the corrected installer, and add a regression guard + test."
+done_criterion = "After running scripts/apply-settings.sh on this machine, live ~/.claude/settings.json has autoCompactWindow=210000 and env.CLAUDE_CODE_AUTO_COMPACT_WINDOW=\"210000\" and NO env.CLAUDE_CODE_DISABLE_1M_CONTEXT / env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE; a fresh dirty fixture (settings holding the two stale keys and a wrong/absent window) converges to the same state through apply-settings.sh; the new pytest passes; scripts/verify-all.py passes (including the extended lint-settings-base autocompact invariant)."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "Not warranted — this is an internal install-machinery change fully grounded in the repo's own settings-merge scripts (apply-settings.sh, set-context-cap.sh, setup-symlinks.sh, base.json) and the verified analysis in memory-global/leaves/autocompact-threshold-policy.md. The 210000 window value and the 'additive merge does not clear a dropped key' constraint are both already established there and in set-context-cap.sh's prune logic; no external solution or best-practice lookup adds anything."
+
+[[stage]]
+index = 1
+title = "apply-settings.sh: active autocompact hygiene (pin window from base + prune the two deprecated env keys)"
+executor = "spawn:developer"
+expected_result_image = "apply-settings.sh, after its additive jq merge, (a) forces autoCompactWindow and env.CLAUDE_CODE_AUTO_COMPACT_WINDOW to the base value when base defines them (base wins for the autocompact window, unlike the additive default) and (b) deletes env.CLAUDE_CODE_DISABLE_1M_CONTEXT and env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE from the merged live settings. Running it on any machine that carries the stale keys removes them and pins the window; running it on an already-clean machine is a no-op (idempotent). No other live key is touched. `bash -n scripts/apply-settings.sh` passes and the .bak backup is still written before the swap."
+criterion_type = "measurable"
+done_criterion = "bash -n passes; apply-settings.sh references CLAUDE_CODE_DISABLE_1M_CONTEXT and CLAUDE_AUTOCOMPACT_PCT_OVERRIDE in a del(...) and pins autoCompactWindow/CLAUDE_CODE_AUTO_COMPACT_WINDOW from base; a dirty temp fixture converges to the clean state through CLAUDE_SETTINGS=<fixture> apply-settings.sh"
+verify_command = "bash -c 'set -e; bash -n scripts/apply-settings.sh; grep -q \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\" scripts/apply-settings.sh && grep -q \"CLAUDE_CODE_DISABLE_1M_CONTEXT\" scripts/apply-settings.sh; f=$(mktemp); printf %s \"{\\\"autoCompactWindow\\\":150000,\\\"env\\\":{\\\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\\\":\\\"70\\\",\\\"CLAUDE_CODE_DISABLE_1M_CONTEXT\\\":\\\"1\\\"}}\" > \"$f\"; CLAUDE_SETTINGS=\"$f\" scripts/apply-settings.sh >/dev/null; jq -e \".autoCompactWindow==210000 and .env.CLAUDE_CODE_AUTO_COMPACT_WINDOW==\\\"210000\\\" and (.env|has(\\\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\\\")|not) and (.env|has(\\\"CLAUDE_CODE_DISABLE_1M_CONTEXT\\\")|not)\" \"$f\" >/dev/null; rm -f \"$f\" \"$f.bak\"'"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/apply-settings.sh"]
+material = "scripts/apply-settings.sh: the single `merged=\"$(jq -n --slurpfile base ... )\"` expression (l24-37) that composes live settings additively — env is `($b.env//{}) + (.env//{})` (live wins, so stale live keys survive and a base window key is only added when absent), and `.autoCompactWindow = ($c.autoCompactWindow // $b.autoCompactWindow)` (live wins when present). settings/base.json is ALREADY correct: autoCompactWindow=210000, env.CLAUDE_CODE_AUTO_COMPACT_WINDOW=\"210000\", and neither stale key present (verified). The defect is purely that the additive merge cannot (a) overwrite a stale live window nor (b) remove a deprecated live key."
+means = "jq (already required by the script). The exact prune+pin recipe already exists and is proven in scripts/set-context-cap.sh l113-119 (`.env |= del(.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, .CLAUDE_CODE_DISABLE_1M_CONTEXT)` and forcing the window key) — copy that recipe into the apply-settings merge instead of duplicating a second jq pass. The set of deprecated keys is the same two named in autocompact-threshold-policy.md and set-context-cap.sh."
+method = "Extend the single jq program in apply-settings.sh (do NOT add a second jq invocation or a post-hoc shell edit — keep it one composed expression, mirroring set-context-cap.sh). After the existing additive lines: (1) change the autoCompactWindow line so base wins for this key when base defines it: `| (if $b.autoCompactWindow then .autoCompactWindow = $b.autoCompactWindow else . end)`; (2) mirror the pinned env key from base when base defines it: `| (if ($b.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW) then .env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = $b.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW else . end)`; (3) prune the deprecated keys unconditionally: `| .env |= del(.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, .CLAUDE_CODE_DISABLE_1M_CONTEXT)`. Update the leading comment block (l1-10) to state that base wins for the autocompact window and that the two deprecated autocompact env keys are pruned on every run (so the additive-merge invariant note stays accurate). Leave the permissions/defaultMode/other-key handling untouched. Keep the `.bak` backup + `jq empty` validation swap as-is."
+conditions = "Runs under set -euo pipefail on macOS (bash 3.2) or Linux; jq on PATH (already asserted). CLAUDE_SETTINGS override honored for the fixture test."
+invariants = "Idempotent: a second run is a no-op. Only the autocompact window + the two deprecated env keys change relative to today's behavior; every other live key (hooks, marketplaces, absolute paths, model, permissions, other env) is preserved byte-for-byte. Linux behavior identical to macOS. The prune targets EXACTLY the two named deprecated keys — never a broader env wipe (guard against an empty/overbroad del)."
+capability_required = "jq + bash portability; understanding of the additive-merge contract (developer)."
+
+[stage.principle]
+statement = "A settings key whose correct value is 'deprecated / must be absent' cannot be fixed by an additive merge that only ever adds or defers-to-live; the installer must ACTIVELY overwrite (window) and delete (the two deprecated keys) on every run. Reuse the proven prune recipe from set-context-cap.sh rather than inventing a parallel one — one recipe, two call sites, no drift."
+source = "memory-global/leaves/autocompact-threshold-policy.md (§ 'apply-settings.sh is additive — dropping a key from base does NOT remove it from live'); scripts/set-context-cap.sh l86-88 + l113-119 (existing prune recipe)."
+confidence = "high"
+refutation = "Would fail if a machine legitimately needed CLAUDE_AUTOCOMPACT_PCT_OVERRIDE or CLAUDE_CODE_DISABLE_1M_CONTEXT set — but policy explicitly deprecates both on the main session (the window pin governs the trigger and the 1M tier is allowed to ride), so unconditional pruning is correct; if that policy ever reverses, the del list is the single edit point."
+
+[[stage]]
+index = 2
+title = "Apply on this macOS machine and verify the live settings converge"
+executor = "spawn:developer"
+expected_result_image = "After running scripts/apply-settings.sh once on this machine, live ~/.claude/settings.json has autoCompactWindow=210000, env.CLAUDE_CODE_AUTO_COMPACT_WINDOW=\"210000\", and neither env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE nor env.CLAUDE_CODE_DISABLE_1M_CONTEXT. The ~/.claude/settings.json.bak backup exists. Every pre-existing machine-specific key (hooks, model, permissions, marketplaces) is still present (spot-check: env key count and the permissions.allow list are unchanged aside from the three autocompact deltas)."
+criterion_type = "measurable"
+done_criterion = "live ~/.claude/settings.json satisfies the window-pinned + stale-keys-absent invariant"
+verify_command = "jq -e '.autoCompactWindow==210000 and .env.CLAUDE_CODE_AUTO_COMPACT_WINDOW==\"210000\" and (.env|has(\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\")|not) and (.env|has(\"CLAUDE_CODE_DISABLE_1M_CONTEXT\")|not)' \"$HOME/.claude/settings.json\""
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["/Users/the0/.claude/settings.json"]
+material = "This machine's live ~/.claude/settings.json (NOT a symlink; a real file, 10305 bytes) currently carries env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=\"70\" + env.CLAUDE_CODE_DISABLE_1M_CONTEXT=\"1\", lacks env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, and has autoCompactWindow absent — the exact stale state the corrected installer must repair."
+means = "The stage-1 corrected scripts/apply-settings.sh, run directly (it is the shared installer; no separate one-off script). apply-settings.sh writes a .bak before swapping, so the run is reversible."
+method = "Run `scripts/apply-settings.sh` from repo_root (writes ~/.claude/settings.json, backup at ~/.claude/settings.json.bak). Then verify via the verify_command. Do NOT hand-edit the live file — the whole point is that the fix rides the installer. Note for the operator: env is read only at Claude Code session start, so the live-file change takes effect on the NEXT restart, not the current session (this is expected and does not block the measurable check, which reads the file directly)."
+conditions = "Run on this macOS host from repo_root; jq present; ~/.claude/settings.json writable."
+invariants = "No machine-specific key lost: hooks / model / marketplaces / permissions.allow / other env keys preserved; only the three autocompact fields change. The .bak backup remains for rollback."
+capability_required = "Running a repo installer + jq verification (developer)."
+
+[stage.principle]
+statement = "Fixing the local machine by running the corrected shared installer (rather than a one-off hand-edit) proves the installer itself is the fix and leaves no bespoke local drift — the machine is repaired as a verifiable side-effect of the structural change."
+source = "Task brief ('ideally as a side-effect of running the corrected installer'); scripts/apply-settings.sh backup+swap design."
+confidence = "high"
+refutation = "Would be wrong if apply-settings.sh had machine-specific side-effects beyond settings.json merge — it does not (it only merges into TARGET and writes a .bak)."
+
+[[stage]]
+index = 3
+title = "Regression guard (lint-settings-base autocompact invariant) + pytest for the installer prune"
+executor = "spawn:developer"
+expected_result_image = "scripts/lint-settings-base.py additionally asserts settings/base.json's autocompact contract (autoCompactWindow==210000, env.CLAUDE_CODE_AUTO_COMPACT_WINDOW==\"210000\", and neither deprecated key present) so a future edit that reintroduces a stale key or unpins the window fails verify-all. A new pytest (scripts/tests/test_apply_settings_autocompact.py) drives the real scripts/apply-settings.sh against a dirty temp fixture (via CLAUDE_SETTINGS) and asserts the merged output pins the window and drops both deprecated keys, and that a machine-specific key placed in the fixture survives. `python3 scripts/verify-all.py` passes; the new pytest passes."
+criterion_type = "measurable"
+done_criterion = "pytest scripts/tests/test_apply_settings_autocompact.py exits 0 AND python3 scripts/verify-all.py exits 0 AND lint-settings-base flags a base.json mutated to reintroduce a stale key"
+verify_command = "bash -c 'set -e; python3 -m pytest scripts/tests/test_apply_settings_autocompact.py -q; python3 scripts/verify-all.py >/dev/null'"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["scripts/lint-settings-base.py", "scripts/tests/test_apply_settings_autocompact.py"]
+material = "scripts/lint-settings-base.py (currently only checks permissions.allow read-only-ness via entry_ok; its main() loads base.json already). scripts/verify-all.py CHECKS list already includes 'lint-settings-base' (l21), so extending the linter needs no wiring. scripts/tests/ is a pytest suite (conftest.py puts scripts/ on sys.path); no existing test covers apply-settings.sh."
+means = "The existing lint-settings-base main() + json load (extend, do not duplicate); pytest + subprocess to invoke the real apply-settings.sh with a CLAUDE_SETTINGS-pointed temp file (the same override the script honors, seen in set-context-cap.sh). Named constants for the window (210000) and the deprecated-key set so the linter and test share one source of truth."
+method = "In lint-settings-base.py: add a `_autocompact_ok(data) -> list[str]` helper returning a list of violation strings — checks data['autoCompactWindow']==210000, data['env']['CLAUDE_CODE_AUTO_COMPACT_WINDOW']=='210000', and that neither 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE' nor 'CLAUDE_CODE_DISABLE_1M_CONTEXT' is in data['env']; call it from main() and fold its violations into the FAIL path (print each; return 1 if any). Keep the existing read-only allow check. Add scripts/tests/test_apply_settings_autocompact.py: (1) write a dirty settings fixture (two stale keys + wrong window + one machine-specific sentinel key) to tmp_path, run `subprocess.run(['bash', str(REPO/'scripts/apply-settings.sh')], env={**os.environ,'CLAUDE_SETTINGS':str(fixture)})`, load the result, assert window pinned + both stale keys absent + sentinel preserved; (2) a second test asserting idempotence (run twice, same result). Reference REPO via Path(__file__).resolve().parents[2] or the conftest scripts dir."
+conditions = "pytest available (repo already uses it); bash + jq on PATH for the subprocess; tmp_path fixture isolates from the real ~/.claude/settings.json."
+invariants = "The test NEVER touches the real ~/.claude/settings.json (always CLAUDE_SETTINGS-redirected to tmp_path). lint-settings-base's existing permissions check is unchanged; only an added invariant. verify-all's check list is not reordered."
+capability_required = "pytest + Python; the tests-accompany-code discipline (developer)."
+
+[stage.principle]
+statement = "A structural install-time invariant needs a structural guard: a lint that fails if base.json drifts, plus a test that exercises the real installer end-to-end against a dirty fixture — else the additive-merge trap silently returns on the next well-meaning edit. tests-accompany-code applies to install machinery too."
+source = "memory-global/leaves/tests-accompany-code.md; scripts/verify-all.py CHECKS registry; scripts/tests/ pytest convention."
+confidence = "high"
+refutation = "If the window default became machine-tier-aware (rejected here — the working host uses a flat 210k pin), the hardcoded 210000 assertion would need to read the tier; not the case for a fixed pin."
+
+[[final_check]]
+label = "live macOS settings satisfy the window-pin + stale-keys-absent invariant"
+command = "jq -e '.autoCompactWindow==210000 and .env.CLAUDE_CODE_AUTO_COMPACT_WINDOW==\"210000\" and (.env|has(\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\")|not) and (.env|has(\"CLAUDE_CODE_DISABLE_1M_CONTEXT\")|not)' \"$HOME/.claude/settings.json\""
+expected_exit = 0
+
+[[final_check]]
+label = "installer end-to-end: a dirty fixture converges through the real apply-settings.sh"
+command = "bash -c 'set -e; f=$(mktemp); printf %s \"{\\\"autoCompactWindow\\\":150000,\\\"model\\\":\\\"sentinel\\\",\\\"env\\\":{\\\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\\\":\\\"70\\\",\\\"CLAUDE_CODE_DISABLE_1M_CONTEXT\\\":\\\"1\\\"}}\" > \"$f\"; CLAUDE_SETTINGS=\"$f\" scripts/apply-settings.sh >/dev/null; jq -e \".autoCompactWindow==210000 and .env.CLAUDE_CODE_AUTO_COMPACT_WINDOW==\\\"210000\\\" and (.env|has(\\\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\\\")|not) and (.env|has(\\\"CLAUDE_CODE_DISABLE_1M_CONTEXT\\\")|not) and .model==\\\"sentinel\\\"\" \"$f\" >/dev/null; rm -f \"$f\" \"$f.bak\"'"
+expected_exit = 0
+
+[[final_check]]
+label = "regression guard + installer test green (verify-all + new pytest)"
+command = "bash -c 'python3 -m pytest scripts/tests/test_apply_settings_autocompact.py -q && python3 scripts/verify-all.py >/dev/null'"
+expected_exit = 0

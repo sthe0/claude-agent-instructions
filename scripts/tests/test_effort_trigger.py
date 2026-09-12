@@ -16,10 +16,22 @@ import pytest
 
 from agentctl import cli, effort
 from agentctl.state import Node, StageStatus
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
     return Namespace(**kw)
+
+
+@pytest.fixture(autouse=True)
+def _no_replan_authorization_gate(monkeypatch):
+    """This module predates the replan-authorization gate (stage 5 of the
+    plan-review-override-customer-id fix) and exercises SUBSTANTIVE,
+    non-DIAGNOSING sessions expecting a bare refinement/no_change replan to
+    apply without a user-facing diff presentation. That gate's own scoping and
+    behavior are covered directly in test_replan_authorization.py; here it is
+    switched off so this module keeps testing what it was written to test."""
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
 
 
 def _to_executing_stage1(store, sid, plan):
@@ -75,7 +87,7 @@ def test_record_result_fires_on_overrun_with_no_stage_marked_failed(store, fixtu
 
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
 
@@ -107,7 +119,7 @@ def test_verify_final_fires_when_late_cost_tips_the_ratio(store, fixtures_dir, t
     _write_cost_log(cost_log, [{"plan_path": plan, "stage_index": 1, "cost_usd": 10.0}])
     d1 = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
     assert d1.ok is True and d1.action == "next_stage"
@@ -119,7 +131,7 @@ def test_verify_final_fires_when_late_cost_tips_the_ratio(store, fixtures_dir, t
     ])
     d2 = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[1], cost_log=str(cost_log)),
         store=store,
     )
     assert d2.ok is True and d2.action == "verify_final"  # under threshold so far
@@ -154,6 +166,7 @@ def test_verify_final_failures_attach_a_live_divergence(store, tmp_path):
     plan = tmp_path / "plan_failing_finalcheck.toml"
     plan.write_text(
         '[meta]\n'
+        'weight_class = "small_change"\n'
         'task_id = "demo-failing-finalcheck"\n'
         'goal = "Pin verify-final attaching a live divergence on a failing final_check"\n'
         'done_criterion = "both stages PASSED and final_check green"\n'
@@ -200,11 +213,11 @@ def test_verify_final_failures_attach_a_live_divergence(store, tmp_path):
 
     cost_log = tmp_path / "costs.jsonl"
     _write_cost_log(cost_log, [])
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(
             ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-               observation="", cost_log=str(cost_log)),
+               observation=observation, cost_log=str(cost_log)),
             store=store,
         )
 
@@ -236,6 +249,7 @@ def test_verify_final_venue_refusal_attaches_a_live_divergence(store, tmp_path):
     plan = tmp_path / "plan_refusing_venue.toml"
     plan.write_text(
         '[meta]\n'
+        'weight_class = "small_change"\n'
         'task_id = "demo-refusing-venue"\n'
         'goal = "Pin verify-final attaching a live divergence on a refusing venue"\n'
         'done_criterion = "both stages PASSED and final_check green"\n'
@@ -283,11 +297,11 @@ def test_verify_final_venue_refusal_attaches_a_live_divergence(store, tmp_path):
 
     cost_log = tmp_path / "costs.jsonl"
     _write_cost_log(cost_log, [])
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(
             ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-               observation="", cost_log=str(cost_log)),
+               observation=observation, cost_log=str(cost_log)),
             store=store,
         )
 
@@ -394,7 +408,7 @@ def test_kill_switch_suppresses_the_transition_but_not_the_accounting(store, fix
 
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
 
@@ -423,7 +437,7 @@ def test_kill_switch_suppresses_verify_final_clean_pass_fire_too(store, fixtures
     _write_cost_log(cost_log, [{"plan_path": plan, "stage_index": 1, "cost_usd": 10.0}])
     d1 = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
     assert d1.ok is True and d1.action == "next_stage"
@@ -436,7 +450,7 @@ def test_kill_switch_suppresses_verify_final_clean_pass_fire_too(store, fixtures
     ])
     d2 = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[1], cost_log=str(cost_log)),
         store=store,
     )
     assert d2.ok is True and d2.action == "verify_final"
@@ -551,7 +565,7 @@ def test_fire_diagnose_replan_cycle_then_refires_on_renewed_overrun(store, fixtu
     _write_cost_log(cost_log, [{"plan_path": plan, "stage_index": 1, "cost_usd": 100.0}])
     d1 = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
     assert d1.node == Node.DIAGNOSING.value
@@ -563,6 +577,17 @@ def test_fire_diagnose_replan_cycle_then_refires_on_renewed_overrun(store, fixtu
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
                         failure_address="нормативное"), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
+
+    # Stage 7: replan is blocked until the fire itself is explicitly decided —
+    # this is the synchronous escalation closing the gap where a fire sat in
+    # state.effort_fires unread while the ordinary difficulty cycle proceeded
+    # around it.
+    d_blocked = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
+    assert d_blocked.ok is False
+    assert d_blocked.marker == "ESCALATE_TO_USER"
+    cli.cmd_fire_acknowledge(
+        ns(session=sid, by="user", decision="revise", note=None), store=store,
+    )
 
     d_replan = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
     assert d_replan.action == "next_stage"
@@ -577,7 +602,7 @@ def test_fire_diagnose_replan_cycle_then_refires_on_renewed_overrun(store, fixtu
     ])
     d2 = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation="", cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[1], cost_log=str(cost_log)),
         store=store,
     )
 
@@ -600,10 +625,10 @@ def test_quality_row_carries_both_effort_vectors(store, fixtures_dir):
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                                 control="reviewed: ok", observation="",
+                                 control="reviewed: ok", observation=observation,
                                  cost_log=None), store=store)
     cli.cmd_verify_final(ns(session=sid, cost_log=None), store=store)
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched",

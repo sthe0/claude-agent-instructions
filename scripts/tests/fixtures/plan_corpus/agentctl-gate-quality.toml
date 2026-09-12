@@ -1,0 +1,119 @@
+# Plan: agentctl gate-quality improvements (advisor activation, gate telemetry,
+# coverage-gate normalization+waiver, Principle anti-template).
+# Origin: user-approved improvement proposals from the core-review conversation
+# (session 62d07353), items 1-3 approved explicitly; item 4 included as a
+# clearly-flagged stage the user may strike at the approval gate.
+
+[meta]
+task_id = "agentctl-gate-quality"
+goal = "Close the 'form is checked, meaning is not' gap in the agentctl engine: deterministically activate the advisory judge, measure mechanical-gate precision, fix coverage-gate brittleness, and block boilerplate Principle fields."
+done_criterion = "All stages landed and committed; full test suite green (python3 -m pytest scripts/tests -q); verify-agentctl.py and verify-doc-concepts.py pass; README/config.md updated with the new key, flags, and telemetry."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "Not warranted: engine-internal refactor composing idioms already established in-repo (warn-only advisor, anti-template set in gates.py, JSONL ledger in policy-scorecard.py, skip-with-note waiver in the experience plugin); no external prior art would change the design."
+
+[[stage]]
+index = 1
+title = "Advisor auto-activation with cost bounds"
+executor = "spawn:developer"
+expected_result_image = "New config.md key advisor-mode (off|substantive, shipped value: substantive) with a typed accessor in agentctl/config.py; _attach_advisories resolves enabled as: AGENTCTL_ADVISOR env (1/0) overrides in both directions, else advisor-mode==substantive AND session weight_class==substantive; advisor.judge invokes claude -p with an explicit cheap model (--model sonnet) and a hard subprocess timeout; README § Advisory judge and config.md table document the behavior."
+criterion_type = "measurable"
+done_criterion = "test_advisor.py extended with branch tests (env force-on, env force-off, config-on+substantive, config-on+small, config-off) and passes."
+verify_command = "python3 -m pytest scripts/tests/test_advisor.py -q"
+expected_exit = 0
+material = "scripts/agentctl/advisor.py (env-only gating, bare claude -p argv), scripts/agentctl/config.py (Thresholds), config.md constants table, the four _attach_advisories call sites in scripts/agentctl/cli.py, scripts/tests/test_advisor.py, scripts/agentctl/README.md"
+means = "existing Thresholds accessor pattern in config.py; advisor.judge's enabled= parameter; test_advisor.py stub-runner fixtures"
+method = "add the config key + accessor; thread the session weight into the enabled resolution at the _attach_advisories chokepoint (single place, not per call site); extend the runner argv with --model and wrap with a timeout; add one test per resolution branch"
+conditions = "instructions repo synced (sync-instructions-repo.sh pull) and working tree clean before edits; scripts/tests green at baseline"
+invariants = "warn-only contract intact: judge never sets directive.ok=False and never changes directive.node; disabled/errored judge returns [] with byte-identical control flow; gates.py purity untouched; README (doc-binding coordination-state-machine) updated in the same change"
+capability_required = "agentctl engine internals (cli/config/advisor layering) + pytest"
+
+[stage.principle]
+statement = "A quality-control mechanism that requires per-use manual opt-in is effectively absent from the system; moving its activation decision into config makes it a property of the system rather than of operator memory."
+source = "CLAUDE.md root principle 'separate rule from perception; determinize the rule at its proper structural level'; observed fact that no hook/settings/prose ever sets AGENTCTL_ADVISOR today."
+confidence = "high"
+refutation = "If over a trial window the advisories are consistently empty/noisy or ignored while adding latency and spend at the four judge points, auto-activation should be reverted to off."
+
+[[stage]]
+index = 2
+title = "Gate telemetry ledger + scorecard section"
+executor = "spawn:developer"
+expected_result_image = "A single _log_gate helper in cli.py appends {ts, session, node, gate, blockers, passed} to ~/.claude/agentctl/gate-log.jsonl at every gate evaluation (plan_approval, resolution, difficulty_blockers, replan coverage); append is fail-open (I/O error never blocks a transition); policy-scorecard.py gains a Gates section aggregating firing counts and block-vs-pass rates per gate; gates.py itself untouched."
+criterion_type = "measurable"
+done_criterion = "New test module exercises the helper (append shape, fail-open on unwritable path, one event per gate evaluation in a walkthrough) and passes."
+verify_command = "python3 -m pytest scripts/tests/test_gate_telemetry.py -q"
+expected_exit = 0
+material = "scripts/agentctl/cli.py gate chokepoints (cmd_approve, cmd_verify_final, cmd_resolve, cmd_replan), ~/.claude/agentctl/ state root, scripts/policy-scorecard.py, scripts/tests/"
+means = "cli.py's existing role as the sole I/O owner (store.py pattern); policy-scorecard.py's JSONL-ledger idiom"
+method = "introduce the helper next to the existing gate-check calls so every gates.blockers()/plugin_gate_blockers() evaluation logs exactly once; aggregate in policy-scorecard as a read-only section; test with a tmp state root"
+conditions = "stage runs on a tree where the baseline suite is green; state root override (--state-root) used in tests so no real session logs are touched"
+invariants = "gates.py remains pure (verify-agentctl purity check passes); telemetry failure never changes any Directive or transition; no existing Directive output field is removed or renamed"
+capability_required = "agentctl cli internals + policy-scorecard.py structure + pytest"
+
+[stage.principle]
+statement = "A mechanical gate whose false-positive/false-negative behavior is unmeasured cannot be calibrated; recording every firing turns calibration disputes into data."
+source = "memory-global/leaves/policy-effectiveness-tracking.md — the closed loop policy -> measured outcome -> adjustment, already applied to model policy."
+confidence = "high"
+refutation = "If after a representative window the log contains too few gate events to compute meaningful rates, the ledger is overhead and its content should be folded into per-session state instead."
+
+[[stage]]
+index = 3
+title = "Coverage gate: normalized matching + recorded waiver"
+executor = "spawn:developer"
+expected_result_image = "replan_coverage_blockers compares invariants via substring AFTER _normalize_string on both item and haystack; agentctl replan accepts --coverage-waiver <reason> which bypasses only the coverage gate, is refused when empty, and is recorded in session state and in the gate log (via stage-2 helper); README replan row documents the flag."
+criterion_type = "measurable"
+done_criterion = "Tests cover: case/whitespace rephrasing now passes; a missing invariant still blocks; waiver with reason passes and is recorded; empty waiver refused; waiver does not bypass difficulty-record completeness."
+verify_command = "python3 -m pytest scripts/tests -q -k 'coverage or waiver'"
+expected_exit = 0
+material = "scripts/agentctl/gates.py (replan_coverage_blockers), scripts/agentctl/cli.py (cmd_replan), state difficulty/replan record, scripts/agentctl/README.md, existing coverage-gate tests"
+means = "existing _normalize_string in gates.py; the experience plugin's skip-with-mandatory-note idiom as the waiver pattern; stage-2 telemetry helper"
+method = "normalize both sides of the membership test; add the CLI flag and thread it into cmd_replan's coverage check with an explicit recorded-waiver branch; log the waiver as a gate event; extend tests"
+conditions = "stage 2 landed (telemetry helper available for the waiver event); baseline suite green"
+invariants = "difficulty_blockers (record completeness) unchanged and NOT waivable; empty critique lists still pass vacuously (back-compat); gates.py purity preserved (waiver recording happens in cli.py)"
+capability_required = "agentctl gates/cli internals + pytest"
+supplies = [{ on = 2, element = "means", artifact = "gate-telemetry helper in cli.py" }]
+
+[stage.principle]
+statement = "Exact-string membership over prose both false-blocks honest rephrasing and rewards verbatim pasting; normalization plus a consciously recorded waiver is closer to the check's intent than fuzzy matching, which trades one false-positive class for another."
+source = "experience plugin's plugin-record --phase skipped --note precedent (a skip must be a recorded conscious act); observed brittleness of raw substring in gates.py."
+confidence = "medium"
+refutation = "If the gate log shows waivers becoming the dominant path (waiver rate comparable to pass rate), the gate is miscalibrated and needs redesign, not more waivers."
+
+[[stage]]
+index = 4
+title = "Anti-template validation for Principle (element 7) [OPTIONAL - strike at approval if unwanted]"
+executor = "spawn:developer"
+expected_result_image = "A shared text-shape module (placeholder set + normalization, extracted from gates.py) used by both gates.py and plan.py; _validate_substantive_stage additionally refuses: any principle field in the placeholder set, refutation==statement after normalization, statement==method after normalization; plan-activity-ontology.md § element 7 notes the mechanical check."
+criterion_type = "measurable"
+done_criterion = "Tests cover: placeholder principle fields refused; refutation identical to statement refused; statement identical to method refused; a genuine principle passes; non-substantive/legacy plans unaffected."
+verify_command = "python3 -m pytest scripts/tests -q -k 'principle or plan'"
+expected_exit = 0
+material = "scripts/agentctl/gates.py (_PLACEHOLDER_SET, _normalize_string) as refactored by stage 3, scripts/agentctl/plan.py (_validate_substantive_stage), memory-global/leaves/plan-activity-ontology.md, scripts/tests/test_plan*.py"
+means = "the difficulty-record anti-template idiom already proven in gates.py; a new shared module so neither gates.py nor plan.py imports the other"
+method = "extract placeholder set + normalizer into the shared module; import from both consumers; add the three refusal rules to substantive principle validation only; extend tests; note the check in the ontology leaf"
+conditions = "stage 3 landed (gates.py normalization refactor settled, avoiding conflicting edits to the same functions); baseline suite green"
+invariants = "lenient weight gating preserved: non-substantive and weight-absent plans keep parsing unchanged; gates.py purity preserved; existing valid substantive plans (including this one) still parse"
+capability_required = "agentctl plan model internals + pytest"
+supplies = [{ on = 3, element = "material", artifact = "gates.py after normalization refactor" }]
+
+[stage.principle]
+statement = "The cheapest degradation of a required free-text field is boilerplate; a placeholder/distinctness shape check removes the zero-cost path while leaving genuine quality judgment to the advisor."
+source = "gates.py difficulty-record anti-template precedent (placeholder set + normalized-distinctness), already engine-enforced for the difficulty record."
+confidence = "high"
+refutation = "If authors begin passing the check with lightly varied boilerplate, the shape check adds friction without value and the obligation should move entirely to the advisor's semantic judgment."
+
+[[final_check]]
+command = "python3 -m pytest scripts/tests -q"
+expected_exit = 0
+label = "full engine + scripts test suite green"
+
+[[final_check]]
+command = "python3 scripts/verify-agentctl.py"
+expected_exit = 0
+label = "engine consistency (gate purity, guardian-hook wiring, plugins)"
+
+[[final_check]]
+command = "python3 scripts/verify-doc-concepts.py"
+expected_exit = 0
+label = "concept docs (agentctl README) still bound to code anchors"

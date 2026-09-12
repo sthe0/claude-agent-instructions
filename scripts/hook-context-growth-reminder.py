@@ -13,10 +13,10 @@ usage = input_tokens + cache_read_input_tokens + cache_creation_input_tokens
 (≈ what /context reports). If usage is unavailable (very fresh session),
 the hook stays silent — nudging a short session is pointless.
 
-Throttled per band via a state file so it fires at most once per band per
-session: a nudge that re-emits on every prompt would itself bloat the
-context it warns about. Bands default to 120k and 250k tokens; override via
-CC_CONTEXT_NUDGE_BANDS (comma-separated ints).
+Throttled per band via lib/band_throttle.py so it fires at most once per
+band per session: a nudge that re-emits on every prompt would itself bloat
+the context it warns about. Bands default to 120k and 250k tokens; override
+via CC_CONTEXT_NUDGE_BANDS (comma-separated ints).
 
 Exit 0 always; emits one stdout line (becomes additional context the agent
 acts on — suggest /clear on a task switch, or delegate exploration).
@@ -26,8 +26,19 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import band_throttle  # noqa: E402
 
 DEFAULT_BANDS = [120_000, 250_000]
+
+# Stamps stay in /tmp, where the OS prunes them, rather than moving to the
+# burn-rate guard's ~/.local/state root: a lost stamp only costs a repeated
+# nudge, so the cheaper store is the right one and this is not worth a
+# behaviour change while consolidating the logic.
+STATE_ROOT = "/tmp"
+STATE_PREFIX = "cc-context-nudge-"
 
 
 def parse_bands() -> list[int]:
@@ -79,27 +90,6 @@ def highest_band(tokens: int, bands: list[int]) -> int:
     return crossed
 
 
-def state_path(session_id: str) -> str:
-    safe = "".join(c for c in (session_id or "nosession") if c.isalnum() or c in "-_")
-    return f"/tmp/cc-context-nudge-{safe or 'nosession'}"
-
-
-def already_fired(path: str) -> int:
-    try:
-        with open(path, encoding="utf-8") as fh:
-            return int(fh.read().strip() or 0)
-    except (OSError, ValueError):
-        return 0
-
-
-def record_fired(path: str, band: int) -> None:
-    try:
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(str(band))
-    except OSError:
-        pass
-
-
 def message(tokens: int, band_idx: int, n_bands: int) -> str:
     k = round(tokens / 1000)
     base = (
@@ -135,11 +125,11 @@ def main() -> int:
     if band == 0:
         return 0
 
-    sp = state_path(session_id)
-    if band <= already_fired(sp):
+    if band <= band_throttle.fired_band(session_id, STATE_ROOT, STATE_PREFIX):
         return 0  # already nudged at this band (or higher) this session
 
-    record_fired(sp, band)
+    band_throttle.record_band(
+        session_id, band, STATE_ROOT, STATE_PREFIX, prune=False)
     print(message(tokens, band, len(bands)))
     return 0
 

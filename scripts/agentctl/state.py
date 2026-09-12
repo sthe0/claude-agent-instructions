@@ -20,7 +20,8 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 34  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+                     # parent_venue_captured (pop-subplan venue-substitution guard)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -152,6 +153,15 @@ class Confidence(str, Enum):
 # `not_applicable` is the one legal sentinel for an EXPLICIT opt-out (the critique states the
 # routing does not apply), kept distinct from a bare None omission so the gate can
 # discriminate the two.
+#
+# «Both reduce reflexively to знание» is a statement about the ADDRESS, not about the
+# REPAIR. Знание is a functional place of its own — upstream of both обеспечения, since it
+# is what a норма is selected against and what a ресурс is judged adequate by — so the act
+# that closes the difficulty may land on знание directly rather than on the ресурс or the
+# норма that merely carried the fault. That landing place is recorded on its own axis,
+# NORMALIZATION_DESTINATIONS, and is orthogonal to this two-valued address: the address
+# says which обеспечение failed, the destination says which functional place the re-norming
+# repairs. A single value cannot carry both without collapsing the distinction.
 FAILURE_ADDRESS_VALUES = ("ресурсное", "нормативное", "not_applicable")
 
 
@@ -301,6 +311,22 @@ class Critique:
 # coordinator's cognition, so `level` may be None (a note below the leaf threshold).
 NORMALIZATION_LEVELS = ("note", "leaf", "principle")
 
+# The functional PLACE a renorming act lands on — a CLOSED vocabulary and its own axis,
+# orthogonal to NORMALIZATION_LEVELS. The two answer different questions and must share no
+# member: `level` asks how generally the record is written down (a payoff question about the
+# artifact), `destination` asks which place in the activity the act actually repairs (a
+# structural question about the деятельность). Conflating them is what made "principle"
+# read as both the most general recording level AND the thing being changed, which quietly
+# denied that знание is a place a renorming can land on at all.
+#
+# The members are the functional places обеспечение деятельности decomposes into (see the
+# FAILURE_ADDRESS_VALUES comment above for the same decomposition on the fault-address
+# axis): ресурсное обеспечение splits into материал and средство, нормативное обеспечение
+# into норма and способ, and знание stands upstream of both as the place a норма is
+# selected against and a ресурс judged adequate by. Closed because an open destination is
+# not a place — it is free text, and the axis then records nothing checkable.
+NORMALIZATION_DESTINATIONS = ("материал", "средство", "норма", "способ", "знание")
+
 
 @dataclass
 class Normalization:
@@ -309,11 +335,15 @@ class Normalization:
     reproduction, a REPRODUCIBLE factor left un-normed simply re-fails — so closing a
     difficulty REQUIRES re-norming that factor (the ACT is mandatory-if-reproducible).
     `factor` names the reproducible cause; `level` (note/leaf/principle) is the payoff-
-    gated recording level and may be None. Recorded by cmd_normalize; gates cmd_replan
-    (see gates.normalization_blockers). A one-off (non-reproducible) factor takes the
+    gated recording level and may be None; `destination` (a NORMALIZATION_DESTINATIONS
+    member) names the functional place the act lands on and is INDEPENDENT of `level` —
+    any destination is recordable at any level. Both default to None so a pre-field
+    record loads unchanged. Recorded by cmd_normalize; gates cmd_replan (see
+    gates.normalization_blockers). A one-off (non-reproducible) factor takes the
     explicit --normalization-waiver escape instead of a record."""
     factor: str
     level: str | None = None
+    destination: str | None = None
 
 
 @dataclass
@@ -372,13 +402,34 @@ class PlanReview:
     plan_path binds the verdict to a NAME, but the coordinator edits plans in place,
     so a same-path rewrite would inherit a PASS granted to different bytes. The gate
     recomputes the hash and rejects a content drift. Empty on legacy records (absent
-    key -> default), which degrades the gate to the prior path-only binding."""
+    key -> default), which degrades the gate to the prior path-only binding.
+
+    `scope` (schema 27) is "" for a whole-plan review (the only kind that used to
+    exist) or `plan_review_scope_for_stage(n)` for a review of stage n alone.
+    `reviewed_meta_digest`/`reviewed_stage_keys` are the ENGINE's own digests of the
+    plan's meta and per-stage parts AT RECORD TIME (plan.plan_meta_digest /
+    plan.plan_stage_digests) — distinct from the REVIEWER-attested `plan_sha256`
+    above. Empty/default on legacy records and on any record recorded without a
+    loadable plan, which is what makes plan.changed_parts read them as "everything
+    moved" (see gates.plan_review_blockers).
+
+    `concern_ids` (schema 28) is the stable identity of each entry in `concerns`,
+    positionally paired — a RiskAcceptance binds to `concern_id`, never to the prose
+    in `concerns`, so rephrasing a concern cannot silently rebind or unbind an
+    acceptance. Shorter than `concerns` (or empty) on any record whose concerns were
+    given no explicit id; `plan_review_concern_ids` fills the gap with a
+    position-derived id, which is also what a legacy pre-schema-28 record gets in
+    full."""
     plan_path: str
     verdict: str
     reviewer: str
     concerns: list[str] = field(default_factory=list)
     note: str = ""
     plan_sha256: str = ""
+    scope: str = ""
+    reviewed_meta_digest: str = ""
+    reviewed_stage_keys: dict[str, str] = field(default_factory=dict)
+    concern_ids: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "PlanReview | None":
@@ -391,6 +442,74 @@ class PlanReview:
             concerns=list(d.get("concerns", [])),
             note=d.get("note", ""),
             plan_sha256=d.get("plan_sha256", ""),
+            scope=d.get("scope", ""),
+            reviewed_meta_digest=d.get("reviewed_meta_digest", ""),
+            reviewed_stage_keys=dict(raw) if isinstance(raw := d.get("reviewed_stage_keys"), dict) else {},
+            concern_ids=list(d.get("concern_ids", [])),
+        )
+
+
+_PLAN_REVIEW_STAGE_SCOPE_PREFIX = "stage:"
+
+
+def plan_review_scope_for_stage(index: int) -> str:
+    return f"{_PLAN_REVIEW_STAGE_SCOPE_PREFIX}{index}"
+
+
+def plan_review_scope_stage_index(scope: str) -> "int | None":
+    if not scope.startswith(_PLAN_REVIEW_STAGE_SCOPE_PREFIX):
+        return None
+    rest = scope[len(_PLAN_REVIEW_STAGE_SCOPE_PREFIX):]
+    return int(rest) if rest.isdigit() else None
+
+
+def plan_review_concern_ids(pr: "PlanReview") -> list[str]:
+    """Every concern's stable id, positional over `pr.concerns`: an explicit
+    `concern_ids[i]` where recorded, else the derived legacy id `c<i>`."""
+    ids = pr.concern_ids
+    return [ids[i] if i < len(ids) and ids[i] else f"c{i}" for i in range(len(pr.concerns))]
+
+
+# A recorded, attributed acceptance of one PlanReview concern's risk (schema 28) —
+# the customer-facing alternative to editing the plan to make a `revise` concern go
+# away. `concern_id` is the key, but the id alone is not the binding: `concern_text`
+# (schema 29) pins the acceptance to the concern's prose at record time, and
+# gates._concern_discharged requires that text still match the concern currently
+# at that id — a rephrased or replaced concern at the same positional id stops
+# discharging rather than silently rebinding to it. Also binds to the exact plan
+# version via the same meta/stage-digest snapshot PlanReview itself carries —
+# plan.changed_parts reads reviewed_meta_digest/reviewed_stage_keys (aliased here as
+# meta_digest/stage_keys) identically for both records, so an acceptance recorded
+# against one plan version does not survive a later edit to the part its concern
+# lives in. `basis`/`risk` mirror premise.py's `assumed` question disposition
+# exactly (same two required free-text fields, same anti-placeholder check) —
+# accepting a risk is the same kind of act as assuming one.
+@dataclass
+class RiskAcceptance:
+    scope: str
+    concern_id: str
+    plan_path: str
+    basis: str
+    risk: str
+    author: str
+    meta_digest: str = ""
+    stage_keys: dict[str, str] = field(default_factory=dict)
+    concern_text: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "RiskAcceptance | None":
+        if not d:
+            return None
+        return cls(
+            scope=d["scope"],
+            concern_id=d["concern_id"],
+            plan_path=d.get("plan_path", ""),
+            basis=d.get("basis", ""),
+            risk=d.get("risk", ""),
+            author=d.get("author", ""),
+            meta_digest=d.get("meta_digest", ""),
+            stage_keys=dict(raw) if isinstance(raw := d.get("stage_keys"), dict) else {},
+            concern_text=d.get("concern_text", ""),
         )
 
 
@@ -474,6 +593,56 @@ class CodeReview:
         )
 
 
+# The stage-6 re-attest carry-forward record (schema 32): built fresh, in full, on
+# every substantive replan, one entry per stage the replan found ELIGIBLE to
+# re-attest — i.e. its immediately-prior live outcome was PASSED. Structurally the
+# same charter as StageReview/CodeReview (one typed record per stage, looked up by
+# a last-wins scan), but this one is not itself a verdict: `dispatch --re-attest`
+# still re-runs the stage's own control before trusting it, so the stash only
+# carries what a normal dispatch would otherwise have to re-derive from scratch —
+# whether the replan touched the stage's operative surface, and what to carry
+# forward if it re-attests. Kept on SessionState rather than as new Stage/Outcome
+# fields specifically so it never enters the Stage-leaf totality tests
+# (test_renormalization/test_question_key_scope/test_contract_coverage all
+# enumerate `leaf_paths(Stage)`; SessionState has no such test).
+@dataclass
+class ReattestStash:
+    """One stage's re-attest eligibility, computed at the substantive replan that
+    re-armed it.
+
+    `stage_index` binds the stash to its stage. `operative_surface_matched` is
+    True iff `plan.stage_reattest_key` was IDENTICAL between the stage's prior
+    (PASSED) definition and its just-replanned one — condition 2 of the three the
+    route checks; a False entry is kept (not dropped) so a refusal can name the
+    specific reason rather than reporting "no stash" for a stage that had one.
+    `prior_outcome`/`prior_control` are what re-attest carries forward on success
+    — copies, not aliases, of the stage's outcome/control at the moment PASSED was
+    last recorded, so a later mutation of the stash's own copy (the `[re_attested]`
+    marker appended to `.actual`) can never also mutate the ORIGINAL record it was
+    copied from. `reattest_digest` is `plan.stage_reattest_digest` of the
+    JUST-REPLANNED stage — re-validated against the LIVE stage at dispatch time
+    (not merely trusted from this record) so a further plan edit made during the
+    PLAN_READY window, after this stash was built, is caught rather than trusted
+    stale."""
+    stage_index: int
+    operative_surface_matched: bool
+    prior_outcome: Outcome
+    prior_control: str | None
+    reattest_digest: str
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "ReattestStash | None":
+        if not d:
+            return None
+        return cls(
+            stage_index=int(d["stage_index"]),
+            operative_surface_matched=bool(d.get("operative_surface_matched", False)),
+            prior_outcome=Outcome(**d["prior_outcome"]) if d.get("prior_outcome") else Outcome(),
+            prior_control=d.get("prior_control"),
+            reattest_digest=d.get("reattest_digest", ""),
+        )
+
+
 # The plan-presentation receipt (schema 20): proof that a specific plan version's
 # rendering was (attempted to be) shown to the user. Structurally the third
 # instance of the PlanReview/StageReview charter — an artifact-EXISTENCE +
@@ -502,7 +671,18 @@ PLAN_PRESENTATION_RENDERING_CAP_BYTES = 64 * 1024
 
 PLAN_PRESENTATION_KIND_ESSENCE = "essence"
 PLAN_PRESENTATION_KIND_FULL = "full"
-PLAN_PRESENTATION_KINDS = (PLAN_PRESENTATION_KIND_ESSENCE, PLAN_PRESENTATION_KIND_FULL)
+# Third instance of the same charter (see the module comment above): proof that
+# a proposed replan's diff rendering was shown to the user, bound to the
+# PROPOSED plan's bytes (the OLD side of the diff is already pinned
+# independently by state.plan_snapshot_path, which cmd_replan diffs against).
+# Gated by gates.replan_authorization_blockers, recorded by cmd_present_plan
+# exactly like the other two kinds.
+PLAN_PRESENTATION_KIND_REPLAN_DIFF = "replan_diff"
+PLAN_PRESENTATION_KINDS = (
+    PLAN_PRESENTATION_KIND_ESSENCE,
+    PLAN_PRESENTATION_KIND_FULL,
+    PLAN_PRESENTATION_KIND_REPLAN_DIFF,
+)
 
 # Language-independent ASCII marker a plan-approval AskUserQuestion option must
 # embed (label or description) to show the full plan. Checked by
@@ -510,6 +690,12 @@ PLAN_PRESENTATION_KINDS = (PLAN_PRESENTATION_KIND_ESSENCE, PLAN_PRESENTATION_KIN
 # cli.cmd_present_plan's essence Directive — single-sourced here so the two can
 # never drift apart.
 SHOW_FULL_PLAN_MARKER = "[show-full-plan]"
+
+# Language-independent ASCII marker a replan-diff rendering must embed so the
+# delivery hook (extended by stage 4) can recognize the turn as carrying a
+# replan-authorization presentation, exactly mirroring SHOW_FULL_PLAN_MARKER —
+# single-sourced here so the emitter and the checker can never drift apart.
+AUTHORIZE_REPLAN_MARKER = "[authorize-replan]"
 
 
 @dataclass
@@ -546,23 +732,113 @@ class JudgeBypass:
     note: str = ""
 
 
+@dataclass
+class RequirementVerdict:
+    requirement_id: str
+    verdict: str  # "pass" | "fail"
+    note: str = ""
+
+
+# Plan-level acceptance record (schema 26): the ORDER's customer accepts the delivered
+# PRODUCT against the declared requirements — once, at resolution — distinct from the
+# per-stage control comparisons (StageReview/CodeReview compare an in-progress RESULT
+# against that stage's own criterion, every stage, throughout execution). `author`
+# must match [meta.order].customer_id (cmd_accept refuses to write otherwise, since
+# only the customer who placed the order can accept its product). `verdicts` must
+# name every requirement id the order declares (cmd_accept refuses an incomplete
+# write; resolution_blockers rechecks defensively — see that function's docstring
+# for why the recheck is not redundant). `plan_sha256` is stamped from
+# state.accepted_plan_digest at write time, so a later replace-the-plan-through-
+# approve leaves this review pointing at superseded bytes; resolution_blockers
+# treats that mismatch as an absent review (fail-closed, not a stale pass).
+@dataclass
+class AcceptanceReview:
+    author: str
+    verdicts: list[RequirementVerdict] = field(default_factory=list)
+    note: str = ""
+    plan_sha256: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "AcceptanceReview | None":
+        if d is None:
+            return None
+        d = dict(d)
+        d["verdicts"] = [RequirementVerdict(**v) for v in d.get("verdicts", [])]
+        return cls(**d)
+
+
+# Bypass-visibility record (schema 26) for the plan-level acceptance gate — same role
+# as JudgeBypass, one level up: recorded when cmd_accept writes an AcceptanceReview
+# without judge corroboration (the corroborating judge was unreachable) and a human
+# supplies --bypass-reason. cmd_accept refuses to write a bypass with no accompanying
+# AcceptanceReview, so the two always arrive together. NEVER read by
+# resolution_blockers itself — the resolution gate has exactly one blocking
+# condition (a complete, all-passing, fresh AcceptanceReview); this is a permanent,
+# separately-surfaced visibility record for verify-final, not a second path to a pass.
+@dataclass
+class AcceptanceBypass:
+    reason: str
+    reviewer: str = ""
+    note: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "AcceptanceBypass | None":
+        if d is None:
+            return None
+        return cls(**d)
+
+
 # --- the 8 activity elements, grouped by the ontology's clusters -------------
 # Each cluster is a typed sub-structure of Stage; the grouping makes the model
 # self-documenting and splits the immutable DECLARATION (subject/means/actor/
 # criterion/principle/conditions) from the mutable execution RECORD (outcome).
 @dataclass
 class Subject:
-    """The material worked on and the result image it should become."""
+    """The material worked on and the result image it should become.
+
+    `material_refs` and `knowledge_refs` are the two structural projections of the
+    material prose, and their contract is a DIVISION, not a check: `material_refs` names
+    what the stage TRANSFORMS, `knowledge_refs` names what it RELIES ON and leaves alone.
+    A symbol appearing in both is a smell — the stage is rewriting the very thing it
+    reasons from — and the plan must justify it in prose; it is deliberately NOT a
+    submission refusal (see submission.py's module docstring for the three reasons)."""
     material: str
     result: str
     invariants: str | None = None
+    material_refs: list[str] = field(default_factory=list)
+    knowledge_refs: list[str] = field(default_factory=list)
 
 
 @dataclass
 class Means:
-    """The fixed instruments (means) and the procedure over them (method)."""
+    """The instruments, and the two different things a plan has to say about their use.
+
+    `means` are the instruments themselves — the element the plan fixes and a stage may
+    not re-select mid-flight.
+
+    `method` is the REQUIREMENT on the way of acting: what the transformation must be an
+    instance of (the pattern to follow, the abstraction to extend, where the change
+    lands). It is the planner's and the customer's, and it moves only through the review
+    and approval a replan re-arms.
+
+    `procedure` is the SEQUENCE of operations proposed for meeting that requirement. It
+    is the executor's own: reading the code routinely shows a better order, and replacing
+    it costs no re-approval — `cli.cmd_replan --renormalize`, which the engine refuses
+    the moment the edit reaches the method, the criterion, the result image, or the goal
+    every stage's observation is compared against.
+
+    Until this field existed this docstring defined one as the other — "the fixed
+    instruments (means) and the procedure over them (method)" — so a plan had a single
+    place for a norm and a proposal, and the proposal, being the concrete one, took it.
+    An executor who then found a better order either followed a worse one or quietly
+    rewrote what he was held to, and neither is visible in the diff as what it is.
+
+    Optional on the TYPE and required of a substantive stage at the SUBMISSION seam
+    (submission.py), like every requirement added since the corpus was frozen: 55 stored
+    plans predate the field and must keep loading byte-for-byte."""
     means: str
     method: str
+    procedure: str = ""
 
 
 @dataclass
@@ -635,12 +911,17 @@ class Criterion:
 class Principle:
     """The refutable principle the stage rests on (confidence is a Confidence value).
 
-    Element 7 is ALWAYS a норма (должное) — the most general member of the norm-series
-    (цель→план→программа→метод→подход→принцип) — and a norm is never checked for truth.
-    So there is NO a-priori `statement_kind` tag on the principle (ADR-0004 dropped it
-    as a category error): the сущее-vs-должное character of a fault is a POST-HOC product
-    of критика at difficulty closure, living in the two refutation MODES and R2's routing,
-    not on the norm itself."""
+    Element 7 is used AS a норма (должное) — the stage rests on it, and what a stage rests
+    on is not checked for truth in the course of resting on it. That is a statement about
+    the FUNCTIONAL PLACE the principle occupies here, not about what the principle IS: the
+    same statement can be знание elsewhere (it has a source, a derivation, and a refutation
+    condition — the three marks of a claim about how things are), and `refutation` only
+    means anything because it can be. What ADR-0004 dropped is the a-priori `statement_kind`
+    TAG, a per-statement typing that tried to settle знание-vs-норма once and for all on the
+    statement itself; the сущее-vs-должное character of a fault stays a POST-HOC product of
+    критика at difficulty closure, living in the two refutation MODES and R2's routing.
+    Nothing here denies the principle a знание reading — the stage's own знание place is
+    `Stage.knowledge`, and a principle may well be where that knowledge came from."""
     statement: str
     source: str
     # `derivation` sits adjacent to `source` because the pair is one checkable unit:
@@ -703,6 +984,118 @@ class FinalCheck:
 
 
 @dataclass
+class Requirement:
+    """One requirement of the order, as an id/text PAIR rather than a sentence.
+
+    The `id` is load-bearing, not decoration: the coverage map keys on it, the
+    submission-time totality check ranges over it, and the acceptance record binds a
+    verdict to it. Leaving it as the first token of a prose sentence would commit the
+    very defect the typed order removes one level down — the order would be typed while
+    its only machine-readable key stayed prose someone has to parse back out."""
+    id: str
+    text: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Requirement":
+        return cls(id=str(d.get("id", "")), text=str(d.get("text", "")))
+
+
+@dataclass
+class Order:
+    """The order a plan serves, typed: the customer it came from, the functional place
+    it fills, the requirements on the product, and the map from each requirement to the
+    control that decides it.
+
+    `customer` is a PAIR. `customer_id` is the machine-comparable identifier an
+    acceptance author is checked against; `customer` is the prose naming the position
+    that identifier stands for. Comparing an author against a paragraph is either
+    vacuous or absurd, so the two are separate fields rather than one.
+
+    Every field defaults to its empty form and nothing here validates: this object is
+    built on the LENIENT loader path, where it must be incapable of refusing a plan (see
+    plan.parse_plan). Requiredness is a submission-seam grade — submission.py's
+    `_order_violations` — for the same reason every other new requirement binds there.
+
+    NOT persisted in SessionState. The engine holds no cached copy of the order, so
+    there is no meta-level analogue of `_apply_refined_stage_fields` to keep in step; a
+    consumer that needs the order reads it from the plan.
+
+    That is a claim about RE-MATERIALIZATION alone, and it has already been read too
+    widely once. The order is still plan CONTENT, so every function deciding what counts as
+    a CHANGE to the plan does have to know about it: `plan.order_scope` (substantive tier),
+    `plan.order_place` (refinement tier), and `plugins_premise._plan_content_digest`, which
+    decides whether a discharged question enumeration survives a replan — the last was
+    missed on exactly this reasoning."""
+    customer_id: str = ""
+    customer: str = ""
+    functional_place: str = ""
+    requirements: list[Requirement] = field(default_factory=list)
+    # requirement id -> the controls that decide it. Values are lists of prose
+    # references (a stage's verify_command, a final_check) — a machine reads the KEYS
+    # for totality; whether an entry's named control really decides the requirement is
+    # review, not something this type can settle.
+    coverage: dict[str, list[str]] = field(default_factory=dict)
+    # Names of the [meta.order] keys the raw table CARRIED but `from_dict` could not read
+    # in the shape this type declares. Recorded, not authored: totality degrades a
+    # malformed key to its empty form, which at the submission seam is indistinguishable
+    # from an absent one — so without this record the seam reports "missing
+    # 'requirements'" for a key plainly present, sending the author to write again what
+    # is already there instead of to fix its shape. Only `from_dict` ever sets it.
+    malformed: tuple[str, ...] = ()
+    # (dropped, total) entry counts for the PARTIAL case of a malformed `requirements`
+    # list — some entries were tables and survived, some were not and were dropped.
+    # None for every other case (no malformation, or the TOTAL case: not a list at all,
+    # or a list none of whose entries survived) — those are exhausted by `malformed`
+    # alone and have no count worth naming. Not an authored part any more than
+    # `malformed` is: it is the same malformation's own drop count, not a place of its
+    # own. Only `from_dict` ever sets it.
+    requirements_dropped: tuple[int, int] | None = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Order":
+        """Rebuild an Order from a raw TOML/JSON table, TOTALLY: every malformation
+        degrades to the empty form rather than raising. That totality is the property
+        the loader path depends on — a plan whose [meta.order] is nonsense must still
+        load, and be refused at the seam where refusals belong. What was degraded is
+        recorded in `malformed` so that seam can say WHICH defect it found."""
+        malformed: list[str] = []
+        requirements_dropped: tuple[int, int] | None = None
+
+        raw_reqs = d.get("requirements")
+        if isinstance(raw_reqs, list):
+            reqs = [Requirement.from_dict(r) for r in raw_reqs if isinstance(r, dict)]
+            if len(reqs) != len(raw_reqs):  # a bare sentence among the tables
+                malformed.append("requirements")
+                if reqs:  # some entries survived — the PARTIAL case, not the total one
+                    requirements_dropped = (len(raw_reqs) - len(reqs), len(raw_reqs))
+        else:
+            reqs = []
+            if raw_reqs is not None:  # a string, or [meta.order.requirements] as a table
+                malformed.append("requirements")
+
+        raw_cov = d.get("coverage")
+        if isinstance(raw_cov, dict):
+            cov = {
+                str(k): [str(x) for x in (v if isinstance(v, list) else [v])]
+                for k, v in raw_cov.items()
+            }
+        else:
+            cov = {}
+            if raw_cov is not None:
+                malformed.append("coverage")
+
+        return cls(
+            customer_id=str(d.get("customer_id", "")),
+            customer=str(d.get("customer", "")),
+            functional_place=str(d.get("functional_place", "")),
+            requirements=reqs,
+            coverage=cov,
+            malformed=tuple(malformed),
+            requirements_dropped=requirements_dropped,
+        )
+
+
+@dataclass
 class PlanFrame:
     """A snapshot of the parent execution context pushed onto plan_stack when a
     service sub-plan starts. Restored in full on pop so the parent resumes exactly
@@ -732,6 +1125,35 @@ class PlanFrame:
     effort_actuals: dict
     effort_fires: list[dict]
     effort_spend_seen: dict
+    # Review-round custody (schema 30). The counter and its counted-version marker belong
+    # to the plan under review, so a service sub-plan neither spends the parent's budget
+    # nor inherits it: cmd_push_subplan snapshots them here and zeroes the live pair,
+    # cmd_pop_subplan restores them. This is why the counter's monotonicity invariant is
+    # scoped to one plan-stack level — a pop restoring the parent's smaller count is
+    # custody, not a decrease. Defaults carry legacy frames (absent keys), which restore
+    # the same zeroed pair a fresh push would produce.
+    plan_review_rounds: int = 0
+    plan_review_counted_digest: str = ""
+    # Code-review round custody (item A / GitHub issue #96) — mirrors plan_review_rounds
+    # above: the service sub-plan's own code-review rounds are a separate budget from the
+    # parent's, so cmd_push_subplan snapshots and zeroes, cmd_pop_subplan restores.
+    code_review_rounds: int = 0
+    # Venue-substitution guard (schema 34): the exact (repo_root, delivery_worktree)
+    # pair _sync_venue_from_plan read off the PARENT plan file at push time, so pop can
+    # tell "the parent file's venue fields moved out from under the pushed child" apart
+    # from "nothing changed" or "the file could not be read at push" — closing the one
+    # other post-approval route from an edited plan FILE to live state (a parent edited
+    # while its child is pushed, then popped, silently re-deriving a venue nobody
+    # approved). `parent_venue_captured` is load-bearing on its own: an empty captured
+    # value is the common shape (most plans declare repo_root and no delivery_worktree),
+    # so "captured empty" and "not captured" must stay distinguishable, or a
+    # delivery_worktree later ADDED to a parent that declared none is invisible to the
+    # comparison. All three default so a legacy frame (pre-34) loads with captured=False,
+    # i.e. no comparison possible — cmd_pop_subplan re-derives from the plan file exactly
+    # as it always has.
+    parent_repo_root: str = ""
+    parent_delivery_worktree: str = ""
+    parent_venue_captured: bool = False
 
 
 @dataclass
@@ -772,6 +1194,28 @@ class Stage:
     criterion: Criterion
     principle: Principle | None = None
     conditions: str | None = None
+    # What must already be true before this stage may START — as opposed to `conditions`,
+    # which is what must hold OF THE WORLD for the stage's own transformation to go
+    # through. Two different questions about two different moments: the first is inherited
+    # from outside the stage (an earlier stage finished, an access granted, a tree clean),
+    # the second is a property of the situation the transformation runs in. With only one
+    # field for both, `conditions` silently degenerates into "the stage before me is done"
+    # — which `depends_on` already records structurally — and the plan then declares no
+    # transformation conditions at all while appearing to. Optional at load so every
+    # already-authored plan loads unchanged; required of a SUBSTANTIVE stage at the
+    # submission seam (submission.py), which is also where the degenerate `conditions` is
+    # refused — the two arrive together on purpose, so an author told to move a sentence
+    # out of `conditions` always has this place to move it into.
+    preconditions: str | None = None
+    # The знание the stage acts FROM: what must already be known for the declared method
+    # over the declared means to reach the result image. A functional place of its own,
+    # upstream of both the norm (element 7, what the stage rests on) and the selection of
+    # means — not a restatement of either. Optional at load so every already-authored plan
+    # loads unchanged; required of a SUBSTANTIVE stage at the submission seam
+    # (submission.py), where an incoming `knowledge` supply edge is an accepted alternative
+    # to declaring it locally — a stage supplied its knowledge by an earlier stage has the
+    # place filled, just not by itself.
+    knowledge: str | None = None
     supplies: list[Supply] = field(default_factory=list)
     # Paths this stage produces (green-reachability targets for verify-command lint).
     # Optional and tolerant: a plan omitting it loads unchanged.
@@ -823,6 +1267,8 @@ class Stage:
                 criterion=Criterion.from_dict(d["criterion"]),
                 principle=Principle.from_dict(d["principle"]) if d.get("principle") else None,
                 conditions=d.get("conditions"),
+                preconditions=d.get("preconditions"),
+                knowledge=d.get("knowledge"),
                 supplies=[Supply(**s) for s in d.get("supplies", [])],
                 output_artifacts=list(d.get("output_artifacts", [])),
                 outcome=Outcome(**d["outcome"]) if d.get("outcome") else Outcome(),
@@ -836,6 +1282,8 @@ class Stage:
                 material=d.get("material", ""),
                 result=d.get("expected_result_image", ""),
                 invariants=d.get("invariants"),
+                material_refs=list(d.get("material_refs", [])),
+                knowledge_refs=list(d.get("knowledge_refs", [])),
             ),
             means=Means(means=d.get("means", ""), method=d.get("method", "")),
             actor=Actor(
@@ -851,6 +1299,8 @@ class Stage:
             ),
             principle=None,  # flat states predate the principle element
             conditions=d.get("conditions"),
+            preconditions=d.get("preconditions"),
+            knowledge=d.get("knowledge"),
             supplies=[Supply(on=int(x)) for x in d.get("depends_on", [])],
             output_artifacts=list(d.get("output_artifacts", [])),
             outcome=Outcome(
@@ -896,6 +1346,41 @@ class SessionState:
     # dataclass default via from_dict), so the gate has no observable and — for a
     # substantive session — blocks approval/replan until a review is recorded.
     plan_review: "PlanReview | None" = None
+    # Stage-scoped thinker reviews (schema 27), keyed by PlanReview.scope — the
+    # per-part sibling of plan_review above, which stays the whole-plan (scope "")
+    # slot. Empty on legacy states (absent key -> dataclass default via from_dict),
+    # which is what makes the coverage gate in gates.py fall back to plan_review
+    # alone, unchanged.
+    plan_stage_reviews: dict[str, "PlanReview"] = field(default_factory=dict)
+    # Recorded risk acceptances discharging `revise` concerns (schema 28) — see
+    # RiskAcceptance's docstring for the binding. Empty on legacy pre-schema-28
+    # states (absent key -> dataclass default via from_dict), which is what makes
+    # gates._plan_review_verdict_blockers fall back to today's unconditional block
+    # on a `revise` verdict, unchanged.
+    risk_acceptances: list["RiskAcceptance"] = field(default_factory=list)
+    # Review-round counter (schema 30), advanced on BOTH review paths:
+    #   * pre-approval — cmd_submit_plan increments it on every resubmission at
+    #     PLAN_READY (the revise_plan self-loop) made while a review record stands;
+    #     cmd_approve resets it to 0 on a successful approval.
+    #   * post-approval — cmd_plan_review increments it per plan VERSION reviewed once
+    #     the approval gate has passed (the `replan` loop, which is where review cycles
+    #     actually recur); cmd_replan resets it and plan_review_counted_digest together.
+    # The two paths are disjoint in time, not merely by convention: cmd_submit_plan sets
+    # approval.passed = False BEFORE its own increment, so no single call can satisfy
+    # both conditions. Read by gates.plan_review_round_release_active against the
+    # Rule-of-Three threshold config.md's effort-replan-absolute reuses. 0
+    # on legacy states (absent key -> dataclass default via from_dict's cls(**data)).
+    plan_review_rounds: int = 0
+    # sha256 of the plan bytes whose review last advanced plan_review_rounds on the
+    # post-approval path (schema 30). The counted UNIT is a plan VERSION, not a recorded
+    # verdict: gates._plan_review_blockers_coverage surfaces ONE uncovered stage at a
+    # time, so an honest first coverage pass over a plan with three moved stages records
+    # three verdicts against identical bytes. Counting verdicts would fire the release
+    # part-way through that pass — and because the release SUBSTITUTES the whole blocker
+    # list rather than adding to it, "stage 3 has not been reviewed" would be replaced by
+    # "no further review is required", retiring a requirement nobody satisfied. Empty on
+    # legacy states (absent key -> dataclass default via from_dict's cls(**data)).
+    plan_review_counted_digest: str = ""
     # The acceptance-review judge records backing the acceptance-review gate (schema
     # 14): one StageReview per acceptance_review stage that has been judged, and one
     # JudgeBypass per gate bypass (kill switch / override). Both default to [] — legacy
@@ -911,6 +1396,29 @@ class SessionState:
     # spawn:developer stage's PASSED record until a review is recorded
     # (fail-closed).
     code_reviews: list[CodeReview] = field(default_factory=list)
+    # Code-review round counter (item A / GitHub issue #96) — the code-review axis's
+    # analog of plan_review_rounds above: this axis previously had no round-release
+    # valve at all. Incremented by cmd_code_review each time a verdict is recorded for
+    # a stage that already had one (a re-review, not the first pass); reset alongside
+    # plan_review_rounds by cmd_approve and cmd_replan. Read by
+    # gates.code_review_round_release_active and by gates.cross_axis_friction_release_active
+    # (which sums this axis with plan_review_rounds and the plan-enumerate axis's own
+    # counter against ONE shared ceiling). 0 on legacy states (absent key -> dataclass
+    # default via from_dict's cls(**data)).
+    code_review_rounds: int = 0
+    # Plan-level acceptance record backing the resolution gate's acceptance check
+    # (schema 26): the ORDER's customer accepting the delivered PRODUCT against the
+    # order's declared requirements, once, at resolution — distinct from every
+    # per-stage control comparison above, which compares an in-progress RESULT
+    # against that stage's own criterion throughout execution, not the product
+    # against the order. None until cmd_accept records one; legacy pre-schema-26
+    # states load with None (absent key -> dataclass default via from_dict), so a
+    # substantive session's resolution gate has no observable and blocks
+    # (fail-closed) until an AcceptanceReview is recorded. acceptance_bypass is the
+    # paired, permanent visibility record for a judge-unreachable bypass (see
+    # AcceptanceBypass's docstring for why resolution_blockers never reads it).
+    acceptance_review: "AcceptanceReview | None" = None
+    acceptance_bypass: "AcceptanceBypass | None" = None
     # Plan-presentation receipts backing the plan-presentation gate (schema 20):
     # one PlanPresentation per (plan_path, kind) currently in force — a fresh
     # cmd_present_plan call SUPERSEDES (never appends) the prior receipt for the
@@ -961,6 +1469,23 @@ class SessionState:
     # plan_path (the prior behaviour) and old state.json loads byte-compatibly.
     plan_snapshot_path: str | None = None
     plan_snapshot_hash: str | None = None
+    # The sha256 of the plan bytes this session has ACCEPTED — stamped at each of the
+    # three submission seams (submit-plan, replan's new side, approve's refresh) and
+    # nowhere else, so it always names bytes that passed submission validation.
+    #
+    # Distinct from plan_snapshot_hash, which is not a synonym: that one hashes the bytes
+    # frozen AT APPROVE as the replan diff baseline, and stays pinned to that approval
+    # while the coordinator edits plan_path. This one moves with every accepted entry,
+    # including the two (submit-plan, replan) that never write a snapshot at all — so a
+    # later reader asking "which bytes is this session actually running" reads this, and
+    # one asking "which bytes was the replan measured against" reads that. None until the
+    # first submission; legacy states load with None (absent key -> dataclass default via
+    # from_dict's cls(**data)).
+    #
+    # Named `accepted_` and not `plan_digest` because `--plan-digest` / `args.plan_digest`
+    # is an unrelated pre-existing thing: the digest a REVIEWER attests to at plan-review.
+    # Two fields spelled the same, one session-owned and one caller-supplied, read as one.
+    accepted_plan_digest: str | None = None
     # The tracker key classify detected (#11): persisted so the tracker plugin's
     # auto_activate predicate can read it without re-deriving it from task_id.
     # None on legacy states and on sessions with no tracker-key-shaped task id
@@ -990,6 +1515,22 @@ class SessionState:
     effort_fires: list[dict] = field(default_factory=list)
     effort_spend_seen: dict = field(default_factory=dict)
     user_prompt_count: int = 0
+    # DIAGNOSING-renegotiation audit trail (GitHub #177) — one record per customer
+    # decision at the diagnosing_replan round-release gate, keyed by string (decision,
+    # note, by, ts, task_replan_count_at_decision). Same plain list[dict] shape as
+    # effort_fires above; absent key on legacy states defaults to [] via from_dict's
+    # cls(**data).
+    renegotiations: list[dict] = field(default_factory=list)
+    # coordination host (schema 31): claude|cursor, None until bound.
+    runtime_host: str | None = None
+    # Stage-6 re-attest carry-forward records (schema 32): rebuilt FROM SCRATCH by
+    # every substantive replan (never accumulated across replans — the only cost
+    # of a gap is an unnecessary full re-dispatch, never an incorrect PASS), one
+    # ReattestStash per stage the replan found PASSED immediately prior. Empty on
+    # legacy pre-schema-32 states (absent key -> dataclass default via from_dict),
+    # so `dispatch --re-attest` has no observable and falls back to a normal
+    # dispatch (fail-closed toward the more expensive, never the cheaper, path).
+    reattest_stash: list[ReattestStash] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -1151,6 +1692,21 @@ class SessionState:
         data["approval"] = GateRecord(**data["approval"])
         data["resolution"] = GateRecord(**data["resolution"])
         data.pop("self_improvement", None)  # legacy field (schema <=4); self-improvement now runs on the standard spine
+        # `plan_digest` was renamed to `accepted_plan_digest` (same meaning). from_dict ends
+        # in cls(**data) and filters nothing, so without this a state.json written before the
+        # rename dies on load with an unexpected-keyword TypeError and no recovery edge. The
+        # value CARRIES OVER rather than being dropped: it is not recomputable from anything
+        # else on the state (the accepted bytes may already have been edited in place), and
+        # dropping it would silently answer "which bytes is this session running" with None.
+        # No SCHEMA_VERSION bump goes with it — the migration is keyed on the key's presence,
+        # and states written by the renaming commit already claim the current version, so a
+        # bump could not discriminate them anyway. `setdefault` and not a truthiness test:
+        # no writer produces a payload carrying both keys (the rename was atomic), and for
+        # the shape that cannot occur the deliberate reading is that a present new key wins
+        # even when null — the legacy value is the older claim of the two.
+        legacy_digest = data.pop("plan_digest", None)
+        if legacy_digest is not None:
+            data.setdefault("accepted_plan_digest", legacy_digest)
         data.setdefault("plugins", {})            # migration: schema <=5 has no plugin layer
         data.setdefault("plugins_archive", {})
         data["final_check"] = [FinalCheck.from_dict(fc) for fc in data.get("final_check", [])]
@@ -1161,6 +1717,13 @@ class SessionState:
         data["permission_request"] = PermissionRequest(**pr) if pr else None
         data["difficulty"] = Difficulty.from_dict(data.get("difficulty"))
         data["plan_review"] = PlanReview.from_dict(data.get("plan_review"))
+        data["plan_stage_reviews"] = {
+            scope: r for scope, v in (data.get("plan_stage_reviews") or {}).items()
+            if (r := PlanReview.from_dict(v)) is not None
+        }
+        data["risk_acceptances"] = [
+            r for r in (RiskAcceptance.from_dict(x) for x in data.get("risk_acceptances", [])) if r is not None
+        ]
         data["stage_reviews"] = [
             r for r in (StageReview.from_dict(x) for x in data.get("stage_reviews", [])) if r is not None
         ]
@@ -1168,6 +1731,11 @@ class SessionState:
         data["code_reviews"] = [
             r for r in (CodeReview.from_dict(x) for x in data.get("code_reviews", [])) if r is not None
         ]
+        data["reattest_stash"] = [
+            r for r in (ReattestStash.from_dict(x) for x in data.get("reattest_stash", [])) if r is not None
+        ]
+        data["acceptance_review"] = AcceptanceReview.from_dict(data.get("acceptance_review"))
+        data["acceptance_bypass"] = AcceptanceBypass.from_dict(data.get("acceptance_bypass"))
         data["plan_presentations"] = [
             PlanPresentation.from_dict(x) for x in data.get("plan_presentations", [])
         ]
@@ -1197,6 +1765,12 @@ class SessionState:
                 effort_actuals=f.get("effort_actuals") or {},
                 effort_fires=f.get("effort_fires") or [],
                 effort_spend_seen=f.get("effort_spend_seen") or {},
+                plan_review_rounds=f.get("plan_review_rounds") or 0,
+                plan_review_counted_digest=f.get("plan_review_counted_digest") or "",
+                code_review_rounds=f.get("code_review_rounds") or 0,
+                parent_repo_root=f.get("parent_repo_root") or "",
+                parent_delivery_worktree=f.get("parent_delivery_worktree") or "",
+                parent_venue_captured=bool(f.get("parent_venue_captured", False)),
             )
             for f in data.get("plan_stack", [])
         ]

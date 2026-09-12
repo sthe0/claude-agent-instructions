@@ -75,7 +75,9 @@ MUTATIONS = [
     ),
     pytest.param(
         lambda t: t.replace(
-            "`topup2-sample.json:binary_ask` | 16 |", "`ab-sample.json:outage_std` | 6 |"
+            "`topup2-sample.json:binary_ask + drift-sample.json:binary_ask + "
+            "drift-sample.json:not_binary_ask` | 48 |",
+            "`ab-sample.json:outage_std` | 6 |",
         ),
         "below the required minimum",
         id="n-below-15",
@@ -96,7 +98,7 @@ MUTATIONS = [
         id="verdict-mismatch",
     ),
     pytest.param(
-        lambda t: t.replace("| 30 | 0 | 0.0000 | 0.1875 |", "| 30 | 2 | 0.0000 | 0.1875 |"),
+        lambda t: t.replace("| 60 | 0 | 0.0000 | 0.0625 |", "| 60 | 2 | 0.0000 | 0.0625 |"),
         "recount that way",
         id="exceedance-miscounted",
     ),

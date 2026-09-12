@@ -57,6 +57,27 @@ snapshot of the same vector, so `actual >= baseline` holds with no clamp. The
 writer-by-writer argument, and what a future writer breaking it should look like, is on
 `deltas()`.
 
+CROSS-SESSION (item B). `divergence()` accepts an optional `cross_session_totals`
+dict — the current `per_axis_totals` from `task_accumulator.get(state.task_id)`,
+read by the CALLER (cli.py) and passed in as plain data, keeping this module pure
+exactly as `refresh_spend(state, rows, path)` already does for the cost ledger.
+Only the REPLANS scale consults it: a restarted session on the same `task_id`
+starts `deltas()`'s SCALE_REPLANS at 0 (a fresh session has empty `history`), so a
+task that hit 2 replans, closed, and reopened would get a brand-new 3-replan
+budget every time — the exact symptom `round_release.py` closed WITHIN a session,
+still open ACROSS one. The accumulator's `replan_count` total already includes
+this session's own replans (cli.py adds 1 to it at every `state.log("replan", ...)`
+site, the same three sites `replan_count()` itself counts from), so
+`effective_deltas()` — the one vector `divergence()` decides on AND the read-only
+`effort-check` report reads, so the two can never disagree — takes
+`max(delta[SCALE_REPLANS], cross_session_totals["replan_count"])` rather
+than adding the two — using the larger of "what this session alone has logged"
+and "what this task has accumulated across every session that touched it" as the
+scale's actual, so a fire happens when EITHER exceeds the threshold, never both
+counted twice. The other three accumulator axes (`plan_review_rounds`,
+`plan_enumerate_rounds`, `code_review_rounds`) are recorded by cli.py for the same
+cross-session visibility but are not, in this stage, consulted by any live gate.
+
 SUB-PLAN CUSTODY. `cmd_push_subplan` resets `state.stages` and re-runs the full
 classify -> ... -> approve spine for a service sub-plan, so a naive second `arm()` would
 compare the PARENT's whole accumulated actual against the CHILD's tiny estimate — a
@@ -326,25 +347,75 @@ def _thresholds_for_absolute(thr: Thresholds) -> dict:
     }
 
 
-def ratios(state: SessionState, thr: Thresholds | None = None) -> dict:
-    """Per-scale `delta / comparand`, or None where the scale is inapplicable.
+def comparands(state: SessionState, thr: Thresholds | None = None) -> dict:
+    """What each scale's delta is measured against: the STORED estimate for a ratio
+    scale, the configured absolute count for an absolute one. A zero means the scale
+    is inapplicable (no stored estimate, or an accounting-only threshold).
 
-    The comparand is the STORED estimate for a ratio scale and the configured absolute
-    count for an absolute one. None means "this scale cannot fire and cannot be ranked":
-    an unarmed session, a zero estimate, or a zero (accounting-only) threshold. Read by
-    the quality-ledger row as well as by `divergence()`."""
+    Split out of `ratios` so a REPORT can name the same comparand the comparison used,
+    without either recomputing the ladder or reaching into `_thresholds_for_absolute`."""
     thr = thr if thr is not None else Thresholds()
     est = state.effort_estimate or {}
     absolute = _thresholds_for_absolute(thr)
-    delta = deltas(state)
+    return {
+        scale: (float(est.get(scale) or 0.0) if scale in RATIO_SCALES else absolute[scale])
+        for scale in SCALE_ORDER
+    }
 
-    out: dict[str, float | None] = {}
-    for scale in SCALE_ORDER:
-        comparand = (
-            float(est.get(scale) or 0.0) if scale in RATIO_SCALES else absolute[scale]
-        )
-        out[scale] = (delta[scale] / comparand) if comparand > 0 else None
-    return out
+
+def describe(scale: str) -> tuple[str, str]:
+    """This scale's human label and unit — for a caller that formats its own numbers
+    (the read-only `effort-check` report, the watch hook's one line) instead of taking
+    the fully-formed `Divergence.framing`."""
+    return _LABEL[scale], _UNIT[scale]
+
+
+def effective_deltas(state: SessionState, *, cross_session_totals: dict | None = None) -> dict:
+    """The delta vector every comparison in this module runs against: `deltas()`, with
+    the REPLANS scale raised to the task's cross-session replan total when that is larger
+    (see the module docstring's CROSS-SESSION section for why larger-of, not sum).
+
+    Named and shared because it has TWO consumers, and they must not disagree:
+    `divergence()`, which decides whether a fire site acts, and the read-only
+    `effort-check` report, which is what the coordinator and its UserPromptSubmit watch
+    hook actually read. A report computed from session-local `deltas()` while the
+    decision ran on this vector went silent exactly where the loop it watches lives: a
+    resolved re-entry builds a fresh SessionState whose own `replan_count` is 0 while the
+    accumulator still holds the prior laps, so the report said "no scale over threshold"
+    on the very session `divergence()` would have fired on. One function, both callers.
+
+    `cross_session_totals=None` reproduces `deltas()` exactly."""
+    delta = deltas(state)
+    cross_replans = float((cross_session_totals or {}).get("replan_count") or 0.0)
+    if cross_replans > delta[SCALE_REPLANS]:
+        delta[SCALE_REPLANS] = cross_replans
+    return delta
+
+
+def effective_ratios(
+    state: SessionState, thr: Thresholds | None = None, *,
+    cross_session_totals: dict | None = None,
+) -> dict:
+    """Per-scale `effective_delta / comparand`, or None where the scale is inapplicable.
+
+    The comparand is the STORED estimate for a ratio scale and the configured absolute
+    count for an absolute one. None means "this scale cannot fire and cannot be ranked":
+    an unarmed session, a zero estimate, or a zero (accounting-only) threshold."""
+    comparand = comparands(state, thr)
+    delta = effective_deltas(state, cross_session_totals=cross_session_totals)
+    return {
+        scale: (delta[scale] / comparand[scale]) if comparand[scale] > 0 else None
+        for scale in SCALE_ORDER
+    }
+
+
+def ratios(state: SessionState, thr: Thresholds | None = None) -> dict:
+    """The session-local ratio vector — `effective_ratios` with no cross-session totals.
+
+    Kept as its own name because the quality-ledger row wants exactly this: what THIS
+    session consumed, not what the task accumulated across every session that touched
+    it. A caller deciding or reporting on a divergence wants `effective_ratios`."""
+    return effective_ratios(state, thr)
 
 
 def _replans_since_last_fire(state: SessionState) -> int:
@@ -374,7 +445,9 @@ def _framing(scale: str, kind: str, act: float, comparand: float, multiple: floa
     )
 
 
-def divergence(state: SessionState, thr: Thresholds | None = None) -> Divergence | None:
+def divergence(
+    state: SessionState, thr: Thresholds | None = None, *, cross_session_totals: dict | None = None
+) -> Divergence | None:
     """The scale on which this session has diverged past the multiple, or None.
 
     Returns None — no fire — when any of these hold, and each is deliberate:
@@ -383,6 +456,15 @@ def divergence(state: SessionState, thr: Thresholds | None = None) -> Divergence
       * a firing has already happened and no `replan` has been logged since (belt 2);
       * every scale is inapplicable (zero estimate / accounting-only threshold) or below
         the multiple.
+
+    `cross_session_totals` (item B, module docstring's CROSS-SESSION section) is the
+    optional caller-supplied `per_axis_totals` dict from `task_accumulator.get`. Only
+    its `"replan_count"` entry is consulted, and only for the REPLANS scale, whose
+    actual becomes `max(delta[SCALE_REPLANS], cross_session_totals["replan_count"])` —
+    the larger of this session's own count and the task's accumulated cross-session
+    count, so a restarted session on the same stuck task inherits the prior session's
+    count instead of starting a fresh budget. `None` (the default) reproduces the
+    session-local-only behavior exactly, unchanged from before item B.
 
     When several scales fire, the one furthest past its OWN trigger is returned (ties
     break on SCALE_ORDER) — NOT the one with the largest raw `multiple`. A ratio scale's
@@ -412,32 +494,40 @@ def divergence(state: SessionState, thr: Thresholds | None = None) -> Divergence
 
     thr = thr if thr is not None else Thresholds()
     multiple = thr.effort_divergence_multiple()
-    est = state.effort_estimate or {}
-    absolute = _thresholds_for_absolute(thr)
-    delta = deltas(state)
-    rat = ratios(state, thr)
+    comparands_by_scale = comparands(state, thr)
+    delta = effective_deltas(state, cross_session_totals=cross_session_totals)
+    rat = effective_ratios(state, thr, cross_session_totals=cross_session_totals)
+    # True when the accumulator, not this session's own history, supplied the replan
+    # count — the only thing this module still needs the session-local vector for.
+    replans_cross_session = delta[SCALE_REPLANS] > deltas(state)[SCALE_REPLANS]
 
     candidates: list[Divergence] = []
     for scale in SCALE_ORDER:
         observed = rat[scale]
         if observed is None:
             continue
+        comparand = comparands_by_scale[scale]
         if scale in RATIO_SCALES:
-            kind = "ratio"
-            comparand, fires = float(est.get(scale) or 0.0), observed >= multiple
+            kind, fires = "ratio", observed >= multiple
         else:
-            kind, comparand = "absolute", absolute[scale]
-            fires = delta[scale] >= comparand
+            kind, fires = "absolute", delta[scale] >= comparand
         if not fires:
             continue
+        act = delta[scale]
+        framing = _framing(scale, kind, act, comparand, observed)
+        if scale == SCALE_REPLANS and replans_cross_session:
+            framing = (
+                f"{framing} (includes {act:g} replans accumulated across prior "
+                f"sessions on this task, via the cross-session task accumulator)"
+            )
         candidates.append(
             Divergence(
                 scale=scale,
                 kind=kind,
-                actual=delta[scale],
+                actual=act,
                 estimate=comparand,
                 multiple=observed,
-                framing=_framing(scale, kind, delta[scale], comparand, observed),
+                framing=framing,
             )
         )
 
@@ -530,7 +620,12 @@ def record_fire(state: SessionState, div: Divergence, *, now: float) -> dict:
     appended record). MANDATORY after any caller acts on a `Divergence` — see
     `divergence()`'s CALLER OBLIGATION. `now` is REQUIRED and supplied by the caller —
     this module reads no clock, and a default would let a future call site silently
-    ship an unstamped `ts` straight onto the durable quality-ledger row."""
+    ship an unstamped `ts` straight onto the durable quality-ledger row.
+
+    The appended record starts with no "ack" key — gates.effort_fire_blockers reads
+    exactly that absence to refuse dispatch/replan/submit_plan until
+    `agentctl fire-acknowledge` appends one (never replaces the record; the audit
+    trail stays append-only)."""
     state.effort_baseline = actual(state)
     record = {
         "scale": div.scale,

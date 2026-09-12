@@ -512,6 +512,83 @@ def _guard_decision_with(transform, canon, command, cwd) -> bool:
         shell_tokens.neutralize_heredoc_constructs = saved
 
 
+def _case(name: str) -> str:
+    return dict(CASES)[name]
+
+
+def test_heredoc_bodies_extracts_quoted_delimiter_body_and_stripper_is_unchanged():
+    """`heredoc_bodies()` reads the same `_removal_regions` walk the stripper
+    applies, so adding it must not perturb the stripper's own return value --
+    checked here directly rather than only inferred from the oracle test above."""
+    raw = _case("heredoc delim quoted")
+    stripped = shell_tokens.strip_heredoc_bodies(raw)
+    assert stripped != raw
+    assert shell_tokens.heredoc_bodies(raw) == [R]
+    assert shell_tokens.strip_heredoc_bodies(raw) == stripped
+
+
+def test_heredoc_bodies_extracts_unquoted_delimiter_body_and_stripper_is_unchanged():
+    raw = _case("genuine heredoc tab form")
+    stripped = shell_tokens.strip_heredoc_bodies(raw)
+    assert stripped != raw
+    assert shell_tokens.heredoc_bodies(raw) == [R]
+    assert shell_tokens.strip_heredoc_bodies(raw) == stripped
+
+
+def test_heredoc_bodies_agrees_with_stripper_on_multi_heredoc_no_op():
+    """Two operators on one line leave a residue that holds more than one
+    statement (clause (v)), so `strip_heredoc_bodies` returns `raw` UNCHANGED --
+    a documented no-op, not a partial strip. `heredoc_bodies()` must reach the
+    same verdict (nothing extracted) rather than silently returning the first
+    body a stripper call would never actually surface."""
+    raw = _case("two heredocs one line")
+    assert shell_tokens.strip_heredoc_bodies(raw) == raw
+    assert shell_tokens.heredoc_bodies(raw) == []
+
+
+# Pins the exact BYTES per region kind, so a trim that leaves an operand quote
+# on, keeps the terminator line, or slips the bracketing newline fails as a
+# value mismatch rather than merely as a different body COUNT.
+_BODY_EXTRACTION = [
+    ("here-string, spaced bare operand", "cat <<< hello > /tmp/t.md", ["hello"]),
+    ("here-string, spaced quoted operand", 'cat <<< "> notes.txt"', ["> notes.txt"]),
+    ("here-string, glued single-quoted operand", "cat <<<'> notes.txt'", ["> notes.txt"]),
+    ("here-strings, extraction order", "cat <<<hs1 <<<hs2 <<<hs3 <<<hs4",
+     ["hs1", "hs2", "hs3", "hs4"]),
+    ("here-string before heredoc", "tee <<<aaa <<'EOF' /tmp/t.md\nbody\nEOF",
+     ["aaa", "body"]),
+    ("heredoc, empty body", "cat <<'EOF'\nEOF", [""]),
+    ("heredoc, multi-line body", "cat <<'EOF'\nl1\nl2\nEOF", ["l1\nl2"]),
+]
+
+
+def test_heredoc_bodies_extracts_exact_bytes_for_every_region_kind():
+    """`heredoc_bodies` recovers body text by trimming construct syntax back off
+    a `_removal_regions` span (`_region_body_text`), so every region KIND needs
+    its own byte-level pin. The two tests above exercise only the here-DOCUMENT
+    branch, leaving the `<<<` quote-trimming, the multi-construct extraction
+    ORDER, and the empty-body edge otherwise unpinned."""
+    for label, command, expected in _BODY_EXTRACTION:
+        assert shell_tokens.heredoc_bodies(command) == expected, label
+
+
+def test_heredoc_bodies_is_empty_exactly_when_the_stripper_is_a_no_op():
+    """Corpus-wide generalization of the single-case no-op agreement above.
+    `heredoc_bodies` reimplements `strip_heredoc_bodies`'s whole recognized
+    shape -- clause (v) and the nothing-was-stripped short circuit included --
+    rather than merely reusing its recognizer, so the two must agree about
+    WHETHER anything was body text on all 186 cases, not only on the one
+    multi-heredoc case pinned by name.
+
+    Deliberately NOT a containment check on the extracted bytes: a short body
+    ('x') is a substring of unrelated surviving command text ('evil.txt'), so
+    that predicate reports drift that did not happen. The byte-level pins above
+    cover trim accuracy; this covers no-op agreement."""
+    for name, raw in CASES:
+        stripped_nothing = shell_tokens.strip_heredoc_bodies(raw) == raw
+        assert (shell_tokens.heredoc_bodies(raw) == []) == stripped_nothing, name
+
+
 @pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
 def test_body_removal_never_turns_a_real_write_from_deny_into_allow(canon):
     """The differential predicate, over every construction in the table.

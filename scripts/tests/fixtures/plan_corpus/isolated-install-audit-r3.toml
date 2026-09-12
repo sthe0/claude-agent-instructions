@@ -1,0 +1,160 @@
+# Plan: isolated-install-audit (r3) — make every installer script correct for the
+# isolated agent root (~/.claude-agent) so the system can be handed to
+# colleagues; fix the discovered old-root hardcodes in core and in the arc
+# project layer, and reconnect the state they orphaned.
+#
+# r3 vs r2 (2026-07-02): stage 2 re-issued after the first developer spawn
+# exhausted its budget thrashing on sandbox-denied pytest (difficulty cycle
+# recorded) — the stage carries an explicit no-pytest spawn constraint and the
+# concrete remaining-work list; new stage 3 folds in the user-approved
+# install-scout findings ("Добавить всё": S1 session-start-digest root, S2
+# test_config_root enumerator CI guard, S3 projects.d relocation, S4 ccgram
+# hook check); prose stage extended with scout doc findings (scripts/README.md,
+# repo CLAUDE.md project-memory path claim).
+
+[meta]
+task_id = "isolated-install-audit"
+goal = "A colleague's fresh install (and both existing machines) gets every symlink, settings file, and state directory under the isolated agent root; no installer silently writes to ~/.claude"
+done_criterion = "Fresh-install simulation (tmp HOME + CLAUDE_AGENT_HOME) creates zero entries under $HOME/.claude; doctor.sh green on this Mac; on the0.klg.yp-c.yandex.net project-memory symlinks resolve under ~/.claude-agent/projects and the arc-layer scripts carry no ~/.claude hardcode"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "Not warranted: all facts scouted directly (grep of installers, SSH inventory of the remote host, live symlink state on both machines)."
+
+# ── Audit findings the stages fix ───────────────────────────────────────────
+# F1 apply-settings.sh defaults TARGET to $HOME/.claude/settings.json (bit us:
+#    AFK setting first landed in the dead root).
+# F2 setup-project-memory.sh hardcodes $HOME/.claude/projects/$HASH — on any
+#    isolated-root machine the sharing symlink lands in the dead root; on the
+#    remote host project memory is disconnected right now.
+# F3 agentctl state roots hardcoded: store.py DEFAULT_ROOT, cli.py GATE_LOG,
+#    session_scope/registry.py DEFAULT_SCOPES_DIR (~/.claude/agentctl/...),
+#    exempt_paths.py plan-path substring "/.claude/plans/". Mixed-root state on
+#    this Mac; a colleague's install would re-create ~/.claude pollution.
+# F4 setup-ccgram.sh:208 detects the install via $HOME/.claude/settings.json.
+# F5 session-isolate.sh plugin dir defaults to $HOME/.claude/project-entry-plugins.
+# F6 arc layer (Arcadia junk/the0/agents, on the remote host):
+#    sync-cursor-cli-permissions.sh hardcodes ~/.claude/projects/<hash>/memory/**
+#    in the generated cli.json; setup-local.sh prose references the old root.
+# F7 prose drift: CLAUDE.md / docs / instructions-repo-layout leaf still name
+#    ~/.claude paths for things that now (or after F3) live in ~/.claude-agent.
+
+[[stage]]
+index = 1
+title = "Core installers resolve the isolated root (F1, F2, F4, F5)"
+executor = "spawn:developer"
+expected_result_image = "apply-settings.sh defaults TARGET to $CLAUDE_AGENT_HOME/settings.json via lib/config-root.sh (CLAUDE_SETTINGS override preserved); setup-project-memory.sh places the per-cwd memory symlink under $CLAUDE_AGENT_HOME/projects/<hash>/ and, when a legacy ~/.claude/projects/<hash>/memory symlink exists, re-points/moves it to the isolated root; setup-ccgram.sh detection checks $CLAUDE_AGENT_HOME/settings.json (falling back to the legacy path); session-isolate.sh plugin-dir default is $CLAUDE_AGENT_HOME/project-entry-plugins with legacy fallback when only the old dir exists. New/updated pytest coverage drives each script against a tmp HOME and asserts nothing is created under $HOME/.claude."
+criterion_type = "measurable"
+done_criterion = "Focused test files pass; grep finds no unguarded $HOME/.claude default in the four scripts"
+verify_command = "bash -c 'cd /Users/the0/claude-agent-instructions/scripts && python3 -m pytest tests/ -q -k \"settings or project_memory or ccgram or isolate or plugin_dir or installer_root_hardcodes\" && grep -q \"CLAUDE_SETTINGS:-.CLAUDE_AGENT_HOME/settings.json\" apply-settings.sh && grep -q \"PROJECTS_DIR=..CLAUDE_AGENT_HOME/projects\" setup-project-memory.sh'"
+expected_exit = 0
+material = "scripts/apply-settings.sh, scripts/setup-project-memory.sh, scripts/setup-ccgram.sh, scripts/session-isolate.sh, scripts/lib/config-root.sh, scripts/lib/config_root.py, scripts/tests/"
+means = "developer spawn dispatched via the agentctl spine (executor spawn:developer, the engine vocabulary — fixed in the 2026-07-02 replan); pytest; existing config-root resolvers as the single source of truth"
+method = "source lib/config-root.sh (or import config_root.py) in each script; replace hardcoded defaults, keep env overrides and add legacy-path fallback/migration where existing installs depend on the old location; extend tests with tmp-HOME fixtures asserting isolated placement and zero old-root writes; verification anchors on the positive default assignments (not a blanket negative grep, which would falsely match the intentional legacy-migration references)"
+conditions = "STAGE ALREADY DELIVERED AND PASSED (committed 2026-07-02); listed for r3 completeness"
+invariants = "CLAUDE_SETTINGS / CLAUDE_SETTINGS_LOCAL env overrides keep working; a legacy in-place install (no ~/.claude-agent) keeps working via the resolver's fallback order; no script deletes user data — legacy symlinks are re-pointed, real dirs left in place"
+capability_required = "python3 + pytest in repo"
+
+[stage.principle]
+statement = "An installer must resolve the config root through one shared resolver, never inline a home path: every literal ~/.claude default is a latent split-brain that surfaces only after the root moves."
+source = "This audit: apply-settings.sh's dead-root default already produced a live defect (AFK setting applied to the wrong root); setup-project-memory.sh's hardcode disconnected project memory on the remote host."
+confidence = "high"
+refutation = "A path that is intentionally root-independent (the personal Claude Code root when the harness is not isolated) may legitimately reference ~/.claude — such mentions must be explicit, not a silent default."
+
+[[stage]]
+index = 2
+title = "agentctl/scope/plan state under the isolated root (F3) + migration — completion"
+executor = "spawn:developer"
+expected_result_image = "On top of the first spawn's landed delta (store/cli/registry/exempt_paths/hook-state-gate via config_root, legacy-fallback state read): (a) 6 failing subprocess tests fixed by env hygiene — helpers in tests/test_session_isolate.py, tests/test_backend_arc.py, tests/test_spawn_specialist_scope_deregister.py strip CLAUDE_CONFIG_DIR/CLAUDE_AGENT_HOME from the child env (pattern of test_config_root.py); (b) 7 remaining reader scripts resolve via config_root with legacy-fallback read: hook-resolution-reminder.py, hook-engine-start.py, hook-tracker-publish-reminder.py, hook-experience-record-reminder.py, hook-prewrite-plan-check.py (ledger), policy-scorecard.py, prewrite-fallback-report.py; (c) migrate-to-isolated.sh extended to relocate ~/.claude/agentctl/{state,scopes,gate-log.jsonl,prewrite-fallback.jsonl} and ~/.claude/plans into the isolated root (copy-then-verify-then-remove, preview by default, --apply to act). Full suite green; after the manager-run migration agentctl status still finds this session."
+criterion_type = "measurable"
+done_criterion = "Full scripts test suite passes; after running the migration on this Mac, agentctl still reports session state and the old dirs are empty/absent"
+verify_command = "bash -c 'cd /Users/the0/claude-agent-instructions/scripts && python3 -m pytest tests/ -q'"
+expected_exit = 0
+material = "scripts/agentctl/store.py, scripts/agentctl/cli.py, scripts/agentctl/exempt_paths.py, scripts/session_scope/registry.py, scripts/migrate-to-isolated.sh, scripts/lib/config_root.py, scripts/tests/"
+means = "developer spawn (scripts/ sandbox) with an explicit no-pytest constraint; manager runs pytest and the live migration; config_root.py resolver"
+method = "spawn finishes the remaining-work list WITHOUT attempting pytest/python3 in Bash (sandbox denies them — after the first denial return INCOMPLETE with PERMISSION-REQUEST naming the manager-verification fallback, the stage-1 spawn's working pattern); manager runs the suite, reviews the diff, runs the live migration (copy-then-verify-then-remove), confirms agentctl status finds the session on the new root, records the result"
+conditions = "Spawn edits only scripts/; spawn must NOT retry denied Bash calls — one denial means hand-verify and return; the live migration run and any doc edits are the manager's steps, not the spawn's; migration is copy-then-verify-then-remove (never a bare move that can lose state)"
+invariants = "the prewrite gate never opens up during migration: hook-state-gate must find session state on either root and fail closed; hook scripts stay fail-open as documented for their own advisory function; no deletion of legacy state before the new-root copy is verified"
+capability_required = "python3 + pytest in repo"
+
+[stage.principle]
+statement = "State a coordination engine reads to decide whether a write is allowed must fail closed across a root move: during any transition the gate reads whichever root holds the session state, never 'new root empty, therefore no gate'."
+source = "This stage's design: the prewrite gate's state lookup moves roots; a naive cutover would make every half-migrated machine gate-less."
+confidence = "high"
+refutation = "If the gate were advisory rather than a security/consistency boundary, fail-open during migration would be acceptable."
+
+[[stage]]
+index = 3
+title = "Install-scout findings: digest reader, CI-guard enumerator, projects.d, ccgram hook (S1-S4)"
+executor = "spawn:developer"
+expected_result_image = "session-start-digest.sh resolves the project-memory fallback via read-time root resolution (override -> isolated -> legacy), matching config_root.py semantics; tests/test_config_root.py _INSTALL_TARGET_PATTERN audit becomes an enumerator — walks all *.sh/*.py under scripts/ that touch the config root (explicit allowlist only for intentional legacy-fallback references) and the regex additionally covers projects and agentctl targets; project_entry/projects.sh (lines 30,64) and project_entry/projects.py (line 302) default the machine-local registry to $CLAUDE_AGENT_HOME/projects.d with legacy-fallback read and a migration step folded into migrate-to-isolated.sh; setup-ccgram.sh ccgram hook --install checked for where it writes — scoped if it lands outside the isolated root, else documented as root-correct. Tests cover each change."
+criterion_type = "measurable"
+done_criterion = "Full suite passes; the new enumerator test fails if any swept script re-introduces a $HOME/.claude default for system-owned targets"
+verify_command = "bash -c 'python3 -m pytest tests/ -q'"
+expected_exit = 0
+material = "scripts/session-start-digest.sh, scripts/tests/test_config_root.py, scripts/project_entry/projects.sh, scripts/project_entry/projects.py, scripts/setup-ccgram.sh, scripts/migrate-to-isolated.sh, scripts/lib/config_root.py, scripts/lib/config-root.sh, scripts/tests/"
+means = "developer spawn (scripts/ sandbox) with the same no-pytest constraint; manager runs pytest; ccgram --help / source inspection for S4"
+method = "same spawn discipline as stage 2 (no pytest attempts, INCOMPLETE + PERMISSION-REQUEST after one denial); the enumerator replaces the fixed five-file list so the audit domain is mechanically enumerated in CI rather than recalled by hand; projects.d keeps CLAUDE_PROJECTS_LOCAL_DIR as the explicit override; manager verifies and records"
+conditions = "Spawn edits only scripts/; user approved this scope 2026-07-02 (Dobavit vse) including the projects.d relocation with migration"
+invariants = "CLAUDE_PROJECTS_LOCAL_DIR override keeps working; legacy installs keep reading their existing projects.d until migrated; no registry record is deleted before its new-root copy is verified"
+capability_required = "python3 + pytest in repo (manager side)"
+
+[stage.principle]
+statement = "A universally-quantified done criterion (no old-root default remains) needs a mechanical domain enumerator living permanently in CI, not a hand-recalled file list: the fixed five-file audit missed the exact files fixed in stage 1, so nothing guards them against regression."
+source = "Install-scout sweep 2026-07-02: _INSTALL_TARGET_PATTERN audits 5 scripts; apply-settings.sh and setup-project-memory.sh (stage-1 fixes) are uncovered; the regex itself misses projects/."
+confidence = "high"
+refutation = "If the swept set were closed and stable (no new installers ever added), a fixed list would be equivalent to an enumerator."
+
+[[stage]]
+index = 4
+title = "Prose/docs/leaf refresh to the isolated root (F7 + scout doc findings)"
+executor = "in_thread"
+expected_result_image = "CLAUDE.md (incl. the stale project-memory path claim near line 174), docs/operations/cross-session-scope-isolation.md, memory-global/leaves/system-knowledge/instructions-repo-layout.md, scripts/README.md (apply-mcp-local.sh / apply-settings.sh rows and other stale root mentions) updated to the isolated-root paths; instructions-repo-layout leaf re-verified (last_verified bumped) against the post-stage-2/3 reality"
+criterion_type = "measurable"
+done_criterion = "grep over CLAUDE.md + docs/ + scripts/README.md finds no reference to ~/.claude/agentctl or ~/.claude/plans as the live location, and no present-tense ~/.claude/projects claim for system-owned state"
+verify_command = "bash -c 'cd /Users/the0/claude-agent-instructions && ! grep -rn \"~/.claude/agentctl\" CLAUDE.md docs/ scripts/README.md | grep -v legacy | grep -v old'"
+expected_exit = 0
+material = "CLAUDE.md, docs/operations/*.md, memory-global/leaves/system-knowledge/instructions-repo-layout.md, scripts/README.md"
+means = "manager in-thread edits (files already read this session)"
+method = "sweep grep for old-root system paths; rewrite each to $CLAUDE_AGENT_HOME/... or ~/.claude-agent/..., keeping explicitly-historical mentions marked as legacy"
+conditions = "runs after stages 2-3 land so prose describes shipped reality"
+invariants = "English-only repo text; no behavioral rule changes — path prose only"
+capability_required = "none beyond repo write"
+
+[stage.principle]
+statement = "Documentation that names live system paths must be swept in the same task that moves the paths — stale path prose actively misleads (it caused the agent's own wrong-root settings mistake this session)."
+source = "This session: CLAUDE.md/docs referencing ~/.claude led the agent to apply a setting to the dead root."
+confidence = "high"
+refutation = "Historical/changelog text describing the old layout as history is exempt — only present-tense location claims must move."
+
+[[stage]]
+index = 5
+title = "Arc project layer on the remote host (F6) + reconnect its project memory"
+executor = "in_thread"
+expected_result_image = "On the0.klg.yp-c.yandex.net: sync-cursor-cli-permissions.sh derives the memory glob from the resolved agent home instead of the hardcoded ~/.claude/projects/...; setup-local.sh prose updated; changes committed in Arcadia (junk/the0/agents) via arc from the main ~/arcadia mount; the fixed setup-project-memory.sh re-run for the live project working dirs so their memory symlinks live under ~/.claude-agent/projects/<hash>/; stale dangling symlinks under old ~/.claude/projects removed or migrated"
+criterion_type = "measurable"
+done_criterion = "Remote: grep finds no ~/.claude/projects hardcode in the arc-layer scripts; ls shows project memory symlinks under ~/.claude-agent/projects resolving to existing targets"
+verify_command = "bash -c 'ssh -o BatchMode=yes the0.klg.yp-c.yandex.net \"! grep -rn \\\"/.claude/projects\\\" ~/arcadia/junk/the0/agents/robot/deepagent/scripts/ && find ~/.claude-agent/projects -maxdepth 2 -name memory -type l | head -1 | grep -q memory\"'"
+expected_exit = 0
+material = "remote ~/arcadia/junk/the0/agents/robot/deepagent/scripts/{setup-local.sh,link-skills.sh,sync-cursor-cli-permissions.sh}; remote ~/.claude/projects/* legacy symlinks; remote ~/claude-agent-instructions (pull stage-1/2/3 fixes first)"
+means = "ssh; arc (main ~/arcadia mount — ~/arcadia_claude_local is currently not mounted, storage is reachable in the main mount); the fixed core scripts pulled from origin"
+method = "pull instructions repo on remote; edit the two arc-layer scripts; arc commit in junk/the0/agents (commit to trunk gated on user confirmation); run fixed setup-project-memory.sh for each live project dir; migrate/remove dangling old-root project symlinks; re-verify"
+conditions = "arc commit/push to trunk requires explicit user confirmation (junk path, but trunk is shared); do NOT install the project layer on this Mac (user constraint); remote edits only via the main arc mount"
+invariants = "No deletion of real (non-symlink) memory dirs — only symlinks are re-pointed; remote instructions repo is updated by pull, never edited in place"
+capability_required = "SSH to the0.klg.yp-c.yandex.net; arc on remote"
+
+[stage.principle]
+statement = "An installer must resolve the config root through one shared resolver, never inline a home path: every literal ~/.claude default is a latent split-brain that surfaces only after the root moves."
+source = "This audit: four core scripts + one arc-layer script each hardcoded the old root; two produced live defects (settings applied to the dead root, project memory disconnected on the remote host)."
+confidence = "high"
+refutation = "A path that is intentionally root-independent (e.g. the personal Claude Code root when the harness itself is not isolated) may legitimately reference ~/.claude — such mentions must be explicitly marked, not silently assumed."
+
+[[final_check]]
+command = "bash -c 'cd /Users/the0/claude-agent-instructions/scripts && python3 -m pytest tests/ -q && ./doctor.sh >/dev/null'"
+expected_exit = 0
+label = "full suite + doctor green locally"
+
+[[final_check]]
+command = "bash -c 'TMPH=$(mktemp -d) && HOME=$TMPH CLAUDE_AGENT_HOME=$TMPH/.claude-agent bash /Users/the0/claude-agent-instructions/scripts/setup-symlinks.sh >/dev/null 2>&1; test ! -d $TMPH/.claude && rm -rf $TMPH'"
+expected_exit = 0
+label = "fresh-install simulation writes nothing under $HOME/.claude"

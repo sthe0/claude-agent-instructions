@@ -3,6 +3,7 @@ non-empty passes, and the guardian predicates report the expected blockers."""
 from argparse import Namespace
 
 from agentctl import cli, gates
+from agentctl.config import Thresholds
 from agentctl.state import (
     Actor,
     Criterion,
@@ -15,6 +16,7 @@ from agentctl.state import (
     StageStatus,
     Subject,
 )
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
@@ -50,10 +52,11 @@ def _to_resolution(store, sid, plan):
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
     # pass both stages of the two-stage fixture
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                                  control="reviewed: ok"), store=store)
+                                  control="reviewed: ok",
+                                  observation=observation), store=store)
     cli.cmd_verify_final(ns(session=sid), store=store)
     # experience auto-activates for substantive sessions and gates resolution
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
@@ -226,3 +229,29 @@ def test_coverage_missing_invariant_still_blocks_after_normalization():
     crit = _critique(invariants_to_preserve=["keep idempotency"])
     blockers = gates.replan_coverage_blockers(old, new, crit)
     assert blockers and "keep idempotency" in blockers[0]
+
+
+# --- plan_enumerate_round_release_active ---
+
+def test_enumerate_round_release_inactive_below_threshold():
+    """One lap below the threshold the staleness blocker still blocks normally.
+    RED arm: the release must NOT fire at threshold-minus-one."""
+    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 0}) is False
+    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 2}) is False
+
+
+def test_enumerate_round_release_active_at_and_past_threshold():
+    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 3}) is True
+    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 4}) is True
+
+
+def test_enumerate_round_release_none_bag_is_inactive():
+    assert gates.plan_enumerate_round_release_active(None) is False
+
+
+def test_enumerate_round_release_threshold_comes_from_config_not_a_literal():
+    """The predicate must read effort-replan-absolute, not embed a literal — the
+    same test the review twin carries, so both axes share one threshold key."""
+    retuned = Thresholds({"effort-replan-absolute": "2"})
+    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 2}, retuned) is True
+    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 1}, retuned) is False

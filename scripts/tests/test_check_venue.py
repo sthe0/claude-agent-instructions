@@ -115,7 +115,8 @@ def test_record_result_verifies_in_delivery_worktree(store, tmp_path):
                     delivery_worktree=str(worktree))
     store.save(s)
     cli.cmd_record_result(
-        ns(session="v1", status="passed", actual="ok", control=None),
+        ns(session="v1", status="passed", actual="ok", control=None,
+           observation="ran it and the produced output matched"),
         store=store, runner=cap,
     )
     assert cap.argv[:2] == ["bash", "-c"]
@@ -130,7 +131,8 @@ def test_no_delivery_worktree_is_byte_identical_to_repo_root_cwd(store):
     s = _executing("v2", _stage("pytest -q"), repo_root="/abs/the repo")
     store.save(s)
     cli.cmd_record_result(
-        ns(session="v2", status="passed", actual="ok", control=None),
+        ns(session="v2", status="passed", actual="ok", control=None,
+           observation="ran it and the produced output matched"),
         store=store, runner=cap,
     )
     assert cap.argv == ["bash", "-c", "cd '/abs/the repo' && pytest -q"]
@@ -193,7 +195,10 @@ def test_missing_delivery_worktree_refuses_without_failing_stage(store, tmp_path
                     delivery_worktree=missing)
     store.save(s)
     d = cli.cmd_record_result(
-        ns(session="v6", status="passed", actual="ok", control=None),
+        ns(session="v6", status="passed", actual="ok", control=None,
+           # the venue is missing, so pytest -q never runs (asserted below): what a
+           # controller could have compared here is the produced work itself.
+           observation="nothing was run: read the files the stage produced against done criterion c by hand"),
         store=store, runner=cap,
     )
     assert d.ok is False

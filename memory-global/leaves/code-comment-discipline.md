@@ -3,7 +3,7 @@ name: code-comment-discipline
 description: Default no comments; comment only when the *why* is non-obvious. Build / config files are not exceptions — never annotate an import / PEERDIR / dependency line with "what this does".
 type: feedback
 created: 2026-05-27
-last_verified: 2026-06-24
+last_verified: 2026-09-01
 ---
 
 # Code comment discipline
@@ -12,8 +12,11 @@ Default to writing **no** comments. Add one only when the *why* would be invisib
 
 **Why:** PR review feedback on a past ticket (2026-05-26): "Many of the comments in this review look redundant. Your instructions should say to prefer expressive code over comments." A series of commits on that branch had landed comments like `# OAuth tokens via the secrets client — canonical VCS client` above a secrets-client import, `# Tracker client used by tracker_fetch.py` above a tracker-client import, `# Standard deps` above a dependency block, `# Prompts and model presets live alongside the code as plain files` above `RESOURCE_FILES`. Each reads the identifier and writes it back as prose — pure noise that ages worse than the code (the comment claims a relationship that may not survive the next refactor).
 
+**Second occurrence (2026-08-31, a monorepo ticket):** five comments in ~150 lines of new test code, and this time not one of them restated an identifier — each carried a real, non-obvious *why* (a library not installable outside the internal environment, an environment variable that would swap the records under the assertions, a constant written out by hand rather than read off the code under test). The rule above passed them all, because it filters comments by **type** and a type filter admits an unbounded number of true *whys*. The customer's verdict supplied the missing half: "комментарии — это тоже код, который нужно поддерживать; код должен быть самодокументируем" — a comment is the last place to record a *why*, after the name and the commit message. Hence the exhaustion clause that now opens the list below. Part of the bloat came from a code-reviewer round that asked for rationale and got comments; the reviewer's charter now names how such a finding is discharged.
+
 **How to apply:**
 
+- *Exhaust the code before writing the comment.* A true, non-obvious *why* is not by itself a licence for a comment — first try to make the code carry it: rename the identifier so the constraint lives in the name (`_load_unpatched_broker_config`, not a comment saying the patch path is cleared), extract a named constant or helper, name the test after the property it pins, or write the assertion so it states the property. Only when no name can hold the *why* does it become a comment. And a *why* about **this change** rather than about **this code** ("written out by hand rather than read off the constant, so that editing the constant breaks this test") belongs in the commit message or PR description, not in the file.
 - *Build / config files* (`ya.make`, `a.yaml`, `Dockerfile`, `Makefile`, `pyproject.toml`, `setup.py`) **are not exceptions**. An `import` / `PEERDIR` / dependency / `RESOURCE_FILES` entry is its own documentation. Annotate only when the entry is genuinely surprising: a non-default flag, a workaround for an upstream bug, an ordering constraint imposed by the toolchain, a pinned version that exists for a specific compatibility reason.
 - *Python / source files* — same rule. Do not introduce comments above class blocks or function bodies that restate the name. Module-level docstrings are fine when the module does something non-trivial; one-line restatements of the class/function name are not.
 - *Comments to delete on sight:*

@@ -1,0 +1,32 @@
+[meta]
+task_id = "manage-trips-commands"
+goal = "Define a prose command surface so the user creates/manages trips by natural-language commands to the agent (create/list/switch/archive/add-variant), realized as a flat project skill manage-trips; note an interactive script-guide as a future option."
+done_criterion = "manage-trips SKILL.md defines the 5 commands as a prose procedure; README + workspace.md point to it; committed"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/projects/trips"
+external_research = "Not warranted — internal project workflow definition; grounded in the already-built journeys/knowledge/tools model and the user's explicit choice of prose over a script for now."
+
+[[stage]]
+index = 1
+title = "manage-trips prose command skill + wiring"
+executor = "in_thread"
+expected_result_image = ".claude/skills/manage-trips/SKILL.md defines commands (завести/список/переключиться/заархивировать/добавить вариант) as a prose procedure with slug/field conventions and a future-script note; README + docs/workspace.md reference it"
+criterion_type = "measurable"
+done_criterion = "ls .claude/skills/manage-trips/SKILL.md present and README references manage-trips"
+verify_command = "ls /Users/the0/projects/trips/.claude/skills/manage-trips/SKILL.md && grep -q manage-trips /Users/the0/projects/trips/README.md"
+expected_exit = 0
+depends_on = []
+output_artifacts = [".claude/skills/manage-trips/SKILL.md", "README.md", "docs/workspace.md"]
+material = "existing journeys/knowledge/tools model + INDEX.md"
+means = "Write, Edit"
+method = "author flat project skill with the 5-command prose procedure; wire README + workspace.md"
+conditions = "trips repo present"
+invariants = "prose-only (no executable script yet); land + charter both covered; conventions match existing templates"
+capability_required = "workflow authoring"
+
+[stage.principle]
+statement = "Define the deterministic command surface as prose first; mechanize into a script only when the vocabulary stabilizes"
+source = "user choice: move on prose for now, interactive script later"
+confidence = "high"
+refutation = "if manual prose execution proves error-prone/repetitive, promote to tools/new-trip.sh"

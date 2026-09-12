@@ -1,0 +1,1060 @@
+{
+ "schema": "result_image_echo_labels/v1",
+ "domain": {
+  "source": "scripts/tests/fixtures/plan_corpus/",
+  "selector": "every stage carrying a non-empty expected_result_image",
+  "key_format": "<plan-filename>:<stage index>",
+  "plans": 55,
+  "images": 200,
+  "note": "The domain is the set the machine enumerates from the fixture. The counts here are re-derived from it, not carried in. An earlier draft of the plan named 192 images across 53 plans, a true reading of ~/.claude-agent/plans/ taken two plans before the fixture was frozen; if this file and the fixture ever disagree, the fixture wins."
+ },
+ "producer": {
+  "actor": "thinker specialization, spawned read-only over the fixture",
+  "independence": "Not the author of the prefilter these labels score. Briefed with the echo definition only: no detection heuristic, no sentence-position rule, no part of the plan stage this labelling serves. The brief given is committed verbatim beside this file as result_image_echo_labeller_brief.md.",
+  "brief": "scripts/tests/fixtures/result_image_echo_labeller_brief.md",
+  "ordering": "This file is committed before any prefilter code exists in the tree; the ordering is asserted by a test reading the repository's history, not by anyone's word."
+ },
+ "figures": {
+  "echo_count": 11,
+  "genuine_count": 189,
+  "prevalence": 0.055,
+  "opens_with_backticked_command_among_echoes": "11/11",
+  "distinct_plan_lineages_carrying_an_echo": 2,
+  "distinct_files_carrying_an_echo": [
+   "effort-divergence-trigger.toml",
+   "spawn-dispatch-cwd-pytest-quality-salience-v2.toml",
+   "spawn-dispatch-cwd-pytest-quality-salience-v3.toml",
+   "spawn-dispatch-cwd-pytest-quality-salience.toml"
+  ],
+  "prior": {
+   "echo_count": 58,
+   "prevalence": 0.29,
+   "opens_with_share": 0.79,
+   "provenance": "A reading taken during this task's corpus critique whose per-instance list was never written down. Carried in the plan as an ESTIMATE with its provenance stated, never as a finding.",
+   "why_it_differs": "The prior counted images that CONTAIN a check-outcome formulation. This labelling counted images that are NOTHING BUT one: the brief's tie-breaker labels an image genuine when deleting its verdict clause still leaves a statement of what the result is. The tie-breaker was authored by the root, is committed in the brief, and matches the stage's approved result image ('merely names the outcome of its check') more closely than the prior did. The gap is therefore largely definitional rather than a refuted measurement."
+  }
+ },
+ "decision": {
+  "date": "2026-08-05",
+  "triggers": {
+   "opens_with_share_below_0.70_of_echoes": {
+    "fired": false,
+    "observed": 1.0,
+    "threshold": 0.7,
+    "consequence_if_fired": "the reasoning that made a 0.70 recall floor reachable by a sentence-position prefilter would no longer hold"
+   },
+   "echo_count_materially_below_the_prior": {
+    "fired": true,
+    "observed": 11,
+    "prior": 58,
+    "consequence": "prevalence is what sizes the remedy; at 5.5%, concentrated in 2 plan lineages, a hard submission refusal is over-built even if its recall test goes green"
+   }
+  },
+  "verdict": "continue with a downgraded remedy",
+  "decided_by": "user, at the stage's own continue-or-stop gate",
+  "content": "Defect 5 keeps its structural half and its discrimination, and loses its refusal. The prefilter and the fail-open judge run on the submission seam and WARN the author; submission is not refused on an echo verdict. The 0.70 recall floor and the 0.25 false-positive ceiling stay exactly as fixed before the labelling — they are not re-tightened in response to a result, which the stage forbids — and they now govern what the warning fires on rather than what the engine refuses.",
+  "rationale": "The stage's own refutation names this outcome in advance: a gate whose justifying defect turns out to be rare is over-built even when its recall test is green. At 11 of 200, nine of them three revisions of one plan, the corpus does not justify refusing a submission; it does justify telling the author. The pair of numbers also goes slack at this prevalence (0.25 over 189 genuine permits 47 false positives against 8 true ones), which weakens a refusal far more than it weakens a warning."
+ },
+ "labels": [
+  {
+   "key": "agentctl-gate-quality.toml:1",
+   "label": "genuine",
+   "reason": "Names the new config key, the resolution ladder, the model/timeout bounds and the doc rows that now exist; the test verdict is nowhere in it."
+  },
+  {
+   "key": "agentctl-gate-quality.toml:2",
+   "label": "genuine",
+   "reason": "Describes the helper, its record shape, its append target, the fail-open property and the new scorecard section — all state, no verdict."
+  },
+  {
+   "key": "agentctl-gate-quality.toml:3",
+   "label": "genuine",
+   "reason": "States the changed comparison semantics and the new waiver flag with its refusal and recording behaviour."
+  },
+  {
+   "key": "agentctl-gate-quality.toml:4",
+   "label": "genuine",
+   "reason": "Names the extracted shared module and the three new refusal conditions the validator now applies."
+  },
+  {
+   "key": "agentctl-pop-pointer-v1.toml:1",
+   "label": "genuine",
+   "reason": "A named worktree on a named branch at a named base now exists, with the reason it must exist before the next stage."
+  },
+  {
+   "key": "agentctl-pop-pointer-v1.toml:2",
+   "label": "genuine",
+   "reason": "Specifies the helper's name, semantics, call site, ordering, comment rationale and the two test shapes — a reader could implement from it."
+  },
+  {
+   "key": "agentctl-pop-pointer-v1.toml:3",
+   "label": "genuine",
+   "reason": "States the commit, the ancestry relation, the landed main, the pulled canon and the removed worktree; the green-tests mention is one clause among real state."
+  },
+  {
+   "key": "agentctl-question-candidate-dispose.toml:1",
+   "label": "genuine",
+   "reason": "Fully describes the new command's arguments, validation, registration and the corrected advice string."
+  },
+  {
+   "key": "agentctl-question-candidate-dispose.toml:2",
+   "label": "genuine",
+   "reason": "Opens with the suite verdict but the commit clause — its content, its message, nothing pushed — stands on its own as the stage's result."
+  },
+  {
+   "key": "agentctl-venue-propagation-v1.toml:1",
+   "label": "genuine",
+   "reason": "A named worktree exists on a named branch off a named commit, clean, with the dispatch reason for its existence."
+  },
+  {
+   "key": "agentctl-venue-propagation-v1.toml:2",
+   "label": "genuine",
+   "reason": "Enumerates the helper's contract, its five call sites, the deliberate non-change, the README invariant and three named tests — pure description of what now exists."
+  },
+  {
+   "key": "agentctl-venue-propagation-v1.toml:3",
+   "label": "genuine",
+   "reason": "Commit, ancestry, landing, canon pull and worktree removal are named as facts; the tests-green clause is supporting, not the whole image."
+  },
+  {
+   "key": "arc-backend-install-macos.toml:1",
+   "label": "genuine",
+   "reason": "Borderline — it leads with the control verdict, but it names a persistent state (client on PATH for fresh shells, authenticated) plus the channel/FUSE/reboot facts recorded; went genuine."
+  },
+  {
+   "key": "arc-backend-install-macos.toml:2",
+   "label": "genuine",
+   "reason": "Describes the inventory file's exact contents — six cited verdict lines and what each reads out of the backend source."
+  },
+  {
+   "key": "arc-backend-install-macos.toml:3",
+   "label": "genuine",
+   "reason": "The backend file exists in the resolved plugin dir, the probe now resolves by name, and the residue file records before/after mount listings."
+  },
+  {
+   "key": "arc-backend-install-macos.toml:4",
+   "label": "genuine",
+   "reason": "Names the registry record, the identity key and what three behavioural probes select — a described configuration, not a pass/fail."
+  },
+  {
+   "key": "arc-backend-install-macos.toml:5",
+   "label": "genuine",
+   "reason": "Describes the created project, the entered working copy, the teardown and the evidence file's contents in full."
+  },
+  {
+   "key": "autocompact-install-time.toml:1",
+   "label": "genuine",
+   "reason": "States exactly what the script now does to the merged settings (force, delete, idempotent) — the bash -n clause is a trailing aside."
+  },
+  {
+   "key": "autocompact-install-time.toml:2",
+   "label": "genuine",
+   "reason": "Names the concrete key/value state of the live settings file and the preserved machine-specific keys."
+  },
+  {
+   "key": "autocompact-install-time.toml:3",
+   "label": "genuine",
+   "reason": "Describes the new linter assertion and what the new pytest drives; the trailing 'passes' does not carry the image."
+  },
+  {
+   "key": "branch-cleanup.toml:1",
+   "label": "genuine",
+   "reason": "Says what happened to a named branch and its commits — merged, pushed, deleted, setting applied — and the resulting state of origin."
+  },
+  {
+   "key": "canon-guard-landing.toml:1",
+   "label": "genuine",
+   "reason": "Prescribes how each conflict is resolved and to what values, leaving a described post-rebase tree; re-verification is an added clause."
+  },
+  {
+   "key": "canon-guard-landing.toml:2",
+   "label": "genuine",
+   "reason": "Names the landing, the removals, the canon pull, the re-run installer and the resulting live wiring of the guard."
+  },
+  {
+   "key": "canon-readonly-guard-determinize.toml:1",
+   "label": "genuine",
+   "reason": "Describes the wiring achieved in live settings and honestly delimits the immediacy boundary the probe establishes."
+  },
+  {
+   "key": "canon-readonly-guard-determinize.toml:2",
+   "label": "genuine",
+   "reason": "Three lettered changes are each described in behavioural detail, including the named out-of-scope residual."
+  },
+  {
+   "key": "canon-readonly-guard-determinize.toml:3",
+   "label": "genuine",
+   "reason": "The commit's contents, message and trailer are named; the verify-all/pytest clause is supporting, not the substance."
+  },
+  {
+   "key": "capture-greece-europe-trip.toml:1",
+   "label": "genuine",
+   "reason": "Short but names what the file now contains (dates, travellers, vibe, candidate regions) and the index row added."
+  },
+  {
+   "key": "claude-task-init-command.toml:1",
+   "label": "genuine",
+   "reason": "Names the two functions the backend now exposes and what a dry-run init call does."
+  },
+  {
+   "key": "claude-task-init-command.toml:2",
+   "label": "genuine",
+   "reason": "States the new selector's dry-run output and the ordering of the real path's steps."
+  },
+  {
+   "key": "claude-task-init-command.toml:3",
+   "label": "genuine",
+   "reason": "Names the launcher's new output line for --init and that --help documents it."
+  },
+  {
+   "key": "claude-task-init-command.toml:4",
+   "label": "genuine",
+   "reason": "Borderline — 'exit 0' is the control's verdict, but the stage's product is a check and the image names the assertions added; went genuine."
+  },
+  {
+   "key": "claude-task-init-command.toml:5",
+   "label": "genuine",
+   "reason": "Names the doc, the command it now lists and the accompanying note."
+  },
+  {
+   "key": "complete-config-root-isolation.toml:1",
+   "label": "genuine",
+   "reason": "Names the module, its three functions and their resolution order; the test clause is appended to a full description."
+  },
+  {
+   "key": "complete-config-root-isolation.toml:2",
+   "label": "genuine",
+   "reason": "Names the three scripts changed and the accessor they now route through, before any pass/fail mention."
+  },
+  {
+   "key": "complete-config-root-isolation.toml:3",
+   "label": "genuine",
+   "reason": "Enumerates the readers and writers converted and the concrete value the channel now resolves to."
+  },
+  {
+   "key": "complete-config-root-isolation.toml:4",
+   "label": "genuine",
+   "reason": "Names which two verifier sections now target the resolved root; the exit-0 clause trails a real change statement."
+  },
+  {
+   "key": "complete-config-root-isolation.toml:5",
+   "label": "genuine",
+   "reason": "States the disposition rule per site (resolver-routed or rationale-commented) and the recorded decision table."
+  },
+  {
+   "key": "complete-config-root-isolation.toml:6",
+   "label": "genuine",
+   "reason": "Says what the docs now describe and that no stale install-target reference remains in scope."
+  },
+  {
+   "key": "default-acceptedits-new-machine.toml:1",
+   "label": "genuine",
+   "reason": "Names the base.json key, the merge expression, and the doc mentions; the lint/verify 'pass' is a trailing clause."
+  },
+  {
+   "key": "delivery-gate-root-and-escape-typing.toml:1",
+   "label": "genuine",
+   "reason": "Names the two new functions, their deliberate resolution difference from agent_home(), and the docstring section explaining the two roots."
+  },
+  {
+   "key": "delivery-gate-root-and-escape-typing.toml:2",
+   "label": "genuine",
+   "reason": "Describes the new module's answers, the chain-membership decision and its rationale, the UNKNOWN degradation rule and the exposed registry."
+  },
+  {
+   "key": "delivery-gate-root-and-escape-typing.toml:3",
+   "label": "genuine",
+   "reason": "States what the SessionStart hook now probes and reports, the preserved seam's precise new meaning, and the separately-recorded acceptance observation."
+  },
+  {
+   "key": "delivery-gate-root-and-escape-typing.toml:4",
+   "label": "genuine",
+   "reason": "Specifies exactly how the blocker message changes per probe answer and that the verdict is unchanged — a message-level result, described."
+  },
+  {
+   "key": "delivery-gate-root-and-escape-typing.toml:5",
+   "label": "genuine",
+   "reason": "Names the new required flag with its closed value set, the dataclass field on both read and write paths, the argv registration and the new report script."
+  },
+  {
+   "key": "delivery-gate-root-and-escape-typing.toml:6",
+   "label": "genuine",
+   "reason": "States the content of the principle leaf, where it is indexed, and the additive README section — a described artifact, with verify-all mentioned last."
+  },
+  {
+   "key": "difficulty-routing-subject-aware.toml:1",
+   "label": "genuine",
+   "reason": "Describes the reworked decision ladder condition by condition and which tests change to assert the new guarantee."
+  },
+  {
+   "key": "difficulty-routing-subject-aware.toml:2",
+   "label": "genuine",
+   "reason": "States the new subject-aware refusal, its exact message constraints, its dry-run behaviour and the explicitly untouched surfaces."
+  },
+  {
+   "key": "difficulty-routing-subject-aware.toml:3",
+   "label": "genuine",
+   "reason": "Opens with suite verdicts but the commit clause — which files, which difficulty named, nothing pushed — is the result and stands alone."
+  },
+  {
+   "key": "effort-divergence-trigger.toml:1",
+   "label": "genuine",
+   "reason": "Borderline — its clauses mirror the grep control, but they say what the section now contains (four scales, two design terms, no rejected markers); went genuine."
+  },
+  {
+   "key": "effort-divergence-trigger.toml:2",
+   "label": "genuine",
+   "reason": "Borderline — the pytest clause is a bare verdict and the cost_tier work appears only through it, but the config.md row description stands alone; went genuine."
+  },
+  {
+   "key": "effort-divergence-trigger.toml:3",
+   "label": "echo",
+   "reason": "The whole image is 'pytest exits 0' plus the list of cases the tests cover; the module the stage produces — its inputs, its answer, its re-arm rule — is nowhere described."
+  },
+  {
+   "key": "effort-divergence-trigger.toml:4",
+   "label": "echo",
+   "reason": "Two exit-0 verdicts and nothing else; a reader learns the checks passed and not one fact about the wiring, the fire sites or the accumulator custody the stage exists to build."
+  },
+  {
+   "key": "effort-divergence-trigger.toml:5",
+   "label": "genuine",
+   "reason": "Opens with two exit-0 verdicts, but the clause that says what the README section now names (scales, window, fire sites, limits) stands on its own."
+  },
+  {
+   "key": "effort-divergence-trigger.toml:6",
+   "label": "genuine",
+   "reason": "Borderline — three linter verdicts dominate, but 'CLAUDE.md names the effort-divergence entry path in one clause' is a state of the text and survives deleting them; went genuine."
+  },
+  {
+   "key": "enable-acceptedits-default.toml:1",
+   "label": "genuine",
+   "reason": "Names the key added to the permissions object and what is left untouched — a described file state."
+  },
+  {
+   "key": "fix-positional-bookkeeping.toml:1",
+   "label": "genuine",
+   "reason": "Defines the new pin field, its candidate domain, the five resolution outcomes and the --repin behaviour — a specification of what the verifier now is."
+  },
+  {
+   "key": "fix-positional-bookkeeping.toml:2",
+   "label": "genuine",
+   "reason": "States the migrated allowlist's new form, the preserved reasons, the untouched globs and what the regression test pins."
+  },
+  {
+   "key": "fix-positional-bookkeeping.toml:3",
+   "label": "genuine",
+   "reason": "Says what the FAIL path now prints and which of the three conditions the remediation does not cover."
+  },
+  {
+   "key": "fix-positional-bookkeeping.toml:4",
+   "label": "genuine",
+   "reason": "Enumerates what the two docs now document, including the honest note that the grep only proves the flag is named."
+  },
+  {
+   "key": "fix-positional-bookkeeping.toml:5",
+   "label": "genuine",
+   "reason": "Describes the appended leaf instance's content, including the recorded rejected hypothesis."
+  },
+  {
+   "key": "ghost-scope-fix.toml:1",
+   "label": "genuine",
+   "reason": "Names the new record field, what the tracking hook now writes, and the liveness predicate the conflict hook now applies."
+  },
+  {
+   "key": "ghost-scope-fix.toml:2",
+   "label": "genuine",
+   "reason": "Names the new registry function, where the spawn calls it, its non-interference contract and the doc update."
+  },
+  {
+   "key": "greece-modular-alternatives.toml:1",
+   "label": "genuine",
+   "reason": "Describes what the renderer parses and emits, which files were written, and explicitly how the verification is scoped."
+  },
+  {
+   "key": "greece-modular-alternatives.toml:2",
+   "label": "genuine",
+   "reason": "Enumerates the sourced facts the stage produces, by topic, with the provenance requirement."
+  },
+  {
+   "key": "greece-modular-alternatives.toml:3",
+   "label": "genuine",
+   "reason": "Names every authored artifact and what changed inside it — a content inventory, no verdict at all."
+  },
+  {
+   "key": "greece-modular-alternatives.toml:4",
+   "label": "genuine",
+   "reason": "States what is rendered, that the constructor section is now really present, the browser exercise and the published live URL."
+  },
+  {
+   "key": "greece-page-quality.toml:1",
+   "label": "genuine",
+   "reason": "Names the correct hash now in the renderer and the broken one removed; the render/tests clause trails a real state statement."
+  },
+  {
+   "key": "greece-page-quality.toml:2",
+   "label": "genuine",
+   "reason": "Says which files were rewritten, in what voice, and what comparative section was added to each options.md."
+  },
+  {
+   "key": "greece-page-quality.toml:3",
+   "label": "genuine",
+   "reason": "Describes the redesigned layout, the re-render, the deployment and the SRI hash present in the deployed HTML."
+  },
+  {
+   "key": "install-switch-requirements-guidance.toml:1",
+   "label": "genuine",
+   "reason": "States what doctor.sh now checks, the version threshold it enforces and that the threshold is a sourced constant."
+  },
+  {
+   "key": "install-switch-requirements-guidance.toml:2",
+   "label": "genuine",
+   "reason": "Names what the installer now prints at the end and the specific switching line the user sees."
+  },
+  {
+   "key": "install-switch-requirements-guidance.toml:3",
+   "label": "genuine",
+   "reason": "Names the two README additions and how the bootstrap path is instructed."
+  },
+  {
+   "key": "install-switch-requirements-guidance.toml:4",
+   "label": "genuine",
+   "reason": "Names the new setup.md section and the strengthened callout in a named subsection."
+  },
+  {
+   "key": "instr-pull-integrity-gate.toml:1",
+   "label": "genuine",
+   "reason": "States the exact constant change with its reason; the '16/16 OK' clause is appended to a described edit."
+  },
+  {
+   "key": "instr-pull-integrity-gate.toml:2",
+   "label": "genuine",
+   "reason": "Describes the new --root mode, its grandfather semantics and why it is the honest project-layer verifier."
+  },
+  {
+   "key": "instr-pull-integrity-gate.toml:3",
+   "label": "genuine",
+   "reason": "Specifies the helper, its call site, which paths skip it, its fail-open construction and where the cwd is captured."
+  },
+  {
+   "key": "instr-pull-integrity-gate.toml:4",
+   "label": "genuine",
+   "reason": "Names the commit's contents, its coherence requirement, and the trailer its message carries."
+  },
+  {
+   "key": "isolate-agent-config-root.toml:1",
+   "label": "genuine",
+   "reason": "The stage's product is a decision, and the image names both possible decisions and what each would fix for the next stage."
+  },
+  {
+   "key": "isolate-agent-config-root.toml:2",
+   "label": "genuine",
+   "reason": "Names the symlinks and settings file that now exist under an overridden root and the absence of install-target literals — states of the tree, phrased as observations."
+  },
+  {
+   "key": "isolate-agent-config-root.toml:3",
+   "label": "genuine",
+   "reason": "Describes the new launcher's authenticated start, where its session data lands, and that bare claude is unchanged."
+  },
+  {
+   "key": "isolate-agent-config-root.toml:4",
+   "label": "genuine",
+   "reason": "Says what the migration script lists and moves, and the post-run layout of both roots."
+  },
+  {
+   "key": "isolate-agent-config-root.toml:5",
+   "label": "genuine",
+   "reason": "Enumerates what the three docs now document; the lint/final-check clauses trail that content statement."
+  },
+  {
+   "key": "isolated-install-audit-r2.toml:1",
+   "label": "genuine",
+   "reason": "Names, script by script, which default now resolves through the config root and what the legacy fallback does."
+  },
+  {
+   "key": "isolated-install-audit-r2.toml:2",
+   "label": "genuine",
+   "reason": "Names the three constants moved under the isolated root, the dual-path exemption, the migration step and the post-migration state."
+  },
+  {
+   "key": "isolated-install-audit-r2.toml:3",
+   "label": "genuine",
+   "reason": "Names the documents updated and the leaf re-verified against post-stage reality."
+  },
+  {
+   "key": "isolated-install-audit-r2.toml:4",
+   "label": "genuine",
+   "reason": "Describes the remote-host changes, where they are committed, and the reconnected memory symlinks."
+  },
+  {
+   "key": "isolated-install-audit-r3.toml:1",
+   "label": "genuine",
+   "reason": "Per-script description of the resolved defaults and their legacy fallbacks; no verdict language at all."
+  },
+  {
+   "key": "isolated-install-audit-r3.toml:2",
+   "label": "genuine",
+   "reason": "Lists the three lettered deltas — test env hygiene, seven converted readers, the extended migration — on top of a named landed base."
+  },
+  {
+   "key": "isolated-install-audit-r3.toml:3",
+   "label": "genuine",
+   "reason": "Names each scout finding's fix, including turning the pattern audit into an enumerator and where the registry default moves."
+  },
+  {
+   "key": "isolated-install-audit-r3.toml:4",
+   "label": "genuine",
+   "reason": "Names the specific doc locations refreshed, down to the stale claim near a line number, plus the leaf re-verification."
+  },
+  {
+   "key": "isolated-install-audit-r3.toml:5",
+   "label": "genuine",
+   "reason": "Describes the remote script change, the Arcadia commit and the relocated project-memory symlinks."
+  },
+  {
+   "key": "isolated-install-audit.toml:1",
+   "label": "genuine",
+   "reason": "Script-by-script statement of the new root resolution and its fallbacks — a described set of edits."
+  },
+  {
+   "key": "isolated-install-audit.toml:2",
+   "label": "genuine",
+   "reason": "Names the constants routed through config_root, the dual-path exemption, the migration and the state after it."
+  },
+  {
+   "key": "isolated-install-audit.toml:3",
+   "label": "genuine",
+   "reason": "Names which docs and which leaf are updated to the isolated-root paths."
+  },
+  {
+   "key": "isolated-install-audit.toml:4",
+   "label": "genuine",
+   "reason": "Describes the remote-layer edits, their commit route and the reconnected memory symlinks."
+  },
+  {
+   "key": "keepalive-cli-auto-r2.toml:1",
+   "label": "genuine",
+   "reason": "Enumerates the four artifacts produced with their subcommands, plist keys and the detection rule."
+  },
+  {
+   "key": "keepalive-cli-auto-r2.toml:2",
+   "label": "genuine",
+   "reason": "States the resulting per-mode SleepDisabled behaviour, the absence of a password prompt and that the old daemon is gone."
+  },
+  {
+   "key": "keepalive-cli-auto.toml:1",
+   "label": "genuine",
+   "reason": "Same artifact inventory: four files, their subcommands, plist keys and detection semantics."
+  },
+  {
+   "key": "keepalive-cli-auto.toml:2",
+   "label": "genuine",
+   "reason": "Names the installed daemon's live behaviour per mode rather than reporting that a check passed."
+  },
+  {
+   "key": "land-hook-prune-two-file.toml:1",
+   "label": "genuine",
+   "reason": "Borderline — it opens with 'verifies green', but the three named deltas and the reasoning about which checkout the control names carry real content; went genuine."
+  },
+  {
+   "key": "land-hook-prune-two-file.toml:2",
+   "label": "genuine",
+   "reason": "Names each act and its resulting state: main fast-forwarded, branch and worktree removed, the leaf edit committed, origin equal to local."
+  },
+  {
+   "key": "macos-core-portability.toml:1",
+   "label": "genuine",
+   "reason": "Says what kill_tree now achieves on macOS and that the three helpers derive from one ps snapshot with no /proc left."
+  },
+  {
+   "key": "macos-core-portability.toml:2",
+   "label": "genuine",
+   "reason": "Names the portable timestamp and the capture-then-test rewrite of the two guards — the code state, not the check's outcome."
+  },
+  {
+   "key": "macos-core-portability.toml:3",
+   "label": "genuine",
+   "reason": "States which idioms are gone from which scripts and what replaced them, including the mapfile-free dedup."
+  },
+  {
+   "key": "macos-core-portability.toml:4",
+   "label": "genuine",
+   "reason": "Names the early platform exit, the SIGPIPE-safe linger check and the Darwin mount branch (or its documented alternative)."
+  },
+  {
+   "key": "manage-trips-commands.toml:1",
+   "label": "genuine",
+   "reason": "Names the skill file, the commands it defines, its conventions and the docs that now reference it."
+  },
+  {
+   "key": "maritime-charter-specialization.toml:1",
+   "label": "genuine",
+   "reason": "Names the three syntheses by subject and their region-general, sourced character — the research product itself."
+  },
+  {
+   "key": "maritime-charter-specialization.toml:2",
+   "label": "genuine",
+   "reason": "Says what the design doc's new section contains: three specs with boundaries, the split rationale and the reuse map."
+  },
+  {
+   "key": "maritime-charter-specialization.toml:3",
+   "label": "genuine",
+   "reason": "Names the three skill files and the sections each carries, plus their grounding."
+  },
+  {
+   "key": "maritime-charter-specialization.toml:4",
+   "label": "genuine",
+   "reason": "Enumerates the new template file's structure, the added trip.md fields and the scaffolded directory."
+  },
+  {
+   "key": "maritime-charter-specialization.toml:5",
+   "label": "genuine",
+   "reason": "Names each transferred artifact and its source, down to which routes became which alternatives."
+  },
+  {
+   "key": "maritime-charter-specialization.toml:6",
+   "label": "genuine",
+   "reason": "States what the project memory index now points at; the 'final verification passes; committed' tail is appended to that content statement."
+  },
+  {
+   "key": "plan-greece-europe-2026-09.toml:1",
+   "label": "genuine",
+   "reason": "Lists the constraint values trip.md now records, field by field."
+  },
+  {
+   "key": "plan-greece-europe-2026-09.toml:2",
+   "label": "genuine",
+   "reason": "States the substantive research findings — visa class, decoupled consulate choice, single-entry consequence, lead-time risk — not that a block was filled."
+  },
+  {
+   "key": "plan-greece-europe-2026-09.toml:3",
+   "label": "genuine",
+   "reason": "Describes the shortlist's shape and the criteria each candidate is tied to."
+  },
+  {
+   "key": "plan-greece-europe-2026-09.toml:4",
+   "label": "genuine",
+   "reason": "Names the two skeletons, the pacing rules they honour, the trip length and the first Schengen entry point."
+  },
+  {
+   "key": "plan-greece-europe-2026-09.toml:5",
+   "label": "genuine",
+   "reason": "Says what each options.md now contains by category, with the sourcing and date-conflict requirements."
+  },
+  {
+   "key": "plan-greece-europe-2026-09.toml:6",
+   "label": "genuine",
+   "reason": "Names the completed day-by-day itineraries, the cost totals, the decision matrix axes and the updated index."
+  },
+  {
+   "key": "plan-greece-europe-2026-09.toml:7",
+   "label": "genuine",
+   "reason": "Specifies what the generator reads and emits, the visual template's elements, the deploy script and the graceful-degradation behaviour."
+  },
+  {
+   "key": "plan-greece-europe-2026-09.toml:8",
+   "label": "genuine",
+   "reason": "Names the pages produced, the deployment and where the resulting public URLs are recorded."
+  },
+  {
+   "key": "prune-dangling-hook-references-v2.toml:1",
+   "label": "genuine",
+   "reason": "Specifies the resolver's algorithm, its two fail-safe rules with worked examples, the added enumeration and the test cases."
+  },
+  {
+   "key": "prune-dangling-hook-references-v2.toml:2",
+   "label": "genuine",
+   "reason": "Defines the ownership rule, the prune pass's scope and refusals, the basename_of fix and the --check contract."
+  },
+  {
+   "key": "prune-dangling-hook-references-v2.toml:3",
+   "label": "genuine",
+   "reason": "Describes the inventory, the backups, the surfaced deletion list, the predicate-derived work-list and the resulting file state."
+  },
+  {
+   "key": "prune-dangling-hook-references-v2.toml:4",
+   "label": "genuine",
+   "reason": "Names what each of the three documents gains, including the recurrence evidence and the resolver's accepted residual."
+  },
+  {
+   "key": "prune-dangling-hook-references-v2.toml:5",
+   "label": "genuine",
+   "reason": "States the commit and its message subject, the landing, and that branch and worktree are gone both sides."
+  },
+  {
+   "key": "prune-dangling-hook-references-v3.toml:1",
+   "label": "genuine",
+   "reason": "Same resolver specification: algorithm, fail-safe rules, added settings enumeration, enumerated test cases."
+  },
+  {
+   "key": "prune-dangling-hook-references-v3.toml:2",
+   "label": "genuine",
+   "reason": "Full description of the prune pass, its deliberate non-reuse of the cwd-dependent enumeration, and the idempotency fix."
+  },
+  {
+   "key": "prune-dangling-hook-references-v3.toml:3",
+   "label": "genuine",
+   "reason": "Names the backups, the pre-surfaced deletion list, the predicate, the five entries it currently selects and the end state of both files."
+  },
+  {
+   "key": "prune-dangling-hook-references-v3.toml:4",
+   "label": "genuine",
+   "reason": "Enumerates the added doc material in all three files, with the evidence and the named residual."
+  },
+  {
+   "key": "prune-dangling-hook-references-v3.toml:5",
+   "label": "genuine",
+   "reason": "States the commit message's subject, the landing route and the removal of branch and worktree."
+  },
+  {
+   "key": "prune-dangling-hook-references-v4.toml:1",
+   "label": "genuine",
+   "reason": "Describes the resolver's behaviour and its two fail-safe rules rather than reporting a suite result."
+  },
+  {
+   "key": "prune-dangling-hook-references-v4.toml:2",
+   "label": "genuine",
+   "reason": "Specifies the new pass, its ownership predicate, its file list, the basename_of repair and the --check exit contract."
+  },
+  {
+   "key": "prune-dangling-hook-references-v4.toml:3",
+   "label": "genuine",
+   "reason": "Names the captured inventory, the backups, the run-time-derived work-list and the exact resulting removals."
+  },
+  {
+   "key": "prune-dangling-hook-references-v4.toml:4",
+   "label": "genuine",
+   "reason": "Says what each document now states, including why the check is excluded from verify-all."
+  },
+  {
+   "key": "prune-dangling-hook-references-v4.toml:5",
+   "label": "genuine",
+   "reason": "Names the landing tool and argues from the engine's delivered_head why the alternative would not do — a described act with its reason."
+  },
+  {
+   "key": "prune-dangling-hook-references-v5.toml:1",
+   "label": "genuine",
+   "reason": "The resolver's contract and test matrix are spelled out; no verdict appears in the image at all."
+  },
+  {
+   "key": "prune-dangling-hook-references-v5.toml:2",
+   "label": "genuine",
+   "reason": "Describes the prune pass, its scope decision, the shared resolver and the dedup defect it repairs."
+  },
+  {
+   "key": "prune-dangling-hook-references-v5.toml:3",
+   "label": "genuine",
+   "reason": "Describes inventory, backup, pre-write surfacing, the governing predicate and the expected removals with their provenance commits."
+  },
+  {
+   "key": "prune-dangling-hook-references-v5.toml:4",
+   "label": "genuine",
+   "reason": "Names the three documents' new content and the residual it must state honestly."
+  },
+  {
+   "key": "prune-dangling-hook-references-v5.toml:5",
+   "label": "genuine",
+   "reason": "Adds the merge-not-rebase route to the landing description and says why land-on-main.sh is excluded."
+  },
+  {
+   "key": "prune-dangling-hook-references-v7.toml:1",
+   "label": "genuine",
+   "reason": "Names what is deleted, what single artifact is carried forward and confirmed readable first, and the fresh worktree's branch and fork point."
+  },
+  {
+   "key": "prune-dangling-hook-references-v7.toml:2",
+   "label": "genuine",
+   "reason": "Names two binding identifiers and the exact semantics of the interpreter walk and the prune-only file list, plus the new test file's cases."
+  },
+  {
+   "key": "prune-dangling-hook-references-v7.toml:3",
+   "label": "genuine",
+   "reason": "Describes the inventory triples, the backups, the pre-write report, the single reconciler run and the two entries the predicate selects."
+  },
+  {
+   "key": "prune-dangling-hook-references-v7.toml:4",
+   "label": "genuine",
+   "reason": "Quotes the row being extended and states what it must now say, including why the literal term 'prune-only' is the contract."
+  },
+  {
+   "key": "prune-dangling-hook-references-v7.toml:5",
+   "label": "genuine",
+   "reason": "States the commit, the ancestry relation, the landing tool, the canon pull ordering and the removed worktree; suite-green is one clause among them."
+  },
+  {
+   "key": "prune-dangling-hook-references.toml:1",
+   "label": "genuine",
+   "reason": "The resolver's algorithm, fail-safe rules and enumeration change are described in full."
+  },
+  {
+   "key": "prune-dangling-hook-references.toml:2",
+   "label": "genuine",
+   "reason": "Defines ownership, the prune pass's behaviour and file scope, and the idempotency defect it fixes."
+  },
+  {
+   "key": "prune-dangling-hook-references.toml:3",
+   "label": "genuine",
+   "reason": "Names the concrete resulting mutation of each live file, down to which group disappears and which sibling survives."
+  },
+  {
+   "key": "prune-dangling-hook-references.toml:4",
+   "label": "genuine",
+   "reason": "Names the rows and subsection each document gains and what they explain."
+  },
+  {
+   "key": "prune-dangling-hook-references.toml:5",
+   "label": "genuine",
+   "reason": "States the commit's message subject, the landing route and the local/remote removal of branch and worktree."
+  },
+  {
+   "key": "restore-phone-vpn.toml:1",
+   "label": "genuine",
+   "reason": "The host is reachable again from outside RU and the underlying cause was found and corrected — a change in the world, with the probe named only as how it shows."
+  },
+  {
+   "key": "restore-phone-vpn.toml:2",
+   "label": "genuine",
+   "reason": "Borderline — phrased as three observations, but they name a state (xray running on that config, 443/8443 listening) and add the restart contingency; went genuine."
+  },
+  {
+   "key": "restore-phone-vpn.toml:3",
+   "label": "genuine",
+   "reason": "Names what now works on the phone — profile connects, feed and a reel load — and the agent's guiding/recording role."
+  },
+  {
+   "key": "restore-phone-vpn.toml:4",
+   "label": "genuine",
+   "reason": "Describes the contingency's product: one added inbound of a named kind, Reality retained, a new share link imported and working."
+  },
+  {
+   "key": "scope-coverage-at-approval.toml:1",
+   "label": "genuine",
+   "reason": "Describes the gate's new behaviour — which blocker is reported, that approve refuses, what dispositioning clears it — before the trailing pytest verdict."
+  },
+  {
+   "key": "scope-coverage-at-approval.toml:2",
+   "label": "genuine",
+   "reason": "States what present-plan now refuses, the exact block it demands and hands back, and the stale-essence rule; the exit-0 clause is appended."
+  },
+  {
+   "key": "scope-coverage-at-approval.toml:3",
+   "label": "genuine",
+   "reason": "Borderline — bracketed by a grep verdict and verify-all, but the README-lists and leaf-names clauses say what the prose now contains; went genuine."
+  },
+  {
+   "key": "si-classify-external-effect.toml:1",
+   "label": "genuine",
+   "reason": "Thin, but it locates a sentence added at a named place and the size that holds; the 'lint passes' clause is not carrying it."
+  },
+  {
+   "key": "si-dialogue-search-lang.toml:1",
+   "label": "genuine",
+   "reason": "Names the rule added to the planner skill, the pointer in CLAUDE.md, the mirror line, and the commit's trailer."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience-v2.toml:1",
+   "label": "genuine",
+   "reason": "A named directory exists as a worktree on a fresh branch and the coordinator's cwd sits inside it — plain state."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience-v2.toml:2",
+   "label": "echo",
+   "reason": "The stage pins dispatched-spawn cwd, yet the image gives only 'test exits 0' plus a gloss of what the three cases assert; the pinning itself is never stated."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience-v2.toml:3",
+   "label": "echo",
+   "reason": "Two exit-0 verdicts and a list of what the test asserts; what the injection actually does to a developer spawn's settings is nowhere described."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience-v2.toml:4",
+   "label": "echo",
+   "reason": "Wholly two exit-0 clauses; nothing about where the 1-5 rating now appears in the two salience surfaces the stage exists to change."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience-v2.toml:5",
+   "label": "genuine",
+   "reason": "Verdict-heavy, but 'live global settings carry no pytest entry' and 'commits exist on the worktree branch' are states that survive deleting the checks; went genuine."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience-v3.toml:1",
+   "label": "genuine",
+   "reason": "Same worktree state: named path, git worktree, fresh branch, cwd inside it."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience-v3.toml:2",
+   "label": "echo",
+   "reason": "Identical to the v2 stage: a passing test and the cases it covers, with the cwd-pinning change itself absent."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience-v3.toml:3",
+   "label": "echo",
+   "reason": "Two exit-0 verdicts plus 'are all asserted' — the reader learns what the check covers, not what the injection or the revert did."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience-v3.toml:4",
+   "label": "echo",
+   "reason": "Nothing but two passing commands; the rating's placement in either surface is not stated."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience-v3.toml:5",
+   "label": "genuine",
+   "reason": "Mostly verdicts, but the two env markers observed in a live spawn, the clean global settings and the commits are real end-state facts; went genuine."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience.toml:1",
+   "label": "genuine",
+   "reason": "States the worktree that now exists and where the coordinator is working from."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience.toml:2",
+   "label": "echo",
+   "reason": "Same verdict-plus-test-cases shape as its later revisions; the pinned cwd behaviour is never described."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience.toml:3",
+   "label": "echo",
+   "reason": "'Test exits 0; base.json parses; the entry and instruction are asserted present' — three statements about the check, none about the allowlist change itself."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience.toml:4",
+   "label": "echo",
+   "reason": "Two exit-0 clauses with a parenthetical restating what the test asserts; no fact about either salience surface."
+  },
+  {
+   "key": "spawn-dispatch-cwd-pytest-quality-salience.toml:5",
+   "label": "genuine",
+   "reason": "Borderline — four of five clauses are verdicts and only 'commit(s) exist on the worktree branch' survives deletion, but that is a state; went genuine."
+  },
+  {
+   "key": "spawn-project-local-specializations.toml:1",
+   "label": "genuine",
+   "reason": "Gives skill_path()'s full resolution order, the new test file and the two docs that now note project-local resolution."
+  },
+  {
+   "key": "spawn-project-local-specializations.toml:2",
+   "label": "genuine",
+   "reason": "Borderline — a verification stage, but the dry-run clause states the behaviour achieved (a trips-cwd run resolves the project-local SKILL.md); went genuine."
+  },
+  {
+   "key": "spb-slow-july-2026.toml:1",
+   "label": "genuine",
+   "reason": "Enumerates the workspace copied and every constraint value trip.md now records, plus the deleted block and the index row."
+  },
+  {
+   "key": "spb-slow-july-2026.toml:2",
+   "label": "genuine",
+   "reason": "Specifies five research briefs by subject and sourcing standard — the knowledge produced, not that research happened."
+  },
+  {
+   "key": "spb-slow-july-2026.toml:3",
+   "label": "genuine",
+   "reason": "Names the fixed window with its reason, the transit and car decisions, and the lodging options' required properties and links."
+  },
+  {
+   "key": "spb-slow-july-2026.toml:4",
+   "label": "genuine",
+   "reason": "Describes the itinerary file's shape, pacing, day allocation and the rhythm it exploits, plus the decision write-up."
+  },
+  {
+   "key": "spb-slow-july-2026.toml:5",
+   "label": "genuine",
+   "reason": "States what is rendered, where it is deployed, where the URL is recorded and the opt-in condition."
+  },
+  {
+   "key": "steal-report.toml:1",
+   "label": "genuine",
+   "reason": "A near-specification of the script: inputs, filtering, the single awk pass, the verdict thresholds, the too-few-samples path, the deployed location and its live run."
+  },
+  {
+   "key": "steal-report.toml:2",
+   "label": "genuine",
+   "reason": "Names the commit and, more importantly, the memory change and the behaviour it is meant to produce in a future session."
+  },
+  {
+   "key": "the0-klg-ssh-agent-persist.toml:1",
+   "label": "genuine",
+   "reason": "Spells out the new autossh invocation, what it stops doing, what it keeps, and the live fixed-path socket that results on the host."
+  },
+  {
+   "key": "the0-klg-ssh-agent-persist.toml:2",
+   "label": "genuine",
+   "reason": "Names each host-side file's new content — static symlink, simplified rc, removed PROMPT_COMMAND heal — and the invariant that follows."
+  },
+  {
+   "key": "the0-klg-ssh-agent-persist.toml:3",
+   "label": "genuine",
+   "reason": "Borderline — a verification stage, but it names states in the user's real pane (symlink target, live socket, keys listed, rebinding across a kickstart); went genuine."
+  },
+  {
+   "key": "the0-vpn-mts-mobile.toml:1",
+   "label": "genuine",
+   "reason": "The stage's product is a diagnostic determination, and the image says what the recorded artifact contains and by which rule a branch selects it."
+  },
+  {
+   "key": "the0-vpn-mts-mobile.toml:2",
+   "label": "genuine",
+   "reason": "States the field's new value on a named inbound and that a before/after dump differs in exactly that one path — the server state, with the rationale for the split."
+  },
+  {
+   "key": "the0-vpn-mts-mobile.toml:3",
+   "label": "genuine",
+   "reason": "Names the generated file, every field that differs per client, the one-client exception and the four things the distribution record must carry."
+  },
+  {
+   "key": "trips-specializations.toml:1",
+   "label": "genuine",
+   "reason": "Names the per-theme synthesis and its parts, and what the meta-theme does to the taxonomy's boundaries."
+  },
+  {
+   "key": "trips-specializations.toml:2",
+   "label": "genuine",
+   "reason": "Enumerates the design document's contents — table, split principle, interaction map, cross-cutting budget."
+  },
+  {
+   "key": "trips-specializations.toml:3",
+   "label": "genuine",
+   "reason": "A repo with a first commit, a README pointing at docs, a .gitignore — the artifacts, not the git-log check."
+  },
+  {
+   "key": "trips-specializations.toml:4",
+   "label": "genuine",
+   "reason": "Specifies the six skill files' required sections, size bound and provenance in the research."
+  },
+  {
+   "key": "trips-specializations.toml:5",
+   "label": "genuine",
+   "reason": "Initialised memory index and an updated commit are real state; the 'final check passed' clause is a middle aside, not the image."
+  },
+  {
+   "key": "vpn-phone-restore.toml:1",
+   "label": "genuine",
+   "reason": "The host answers from external probes and from this Mac, achieved by a named panel action — with the explicit non-change to Xray config."
+  },
+  {
+   "key": "vpn-phone-restore.toml:2",
+   "label": "genuine",
+   "reason": "Names the running process and its listeners plus the restart path if it died — a state description, not a pass report."
+  },
+  {
+   "key": "vpn-phone-restore.toml:3",
+   "label": "genuine",
+   "reason": "Says what the user does on the phone and that the Instagram feed loads; the agent recording pass/fail is one clause of it."
+  },
+  {
+   "key": "vpn-phone-restore.toml:4",
+   "label": "genuine",
+   "reason": "Names the trigger condition, the added inbound, the exported link and the additive-cutover property."
+  },
+  {
+   "key": "vpn-the0-fun.toml:1",
+   "label": "genuine",
+   "reason": "Describes the monitor's computation, its log format, its shell hardening choices, the deployment and the idempotent cron line."
+  },
+  {
+   "key": "vpn-the0-fun.toml:2",
+   "label": "genuine",
+   "reason": "Names the commit, its branch and what its message must explain — the artifact, not the git-log grep."
+  }
+ ]
+}

@@ -1,0 +1,115 @@
+[meta]
+task_id = "instr-pull-integrity-gate"
+goal = "Two self-improvement fixes approved by the user: (1) stop verify-cross-refs from flagging byte-exact frozen snapshots (benchmark-profile*/), which currently makes verify-all FAIL on paths that are immutable by contract; (2) structurally determinize the norm 'when instructions are updated, run integrity/consistency checks in both the global and project layers' by wiring a fail-open integrity gate into sync-instructions-repo.sh cmd_pull, instead of leaving it as a forgettable prose rule."
+done_criterion = "verify-all.py passes (verify-cross-refs green); sync-instructions-repo.sh runs verify-all (global) + verify-leaf-structure.py --root (project, when the invoking tree holds .claude/agent-memory/MEMORY.md) after a pull that applied commits, fail-open; new test(s) cover the pull-time gate; all committed with a [self-improvement-reviewed] trailer. Measurable gates resolution; the user gives the final acceptance on review of the delivered pull-time behavior."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "none"
+
+[[stage]]
+index = 1
+title = "Exclude frozen snapshots from verify-cross-refs; confirm verify-all green"
+executor = "in_thread"
+expected_result_image = "scripts/verify-cross-refs.py SKIP_PATH_PREFIXES extended from ('docs/migrations/',) to also include 'benchmark-profile/' and 'benchmark-profile-spawn/' (byte-exact frozen snapshots pinned by MANIFEST.sha256 — editing their contents would break the manifest, so they must be out of cross-ref scope). verify-all.py then reports 16/16 OK."
+criterion_type = "measurable"
+done_criterion = "verify-cross-refs.py exits 0 (the check this stage fixes); full verify-all.py green is asserted in Final verification"
+verify_command = "cd /Users/the0/claude-agent-instructions && python3 scripts/verify-cross-refs.py && echo GATE_OK"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/verify-cross-refs.py"]
+material = "SKIP_PATH_PREFIXES tuple in verify-cross-refs.py"
+means = "Edit, Bash"
+method = "extend the SKIP_PATH_PREFIXES tuple; rerun verify-all"
+conditions = "benchmark-profile*/ are tracked frozen snapshots (confirmed via MANIFEST.sha256 + 'byte-exact' commit)"
+invariants = "do NOT edit any file inside benchmark-profile*/ (byte-exact contract); only the skip-list changes; other verify checks stay green"
+capability_required = "python + repo edit"
+
+[stage.principle]
+statement = "A byte-exact frozen snapshot is out of scope for content linters — cross-ref checking must skip it rather than demand edits that break its hash manifest"
+source = "MANIFEST.sha256 pins content; verify-cross-refs already has a SKIP_PATH_PREFIXES seam"
+derivation = "If a file's bytes are pinned by a hash manifest, any lint that would require editing it is unsatisfiable by construction; therefore the lint must exclude the pinned tree. The skip-list seam already exists for docs/migrations/, so the frozen snapshots belong in the same list."
+confidence = "high"
+refutation = "if any benchmark-profile*/ file is meant to be a live editable doc (not hash-pinned), skipping it would hide real broken refs"
+
+[[stage]]
+index = 2
+title = "Add a --root batch mode to verify-leaf-structure.py for the project-memory layout + test"
+executor = "in_thread"
+expected_result_image = "verify-leaf-structure.py gains a `--root DIR` mode that enumerates every *.md under DIR and runs check_content on each, honoring the existing grandfather rule (non-opted-in files skipped, only `schema:`-declared leaves enforced). This is the honest project-layer verifier: it understands the runtime `.claude/agent-memory/` layout (line-79 path check already accepts 'agent-memory'), unlike verify-memory-index.py which hardcodes the `memory-global/leaves` layout and would exit 0 having validated nothing (false-green — the independent plan review's blocker). A test asserts --root over a fixture agent-memory dir checks opted-in leaves and grandfathers the rest."
+criterion_type = "measurable"
+done_criterion = "the new verify-leaf-structure --root test passes AND `verify-leaf-structure.py --root <this repo's own memory-global/leaves>` still exits 0"
+verify_command = "cd /Users/the0/claude-agent-instructions && python3 -m pytest scripts/tests/test_verify_leaf_structure.py -q && echo GATE_OK"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/verify-leaf-structure.py", "scripts/tests/test_verify_leaf_structure.py"]
+material = "verify-leaf-structure.py argparse + a new root-scan path"
+means = "Edit, Write, Bash (pytest)"
+method = "add `--root DIR` to the argparse group; enumerate DIR.rglob('*.md'); reuse check_content + the grandfather guard; extend the existing same-subject test scripts/tests/test_verify_leaf_structure.py with a TestRootMode class (avoids a redundant new test file)"
+conditions = "verify-leaf-structure understands 'agent-memory' in path parts (confirmed line 79); grandfathers non-opted-in leaves (confirmed)"
+invariants = "preserve exactly (deliverable carried in scripts/tests/test_verify_leaf_structure.py): verify-leaf-structure --root behavior + 6 tests; grandfather semantics; existing --staged/--hook/positional modes untouched; English-only"
+capability_required = "python + pytest"
+
+[stage.principle]
+statement = "The project layer must be verified by a checker that understands its runtime layout (.claude/agent-memory/), not one hardcoded to the global memory-global/leaves layout — else the check is a false-green"
+source = "independent plan review (blocker); verify-memory-index.py hardcodes LEAVES_REL='memory-global/leaves'; verify-leaf-structure.py already accepts 'agent-memory' paths"
+derivation = "A verifier pointed at a directory whose layout it does not recognize returns its empty-scope OK path, validating nothing while logging green. Wiring such a checker as the project-layer gate would manufacture false assurance — worse than no check. Therefore the gate must use verify-leaf-structure (layout-aware), extended with the missing batch-over-root entrypoint."
+confidence = "high"
+refutation = "if project agent-memory leaves are in fact laid out as memory-global/leaves, verify-memory-index --root would suffice and this stage is redundant"
+
+[[stage]]
+index = 3
+title = "Wire fail-open integrity gate into sync-instructions-repo.sh cmd_pull + tests"
+executor = "in_thread"
+expected_result_image = "sync-instructions-repo.sh gains a run_integrity_checks helper invoked in cmd_pull right before the final 'pull: done' log (so it runs ONLY on the reconcile path where commits were actually applied — the behind==0 early return at line ~132 and the fetch-not-found return at ~124 skip it, keeping up-to-date auto-pulls cheap; the stash-pop-conflict `return 1` at ~161 also bypasses it, acceptable on a conflicted tree). It runs (a) python3 verify-all.py for the GLOBAL layer, and (b) if the pull was invoked from a project holding .claude/agent-memory/MEMORY.md, python3 verify-leaf-structure.py --root <that agent-memory dir> for the PROJECT layer. Fail-open: each failure emits a loud log WARN line but NEVER aborts the pull — the helper is invoked as `run_integrity_checks || true` and each internal command is guarded, so set -euo pipefail cannot abort. The invocation directory is captured at FILE TOP into a variable BEFORE the module-scope `cd \"$REPO\"` at line ~30 (not inside cmd_pull); detached/cron runs whose cwd holds no project agent-memory skip the project check silently. A test in scripts/tests/ asserts the gate runs the global check after an applied pull and that a verify failure does not fail the pull (fail-open)."
+criterion_type = "measurable"
+done_criterion = "the new pull-gate test passes (scoped); the full suite staying green is asserted in Final verification"
+verify_command = "cd /Users/the0/claude-agent-instructions && python3 -m pytest scripts/tests/test_sync_pull_integrity_gate.py -q && echo GATE_OK"
+expected_exit = 0
+depends_on = [1, 2]
+output_artifacts = ["scripts/sync-instructions-repo.sh", "scripts/tests/test_sync_pull_integrity_gate.py"]
+material = "cmd_pull function + new run_integrity_checks helper + a top-of-file INVOCATION_DIR capture"
+means = "Edit, Write, Bash (pytest)"
+method = "capture invocation dir at file top before the `cd \"$REPO\"`; add run_integrity_checks() using the existing log() helper and $REPO (global=verify-all.py; project=verify-leaf-structure.py --root, discovered by WALKING UP from the captured invocation dir to the nearest ancestor holding .claude/agent-memory/MEMORY.md so a subdirectory invocation still finds it — qenum-9 — and SKIPPING the project check when that discovered dir resolves under $REPO itself, so a repo-internal invocation never self-checks the instructions repo — qenum-10); call it as `run_integrity_checks || true` before 'pull: done'; author a test that stubs the checks and asserts fail-open + invocation"
+conditions = "verify-all.py exists; verify-leaf-structure.py --root added in stage 2"
+invariants = "fail-open (pull rc unaffected by check outcome); runs only when commits were applied (not on behind==0); project check skipped silently when no ancestor of the invocation dir holds .claude/agent-memory/MEMORY.md, and skipped when the discovered agent-memory is under $REPO (no self-check); WARN goes to stderr via the existing log() helper (defined channel, not implementer discretion); capture lives at file top before cd (not in cmd_pull); English-only; no behavior change to fetch/rebase/merge logic"
+capability_required = "bash + python + pytest"
+
+[stage.principle]
+statement = "Determinize a decidable norm structurally (wire the check into the pull command) rather than as prose the model may forget; fail-open so an integrity signal never strands the user without updated instructions"
+source = "CLAUDE.md root principle 'Separate rule from perception; determinize the rule at its proper structural level'"
+derivation = "The norm 'run integrity checks after updating instructions' is fully decidable from an observable input (a pull applied commits) — it has no perception part — so it qualifies for structural mechanization. Placing it inside cmd_pull makes it fire deterministically on every applied pull regardless of which session/model triggers it, which prose cannot guarantee. Fail-open follows from the objective: a failed check is a signal to surface, not a reason to withhold the (already-applied) update."
+confidence = "high"
+refutation = "if the check materially slows every pull or blocks updates on benign failures, the structural placement is wrong"
+
+[[stage]]
+index = 4
+title = "Commit all fixes with the self-improvement trailer"
+executor = "in_thread"
+expected_result_image = "One coherent commit on the instructions repo adding the skip-list change, the verify-leaf-structure --root mode, the pull-time gate, and their tests (all one self-improvement change — committed together, not split), the message naming the difficulty it removes and carrying the [self-improvement-reviewed] trailer required by the commit-msg hook for self-improvement-touching work."
+criterion_type = "measurable"
+done_criterion = "git log shows the commit(s) with [self-improvement-reviewed] trailer covering the changed files"
+verify_command = "cd /Users/the0/claude-agent-instructions && git log --oneline -3 | grep -q . && git log -1 --format=%B | grep -q 'self-improvement-reviewed'"
+expected_exit = 0
+depends_on = [3]
+output_artifacts = ["git commit"]
+material = "staged changes from stages 1-3"
+means = "Bash (git)"
+method = "git add the changed files; commit with difficulty-named message + trailer"
+conditions = "stages 1-3 done, tests green"
+invariants = "commit only these changes; no push until a separate explicit user confirmation"
+capability_required = "git"
+
+[stage.principle]
+statement = "Self-improvement edits carry the [self-improvement-reviewed] trailer and name the difficulty removed, so the change is auditable"
+source = "skills/self-improvement/policy.md § Git sync; commit-msg hook"
+derivation = "The commit-msg hook mechanically rejects a self-improvement-touching commit lacking the trailer; naming the difficulty in the message is the functional-ground convention. Complying is a precondition for the commit to land at all."
+confidence = "high"
+refutation = "none"
+
+## Final verification
+# 1. python3 scripts/verify-all.py -> 16/16 OK (cross-refs green).
+# 2. python3 -m pytest scripts/tests/ -q -> all pass, including test_verify_leaf_structure_root.py and test_sync_pull_integrity_gate.py.
+# 3. python3 scripts/verify-leaf-structure.py --root <project>/.claude/agent-memory -> OK (project layer actually validated, not false-green).
+# 4. Manual: sync-instructions-repo.sh pull on an up-to-date repo does NOT run the gate (behind==0 early return); on an applied pull it logs the integrity run and stays fail-open.
+# 5. git log shows commit(s) with the [self-improvement-reviewed] trailer over the changed files; nothing pushed yet.

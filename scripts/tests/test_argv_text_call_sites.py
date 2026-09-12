@@ -236,7 +236,8 @@ def _load(filename: str, module_name: str):
 def _specialist_prompt(extra_argv: list[str], plan: str) -> str:
     mod = _load("spawn-specialist.py", "spawn_specialist")
     args = mod.build_parser().parse_args(
-        ["--kind", "developer", "--criterion-type", "measurable", "--plan", plan]
+        ["--kind", "developer", "--criterion-type", "measurable", "--plan", plan,
+         "--complexity", "medium", "--effort", "medium"]
         + extra_argv
     )
     return mod.assemble_prompt(args, depth=1, permissions="")
@@ -292,6 +293,7 @@ _WRAPPER_DO_NOT_WRAP: dict[str, dict[str, str]] = {
     "spawn-cursor-specialist.py": {
         "kind": "specialization name — an id from a fixed catalog (SKILL.md directory names), not prose",
         "model": "model alias/id (e.g. composer-2.5) — a token, not prose",
+        "continue_worktree": "a worktree path — a filesystem reference, not prose",
     },
 }
 

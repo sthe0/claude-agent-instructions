@@ -1,0 +1,46 @@
+# A substantive plan that LOADS but must not SUBMIT.
+#
+# It declares every field `load_plan(strict=True)` has ever required, and omits only
+# `knowledge`. That combination is the whole point of the fixture: it is the live proof
+# that the знание requirement sits on the submission seam and not in the loader, so a
+# plan authored before the requirement existed still re-reads cleanly inside a session
+# that already accepted it, while the same bytes are refused when they try to ENTER a
+# session. If a future change moves the requirement into `parse_plan`'s `if strict:`
+# branches, this file stops loading and final_check 4 goes red on its first assertion
+# rather than its second — which is the distinction worth failing on.
+#
+# `material_refs` and `knowledge_refs` ARE declared, so the refusal this fixture provokes
+# names `knowledge` specifically rather than being the first of three indistinguishable
+# misses.
+
+[meta]
+task_id = "submission-fixture"
+goal = "prove the знание requirement lives at the submission seam"
+done_criterion = "load_plan accepts these bytes and validate_submission refuses them"
+criterion_type = "measurable"
+weight_class = "substantive"
+external_research = "checked the engine's own loader call sites; no prior art applies"
+
+[[stage]]
+index = 1
+title = "A stage with every place filled but знание"
+executor = "in_thread"
+expected_result_image = "the loader accepts this stage"
+criterion_type = "measurable"
+done_criterion = "load_plan(strict=True) returns a PlanDoc"
+verify_command = "python3 -m pytest scripts/tests/test_knowledge_place.py -q"
+material = "this fixture file"
+material_refs = ["scripts/tests/fixtures/submission/stage_without_knowledge.toml"]
+knowledge_refs = ["agentctl.plan.load_plan", "agentctl.submission.validate_submission"]
+means = "the agentctl loader"
+method = "parse the file and hand the doc to the submission grade"
+conditions = "run from the repository root"
+invariants = "no field required by the loader is missing here"
+capability_required = "Python"
+
+[stage.principle]
+statement = "a requirement placed at the entry seam is not retroactive over plans a session already holds"
+source = "agentctl/submission.py module docstring; the seven strict load_plan call sites"
+derivation = "the loader is re-entered on plans already accepted, the seam is entered only by new bytes, so only the latter can carry a new requirement without breaking a live session"
+confidence = "high"
+refutation = "a plan that loads here but is refused at submission would show the two grades had not in fact diverged"

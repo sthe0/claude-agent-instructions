@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from lib import marker_extract
+from lib import host_llm, marker_extract
 from lib.planner_plan_check import RETURN_MARKERS
 
 # spawn-cursor-escape.py's own, deliberately different vocabulary — the caller
@@ -176,6 +176,102 @@ def test_every_failure_path_fails_closed(label, runner):
     assert result.reason, label
 
 
+# --- outcome typing: the closed-set judgement/observation split ----------------
+
+
+def test_classified_outcome_on_a_clean_success():
+    result = marker_extract.extract("body", allowed=RETURN_MARKERS, runner=_fake_runner(_reply("COMPLETED")))
+    assert result.outcome == marker_extract.OUTCOME_CLASSIFIED
+
+
+@pytest.mark.parametrize(
+    "label,runner",
+    [
+        ("none_verdict", _fake_runner(_reply("NONE"))),
+        ("off_vocabulary", _fake_runner(_reply("APPROVED"))),
+    ],
+)
+def test_no_marker_outcome_for_a_genuine_judgement(label, runner):
+    result = marker_extract.extract("body", allowed=RETURN_MARKERS, runner=runner)
+    assert result.outcome == marker_extract.OUTCOME_NO_MARKER, label
+
+
+@pytest.mark.parametrize(
+    "label,runner",
+    [
+        ("empty_stdout", _fake_runner("")),
+        ("unparseable_reply", _fake_runner("I think it is probably completed?\n")),
+        ("nonzero_exit", _fake_runner("", returncode=1, stderr="boom")),
+        ("runner_raises", _raising_runner(RuntimeError("exploded"))),
+    ],
+)
+def test_extractor_failed_outcome_for_an_observation_failure(label, runner):
+    result = marker_extract.extract("body", allowed=RETURN_MARKERS, runner=runner)
+    assert result.outcome == marker_extract.OUTCOME_EXTRACTOR_FAILED, label
+    # extract() itself never degrades — that is build_extraction's layer.
+    assert result.degraded is False, label
+
+
+def test_build_extraction_unavailable_outcome_when_claude_absent(monkeypatch):
+    monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: None)
+    result = marker_extract.build_extraction("x", kind="developer", runner=_spy_runner([]))
+    assert result.outcome == marker_extract.OUTCOME_EXTRACTOR_UNAVAILABLE
+    assert result.degraded is True
+
+
+# --- retry: EXTRACTOR_FAILED is retried, NO_MARKER never is --------------------
+
+
+def test_extract_retries_a_transient_observation_failure_then_succeeds():
+    calls: list = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if len(calls) < 2:
+            return marker_extract.RunResult(1, "", "transient boom")
+        return marker_extract.RunResult(0, _reply("COMPLETED"), "")
+
+    result = marker_extract.extract("body", allowed=RETURN_MARKERS, runner=run)
+    assert result.marker == "COMPLETED"
+    assert result.outcome == marker_extract.OUTCOME_CLASSIFIED
+    assert len(calls) == 2
+
+
+def test_extract_retry_exhausted_reports_attempt_count_and_elapsed_time():
+    calls: list = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return marker_extract.RunResult(1, "", "still broken")
+
+    result = marker_extract.extract("body", allowed=RETURN_MARKERS, runner=run, timeout=1)
+    assert result.marker is None
+    assert result.outcome == marker_extract.OUTCOME_EXTRACTOR_FAILED
+    assert result.degraded is False
+    assert len(calls) == marker_extract._MAX_EXTRACT_ATTEMPTS
+    assert (
+        f"attempt {marker_extract._MAX_EXTRACT_ATTEMPTS}/{marker_extract._MAX_EXTRACT_ATTEMPTS}"
+        in result.reason
+    )
+    assert "elapsed" in result.reason
+
+
+def test_a_none_verdict_does_not_trigger_a_retry():
+    # Regression: NO_MARKER is a JUDGEMENT, never retried — retrying a genuine
+    # refusal would just ask the same closed-set question again.
+    calls: list = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return marker_extract.RunResult(0, _reply("NONE"), "")
+
+    result = marker_extract.extract("body", allowed=RETURN_MARKERS, runner=run)
+    assert result.marker is None
+    assert result.outcome == marker_extract.OUTCOME_NO_MARKER
+    assert len(calls) == 1
+
+
 def test_subprocess_runner_converts_a_timeout_into_a_failed_runresult(monkeypatch):
     import subprocess
 
@@ -186,6 +282,21 @@ def test_subprocess_runner_converts_a_timeout_into_a_failed_runresult(monkeypatc
     result = marker_extract.subprocess_runner(["claude"], timeout=7)
     assert result.returncode == 1
     assert "timed out after 7s" in result.stderr
+
+
+def test_subprocess_runner_runs_isolated_via_host_llm(monkeypatch):
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured.update(kwargs)
+        return marker_extract.subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(marker_extract.subprocess, "run", fake_run)
+    monkeypatch.setenv("HOST_LLM_ISOLATION_SENTINEL", "present")
+    marker_extract.subprocess_runner(["claude"], timeout=7)
+    assert captured["env"]["HOST_LLM_ISOLATION_SENTINEL"] == "present"
+    assert "claude-judge-sandbox" in captured["env"]["CLAUDE_CONFIG_DIR"]
+    assert "claude-judge-sandbox" in captured["cwd"]
 
 
 # --- (g2) kill switch: the ENV VAR itself, pinned to the documented value ------
@@ -205,9 +316,9 @@ def test_enabled_is_false_only_for_the_exact_documented_value(monkeypatch):
 
 
 def test_extractor_available_reflects_shutil_which(monkeypatch):
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
     assert marker_extract.extractor_available() is True
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: None)
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: None)
     assert marker_extract.extractor_available() is False
 
 
@@ -241,19 +352,19 @@ def test_build_extraction_returns_none_and_never_runs_under_the_kill_switch(monk
 
 def test_build_extraction_degrades_when_claude_is_absent(monkeypatch):
     monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: None)
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: None)
     calls: list = []
     result = marker_extract.build_extraction("x", kind="developer", runner=_spy_runner(calls))
     assert result is not None
     assert result.marker is None
     assert result.degraded is True
-    assert "PATH" in result.reason
+    assert "unavailable" in result.reason
     assert calls == []
 
 
 def test_build_extraction_runs_the_pass_when_reachable(monkeypatch):
     monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
     calls: list = []
     result = marker_extract.build_extraction("x", kind="developer", runner=_spy_runner(calls))
     assert result is not None and result.marker == "COMPLETED"
@@ -263,7 +374,7 @@ def test_build_extraction_runs_the_pass_when_reachable(monkeypatch):
 
 def test_build_extraction_hints_from_the_kind_without_narrowing_acceptance(monkeypatch):
     monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
     seen: list = []
 
     def run(argv, **kwargs):
@@ -293,3 +404,23 @@ def test_prompt_is_bounded_and_keeps_both_head_and_tail():
 def test_short_text_is_passed_through_whole():
     prompt = marker_extract.build_prompt("short body", RETURN_MARKERS)
     assert "characters elided" not in prompt
+
+
+def test_model_cursor_host_defaults_to_auto(monkeypatch):
+    monkeypatch.delenv(marker_extract.ENV_MODEL, raising=False)
+    assert marker_extract.model("cursor") is None
+
+
+def test_extract_cursor_host_builds_agent_argv_without_model(monkeypatch):
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/agent" if name == "agent" else None)
+    seen: list = []
+
+    def run(argv, **kwargs):
+        seen.append(argv)
+        return marker_extract.RunResult(0, _reply("COMPLETED"), "")
+
+    result = marker_extract.extract("body", runner=run, runtime_host="cursor")
+    assert result.marker == "COMPLETED"
+    assert seen[0][0] == "/usr/bin/agent"
+    assert "claude" not in seen[0]
+    assert "--model" not in seen[0]

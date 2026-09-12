@@ -51,7 +51,9 @@ What this skill is **not**:
 
 ## Content guidance per action
 
-Adapt the detail to the project's conventions. If project memory specifies a comment format, follow it. Otherwise: terse, factual, linkable. Plan posts include the markdown plan (or a link to a plan file) and flag stages needing approval. Progress posts are one line plus an artifact link. Final-result posts list all artifacts.
+Adapt the detail to the project's conventions. If project memory specifies a comment format, follow it. Otherwise: terse, factual, linkable. Plan posts include the markdown plan (or the plan file **attached** to the ticket) and flag stages needing approval. Progress posts are one line plus an artifact link. Final-result posts list all artifacts.
+
+**Never post a local filesystem path as if it were a reachable reference.** A path like `/home/<user>/.claude-agent/plans/<slug>.toml` only exists on the agent's own machine — a ticket reader cannot open it. When the ticket's readers need the actual file, **attach/upload it** to the ticket (or link a URL their own account can reach); when they only need to see its content, inline the rendered plan in the comment. This is the tracker-facing instance of [outcome-format.md](../../memory-global/leaves/outcome-format.md) point (3).
 
 **Cite every external run you rely on.** Any external graph/run whose result you use in a comment or conclusion is published in that ticket with its URL + terminal status — and, for a run that failed but whose number was salvaged off-graph, the recompute method that recovered it. A conclusion resting on a run whose URL is absent from the ticket is unreproducible and reads as "all green" even when the run failed; this is the tracker-side instance of the L1 claim-ledger grounding rule (`formalization-ladder-l1-l3`), the same requirement the tech-writer exposition rule and [[long-job-monitoring]] step 0 carry for their surfaces.
 
@@ -62,6 +64,8 @@ For any comment longer than a few lines — a report, a methodology or result su
 For ticket-driven work the **ticket is the single source of truth for the resolved difficulty** — do not duplicate it into a full experience leaf. At resolution, post the structured record (Difficulty / Order & criterion / Context / Working plan) as the final comment, then write only a **thin pointer leaf** (`ticket:` frontmatter + a one-line reusable hook). `scripts/record-experience.py ticket …` does both: it writes the thin leaf and prints the comment body to post here. Schema: [experience-leaf-schema.md](../../memory-global/leaves/experience-leaf-schema.md). This keeps the ticket and memory from diverging on later edits and saves context that would go to re-typing the plan.
 
 ## How to publish
+
+Every publication that travels as a shell command is gated on a preceding tech-writer pass — see [published-text-writer-gate.md](../../memory-global/leaves/published-text-writer-gate.md) — so route reader-facing text through `tech-writer` before posting rather than typing it directly into a publish call.
 
 In priority order:
 
@@ -81,6 +85,8 @@ Before publishing anything, load:
 - Wiki / docs linked from the ticket.
 
 If the ticket has **numbers, deadlines, TTLs, or abbreviations without an explicit link to a field or config**, surface them to the planner / root: source them or ask the user. Do not let the ticket's vague numerics get interpreted by guess.
+
+**An empty or bare-title description is a signal, not a null case.** A ticket created via a bare `--new`/`--title` launcher commonly carries no description at all. Before decomposing or publishing anything, run task-understanding first (restate the goal, surface ambiguities, confirm with the user — [[reasoning-and-task-solving]] § Understand before acting), then write the result into the ticket's **description** field (`update TICKET --field description=@/path` or the project's tracker-CLI equivalent) — not only into comments. The description is the artifact a later reader (or a future session) checks first; leaving it empty while only comments carry the plan hides the understanding from that reader.
 
 ## Coordination with other skills and agents
 

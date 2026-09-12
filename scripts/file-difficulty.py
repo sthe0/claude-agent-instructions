@@ -24,13 +24,43 @@ if str(SCRIPTS_DIR) not in sys.path:
 import difficulty_channel as dc  # noqa: E402
 import difficulty_channel.adapters  # noqa: E402,F401
 from difficulty_channel import authority  # noqa: E402
-from difficulty_channel.adapters import BUILTIN_NAMES, load_adapter  # noqa: E402
+from difficulty_channel.adapters import (  # noqa: E402
+    AdapterPluginBroken,
+    BUILTIN_NAMES,
+    load_adapter,
+)
 from difficulty_channel.adapters.github import DIFFICULTY_LABEL as _GH_DIFFICULTY_LABEL, BACKLOG_LABEL as _GH_BACKLOG_LABEL  # noqa: E402
 from difficulty_channel.project_queue import resolve_project_queue  # noqa: E402
 from lib import config_root  # noqa: E402
 from lib import term_ruleset as tr  # noqa: E402
 
 REPO_ROOT = SCRIPTS_DIR.parent
+
+
+def _fix_first_guard_applies(args: argparse.Namespace, project_q: str | None, authority_mod) -> bool:
+    """True when a core-tier filing headed for org-wide queues is a fix-first deferral.
+
+    Needs no adapter — its five inputs (args.layer, project_q, args.queue,
+    args.force_report, authority_mod.is_author()) are all available whether or not
+    ``load_adapter`` succeeded, which is what lets it be evaluated on the
+    plugin-broken path too.
+    """
+    return (
+        args.layer == "core"
+        and project_q is None
+        and not args.queue
+        and not args.force_report
+        and authority_mod.is_author()
+    )
+
+
+def _print_fix_first_refusal() -> None:
+    print(
+        "error: author machine: propose the fix directly (fix-first); "
+        "backlog -> --channel github --stream backlog "
+        "(or name a queue explicitly with --queue)",
+        file=sys.stderr,
+    )
 
 
 def _now_iso() -> str:
@@ -42,6 +72,12 @@ def _now_iso() -> str:
 
 
 def _build_record(args: argparse.Namespace, ts: str | None = None) -> dc.DifficultyRecord:
+    if args.cost is not None:
+        cost_estimate = args.cost
+    elif args.cost_not_estimable is not None:
+        cost_estimate = f"not estimable: {args.cost_not_estimable}"
+    else:
+        cost_estimate = ""
     return dc.DifficultyRecord(
         ts=ts or _now_iso(),
         layer=args.layer,
@@ -50,6 +86,7 @@ def _build_record(args: argparse.Namespace, ts: str | None = None) -> dc.Difficu
         severity=dc.Severity.parse(args.severity),
         reporter=args.reporter or os.environ.get("USER", "unknown"),
         evidence=args.evidence or "",
+        cost_estimate=cost_estimate,
     )
 
 
@@ -63,6 +100,8 @@ def _print_record(record: dc.DifficultyRecord) -> None:
     print(f"  reporter:          {record.reporter}")
     if record.evidence:
         print(f"  evidence:          {record.evidence!r}")
+    if record.cost_estimate:
+        print(f"  cost_estimate:     {record.cost_estimate!r}")
 
 
 def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
@@ -78,6 +117,14 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
                    help="which layer the difficulty is against (default: core)")
     p.add_argument("--evidence", default="",
                    help="supporting quote, log line, or link")
+    p.add_argument("--cost", default=None,
+                   help="what the problem costs per occurrence or per week, in whatever unit "
+                        "fits: '~8k tokens per session', '$3/week', '2 replans per ticket' "
+                        "(mutually exclusive with --cost-not-estimable; exactly one is required "
+                        "to actually file)")
+    p.add_argument("--cost-not-estimable", default=None, metavar="REASON",
+                   help="explicit reason no cost estimate is possible (mutually exclusive with "
+                        "--cost; exactly one is required to actually file)")
     p.add_argument("--reporter", default="",
                    help="who/what is filing (default: $USER)")
     p.add_argument("--channel", default=None,
@@ -138,6 +185,28 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
             # A channel registered in-process (a test double, an embedded channel) has no
             # plugin file and names no queues: submit with no routing hints.
             adapter = None
+        except AdapterPluginBroken as exc:
+            if dc.is_registered(channel_name):
+                # Mirrors the FileNotFoundError branch above: a broken plugin file says
+                # nothing about a channel that was registered without one, so filing
+                # proceeds — but a real diagnostic on the way here should not be
+                # silently swallowed.
+                print(
+                    f"warning: plugin failed to load: {exc}; channel registered "
+                    "in-process, filing anyway",
+                    file=sys.stderr,
+                )
+                adapter = None
+            else:
+                project_q = (
+                    None if args.queue
+                    else resolve_project_queue(Path(args.target).resolve())
+                )
+                if _fix_first_guard_applies(args, project_q, authority):
+                    _print_fix_first_refusal()
+                    return 2
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
         if adapter is None:
             submit_kwargs = {}
             routing_lines = []
@@ -155,14 +224,8 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
             # headed for the channel's org-wide queues from a machine that can edit
             # Core directly is a deferral-by-default — refuse with the hint. Fires on
             # --dry-run too (the preview must show the refusal, not fake a routing).
-            if (args.layer == "core" and project_q is None and not args.queue
-                    and not args.force_report and authority.is_author()):
-                print(
-                    "error: author machine: propose the fix directly (fix-first); "
-                    "backlog -> --channel github --stream backlog "
-                    "(or name a queue explicitly with --queue)",
-                    file=sys.stderr,
-                )
+            if _fix_first_guard_applies(args, project_q, authority):
+                _print_fix_first_refusal()
                 return 2
             submit_kwargs = {"queue": resolved_queue}
             routing_lines = [f"queue: {resolved_queue}"]
@@ -174,6 +237,16 @@ def main(argv: list[str] | None = None, _ts: str | None = None) -> int:
         for line in routing_lines:
             print(line)
         return 0
+
+    if (args.cost is not None) == (args.cost_not_estimable is not None):
+        got = "both" if args.cost is not None else "neither"
+        print(
+            "error: exactly one of --cost or --cost-not-estimable is required to file "
+            "(so a fixable loss is never left unmeasured, and a genuinely non-estimable one "
+            f"is never silently skipped) — got {got}",
+            file=sys.stderr,
+        )
+        return 2
 
     if authority.is_author() and not args.force_report:
         print(

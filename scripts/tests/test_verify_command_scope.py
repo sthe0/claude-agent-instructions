@@ -142,6 +142,7 @@ task_id = "demo"
 goal = "g"
 done_criterion = "dc"
 criterion_type = "measurable"
+weight_class = "small_change"
 
 [[stage]]
 index = 1
@@ -188,6 +189,7 @@ task_id = "demo"
 goal = "g"
 done_criterion = "dc"
 criterion_type = "measurable"
+weight_class = "small_change"
 
 [[stage]]
 index = 1

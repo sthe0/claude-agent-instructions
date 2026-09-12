@@ -1,0 +1,163 @@
+[meta]
+task_id = "complete-config-root-isolation"
+goal = "Finish the config-root isolation the prior task started: it moved the install/write side to $CLAUDE_AGENT_HOME (~/.claude-agent) but left runtime readers/resolvers/verifiers hardcoding ~/.claude, several of which now break on a migrated machine (specialist spawning, agent-identity channel resolution, verify checks). Route every runtime config-root reader through one resolver, fix the readers, refresh stale docs."
+done_criterion = "On the migrated machine (~/.claude-agent is the system root): (1) `scripts/verify-agentctl.py` passes; (2) `bash scripts/verify-layout-contract.sh` exits 0; (3) a specialist spawn resolves its SKILL.md from the system root; (4) `scripts/difficulty_channel/authority.py` reads the configured channel from ~/.claude-agent/agent-identity.local, not the ~/.claude default; (5) `python3 -m pytest scripts/tests/` green. Lands on branch isolate-agent-config-root together with the already-committed hook fix dfc5a94."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "Not warranted: entirely an internal-consistency fix within this repo's own scripts. The reused mechanism (a single config-root resolver) already exists in shell form at scripts/lib/config-root.sh with tests in scripts/tests/test_config_root.py; this task adds the Python analog and applies the same discipline to readers. No external library or non-obvious best practice is involved; the design is grounded in the repo's own established resolver+structural-audit-test pattern."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EXECUTOR NOTE (read before dispatch): specialist spawning is BROKEN on this
+# machine until Stage 2 lands (bug A — spawn-specialist.py resolves skills under
+# ~/.claude/skills, which post-migration is empty of system skills). Therefore
+# the bootstrap stages 1–2 run manager IN-THREAD after plan approval; once
+# Stage 2 restores skill resolution, stages 3–6 may be spawned to developer
+# (or continued in-thread at the user's discretion). This ordering is itself the
+# removal of the difficulty "the tool that repairs the system cannot run because
+# the system is broken".
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[stage]]
+index = 1
+title = "Introduce a Python config-root resolver (service — mirrors config-root.sh)"
+executor = "manager-in-thread"
+expected_result_image = "Importing scripts/lib/config_root.py exposes agent_home()/skills_dir()/identity_file() returning the isolated root when CLAUDE_AGENT_HOME or CLAUDE_CONFIG_DIR is set or ~/.claude-agent exists, and ~/.claude only as the non-isolated fallback; new pytest cases in test_config_root.py cover default/env-override/CLAUDE_CONFIG_DIR/legacy-fallback and pass."
+criterion_type = "measurable"
+done_criterion = "pytest for the new resolver module passes"
+verify_command = "python3 -m pytest scripts/tests/test_config_root.py -q"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/lib/config_root.py", "scripts/tests/test_config_root.py"]
+material = "scripts/lib/config-root.sh exists (shell resolver, CLAUDE_AGENT_HOME only). No Python analog exists — readers each hardcode Path.home()/'.claude'."
+means = "The existing config-root.sh contract + the structural-audit-test idiom already in test_config_root.py."
+method = "Add scripts/lib/config_root.py with: agent_home() -> Path resolving env CLAUDE_CONFIG_DIR, else env CLAUDE_AGENT_HOME, else ~/.claude-agent if it exists, else ~/.claude (legacy non-isolated fallback); convenience skills_dir()=agent_home()/'skills' and identity_file() honoring env CLAUDE_AGENT_IDENTITY then agent_home()/'agent-identity.local'. Keep it dependency-free (pathlib+os). Add pytest cases mirroring the shell resolver tests (default -> ~/.claude-agent when it exists; CLAUDE_AGENT_HOME override; CLAUDE_CONFIG_DIR override; legacy fallback to ~/.claude when neither env set nor ~/.claude-agent present)."
+conditions = "python3 available; tests use tmp HOME/env like the existing suite."
+invariants = "Resolver never raises on a missing root; a non-isolated machine (no ~/.claude-agent, no env) still resolves ~/.claude so pre-migration installs keep working."
+capability_required = "Python; familiarity with the existing resolver contract (developer-level, done in-thread as bootstrap)."
+
+[stage.principle]
+statement = "One resolver owns config-root location; every reader calls it instead of hardcoding a path — the rule part (where is the root) is determinized in a single structural home."
+source = "scripts/lib/config-root.sh precedent + CLAUDE.md 'determinize the rule at its proper structural level'."
+confidence = "high"
+refutation = "Would fail only if different artifacts legitimately lived under different roots with no single answer; here install-artifacts share one root."
+
+[[stage]]
+index = 2
+title = "Fix bug A — skill resolution + verify-agentctl (unblocks specialist spawning)"
+executor = "manager-in-thread"
+expected_result_image = "spawn-specialist.py, spawn-cursor-specialist.py and verify-agentctl.py resolve skills via config_root.skills_dir(); on the migrated machine verify-agentctl.py passes and a dry resolution of the planner SKILL.md finds it under ~/.claude-agent/skills."
+criterion_type = "measurable"
+done_criterion = "verify-agentctl.py exits 0 on this migrated machine"
+verify_command = "python3 scripts/verify-agentctl.py"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["scripts/spawn-specialist.py", "scripts/spawn-cursor-specialist.py", "scripts/verify-agentctl.py"]
+material = "spawn-specialist.py:38 SKILLS_DIR=Path.home()/'.claude'/'skills'; spawn-cursor-specialist.py:36 same; verify-agentctl.py:39 SKILLS_ROOT same. Also spawn-specialist.py:336,350 read ~/.claude/projects for transcripts (fold into this stage or defer to Stage 5 — decide during edit)."
+means = "The Stage-1 config_root resolver (skills_dir())."
+method = "Replace each hardcoded SKILLS_DIR/SKILLS_ROOT with config_root.skills_dir() (import from scripts/lib/config_root.py; add scripts/lib to sys.path or use a relative import consistent with how these scripts import siblings). Keep the project-local (<cwd>/.claude/skills/specializations/) override branch in spawn-specialist unchanged. Leave the ~/.claude/projects transcript reads for Stage 5 unless trivially co-located."
+conditions = "Runs on the migrated machine where system skills live only under ~/.claude-agent/skills."
+invariants = "A non-isolated machine (skills under ~/.claude) still resolves via the legacy fallback; project-local skill override precedence unchanged."
+capability_required = "Python; understanding of the spawn skill-resolution flow."
+
+[stage.principle]
+statement = "Repair the capability that repairs the system first: the resolver reaching the spawn/verify path is the bootstrap that re-enables delegation."
+source = "This session's observed chicken-and-egg (spawn broken by the very bug under repair)."
+confidence = "high"
+refutation = "None — spawning is empirically broken until this lands."
+
+[[stage]]
+index = 3
+title = "Fix bug B — agent-identity.local readers/writers agree on the system root"
+executor = "spawn:developer"
+expected_result_image = "authority.py, enter-task.sh, project_entry/projects.sh and hook-long-job-arm.py read agent-identity.local via the resolver; setup-org.sh writes it to the resolver path (matching configure-identity.sh); on this machine authority.read channel returns 'startrek' (the value in ~/.claude-agent/agent-identity.local), not the ~/.claude default; updated tests pass."
+criterion_type = "measurable"
+done_criterion = "authority reads the configured channel from ~/.claude-agent and identity tests pass"
+verify_command = "bash -c 'python3 -c \"import sys; sys.path.insert(0,\\\"scripts\\\"); from difficulty_channel import authority; print(authority.preferred_channel())\" | grep -qx startrek && python3 -m pytest scripts/tests/test_authority.py scripts/tests/test_setup_org.py scripts/tests/test_hook_long_job_arm.py -q'"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["scripts/difficulty_channel/authority.py", "scripts/enter-task.sh", "scripts/project_entry/projects.sh", "scripts/hook-long-job-arm.py", "scripts/setup-org.sh", "scripts/tests/test_authority.py", "scripts/tests/test_setup_org.py", "scripts/tests/test_hook_long_job_arm.py"]
+material = "Writers: configure-identity.sh (-> $CLAUDE_AGENT_HOME, correct), setup-org.sh:26 (-> $HOME/.claude, WRONG). Readers: authority.py:25, enter-task.sh:130, projects.sh:20, hook-long-job-arm.py (all -> ~/.claude). Existing tests use tmp paths and assert the old ~/.claude layout in test_setup_org.py."
+means = "Stage-1 resolver identity_file() (Python) and CLAUDE_AGENT_HOME sourced from config-root.sh (shell)."
+method = "Python readers (authority.py, hook-long-job-arm.py) call config_root.identity_file(). Shell readers (enter-task.sh:130, projects.sh:20) source scripts/lib/config-root.sh and use ${CLAUDE_AGENT_IDENTITY:-$CLAUDE_AGENT_HOME/agent-identity.local}. setup-org.sh:26 IDENTITY_FILE -> $CLAUDE_AGENT_HOME/agent-identity.local (source config-root.sh). Update docstrings in hook-long-job-arm.py (20,42) and authority.py (9). Update tests to the resolver-driven location (keep CLAUDE_AGENT_HOME/CLAUDE_AGENT_IDENTITY env-injection for hermeticity)."
+conditions = "python3 + bash; tests hermetic via env-injected roots."
+invariants = "CLAUDE_AGENT_IDENTITY override still wins; non-isolated fallback to ~/.claude preserved; no behavior change when the key is absent (built-in defaults)."
+capability_required = "Python + Bash; difficulty-channel and task-entry familiarity (developer)."
+
+[stage.principle]
+statement = "A per-machine config value must be read from the same root it is written to; writer/reader divergence is a latent silent-fallback bug."
+source = "Observed live: channel written to ~/.claude-agent, read from ~/.claude, silently defaulting."
+confidence = "high"
+refutation = "None — the divergence is demonstrated on the live machine."
+
+[[stage]]
+index = 4
+title = "Fix bug C — verify checks target the system root"
+executor = "spawn:developer"
+expected_result_image = "verify-layout-contract.sh runtime-symlink section and verify-instructions-sync.sh check the resolved system root; `bash scripts/verify-layout-contract.sh` exits 0 on this migrated machine."
+criterion_type = "measurable"
+done_criterion = "verify-layout-contract.sh exits 0 on the migrated machine"
+verify_command = "bash scripts/verify-layout-contract.sh"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["scripts/verify-layout-contract.sh", "scripts/verify-instructions-sync.sh"]
+material = "verify-layout-contract.sh:162-172 check $HOME/.claude/{CLAUDE.md,config.md,memory-global,skills,memory,scripts-local}; verify-instructions-sync.sh:33 check_link $HOME/.claude/CLAUDE.md. Both false-FAIL after migration."
+means = "config-root.sh (source it at the top of each shell verifier)."
+method = "Source scripts/lib/config-root.sh; replace $HOME/.claude with $CLAUDE_AGENT_HOME in the runtime-symlink/link checks. Keep personal-side checks (e.g. ~/.claude/memory personal auto-memory) only where they are genuinely personal — audit each of the 6 lines; the memory/scripts-local personal-fallback lines may need to stay on ~/.claude (decide per line, document inline)."
+conditions = "Runs on the migrated machine."
+invariants = "A non-isolated machine (symlinks still in ~/.claude via resolver fallback) still passes; personal-only checks stay personal."
+capability_required = "Bash; layout-contract semantics (developer)."
+
+[stage.principle]
+statement = "A verifier must assert against the location the system actually installs to, or it reports false failures and erodes trust in the guard."
+source = "This session: verify-layout-contract + verify-agentctl false-FAIL blocked a correct commit."
+confidence = "high"
+refutation = "None — false FAILs observed directly."
+
+[[stage]]
+index = 5
+title = "Bug D — analytics/settings readers: make config-root-aware or document"
+executor = "spawn:developer"
+expected_result_image = "Each script reading ~/.claude/projects (transcripts) or ~/.claude/settings.json is either routed through the resolver (when it must see the system's data under claude-agent) or left with an inline one-line rationale; a decision table is recorded in the plan's Actual effort / commit message."
+criterion_type = "acceptance-review"
+done_criterion = "Reviewer confirms each bug-D site is either resolver-routed or has a documented reason to stay on ~/.claude; pytest stays green."
+verify_command = "python3 -m pytest scripts/tests/ -q"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["scripts/cost-report.py", "scripts/policy-scorecard.py", "scripts/skill-usage-audit.py", "scripts/tool-usage-report.py", "scripts/stamp-memory-dates.py", "scripts/apply-settings.sh", "scripts/set-context-cap.sh", "scripts/apply-mcp-local.sh"]
+material = "Transcript/analytics readers: cost-report.py:28, policy-scorecard.py:57, skill-usage-audit.py:33, tool-usage-report.py:35, stamp-memory-dates.py:146, spawn-specialist.py:336,350. Settings target: apply-settings.sh:21, set-context-cap.sh:110, apply-mcp-local.sh:8. Under claude-agent the CLI writes projects/ and settings.json under ~/.claude-agent."
+means = "config_root.agent_home() (Python) / config-root.sh (shell) with a CLAUDE_SETTINGS/override kept where already present."
+method = "For each site decide: transcripts/settings the SYSTEM produces -> resolver; anything intentionally personal-scoped -> leave + inline comment. apply-settings.sh/set-context-cap.sh already honor $CLAUDE_SETTINGS override; ensure setup-symlinks passes CLAUDE_SETTINGS=$CLAUDE_AGENT_HOME/settings.json (verify current behavior first — it may already). Record the per-site verdict."
+conditions = "python3 + bash."
+invariants = "No analytics script crashes on a missing root; overrides preserved."
+capability_required = "Python + Bash; judgment on system-vs-personal data scope (developer)."
+
+[stage.principle]
+statement = "Lower-severity path drift still needs an explicit per-site verdict (fix or documented-leave); silent inconsistency is the same class of bug as the breaking ones, only quieter."
+source = "CLAUDE.md 'no silent caps' + the bug-A/B pattern generalized."
+confidence = "medium"
+refutation = "A site proven never to run in system context could stay, but that must be stated, not assumed."
+
+[[stage]]
+index = 6
+title = "Refresh stale doc install-target references"
+executor = "spawn:developer"
+expected_result_image = "README.md and the listed docs describe system install targets under ~/.claude-agent (or $CLAUDE_AGENT_HOME); no stale ~/.claude install-target ref remains in the in-scope docs; verify-readme and the doc guards pass."
+criterion_type = "measurable"
+done_criterion = "doc guards pass and the in-scope docs carry no stale ~/.claude install-target lines"
+verify_command = "bash -c 'python3 scripts/verify-readme.py >/dev/null 2>&1 || python3 scripts/verify-readme.py; ! grep -nE \"~/\\.claude/(agents|scripts-local|skills|agent-identity)\" README.md'"
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["README.md", "docs/README.md", "docs/components/scripts.md", "docs/components/skills-symlinks.md", "docs/operations/difficulty-channel-onboarding.md"]
+material = "README.md:119 (~/.claude/agent-identity.local), 132-134 (Extra agents/Local scripts/Local skills under ~/.claude); docs/README.md:47; docs/components/scripts.md; docs/components/skills-symlinks.md; docs/operations/difficulty-channel-onboarding.md:26,46,49. docs/migrations/* are history — leave. Plugin/registry runtime-dir refs (~/.claude/project-entry-plugins, projects.d) are machine-local by design — leave, but verify intentional."
+means = "The corrected code from stages 2-5 as the source of truth for what path each artifact now uses."
+method = "Update each ref to the isolated root (system agents -> $CLAUDE_AGENT_HOME/agents etc.), matching the machine-local vs system-root distinction the code now enforces. Keep genuinely machine-local/personal refs. English only."
+conditions = "Docs pass lint-prose-length / verify-readme."
+invariants = "No behavioral claim in docs contradicts the post-fix code; migration history untouched."
+capability_required = "Technical writing + the corrected path model (developer or tech-writer)."
+
+[stage.principle]
+statement = "Docs are delivered only when the read-first surface matches the shipped code; the doc refresh follows the code decision, not precedes it."
+source = "memory-global/leaves/docs-accompany-architectural-change.md."
+confidence = "high"
+refutation = "None for user-facing install docs."

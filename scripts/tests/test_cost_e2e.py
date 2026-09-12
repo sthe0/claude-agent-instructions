@@ -11,6 +11,7 @@ import pytest
 
 from agentctl import cli
 from agentctl.state import Node
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
@@ -36,21 +37,13 @@ def _full_session_to_resolved(store, sid, plan_path, cost_log_path, tmp_path):
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                           m3_severe=False, m4_severe=False), store=store)
 
-    # Stage 1
-    cli.cmd_next_stage(ns(session=sid), store=store)
-    cli.cmd_record_result(
-        ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           cost_log=str(cost_log_path)),
-        store=store,
-    )
-
-    # Stage 2
-    cli.cmd_next_stage(ns(session=sid), store=store)
-    cli.cmd_record_result(
-        ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           cost_log=str(cost_log_path)),
-        store=store,
-    )
+    for observation in STAGE_OBSERVATIONS[:2]:
+        cli.cmd_next_stage(ns(session=sid), store=store)
+        cli.cmd_record_result(
+            ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
+               observation=observation, cost_log=str(cost_log_path)),
+            store=store,
+        )
 
     # Final verification (arms resolution gate + sets state.cost)
     d_vf = cli.cmd_verify_final(ns(session=sid), store=store)

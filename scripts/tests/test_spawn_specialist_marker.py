@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from lib import marker_extract
+from lib import host_llm, marker_extract
 from lib import planner_plan_check as MOD
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
@@ -76,6 +76,58 @@ def test_marker_word_mid_sentence_not_matched():
     text, ok = MOD.validate_marker("I considered whether to ESCALATE this but did not")
     assert ok is False
     assert text.startswith("MALFORMED:")
+
+
+# --- decoration stripping (issue #79) and multi-marker resolution ------------
+
+@pytest.mark.parametrize(
+    "decorated",
+    [
+        "**COMPLETED:** shipped it",
+        "__COMPLETED:__ shipped it",
+        "`COMPLETED:` shipped it",
+        "## COMPLETED: shipped it",
+        "> COMPLETED: shipped it",
+        "- COMPLETED: shipped it",
+    ],
+    ids=["bold", "underscore", "backtick", "heading", "blockquote", "bullet"],
+)
+def test_validate_marker_accepts_each_decoration_shape(decorated):
+    text, ok = MOD.validate_marker(decorated)
+    assert ok is True
+    assert text == decorated  # unchanged on success
+
+
+def test_validate_marker_accepts_agreeing_terminal_markers():
+    text, ok = MOD.validate_marker("COMPLETED: draft\nmore\nCOMPLETED: final")
+    assert ok is True
+
+
+def test_validate_marker_terminal_marker_wins_over_an_emphasised_verdict_headline():
+    # Corpus-dominant shape: a code-reviewer's emphasis-wrapped verdict headline
+    # precedes its true terminal marker. The headline must not beat the terminal
+    # line, and the message still passes.
+    text = "**REVIEW: revise**\nprose about the diff\nCOMPLETED: reviewed the stage diff"
+    assert MOD.extract_marker(text) == "COMPLETED"
+    result, ok = MOD.validate_marker(text)
+    assert ok is True
+    assert result == text  # unchanged on success
+
+
+def test_validate_marker_accepts_a_later_decoy_marker_line_as_terminal():
+    # The accepted cost of last-hit resolution: a correct marker followed later
+    # by a decoy marker line resolves to that LATER line rather than MALFORMED —
+    # this scan refuses to discard the output, not to pick between two readings.
+    text = (
+        "COMPLETED: shipped it, tests pass.\n\n"
+        "(Had the tests failed I would have returned\n"
+        "REPLAN: revise the approach\n"
+        "but they passed.)"
+    )
+    assert MOD.extract_marker(text) == "REPLAN"
+    result, ok = MOD.validate_marker(text)
+    assert ok is True
+    assert result == text
 
 
 # --- identity: both wrappers bind the SHARED functions -----------------------
@@ -145,7 +197,7 @@ def test_build_extraction_invoked_unconditionally_on_clean_marker(monkeypatch):
     # extractor would never run here. It must run anyway (Claude path only).
     mod = _load_wrapper("spawn-specialist.py")
     monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
     calls, spy = _spy_runner()
     monkeypatch.setattr(mod.marker_extract, "subprocess_runner", spy)
 
@@ -162,7 +214,7 @@ def test_cursor_build_extraction_never_invokes_claude(wrapper, monkeypatch):
     """Cursor hard gate: _build_extraction must not shell out to claude -p."""
     mod = _load_wrapper(wrapper)
     monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
-    monkeypatch.setattr(marker_extract.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
     calls, spy = _spy_runner("RESOLVED" if "escape" in wrapper else "COMPLETED")
     monkeypatch.setattr(mod.marker_extract, "subprocess_runner", spy)
 
@@ -187,3 +239,102 @@ def test_escape_build_extraction_not_invoked_when_kill_switch_off(monkeypatch):
 
     assert extraction is None
     assert calls == []
+
+
+# --- child outcome classification (stage 5, issues #78/#80) ------------------
+#
+# classify_child_outcome is the bare signature scan; _resolve_child_outcome
+# layers the marker-always-wins precedence rule on top. Testing them
+# separately makes the precedence invariant independently provable.
+
+SPAWN_MOD = _load_wrapper("spawn-specialist.py")
+
+
+@pytest.mark.parametrize(
+    "stdout,stderr",
+    [
+        ("API Error: Unable to connect to API (ENOTFOUND)", ""),
+        ("", "API Error: Unable to connect to API (ENOTFOUND)"),
+        ("some preamble\nENOTFOUND\nmore text", ""),
+    ],
+    ids=["stdout", "stderr", "bare-enotfound"],
+)
+def test_classify_child_outcome_detects_infra_failure_family(stdout, stderr):
+    outcome, matched = SPAWN_MOD.classify_child_outcome(stdout, stderr, 1)
+    assert outcome == SPAWN_MOD.CHILD_INFRA_FAILURE
+    assert matched in ("API Error", "Unable to connect to API", "ENOTFOUND")
+
+
+def test_classify_child_outcome_detects_exhausted_family():
+    outcome, matched = SPAWN_MOD.classify_child_outcome(
+        "", "Error: Prompt is too long: 512000 tokens > 400000 maximum", 1
+    )
+    assert outcome == SPAWN_MOD.CHILD_EXHAUSTED
+    assert matched == "Prompt is too long"
+
+
+def test_classify_child_outcome_no_signature_is_child_answered():
+    outcome, matched = SPAWN_MOD.classify_child_outcome(
+        "just a summary, no marker at all", "", 0
+    )
+    assert outcome == SPAWN_MOD.CHILD_ANSWERED
+    assert matched is None
+
+
+def test_resolve_child_outcome_marker_always_wins_over_a_matching_signature():
+    # The critical precedence case: stdout carries BOTH a matching signature
+    # string AND a valid terminal marker. A found marker must always outrank
+    # the signature match — proving the prefilter cannot suppress a real
+    # result even when the signature text is present verbatim.
+    stdout = (
+        "COMPLETED: shipped it, tests pass.\n\n"
+        "(While debugging I also hit an unrelated API Error: "
+        "Unable to connect to API (ENOTFOUND) on a different host, "
+        "but that was resolved before this run.)"
+    )
+    # Prove the naive approach WOULD misclassify this: the signature is
+    # present, so a check-signatures-first implementation returns non-None.
+    naive_outcome, naive_matched = SPAWN_MOD.classify_child_outcome(stdout, "", 0)
+    assert naive_outcome == SPAWN_MOD.CHILD_INFRA_FAILURE
+    assert naive_matched is not None
+
+    # The precedence-aware resolver, given the marker that check_planner_return
+    # actually parsed from this text, must not be fooled.
+    outcome, matched = SPAWN_MOD._resolve_child_outcome(stdout, "", 0, "COMPLETED")
+    assert outcome == SPAWN_MOD.CHILD_ANSWERED
+    assert matched is None
+
+
+def test_resolve_child_outcome_no_marker_falls_through_to_signature_scan():
+    outcome, matched = SPAWN_MOD._resolve_child_outcome(
+        "", "API Error: Unable to connect to API (ENOTFOUND)", 1, None
+    )
+    assert outcome == SPAWN_MOD.CHILD_INFRA_FAILURE
+    assert matched is not None
+
+
+def test_resolve_child_outcome_no_marker_no_signature_is_untouched_child_answered():
+    outcome, matched = SPAWN_MOD._resolve_child_outcome(
+        "just a summary, no marker at all", "", 0, None
+    )
+    assert outcome == SPAWN_MOD.CHILD_ANSWERED
+    assert matched is None
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [SPAWN_MOD.CHILD_INFRA_FAILURE, SPAWN_MOD.CHILD_EXHAUSTED],
+)
+def test_child_outcome_envelope_never_says_malformed(outcome):
+    envelope = SPAWN_MOD._child_outcome_envelope(outcome, "some signature", "", "raw stderr text")
+    assert "malformed" not in envelope.lower()
+    assert envelope.startswith(f"{outcome}:")
+    assert "raw stderr text" in envelope  # falls back to stderr when result_text is empty
+
+
+def test_child_outcome_envelope_prefers_result_text_over_stderr():
+    envelope = SPAWN_MOD._child_outcome_envelope(
+        SPAWN_MOD.CHILD_EXHAUSTED, "Prompt is too long", "partial result text", "raw stderr text"
+    )
+    assert "partial result text" in envelope
+    assert "raw stderr text" not in envelope

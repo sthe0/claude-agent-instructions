@@ -1,0 +1,72 @@
+# Plan: ghost-scope fix — a dead spawn session's scope registration must not
+# block writers. Structural fix for the defect recorded in
+# memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-writer.md
+# (bit three times in task agentctl-gate-quality; one $3 spawn lost to the
+# denial spiral). Two independent layers: (1) the conflict detector stops
+# trusting heartbeat age alone and probes process liveness; (2) the spawn
+# supervisor deregisters its child's scope at exit, so the common case never
+# even reaches the TTL/probe fallback.
+
+[meta]
+task_id = "ghost-scope-fix"
+goal = "Scope registry reflects only live sessions: the conflict detector probes process liveness instead of trusting heartbeat age alone, and spawn-specialist deregisters its child session's scope on exit (success and failure paths)."
+done_criterion = "A dead session's scope file no longer blocks writers: pid-aware liveness in session_scope + hook-scope-conflict, deregistration in spawn-specialist on all exit paths; tests cover both layers; full suite green."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/claude-agent-instructions"
+external_research = "Not warranted: the fix composes idioms already established in-repo (extra_live_check injection point in session_scope.registry.live_sessions, os.kill(pid,0) probes as in proc_tree.py, atomic file ops in registry.py); pid-liveness + supervisor-cleanup is standard lockfile practice."
+
+[[stage]]
+index = 1
+title = "Pid-aware liveness in the scope registry and conflict hook"
+executor = "spawn:developer"
+expected_result_image = "ScopeRecord carries an optional pid (back-compat: from_dict defaults to None, legacy records unaffected); hook-scope-track.py records the session process pid alongside the heartbeat (the correct ancestor pid verified empirically against a real hook invocation and the choice documented in a comment); a pid_alive probe (os.kill(pid,0) semantics: alive / dead / EPERM-treated-as-alive) is wired into hook-scope-conflict.py via the existing extra_live_check injection point, so a record is live only if heartbeat-fresh AND (pid unknown OR pid alive); tests cover dead-pid exclusion, legacy no-pid records keeping heartbeat-only behavior, and EPERM handling."
+criterion_type = "measurable"
+done_criterion = "New/extended tests pass: dead pid excludes a heartbeat-fresh record from conflicts; a record without pid behaves exactly as today; hook fail-open contract intact."
+verify_command = "python3 -m pytest scripts/tests -q -k 'scope'"
+expected_exit = 0
+material = "scripts/session_scope/registry.py (ScopeRecord, live_sessions, from_dict), scripts/session_scope/detector.py (detect_conflicts extra_live_check), scripts/hook-scope-track.py, scripts/hook-scope-conflict.py (evaluate/LIVE_TTL_S), scripts/tests/ scope tests"
+means = "existing extra_live_check parameter on live_sessions/detect_conflicts (the injection point was designed for exactly this); os.kill(pid, 0) liveness probe; ScopeRecord.from_dict default pattern for schema back-compat"
+method = "manager clears dead spawn sessions' scope entries under ~/.claude/agentctl/scopes before dispatch; add the pid field with a None default; record the pid in hook-scope-track at heartbeat time after empirically identifying which ancestor pid denotes the session process (hook process ancestry may vary by harness — verify, do not assume os.getppid()); implement pid_alive with EPERM treated as alive (pid exists under another uid) and combine as heartbeat AND pid; thread it into hook-scope-conflict.evaluate as extra_live_check; extend tests with injected clocks and fake pids"
+conditions = "instructions repo synced and working tree clean before edits; baseline suite green; spawn sandbox scoped to scripts/ with manager fallback for pytest and out-of-scope actions; dead spawn sessions' scope entries cleared before dispatch"
+invariants = "both hooks stay strictly fail-open (any internal error allows the tool call); legacy records without pid keep today's heartbeat-only semantics; detector/registry purity preserved (clock and liveness always caller-injected, no wall-clock reads inside session_scope); LIVE_TTL_S semantics unchanged as the outer bound"
+capability_required = "session_scope package internals + hook payload contract + pytest"
+
+[stage.principle]
+statement = "Liveness inferred from a time proxy (heartbeat age) diverges from actual process state for the full TTL window; probing the process itself replaces the proxy error with ground truth, with the heartbeat kept only as the outer bound for pid-reuse safety."
+source = "the recorded ghost-scope experience leaf (three denials in one task, one $3 spawn lost); lockfile-with-pid convention (e.g. pidfile checks in daemon tooling); extra_live_check parameter already present in registry.live_sessions."
+confidence = "high"
+refutation = "If the hook's process ancestry proves unstable across harness versions (the recorded pid stops denoting the session process), the probe would misclassify live sessions as dead and the change must fall back to heartbeat-only plus stage-2 deregistration."
+
+[[stage]]
+index = 2
+title = "Spawn exit deregisters the child session's scope"
+executor = "spawn:developer"
+expected_result_image = "registry gains a delete(scopes_dir, session_id) that is a no-op on a missing file; spawn-specialist.py, after the child process reaches a terminal state on ANY path (normal exit, budget death, kill_tree teardown), resolves the child session id (result-JSON session_id, else transcript filename stem) and deletes that session's scope file, logging the deregistration to stderr; failure to deregister never alters the spawn's marker/rc; docs/operations/cross-session-scope-isolation.md documents the deregistration + pid-probe layers and demotes the TTL to fallback."
+criterion_type = "measurable"
+done_criterion = "Tests pass: delete removes an existing scope file and is a no-op on a missing one; the spawn teardown path invokes deregistration with the child session id on both success and failure exits (unit-tested around the extracted helper); deregistration failure is swallowed."
+verify_command = "python3 -m pytest scripts/tests -q -k 'scope or spawn'"
+expected_exit = 0
+material = "scripts/session_scope/registry.py (delete helper), scripts/spawn-specialist.py (Popen/teardown region around proc_tree.launch_supervised/kill_tree, _discover_transcript_path), docs/operations/cross-session-scope-isolation.md, scripts/tests/"
+means = "transcript filename stem == child session id (already discovered for the stderr line); result-JSON session_id field; registry's atomic file-op idioms; proc_tree teardown hooks"
+method = "manager clears dead spawn sessions' scope entries under ~/.claude/agentctl/scopes before dispatch; add registry.delete; extract a deregister_child_scope(session_id) helper in spawn-specialist called from a finally around the child wait/teardown; resolve the session id from the parsed result JSON, falling back to the transcript stem; swallow and stderr-log any deregistration error; update the operations doc"
+conditions = "stage 1 landed (pid field settled in registry.py, avoiding conflicting edits to the same module); baseline suite green; spawn sandbox scoped to scripts/ with manager fallback for pytest; dead spawn sessions' scope entries cleared before dispatch"
+invariants = "the parent session's own scope file is never touched (only the child's session id is deregistered); a missing scope file is a silent no-op; spawn return contract (marker, rc, stdout/stderr shape) byte-compatible; hook-scope-track.py untouched by this stage"
+capability_required = "spawn-specialist lifecycle internals (proc_tree supervision, transcript discovery) + pytest"
+supplies = [{ on = 1, element = "material", artifact = "registry.py with the pid-aware ScopeRecord settled" }]
+
+[stage.principle]
+statement = "A resource registered on behalf of a process must be released by the supervisor that owns its lifecycle, at exit, on every path; TTL/probe expiry is the fallback for supervisor death, not the mechanism."
+source = "RAII/finally resource discipline; proc_tree.install_teardown already models supervisor-owned cleanup for the process tree itself — the scope file is the one resource it currently leaks."
+confidence = "high"
+refutation = "If dead sessions' scope files prove valuable post-mortem (diagnosing what a failed spawn touched), deletion loses evidence and the helper should archive the record (e.g. rename to .dead) instead of unlinking it."
+
+[[final_check]]
+command = "python3 -m pytest scripts/tests -q"
+expected_exit = 0
+label = "full scripts test suite green"
+
+[[final_check]]
+command = "python3 scripts/verify-agentctl.py"
+expected_exit = 0
+label = "engine consistency (gate purity, guardian-hook wiring) unaffected"

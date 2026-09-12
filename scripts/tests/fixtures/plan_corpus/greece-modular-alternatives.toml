@@ -1,0 +1,100 @@
+[meta]
+task_id = "greece-modular-alternatives"
+goal = "Add a GENERIC, reusable modular-alternatives capability to the trips framework (any journey with a segments.md), then apply it to greece-europe-2026-09. Segments are first-class objects with interchangeable options, rendered as (a) server-side option cards AND (b) a CLIENT-SIDE interactive route assembler (pick one option per segment -> route assembles live on the map with a running cost + composed itinerary), plus 3 curated end-to-end routes cross-referenced to segment options. Apply updated Greece constraints (island-only bases, no mainland Greece/Athens, Greece visa route, coastline-first). Deploy. NOTE: the generic renderer + assembler + tests are ALREADY BUILT and green (8 pytest) this session; this plan tracks verification of that plus the remaining research/content/deploy."
+done_criterion = "Greece journey shows the constructor + interactive assembler + 3 curated routes cross-referenced to options; trip.md/decision.md reframed to island-first landscape honouring the updated hard constraints; site re-rendered, assembler exercised in a browser, deployed to trips-greece-europe-2026-09.pages.dev; user reviews and accepts."
+criterion_type = "acceptance-review"
+weight_class = "substantive"
+repo_root = "/Users/the0/projects/trips"
+external_research = "Warranted for thin legs: Puglia (coastline + Bari entry), island->Italy connections per base, Turkey->Rhodes ferry Sep-2026 status, return hubs refresh. Island research (Rhodes/Naxos/Paros/Milos/Santorini) already gathered this session; background research agent for the thin legs is running."
+
+[[stage]]
+index = 1
+title = "Verify the generic renderer + assembler + tests (already built this session)"
+executor = "in_thread"
+expected_result_image = "render_site.py already parses segments.md generically (SegmentOption/Segment, parse_segments), emits a 'Конструктор маршрута' section (server-side option cards + embedded window.__SEGMENTS__ JSON) and a vanilla-JS Leaflet assembler (CONSTRUCTOR_JS), and renders each alt's Сборка chips. journeys/_TEMPLATE/segments.md (schema contract) + docs/modular-alternatives.md + docs/workspace.md written. Verified journey-agnostically by pytest on a synthetic fixture — NOT by greece output (authored later, stage 3)."
+criterion_type = "measurable"
+done_criterion = "pytest green (fixture-driven, journey-agnostic)"
+verify_command = "cd /Users/the0/projects/trips && python3 -m pytest scripts/test_render_site.py -q"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/render_site.py", "scripts/test_render_site.py", "journeys/_TEMPLATE/segments.md", "docs/modular-alternatives.md", "docs/workspace.md"]
+material = "current render_site.py model + user requirements"
+means = "pytest"
+method = "verify the generic segment/assembler capability via fixture-driven pytest; renderer correctness must not depend on greece content"
+conditions = "renderer + assembler + tests built this session"
+invariants = "markdown-convention parsing (no frontmatter); graceful degradation (no segments.md -> index still renders); journey-agnostic (no hardcoded greece); verify uses pytest fixture, never greece output"
+capability_required = "python tests"
+
+[stage.principle]
+statement = "A journey-agnostic capability is verified against a synthetic fixture, never against content authored in a later stage — else the check false-fails correct work at record time"
+source = "the greece-grep verify_command that false-failed this stage under the prior plan"
+confidence = "high"
+refutation = "none"
+
+[[stage]]
+index = 2
+title = "Consolidate thin-leg research (Puglia, island->Italy connections, Turkey->Rhodes ferry, return hubs)"
+executor = "spawn_agent"
+expected_result_image = "Sourced facts (source+date): Puglia slow bases + coastline reachable from Bari; realistic island->Italy routes per base (Rhodes->Bari direct; Cyclades via Athens; Santorini direct); Turkey->Rhodes ferry Sep-2026 operating status; return-hub (Istanbul vs Moscow) refresh. Consolidated from the running background research agent."
+criterion_type = "acceptance-review"
+done_criterion = "facts sufficient to author segments + routes with citations"
+depends_on = []
+output_artifacts = ["research notes (in-context)"]
+material = "web sources + running background agent"
+means = "Agent (sonnet, web)"
+method = "collect consolidated findings from the background agent; fill any gaps"
+conditions = "island research already in hand"
+invariants = "every non-obvious fact cited with date; no fabrication"
+capability_required = "web research"
+
+[stage.principle]
+statement = "Only research the legs not already covered; reuse the island research from this session"
+source = "cost discipline"
+confidence = "high"
+refutation = "none"
+
+[[stage]]
+index = 3
+title = "Author Greece content: trip.md rewrite, segments.md, 3 curated routes, coords, decision.md"
+executor = "spawn_developer"
+expected_result_image = "trip.md updated (drop Hungary route/mainland Greece/Athens; island-first framing; Greece visa route; refreshed sources & lead-time). segments.md authored (island base / Greece->Italy / Italy regions incl. Puglia / neighbor / return hub + comfort tier) with option cards + coords. 3 curated routes alternatives/{r1-dodecanese-south,r2-cyclades-north,r3-showcase-mix}/ with itinerary/options/cost + Сборка. coords.json extended (Rhodes/Naxos/Paros/Symi/Lindos/Puglia towns...). decision.md reframed to the landscape. Old a-economy/b-comfort removed."
+criterion_type = "acceptance-review"
+done_criterion = "markdown model complete, warm Russian travel-blog voice consistent with existing pages, sources cited"
+depends_on = [1, 2]
+output_artifacts = ["journeys/greece-europe-2026-09/trip.md", "journeys/greece-europe-2026-09/segments.md", "journeys/greece-europe-2026-09/alternatives/", "journeys/greece-europe-2026-09/coords.json", "journeys/greece-europe-2026-09/decision.md"]
+material = "research (stage 2) + island research + schema (stage 1)"
+means = "developer/tech-writer spawn"
+method = "author markdown per the segments.md schema contract; keep voice; cite sources+dates"
+conditions = "schema + research ready"
+invariants = "no fabricated facts; constraints honoured; single-entry-Schengen rule intact; no-mainland/no-Athens honoured"
+capability_required = "russian travel prose + domain planning"
+
+[stage.principle]
+statement = "Content honours the updated hard constraints and cites every non-obvious fact"
+source = "trip planning discipline"
+confidence = "high"
+refutation = "if a route violates single-entry Schengen or no-mainland, fix before render"
+
+[[stage]]
+index = 4
+title = "Render, verify (exercise assembler + greece constructor end-to-end), deploy"
+executor = "in_thread"
+expected_result_image = "render_site.py emits greece index (constructor + interactive assembler) + 3 route pages with maps/costs; the greece index now genuinely contains the «Конструктор» section (segments.md authored in stage 3); assembler exercised in a browser (pick options -> map/cost/itinerary update); deploy_site.sh publishes to trips-greece-europe-2026-09.pages.dev; live URL confirmed; trip.md/decision.md URL line current."
+criterion_type = "measurable"
+done_criterion = "greece site rendered (constructor present) + deployed, live URL returns 200"
+verify_command = "cd /Users/the0/projects/trips && python3 scripts/render_site.py journeys/greece-europe-2026-09 && grep -qi 'Конструктор' journeys/greece-europe-2026-09/site/index.html && ls journeys/greece-europe-2026-09/site/*.html"
+expected_exit = 0
+depends_on = [3]
+output_artifacts = ["journeys/greece-europe-2026-09/site/", "live URL"]
+material = "renderer + assembler + content"
+means = "render_site.py, deploy_site.sh, browser"
+method = "render, exercise assembler, eyeball, deploy, confirm URL — the greece-content grep belongs HERE (after segments.md exists), not at the renderer-verify stage"
+conditions = "renderer + assembler + content done"
+invariants = "no broken pages; assembler functional; deploy target trips-greece-europe-2026-09; greece constructor verified end-to-end only after segments.md authored"
+capability_required = "build + deploy + manual verify"
+
+[stage.principle]
+statement = "Verify the runtime axis (rendered greece HTML with the constructor present + working assembler + live URL), not just that files changed"
+source = "verify-the-right-axis discipline"
+confidence = "high"
+refutation = "none"

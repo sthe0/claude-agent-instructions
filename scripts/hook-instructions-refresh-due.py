@@ -29,8 +29,11 @@ A merge to origin/main does not "deploy" anything by itself — the checkout on
 disk still runs whatever it has checked out. Two sub-checks, printed on a
 separate "[instructions-deploy]" line so the existing "[instructions-refresh]"
 nudge assertions are unaffected: (1) the Core checkout's HEAD is not on the
-default branch; (2) settings.json hook commands resolve to more than one
-distinct checkout root. Both fail-open like everything else in this hook.
+default branch; (2) any settings.json hook command resolves to a checkout root
+other than the CANONICAL one (_core_root()) — homogeneity across hook commands
+is not enough, since every hook command could agree on one non-canonical root
+(e.g. a feature worktree) and that must still warn. Both fail-open like
+everything else in this hook.
 
 Two more nudges ride the same throttle, companions to hook-guard-canon-
 readonly.py's hard PreToolUse deny (never auto, only OFFERs — mirrors this
@@ -214,16 +217,36 @@ def distinct_roots(settings_path: Path) -> list[str]:
         return []
 
 
-def check_homogeneity(settings_path: Path) -> str | None:
-    """Warn when settings.json hook commands span more than one checkout root."""
+def check_canonical_roots(settings_path: Path, core_root: Path) -> str | None:
+    """Warn when any settings.json hook command's checkout root differs from
+    the CANONICAL Core checkout (`core_root`, resolved). Homogeneity is not
+    the norm — every hook command could agree on one root and still be wrong
+    if that root is a feature worktree rather than the canonical checkout; the
+    case this replaces (`len(roots) > 1`) silently passed exactly that.
+    Fail-open: None when there are no hook-command roots at all, when
+    `core_root` itself is unresolvable, or when every root resolves to it."""
     roots = distinct_roots(settings_path)
-    if len(roots) > 1:
-        return (
-            f"settings.json hooks span {len(roots)} distinct checkout roots "
-            f"({', '.join(roots)}) — deployed hook behavior is inconsistent; "
-            "point every hook command at one checkout"
-        )
-    return None
+    if not roots:
+        return None
+    try:
+        canonical = core_root.resolve()
+    except OSError:
+        return None
+    offending = []
+    for raw in roots:
+        try:
+            resolved = Path(raw).resolve()
+        except OSError:
+            continue
+        if resolved != canonical:
+            offending.append(raw)
+    if not offending:
+        return None
+    return (
+        f"settings.json hooks reference {len(offending)} non-canonical checkout "
+        f"root(s) ({', '.join(sorted(offending))}) — canonical Core checkout is "
+        f"{core_root} — point every hook command at the canonical checkout."
+    )
 
 
 def _git_info(cwd: str):
@@ -360,9 +383,9 @@ def main() -> int:
     branch_warning = check_branch(_core_root())
     if branch_warning:
         deploy_warnings.append(branch_warning)
-    homogeneity_warning = check_homogeneity(_settings_path())
-    if homogeneity_warning:
-        deploy_warnings.append(homogeneity_warning)
+    canonical_root_warning = check_canonical_roots(_settings_path(), _core_root())
+    if canonical_root_warning:
+        deploy_warnings.append(canonical_root_warning)
     if deploy_warnings:
         print("[instructions-deploy] " + " ".join(deploy_warnings))
 

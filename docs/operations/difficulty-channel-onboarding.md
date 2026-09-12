@@ -89,8 +89,14 @@ python3 ~/claude-agent-instructions/scripts/file-difficulty.py \
   --target CLAUDE.md \
   --ground 'gate wording ambiguous — non-author cannot tell when approval is required' \
   --severity medium \
-  --evidence 'saw two conflicting rules in §Coordination and §Classify'
+  --evidence 'saw two conflicting rules in §Coordination and §Classify' \
+  --cost '~5 min confusion per occurrence'
 ```
+
+Filing requires exactly one of `--cost` (a rough per-occurrence or per-week estimate, in
+whatever unit fits) or `--cost-not-estimable REASON` (an explicit reason no estimate is
+possible) — a fixable loss must never go unmeasured, and a genuinely non-estimable one must
+never be silently skipped.
 
 Add `--dry-run` to print the record without submitting. Add `--channel <name>` to override the
 machine default.

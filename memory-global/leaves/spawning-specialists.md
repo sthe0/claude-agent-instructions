@@ -3,7 +3,7 @@ name: spawning-specialists
 description: Full mechanics of spawning a specialist via claude -p — spawn template inputs, budget tiers, recursion cap, monitoring a running spawn, after-spawn checks, bypassPermissions discipline, return markers.
 type: reference
 created: 2026-06-04
-last_verified: 2026-07-27
+last_verified: 2026-08-26
 ---
 
 # Spawning specialists
@@ -30,7 +30,8 @@ Cognitive inputs the manager supplies (mechanics are in `--help`):
 - `--plan` — markdown plan with the owned step marked `**<<this step>>**`.
 - `--done-criterion` + `--criterion-type` (`measurable` | `acceptance-review`).
 - `--context-dossier` — 5–10 line digest of conversation context the specialist cannot read on its own (intent nuances, rejected options, in-session decisions, terminology aliases). Omit if nothing's missable.
-- `--budget` (cost ceiling) — see table below. `--complexity` (`low`/`medium`/`high` → haiku/sonnet/opus) sets the sub-agent model by **assessed task difficulty**, overriding the per-kind default; rubric in `--help`. Budget and complexity are distinct axes — a cheap-budget task can still need opus.
+- `--budget` (cost ceiling) — see table below. `--complexity` (`low`/`medium`/`high` → haiku/sonnet/opus) sets the sub-agent model by **assessed task difficulty**; rubric in `--help`. `--complexity` and `--model` are a **required, mutually exclusive** pair — there is no per-kind default and no inherit-the-parent-model fallback, so every spawn names a model one way or the other. An optional `--max-complexity` caps the tier a `--complexity` classification may resolve to (default: unset, no cap); it does not affect an explicit `--model`. Budget and complexity are distinct axes — a cheap-budget task can still need opus.
+- `--effort` (`low`/`medium`/`high`/`xhigh`/`max`, forwarded to the child's own `claude -p --effort`) — **required, with no inherit-the-parent fallback**, on the same rationale as `--complexity`/`--model`: an optional flag with a default degrades into an unconsidered default under time pressure. Rubric: `low` = cheap dispatch/retrieval/polling; `medium` = standard implementation or analysis (pick when unsure); `high`/`xhigh` = subtle reasoning, architecture, adversarial verification where correctness is load-bearing; `max` = rare, only for the most contested judgment calls. Independent of `--complexity`/`--model` — effort sizes the reasoning depth, model choice sizes the capability tier.
 - `--project-permissions <project>/.claude/agent-memory/permissions.json` if inside a project tree.
 
 **Large text travels as a file, never as inline argv.** A dossier, a replanning task, a long brief or a multi-paragraph constraints block goes into a file, and the flag gets `@<path>`: `--constraints @/tmp/constraints.md`, `--done-criterion @/tmp/criterion.md`. Linux caps a single argv string at 131072 bytes (`MAX_ARG_STRLEN`), and the kernel refuses the whole spawn with `E2BIG` *before the child starts* — so the failure lands on the one spawn whose brief was finally substantial enough to matter. Prose that legitimately begins with `@` is doubled (`@@`); a `@` reference to a file that does not exist exits loudly rather than being recorded as literal prose. The same convention holds across every narrative `agentctl` argument — see [`scripts/agentctl/README.md`](../../scripts/agentctl/README.md) § Passing large text.
@@ -83,6 +84,12 @@ Elevation of any kind is not a substitute for **prompt-level discipline**:
 
 - The `--constraints` / dossier **must** contain an explicit hard-deny list — no `cd` / no Write / no Edit / no VCS commit outside `<assigned-mount>`, no internal package-build / `docker push` / smoke tests of other tickets — plus a self-check at session start (`pwd` ⊆ expected mount; if not, return `CLARIFY:`).
 - Without this discipline the child treats sibling mounts (referenced as "analogs") as fair game for "understanding through execution".
+
+## A spawned specialist has no continuation channel — never background-and-wait-for-notify
+
+A `claude -p` spawn is a **one-shot batch process**, unlike the root/interactive session, which genuinely receives `<task-notification>` when a backgrounded job it started finishes. If a spawned specialist launches a long-running background command (`docker run -d`, `docker wait &`, any `run_in_background`-style step) and ends its own turn assuming it will be "notified later" to continue, nothing calls it back — the process simply terminates once its turn ends, the work is orphaned, and `spawn-specialist.py`'s marker extractor finds no terminal marker and reports `MALFORMED:`, routing the parent session to `BLOCKED`/`ESCALATE`.
+
+**The `--constraints` / dossier for any stage whose control involves a long-running external command must say so explicitly:** execute the command synchronously/blocking within the specialist's own turn (foreground `docker run`, or an inline `docker wait` that is actually awaited before the turn ends) and only return a marker once the real exit is known — never background it and end the turn early. Discovered when a project-ticket stage's `developer` spawn, running a smoke test inside a container it had just built, backgrounded a `docker wait`, wrote "I'll continue once notified", and exited with `MALFORMED` — the underlying container was in fact still running (stuck retrying an exhausted LLM quota, a separate resource-level problem), but the spawn never discovered that because it never blocked on the result at all.
 
 ## Return markers
 

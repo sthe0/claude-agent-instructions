@@ -10,10 +10,22 @@ from agentctl import cli, plan, plugins
 from agentctl import plugins_premise as pp
 from agentctl.directive import Directive
 from agentctl.state import Node, StageStatus
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
     return Namespace(**kw)
+
+
+@pytest.fixture(autouse=True)
+def _no_replan_authorization_gate(monkeypatch):
+    """This module predates the replan-authorization gate (stage 5 of the
+    plan-review-override-customer-id fix) and exercises SUBSTANTIVE,
+    non-DIAGNOSING sessions expecting a bare refinement/no_change replan to
+    apply without a user-facing diff presentation. That gate's own scoping and
+    behavior are covered directly in test_replan_authorization.py; here it is
+    switched off so this module keeps testing what it was written to test."""
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
 
 
 def _start(store, sid):
@@ -160,10 +172,11 @@ def test_resolve_completed_marker(store, fixtures_dir):
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                               control="reviewed: ok"), store=store)
+                               control="reviewed: ok", observation=observation),
+                              store=store)
     cli.cmd_verify_final(ns(session=sid), store=store)
     # experience auto-activates for substantive sessions and gates resolution
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
@@ -267,16 +280,25 @@ def test_critique_announces_replan_when_record_is_complete(store, fixtures_dir):
     assert d.detail == "difficulty cycle complete; replan is now unblocked"
 
 
-def test_measurable_record_result_unchanged_without_observation(store, fixtures_dir):
-    """Regression: measurable record-result passes without --observation (unchanged behaviour)."""
+def test_measurable_record_result_requires_observation_on_substantive_session(store, fixtures_dir):
+    """Defect 2: a substantive-session measurable pass is refused with no --observation,
+    and proceeds once a genuine one is supplied — control compares result with goal at
+    every stage, not just acceptance_review ones."""
     sid = "meas-obs"
     _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)
-    d = cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                               control="reviewed: ok"), store=store)
+    refused = cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                                     control="reviewed: ok"), store=store)
+    assert refused.ok is False
+    assert refused.action == "attest_observation"
+    d = cli.cmd_record_result(
+        ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
+           observation=STAGE_OBSERVATIONS[0]),
+        store=store,
+    )
     assert d.ok is True
 
 
@@ -336,10 +358,11 @@ def test_reset_from_resolved_rearms(store, fixtures_dir):
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                               control="reviewed: ok"), store=store)
+                               control="reviewed: ok", observation=observation),
+                              store=store)
     cli.cmd_verify_final(ns(session=sid), store=store)
     # experience auto-activates for substantive sessions and gates resolution
     cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
@@ -400,7 +423,7 @@ def test_final_check_carried_to_state_at_submit(store, tmp_path):
     plan = tmp_path / "plan_with_fc.toml"
     plan.write_text(
         '[meta]\ntask_id = "fc-test"\ngoal = "g"\ndone_criterion = "dc"\n'
-        'criterion_type = "measurable"\n\n'
+        'criterion_type = "measurable"\nweight_class = "small_change"\n\n'
         '[[stage]]\nindex = 1\ntitle = "s"\nexecutor = "in_thread"\n'
         'expected_result_image = "img"\ndone_criterion = "dc"\n\n'
         '[[final_check]]\ncommand = "pytest -q"\nexpected_exit = 0\nlabel = "suite"\n',
@@ -449,7 +472,7 @@ def test_record_result_spawn_stage_attributes_cost(store, fixtures_dir, tmp_path
 
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
     assert d.ok is True
@@ -477,7 +500,7 @@ def test_record_result_spawn_stage_sums_multiple_log_rows(store, fixtures_dir, t
 
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
     assert d.ok is True
@@ -497,7 +520,7 @@ def test_record_result_missing_cost_log_leaves_none(store, fixtures_dir, tmp_pat
 
     d = cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           cost_log=str(missing)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(missing)),
         store=store,
     )
     assert d.ok is True
@@ -523,14 +546,14 @@ def test_verify_final_populates_state_cost(store, fixtures_dir, tmp_path):
     # Pass stage 1
     cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           cost_log=str(cost_log)),
+           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
         store=store,
     )
     # Pass stage 2 (no cost log for this one)
     cli.cmd_next_stage(ns(session=sid), store=store)
     cli.cmd_record_result(
         ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           cost_log=str(tmp_path / "empty.jsonl")),
+           observation=STAGE_OBSERVATIONS[1], cost_log=str(tmp_path / "empty.jsonl")),
         store=store,
     )
 
@@ -563,10 +586,10 @@ def test_resolve_directive_carries_cost(store, fixtures_dir, tmp_path):
         encoding="utf-8",
     )
 
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_record_result(
             ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-               cost_log=str(cost_log)),
+               observation=observation, cost_log=str(cost_log)),
             store=store,
         )
         cli.cmd_next_stage(ns(session=sid), store=store)
@@ -594,9 +617,10 @@ def test_resolve_without_attributed_cost_has_empty_cost_dict(store, fixtures_dir
     sid = "cost-empty"
     _to_executing_spawn(store, sid, fixtures_dir)
 
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_record_result(
-            ns(session=sid, status="passed", actual="ok", control="reviewed: ok"),
+            ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
+               observation=observation),
             store=store,
         )
         cli.cmd_next_stage(ns(session=sid), store=store)
@@ -662,6 +686,7 @@ def _to_verifying_all_passed_failing_finalcheck(store, sid, tmp_path):
         'goal = "Pin verify-final routing a failing final_check into DIAGNOSING"\n'
         'done_criterion = "both stages PASSED and final_check green"\n'
         'criterion_type = "measurable"\n'
+        'weight_class = "small_change"\n'
         '\n'
         '[[final_check]]\n'
         'label = "all green"\n'
@@ -694,10 +719,11 @@ def _to_verifying_all_passed_failing_finalcheck(store, sid, tmp_path):
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_next_stage(ns(session=sid), store=store)
         cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                               control="reviewed: ok"), store=store)
+                               control="reviewed: ok", observation=observation),
+                              store=store)
 
 
 def test_verify_final_failure_routes_to_diagnosing(store, tmp_path):
@@ -737,7 +763,8 @@ def test_verify_final_pending_stage_stays_fix_stages(store, fixtures_dir):
     plan = _to_executing_spawn(store, sid, fixtures_dir)
     # Only stage 1 is passed; stage 2 remains PENDING.
     cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
-                           control="reviewed: ok"), store=store)
+                           control="reviewed: ok",
+                           observation=STAGE_OBSERVATIONS[0]), store=store)
 
     d = cli.cmd_verify_final(ns(session=sid), store=store)
     assert d.ok is False
@@ -757,6 +784,7 @@ def _two_stage_plan_text(final_check_cmd="true", stage2_verify_cmd="true"):
         'goal = "Pin approve/no_change refreshing final_check/stage caches"\n'
         'done_criterion = "both stages PASSED and final_check green"\n'
         'criterion_type = "measurable"\n'
+        'weight_class = "small_change"\n'
         '\n'
         '[[final_check]]\n'
         'label = "all green"\n'
@@ -989,3 +1017,47 @@ def test_refinement_replan_rebinds_only_changed_stage_questions(store, tmp_path)
     assert "stage 2" in rebind[0]
     # stage 1's question — bound to the untouched stage — is NOT re-blocked.
     assert not any("stage 1" in b for b in blockers)
+
+
+def test_refinement_replan_leaves_untouched_elements_of_a_changed_stage(store, tmp_path):
+    """The same pricing one level finer, and the reason `disposed_at_key` is stamped
+    per element: the refinement rewrites stage 2's verify_command, so its whole-stage
+    key moves — but a question answered against stage 2's MEANS is answered against
+    bytes that did not move, and demanding a rebind for it teaches the rebind verb as
+    a formality. The test above covers the same replan for a stamp written before the
+    key was element-scoped, which has only the whole-stage key to match and so still
+    blocks."""
+    sid = "replan-rebind-element-scope"
+    old_path = tmp_path / "plan.toml"
+    old_path.write_text(_two_stage_plan_text(stage2_verify_cmd="true"))
+    _approved_two_stage(store, sid, old_path)
+
+    old_doc = plan.load_plan(str(old_path))
+    means_key_by_index = {
+        s.index: plan.stage_question_key(s, "means") for s in old_doc.stages
+    }
+
+    new_path = tmp_path / "plan_refined.toml"
+    new_path.write_text(_two_stage_plan_text(stage2_verify_cmd="false"))
+
+    state = store.load(sid)
+    plugins.activate(state, "premise")
+    bag = state.plugins["premise"]
+    bag["enumerated"] = True
+    bag["enumerated_at"] = pp._plan_content_digest(plan.load_plan(str(new_path)))
+    bag["questions"] = [
+        {
+            "id": f"q{i}", "target": f"stage:{i}.means",
+            "question": f"is stage {i}'s means sound?",
+            "disposition": "assumed", "own_research": "read the surrounding code",
+            "basis": "matches the existing working caller",
+            "risk": "the caller may change",
+            "disposed_at_key": means_key_by_index[i],
+        }
+        for i in (1, 2)
+    ]
+    store.save(state)
+
+    d = cli.cmd_replan(ns(session=sid, plan=str(new_path)), store=store)
+    blockers = d.data.get("blockers", []) if d.data else []
+    assert not [b for b in blockers if "changed since this question was disposed" in b]

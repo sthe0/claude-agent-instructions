@@ -68,6 +68,16 @@ GATE_TO_HOOK = {
     "resolution": "hook-turn-end-gate.py",
 }
 
+# A substantive stage's PASSED record also owes an --observation (defect 2: control compares
+# the achieved result with the goal at every stage). The hand-built `dev stage` fixtures the
+# checks below construct declare no verify_command and are handed no runner, so nothing is
+# ever executed for them — the only comparison a controller of such a stage could report is a
+# read of the code it produced against that stage's own done criterion (`dc`). Claiming a run
+# here would be the very defect these checks exist to catch, one level up.
+HANDBUILT_STAGE_OBSERVATION = (
+    "read the diff this dev stage produced against done criterion dc; it does what dc asks"
+)
+
 # Nodes allowed to have no outgoing table edge.
 TERMINAL_NODES = {"RESOLVED", "BLOCKED"}
 # Nodes reachable by a side-channel command rather than the pure table.
@@ -260,9 +270,10 @@ def check_control_precondition() -> list[str]:
     failed records are always allowed through. No new command must exist for this
     feature — the precondition rides the general record-result command.
 
-    Scoped to this one precondition: the orthogonal code-review gate (also keyed
-    on spawn:developer + SUBSTANTIVE) is force-disabled for the duration, the same
-    accommodation scripts/tests/conftest.py makes for the pytest suite at large.
+    Scoped to this one precondition: the orthogonal code-review and acceptance
+    judge-corroboration gates (also keyed on SUBSTANTIVE sessions) are
+    force-disabled for the duration, the same accommodation scripts/tests/conftest.py
+    makes for the pytest suite at large.
     """
     from argparse import Namespace
     from agentctl import cli
@@ -274,6 +285,8 @@ def check_control_precondition() -> list[str]:
     problems: list[str] = []
     prior_code_review_env = os.environ.get("AGENTCTL_CODE_REVIEW")
     os.environ["AGENTCTL_CODE_REVIEW"] = "0"
+    prior_stage_review_env = os.environ.get("AGENTCTL_STAGE_REVIEW")
+    os.environ["AGENTCTL_STAGE_REVIEW"] = "0"
 
     def _dev_stage(index=1, executor="spawn:developer") -> Stage:
         return Stage(
@@ -302,75 +315,84 @@ def check_control_precondition() -> list[str]:
         def load(self, _): return self.s
         def save(self, s): self.s = s
 
-    # 1. spawn:developer + passed + no --control -> REFUSED
-    store = _Mem(_executing_state(_dev_stage()))
-    d = cli.cmd_record_result(
-        Namespace(session="ctrl-check", status="passed", actual="done", control=None),
-        store=store,
-    )
-    if d.ok:
-        problems.append(
-            "record-result --status passed on a spawn:developer stage without --control "
-            "was not refused (expected ok=False)"
+    try:
+        # 1. spawn:developer + passed + no --control -> REFUSED
+        store = _Mem(_executing_state(_dev_stage()))
+        d = cli.cmd_record_result(
+            Namespace(session="ctrl-check", status="passed", actual="done", control=None),
+            store=store,
         )
-    if "record-result" not in d.detail or "--control" not in d.detail:
-        problems.append(
-            f"refusal directive does not name 'record-result --control' in its detail: {d.detail!r}"
-        )
+        if d.ok:
+            problems.append(
+                "record-result --status passed on a spawn:developer stage without --control "
+                "was not refused (expected ok=False)"
+            )
+        if "record-result" not in d.detail or "--control" not in d.detail:
+            problems.append(
+                f"refusal directive does not name 'record-result --control' in its detail: {d.detail!r}"
+            )
 
-    # 2. spawn:developer + passed + --control -> ALLOWED (transitions to VERIFYING)
-    store2 = _Mem(_executing_state(_dev_stage()))
-    d2 = cli.cmd_record_result(
-        Namespace(session="ctrl-check", status="passed", actual="done",
-                  control="reviewed: self-review ok"),
-        store=store2,
-    )
-    if not d2.ok:
-        problems.append(
-            f"record-result --status passed with --control was refused unexpectedly: {d2.detail}"
+        # 2. spawn:developer + passed + --control -> ALLOWED (transitions to VERIFYING)
+        store2 = _Mem(_executing_state(_dev_stage()))
+        d2 = cli.cmd_record_result(
+            Namespace(session="ctrl-check", status="passed", actual="done",
+                      control="reviewed: self-review ok",
+                      observation=HANDBUILT_STAGE_OBSERVATION),
+            store=store2,
         )
-    if d2.ok and store2.s.node != Node.VERIFYING.value:
-        problems.append(
-            f"after --control accepted, node should be VERIFYING, got {store2.s.node}"
-        )
+        if not d2.ok:
+            problems.append(
+                f"record-result --status passed with --control was refused unexpectedly: {d2.detail}"
+            )
+        if d2.ok and store2.s.node != Node.VERIFYING.value:
+            problems.append(
+                f"after --control accepted, node should be VERIFYING, got {store2.s.node}"
+            )
 
-    # 3. spawn:developer + failed + no --control -> enters DIAGNOSING (not a control refusal)
-    store3 = _Mem(_executing_state(_dev_stage()))
-    d3 = cli.cmd_record_result(
-        Namespace(session="ctrl-check", status="failed", actual="boom", control=None),
-        store=store3,
-    )
-    if d3.action == "attest_control":
-        problems.append(
-            "record-result --status failed on a spawn:developer stage was refused "
-            "by the control precondition (control must only block passed, not failed)"
+        # 3. spawn:developer + failed + no --control -> enters DIAGNOSING (not a control refusal)
+        store3 = _Mem(_executing_state(_dev_stage()))
+        d3 = cli.cmd_record_result(
+            Namespace(session="ctrl-check", status="failed", actual="boom", control=None),
+            store=store3,
         )
+        if d3.action == "attest_control":
+            problems.append(
+                "record-result --status failed on a spawn:developer stage was refused "
+                "by the control precondition (control must only block passed, not failed)"
+            )
 
-    # 4. in_thread + passed + no --control -> ALLOWED
-    store4 = _Mem(_executing_state(_dev_stage(executor="in_thread")))
-    d4 = cli.cmd_record_result(
-        Namespace(session="ctrl-check", status="passed", actual="done", control=None),
-        store=store4,
-    )
-    if not d4.ok:
-        problems.append(
-            f"record-result --status passed on an in_thread stage without --control "
-            f"was refused unexpectedly (control not required for in_thread): {d4.detail}"
+        # 4. in_thread + passed + no --control -> ALLOWED
+        store4 = _Mem(_executing_state(_dev_stage(executor="in_thread")))
+        d4 = cli.cmd_record_result(
+            Namespace(session="ctrl-check", status="passed", actual="done", control=None,
+                      observation=HANDBUILT_STAGE_OBSERVATION),
+            store=store4,
         )
+        if not d4.ok:
+            problems.append(
+                f"record-result --status passed on an in_thread stage without --control "
+                f"was refused unexpectedly (control not required for in_thread): {d4.detail}"
+            )
 
-    # 5. no new command carved out for the control feature
-    forbidden = {"attest-control", "record-review", "review-result"}
-    found = sorted(forbidden & set(cli.COMMANDS))
-    if found:
-        problems.append(
-            f"forbidden new command(s) in COMMANDS (control must ride record-result, "
-            f"not a new verb): {found}"
-        )
-
-    if prior_code_review_env is None:
-        os.environ.pop("AGENTCTL_CODE_REVIEW", None)
-    else:
-        os.environ["AGENTCTL_CODE_REVIEW"] = prior_code_review_env
+        # 5. no new command carved out for the control feature
+        forbidden = {"attest-control", "record-review", "review-result"}
+        found = sorted(forbidden & set(cli.COMMANDS))
+        if found:
+            problems.append(
+                f"forbidden new command(s) in COMMANDS (control must ride record-result, "
+                f"not a new verb): {found}"
+            )
+    finally:
+        # restore under finally, as check_code_review_gate does: a raise here would
+        # otherwise leave AGENTCTL_STAGE_REVIEW=0 set for every later check in the run.
+        if prior_code_review_env is None:
+            os.environ.pop("AGENTCTL_CODE_REVIEW", None)
+        else:
+            os.environ["AGENTCTL_CODE_REVIEW"] = prior_code_review_env
+        if prior_stage_review_env is None:
+            os.environ.pop("AGENTCTL_STAGE_REVIEW", None)
+        else:
+            os.environ["AGENTCTL_STAGE_REVIEW"] = prior_stage_review_env
     return problems
 
 
@@ -518,6 +540,8 @@ def check_code_review_precondition() -> list[str]:
     problems: list[str] = []
     prior_code_review_env = os.environ.get("AGENTCTL_CODE_REVIEW")
     os.environ.pop("AGENTCTL_CODE_REVIEW", None)
+    prior_stage_review_env = os.environ.get("AGENTCTL_STAGE_REVIEW")
+    os.environ["AGENTCTL_STAGE_REVIEW"] = "0"
 
     def _dev_stage(index=1) -> Stage:
         return Stage(
@@ -570,7 +594,8 @@ def check_code_review_precondition() -> list[str]:
         store2 = _Mem(state2)
         d2 = cli.cmd_record_result(
             Namespace(session="cr-check", status="passed", actual="done",
-                      control="reviewed: self-review ok", code_ref=None),
+                      control="reviewed: self-review ok", code_ref=None,
+                      observation=HANDBUILT_STAGE_OBSERVATION),
             store=store2,
         )
         if not d2.ok:
@@ -602,7 +627,8 @@ def check_code_review_precondition() -> list[str]:
         store4 = _Mem(_executing_state(_dev_stage()))
         d4 = cli.cmd_record_result(
             Namespace(session="cr-check", status="passed", actual="done",
-                      control="reviewed: self-review ok", code_ref=None),
+                      control="reviewed: self-review ok", code_ref=None,
+                      observation=HANDBUILT_STAGE_OBSERVATION),
             store=store4,
         )
         if not d4.ok:
@@ -615,6 +641,10 @@ def check_code_review_precondition() -> list[str]:
             os.environ.pop("AGENTCTL_CODE_REVIEW", None)
         else:
             os.environ["AGENTCTL_CODE_REVIEW"] = prior_code_review_env
+        if prior_stage_review_env is None:
+            os.environ.pop("AGENTCTL_STAGE_REVIEW", None)
+        else:
+            os.environ["AGENTCTL_STAGE_REVIEW"] = prior_stage_review_env
     return problems
 
 

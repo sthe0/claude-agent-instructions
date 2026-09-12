@@ -19,6 +19,7 @@ from agentctl import cli, plugins
 from agentctl import plugins_ledger as lp
 from agentctl.directive import Directive
 from agentctl.state import Node, SessionState, WeightClass
+from conftest import STAGE_OBSERVATIONS
 
 
 def _new_state(sid="s", **kw):
@@ -160,10 +161,10 @@ def _drive_to_resolution(capsys, root, sid, plan, *, deliverable_kind):
     _run(capsys, root, "submit-plan", "--session", sid, "--plan", plan)
     _run(capsys, root, "approve", "--session", sid, "--by", "user")
     _run(capsys, root, "partition", "--session", sid)
-    for _ in range(2):
+    for observation in STAGE_OBSERVATIONS[:2]:
         _run(capsys, root, "next-stage", "--session", sid)
         _run(capsys, root, "record-result", "--session", sid, "--status", "passed",
-             "--actual", "ok", "--control", "reviewed: ok")
+             "--actual", "ok", "--control", "reviewed: ok", "--observation", observation)
     _run(capsys, root, "verify-final", "--session", sid)
     # experience auto-activates for every substantive session; satisfy its gate so
     # these tests isolate the ledger plugin's own gating behavior

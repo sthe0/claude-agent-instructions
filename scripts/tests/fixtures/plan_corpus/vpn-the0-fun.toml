@@ -1,0 +1,62 @@
+[meta]
+task_id = "vpn-the0-fun"
+goal = "Install a lightweight, log-only CPU-steal monitor on the0.fun so that a sustained hypervisor-steal episode (the current 'feels bad' symptom, ~9-10% now vs 2.25% lifetime) can be distinguished from a one-off noisy-neighbour spike over time. Store the script in this VPS repo too."
+done_criterion = "steal-monitor.sh deployed to /home/the0/steal-monitor/ on the0.fun, running under the0's user crontab every 5 min; ~/steal-monitor/steal.log accrues CSV rows (ts,steal%,load1); high samples (>=15%) mirrored to steal-alerts.log; script committed to this repo at scripts/steal-monitor.sh; user accepts on review"
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/Users/the0/projects/the0.fun"
+external_research = "none"
+
+[[stage]]
+index = 1
+title = "Author script in repo + deploy to the0.fun + install cron + first manual run"
+executor = "in_thread"
+expected_result_image = "scripts/steal-monitor.sh authored: computes steal delta from /proc/stat over a 5s window (steal is awk $9 on the 'cpu ' line; total = sum of the 8 non-guest fields user..steal to avoid guest double-count), appends 'ts,steal%,load1' to ~/steal-monitor/steal.log, mirrors >=15% samples to steal-alerts.log; timestamps itself via date (no CRON_TZ dependency); sets an explicit PATH and uses set -uo pipefail (NOT -e, so a no-alert awk/grep exit 1 can't kill the run) with threshold check guarded by || true. Deployed to /home/the0/steal-monitor/steal-monitor.sh, chmod +x, run once manually -> first CSV line present. User crontab for the0 gains '*/5 * * * * /home/the0/steal-monitor/steal-monitor.sh >> ~/steal-monitor/cron.err 2>&1' installed IDEMPOTENTLY (strip any prior steal-monitor line first)."
+criterion_type = "measurable"
+done_criterion = "log has >=1 CSV line AND crontab -l shows exactly one steal-monitor entry"
+verify_command = "ssh the0.fun 'test -s ~/steal-monitor/steal.log && [ \"$(crontab -l 2>/dev/null | grep -c steal-monitor.sh)\" = 1 ] && echo OK'"
+expected_exit = 0
+depends_on = []
+output_artifacts = ["scripts/steal-monitor.sh", "the0.fun:/home/the0/steal-monitor/steal-monitor.sh"]
+material = "steal% derivation from /proc/stat; user crontab under the0"
+means = "Write, Bash (ssh)"
+method = "author script locally; heredoc to server; chmod; mkdir -p ~/steal-monitor; manual run; install cron idempotently via '(crontab -l 2>/dev/null | grep -v steal-monitor.sh; echo <line>) | crontab -'"
+conditions = "ssh to the0.fun works; no sudo needed (userspace only, /home/nick untouched)"
+invariants = "log-only (no Telegram); no sudo; /home/nick never touched; no CRON_TZ in user crontab; cron line unique (idempotent install); absolute cmd resolution via explicit PATH; cron stderr captured to cron.err; threshold check never aborts the main log write"
+capability_required = "bash + remote deploy"
+
+[stage.principle]
+statement = "Sample steal over an interval delta from /proc/stat, not a single snapshot, so the logged number reflects real oversubscription over a window"
+source = "vmstat st-column semantics; CLAUDE.md quality (verify the right axis)"
+confidence = "high"
+refutation = "if steal% computed here diverges from vmstat st over the same window, the derivation is wrong"
+
+[[stage]]
+index = 2
+title = "Commit script to the VPS repo"
+executor = "in_thread"
+expected_result_image = "scripts/steal-monitor.sh committed to the the0.fun repo on a branch, with a message describing the monitor and the steal difficulty it addresses."
+criterion_type = "measurable"
+done_criterion = "git log shows a commit adding scripts/steal-monitor.sh"
+verify_command = "cd /Users/the0/projects/the0.fun && git log --oneline -1 -- scripts/steal-monitor.sh | grep -q ."
+expected_exit = 0
+depends_on = [1]
+output_artifacts = ["git commit"]
+material = "authored script"
+means = "Bash (git)"
+method = "git add scripts/steal-monitor.sh; commit"
+conditions = "stage 1 script exists"
+invariants = "commit only the monitor script; no unrelated changes"
+capability_required = "git"
+
+[stage.principle]
+statement = "VPS config/scripts live in the VPS repo so the monitor is reproducible and documented"
+source = "project CLAUDE.md (repo manages config/scripts for the0.fun)"
+confidence = "high"
+refutation = "none"
+
+## Final verification
+# 1. ssh the0.fun: ~/steal-monitor/steal.log has >=1 line; crontab -l shows the entry.
+# 2. Time-driven: after ~10 min, steal.log has >=2 lines (cron actually fires) — the observable is elapsed-interval accrual, not just a config edit.
+# 3. scripts/steal-monitor.sh committed in the the0.fun repo.
+# 4. /home/nick untouched; no sudo used; log-only (no Telegram wiring).
