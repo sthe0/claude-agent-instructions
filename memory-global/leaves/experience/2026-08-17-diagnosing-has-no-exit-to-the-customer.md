@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user (AskUserQuestion at the resolution gate, 202
 refs: [review-loop-cannot-measure-its-own-convergence, no-circuit-breaker-on-verification-effort, effort-divergence-trigger, scope-substitution-at-plan-authoring, coordinator-objective]
 plan_file: /Users/the0/.claude-agent/plans/smd-act-defects-8.toml
 created: 2026-08-17
-last_verified: 2026-09-03
+last_verified: 2026-09-13
 ---
 
 # The effort-divergence cycle has no exit that renegotiates the order with its customer
@@ -71,6 +71,10 @@ Read the activity-theory repository and the MMPK literature, critique the implem
 
 **What changes for the next instance of this difficulty.** Every context above 2026-08-27 through 2026-09-03 required either a human to notice "a second `replans`-scale firing" and intervene by hand (`task-reset`, an env-var escape, or an explicit user ask), or — worse — the retrieval failure of 2026-09-02, where this leaf's own recorded remedy was not found and the loop was re-derived from source. That retrieval step is no longer load-bearing for *this specific* fixed point: the engine now refuses the fixed point mechanically at `effort-replan-absolute`, forcing the renegotiation question to the surface (`continue`/`rescope`/`abandon`) rather than leaving it to be rediscovered per session. § Recognise-it-on-the-second-firing (item 1 below) still applies to *other* difficulty classes this leaf's common core covers (e.g. a fresh divergence scale not yet gated, or a task on an older `agentctl` checkout); item 2 (`task-reset`) is now a fallback rather than the primary answer for the `replans` scale specifically, since the primary answer is enforced by the gate itself. This context is left in place rather than deleting the leaf, because the general principle it documents — DIAGNOSING can re-author a plan but not renegotiate the order — still holds for the acceptance-judge instability item 3 documents, and as a record of how many independent reproductions it took before the fix was structural rather than another workaround.
 
+
+### 2026-09-13 — consent-gate-proliferation-under-advisor-unavailability
+- Where it arose: trips session 0ad1155a-7ef8-4778-9c70-be7a179a0ab2, plan fix-subplan-plugin-isolation-v7, stage 1 record-result
+- Working plan: /Users/the0/.claude-agent/plans/fix-subplan-plugin-isolation-v7.toml
 ## Common core & variations
 **Common:** The engine can re-author a plan but cannot renegotiate the ORDER with its customer. Here the customer did renegotiate — withdrawing requirement R5 after the work itself showed the requirement rested on a flawed premise — and the engine had no way to write that down.
 
