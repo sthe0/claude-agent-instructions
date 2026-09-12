@@ -11,9 +11,11 @@ returns.
 
 Every returned candidate is an ABSOLUTE path, resolved relative to the
 `eff_cwd` the caller supplies — join-only, no existence check and no
-filesystem policy. Heredoc/here-string bodies are stripped via
-`lib/shell_tokens.py` before tokenizing, so a Markdown blockquote line inside a
-body is never read as syntax.
+filesystem policy. Heredoc/here-string bodies are blanked (not removed) via
+`lib/shell_tokens.py`'s `neutralize_heredoc_constructs` before tokenizing, so a
+Markdown blockquote line or an unbalanced quote inside a body is never read as
+syntax, without trusting that a body a later statement goes on to execute is
+truly inert.
 """
 from __future__ import annotations
 
@@ -147,11 +149,11 @@ def segment_write_target(seg: list[str], eff_cwd: str) -> list[str]:
 
 def command_write_targets(command: str, eff_cwd: str) -> list[str]:
     """Every write-target candidate of `command` (all segments, in command
-    order), as absolute paths resolved against `eff_cwd`. Strips heredoc/
+    order), as absolute paths resolved against `eff_cwd`. Blanks heredoc/
     here-string bodies first (`lib/shell_tokens.py`) so a line of body text is
     never read as command syntax. Fail-open (empty list) on any parse error —
     matching every other consumer's convention in this hook family."""
-    command = shell_tokens.strip_heredoc_bodies(command)
+    command = shell_tokens.neutralize_heredoc_constructs(command)
     try:
         tokens = shlex.split(command)
     except Exception:
