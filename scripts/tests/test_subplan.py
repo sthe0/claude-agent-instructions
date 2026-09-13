@@ -192,6 +192,31 @@ def test_pop_subplan_restores_parent(store):
     assert state.current_stage is None
 
 
+def test_pop_subplan_directive_next_stage_is_actually_runnable(store):
+    """Regression: cmd_pop_subplan's own Directive says "run next-stage to
+    continue" while node=EXECUTING, but cmd_next_stage's node whitelist used to
+    accept only PARTITIONED/ROUTED/VERIFYING — so the very next command the
+    directive recommends was rejected with "cannot start a stage from
+    node=EXECUTING". Assert the recommended follow-up call actually succeeds
+    and activates the next ready stage."""
+    _executing_state(store, "s3b")
+    cli.cmd_push_subplan(
+        ns(session="s3b", plan="/tmp/child.toml", task="child-task", originating_stage=1),
+        store=store,
+    )
+    _resolve_child(store, "s3b")
+    cli.cmd_pop_subplan(ns(session="s3b"), store=store)
+
+    d = cli.cmd_next_stage(ns(session="s3b"), store=store)
+    assert d.ok is True
+    assert d.node == Node.EXECUTING.value
+    assert d.data["stage"] == 2
+
+    state = store.load("s3b")
+    assert state.current_stage == 2
+    assert state.stage(2).outcome.status == StageStatus.ACTIVE.value
+
+
 # --- round-trip with non-empty plan_stack --------------------------------------
 
 def test_roundtrip_with_plan_stack(store):

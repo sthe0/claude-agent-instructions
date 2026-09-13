@@ -4126,9 +4126,17 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
         event = "execute_small"
     elif state.node == Node.VERIFYING.value:
         event = "next_stage"
+    elif state.node == Node.EXECUTING.value and state.active_stage() is None:
+        # cmd_pop_subplan restores the parent at EXECUTING with no ACTIVE stage
+        # (the originating stage was marked PASSED directly, bypassing the
+        # record_result "verify" edge) and its own Directive tells the caller
+        # to "run next-stage to continue" — so this node must be a legal entry
+        # here too, not just VERIFYING. No edge to cross: already EXECUTING.
+        event = None
     else:
         return Directive(False, state.node, "blocked", f"cannot start a stage from node={state.node}")
-    state.node = transition(state.node, event)
+    if event is not None:
+        state.node = transition(state.node, event)
     stage.outcome.status = StageStatus.ACTIVE.value
     state.current_stage = stage.index
     state.log("next_stage", stage=stage.index, executor=stage.actor.executor)
