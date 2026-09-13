@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user (AskUserQuestion at the resolution gate, 202
 refs: [review-loop-cannot-measure-its-own-convergence, no-circuit-breaker-on-verification-effort, effort-divergence-trigger, scope-substitution-at-plan-authoring, coordinator-objective]
 plan_file: /Users/the0/.claude-agent/plans/smd-act-defects-8.toml
 created: 2026-08-17
-last_verified: 2026-09-13
+last_verified: 2026-09-14
 ---
 
 # The effort-divergence cycle has no exit that renegotiates the order with its customer
@@ -75,6 +75,11 @@ Read the activity-theory repository and the MMPK literature, critique the implem
 ### 2026-09-13 — consent-gate-proliferation-under-advisor-unavailability
 - Where it arose: trips session 0ad1155a-7ef8-4778-9c70-be7a179a0ab2, plan fix-subplan-plugin-isolation-v7, stage 1 record-result
 - Working plan: /Users/the0/.claude-agent/plans/fix-subplan-plugin-isolation-v7.toml
+### 2026-09-14 — first firing on the `wall_clock` scale, not `replans`: a parked-plan resumption cost, not a fixed point
+- Where it arose: agentctl-driven SUBSTANTIVE Core task heredoc-body-spans (GitHub claude-agent-instructions#108), session 7dd14604-9e20-4e2f-9e8d-4020748ea221 (the same session id as the 2026-09-03 STRUCTURALLY CLOSED context above, reused later for a different task) — all 5 stages PASSED, PR #222 already merged to origin/main, issue #66 closed, issue #71 commented.
+- Working plan: /home/the0/.claude-agent/plans/heredoc-body-spans.toml. `record-result --status passed` on stage 5 fired the effort-divergence trigger on the **wall_clock** scale — 733.35 min accumulated active time against a re-derived 95.00 min estimate (7.7x) — with `state.effort_fires` showing exactly ONE entry and `state.renegotiations` empty: the FIRST firing for this session on this scale, not a repeat of the replans-scale fixed point the rest of this leaf documents, so the 2026-09-03 structural renegotiation gate (keyed to `effort-replan-absolute` on the `replans` scale specifically) never engaged, and a single ordinary declare→investigate→critique→normalize→replan cycle closed it cleanly with no `task-reset` needed. Investigation carried two explicit hypotheses per the gate's `>=2` requirement: H1 (norm gap — cost_tier assumes one continuous sitting; this plan was explicitly parked and resumed across real calendar days, issue #108 itself named "the parked plan") vs. H2 (real execution inefficiency — the verify_command/question-enumerate rework reflected a poorly-authored plan). H2 was falsified: both reworks were point fixes, independently thinker-reviewed `pass` bound to the plan's sha256, and caused no rollback of the already-PASSED stages 1-4. H1 held. `--failure-address нормативное`. Root fix: no plan-content edit was needed (nothing to "correct" — the 95-min figure is engine-derived from `cost_tier`, not a literal TOML field, so there is no single number to patch); the replanning task was a **refinement**-only closing replan (same plan bytes, explicit closing note) plus this leaf extension as the actual normalize artifact.
+- Cost this instance: no additional spawns beyond the diagnosis cycle itself; the 733 min was overwhelmingly idle/parked calendar time between engine sessions, not rework.
+
 ## Common core & variations
 **Common:** The engine can re-author a plan but cannot renegotiate the ORDER with its customer. Here the customer did renegotiate — withdrawing requirement R5 after the work itself showed the requirement rested on a flawed premise — and the engine had no way to write that down.
 
