@@ -404,6 +404,16 @@ delivery_marker = ""
 delivery_note = ""
 
 [[rule]]
+id = "subagent-self-posed-question-not-a-substitute"
+tier = 0
+locator_heading = "### Acting without asking"
+locator_phrase = "A subagent's own self-posed"
+kernel_reason = "NOT-NOTICING"
+delivery_kind = ""
+delivery_marker = ""
+delivery_note = "hook-guard-subagent-destructive-action.py is a structured_hook PreToolUse gate (no bracket tag, unobservable ALLOW-path) covering the recursive-delete subset of this rule, keyed on the agent_id/agent_type discriminator; kept tier 0 since the prose covers any destructive/irreversible action a subagent might self-authorize, not only recursive delete."
+
+[[rule]]
 id = "dont-offload-action-you-can-perform"
 tier = 0
 locator_heading = "### Acting without asking"
