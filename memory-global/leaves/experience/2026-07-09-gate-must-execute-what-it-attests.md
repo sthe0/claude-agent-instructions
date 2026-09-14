@@ -9,7 +9,7 @@ tier: 1
 refs: [2026-07-04-topological-gate-when-signal-unobservable.md, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md, 2026-06-24-gate-exemption-is-category-error-for-result-images.md]
 plan_file: /home/the0/.claude-agent/plans/hook-ask-defer-timer-block.v4.toml
 created: 2026-07-09
-last_verified: 2026-09-01
+last_verified: 2026-09-15
 ---
 
 # A gate must execute the artifact it attests, and every refusal it can issue must reach a resolution cycle
@@ -59,6 +59,10 @@ Notice the executed spec differs from the attested artifact (dispatch handed a s
 ### 2026-09-01 — the guard measured a CORRELATED axis, so it could not fail the way the artifact actually fails
 - Where it arose: claude-agent-instructions: scripts/lint-prose-length.py (byte block in main(), deliberately NOT a GOVERNED entry), config.md (new memory-index-max-bytes row), memory-global/MEMORY.md, memory-global/leaves/coordination/MEMORY.md. Landed on origin/main as f8517cd.
 - Working plan: /home/the0/.claude-agent/plans/memory-index-byte-gate-and-subindex.toml
+
+### 2026-09-15 — delivery receipt not re-stamped on a legitimate second essence re-presentation
+- Where it arose: mount-cleanup-27 plan session (2026-09-15): present-plan --kind essence -> arm timer -> emit rendering as final text -> AskUserQuestion approval, executed correctly twice in one session (second time forced by order-bag state changing after the first presentation, per hook-required scope-coverage block). Hook stamped a delivery receipt for the FIRST rendering but did NOT re-fire for the SECOND, structurally-identical presentation; 'approve' then refused with 'delivery proof is stale' even though the user had genuinely just seen and approved the second, current rendering.
+- Working plan: Escaped via the documented agentctl confirm-delivery --kind essence --by user --escape-reason hook_not_fired --note <why>, since the user's own AskUserQuestion answer was the real out-of-band confirmation. Did not widen the gate. Flagged as a hook bug worth a Core report: the delivery hook's re-fire condition appears keyed to 'has ANY receipt been stamped this session' rather than 'does a receipt exist for the CURRENT plan_sha256/rendering_sha256 pair', so a second, later, legitimate presentation in the same session is invisible to it.
 ## Common core & variations
 **Common:** One functional ground with the two engine defects above: a gate or verifier is only as truthful as the thing it actually reads. Attest what you execute; announce only what you read; scan only what is under version control. Each instance reported GREEN (or a confident directive) while grounded in something other than the artifact it governed.
 
