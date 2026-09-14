@@ -4,7 +4,7 @@ description: hook-language-reminder.py fires only on UserPromptSubmit — autono
 type: feedback
 schema: leaf/v1
 created: 2026-08-25
-last_verified: 2026-08-26
+last_verified: 2026-09-14
 ---
 
 ## Difficulty
@@ -14,6 +14,8 @@ last_verified: 2026-08-26
 Confirmed 2026-08-25 in a project session conducted entirely in Russian: after a long autonomous investigation (tool calls + task-notification turns only, no fresh user prompt in between), the first user-facing reply on resuming was written in English — the rule itself (CLAUDE.md § Instruction language) was correct and known, but the mechanized nudge that operationalizes it never fired for that specific turn shape. The user caught it immediately; the very next turn's reminder fired normally and the lapse self-corrected in one round.
 
 **Second occurrence, 2026-08-26, same project, same turn shape:** a long autonomous git/bash cleanup sequence (no fresh user message in between) ended with a full outcome report composed entirely in English. This is exactly the second independent lapse this leaf's own Guidance named as the trigger to stop deferring and actually build the `Stop`-hook extension.
+
+**Third occurrence, 2026-09-14, a downstream project, same turn shape:** a resolution-gate wrap-up (recording a resolved ticket's result in memory, committing it, landing it to trunk) ran across several tool-only and `<task-notification>`-only turns with no fresh user message in between; the closing report and the following `Stop`-hook reply both landed entirely in English, in a session conducted entirely in Russian. The user caught it a third time ("почему не по-русски?"). [claude-agent-instructions#190](https://github.com/sthe0/claude-agent-instructions/issues/190) — filed after occurrence #2 with a complete implementation plan — was still sitting in `backlog`, unimplemented, when this occurrence happened; the user's occurrence-#2 decision to park it did not anticipate a third hit on the identical turn shape.
 
 ## Guidance
 
