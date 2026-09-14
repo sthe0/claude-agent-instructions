@@ -6,12 +6,55 @@ this test suite depending on any file's continued existence or content.
 """
 from __future__ import annotations
 
+import ast
+import inspect
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import lib.permission_surface as permission_surface  # noqa: E402
 from lib.permission_surface import is_permission_surface, widens  # noqa: E402
+
+
+# --- structural: no path whitelist anywhere in the module -------------------
+
+def test_module_source_contains_no_path_whitelist():
+    """Recognition must be by JSON shape only. A path constant -- a filename,
+    a directory fragment, a glob, a `pathlib`/`os.path` import -- anywhere in
+    the module's CODE (not its prose) would be exactly the whitelist this
+    stage's principle forbids: it would silently stop covering the domain the
+    moment a new settings file appears elsewhere. Checked via `ast` against
+    string literals and imports outside docstrings, so a whitelist added
+    alongside (rather than instead of) shape detection is still caught, while
+    the module docstring's own prose mention of `permissions/*.json` (naming
+    the unrelated sibling format, not matching on it) does not false-positive.
+    """
+    source = inspect.getsource(permission_surface)
+    tree = ast.parse(source)
+    docstring_const_ids = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef)) and ast.get_docstring(node):
+            body = getattr(node, "body", [])
+            if body and isinstance(body[0], ast.Expr):
+                docstring_const_ids.add(id(body[0].value))
+
+    forbidden_fragments = [".json", "os.path", "pathlib", "Path"]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and id(node) in docstring_const_ids:
+            continue
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            for fragment in forbidden_fragments:
+                assert fragment not in node.value, (
+                    f"path-like fragment {fragment!r} found in string literal: {node.value!r}"
+                )
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = getattr(node, "module", None) or ""
+            for alias in node.names:
+                names += alias.name
+            assert "os" not in names.split(".") and "pathlib" not in names, (
+                f"path-related import found: {ast.dump(node)}"
+            )
 
 
 # --- real settings-shape fixtures (positive cases) --------------------------
