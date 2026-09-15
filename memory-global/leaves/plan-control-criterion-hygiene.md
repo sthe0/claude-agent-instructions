@@ -1,10 +1,10 @@
 ---
 name: plan-control-criterion-hygiene
-description: Ten plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world (both whole-plan merge/rollout and stage-to-stage cleanup transitions); sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start; bind a hand-copied mirror of a live-computed value to an import-and-compare test, not a frozen literal, because a merge race with unrelated trunk work can drift the mirror while the merge itself stays textually clean; and never freeze an exact identifier (a test/function node id) for an artifact that does not exist yet at authoring time — reconcile it against what the implementing stage actually names, before verify-final runs it for real.
+description: Eleven plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world (both whole-plan merge/rollout and stage-to-stage cleanup transitions); sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start; bind a hand-copied mirror of a live-computed value to an import-and-compare test, not a frozen literal, because a merge race with unrelated trunk work can drift the mirror while the merge itself stays textually clean; never freeze an exact identifier (a test/function node id) for an artifact that does not exist yet at authoring time — reconcile it against what the implementing stage actually names, before verify-final runs it for real; and never bind a criterion to whole-file identity of a file the stage does not exclusively own — scope the check to the one artifact the stage is actually responsible for, because verify-final re-runs the check after other legitimate, unrelated activity has touched the shared file.
 type: feedback
 schema: leaf/v1
 created: 2026-08-31
-last_verified: 2026-09-03
+last_verified: 2026-09-15
 ---
 
 # Plan control-criterion hygiene
@@ -427,6 +427,46 @@ before treating that criterion as still frozen — do not wait for
 > cleanly: `4 passed in 1.39s`), purely a stale forward-reference, costing a
 > full `declare → investigate → critique → normalize → replan` cycle to
 > repair.
+
+### 11. A criterion never binds to whole-file identity of a file the stage does not exclusively own
+
+A stage that mutates one narrow slice of a large, shared, actively-edited file
+(most commonly `settings.json`) sometimes verifies its own cleanup with a
+whole-file hash or byte-for-byte equality against a snapshot taken just before
+the stage ran. This looks precise — it is in fact the widest possible
+criterion the stage could have written, because it asserts something about
+*every other byte in the file*, not just the slice the stage is responsible
+for.
+
+The file is shared: other stages of the same plan, other plans, other
+sessions, and external actors all legitimately write to it between the
+moment the stage's own check first passes and the moment `verify-final`
+re-runs that same check post-landing (norm 5's lifecycle-state problem, but
+here the "state" is an entire file's content rather than one fact about it).
+Any one of those unrelated, sanctioned writes flips the hash and fails the
+check — not because the stage's own deliverable regressed, but because the
+check was never actually about the stage's deliverable in the first place.
+
+The fix mirrors norm 2's read-vs-produce split, applied to file scope rather
+than to a single fact: identify the specific artifact the stage produces or
+removes inside the shared file (a named key, a registered hook's command
+path, a specific block) and assert only that artifact's presence or absence.
+Never assert identity of the whole container.
+
+> **Observed.** A stage's `verify_command` snapshotted `settings.json`'s
+> sha256 immediately before the stage added a temporary debug-capture hook,
+> then asserted the live file's hash matched that snapshot again once the
+> hook was removed — meant to confirm "the temporary hook is gone." It
+> confirmed something much stronger: "nothing in this file changed at all."
+> `verify-final` re-ran the check after two independent, fully legitimate
+> writes to the same file — this plan's own later stage permanently
+> registering a different hook, and an unrelated ticket's hook registration
+> being removed by other activity — and failed, even though a direct search
+> for the debug hook's own identifying command path confirmed it was
+> genuinely absent. The repair replaced the whole-file hash comparison with a
+> substring check for that one identifying path, preserving the check's
+> power to catch the real failure (the debug hook still registered) while
+> dropping its false sensitivity to everything else in the file.
 
 ## See also
 
