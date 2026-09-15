@@ -1,6 +1,6 @@
 ---
 name: plan-control-criterion-hygiene
-description: Eleven plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world (both whole-plan merge/rollout and stage-to-stage cleanup transitions); sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start; bind a hand-copied mirror of a live-computed value to an import-and-compare test, not a frozen literal, because a merge race with unrelated trunk work can drift the mirror while the merge itself stays textually clean; never freeze an exact identifier (a test/function node id) for an artifact that does not exist yet at authoring time — reconcile it against what the implementing stage actually names, before verify-final runs it for real; and never bind a criterion to whole-file identity of a file the stage does not exclusively own — scope the check to the one artifact the stage is actually responsible for, because verify-final re-runs the check after other legitimate, unrelated activity has touched the shared file.
+description: Twelve plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world (both whole-plan merge/rollout and stage-to-stage cleanup transitions); sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start; bind a hand-copied mirror of a live-computed value to an import-and-compare test, not a frozen literal, because a merge race with unrelated trunk work can drift the mirror while the merge itself stays textually clean; never freeze an exact identifier (a test/function node id) for an artifact that does not exist yet at authoring time — reconcile it against what the implementing stage actually names, before verify-final runs it for real; never bind a criterion to whole-file identity of a file the stage does not exclusively own — scope the check to the one artifact the stage is actually responsible for, because verify-final re-runs the check after other legitimate, unrelated activity has touched the shared file; and never bind a criterion to "the single most recent commit" (`git log -1`) touching a path — check the artifact's own current tracked/clean state directly, because a later, unrelated, legitimate commit (e.g. a DIAGNOSING-cycle repair for a different stage) becomes the new tip and silently falsifies a positional proxy that was never about the artifact at all.
 type: feedback
 schema: leaf/v1
 created: 2026-08-31
@@ -467,6 +467,48 @@ Never assert identity of the whole container.
 > substring check for that one identifying path, preserving the check's
 > power to catch the real failure (the debug hook still registered) while
 > dropping its false sensitivity to everything else in the file.
+
+### 12. A criterion never binds to "the single most recent commit" touching a path
+
+Norm 11 governs a criterion that asserts too much about a shared file's
+*content* (whole-file identity). This is the same fragility family applied to
+a shared **history** instead: a criterion that checks whether a stage's
+required artifacts were touched by `git log --name-only -1` (or equivalent
+"inspect only the tip commit") rather than by the artifacts' own current
+state.
+
+A worktree's commit history is shared across the plan's own lifetime exactly
+the way a large file's bytes are shared across the plan's own lifetime in
+norm 11: other stages of the same plan — most concretely, a DIAGNOSING-cycle
+repair commit for an *earlier* stage, landed after the stage under test
+already completed and was accepted — legitimately add commits on top. The
+moment any such commit becomes the new tip, "the single most recent commit"
+no longer refers to the commit that actually delivered the artifact, even
+though the artifact itself is still exactly where the stage left it: tracked,
+committed, and unchanged.
+
+The fix mirrors norm 11's: stop asking "did the most recent commit touch this
+path" and ask "is this path tracked and free of uncommitted diff, right now"
+— `git ls-files --error-unmatch <path>` plus `git status --porcelain --
+<path>` (empty output), evaluated against the artifact's current position in
+the tree, not against any one commit's diff. This is strictly more robust:
+it is true immediately after the artifact's own delivering commit, stays true
+through every later, unrelated commit that doesn't touch it, and only goes
+false if the artifact is genuinely reverted or never committed — which is
+exactly the failure the check exists to catch.
+
+> **Observed.** Stage 2 of this leaf's own governing plan verified that
+> `CLAUDE.md` and a new experience leaf were present by checking
+> `git log --name-only -1` for both paths. The check passed once, at the
+> moment stage 2's own delivering commit was genuinely the tip. Stage 1 of
+> the *same* plan then went through its own DIAGNOSING cycle (fixing exactly
+> norm 11's whole-file-hash defect) and landed a repair commit — touching
+> only this leaf's norm-11 text — on top of stage 2's commit. `verify-final`
+> re-ran stage 2's check against the new tip, found neither `CLAUDE.md` nor
+> the leaf in that one commit's diff, and failed, even though both artifacts
+> were still tracked, committed, and byte-identical to what stage 2 had
+> delivered. The repair replaced the `git log -1` check with a direct
+> tracked/clean-state check against the artifacts themselves.
 
 ## See also
 
