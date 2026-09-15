@@ -13,6 +13,7 @@ Loaded into every session via `@~/.claude-agent/memory-global/MEMORY.md` import 
 ## Reasoning and coordination practices
 
 - [Coordination-practice sub-index](leaves/coordination/MEMORY.md) — entries also named inline in CLAUDE.md, moved out to shrink this index under its byte ceiling; CLAUDE.md's own inline mention keeps each entry always-loaded-visible without repeating it here.
+- [Published-artifact complaint is a dual signal](leaves/artifact-complaint-dual-signal.md) — a readability/formality complaint about a published artifact means both fix-it and diagnose-why-the-gate-missed-it, same turn.
 - [Recurring normalize-factor is an architecture signal](leaves/recurring-normalize-factor-is-architecture-signal.md) — ≥2 normalize cycles naming factors in the same underlying category means the prior re-norming was cosmetic; the replanning task must surface a structural alternative to the user, not another patch.
 - [Typical coordinator pitfalls](leaves/coordinator-pitfalls.md) — anti-patterns to avoid as the root coordinator; signals that point to specific corrective actions.
 - [`resolve --by user` needs a real ask](leaves/resolve-by-user-needs-real-ask.md) — never call `agentctl resolve`/`accept --by user` without a genuine, same-turn `AskUserQuestion` — even for a trivial, already-verified small change; self-caught 2026-09-15.
