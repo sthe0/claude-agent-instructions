@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user (A + B, not C -- AskUserQuestion 2026-09-14/
 refs: [CLAUDE.md#acting-without-asking, memory-global/leaves/verify-right-axis-report-honestly.md, memory-global/leaves/own-research-precedes-escalation.md, scripts/hook-guard-subagent-destructive-action.py, scripts/hook-guard-destructive-rm.py]
 plan_file: /home/the0/.claude-agent/plans/subagent-destructive-guard.toml
 created: 2026-09-15
-last_verified: 2026-09-15
+last_verified: 2026-09-16
 ---
 
 # Subagent self-authorized destructive action
