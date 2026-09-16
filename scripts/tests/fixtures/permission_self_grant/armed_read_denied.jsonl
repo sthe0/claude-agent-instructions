@@ -1,0 +1,2 @@
+{"type": "assistant", "uuid": "asst-r1", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_r1", "name": "Read", "input": {"file_path": "/srv/secrets/notes.md"}}]}}
+{"type": "user", "uuid": "den-r1", "toolDenialKind": "permission-rule", "sourceToolAssistantUUID": "asst-r1", "toolUseResult": "Error: Claude requested permissions to read from /srv/secrets/notes.md, but you haven't granted it yet."}

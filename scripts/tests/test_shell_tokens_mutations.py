@@ -78,8 +78,8 @@ GUARD_HOOK_PATH = SCRIPTS_DIR / "hook-guard-canon-readonly.py"
 # suite silently going stale against a moved target -- the escape hatch a
 # bare `git diff --quiet <rev>` check does not have.
 MODULE_CONTRACT_SHA256 = {
-    SHELL_TOKENS_PATH: "b7f5a15f41dfad3ca7d7ca4a0e32bc2f2e124edec524f8e4264c8dbc55fd4aff",
-    BASH_WRITE_TARGETS_PATH: "ad24b259c12959974385d8714d9967bdcb50359698a4819c793766cc36ae9f9b",
+    SHELL_TOKENS_PATH: "65d9e6d724d053a2edb18c165dffdce4557f8b485d0e0ab839c4437eb1bfee87",
+    BASH_WRITE_TARGETS_PATH: "4252b497fdfa961d67d168970c06b78dfc03e7dc2f5a4c78fde2d282b1f92378",
     GUARD_HOOK_PATH: "dec99146110846fa5c599755b445610ff80d0f52ad17c65b77af3105c7c45a74",
 }
 
@@ -318,19 +318,19 @@ def _build_mutant(base_tree: ast.Module, kind: str, lineno: int, col_offset: int
 # each of `_removal_regions`'s OWN decision-bearing nodes individually,  and
 # five sites turn out to be genuinely blind to them. Each witness below is
 # hand-traced against the specific forced mutant it targets:
-#   - backslash-skip `If` (line 321) forced FALSE: a `\"` immediately before
+#   - backslash-skip `If` (line 822) forced FALSE: a `\"` immediately before
 #     a real `<<EOF` -- unskipped, the escaped quote is read as a real quote
 #     open, and the walk never finds a close, returning None where the
 #     shipped function returns real regions.
-#   - final `quote is None` `IfExp` (line 412) forced TRUE: an unterminated
+#   - final `quote is None` `IfExp` (line 913) forced TRUE: an unterminated
 #     bare quote with no heredoc at all -- the shipped function returns None
 #     (quote never closed); the mutant always returns `regions` (`[]`).
-#   - comment-skip `IfExp` (line 338) forced TRUE: a leading `#`-comment
+#   - comment-skip `IfExp` (line 839) forced TRUE: a leading `#`-comment
 #     followed by a REAL heredoc on a later line -- the mutant always jumps
 #     to end-of-command, skipping the heredoc the shipped function still
 #     finds.
-#   - comment-skip `IfExp` (line 338) forced FALSE, and here-string
-#     unterminated-quote `If` (line 350) forced FALSE: both leave an index
+#   - comment-skip `IfExp` (line 839) forced FALSE, and here-string
+#     unterminated-quote `If` (line 851) forced FALSE: both leave an index
 #     variable unclamped (-1) after a `.find()` miss, producing a genuine
 #     infinite loop in the mutant rather than a wrong-but-terminating
 #     result -- `_call_bounded`'s timeout is itself the observable

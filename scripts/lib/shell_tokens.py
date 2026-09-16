@@ -105,6 +105,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 
 # Commands known to treat standard input as inert DATA. An ALLOWLIST, never a
 # denylist of interpreters: a denylist naming `bash` and `sh` was measured to
@@ -137,6 +138,15 @@ _WORD_END = frozenset(" \t\n|&;()<>")
 # consumer is.
 _EXPANSION_TRIGGERS = ("$", "`", "\\")
 
+# Characters after which an unquoted `#` opens a comment. Whitespace is the
+# obvious member and was for a while the only one, but bash starts a comment
+# wherever a WORD starts, and a metacharacter ends the preceding word just as
+# whitespace does -- `git status;#c`, `a&#c`, `b|#c` and `(#c)` all comment in
+# real bash. The narrower test fed the comment's own inert text through the
+# quote/paren/backtick walk, where an unbalanced construct inside it desynced
+# the very counters the walk depends on.
+_COMMENT_START_AFTER = frozenset(" \t\n;&|()")
+
 # Constructs outside the recognized shape. Each either runs a program the body
 # would reach (process / command substitution), changes what `<<` means
 # (arithmetic left shift), or moves a statement boundary that clause (v) depends
@@ -159,10 +169,15 @@ _DEFINITION = re.compile(
 )
 
 
-def _command_line(command: str) -> str:
+def command_line(command: str) -> str:
     """The command line proper: text up to the first newline NOT preceded by a
     line continuation. A continuation moves where a here-document body begins,
-    which is why clause (ii) disqualifies one outright."""
+    which is why clause (ii) disqualifies one outright.
+
+    Public: a second consumer (the permission-self-grant gate) needs this exact
+    computation to decide whether an unparseable here-document body is safely
+    inert, without re-implementing "where does a body begin" a second time.
+    """
     i = 0
     while i < len(command):
         if command[i] == "\\" and i + 1 < len(command):
@@ -172,6 +187,330 @@ def _command_line(command: str) -> str:
             return command[:i]
         i += 1
     return command
+
+
+def has_process_substitution(command: str) -> bool:
+    """True iff `command` contains a process-substitution opening sequence,
+    `<(` or `>(`, anywhere in its text.
+
+    Difficulty removed: `<(cmd)`/`>(cmd)` forks and runs `cmd` as a side effect
+    of preparing the OUTER command's argument list -- regardless of whether the
+    outer command ever succeeds, or the resulting `/dev/fd/N` path is even
+    used. Neither `<` nor `>` is a bash statement/pipe separator, so a nested
+    write inside `<(...)`/`>(...)` never starts a new segment for
+    `bash_write_targets.split_segments` and is never a segment's own command
+    word -- it rides along, invisible, as a trailing token of whatever
+    ordinary-looking command precedes it (`git commit -F - <(dd if=x of=
+    <surface> bs=1) <<'EOF'`). That is true whether the surrounding text lexes
+    cleanly or not, so this check has to run BEFORE either consumer trusts its
+    own grammar: `_write_incapable_bash_call`'s conjuncts only ever look at a
+    segment's first word(s), and `bash_write_targets.command_write_targets`'s
+    per-segment verb dispatch never looks past the first `<`/`>` token either
+    (`_operands_until_redirect`) -- both blind to a command hiding past that
+    point, and a directory-shaped candidate (the `patch`/`git apply`
+    convention) does not help here, because a caller like the self-grant gate
+    reads a directory as "not a permission surface", i.e. an ALLOW.
+
+    A raw substring scan, not a parse: strictly conservative, matching the
+    same textual philosophy `_write_incapable_bash_call` conjunct (E) already
+    uses for writer verbs, and it is what lets ONE primitive serve every
+    caller regardless of whether that caller's own tokenizer would have
+    accepted the text at all. Callers pass text with heredoc bodies already
+    stripped (`strip_heredoc_bodies`) so a heredoc BODY merely mentioning the
+    two characters -- ordinary prose about a shell redirection -- does not
+    trip this by itself; the command line proper is exactly where a process
+    substitution the shell actually runs must appear.
+    """
+    return "<(" in command or ">(" in command
+
+
+# The full punctuation-character set `shlex.shlex(punctuation_chars=True)` uses
+# by default -- bash's own operator characters. `shlex` groups an entire RUN of
+# ADJACENT characters from this set into one token (that is what makes it
+# split `;` or `|` off a glued WORD in the first place), but it does not know
+# that `;`, `|`, `&`, `&&`, `||` and `|&` are themselves distinct bash
+# operators from `(`/`)` -- so a separator glued directly against a
+# parenthesis with no whitespace (`;(`, `|(`, `&&(`, `;;`, `;)`) comes back as
+# ONE token instead of bash's own two-or-more. `_split_punct_run` re-splits
+# such a token by the same maximal-munch rule bash's own lexer applies.
+_PUNCT_CHARS = frozenset("();<>|&")
+_TWO_CHAR_OPERATORS = ("&&", "||", "|&", "<<", ">>")
+
+
+def _split_punct_run(token: str) -> list[str]:
+    """Split a token made ENTIRELY of `_PUNCT_CHARS` into bash's own maximal-
+    munch operators -- greedily preferring a recognized two-character operator,
+    falling back to the single character otherwise. Applies regardless of
+    which operators are glued together (`;(`, `|(`, `&&(`, `;;`, `;)`, `)|`,
+    ...): the rule is positional and character-based, not a pattern matched
+    against the two shapes a prior review round happened to report."""
+    pieces: list[str] = []
+    i = 0
+    n = len(token)
+    while i < n:
+        two = token[i:i + 2]
+        if two in _TWO_CHAR_OPERATORS:
+            pieces.append(two)
+            i += 2
+            continue
+        pieces.append(token[i])
+        i += 1
+    return pieces
+
+
+def separator_exact_split(text: str) -> list[str]:
+    """Tokenize `text` so bash's own statement/pipe separators (`;`, `|`, `||`,
+    `&`, `&&`, `|&`) and its subshell parentheses (`(`, `)`) always come back
+    as their own tokens -- even glued to an adjacent word (`echo hi;dd of=x`)
+    or glued directly to EACH OTHER (`echo hi;(dd of=x)`) with no whitespace
+    anywhere.
+
+    `shlex.split`'s default mode folds an unquoted `;`/`|`/`&` into whatever
+    word touches it, because `whitespace_split` treats every non-whitespace,
+    non-quote character alike -- `bash_write_targets.split_segments`'s own
+    docstring names that as an accepted residual for its ORIGINAL callers, who
+    only need SOME segment to answer. A caller that reads "every segment's
+    command word is write-incapable" as a soundness claim over the WHOLE line
+    cannot rely on that residual: a glued `;dd` or `|bash` hides the second
+    command's real word from such a caller entirely, and it would still run
+    under real bash regardless of how it lexed.
+
+    `shlex.shlex(punctuation_chars=True)` recognizes exactly bash's own
+    operator character set (`(); <>|&`), which removes the WORD-glued residual
+    at its root. It does NOT by itself remove the OPERATOR-glued residual --
+    the lexer still folds an entire run of adjacent punctuation characters
+    into one token, so `;(` is returned as a single token rather than bash's
+    own two. `_split_punct_run` re-splits any such all-punctuation token by
+    bash's own maximal-munch rule, closing that residual by construction for
+    every operator combination this character set admits, not by pattern-
+    matching the specific glued shapes a review round happened to report.
+
+    Raises `ValueError` under the same conditions `shlex.split` would (an
+    unbalanced quote); a caller wanting the fail-closed behaviour that gives it
+    already catches that from `shlex.split` today. That equivalence is why
+    `commenters` is cleared below: `shlex.shlex` defaults it to `'#'` while
+    `shlex.split` sets it to `''`, and an unmatched default would make a `#`
+    anywhere in the text END the token stream -- every statement after it
+    silently absent from a caller reading "every segment's command word is
+    write-incapable" as a claim over the WHOLE text. A trailing `# comment` on
+    a multi-line command is ordinary, so a `#`-truncated stream is a real
+    false-ALLOW route, not an exotic one; with `commenters` cleared, `#` is an
+    ordinary word character and a `#`-led segment degrades to an unrecognized
+    command word, which every caller here answers fail-closed.
+    """
+    lexer = shlex.shlex(normalize_newline_separators(text), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    tokens: list[str] = []
+    for tok in lexer:
+        if tok and all(c in _PUNCT_CHARS for c in tok):
+            tokens.extend(_split_punct_run(tok))
+        else:
+            tokens.append(tok)
+    return tokens
+
+
+def normalize_newline_separators(command: str) -> str:
+    """`command` with every bash statement-terminating bare newline rewritten to
+    a whitespace-padded `;`, so a caller's tokenizer sees the same segment
+    boundary bash itself draws there.
+
+    Difficulty removed: neither `shlex.split` (`bash_write_targets.
+    command_write_targets`'s general-path tokenizer) nor `separator_exact_split`
+    above (the fallback path's tokenizer) ever emits a token for a bare `\n` --
+    both fold it into whitespace exactly like a space, unlike `;`/`|`/`&`/`&&`/
+    `||`, which DO become their own token once whitespace-surrounded. An
+    ordinary, cleanly-lexing multi-line command therefore collapses into ONE
+    segment in `bash_write_targets.split_segments`, so only the first
+    statement's leading word is ever checked as a writer/write-incapable verb --
+    any write-capable statement on a later physical line is invisible to both
+    callers. This is the ONE shared primitive both tokenizers route a bare
+    newline through, rather than two independent copies of "is this newline a
+    separator".
+
+    A depth-0 newline outside every quote, here-document body, and subshell/
+    arithmetic/conditional/command-substitution construct is the separator this
+    function targets -- the same positive shape `_holds_multiple_statements`
+    already recognizes at `;&\n`, applied here to the RAW command rather than a
+    heredoc-stripped residue, because a caller may never reach
+    `strip_heredoc_bodies`'s residue at all: `_recognized` is false for most
+    write-verb commands by clauses (ii)/(iv) of the module docstring, so a
+    command carrying an actual writer verb routinely reaches this function with
+    its heredoc bodies still physically present. A newline inside a here-
+    document BODY is inert with respect to statement separation -- it is the
+    body's own DATA, not bash grammar -- so this function locates and skips
+    every heredoc body span with the same delimiter/terminator walk
+    `_strip_bodies` uses, deliberately INDEPENDENT of `_pipeline_consumers_ok`:
+    whether a body is safe to REMOVE is a different question from where its
+    span ends, and this function never removes a body byte, only rewrites a
+    statement-separator newline found OUTSIDE any such span.
+
+    TWO NESTING AXES, NOT ONE COUNTER. A backtick substitution does not nest, so
+    a backtick toggles between outside and inside its own substitution -- but
+    that toggle is a different AXIS from `$()`/`()`/`(())`/`[[]]` depth, and one
+    counter carrying both desyncs the moment the two interleave. A backtick
+    opened inside `$( )` and closed after the `)` left the shared counter at 1
+    with every construct on the line balanced, so every later statement-
+    separating newline failed the depth test and was not rewritten -- the
+    write-hiding direction this function exists to remove. Separate state -- a
+    COUNT for the axis that nests, a BOOLEAN for the one that cannot -- makes
+    each answer only for itself, and the gate is their CONJUNCTION: a newline
+    separates only where both say top level, which is what the shared counter
+    already did for input the two axes never interleave in.
+
+    Fail-closed on doubt, in this function's OWN safe direction: a heredoc
+    operator whose delimiter or terminator cannot be located stops being
+    tracked as a body at all, so every newline past that point falls back to
+    the ordinary depth-0 rule -- MORE segmentation, not less, the safe
+    direction for a write-detection primitive (it can only add scrutiny a
+    caller applies on top, never remove scrutiny that was already there).
+    """
+    out: list[str] = []
+    i = 0
+    n = len(command)
+    quote = None
+    depth = 0
+    in_backtick = False
+    while i < n:
+        c = command[i]
+        if quote:
+            if c == "\\" and quote == '"':
+                out.append(command[i:i + 2])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            out.append(c)
+            i += 1
+            continue
+        if c == "\\":
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if c in "'\"":
+            quote = c
+            out.append(c)
+            i += 1
+            continue
+        at_top = depth == 0 and not in_backtick
+        if at_top and c == "#" and (i == 0 or command[i - 1] in _COMMENT_START_AFTER):
+            j = command.find("\n", i)
+            j = n if j < 0 else j
+            out.append(command[i:j])
+            i = j
+            continue
+        if command.startswith("$((", i) or command.startswith("((", i):
+            depth += 1
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if command.startswith("))", i):
+            depth = max(0, depth - 1)
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if command.startswith("$(", i):
+            depth += 1
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if command.startswith("[[", i):
+            depth += 1
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if command.startswith("]]", i):
+            depth = max(0, depth - 1)
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if c == "(":
+            depth += 1
+            out.append(c)
+            i += 1
+            continue
+        if c == ")":
+            depth = max(0, depth - 1)
+            out.append(c)
+            i += 1
+            continue
+        if c == "`":
+            in_backtick = not in_backtick
+            out.append(c)
+            i += 1
+            continue
+        if at_top and command.startswith("<<<", i):
+            end = _skip_here_string_operand(command, i)
+            out.append(command[i:end])
+            i = end
+            continue
+        if at_top and command.startswith("<<", i):
+            end = _skip_heredoc_span(command, i)
+            out.append(command[i:end])
+            i = end
+            continue
+        if at_top and c == "\n":
+            out.append(" ; ")
+            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _skip_here_string_operand(command: str, i: int) -> int:
+    """End index of the `<<<` operator's operand, for
+    `normalize_newline_separators` -- the operand is a single shell word, never
+    a statement boundary, so it is copied through unchanged regardless of what
+    it contains. Fail-closed on an unterminated quoted operand: returns `i + 3`
+    so the caller's walk resumes right after the bare operator."""
+    n = len(command)
+    j = i + 3
+    while j < n and command[j] == " ":
+        j += 1
+    if j < n and command[j] in "'\"":
+        operand_quote = command[j]
+        k = command.find(operand_quote, j + 1)
+        return k + 1 if k != -1 else i + 3
+    start = j
+    while j < n and command[j] not in _WORD_END:
+        j += 1
+    return j if j > start else i + 3
+
+
+def _skip_heredoc_span(command: str, i: int) -> int:
+    """End index of a `<<`/`<<-` heredoc's delimiter line, body and terminator
+    line, for `normalize_newline_separators` -- every newline in that span is
+    heredoc-body data, never a statement separator, so the whole span is
+    copied through unchanged. Mirrors `_strip_bodies`'s own delimiter/
+    terminator walk, deliberately without its `_pipeline_consumers_ok` gate:
+    where the body ends is a syntactic fact, independent of whether removing
+    it would be safe. Fail-closed on doubt in this function's own direction --
+    see `normalize_newline_separators`'s docstring."""
+    n = len(command)
+    j = i + 2
+    if j < n and command[j] == "-":
+        j += 1
+    while j < n and command[j] == " ":
+        j += 1
+    match = _DELIMITER_WORD.match(command[j:])
+    if not match:
+        return i + 2
+    backslash, open_quote, word, close_quote = match.groups()
+    if open_quote and open_quote != close_quote:
+        return i + 2
+    j += match.end()
+    if j < n and command[j] not in _WORD_END:
+        return i + 2
+    lines = command[j:].split("\n")
+    terminator = None
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == word:
+            terminator = index
+            break
+    if terminator is None:
+        return i + 2
+    return j + len("\n".join(lines[:terminator + 1]))
 
 
 def _consumer_ok(element: str, consumers: frozenset[str] = CONSUMERS) -> bool:
@@ -207,7 +546,7 @@ def _recognized(command: str, consumers: frozenset[str] = CONSUMERS) -> bool:
     the rebound name is the enumeration trap this module exists to avoid."""
     if _DEFINITION.search(command):
         return False
-    head = _command_line(command)
+    head = command_line(command)
     if any(token in head for token in _UNRECOGNIZED):
         return False
     return all(_consumer_ok(part, consumers) for part in head.split("|"))
@@ -303,6 +642,158 @@ def _body_inert(delimiter_quoted: bool, text: str) -> bool:
     consumer is even started -- so `cat <<EOF` with `$(echo hi > /elsewhere)`
     inside really writes, however inert the consumer is."""
     return delimiter_quoted or not any(ch in text for ch in _EXPANSION_TRIGGERS)
+
+
+def first_heredoc_body_shell_inert(command: str) -> bool | None:
+    """Clause (vi) alone, for the FIRST `<<` / `<<-` / `<<<` operator on `command`'s
+    command line proper -- None if no such operator is found outside quotes (there
+    is no body for the shell to expand).
+
+    Deliberately independent of clauses (iii)/(iv): a caller here is asking "would
+    the SHELL itself expand this body before any consumer starts", not "is it safe
+    to remove this text" -- `strip_heredoc_bodies` answers the latter and requires
+    the whole recognized shape, including a consumer on `CONSUMERS`, before it will
+    say anything at all. A write-incapable command word (`git commit`, not on
+    `CONSUMERS`) still leaves the body reaching the shell exactly the same way a
+    `cat` would, so this question must be answerable without that gate.
+
+    Mirrors `_strip_bodies`'s own quote-tracking walk and delimiter parsing, since
+    that is the one piece with no cheaper answer -- unlike the command-line
+    boundary (`command_line`, exposed above for the same reason), the walk itself
+    is not otherwise exposed. Fail-closed on doubt: a delimiter or terminator this
+    walk cannot locate returns False, the same footing `_strip_bodies` stands on.
+    """
+    line = command_line(command)
+    n = len(line)
+    i = 0
+    quote = None
+    while i < n:
+        c = line[i]
+        if quote is None and c == "\\":
+            i += 2
+            continue
+        if quote is None and c in "'\"":
+            quote = c
+            i += 1
+            continue
+        if quote == '"' and c == "\\":
+            i += 2
+            continue
+        if quote and c == quote:
+            quote = None
+            i += 1
+            continue
+        if quote is None:
+            if line.startswith("<<<", i):
+                j = i + 3
+                while j < n and line[j] == " ":
+                    j += 1
+                if j < n and line[j] in "'\"":
+                    operand_quote = line[j]
+                    k = line.find(operand_quote, j + 1)
+                    if k == -1:
+                        return False
+                    if k + 1 < n and line[k + 1] not in _WORD_END:
+                        return False  # quoted operand glued to more word
+                    return _body_inert(operand_quote == "'", line[j + 1:k])
+                start = j
+                while j < n and line[j] not in _WORD_END:
+                    j += 1
+                return _body_inert(False, line[start:j])
+            if line.startswith("<<", i):
+                j = i + 2
+                if j < n and line[j] == "-":
+                    j += 1
+                while j < n and line[j] == " ":
+                    j += 1
+                match = _DELIMITER_WORD.match(line[j:])
+                if not match:
+                    return False
+                backslash, open_quote, word, close_quote = match.groups()
+                if open_quote and open_quote != close_quote:
+                    return False
+                delimiter_quoted = bool(backslash) or bool(open_quote)
+                end = j + match.end()
+                if end < n and line[end] not in _WORD_END:
+                    return False
+                lines = command[len(line):].split("\n")
+                terminator = None
+                for index, ln in enumerate(lines[1:], start=1):
+                    if ln.strip() == word:
+                        terminator = index
+                        break
+                if terminator is None:
+                    return False
+                return _body_inert(delimiter_quoted, "\n".join(lines[1:terminator]))
+        i += 1
+    return None
+
+
+def first_heredoc_consumes_entire_tail(command: str) -> bool:
+    """True iff the FIRST `<<` / `<<-` / `<<<` operator on `command`'s command line
+    proper accounts for the ENTIRE remainder of `command` -- its operand (`<<<`) or its
+    body plus terminator line (`<<`/`<<-`) is the last thing in `command`, with no
+    further text (a second command, a later heredoc) after it. Vacuously True when
+    there is no such operator at all, provided nothing follows the command line proper
+    either. Fail-closed on doubt, the same footing `first_heredoc_body_shell_inert`
+    stands on: an operator this walk cannot locate a terminator for returns False.
+
+    Exists for a caller reasoning about the command-line-proper region in isolation
+    (`_write_incapable_bash_call`'s conjuncts (A)/(B) in hook-guard-permission-self-
+    grant.py) that must not silently ignore a SECOND command bash would run after the
+    first heredoc's terminator -- that text is invisible to `shlex` and to every
+    conjunct that trusts the lexed command-line-proper alone, so nothing upstream of
+    this function would otherwise ever look at it.
+    """
+    line = command_line(command)
+    n = len(line)
+    i = 0
+    quote = None
+    while i < n:
+        c = line[i]
+        if quote is None and c == "\\":
+            i += 2
+            continue
+        if quote is None and c in "'\"":
+            quote = c
+            i += 1
+            continue
+        if quote == '"' and c == "\\":
+            i += 2
+            continue
+        if quote and c == quote:
+            quote = None
+            i += 1
+            continue
+        if quote is None:
+            if line.startswith("<<<", i):
+                return command[len(line):].strip() == ""
+            if line.startswith("<<", i):
+                j = i + 2
+                if j < n and line[j] == "-":
+                    j += 1
+                while j < n and line[j] == " ":
+                    j += 1
+                match = _DELIMITER_WORD.match(line[j:])
+                if not match:
+                    return False
+                backslash, open_quote, word, close_quote = match.groups()
+                if open_quote and open_quote != close_quote:
+                    return False
+                end = j + match.end()
+                if end < n and line[end] not in _WORD_END:
+                    return False
+                lines = command[len(line):].split("\n")
+                terminator = None
+                for index, ln in enumerate(lines[1:], start=1):
+                    if ln.strip() == word:
+                        terminator = index
+                        break
+                if terminator is None:
+                    return False
+                return all(ln.strip() == "" for ln in lines[terminator + 1:])
+        i += 1
+    return command[len(line):].strip() == ""
 
 
 def _removal_regions(command: str, consumers: frozenset[str]) -> list[tuple[int, int, str]] | None:

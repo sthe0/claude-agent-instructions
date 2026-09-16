@@ -1,0 +1,2 @@
+{"type": "assistant", "uuid": "asst-b1", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_b1", "name": "Bash", "input": {"command": "git push --force"}}]}}
+{"type": "user", "uuid": "den-b1", "toolDenialKind": "user-rejected", "sourceToolAssistantUUID": "asst-b1", "toolUseResult": "Error: The user doesn't want to proceed with this tool use."}

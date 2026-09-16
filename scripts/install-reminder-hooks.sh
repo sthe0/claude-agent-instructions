@@ -160,6 +160,12 @@ DESIRED = [
     # Hard gate: deny a recursive rm that (worst-case, with any empty $VAR) targets
     # /, $HOME, ~/.claude, or the instruction repo — the agent's own memory/config.
     ("PreToolUse",       "Bash",  "hook-guard-destructive-rm.py",    5),
+    # Hard gate: deny a recursive rm issued by a SUBAGENT (spawned/forked), against
+    # any target, regardless of path — a subagent must never self-authorize a
+    # destructive delete outside the coordination spine, even having answered its
+    # own AskUserQuestion (2026-09-14 incident). Reuses hook-guard-destructive-rm.py's
+    # own detector. Fail-open on error; never wedges the workflow.
+    ("PreToolUse",       "Bash",  "hook-guard-subagent-destructive-action.py", 5),
     # Hard gate: deny an Edit/Write or `git commit` in canon (the serving/PRIMARY
     # Core checkout, on ANY branch, plus any machine-local canon-roots entry) —
     # feature work must go in a linked worktree or second mount, so live hooks
@@ -178,6 +184,12 @@ DESIRED = [
     # test_each_hooks_budget_covers_the_calls_it_declares rather than pinned
     # to a specific ceiling value here.
     ("PreToolUse",       "Bash",  "hook-published-text-writer-gate.py", 60),
+    # Hard gate: deny a call that widens the agent's own permission surface — an
+    # entry ADDED to `permissions.allow` or REMOVED from `permissions.deny` — in
+    # response to a denial of an ARMING kind this session already hit. FAIL-CLOSED.
+    # Detail: hook-guard-permission-self-grant.py.
+    ("PreToolUse",       "Edit|Write", "hook-guard-permission-self-grant.py", 5),
+    ("PreToolUse",       "Bash",  "hook-guard-permission-self-grant.py", 5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
     # Nudge when an AskUserQuestion answer is free text rather than an offered
     # option label: a correction delivered this way bypasses the

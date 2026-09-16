@@ -145,6 +145,14 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
      "denies a Bash publication call whose text body has no preceding "
      "tech-writer witness in the transcript; absent, unpolished text can reach "
      "a ticket/PR/issue with nothing to stop it"),
+    ("hook-guard-permission-self-grant.py",
+     "denies a call widening the agent's own permission surface in answer to a "
+     "denial of an arming kind; absent, a "
+     "self-grant proceeds silently and the widened entry outlives the task"),
+    ("hook-guard-subagent-destructive-action.py",
+     "denies a subagent-issued recursive rm against any target, regardless of "
+     "path; absent, a spawned/forked agent can self-authorize a destructive "
+     "delete outside the coordination spine, as in the 2026-09-14 incident"),
 )
 
 # The TIMEOUT axis: how long a registration must be allowed to run.

@@ -7,11 +7,16 @@ could never represent.
 """
 from __future__ import annotations
 
+import json
+import os
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from lib import denial_arming  # noqa: E402
 from lib.denial_arming import (  # noqa: E402
     _ALL_DENIAL_KINDS,
     _ARMING_KINDS,
@@ -161,6 +166,48 @@ def test_undecodable_bytes_inside_a_valid_row_do_not_make_the_file_unreadable(tm
     assert result.verdict is Verdict.NOT_ARMED
 
 
+def test_a_transcript_that_yields_more_than_stat_promised_is_unreadable(tmp_path, monkeypatch):
+    # THE POST-READ LENGTH CHECK, PINNED. `_read_transcript` gates on `st_size` and then reads
+    # one character past the cap and checks what it got; measured, deleting that second check
+    # left this whole suite green, so it was documented as load-bearing and mechanically was
+    # not. `st_size` is what one earlier syscall reported, not a promise about a later `read`
+    # -- and a transcript is APPENDED TO by the very process asking, so the window between the
+    # two is a window in which the file grows. The lying `stat` here is that window; nothing
+    # else reproduces it, because for a static file a UTF-8 decode can only yield fewer
+    # characters than bytes.
+    #
+    # The direction is the whole point. A truncated read drops the file's NEWEST rows, which
+    # is exactly where the arming denial is: without the check this transcript comes back
+    # NOT_ARMED -- "this session hit no permission denial" -- and a caller built on that
+    # ALLOWS the self-grant. The control below is the same bytes read whole, so the row cannot
+    # pass by the fixture failing to arm in the first place.
+    rows = [
+        '{"type":"assistant","uuid":"a1","message":{"content":[{"type":"tool_use",'
+        '"name":"Read","input":{"file_path":"/srv/secrets/notes.md"}}]}}',
+        '{"type":"user","toolDenialKind":"permission-rule","sourceToolAssistantUUID":"a1",'
+        '"toolUseResult":"Error: Claude requested permissions"}',
+    ]
+    path = tmp_path / "grows.jsonl"
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    assert armed(path).verdict is Verdict.ARMED          # the same bytes, read whole, arm
+
+    real_stat = os.stat
+
+    def lying_stat(target, *args, **kwargs):
+        st = real_stat(target, *args, **kwargs)
+        if isinstance(target, (str, os.PathLike)) and str(target) == str(path):
+            fields = list(st)
+            fields[6] = 0                                 # `st_size` under-reports
+            return os.stat_result(tuple(fields))
+        return st
+
+    monkeypatch.setattr(denial_arming.os, "stat", lying_stat)
+    monkeypatch.setattr(denial_arming, "_MAX_TRANSCRIPT_BYTES", len(rows[0]))
+
+    assert armed(path).verdict is Verdict.UNREADABLE
+
+
 def test_a_truncated_tail_among_readable_rows_is_still_read():
     # The control on the other side of the same check: a real transcript whose
     # last line was cut mid-write IS readable -- its earlier rows have the row
@@ -168,3 +215,55 @@ def test_a_truncated_tail_among_readable_rows_is_still_read():
     # the third value on ordinary sessions and destroy the distinction.
     result = armed(FIXTURES / "truncated_tail.jsonl")
     assert result.verdict is Verdict.NOT_ARMED
+
+
+# --- the parse boundary: field TYPES, not just field presence ------------------
+
+def _custom_call_transcript(tmp_path, name, tool_input):
+    """`mixed_kinds`' first denial, rebuilt with the `tool_use` fields under test control."""
+    path = tmp_path / "typed.jsonl"
+    rows = [
+        '{"type":"assistant","uuid":"a1","message":{"content":[{"type":"tool_use",'
+        f'"name":{json.dumps(name)},"input":{json.dumps(tool_input)}}}]}}}}',
+        '{"type":"user","toolDenialKind":"permission-rule","sourceToolAssistantUUID":"a1",'
+        '"toolUseResult":"Error: Claude requested permissions"}',
+    ]
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return path
+
+
+def test_the_faithful_shape_of_the_typed_transcript_helper(tmp_path):
+    # The control for the two rows below: with well-typed fields the helper must produce a
+    # resolved ARMED denial, so a later assertion of `None` is evidence about the TYPE check
+    # and not about a helper that stopped arming.
+    result = armed(_custom_call_transcript(tmp_path, "Bash", {"command": "rm -rf /tmp/x"}))
+    assert result.verdict is Verdict.ARMED
+    assert (result.denials[0].tool_name, result.denials[0].tool_input) == (
+        "Bash", {"command": "rm -rf /tmp/x"})
+
+
+@pytest.mark.parametrize("name", [7, ["Bash"], {"a": 1}, True, None])
+def test_a_non_string_tool_name_collapses_to_the_unknown_call_state(tmp_path, name):
+    # `DeniedCall.tool_name` is annotated `str | None`, and that annotation used to be a
+    # claim nobody established -- the field was stored straight off `json.loads`. A caller
+    # that trusted it compared the value against an entry's tool name, got unequal for every
+    # entry, and concluded "this denial is covered by nothing": a SILENT hole, in a gate whose
+    # whole purpose is to notice that coverage. The denial must still arm; only the call is
+    # unknown, which is the state the module already models and callers already fail toward.
+    result = armed(_custom_call_transcript(tmp_path, name, {"command": "x"}))
+    assert result.verdict is Verdict.ARMED
+    assert result.denials[0].tool_name is None
+    assert result.denials[0].tool_input is None
+
+
+@pytest.mark.parametrize("tool_input", [7, ["x"], "str", True, None])
+def test_a_non_dict_tool_input_collapses_to_the_unknown_call_state(tmp_path, tool_input):
+    # The sibling field, failing the other way: a TRUTHY non-dict slipped past the
+    # `None`/`{}` rescue in `permission_entry_match.covers()` and raised `AttributeError` in
+    # the caller. Both fields are coerced together, so `tool_name` is asserted `None` here
+    # too -- a half-known call is a shape no consumer models, and inventing it would be a
+    # third state to test rather than the one that already exists.
+    result = armed(_custom_call_transcript(tmp_path, "Bash", tool_input))
+    assert result.verdict is Verdict.ARMED
+    assert result.denials[0].tool_name is None
+    assert result.denials[0].tool_input is None

@@ -330,7 +330,7 @@ _REVIEWER_FAMILIES = [
     # `str.strip()`, so a CRLF body is a place the two could disagree.
     ("CRLF body and terminator", "cat <<'EOF' > /tmp/t.md\r\n> " + CANON + "/f.txt\r\nEOF\r\n"),
     ("CR on terminator only", f"cat <<'EOF' > /tmp/t.md{NL}> {CANON}/f.txt{NL}EOF\r"),
-    # The operator on the second line, where `_command_line` saw only the first.
+    # The operator on the second line, where `command_line` saw only the first.
     ("heredoc on second line", f"cat /dev/null{NL}cat <<'EOF' > /tmp/t.md{NL}> {CANON}/f.txt{NL}EOF"),
     ("interpreter on second line", f"cat /dev/null{NL}bash <<'EOF'{NL}{R}{NL}EOF"),
 ]
@@ -1426,4 +1426,267 @@ def test_widened_consumer_body_introduces_no_new_spurious_deny(canon):
     """
     cmd = f"ruby <<'EOF'\nputs \"> {CANON}/should_not_matter\"\nEOF"
     assert not bash_writes(cmd), "oracle says this really writes"
-    assert not guard_denies(canon, cmd, canon), "spuriously denied"
+# --- direct shell_tokens primitives used by hook-guard-permission-self-grant.py ---
+#
+# The two rows below do not exercise `guard_hook` (this file's canon-readonly guard,
+# which never calls either primitive) -- they exercise `shell_tokens` directly against
+# the real-bash oracle already defined above, because that is where both round-2 review
+# findings against the permission-self-grant gate actually live, and this corpus's
+# silence on both primitives is why they shipped green under 196 passing tests.
+
+
+@pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
+def test_first_heredoc_body_shell_inert_glued_here_string_operand():
+    """Finding-2 regression: a quoted here-string operand glued to more word
+    (`<<<'safe'$(...)`) is not a bare quoted operand -- bash concatenates the quoted
+    and unquoted parts into ONE word and still performs the command substitution on
+    the unquoted tail, so the body is not inert even though the quote itself closes
+    cleanly. Oracle-pinned so a future edit cannot re-introduce the missing
+    `_WORD_END` guard without a real-bash-backed test going red."""
+    command = f"cat <<<'safe'$(touch {CANON}/{MARKER})"
+    assert bash_writes(command), "oracle: the glued $(...) really runs"
+    assert shell_tokens.first_heredoc_body_shell_inert(command) is False
+
+
+@pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
+def test_first_heredoc_consumes_entire_tail_rejects_a_second_command():
+    """Finding-1 regression: a second command after the first heredoc's terminator
+    line is invisible to a caller that only lexes the command-line-proper region
+    (`_write_incapable_bash_call`'s conjuncts (A)/(B) in hook-guard-permission-self-
+    grant.py) -- `first_heredoc_consumes_entire_tail` is the primitive that catches
+    it. The writer verb here is spelled `t''ee`, shell quoting a textual regex scan
+    cannot resolve back to `tee` but real bash still executes as `tee`. Oracle-
+    pinned: the quoted `tee` after the heredoc's terminator genuinely writes the
+    marker."""
+    command = (
+        "git commit -F - <<'EOF'\n"
+        "prose\n"
+        "EOF\n"
+        f"t''ee {CANON}/{MARKER} <<<\"data\"\n"
+    )
+    assert bash_writes(command), "oracle: the second command really runs tee"
+    assert shell_tokens.first_heredoc_consumes_entire_tail(command) is False
+
+
+@pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
+def test_separator_exact_split_splits_a_semicolon_glued_to_the_next_word():
+    """Finding-4 regression: `plain shlex.split` folds an unquoted `;` glued to the
+    next word (`hi;dd`, no surrounding whitespace) into ONE token --
+    `bash_write_targets.split_segments`'s own docstring names that as an accepted
+    residual for its original callers, but real bash still treats `echo hi` and
+    `dd of=...` as two independent statements regardless of how it lexed. Oracle-
+    pinned: `dd` genuinely writes the marker despite the glued `;`, so
+    `separator_exact_split` must return the `;` as its own token rather than
+    leaving `hi;dd` fused."""
+    command = f"echo hi;dd of={CANON}/{MARKER} if=/dev/zero bs=1 count=1"
+    assert bash_writes(command), "oracle: the glued ';dd' really runs"
+    assert shell_tokens.separator_exact_split(command) == [
+        "echo", "hi", ";", "dd", f"of={CANON}/{MARKER}", "if=/dev/zero", "bs=1", "count=1",
+    ]
+
+
+@pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
+def test_separator_exact_split_splits_a_pipe_glued_to_the_next_word():
+    """Finding-4 regression, worse variant: a `|` glued to `bash` (`hi|bash`) hides a
+    full interpreter -- not merely a write-capable command -- behind the write-
+    incapable `echo`. Oracle-pinned: piping into `bash` really runs `dd` as code."""
+    command = f"echo hi|bash -c 'dd of={CANON}/{MARKER} if=/dev/zero bs=1 count=1'"
+    assert bash_writes(command), "oracle: the glued '|bash' really runs"
+    assert shell_tokens.separator_exact_split(command) == [
+        "echo", "hi", "|", "bash", "-c",
+        f"dd of={CANON}/{MARKER} if=/dev/zero bs=1 count=1",
+    ]
+
+
+@pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
+@pytest.mark.parametrize(
+    "sep, expected_sep_tokens",
+    [
+        (";", [";"]),
+        ("|", ["|"]),
+        ("&&", ["&&"]),
+    ],
+)
+def test_separator_exact_split_splits_a_separator_glued_to_a_subshell_paren(
+    sep, expected_sep_tokens,
+):
+    """Finding-5 regression: `shlex.shlex(punctuation_chars=True)` groups an
+    entire RUN of adjacent punctuation characters into one token, so a
+    separator glued directly to a subshell paren with no whitespace (`;(`,
+    `|(`, `&&(`) came back as ONE token -- not a member of
+    `bash_write_targets._BASH_SEPS` -- which hid the subshell's write-capable
+    command from `split_segments` entirely. Oracle-pinned: real bash always
+    runs the subshell as its own statement regardless of the glue, so
+    `separator_exact_split` must always split the separator from the paren."""
+    command = f"echo hi{sep}(dd of={CANON}/{MARKER} if=/dev/zero bs=1 count=1)"
+    assert bash_writes(command), f"oracle: the glued '{sep}(' subshell really runs"
+    assert shell_tokens.separator_exact_split(command) == (
+        ["echo", "hi"] + expected_sep_tokens
+        + ["(", "dd", f"of={CANON}/{MARKER}", "if=/dev/zero", "bs=1", "count=1", ")"]
+    )
+
+
+def test_separator_exact_split_splits_a_double_semicolon():
+    """`;;` is two `;` operators glued together with no word between them at
+    all -- the degenerate case of the same punctuation-run-grouping defect,
+    with no adjacent word to hide a command behind. No bash oracle is needed
+    here: there is nothing on either side of the pair for a subshell to write
+    through, so this is a pure tokenization check."""
+    assert shell_tokens.separator_exact_split("echo hi;;echo bye") == [
+        "echo", "hi", ";", ";", "echo", "bye",
+    ]
+
+
+def test_split_punct_run_is_the_load_bearing_primitive():
+    """Mutation control: if `_split_punct_run` silently vanished (a caller
+    started appending the raw shlex token instead of its re-split pieces), the
+    glued-operator tokens above would come back fused again. Pinning the
+    private helper directly means a refactor that drops the call, rather than
+    only breaking one of its callers, is caught here too."""
+    assert shell_tokens._split_punct_run(";(") == [";", "("]
+    assert shell_tokens._split_punct_run("&&(") == ["&&", "("]
+    assert shell_tokens._split_punct_run(";;") == [";", ";"]
+    assert shell_tokens._split_punct_run(")") == [")"]
+
+
+@pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
+def test_separator_exact_split_splits_a_bare_newline_as_a_statement_separator():
+    """Finding-7 regression: a bare `\\n` is ordinary whitespace to
+    `shlex.shlex(punctuation_chars=True)`, exactly like a space -- unlike
+    `;`/`|`/`&`/`&&`/`||`, which DO become their own token once whitespace-
+    surrounded, a bare newline never did, so a genuinely two-statement command
+    collapsed into one token stream. Real bash still runs the second physical
+    line as an independent statement regardless of how it lexed. Oracle-
+    pinned: the second line really writes the marker, so
+    `separator_exact_split` must return a `;` in its place."""
+    command = f"echo hi{NL}{R}"
+    assert bash_writes(command), "oracle: the second physical line really runs"
+    assert shell_tokens.separator_exact_split(command) == [
+        "echo", "hi", ";", "echo", "hi", ">", f"{CANON}/{MARKER}",
+    ]
+
+
+def test_normalize_newline_separators_leaves_heredoc_body_newlines_alone():
+    """Finding-7 regression guard: a heredoc BODY's own internal newlines must
+    never be mistaken for statement-separator newlines -- only a newline
+    genuinely OUTSIDE a heredoc's body (or a quote/subshell) is a separator.
+    `_skip_heredoc_span` slices the delimiter-to-terminator span as one opaque
+    block rather than re-walking it character by character, so the body's two
+    internal lines must survive untouched, unlike the newline that follows the
+    terminator (which is fair game once nothing depends on it)."""
+    command = "cat <<'EOF' > /tmp/t.md\nline1\nline2\nEOF\n"
+    normalized = shell_tokens.normalize_newline_separators(command)
+    assert "line1\nline2\nEOF" in normalized
+
+
+def test_normalize_newline_separators_is_the_load_bearing_primitive():
+    """Mutation control: if `normalize_newline_separators` silently vanished
+    (`separator_exact_split` started lexing the raw text instead), Finding 7
+    would reproduce for the fallback path alone even with every other
+    primitive intact -- a bare newline would stop being a token boundary
+    again. `bash_write_targets.command_write_targets`'s own call site is
+    pinned separately (`test_bare_newline_separated_statement_is_found_via_
+    general_path` in test_bash_write_targets.py) -- this is the ONE shared
+    primitive both paths route through, not two independent copies."""
+    command = f"echo hi{NL}{R}"
+    assert ";" in shell_tokens.separator_exact_split(command)
+
+    original = shell_tokens.normalize_newline_separators
+    shell_tokens.normalize_newline_separators = lambda text: text
+    try:
+        tokens = shell_tokens.separator_exact_split(command)
+    finally:
+        shell_tokens.normalize_newline_separators = original
+    assert ";" not in tokens
+
+
+@pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
+def test_separator_exact_split_reads_a_hash_as_an_ordinary_word_character():
+    """`shlex.shlex` defaults `commenters` to `'#'` where `shlex.split` sets it
+    to `''`, so an unmatched default ENDS the token stream at the first `#` --
+    every statement after it absent, which for a caller reading "every
+    segment's command word is write-incapable" over the whole text is a
+    false-ALLOW route. Oracle-pinned: real bash does run the second physical
+    line, so the `#` and the words behind it must come back as ordinary
+    tokens and the `;` separator must still appear."""
+    command = f"git status # c{NL}{R}"
+    assert bash_writes(command), "oracle: the second physical line really runs"
+    assert shell_tokens.separator_exact_split(command) == [
+        "git", "status", "#", "c", ";", "echo", "hi", ">", f"{CANON}/{MARKER}",
+    ]
+
+
+def test_clearing_commenters_is_the_load_bearing_primitive():
+    """Mutation control for `lexer.commenters = ""`. The assignment is local to
+    `separator_exact_split`, so the mutant cannot be monkeypatched in; it is
+    reconstructed here instead -- the same lexer built the same way MINUS that
+    one line -- and the differential is the control: the mutant loses the whole
+    second statement, the real function keeps it. Pinning `shlex.shlex`'s own
+    default alongside means a CPython change to it is caught here rather than
+    silently making the cleared line a no-op."""
+    text = shell_tokens.normalize_newline_separators(f"git status # c{NL}tee /S")
+
+    mutant = shlex.shlex(text, posix=True, punctuation_chars=True)
+    mutant.whitespace_split = True
+    assert mutant.commenters == "#", "shlex.shlex's default is what this line answers"
+    assert list(mutant) == ["git", "status"], "mutant: everything past `#` vanishes"
+
+
+def test_normalize_newline_separators_keeps_backtick_nesting_off_the_bracket_depth():
+    """A backtick must not perturb `$()`/`()`/`(())`/`[[]]` depth, and vice versa.
+
+    One shared counter made a backtick TOGGLE that depth instead of nesting on
+    its own axis, and the two axes desync the moment they interleave. Here the
+    backtick opens inside `$( )` and closes after the `)`: the shared counter
+    ran 1 (`$(`) -> 0 (backtick) -> 0 (`)`, clamped at zero, losing the
+    decrement) -> 1 (backtick), leaving 1 with both constructs balanced, so the
+    statement-separating newline failed the `depth == 0` gate and came back
+    VERBATIM. A verbatim newline is ordinary whitespace to both tokenizers
+    downstream, so the second statement stops being a segment of its own and
+    its `>` write rides along inside the first -- the false-ALLOW class this
+    primitive exists to close.
+
+    No bash oracle, for a reason worth stating rather than leaving as a gap:
+    the two axes cannot interleave in well-formed bash (a backtick pair and a
+    paren pair properly nest or they are a syntax error), so no oracle-pinnable
+    construction can exhibit the desync. That is precisely why it must be
+    pinned HERE -- this function's soundness claim is over arbitrary
+    agent-supplied text, and text bash would reject is exactly the text an
+    attempt to hide a write would be built from. Same footing as
+    `test_separator_exact_split_splits_a_double_semicolon`.
+    """
+    command = f"echo $(date `) x `{NL}{R}"
+
+    normalized = shell_tokens.normalize_newline_separators(command)
+    assert NL not in normalized, "the only newline is a statement separator"
+    assert ";" in shell_tokens.separator_exact_split(command)
+
+
+@pytest.mark.skipif(not _bash_available(), reason="no bash: oracle has no ground truth")
+@pytest.mark.parametrize("glue", [";", "&", ")"])
+def test_normalize_newline_separators_reads_a_comment_after_a_metacharacter(glue):
+    """Bash starts a comment wherever a WORD starts, and a metacharacter ends
+    the preceding word exactly as whitespace does -- so `;#c`, `&#c`, `|#c`,
+    `(#c` and `)#c` all comment. A comment test gated on whitespace alone fed that
+    inert text through the quote/paren/backtick walk instead of skipping it, where
+    an unbalanced construct INSIDE the comment desynced the same counters the walk
+    depends on: the `(` below drove depth to 1 and the following statement-
+    separating newline was left verbatim, hiding the second statement's write
+    inside the first.
+
+    Oracle-pinned on the three glues that are valid bash on their own (`|#` leaves
+    a pipeline with no right-hand side and `(#` needs a closing paren, so
+    neither is pinnable in isolation -- both ride on the same character set as
+    `;`, `&`, and `)`, which is the unit under test). Real bash runs the second
+    physical line and writes the marker, so `separator_exact_split` must return
+    a `;` in that newline's place.
+    """
+    if glue == ")":
+        # For closing paren, we need a subshell: the ) closes it and starts the comment
+        command = f"(git status)#comment with an unbalanced ( in it{NL}{R}"
+    else:
+        command = f"git status{glue}#comment with an unbalanced ( in it{NL}{R}"
+    assert bash_writes(command), "oracle: the second physical line really runs"
+    tokens = shell_tokens.separator_exact_split(command)
+    assert tokens[-5:] == [";", "echo", "hi", ">", f"{CANON}/{MARKER}"]
+    assert "tee" in shell_tokens.separator_exact_split(f"git status # c{NL}tee /S")
