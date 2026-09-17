@@ -146,20 +146,6 @@ _KNOWN_UNGUARDED_HARD_SINKS = {
         "freezes the results) then collect_blockers() — the propagation "
         "point where the judge-guarded booleans reach this stop_block sink.",
     ),
-    "430a12f403fe287a": (
-        "scripts/hook-guard-permission-self-grant.py", "main",
-        "structural per the registry: main() calls decide(), whose three-"
-        "conjunct verdict is computed entirely from JSON-diffing "
-        "(permission_surface.widens), shell-token/path structural parsing "
-        "(shell_tokens, bash_write_targets, permission_entry_match — every "
-        "regex in that chain, e.g. _ENTRY_RE/_SEP_PATTERN/_ASSIGNMENT_PREFIX/"
-        "_DEFINITION, reads shell-command or path syntax, never natural-"
-        "language meaning), and a fixed enumerated denial-kind vocabulary "
-        "(denial_arming._ARMING_KINDS); no free-text classification anywhere "
-        "in the call chain — confirmed by reading decide() and its lib/ "
-        "imports at source; the module's own docstring states this gate is "
-        "deliberately mechanical/syntactic rather than model-judged.",
-    ),
     "69a68ca9bdda4152": (
         "scripts/hook-guard-subagent-destructive-action.py", "main",
         "structural per the registry: main() calls decide(), which gates on "
