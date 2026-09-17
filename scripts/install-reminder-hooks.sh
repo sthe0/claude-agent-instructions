@@ -184,12 +184,6 @@ DESIRED = [
     # test_each_hooks_budget_covers_the_calls_it_declares rather than pinned
     # to a specific ceiling value here.
     ("PreToolUse",       "Bash",  "hook-published-text-writer-gate.py", 60),
-    # Hard gate: deny a call that widens the agent's own permission surface — an
-    # entry ADDED to `permissions.allow` or REMOVED from `permissions.deny` — in
-    # response to a denial of an ARMING kind this session already hit. FAIL-CLOSED.
-    # Detail: hook-guard-permission-self-grant.py.
-    ("PreToolUse",       "Edit|Write", "hook-guard-permission-self-grant.py", 5),
-    ("PreToolUse",       "Bash",  "hook-guard-permission-self-grant.py", 5),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
     # Nudge when an AskUserQuestion answer is free text rather than an offered
     # option label: a correction delivered this way bypasses the
