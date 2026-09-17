@@ -11,9 +11,14 @@ search-before-record / extend-with-a-new-context flow that lets one difficulty
 accumulate several contexts.
 
 Subcommands:
-  search <keywords>   Rank existing experience leaves by description +
-                      `## Difficulty` overlap. MANDATORY before recording —
-                      extend an analogous leaf instead of duplicating.
+  search <keywords>   Rank existing leaves by description + `## Difficulty`
+                      overlap. Default --tier experience: MANDATORY before
+                      recording — extend an analogous leaf instead of
+                      duplicating. --tier system-knowledge: retrieve a
+                      durable system fact before authoring a plan that
+                      touches that system (same difficulty-led ranking,
+                      read-before-designing rather than extend-before-
+                      recording). --tier principles: the generality>=1 tier.
   new                 Write a fresh standalone leaf (first occurrence).
   extend              Append a new `### context` to an existing leaf; once it
                       holds >=2 contexts, scaffold `## Common core & variations`.
@@ -55,15 +60,30 @@ def experience_dir(scope: str, project_dir: str | None) -> Path:
 
 
 # The ranking section per tier: experience leaves rank on their `## Difficulty`,
-# principles on their `## Principle`. The term-counting ranking itself is identical.
-TIER_SECTION = {"experience": "Difficulty", "principles": "Principle"}
+# principles on their `## Principle`, system-knowledge leaves on their `## Difficulty`
+# too — leaf-schema.md requires every system-knowledge leaf to be difficulty-led (a
+# full `## Difficulty` section under schema:leaf/v1, or the grandfathered
+# description/lead-blockquote baseline; a leaf with neither has no matching section
+# and degrades to description-only scoring, same as an experience leaf would). The
+# term-counting ranking itself is identical across all three tiers.
+TIER_SECTION = {
+    "experience": "Difficulty",
+    "principles": "Principle",
+    "system-knowledge": "Difficulty",
+}
 
 
 def search_root(scope: str, project_dir: str | None, tier: str) -> Path:
     # principles are a global-only tier (ADR-0001 generality gradient); experience
-    # keeps its existing global/project split.
+    # and system-knowledge keep the same global/project split.
     if tier == "principles":
         return REPO_ROOT / "memory-global/leaves/principles"
+    if tier == "system-knowledge":
+        if scope == "project":
+            if not project_dir:
+                sys.exit("--scope project requires --project-dir")
+            return Path(project_dir) / ".claude/agent-memory/system-knowledge"
+        return REPO_ROOT / "memory-global/leaves/system-knowledge"
     return experience_dir(scope, project_dir)
 
 
@@ -328,11 +348,15 @@ def cmd_search(a) -> int:
         if score:
             scored.append((score, leaf, desc.strip()))
     scored.sort(key=lambda x: -x[0])
-    noun = "principle" if tier == "principles" else "experience leaf"
+    noun = {"principles": "principle", "system-knowledge": "system-knowledge leaf"}.get(
+        tier, "experience leaf"
+    )
     if not scored:
         print(f"no analogous {noun} found — record a NEW leaf")
         return 0
-    verb = "ground a stage in" if tier == "principles" else "extend"
+    verb = {"principles": "ground a stage in", "system-knowledge": "read before designing"}.get(
+        tier, "extend"
+    )
     print(f"analogous {noun}s ({verb} one instead of duplicating):")
     for score, leaf, desc in scored[:8]:
         print(f"  [{score:>3}] {leaf.name}\n        {desc}")
@@ -556,9 +580,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_scope(s)
     s.add_argument(
         "--tier",
-        choices=["experience", "principles"],
+        choices=["experience", "principles", "system-knowledge"],
         default="experience",
-        help="which leaf tier to search: experience (default) or the principles generality tier",
+        help=(
+            "which leaf tier to search: experience (default), the principles "
+            "generality tier, or system-knowledge (durable non-obvious facts, "
+            "ranked on the same difficulty-led basis as experience)"
+        ),
     )
     s.add_argument(
         "--domain",
