@@ -4,7 +4,7 @@ description: When the user points at a specific prior success/precedent (ticket,
 type: feedback
 schema: leaf/v1
 created: 2026-07-03
-last_verified: 2026-09-03
+last_verified: 2026-09-17
 ---
 
 # Investigate a cited precedent before theorizing from the current snapshot
@@ -39,9 +39,11 @@ Concrete instance — ownership attribution (2026-08-19): investigating a block-
 
 ### A precedent may live in the artifact's own thread, not just the live dialogue
 
-A cited precedent need not reach you through the live conversation to be binding. When the task is tracked in a ticket, PR, or review thread you are actively managing, another participant's comment in that thread — a suggested reproduction path, a workaround, a diagnosis — is exactly as load-bearing as something the user says out loud, and just as easy to miss if you re-read the thread only for status, not for prior proposals. Before devising your own alternative approach to a blocker tracked in such a thread, re-read the full thread for an already-suggested path from **any** participant, not only the user, and try that path before inventing a new one.
+A cited precedent need not reach you through the live conversation to be binding. When the task is tracked in a ticket, PR, or review thread you are actively managing, another participant's comment in that thread — a suggested reproduction path, a workaround, a diagnosis, or a link to authoritative reference documentation (an API spec, a Swagger/OpenAPI page, an internal guide) — is exactly as load-bearing as something the user says out loud, and just as easy to miss if you re-read the thread only for status, not for prior proposals. Before devising your own alternative approach to a blocker tracked in such a thread, re-read the full thread for an already-suggested path from **any** participant, not only the user, and try that path before inventing a new one — including a documentation link: read the actual spec before falling back to empirical trial-and-error (guessing behavior from response codes, probing routes blind) as your own substitute investigation.
 
 Concrete instance (2026-09-03): a comment on a tracked ticket from a third party suggested reproducing a bug through a specific existing entry point (a web form). Before working through that specific path, several rounds were spent devising alternative one-off approaches (a hand-written client mimicking an internal auth exchange, with a hardcoded client secret) — the already-suggested path was investigated only after the user pointed back at it. The thread itself, not only the live dialogue, was the source of the missed precedent — user correction 2026-09-03.
+
+Concrete instance (2026-09-17): a ticket comment explicitly linked the service's Swagger/OpenAPI documentation as the source for its API surface. Instead of reading it, several rounds were spent empirically probing undocumented endpoints by guessing at HTTP status codes — including two false-positive 200 responses that turned out to be the frontend SPA's HTML shell, not real API responses. Only after the user pointed back at the linked documentation ("почему ты сам не сходил не посмотрел документацию, ссылку на которую явно привёл...") was the actual spec fetched and read, immediately surfacing two richer endpoints unreachable by probing alone. A linked spec/API doc is exactly as load-bearing as a linked reproduction path — user correction 2026-09-17.
 
 ### The precedent may be implicit — a repeat/extend task carries its own baseline
 
