@@ -4,7 +4,7 @@ description: Publishing reader-facing text to a ticket/issue is gated on the FAC
 type: reference
 schema: difficulty/v1
 created: 2026-09-02
-last_verified: 2026-09-02
+last_verified: 2026-09-18
 ---
 
 # The published-text writer gate: bind on the fact of a tech-writer pass, not on content
@@ -72,6 +72,10 @@ The binding is computed over the ONE transcript the `PreToolUse` payload names a
 ### Residual 8 -- Harness-vocabulary leak (uncovered by this gate)
 
 GitHub issue #125's 2026-08-19 comment flags a distinct failure mode: TICKET-467 leaked internal engine vocabulary (crutch names, internal tool identifiers, engine state labels) into a published body. A body can pass a genuine tech-writer pass and still carry this vocabulary — polish does not reliably strip harness-specific terms, and recognizing them needs a vocabulary list this gate does not carry. The attachment judge's structural sniff catches TOML/plan-render *shape*, never terminology, and the term ruleset that once addressed this was deleted (Core issue #157). This gate does not close that gap; the underlying ask — a Core harness-vocabulary term ruleset — remains alive as its own, not-yet-scoped backlog item, not folded into this plan's scope.
+
+### Residual 9 -- Seam coverage is per-exact-verb, not per-tool
+
+`publication-tools.local`'s `bash_verb` matching (`lib/published_body._segment_matches_verb`) is an exact-token match on the verb's full token sequence, not a prefix or substring match: an entry named `tracker-cli.sh comment` matches only a command segment whose corresponding tokens are `tracker-cli.sh comment` verbatim — a sibling subcommand like `tracker-cli.sh comment-update` or `tracker-cli.sh project-comment` does **not** match it and resolves to `NOT_A_PUBLICATION`, silently unGATED, with no advisory record distinguishing this from an ordinary non-publishing command. Concretely: this machine's seam registered `tracker-cli.sh comment` but not `tracker-cli.sh comment-update`, so every `comment-update` call — including an in-place edit of an already-published body — bypassed the writer-pass binding entirely; a 2026-09-18 TICKET-497 ticket comment, edited via `comment-update`, reached the ticket with no witness check at all, and the user flagged it as bureaucratic filler for an external reader. This is a coverage gap in the seam, not a content-classification failure — the fix was two added seam entries (`tracker-cli.sh comment-update`, `tracker-cli.sh project-comment`), re-verified by calling `published_body.resolve()` directly against a synthetic `comment-update` command (resolves to `TEXT` after the fix; the verb did not match at all before it). **Generalizes:** any tool skill that grows a new publish-shaped subcommand (an edit verb, a second comment type, a new CLI) needs an explicit seam entry — the gate does not infer siblings from a registered verb's name, and a missing entry fails open with no distinguishing signal from an ordinary non-publishing command.
 
 ## Deferred calibration
 
