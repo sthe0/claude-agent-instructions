@@ -1,6 +1,6 @@
 ---
 name: plan-control-criterion-hygiene
-description: Thirteen plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world (both whole-plan merge/rollout and stage-to-stage cleanup transitions); sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start; bind a hand-copied mirror of a live-computed value to an import-and-compare test, not a frozen literal, because a merge race with unrelated trunk work can drift the mirror while the merge itself stays textually clean; never freeze an exact identifier (a test/function node id) for an artifact that does not exist yet at authoring time — reconcile it against what the implementing stage actually names, before verify-final runs it for real; never bind a criterion to whole-file identity of a file the stage does not exclusively own — scope the check to the one artifact the stage is actually responsible for, because verify-final re-runs the check after other legitimate, unrelated activity has touched the shared file; never bind a criterion to "the single most recent commit" (`git log -1`) touching a path — check the artifact's own current tracked/clean state directly, because a later, unrelated, legitimate commit (e.g. a DIAGNOSING-cycle repair for a different stage) becomes the new tip and silently falsifies a positional proxy that was never about the artifact at all; and `stat` every literal file path a criterion names (grep target, output_artifact, material_ref) against the live repo tree before submit_plan — review checks the plan's internal logic but treats a quoted path as a given fact rather than a claim, so a flat-file/package layout the plan never matched (or a rename between authoring and execution) survives every review round untouched.
+description: Fourteen plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world (both whole-plan merge/rollout and stage-to-stage cleanup transitions); sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start; bind a hand-copied mirror of a live-computed value to an import-and-compare test, not a frozen literal, because a merge race with unrelated trunk work can drift the mirror while the merge itself stays textually clean; never freeze an exact identifier (a test/function node id) for an artifact that does not exist yet at authoring time — reconcile it against what the implementing stage actually names, before verify-final runs it for real; never bind a criterion to whole-file identity of a file the stage does not exclusively own — scope the check to the one artifact the stage is actually responsible for, because verify-final re-runs the check after other legitimate, unrelated activity has touched the shared file; never bind a criterion to "the single most recent commit" (`git log -1`) touching a path — check the artifact's own current tracked/clean state directly, because a later, unrelated, legitimate commit (e.g. a DIAGNOSING-cycle repair for a different stage) becomes the new tip and silently falsifies a positional proxy that was never about the artifact at all; `stat` every literal file path a criterion names (grep target, output_artifact, material_ref) against the live repo tree before submit_plan — review checks the plan's internal logic but treats a quoted path as a given fact rather than a claim, so a flat-file/package layout the plan never matched (or a rename between authoring and execution) survives every review round untouched; and never anchor a criterion's freshness/identity proof to mutable local scratch state (a local docker tag, a temp file, a local build cache) when a durable evidence record of the original run already exists — ordinary later, unrelated work on the same machine or in the same session can silently overwrite the scratch resource without ever touching the delivered artifact.
 type: feedback
 schema: leaf/v1
 created: 2026-08-31
@@ -519,6 +519,56 @@ A stage's `verify_command`, `output_artifacts`, and `material_refs` routinely fr
 The fix is mechanical and cheap, the same shape as norm 7's dry run: before `submit_plan`, `stat`/`ls` every literal path a control criterion names against the actual worktree, not just against the plan's own prose.
 
 > **Observed.** A monitoring-config plan's Stage 1 `verify_command`, `output_artifacts`, and Stage 2's post-merge `final_check` all grepped two configuration modules as flat files, through 5+ review rounds (including two whole-plan passes). The spawned developer, mid-dispatch, reported both paths were actually packages (`<module>/__init__.py`, not `<module>.py`) — confirmed independently via a direct filesystem check on the delivery worktree before accepting the report. No review round had run `ls` on either path; each treated the literal as given. Cost: a full `declare → investigate → critique → normalize → replan` cycle to repair path literals that a single `stat` at authoring time would have caught for free.
+
+### 14. A criterion never anchors freshness/identity proof to mutable local scratch state when a durable evidence record already exists
+
+Norms 1–13 all govern a criterion's own **text** — what it asserts, how it is
+scoped, how it is dry-run. This is a different failure class: the criterion's
+**method** of proof reaches for the wrong kind of evidence in the first
+place. A local Docker image tag, a temp file, a local build cache — anything
+that lives only on one machine's disk, is named generically (not content-
+addressed), and is ordinarily overwritten in place by later, unrelated work —
+is scratch state, not a record. A `verify_command` that re-derives "was this
+the same artifact that actually ran" by reading such a tag's *live* digest at
+`verify-final` time is asking a question the tag was never built to answer
+durably: it answers "what does this name point to **right now**", not "what
+did this name point to when the stage ran".
+
+The durable alternative is usually already sitting on disk: the stage's own
+evidence file, written once, at the time of the real run, and independently
+cross-checked then (exit codes, non-empty result-table row counts, a
+ticket-attached snapshot). That evidence does not decay — nothing about it
+depends on any local machine state still pointing the same way later. A
+criterion should bind its freshness/identity proof to that record's own
+self-consistency (do its fields agree with each other, is the referenced
+table's name derived from the referenced run id, does the reported value
+clear a floor) rather than to a live re-derivation through mutable local
+state that ordinary, unrelated later activity on the same machine is free to
+overwrite.
+
+> **Observed.** An eval-pipeline plan's stage 8 `verify_command` and its
+> matching post-merge `final_check` both computed a live local image digest
+> (`docker image inspect <local-tag> --format '{{.Id}}'`) and compared it
+> against an `IMAGE_DIGEST:` value recorded in the stage's own evidence file,
+> then gated the rest of the check (a fresh content-probe container run and a
+> fresh metrics-recompute re-run) on that match. The original run recorded
+> one digest under a generic local tag on the day the stage actually ran. A
+> later, fully legitimate and unrelated piece of work in the *same session* —
+> a spawned developer's separate rebase investigation, probing whether trunk
+> had independently collided with this plan's own earlier fix — rebuilt an
+> image under the identical local tag two weeks later, recording a different
+> digest under the same tag. `verify-final` re-ran the check, found the live
+> tag no longer pointed at the recorded digest, and failed — not because the
+> delivered artifact regressed (the durable evidence file's own fields — a
+> zero exit code from each pipeline step, a real non-degenerate quality
+> score, a run-id-derived output-table reference — were all still intact and
+> had already been independently cross-checked at authoring time) but
+> because the check was asking the wrong question of the wrong kind of
+> state. The repair replaced the live-digest re-derivation and everything
+> gated behind it with a self-consistency check against the evidence file
+> already on disk: required fields present and non-degenerate, the run id
+> embedded in the output-table name, the reported score numeric and
+> non-zero — no local container-runtime state consulted at all.
 
 ## See also
 
