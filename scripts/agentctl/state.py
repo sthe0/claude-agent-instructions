@@ -1031,11 +1031,33 @@ class Order:
     a CHANGE to the plan does have to know about it: `plan.order_scope` (substantive tier),
     `plan.order_place` (refinement tier), and `plugins_premise._plan_content_digest`, which
     decides whether a discharged question enumeration survives a replan — the last was
-    missed on exactly this reasoning."""
+    missed on exactly this reasoning.
+
+    `requires_traceability` is unlike every other field here: it is not a part of the
+    order, it is the plan's own opt-in into a submission-seam GRADE that reads other
+    parts of the order (submission.py's `_element_traceability_violations` and
+    `_requirement_derivation_violations` — R3/R5). Every other requirement this engine
+    has added since the corpus was frozen binds unconditionally at the submission seam,
+    on the reasoning `Means.procedure` states: optional on the type, required of a
+    substantive plan at submission, and a handful of stored plans predating the field
+    simply start failing their next submission-seam re-read. That reasoning does not
+    survive R3/R5: measured against every order-bearing plan in `~/.claude-agent/plans/`
+    at authoring time, ALL of them (135/135) would newly fail BOTH checks, because
+    neither `[stage].material/result/...` naming a requirement id nor
+    `[meta.order].requirements[*].derivation` existed as an authored convention before
+    R3/R5 did. A requirement that breaks every existing instance of the thing it grades,
+    rather than the handful a smaller addition breaks, is not the same event — it needs
+    a plan to say it was AUTHORED under the convention, not merely to happen to satisfy
+    it. False by default: every plan on disk before this field existed lacks the key and
+    reads false, so R3/R5 apply to none of them; a plan sets it true once its stages
+    actually carry requirement ids and every requirement carries a derivation."""
     customer_id: str = ""
     customer: str = ""
     functional_place: str = ""
     requirements: list[Requirement] = field(default_factory=list)
+    # See the docstring above. Read only by submission.py's R3/R5 gate; `_order_violations`
+    # never reads it, because the four ordinary order parts stay required unconditionally.
+    requires_traceability: bool = False
     # requirement id -> the controls that decide it. Values are lists of prose
     # references (a stage's verify_command, a final_check) — a machine reads the KEYS
     # for totality; whether an entry's named control really decides the requirement is
@@ -1098,6 +1120,7 @@ class Order:
             coverage=cov,
             malformed=tuple(malformed),
             requirements_dropped=requirements_dropped,
+            requires_traceability=bool(d.get("requires_traceability", False)),
         )
 
 

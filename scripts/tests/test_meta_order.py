@@ -61,6 +61,14 @@ _NOT_REQUIRED: dict[str, str] = {
         "entries were tables and survived, some were not), set only by Order.from_dict and "
         "read only by the message that names how many entries were dropped."
     ),
+    "requires_traceability": (
+        "not a part of the order the customer states -- it is the plan's own opt-in into "
+        "the R3/R5 submission-seam grade (submission._element_traceability_violations, "
+        "submission._requirement_derivation_violations). Its absence means 'authored "
+        "before that grade existed, and grandfathered out of it', not 'missing'; refusing "
+        "its omission would defeat the exact grandfather it exists to provide. See "
+        "Order.requires_traceability in state.py."
+    ),
 }
 
 # THE PARAMETRIZATION. Derived from the type, never typed out beside it.
@@ -97,6 +105,11 @@ _ORDER_SCALARS = {
         'derivation = "fixture-derivation" },\n'
         ']'
     ),
+    # Present by default so every existing R3/R5 fixture below keeps exercising the
+    # grade it was written to exercise; Blocking-2's grandfather negative control
+    # (below) reads a genuinely pre-schema fixture file instead of this helper, so it
+    # never gets this line and stays grandfathered, exactly as an old plan on disk does.
+    "requires_traceability": "requires_traceability = true",
 }
 
 _COVERAGE = {"R1": ["stage 1 verify_command"], "R2": ["final_check 1"]}
@@ -679,6 +692,81 @@ def test_requirement_derivation_only_edit_changes_order_place_tuple(tmp_path):
     assert order_place(old.meta) != order_place(new.meta)
 
 
+def test_element_traceability_id_match_is_anchored_not_substring(tmp_path):
+    """`id="R1"` must not read as traced by material that merely CONTAINS the two
+    characters "r1" inside an unrelated word -- `"dir1/unrelated.py"` contains "r1" as a
+    run of characters, but never names requirement R1. A plain substring test passed
+    this fixture; the anchored match must refuse it."""
+    path = tmp_path / "substring_false_positive.toml"
+    _write_plan(path)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'material = "m1 (traces to R1, R2)"', 'material = "dir1/unrelated.py"',
+        ),
+        encoding="utf-8",
+    )
+
+    problems = submission_violations(load_plan(str(path)))
+
+    assert any("names no order-requirement id" in p for p in problems), problems
+
+
+def test_element_traceability_id_match_is_anchored_at_token_boundary(tmp_path):
+    """The positive companion: an id mentioned as its own token -- however it is
+    punctuated around -- still traces, so the anchoring is a token boundary and not an
+    accidental over-tightening to whitespace-delimited words alone."""
+    path = tmp_path / "punctuated_id.toml"
+    _write_plan(path)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'material = "m1 (traces to R1, R2)"', 'material = "m1 (R1)"',
+        ),
+        encoding="utf-8",
+    )
+
+    problems = submission_violations(load_plan(str(path)))
+
+    assert not any("names no order-requirement id" in p for p in problems), problems
+
+
+def test_meta_order_requirement_with_no_text_is_refused(tmp_path):
+    """An id with nothing behind it -- an empty `text` -- is refused unconditionally by
+    `_order_violations`, not silently skipped: it is a coverage-map key standing in for a
+    requirement the plan never actually states, and `_requirement_derivation_violations`
+    deliberately does not re-report it (see that function's own `continue`)."""
+    path = tmp_path / "no_text.toml"
+    _write_plan(path, omit=("requirements",))
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "[meta.order]\n",
+            '[meta.order]\nrequirements = [\n'
+            '  { id = "R1", text = "t1", derivation = "fixture-derivation" },\n'
+            '  { id = "R2", text = "", derivation = "fixture-derivation" },\n'
+            ']\n',
+        ),
+        encoding="utf-8",
+    )
+
+    problems = submission_violations(load_plan(str(path)))
+
+    assert any("R2" in p and "no 'text'" in p for p in problems), problems
+
+
+def test_meta_order_traceability_and_derivation_are_silent_when_requirements_absent(tmp_path):
+    """The clean short-circuit: with `requirements` entirely absent (not merely one
+    requirement missing a derivation or an id), neither `_element_traceability_
+    violations` nor `_requirement_derivation_violations` has anything to range over and
+    both must stay silent -- `_order_violations`' own 'missing requirements' message is
+    the only complaint, not a pile-up of messages from checks with nothing to check."""
+    plan = _write_plan(tmp_path / "no_requirements.toml", omit=("requirements",))
+
+    problems = submission_violations(load_plan(plan))
+
+    assert any("missing 'requirements'" in p for p in problems), problems
+    assert not any("names no order-requirement id" in p for p in problems), problems
+    assert not any("has no derivation" in p for p in problems), problems
+
+
 # --- the carve-outs: nothing already accepted is affected --------------------
 
 
@@ -706,6 +794,41 @@ def test_meta_order_the_loader_never_refuses_an_orderless_plan(tmp_path):
     assert [p for p in submission_violations(doc) if "missing the 'order' table" in p]
     with pytest.raises(PlanError, match="missing the 'order' table"):
         validate_submission(doc)
+
+
+def test_meta_order_retroactive_grandfather_of_a_real_pre_schema_order_bearing_plan():
+    """THE negative control R3/R5 actually need, not the vacuous one above. That test's
+    fixture has no [meta.order] at all, so it short-circuits before either check ever
+    runs and proves nothing about the regression the two checks introduced.
+
+    plan_snapshot_smd-act-defects-8.toml is the case that matters: a real, SUBSTANTIVE,
+    order-bearing plan authored before R3/R5 existed. It carries eleven requirements,
+    none of them a `derivation` key, and stage prose that was never written to name a
+    requirement id. Both checks would newly refuse it on sight.
+
+    Both directions are asserted, not just the grandfathered one, because a fixture
+    that happens to already satisfy R3/R5 would make the grandfather assertion pass
+    for the wrong reason. Forcing requires_traceability = True on the very same parsed
+    document first proves the fixture genuinely trips both checks -- the flag is what
+    keeps it silent, not some property of the plan text -- and only then is the flag
+    reset to what the file actually says (unset, so it reads False) and re-checked."""
+    fixture = Path(__file__).parent / "fixtures" / "plan_snapshot_smd-act-defects-8.toml"
+    doc = load_plan(str(fixture), strict=False)
+
+    assert doc.meta.order is not None
+    assert len(doc.meta.order.requirements) == 11
+    assert all(not r.derivation for r in doc.meta.order.requirements)
+    assert doc.meta.order.requires_traceability is False
+
+    doc.meta.order.requires_traceability = True
+    forced = submission_violations(doc)
+    assert any("names no order-requirement id" in p for p in forced), forced
+    assert any("has no derivation" in p for p in forced), forced
+
+    doc.meta.order.requires_traceability = False
+    problems = submission_violations(doc)
+    assert not any("names no order-requirement id" in p for p in problems), problems
+    assert not any("has no derivation" in p for p in problems), problems
 
 
 def test_meta_order_every_frozen_corpus_plan_loads_unaffected(tmp_path):

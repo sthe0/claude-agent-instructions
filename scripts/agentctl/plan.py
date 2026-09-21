@@ -1467,6 +1467,7 @@ def order_place(meta) -> tuple:
         tuple(sorted((k, tuple(v)) for k, v in order.coverage.items())),
         order.malformed,
         order.requirements_dropped,
+        order.requires_traceability,
     ),)
 
 

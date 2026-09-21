@@ -56,6 +56,8 @@ load-bearing ones and neither weakens as enumerators are added.
 """
 from __future__ import annotations
 
+import re
+
 from .conditions import judge_restatement, restatement_prefilter
 from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
@@ -377,6 +379,12 @@ def _order_violations(meta) -> list[str]:
         strictly worse case: an entry with no id is not merely uncovered, it is
         uncoverABLE — the coverage map, the acceptance verdicts and this check all key on
         the id, so a requirement without one cannot be named by any of them;
+      * an id with no 'text' — an id names which requirement, the text is the
+        requirement itself, so an empty one is a coverage-map key with nothing behind
+        it. Refused here, unconditionally, rather than left to `_requirement_derivation_
+        violations` to notice: that check is gated on `order.requires_traceability` (see
+        `Order.requires_traceability` in state.py) and skips a textless requirement
+        outright, so an ungated presence check is what actually catches it on every plan;
       * a DUPLICATED requirement id, refused for the same reason one step on: the id is
         the key, so two requirements sharing one collapse into a single coverage entry and
         a single acceptance verdict, and the second rides in accepted without ever having
@@ -420,6 +428,16 @@ def _order_violations(meta) -> list[str]:
             f"map and every acceptance verdict key on the id, so an id-less requirement "
             f"cannot be covered or accepted at all"
         )
+    textless = sorted(
+        {r.id for r in order.requirements if r.id and not _normalize_string(r.text)}
+    )
+    if textless:
+        out.append(
+            f"[meta.order] requirement(s) {', '.join(textless)} carry an id but no "
+            f"'text'. An id names WHICH requirement; the text is the requirement itself "
+            f"— an id with nothing to accept against is a coverage-map key standing in "
+            f"for a requirement the plan never actually states"
+        )
     declared = [r.id for r in order.requirements if r.id]
     duplicated = sorted({rid for rid in declared if declared.count(rid) > 1})
     if duplicated:
@@ -449,6 +467,22 @@ def _order_violations(meta) -> list[str]:
     return out
 
 
+def _names_requirement_id(rid: str, norm: str) -> bool:
+    """Whether normalized text `norm` names requirement id `rid` as a TOKEN, not merely
+    as a run of characters some other word happens to contain.
+
+    A plain substring test (`_normalize_string(rid) in norm`) is wrong in both
+    directions: `id="R1"` reads as present in `material="dir1/unrelated.py"` (`"r1"` is
+    a substring of `"dir1"`) though the material never names the requirement, and a
+    single-character id can vanish into ordinary prose the same way. Anchored on
+    `[0-9a-z]` rather than `\\b` because `_normalize_string` already casefolds and
+    strips to that alphabet plus whitespace/punctuation, so the two boundary classes
+    coincide for every normalized id this engine emits."""
+    return re.search(
+        rf"(?<![0-9a-z]){re.escape(_normalize_string(rid))}(?![0-9a-z])", norm
+    ) is not None
+
+
 def _element_traceability_violations(doc) -> list[str]:
     """Every stage whose declared elements name no order-requirement id. [] == clean.
 
@@ -464,9 +498,19 @@ def _element_traceability_violations(doc) -> list[str]:
     Structural, not semantic: the vocabulary being matched is the plan author's own
     controlled vocabulary (`[meta.order].requirements[*].id`), not free text being read
     for meaning. See `_requirement_derivation_violations` for the element this is NOT —
-    a check over prose content — and why that one is routed to review instead."""
+    a check over prose content — and why that one is routed to review instead.
+
+    Gated on `order.requires_traceability` (see its docstring in state.py): a check
+    that would newly fail every order-bearing plan authored before it existed cannot
+    bind unconditionally the way a smaller addition does — it applies only to a plan
+    that declares itself authored under the convention it grades."""
     order = doc.meta.order
-    if order is None or "order" in order.malformed or not order.requirements:
+    if (
+        order is None
+        or "order" in order.malformed
+        or not order.requirements
+        or not order.requires_traceability
+    ):
         return []
     ids = [r.id for r in order.requirements if r.id]
     if not ids:
@@ -490,7 +534,7 @@ def _element_traceability_violations(doc) -> list[str]:
             )
         )
         norm = _normalize_string(blob)
-        if not any(_normalize_string(rid) in norm for rid in ids):
+        if not any(_names_requirement_id(rid, norm) for rid in ids):
             out.append(
                 f"stage {stage.index} names no order-requirement id ({', '.join(ids)}) "
                 f"anywhere in material/result/invariants/means/method/procedure/"
@@ -515,11 +559,24 @@ def _requirement_derivation_violations(order) -> list[str]:
     thinker review instead. See the module docstring's split of a check into a rule part
     (decidable from form, mechanized here) and a perception part (judgment, left to
     review) -- and `_element_traceability_violations` above for the sibling check this
-    deliberately does NOT repeat that split incorrectly."""
-    if order is None or "order" in order.malformed or not order.requirements:
+    deliberately does NOT repeat that split incorrectly.
+
+    Gated on `order.requires_traceability`, for the same reason
+    `_element_traceability_violations` is: see that function's docstring and
+    `Order.requires_traceability`'s in state.py."""
+    if (
+        order is None
+        or "order" in order.malformed
+        or not order.requirements
+        or not order.requires_traceability
+    ):
         return []
     out: list[str] = []
     for r in order.requirements:
+        # An id-less or empty-text requirement is refused by `_order_violations`
+        # (id-less: "carry no 'id'"; empty-text: below) -- this loop's own job is
+        # grading a requirement that has already cleared presence, not re-refusing
+        # one that has not.
         if not r.id or not _normalize_string(r.text):
             continue
         if not _normalize_string(r.derivation):

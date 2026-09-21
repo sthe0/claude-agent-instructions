@@ -34,6 +34,22 @@ def render_plan_md(doc: PlanDoc) -> str:
         lines.append(f"- **External research:** {m.external_research}")
     lines.append("")
 
+    if m.order is not None:
+        o = m.order
+        lines.append("## Order")
+        lines.append("")
+        if o.customer_id or o.customer:
+            lines.append(f"- **Customer:** {o.customer} (`{o.customer_id}`)")
+        if o.functional_place:
+            lines.append(f"- **Functional place:** {o.functional_place}")
+        if o.requirements:
+            lines.append("- **Requirements:**")
+            for r in o.requirements:
+                label = f"**{r.id}**" if r.id else "*(no id)*"
+                lines.append(f"  - {label}: {r.text}")
+                lines.append(f"    - **Derivation:** {r.derivation or '*(none)*'}")
+        lines.append("")
+
     for s in doc.stages:
         lines.append(f"## Stage {s.index}: {s.title}")
         lines.append("")
