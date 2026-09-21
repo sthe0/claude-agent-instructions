@@ -91,8 +91,10 @@ _ORDER_SCALARS = {
     ),
     "requirements": (
         'requirements = [\n'
-        '  { id = "R1", text = "the order is a typed object, not one free-text string" },\n'
-        '  { id = "R2", text = "each part of it is required of a substantive plan" },\n'
+        '  { id = "R1", text = "the order is a typed object, not one free-text string", '
+        'derivation = "fixture-derivation" },\n'
+        '  { id = "R2", text = "each part of it is required of a substantive plan", '
+        'derivation = "fixture-derivation" },\n'
         ']'
     ),
 }
@@ -118,7 +120,7 @@ expected_result_image = "The seam requires a typed order of a substantive plan."
 criterion_type = "measurable"
 done_criterion = "d1"
 verify_command = "pytest -q"
-material = "m1"
+material = "m1 (traces to R1, R2)"
 means = "bash"
 method = "run"
 procedure = "1. read the fixture. 2. apply the edit. 3. re-check the seam"
@@ -564,6 +566,117 @@ def test_meta_order_a_coverage_key_naming_no_requirement_is_refused(tmp_path):
     problems = submission_violations(load_plan(plan))
 
     assert any("R7" in p and "no requirement" in p for p in problems), problems
+
+
+# --- element traceability (R3) and requirement derivation (R5) --------------
+
+
+def test_meta_order_stage_naming_no_requirement_id_is_refused(tmp_path):
+    """A stage that traces to no declared requirement anywhere in its prose is
+    unaccountable scope, refused by `_element_traceability_violations`."""
+    path = tmp_path / "no_trace.toml"
+    _write_plan(path)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'material = "m1 (traces to R1, R2)"', 'material = "m1"',
+        ),
+        encoding="utf-8",
+    )
+
+    problems = submission_violations(load_plan(str(path)))
+
+    assert any("names no order-requirement id" in p for p in problems), problems
+
+
+def test_element_traceability_reads_actor_capability_required(tmp_path):
+    """`_element_traceability_violations` joins `capability_required` into the blob it
+    searches, not only the more obviously prose-like fields — proven by a stage whose
+    ONLY requirement-id mention lives there, every other prose field left blank or
+    unrelated to any id."""
+    path = tmp_path / "cap_trace.toml"
+    _write_plan(path)
+    text = path.read_text(encoding="utf-8")
+    text = text.replace('material = "m1 (traces to R1, R2)"', 'material = "m1"')
+    text = text.replace(
+        'capability_required = "cap"', 'capability_required = "cap (traces to R1)"',
+    )
+    path.write_text(text, encoding="utf-8")
+
+    problems = submission_violations(load_plan(str(path)))
+
+    assert not any("names no order-requirement id" in p for p in problems), problems
+
+
+def test_meta_order_requirement_without_derivation_is_refused(tmp_path):
+    """A requirement with text but no derivation states WHAT it asks without ever
+    showing HOW it was reached -- refused by `_requirement_derivation_violations`,
+    named by id so the author knows which requirement to fix."""
+    path = tmp_path / "no_derivation.toml"
+    _write_plan(path, omit=("requirements",))
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "[meta.order]\n",
+            '[meta.order]\nrequirements = [\n'
+            '  { id = "R1", text = "t1", derivation = "fixture-derivation" },\n'
+            '  { id = "R2", text = "t2" },\n'
+            ']\n',
+        ),
+        encoding="utf-8",
+    )
+
+    problems = submission_violations(load_plan(str(path)))
+
+    assert any("R2" in p and "has no derivation" in p for p in problems), problems
+    assert not any("R1" in p and "has no derivation" in p for p in problems), problems
+
+
+def test_meta_order_requirement_derivation_repeating_customer_text_is_accepted(tmp_path):
+    """The permanent guard against ever silently reintroducing a textual-overlap check
+    into `_requirement_derivation_violations`: a derivation that verbatim-repeats a
+    phrase from `order.customer` is still ACCEPTED, because the check is over FORM (does
+    a derivation exist) and never over textual similarity to anything else. A well
+    -problematized requirement can legitimately need to repeat an exact term from the
+    order; if this test ever fails, a substring/edit-distance comparison has crept back
+    in and must be removed."""
+    path = tmp_path / "verbatim_derivation.toml"
+    _write_plan(path, omit=("requirements",))
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "[meta.order]\n",
+            '[meta.order]\nrequirements = [\n'
+            '  { id = "R1", text = "t1", derivation = "the position that posed the '
+            'critique task, reached via problematization" },\n'
+            '  { id = "R2", text = "t2", derivation = "fixture-derivation" },\n'
+            ']\n',
+        ),
+        encoding="utf-8",
+    )
+
+    problems = submission_violations(load_plan(str(path)))
+
+    assert not any("has no derivation" in p for p in problems), problems
+
+
+def test_requirement_derivation_only_edit_changes_order_place_tuple(tmp_path):
+    """`order_place` must carry `derivation`, not only `id`/`text`: without it, rewriting
+    a requirement's derivation to filler after review moves no key in the change-decision
+    digest `gates.plan_review_blockers` keys off, so it is never re-judged. Distinct from
+    `test_order_place_exhausts_the_order_s_field_set`, which ranges over `Order`'s own
+    fields and was never designed to catch a `Requirement`-level omission."""
+    old = load_plan(_write_plan(tmp_path / "old.toml"), strict=False)
+    path = tmp_path / "new.toml"
+    _write_plan(path)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'derivation = "fixture-derivation"',
+            'derivation = "a different, but still non-empty, derivation"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    new = load_plan(str(path), strict=False)
+
+    assert order_place(old.meta) != order_place(new.meta)
 
 
 # --- the carve-outs: nothing already accepted is affected --------------------

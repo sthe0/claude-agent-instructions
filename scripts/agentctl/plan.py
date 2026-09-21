@@ -1463,7 +1463,7 @@ def order_place(meta) -> tuple:
         order.customer_id,
         order.customer,
         order.functional_place,
-        tuple((r.id, r.text) for r in order.requirements),
+        tuple((r.id, r.text, r.derivation) for r in order.requirements),
         tuple(sorted((k, tuple(v)) for k, v in order.coverage.items())),
         order.malformed,
         order.requirements_dropped,

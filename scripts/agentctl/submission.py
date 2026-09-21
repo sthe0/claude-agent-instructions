@@ -449,6 +449,90 @@ def _order_violations(meta) -> list[str]:
     return out
 
 
+def _element_traceability_violations(doc) -> list[str]:
+    """Every stage whose declared elements name no order-requirement id. [] == clean.
+
+    Order-traceability is not only the `[stage.principle]` element's job: every element
+    that exists because the order asked for something must say which requirement it
+    traces to, or it is unaccountable scope. This ranges over the seven prose elements a
+    stage actually carries — material/result/invariants, means/method/procedure,
+    conditions/preconditions/knowledge, capability_required, done_criterion — joined into
+    one normalized blob per stage, so a stage naming its requirement id ANYWHERE among
+    them passes; the check is deliberately not per-field, since a plan is free to place
+    the traceability note wherever it reads best.
+
+    Structural, not semantic: the vocabulary being matched is the plan author's own
+    controlled vocabulary (`[meta.order].requirements[*].id`), not free text being read
+    for meaning. See `_requirement_derivation_violations` for the element this is NOT —
+    a check over prose content — and why that one is routed to review instead."""
+    order = doc.meta.order
+    if order is None or "order" in order.malformed or not order.requirements:
+        return []
+    ids = [r.id for r in order.requirements if r.id]
+    if not ids:
+        return []
+    out: list[str] = []
+    for stage in doc.stages:
+        blob = " ".join(
+            str(part)
+            for part in (
+                stage.subject.material,
+                stage.subject.result,
+                stage.subject.invariants or "",
+                stage.means.means,
+                stage.means.method,
+                stage.means.procedure,
+                stage.conditions or "",
+                stage.preconditions or "",
+                stage.knowledge or "",
+                stage.actor.capability_required or "",
+                stage.criterion.done_criterion,
+            )
+        )
+        norm = _normalize_string(blob)
+        if not any(_normalize_string(rid) in norm for rid in ids):
+            out.append(
+                f"stage {stage.index} names no order-requirement id ({', '.join(ids)}) "
+                f"anywhere in material/result/invariants/means/method/procedure/"
+                f"conditions/preconditions/knowledge/capability_required/done_criterion. "
+                f"Order-traceability is not only the [stage.principle] element's job -- "
+                f"every element that exists because the order asked for something must "
+                f"say which requirement it traces to, or it is unaccountable scope"
+            )
+    return out
+
+
+def _requirement_derivation_violations(order) -> list[str]:
+    """Every declared requirement whose derivation is empty. [] == clean.
+
+    A requirement's TEXT alone shows only WHAT it says, never HOW it was reached. This
+    checks only the STRUCTURAL fact that a derivation exists and carries content — it
+    performs no textual-similarity, substring, or edit-distance comparison against
+    `order.customer` or against anything else. Whether a given derivation genuinely shows
+    problematization (order -> problematization -> reconstruction of the functional
+    place -> task), rather than disguised transcription dressed up as reasoning, is not a
+    fact recoverable from the derivation's surface form -- it is routed to the mandatory
+    thinker review instead. See the module docstring's split of a check into a rule part
+    (decidable from form, mechanized here) and a perception part (judgment, left to
+    review) -- and `_element_traceability_violations` above for the sibling check this
+    deliberately does NOT repeat that split incorrectly."""
+    if order is None or "order" in order.malformed or not order.requirements:
+        return []
+    out: list[str] = []
+    for r in order.requirements:
+        if not r.id or not _normalize_string(r.text):
+            continue
+        if not _normalize_string(r.derivation):
+            out.append(
+                f"[meta.order] requirement {r.id} has no derivation -- state how it was "
+                f"reached via order -> problematization -> reconstruction of the "
+                f"functional place -> task (see [[function-place-difficulty]]); a "
+                f"requirement's resulting TEXT alone does not show HOW it was reached, "
+                f"only WHAT it says"
+            )
+    return out
+
+
 def _conditions_restatement(stage, judge_runner, judge_enabled: bool) -> str | None:
     """The violation for a `conditions` exhausted by restating `depends_on`, or None.
 
@@ -615,6 +699,8 @@ def submission_violations(
                 f"[meta] missing {label!r} (required for substantive plans): {_WHY[label]}"
             )
     out.extend(_order_violations(doc.meta))
+    out.extend(_element_traceability_violations(doc))
+    out.extend(_requirement_derivation_violations(doc.meta.order))
     for stage in doc.stages:
         # Supplies are already built by the time a PlanDoc exists, so the "supplied by an
         # earlier stage" alternative is decidable here — evaluating the knowledge

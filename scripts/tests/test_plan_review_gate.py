@@ -470,6 +470,7 @@ functional_place = "the norm governing an act of activity, in a test"
 [[meta.order.requirements]]
 id = "R1"
 text = "the fixture plan meets the substantive grade"
+derivation = "fixture-derivation"
 
 [meta.order.coverage]
 R1 = ["stage 1 verify_command"]
@@ -486,7 +487,7 @@ expected_result_image = "n/a"
 criterion_type = "measurable"
 done_criterion = "d1"
 verify_command = "true"
-material = "m1"
+material = "m1 (traces to R1)"
 means = "bash"
 method = "run"
 conditions = "none"

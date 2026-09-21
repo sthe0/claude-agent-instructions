@@ -995,10 +995,15 @@ class Requirement:
     its only machine-readable key stayed prose someone has to parse back out."""
     id: str
     text: str = ""
+    derivation: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "Requirement":
-        return cls(id=str(d.get("id", "")), text=str(d.get("text", "")))
+        return cls(
+            id=str(d.get("id", "")),
+            text=str(d.get("text", "")),
+            derivation=str(d.get("derivation", "")),
+        )
 
 
 @dataclass

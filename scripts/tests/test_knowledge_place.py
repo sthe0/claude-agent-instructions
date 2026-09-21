@@ -98,7 +98,7 @@ procedure = "1. read the fixture. 2. apply the edit. 3. re-check the seam"
 conditions = "c"
 preconditions = "p"
 invariants = "n"
-capability_required = "cap"
+capability_required = "cap (traces to R1)"
 {knowledge_block}
 [stage.principle]
 statement = "s"
@@ -256,7 +256,7 @@ procedure = "1. read the fixture. 2. apply the edit. 3. re-check the seam"
 conditions = "c"
 preconditions = "p"
 invariants = "n"
-capability_required = "cap"
+capability_required = "cap (traces to R1)"
 
 [[stage.supplies]]
 on = 1
