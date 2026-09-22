@@ -188,6 +188,26 @@ def _observation_sha256(observation: str) -> str:
     return hashlib.sha256((observation or "").encode("utf-8")).hexdigest()
 
 
+# `--reviewer` is free text (30+ observed spellings of "thinker" alone), which makes a
+# reviewer-by-role query over history unanswerable without re-parsing every event by
+# hand. D9 capture: a best-effort canonical token alongside the untouched raw string —
+# never REPLACING it, since a normalization that destroys its input cannot be
+# re-derived when the mapping below turns out wrong (e.g. a new role appears).
+_REVIEWER_CANONICAL_TOKENS = (
+    "thinker", "developer", "code-reviewer", "planner", "tech-writer", "coordinator", "user",
+)
+
+
+def _normalize_reviewer_token(raw: str | None) -> str:
+    s = (raw or "").strip().lower()
+    if not s:
+        return ""
+    for token in _REVIEWER_CANONICAL_TOKENS:
+        if token in s:
+            return token
+    return "other"
+
+
 def _record_stage_review(state: SessionState, review: StageReview, *, from_judge: bool) -> None:
     """Store a StageReview, one per stage_index (last-wins). A judge verdict
     (from_judge=True) NEVER clobbers a human/manual review already present for the
@@ -3053,8 +3073,14 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
         presented_ts=time.time(),
     )
     _record_plan_presentation(state, presentation)
+    # D9 capture: what the user said when sending a PRIOR presentation of this plan
+    # back (a correction or rejection) — the one thing present_plan's own receipt
+    # never had anywhere to record, since the text belongs to the user's reply, not
+    # to the rendering being stamped now. Optional and free-text; its absence (the
+    # ordinary case — a first presentation, or a clean approval) is not a refusal.
     state.log("present_plan", plan=target, kind=kind,
-              rendering_sha256=presentation.rendering_sha256)
+              rendering_sha256=presentation.rendering_sha256,
+              rejection_text=getattr(args, "rejection_text", None))
     store.save(state)
 
     if kind == PLAN_PRESENTATION_KIND_ESSENCE:
@@ -3422,6 +3448,8 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     _log_gate(state, "plan_review", blockers, passed=not blockers)
     state.log("plan_review", target=target, verdict=args.verdict, scope=scope,
               reviewer=review.reviewer,
+              reviewer_raw=review.reviewer,
+              reviewer_token=_normalize_reviewer_token(review.reviewer),
               plan_sha256=review.plan_sha256,
               plan_bytes=_plan_file_bytes(target),
               concerns=review.concerns,
@@ -5217,7 +5245,7 @@ def cmd_declare(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     state.difficulty.declaration = Declaration(
         expected=args.expected, actual=args.actual, mismatch=args.mismatch
     )
-    state.log("declare")
+    state.log("declare", expected=args.expected, actual=args.actual, mismatch=args.mismatch)
     store.save(state)
     return Directive(True, state.node, "investigate",
                      "declaration recorded; localize the divergence next (investigate)")
@@ -5271,7 +5299,14 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
         differences_to_remove=list(getattr(args, "differences_to_remove", None) or []),
         failure_address=failure_address,
     )
-    state.log("critique")
+    state.log(
+        "critique",
+        functional_ground=state.difficulty.critique.functional_ground,
+        replanning_task=state.difficulty.critique.replanning_task,
+        invariants_to_preserve=state.difficulty.critique.invariants_to_preserve,
+        differences_to_remove=state.difficulty.critique.differences_to_remove,
+        failure_address=state.difficulty.critique.failure_address,
+    )
     store.save(state)
     # Consult (never fire) the same gate cmd_replan enforces: the record now has all
     # three sections, but the gate also shape-checks them (>=2 distinct hypotheses,
@@ -5427,6 +5462,27 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
         + (f"stage(s) {changed}" if changed else "no stage")
         + " was replaced; every norm the plan sets is unchanged",
         data={"stages": changed})
+
+
+def _replan_cause(state: SessionState, explicit_reason: str | None) -> dict:
+    """D9 history capture: why THIS replan happened. Preferred source is the active
+    Difficulty record's critique — functional_ground/replanning_task are exactly the
+    "why" the overcome-difficulty cycle already produces, so this reads them rather
+    than asking the caller to retype them. Falls back to an optional free-text
+    --reason for a bare, non-DIAGNOSING replan (a plain refinement/no_change with no
+    difficulty behind it). Returns {} when neither is available — a replan with no
+    stated cause is captured as such, never refused for lacking one."""
+    critique = state.difficulty.critique if state.difficulty is not None else None
+    if critique is not None:
+        return {
+            "cause_source": "difficulty",
+            "functional_ground": critique.functional_ground,
+            "replanning_task": critique.replanning_task,
+        }
+    reason = (explicit_reason or "").strip()
+    if reason:
+        return {"cause_source": "reason", "reason": reason}
+    return {}
 
 
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -5862,6 +5918,15 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # retry it; the difficulty record is cleared so a later failure starts fresh.
     diagnosing = state.node == Node.DIAGNOSING.value
 
+    # D9 capture: WHY this replan happened, read off the active Difficulty record
+    # (already populated by declare/investigate/critique) BEFORE any branch below
+    # clears it. Every branch below either sets state.difficulty = None (substantive,
+    # unconditionally; no_change/refinement, when diagnosing) or leaves it — so this is
+    # the last point at which the record is guaranteed still present. Falls back to an
+    # optional --reason for a bare (non-DIAGNOSING) replan; never refuses when both are
+    # absent, since this is a capture and not a gate.
+    replan_cause = _replan_cause(state, getattr(args, "reason", None))
+
     # Effort-divergence spend refresh (call site 3): book against the OLD plan_path
     # BEFORE any branch below may rewrite state.plan_path — the opposite ordering from
     # each branch's own rederive() call, which must run AFTER that branch's stage-list
@@ -5908,7 +5973,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                     s.outcome.status = StageStatus.PENDING.value
             state.difficulty = None
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
-            state.log("replan", kind="no_change", exited_diagnosing=True)
+            state.log("replan", kind="no_change", exited_diagnosing=True, **replan_cause)
             task_accumulator.add(
                 state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
             )
@@ -5944,7 +6009,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         if diagnosing:
             state.difficulty = None
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
-        state.log("replan", kind="refinement", exited_diagnosing=diagnosing)
+        state.log("replan", kind="refinement", exited_diagnosing=diagnosing, **replan_cause)
         task_accumulator.add(
             state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
         )
@@ -6010,7 +6075,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     state.difficulty = None
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
-    state.log("replan", kind="substantive")
+    state.log("replan", kind="substantive", **replan_cause)
     task_accumulator.add(
         state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
     )
@@ -7160,6 +7225,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--emit-skeleton", dest="emit_skeleton", action="store_true",
                     help="print the [stage N] anchor scaffold for a `full` rendering; "
                          "stamps nothing")
+    sp.add_argument("--rejection-text", dest="rejection_text", default=None,
+                    help="what the user said when sending a PRIOR presentation of this "
+                         "plan back (a correction or rejection), captured for history "
+                         "only; omit on a first presentation or a clean approval — never "
+                         "required")
     sp = add("confirm-delivery"); sp.add_argument("--session", required=True)
     sp.add_argument("--kind", choices=list(PLAN_PRESENTATION_KINDS), default=PLAN_PRESENTATION_KIND_ESSENCE,
                     help="which presentation's delivery this override confirms — must "
@@ -7376,6 +7446,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="plan stage index to re-open as FAILED (repeatable; "
                          "defaults to the final stage so a reject is never a no-op)")
     sp = add("replan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
+    sp.add_argument("--reason", default=None,
+                    help="free-text cause for this replan, captured for history only; used "
+                         "only when no active difficulty record supplies one (a bare "
+                         "refinement/no_change replan outside DIAGNOSING) — never required, "
+                         "and its absence never refuses the command")
     sp.add_argument("--coverage-waiver", dest="coverage_waiver", default=None,
                     help="bypass a failing coverage gate with a recorded reason (refused if empty); "
                          "never bypasses the difficulty-record completeness precondition")
