@@ -8,10 +8,16 @@
 # exactly that field from its state.log(...) call site and confirm the one
 # test written for it goes RED — plus a seventh mutation that injects an
 # actual refusal on an absent new argument, proving
-# test_five_commands_unchanged_without_new_arguments would catch a D9
-# regression that breaks the "no new refusal path" invariant, which a mere
-# gates.py function-count check cannot see (a refusal added INSIDE an
-# existing function changes no function count).
+# test_seven_command_directives_pinned_under_pre_d9_argument_shapes would
+# catch a D9 regression that breaks the "no new refusal path" invariant,
+# which a mere gates.py function-count check cannot see (a refusal added
+# INSIDE an existing function changes no function count).
+#
+# Each label's target test is first required to be collected and GREEN
+# against the unmutated pristine copy (see pristine_check below) — a
+# mismatched or stale TARGET_TEST name otherwise resolves to a pytest
+# usage/collection error (rc=4/5) that this loop would, without that check,
+# read exactly like a RED test and report as a proven mutation.
 #
 # Runs entirely inside a scratch copy of the worktree root's scripts/ and
 # tests/ siblings (preserving their relative layout, since
@@ -40,8 +46,41 @@ TARGET_TEST() {
     present_plan)   echo "test_present_plan_event_captures_rejection_text" ;;
     reviewer_token) echo "test_plan_review_event_captures_reviewer_token_and_raw" ;;
     reviewer_raw)   echo "test_plan_review_event_captures_reviewer_token_and_raw" ;;
-    refusal)        echo "test_five_commands_unchanged_without_new_arguments" ;;
+    refusal)        echo "test_seven_command_directives_pinned_under_pre_d9_argument_shapes" ;;
   esac
+}
+
+# Every TARGET_TEST name is looked up by pytest node-id (`file.py::name`), which
+# is a string the mutation catalogue and the test module must independently
+# agree on. A rename on one side that misses the other, or a target test that
+# is already broken for an unrelated reason, makes rc!=0 for a reason that has
+# nothing to do with the mutation — and the loop below reads any rc!=0 as PASS.
+# So resolve+run each target test against the UNMUTATED pristine copy once,
+# before any mutation runs, and refuse to call a label PASS on a target test
+# that was never actually green to begin with. Cached per test name since two
+# labels (reviewer_token/reviewer_raw) share one target.
+declare -A PRISTINE_OK
+declare -A PRISTINE_REASON
+
+pristine_check() {
+  # $1 = pytest node-id test name; populates PRISTINE_OK[$1]/PRISTINE_REASON[$1] once
+  local test_name="$1" out rc reason
+  if [[ -n "${PRISTINE_OK[$test_name]+set}" ]]; then
+    return
+  fi
+  out="$(cd "$WORK/pristine" && python3 -m pytest "tests/test_history_capture.py::$test_name" -q --no-header --tb=line -p no:cacheprovider 2>&1)"
+  rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    PRISTINE_OK[$test_name]=1
+    PRISTINE_REASON[$test_name]=""
+    return
+  fi
+  case "$rc" in
+    4|5) reason="collection error (rc=$rc) — target test name not found or not collected" ;;
+    *)   reason="pre-existing failure against the pristine copy (rc=$rc)" ;;
+  esac
+  PRISTINE_OK[$test_name]=0
+  PRISTINE_REASON[$test_name]="$reason: $(tail -3 <<< "$out" | tr '\n' ' ')"
 }
 
 # Applies exactly one named D9 mutation to a scratch cli.py in place. Inlined
@@ -134,19 +173,27 @@ TOTAL=0
 FAILCOUNT=0
 for label in $LABELS; do
   TOTAL=$((TOTAL+1))
+
+  test_name="$(TARGET_TEST "$label")"
+  if [[ -z "$test_name" ]]; then
+    echo "FAIL $label: no target test registered"
+    FAILCOUNT=$((FAILCOUNT+1))
+    continue
+  fi
+
+  pristine_check "$test_name"
+  if [[ "${PRISTINE_OK[$test_name]}" != "1" ]]; then
+    echo "FAIL $label: target test $test_name is not collected-and-green on the pristine copy (${PRISTINE_REASON[$test_name]})"
+    FAILCOUNT=$((FAILCOUNT+1))
+    continue
+  fi
+
   mut_dir="$WORK/mut_$label"
   rm -rf "$mut_dir"
   cp -R "$WORK/pristine" "$mut_dir"
 
   if ! mutate "$mut_dir/scripts/agentctl/cli.py" "$label"; then
     echo "FAIL $label: could not apply mutation (substitution did not match; see stderr above)"
-    FAILCOUNT=$((FAILCOUNT+1))
-    continue
-  fi
-
-  test_name="$(TARGET_TEST "$label")"
-  if [[ -z "$test_name" ]]; then
-    echo "FAIL $label: no target test registered"
     FAILCOUNT=$((FAILCOUNT+1))
     continue
   fi

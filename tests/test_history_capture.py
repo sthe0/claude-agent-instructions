@@ -262,7 +262,7 @@ def test_plan_review_event_captures_reviewer_token_and_raw(store, fixtures_dir):
 
 # --- no-new-argument behavior-unchanged control -----------------------------------
 
-def test_five_commands_unchanged_without_new_arguments(store, fixtures_dir, tmp_path):
+def test_seven_command_directives_pinned_under_pre_d9_argument_shapes(store, fixtures_dir, tmp_path):
     """Pins the FULL Directive — every field, not just a truthy `.ok` — of all
     seven commands this DIAGNOSING-then-VERIFYING walk drives (declare,
     investigate, critique, normalize, replan, present_plan, plan_review) when
