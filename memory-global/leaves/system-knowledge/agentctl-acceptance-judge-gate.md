@@ -1,10 +1,10 @@
 ---
 name: agentctl-acceptance-judge-gate
-description: "How agentctl's acceptance-judge gate on record-result --status passed actually works: a haiku model compares --observation against stage.subject.result, verdicts live in state.stage_reviews (not an 'advisor' key); the predicted short-observation mitigation is now falsified by a second confirmed occurrence"
+description: "How agentctl's acceptance-judge gate on record-result --status passed actually works: a haiku model compares --observation against stage.subject.result, verdicts live in state.stage_reviews (not an 'advisor' key); the predicted short-observation mitigation is now falsified by a THIRD confirmed occurrence"
 type: reference
 schema: leaf/v1
 created: 2026-08-26
-last_verified: 2026-09-03
+last_verified: 2026-09-22
 ---
 
 ## Difficulty
@@ -135,6 +135,24 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
   This is a candidate self-improvement task in its own right (edits `advisor.py`, hence its own
   plan-approval spine) — not something a single plan's replan can fix, since the mechanism is
   shared across every SUBSTANTIVE session's judge-gated stages, not scoped to one plan.
+- **THIRD confirmed occurrence (2026-09-22, `planner-order-traceability` plan, stage 1,
+  `record-result`):** 5 consecutive `revise` verdicts on the same underlying, independently-green
+  evidence (stage `verify_command` and the repo's full `verify-all` were both passing throughout),
+  each citing a **different** stated gap — too generic → truncated quotes → missing exact numbers
+  → truncated quotes again (after an infra retry) → "observation structure mirrors
+  `expected_result_image`, does not prove independent command execution" — the same shifting-
+  reason-without-convergence signature as the two prior instances, on a third, unrelated plan.
+  Resolved via the documented `stage-review --verdict override` escape: the user personally
+  cross-checked file sizes and the full committed text of every changed file against git bytes
+  before authorizing it. No new mitigation was attempted or falsified this time — the escape was
+  reached directly on round 5 rather than after further resubmission, since the pattern was
+  already recognized from this leaf. **This raises the occurrence count to three independent plans
+  across four separate stages (2026-08-26 ×2, 2026-09-03, 2026-09-22) with zero successful
+  convergences via resubmission across all of them** — the self-improvement task named above
+  (bounding the judge's demand to "name ≥N concrete falsifiable facts" rather than an open-ended
+  adequacy call) remains proposed but unimplemented; each new occurrence is cheaper to resolve
+  (recognize-and-override, no wasted resubmission rounds) but the underlying gate is still
+  unfixed.
 
 ## See also
 
