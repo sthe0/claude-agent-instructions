@@ -273,10 +273,9 @@ def test_seven_command_directives_pinned_under_pre_d9_argument_shapes(store, fix
     than a claim — a looser check (e.g. `.ok is True`) would miss a changed
     `detail` string or a new `data` key just as easily as a new refusal path.
     It still also serves as the mutation-catalogue anchor for the 7th
-    ('refusal') mutation: if a mutation adds e.g. `if not getattr(args,
-    "reason", None): return Directive(False, ...)` to cmd_replan (or the
-    present_plan equivalent on `rejection_text`), this test goes red — but
-    that is one of seven things it pins, not the whole story."""
+    ('refusal') mutation, which adds a refusal to cmd_replan when `reason` is
+    absent: this test goes red on it — but that is one of seven things it
+    pins, not the whole story."""
     sid = "hist-nr1"
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan, task="hist-no-new-args")
@@ -341,7 +340,6 @@ def test_seven_command_directives_pinned_under_pre_d9_argument_shapes(store, fix
     ), f"replan mismatch: got {d}"
 
     # present_plan: legacy Namespace, no `rejection_text` attribute at all
-    # State is now VERIFYING after replan exited DIAGNOSING.
     rendering_file = _rendering(tmp_path, name="rendering_legacy.txt")
     d = cli.cmd_present_plan(ns(
         session=sid, kind="full", plan=None,
@@ -361,7 +359,6 @@ def test_seven_command_directives_pinned_under_pre_d9_argument_shapes(store, fix
     ), f"present_plan mismatch: got {d}"
 
     # plan_review: legacy Namespace, exactly the pre-D9 field set
-    # State is still VERIFYING after present_plan.
     d = cli.cmd_plan_review(ns(
         session=sid, target=None, scope=None, verdict="pass", reviewer="thinker",
         concerns=None, note="", plan_digest=_sha256_file(plan),

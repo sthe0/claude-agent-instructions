@@ -13,14 +13,19 @@
 # which a mere gates.py function-count check cannot see (a refusal added
 # INSIDE an existing function changes no function count).
 #
-# Each label's target test is first required to be collected and GREEN
-# against the unmutated pristine copy (see pristine_check below) — a
-# mismatched or stale TARGET_TEST name otherwise resolves to a pytest
-# usage/collection error (rc=4/5) that this loop would, without that check,
-# read exactly like a RED test and report as a proven mutation.
+# "Goes RED" is not enough: a syntax error, an import failure or an unrelated
+# exception left behind by a mutation also makes pytest exit non-zero. A label
+# is PASS only if its target test fails BECAUSE the mutation removed what it
+# pins — pytest exits 1 AND the failure line it reports inside
+# test_history_capture.py carries that label's expected signature. Every other
+# red run is a typed "wrong reason" FAIL.
 #
-# Runs entirely inside a scratch copy of the worktree root's scripts/ and
-# tests/ siblings (preserving their relative layout, since
+# Each label's target test must also be collected and GREEN against the
+# unmutated pristine copy, so a stale target test name is reported as such
+# rather than as a mutation result.
+#
+# Runs entirely inside a scratch copy of the worktree root's scripts/, tests/
+# and config.md (preserving their relative layout, since
 # test_history_capture.py resolves scripts/tests/ via `../scripts/tests`
 # relative to its own path) — the real worktree is never mutated. Safe to run
 # inside the working checkout.
@@ -35,75 +40,47 @@ trap '[[ -n "${WORK:-}" ]] && rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/pristine"
 cp -R "$ROOT/scripts" "$WORK/pristine/scripts"
 cp -R "$ROOT/tests" "$WORK/pristine/tests"
-# scripts/agentctl/config.py computes REPO_ROOT = Path(__file__).resolve()
-# .parent.parent.parent (repo root, three levels above config.py) and reads
-# REPO_ROOT/config.md; cli.cmd_classify (exercised by every test in this
-# suite via conftest.py's fixtures) calls into that path. Without this copy,
-# cmd_classify raises FileNotFoundError against the scratch root before any
-# mutation can matter, and the loop below reads that crash (rc=1) as the
-# mutation discriminating — this is the vacuous-PASS bug this round fixes.
-# No other REPO_ROOT-relative read is reachable from these tests: the
-# package's other REPO_ROOT children (scripts/spawn-specialist.py,
-# scripts/permissions-cli.py) live under scripts/, already copied above, and
-# the remaining two REPO_ROOT reads (_instructions_head()'s `git -C
-# REPO_ROOT rev-parse HEAD`, and question-enumerate-worker's spawn cwd) are
-# both fail-open and unrelated to the declare/critique/replan/present_plan/
-# plan_review paths under test.
+# agentctl/config.py reads config.md from the repo root, three levels above
+# itself; without it every test crashes before any mutation matters.
 cp "$ROOT/config.md" "$WORK/pristine/config.md"
 find "$WORK/pristine" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
-# label -> the one test this mutation must turn RED
-TARGET_TEST() {
+# label -> "<the one test this mutation must turn RED><TAB><expected failure
+# signature>". The signature is the exception the target test raises when
+# exactly this label's field is gone; a label missing either half is a FAIL.
+EXPECT() {
   case "$1" in
-    declare)        echo "test_declare_event_captures_declaration" ;;
-    critique)       echo "test_critique_event_captures_critique" ;;
-    replan)         echo "test_replan_event_captures_cause_from_difficulty" ;;
-    present_plan)   echo "test_present_plan_event_captures_rejection_text" ;;
-    reviewer_token) echo "test_plan_review_event_captures_reviewer_token_and_raw" ;;
-    reviewer_raw)   echo "test_plan_review_event_captures_reviewer_token_and_raw" ;;
-    refusal)        echo "test_seven_command_directives_pinned_under_pre_d9_argument_shapes" ;;
+    declare)        printf '%s\t%s\n' test_declare_event_captures_declaration "KeyError: 'expected'" ;;
+    critique)       printf '%s\t%s\n' test_critique_event_captures_critique "KeyError: 'functional_ground'" ;;
+    replan)         printf '%s\t%s\n' test_replan_event_captures_cause_from_difficulty "KeyError: 'cause_source'" ;;
+    present_plan)   printf '%s\t%s\n' test_present_plan_event_captures_rejection_text "KeyError: 'rejection_text'" ;;
+    reviewer_token) printf '%s\t%s\n' test_plan_review_event_captures_reviewer_token_and_raw "KeyError: 'reviewer_token'" ;;
+    reviewer_raw)   printf '%s\t%s\n' test_plan_review_event_captures_reviewer_token_and_raw "KeyError: 'reviewer_raw'" ;;
+    refusal)        printf '%s\t%s\n' test_seven_command_directives_pinned_under_pre_d9_argument_shapes "replan mismatch" ;;
   esac
 }
 
-# Every TARGET_TEST name is looked up by pytest node-id (`file.py::name`), which
-# is a string the mutation catalogue and the test module must independently
-# agree on. A rename on one side that misses the other, or a target test that
-# is already broken for an unrelated reason, makes rc!=0 for a reason that has
-# nothing to do with the mutation — and the loop below reads any rc!=0 as PASS.
-# So resolve+run each target test against the UNMUTATED pristine copy once,
-# before any mutation runs, and refuse to call a label PASS on a target test
-# that was never actually green to begin with. Cached per test name since two
-# labels (reviewer_token/reviewer_raw) share one target.
-declare -A PRISTINE_OK
-declare -A PRISTINE_REASON
-
+# Runs one target test against the UNMUTATED pristine copy, per label, just
+# before that label's mutation. Returns 0 if it is collected and green;
+# otherwise echoes why and returns 1.
 pristine_check() {
-  # $1 = pytest node-id test name; populates PRISTINE_OK[$1]/PRISTINE_REASON[$1] once
-  local test_name="$1" out rc reason
-  if [[ -n "${PRISTINE_OK[$test_name]+set}" ]]; then
-    return
-  fi
+  local test_name="$1" out rc
   out="$(cd "$WORK/pristine" && python3 -m pytest "tests/test_history_capture.py::$test_name" -q --no-header --tb=line -p no:cacheprovider 2>&1)"
   rc=$?
   if [[ "$rc" -eq 0 ]]; then
-    PRISTINE_OK[$test_name]=1
-    PRISTINE_REASON[$test_name]=""
-    return
+    return 0
   fi
   case "$rc" in
-    4|5) reason="collection error (rc=$rc) — target test name not found or not collected" ;;
-    *)   reason="pre-existing failure against the pristine copy (rc=$rc)" ;;
+    2|4|5) echo "collection/import error (rc=$rc) — target test not found, not collected, or its module fails to import: $(tail -3 <<< "$out" | tr '\n' ' ')" ;;
+    *)     echo "pre-existing failure against the pristine copy (rc=$rc): $(tail -3 <<< "$out" | tr '\n' ' ')" ;;
   esac
-  PRISTINE_OK[$test_name]=0
-  PRISTINE_REASON[$test_name]="$reason: $(tail -3 <<< "$out" | tr '\n' ' ')"
+  return 1
 }
 
-# Applies exactly one named D9 mutation to a scratch cli.py in place. Inlined
-# here (rather than a standalone mutator module) because the stage's frozen
-# scope-bound check authorises exactly two new files. Every substitution
-# asserts its expected occurrence count first, so a mutation that silently
-# fails to apply (source drifted, whitespace changed) raises loudly instead of
-# producing a false PASS.
+# Applies exactly one named D9 mutation to a scratch cli.py in place. Every
+# substitution asserts its expected occurrence count first, so a mutation that
+# silently fails to apply (source drifted, whitespace changed) raises loudly
+# instead of leaving cli.py unmutated.
 mutate() {
   # $1 = path to the scratch cli.py, $2 = mutation label
   python3 - "$1" "$2" <<'PY'
@@ -189,16 +166,15 @@ FAILCOUNT=0
 for label in $LABELS; do
   TOTAL=$((TOTAL+1))
 
-  test_name="$(TARGET_TEST "$label")"
-  if [[ -z "$test_name" ]]; then
-    echo "FAIL $label: no target test registered"
+  IFS=$'\t' read -r test_name signature <<< "$(EXPECT "$label")"
+  if [[ -z "$test_name" || -z "$signature" ]]; then
+    echo "FAIL $label: no target test and expected failure signature registered in EXPECT"
     FAILCOUNT=$((FAILCOUNT+1))
     continue
   fi
 
-  pristine_check "$test_name"
-  if [[ "${PRISTINE_OK[$test_name]}" != "1" ]]; then
-    echo "FAIL $label: target test $test_name is not collected-and-green on the pristine copy (${PRISTINE_REASON[$test_name]})"
+  if ! why="$(pristine_check "$test_name")"; then
+    echo "FAIL $label: target test $test_name is not collected-and-green on the pristine copy ($why)"
     FAILCOUNT=$((FAILCOUNT+1))
     continue
   fi
@@ -215,14 +191,22 @@ for label in $LABELS; do
 
   out="$(cd "$mut_dir" && python3 -m pytest "tests/test_history_capture.py::$test_name" -q --no-header --tb=line -p no:cacheprovider 2>&1)"
   rc=$?
+  # --tb=line reports the innermost frame, so this line exists only when the
+  # exception was raised by the test's own code, not somewhere inside cli.py.
+  crash_line="$(grep -m1 -E 'test_history_capture\.py:[0-9]+: ' <<< "$out" || true)"
+  reason="${crash_line:-$(tail -3 <<< "$out" | tr '\n' ' ')}"
   if [[ "$rc" -eq 0 ]]; then
     echo "FAIL $label: $test_name stayed green against the mutated cli.py"
     echo "$out" | tail -5
     FAILCOUNT=$((FAILCOUNT+1))
+  elif [[ "$rc" -ne 1 ]]; then
+    echo "FAIL $label: $test_name went RED for the wrong reason (rc=$rc, not a test failure — expected rc=1 with \"$signature\"): $reason"
+    FAILCOUNT=$((FAILCOUNT+1))
+  elif [[ -z "$crash_line" || "$crash_line" != *"$signature"* ]]; then
+    echo "FAIL $label: $test_name went RED for the wrong reason (rc=1, but its failure line lacks \"$signature\"): $reason"
+    FAILCOUNT=$((FAILCOUNT+1))
   else
-    reason="$(grep -m1 -E 'test_history_capture\.py:[0-9]+: ' <<< "$out" || true)"
-    [[ -z "$reason" ]] && reason="$(tail -3 <<< "$out" | tr '\n' ' ')"
-    echo "PASS $label: $test_name went RED ($reason)"
+    echo "PASS $label: $test_name went RED because of the mutation ($crash_line)"
   fi
 done
 
