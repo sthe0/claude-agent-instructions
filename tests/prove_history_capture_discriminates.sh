@@ -35,6 +35,21 @@ trap '[[ -n "${WORK:-}" ]] && rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/pristine"
 cp -R "$ROOT/scripts" "$WORK/pristine/scripts"
 cp -R "$ROOT/tests" "$WORK/pristine/tests"
+# scripts/agentctl/config.py computes REPO_ROOT = Path(__file__).resolve()
+# .parent.parent.parent (repo root, three levels above config.py) and reads
+# REPO_ROOT/config.md; cli.cmd_classify (exercised by every test in this
+# suite via conftest.py's fixtures) calls into that path. Without this copy,
+# cmd_classify raises FileNotFoundError against the scratch root before any
+# mutation can matter, and the loop below reads that crash (rc=1) as the
+# mutation discriminating — this is the vacuous-PASS bug this round fixes.
+# No other REPO_ROOT-relative read is reachable from these tests: the
+# package's other REPO_ROOT children (scripts/spawn-specialist.py,
+# scripts/permissions-cli.py) live under scripts/, already copied above, and
+# the remaining two REPO_ROOT reads (_instructions_head()'s `git -C
+# REPO_ROOT rev-parse HEAD`, and question-enumerate-worker's spawn cwd) are
+# both fail-open and unrelated to the declare/critique/replan/present_plan/
+# plan_review paths under test.
+cp "$ROOT/config.md" "$WORK/pristine/config.md"
 find "$WORK/pristine" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
 # label -> the one test this mutation must turn RED
