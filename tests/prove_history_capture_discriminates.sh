@@ -4,14 +4,23 @@
 # A passing test suite proves the six capture points work TODAY; it says
 # nothing about whether the assertions actually pin the fields they claim to
 # (a test that never fails on a missing field is not evidence for anything).
-# This proves discrimination directly: for each of the six D9 fields, remove
-# exactly that field from its state.log(...) call site and confirm the one
-# test written for it goes RED — plus a seventh mutation that injects an
-# actual refusal on an absent new argument, proving
+# This proves discrimination directly: for each of the six D9 capture points,
+# remove its field from its state.log(...) call site and confirm the one test
+# written for it goes RED. replan has three call sites (no_change, refinement,
+# substantive), each stripped by its own mutation against its own test, so a
+# red earned by one site is never read as certifying the other two. A ninth
+# mutation injects an actual refusal on an absent new argument, proving
 # test_seven_command_directives_pinned_under_pre_d9_argument_shapes would
 # catch a D9 regression that breaks the "no new refusal path" invariant,
 # which a mere gates.py function-count check cannot see (a refusal added
 # INSIDE an existing function changes no function count).
+#
+# Fields actually proven, one per capture point: declare -> expected;
+# critique -> functional_ground; each replan site -> cause_source;
+# present_plan -> rejection_text; reviewer_token; reviewer_raw. The tests
+# also assert actual/mismatch, the other four critique fields and the replan
+# cause's functional_ground/replanning_task/reason, but no mutation removes
+# those, so this catalogue does not prove them.
 #
 # "Goes RED" is not enough: a syntax error, an import failure or an unrelated
 # exception left behind by a mutation also makes pytest exit non-zero. A label
@@ -52,7 +61,9 @@ EXPECT() {
   case "$1" in
     declare)        printf '%s\t%s\n' test_declare_event_captures_declaration "KeyError: 'expected'" ;;
     critique)       printf '%s\t%s\n' test_critique_event_captures_critique "KeyError: 'functional_ground'" ;;
-    replan)         printf '%s\t%s\n' test_replan_event_captures_cause_from_difficulty "KeyError: 'cause_source'" ;;
+    replan_no_change)   printf '%s\t%s\n' test_replan_event_captures_cause_from_difficulty "KeyError: 'cause_source'" ;;
+    replan_refinement)  printf '%s\t%s\n' test_replan_event_captures_cause_from_explicit_reason "KeyError: 'cause_source'" ;;
+    replan_substantive) printf '%s\t%s\n' test_substantive_replan_event_captures_cause_from_difficulty "KeyError: 'cause_source'" ;;
     present_plan)   printf '%s\t%s\n' test_present_plan_event_captures_rejection_text "KeyError: 'rejection_text'" ;;
     reviewer_token) printf '%s\t%s\n' test_plan_review_event_captures_reviewer_token_and_raw "KeyError: 'reviewer_token'" ;;
     reviewer_raw)   printf '%s\t%s\n' test_plan_review_event_captures_reviewer_token_and_raw "KeyError: 'reviewer_raw'" ;;
@@ -60,14 +71,54 @@ EXPECT() {
   esac
 }
 
+# Runs one test of tests/test_history_capture.py inside a scratch copy, echoing
+# pytest's combined output and returning its exit code. The verdict below
+# depends on --tb=line and on colour being off, so both live only here.
+run_target() {
+  # $1 = scratch copy root, $2 = test name
+  # PY_COLORS=0 rather than --color=no: with PY_COLORS=1 in the caller's
+  # environment, --color=no still left no matchable crash line and every
+  # correct mutation was rejected; PY_COLORS=0 overrides both PY_COLORS=1 and
+  # FORCE_COLOR=1 from the caller.
+  (cd "$1" && PY_COLORS=0 python3 -m pytest "tests/test_history_capture.py::$2" -q --no-header --tb=line -p no:cacheprovider 2>&1)
+}
+
+# Returns 0 if the named test function's own source contains what raises the
+# signature: for "KeyError: '<k>'" the subscript ["<k>"] / ['<k>'], for any
+# other signature the literal text (an assertion message).
+signature_in_source() {
+  # $1 = test file, $2 = test name, $3 = signature
+  python3 - "$1" "$2" "$3" <<'PY'
+import ast
+import re
+import sys
+
+path, test_name, signature = sys.argv[1:4]
+src = open(path, encoding="utf-8").read()
+fn = next((n for n in ast.walk(ast.parse(src))
+           if isinstance(n, ast.FunctionDef) and n.name == test_name), None)
+if fn is None:
+    sys.exit(1)
+body = ast.get_source_segment(src, fn)
+key = re.fullmatch(r"KeyError: '(.+)'", signature)
+needles = [f'["{key[1]}"]', f"['{key[1]}']"] if key else [signature]
+sys.exit(0 if any(n in body for n in needles) else 1)
+PY
+}
+
 # Runs one target test against the UNMUTATED pristine copy, per label, just
-# before that label's mutation. Returns 0 if it is collected and green;
-# otherwise echoes why and returns 1.
+# before that label's mutation. Returns 0 if it is collected and green and its
+# source can still raise the label's signature; otherwise echoes why and
+# returns 1 (not collected-and-green) or 2 (stale signature table).
 pristine_check() {
-  local test_name="$1" out rc
-  out="$(cd "$WORK/pristine" && python3 -m pytest "tests/test_history_capture.py::$test_name" -q --no-header --tb=line -p no:cacheprovider 2>&1)"
+  local test_name="$1" signature="$2" out rc
+  out="$(run_target "$WORK/pristine" "$test_name")"
   rc=$?
   if [[ "$rc" -eq 0 ]]; then
+    if ! signature_in_source "$WORK/pristine/tests/test_history_capture.py" "$test_name" "$signature"; then
+      echo "\"$signature\" cannot be raised by $test_name's own source"
+      return 2
+    fi
     return 0
   fi
   case "$rc" in
@@ -117,11 +168,27 @@ elif label == "critique":
         '    state.log("critique")',
         1, "critique",
     )
-elif label == "replan":
-    # all three replan branches (no_change/diagnosing, refinement, substantive)
-    # share this exact tail; stripping it turns all three cold at once — this
-    # catalogue only needs one of them (the difficulty-sourced test) red.
-    text = replace_exact(text, ", **replan_cause)", ")", 3, "replan")
+elif label == "replan_no_change":
+    text = replace_exact(
+        text,
+        'state.log("replan", kind="no_change", exited_diagnosing=True, **replan_cause)',
+        'state.log("replan", kind="no_change", exited_diagnosing=True)',
+        1, "replan_no_change",
+    )
+elif label == "replan_refinement":
+    text = replace_exact(
+        text,
+        'state.log("replan", kind="refinement", exited_diagnosing=diagnosing, **replan_cause)',
+        'state.log("replan", kind="refinement", exited_diagnosing=diagnosing)',
+        1, "replan_refinement",
+    )
+elif label == "replan_substantive":
+    text = replace_exact(
+        text,
+        'state.log("replan", kind="substantive", **replan_cause)',
+        'state.log("replan", kind="substantive")',
+        1, "replan_substantive",
+    )
 elif label == "present_plan":
     text = replace_exact(
         text,
@@ -160,7 +227,7 @@ open(path, "w", encoding="utf-8").write(text)
 PY
 }
 
-LABELS="declare critique replan present_plan reviewer_token reviewer_raw refusal"
+LABELS="declare critique replan_no_change replan_refinement replan_substantive present_plan reviewer_token reviewer_raw refusal"
 TOTAL=0
 FAILCOUNT=0
 for label in $LABELS; do
@@ -173,11 +240,20 @@ for label in $LABELS; do
     continue
   fi
 
-  if ! why="$(pristine_check "$test_name")"; then
-    echo "FAIL $label: target test $test_name is not collected-and-green on the pristine copy ($why)"
-    FAILCOUNT=$((FAILCOUNT+1))
-    continue
-  fi
+  why="$(pristine_check "$test_name" "$signature")"
+  case $? in
+    0) ;;
+    2)
+      echo "FAIL $label: stale signature table, not a discrimination result — $why; mutation not run"
+      FAILCOUNT=$((FAILCOUNT+1))
+      continue
+      ;;
+    *)
+      echo "FAIL $label: target test $test_name is not collected-and-green on the pristine copy ($why)"
+      FAILCOUNT=$((FAILCOUNT+1))
+      continue
+      ;;
+  esac
 
   mut_dir="$WORK/mut_$label"
   rm -rf "$mut_dir"
@@ -189,7 +265,7 @@ for label in $LABELS; do
     continue
   fi
 
-  out="$(cd "$mut_dir" && python3 -m pytest "tests/test_history_capture.py::$test_name" -q --no-header --tb=line -p no:cacheprovider 2>&1)"
+  out="$(run_target "$mut_dir" "$test_name")"
   rc=$?
   # --tb=line reports the innermost frame, so this line exists only when the
   # exception was raised by the test's own code, not somewhere inside cli.py.

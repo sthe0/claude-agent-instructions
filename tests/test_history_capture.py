@@ -208,6 +208,29 @@ def test_replan_event_captures_cause_from_explicit_reason(store, fixtures_dir, t
     assert event["reason"] == "user asked to fix a typo"
 
 
+def test_substantive_replan_event_captures_cause_from_difficulty(store, fixtures_dir):
+    sid = "hist-r4"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    bigger = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    _to_diagnosing(store, plan, sid, task="hist-replan-substantive")
+    cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
+    cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
+                           hypotheses=["h1", "h2"]), store=store)
+    cli.cmd_critique(ns(session=sid, functional_ground="fg-subst", replanning_task="rt-subst",
+                        failure_address="нормативное"), store=store)
+    cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
+
+    d = cli.cmd_replan(ns(session=sid, plan=bigger), store=store)
+    assert d.ok is True, d.detail
+    assert d.marker == "PLAN-READY"
+
+    event = _last_event(store, sid, "replan")
+    assert event["kind"] == "substantive"
+    assert event["cause_source"] == "difficulty"
+    assert event["functional_ground"] == "fg-subst"
+    assert event["replanning_task"] == "rt-subst"
+
+
 def test_replan_event_omits_cause_when_neither_available(store, fixtures_dir, tmp_path):
     sid = "hist-r3"
     plan = str(fixtures_dir / "plan_two_stage.toml")
