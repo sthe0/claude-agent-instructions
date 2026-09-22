@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "fedor.solovyev@gmail.com"
 refs: [gates.py:420-461, cli.py:1924-1954]
 created: 2026-07-21
-last_verified: 2026-07-21
+last_verified: 2026-09-18
 ---
 
 # Acceptance-judge stale-verdict deadlock when nested claude -p is unavailable — escape via byte-identical stage-review binding
@@ -25,6 +25,16 @@ record-result --status passed --observation X (judge runs, fails open, no verdic
 ### 2026-07-21 — initial
 - Where it arose: agentctl SUBSTANTIVE session, advisor-mode=substantive, nested claude -p unavailable/timing-out; de448-throughput-loadtest track close.
 - Working plan: Read gates.acceptance_review_blockers + cli.py record-result judge block; bind manual stage-review observation to the exact record-result observation bytes; do not mutate the observation between the two calls.
+
+
+### 2026-09-18 — Judge reachable, verdict 'revise' on a content-free observation
+- Where it arose: Filing one report-only Core backlog issue (sthe0/claude-agent-instructions#223); single in_thread stage, advisor-mode=substantive
+- Working plan: Re-record the same passing result with an observation that states what the published artifact CONTAINS, section by section, rather than that the commands exited well.
+
+## Common core & variations
+**Common:** The acceptance gate binds to the --observation bytes alone. Whatever goes into --actual is invisible to the judge, so a rich --actual plus a thin --observation reads to the judge exactly like an unverified claim.
+
+**Variations:** Distinct from the nested-claude-unavailable context above: here the judge RAN and returned a substantive 'revise' — 'the observation only confirms a command succeeded and an issue was created, but doesn't describe the actual content'. The fix is not a manual stage-review but a better observation: restate the artifact's own content against each element of the stage's expected_result_image. A second, unrelated trap followed immediately — the retry's judge subprocess exited non-zero (fail-open), which stores NO verdict yet still blocks as 'stale'; re-running the identical record-result command a second time succeeded, so a fail-open judge failure is worth one plain retry before reaching for stage-review.
 
 ## Cost
 Not recorded — this leaf was salvaged from an abandoned worktree well after the originating
