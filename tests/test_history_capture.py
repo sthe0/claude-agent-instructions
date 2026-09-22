@@ -280,33 +280,92 @@ def test_five_commands_unchanged_without_new_arguments(store, fixtures_dir, tmp_
     cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
     assert store.load(sid).node == Node.DIAGNOSING.value
 
+    # declare: exact Directive match
     d = cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
-    assert d.ok is True, d.detail
+    assert d == cli.Directive(
+        ok=True,
+        node="DIAGNOSING",
+        action="investigate",
+        detail="declaration recorded; localize the divergence next (investigate)",
+        marker=None,
+        data={},
+    ), f"declare mismatch: got {d}"
+
+    # investigate: exact Directive match
     d = cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                               hypotheses=["h1", "h2"]), store=store)
-    assert d.ok is True, d.detail
+    assert d == cli.Directive(
+        ok=True,
+        node="DIAGNOSING",
+        action="critique",
+        detail="investigation recorded; state the functional ground + replanning task (critique)",
+        marker=None,
+        data={},
+    ), f"investigate mismatch: got {d}"
+
+    # critique: exact Directive match
     d = cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
                             failure_address="нормативное"), store=store)
-    assert d.ok is True, d.detail
+    assert d == cli.Directive(
+        ok=True,
+        node="DIAGNOSING",
+        action="replan",
+        detail="difficulty cycle complete; replan is now unblocked",
+        marker=None,
+        data={},
+    ), f"critique mismatch: got {d}"
+
+    # normalize: exact Directive match
     d = cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
-    assert d.ok is True, d.detail
+    assert d == cli.Directive(
+        ok=True,
+        node="DIAGNOSING",
+        action="replan",
+        detail="renorming recorded; replan is now unblocked",
+        marker=None,
+        data={},
+    ), f"normalize mismatch: got {d}"
 
     # replan: legacy Namespace, no `reason` attribute at all
+    # Exits DIAGNOSING back to VERIFYING on difficulty closure; detail message is stable.
     d = cli.cmd_replan(ns(session=sid, plan=plan), store=store)
     assert d.ok is True, d.detail
+    assert d.node in ("VERIFYING", "EXECUTING"), f"replan node: expected 'VERIFYING' or 'EXECUTING', got {d.node!r}"
+    assert d.action in ("next_stage", "continue"), f"replan action: got {d.action!r}"
+    assert d.marker is None, f"replan marker: expected None, got {d.marker!r}"
+    assert "difficulty worked through" in d.detail, f"replan detail: expected 'difficulty worked through' in {d.detail!r}"
+    # data may contain advisories, which is OK (advisory list is not a refusal)
+    assert isinstance(d.data, dict), f"replan data must be a dict, got {type(d.data)}"
 
     # present_plan: legacy Namespace, no `rejection_text` attribute at all
+    # State is now VERIFYING after replan exited DIAGNOSING. Volatile detail field contains
+    # "FINAL text message" choreography; data hashes are deterministic from file content.
+    rendering_file = _rendering(tmp_path, name="rendering_legacy.txt")
     d = cli.cmd_present_plan(ns(
         session=sid, kind="full", plan=None,
-        rendering_file=_rendering(tmp_path, name="rendering_legacy.txt"),
+        rendering_file=rendering_file,
         emit_skeleton=False,
     ), store=store)
     assert d.ok is True, d.detail
+    assert d.node in ("VERIFYING", "EXECUTING"), f"present_plan node: expected 'VERIFYING' or 'EXECUTING', got {d.node!r}"
+    assert d.action == "continue", f"present_plan action: expected 'continue', got {d.action!r}"
+    assert d.marker is None, f"present_plan marker: expected None, got {d.marker!r}"
+    assert "rendering_sha256" in d.data, f"present_plan data must have rendering_sha256, got {d.data.keys()}"
+    assert "plan_sha256" in d.data, f"present_plan data must have plan_sha256, got {d.data.keys()}"
+    # Both hashes must be 64-char hex (SHA256)
+    assert len(d.data["rendering_sha256"]) == 64, f"rendering_sha256 wrong length: {d.data['rendering_sha256']!r}"
+    assert len(d.data["plan_sha256"]) == 64, f"plan_sha256 wrong length: {d.data['plan_sha256']!r}"
 
     # plan_review: legacy Namespace, exactly the pre-D9 field set
+    # State is still VERIFYING after present_plan.
     d = cli.cmd_plan_review(ns(
         session=sid, target=None, scope=None, verdict="pass", reviewer="thinker",
         concerns=None, note="", plan_digest=_sha256_file(plan),
         findings_blocking=None, findings_nonblocking=None,
     ), store=store)
     assert d.ok is True, d.detail
+    assert d.node in ("VERIFYING", "EXECUTING"), f"plan_review node: expected 'VERIFYING' or 'EXECUTING', got {d.node!r}"
+    assert d.action == "continue", f"plan_review action: expected 'continue', got {d.action!r}"
+    assert d.marker is None, f"plan_review marker: expected None, got {d.marker!r}"
+    assert "thinker review recorded" in d.detail, f"plan_review detail: expected 'thinker review recorded' in {d.detail!r}"
+    assert "verdict=pass" in d.detail, f"plan_review detail: expected 'verdict=pass' in {d.detail!r}"
