@@ -1,7 +1,7 @@
 """D9: `state.log(event, **fields)` (state.py) already accepts arbitrary keyword
 fields; five call sites used it impoverished (`state.log("declare")` with no
 fields at all) while plan_review's own call site was already rich. One test per
-capture point (declare, critique, replan x2, present_plan, plan_review's
+capture point (declare, critique, replan x3, present_plan, plan_review's
 reviewer_token/reviewer_raw), driving the real CLI path in-process against a
 temporary state store and asserting the field lands in history — plus a
 control asserting none of the five commands gained a new refusal path when its
@@ -263,14 +263,20 @@ def test_plan_review_event_captures_reviewer_token_and_raw(store, fixtures_dir):
 # --- no-new-argument behavior-unchanged control -----------------------------------
 
 def test_five_commands_unchanged_without_new_arguments(store, fixtures_dir, tmp_path):
-    """Mutation-catalogue anchor for the 7th ('refusal') mutation. None of
-    declare/critique/replan/present_plan/plan_review may grow a new refusal path
-    when its D9 optional argument is absent — every Namespace below carries
-    exactly the fields these commands accepted before D9 (no --reason, no
-    --rejection-text), the same shape every pre-existing test in this suite
-    builds them with. If a mutation adds e.g. `if not getattr(args, "reason",
-    None): return Directive(False, ...)` to cmd_replan (or the present_plan
-    equivalent on `rejection_text`), this test goes red."""
+    """Pins the FULL Directive — every field, not just a truthy `.ok` — of all
+    seven commands this DIAGNOSING-then-VERIFYING walk drives (declare,
+    investigate, critique, normalize, replan, present_plan, plan_review) when
+    each is given exactly the argument shape it accepted before D9 (no
+    --reason, no --rejection-text), the same shape every pre-existing test in
+    this suite builds them with. Exact-equality assertions are what turn the
+    stage's "byte-identical behaviour" sentence into an actual test rather
+    than a claim — a looser check (e.g. `.ok is True`) would miss a changed
+    `detail` string or a new `data` key just as easily as a new refusal path.
+    It still also serves as the mutation-catalogue anchor for the 7th
+    ('refusal') mutation: if a mutation adds e.g. `if not getattr(args,
+    "reason", None): return Directive(False, ...)` to cmd_replan (or the
+    present_plan equivalent on `rejection_text`), this test goes red — but
+    that is one of seven things it pins, not the whole story."""
     sid = "hist-nr1"
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan, task="hist-no-new-args")
@@ -280,7 +286,6 @@ def test_five_commands_unchanged_without_new_arguments(store, fixtures_dir, tmp_
     cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
     assert store.load(sid).node == Node.DIAGNOSING.value
 
-    # declare: exact Directive match
     d = cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
     assert d == cli.Directive(
         ok=True,
@@ -291,7 +296,6 @@ def test_five_commands_unchanged_without_new_arguments(store, fixtures_dir, tmp_
         data={},
     ), f"declare mismatch: got {d}"
 
-    # investigate: exact Directive match
     d = cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                               hypotheses=["h1", "h2"]), store=store)
     assert d == cli.Directive(
@@ -303,7 +307,6 @@ def test_five_commands_unchanged_without_new_arguments(store, fixtures_dir, tmp_
         data={},
     ), f"investigate mismatch: got {d}"
 
-    # critique: exact Directive match
     d = cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
                             failure_address="нормативное"), store=store)
     assert d == cli.Directive(
@@ -315,7 +318,6 @@ def test_five_commands_unchanged_without_new_arguments(store, fixtures_dir, tmp_
         data={},
     ), f"critique mismatch: got {d}"
 
-    # normalize: exact Directive match
     d = cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
     assert d == cli.Directive(
         ok=True,
@@ -327,34 +329,36 @@ def test_five_commands_unchanged_without_new_arguments(store, fixtures_dir, tmp_
     ), f"normalize mismatch: got {d}"
 
     # replan: legacy Namespace, no `reason` attribute at all
-    # Exits DIAGNOSING back to VERIFYING on difficulty closure; detail message is stable.
+    # Exits DIAGNOSING back to VERIFYING on difficulty closure; stage 1 is re-armed PENDING so state.ready_stages() is True.
     d = cli.cmd_replan(ns(session=sid, plan=plan), store=store)
-    assert d.ok is True, d.detail
-    assert d.node in ("VERIFYING", "EXECUTING"), f"replan node: expected 'VERIFYING' or 'EXECUTING', got {d.node!r}"
-    assert d.action in ("next_stage", "continue"), f"replan action: got {d.action!r}"
-    assert d.marker is None, f"replan marker: expected None, got {d.marker!r}"
-    assert "difficulty worked through" in d.detail, f"replan detail: expected 'difficulty worked through' in {d.detail!r}"
-    # data may contain advisories, which is OK (advisory list is not a refusal)
-    assert isinstance(d.data, dict), f"replan data must be a dict, got {type(d.data)}"
+    assert d == cli.Directive(
+        ok=True,
+        node="VERIFYING",
+        action="next_stage",
+        detail="difficulty worked through; plan unchanged — retry the re-armed stage",
+        marker=None,
+        data={},
+    ), f"replan mismatch: got {d}"
 
     # present_plan: legacy Namespace, no `rejection_text` attribute at all
-    # State is now VERIFYING after replan exited DIAGNOSING. Volatile detail field contains
-    # "FINAL text message" choreography; data hashes are deterministic from file content.
+    # State is now VERIFYING after replan exited DIAGNOSING.
     rendering_file = _rendering(tmp_path, name="rendering_legacy.txt")
     d = cli.cmd_present_plan(ns(
         session=sid, kind="full", plan=None,
         rendering_file=rendering_file,
         emit_skeleton=False,
     ), store=store)
-    assert d.ok is True, d.detail
-    assert d.node in ("VERIFYING", "EXECUTING"), f"present_plan node: expected 'VERIFYING' or 'EXECUTING', got {d.node!r}"
-    assert d.action == "continue", f"present_plan action: expected 'continue', got {d.action!r}"
-    assert d.marker is None, f"present_plan marker: expected None, got {d.marker!r}"
-    assert "rendering_sha256" in d.data, f"present_plan data must have rendering_sha256, got {d.data.keys()}"
-    assert "plan_sha256" in d.data, f"present_plan data must have plan_sha256, got {d.data.keys()}"
-    # Both hashes must be 64-char hex (SHA256)
-    assert len(d.data["rendering_sha256"]) == 64, f"rendering_sha256 wrong length: {d.data['rendering_sha256']!r}"
-    assert len(d.data["plan_sha256"]) == 64, f"plan_sha256 wrong length: {d.data['plan_sha256']!r}"
+    assert d == cli.Directive(
+        ok=True,
+        node="VERIFYING",
+        action="continue",
+        detail="presentation receipt recorded (kind=full); emit this exact rendering as the turn's FINAL text message so the delivery hook can verify it actually reached the user",
+        marker=None,
+        data={
+            "rendering_sha256": _sha256_file(rendering_file),
+            "plan_sha256": _sha256_file(plan),
+        },
+    ), f"present_plan mismatch: got {d}"
 
     # plan_review: legacy Namespace, exactly the pre-D9 field set
     # State is still VERIFYING after present_plan.
@@ -363,9 +367,11 @@ def test_five_commands_unchanged_without_new_arguments(store, fixtures_dir, tmp_
         concerns=None, note="", plan_digest=_sha256_file(plan),
         findings_blocking=None, findings_nonblocking=None,
     ), store=store)
-    assert d.ok is True, d.detail
-    assert d.node in ("VERIFYING", "EXECUTING"), f"plan_review node: expected 'VERIFYING' or 'EXECUTING', got {d.node!r}"
-    assert d.action == "continue", f"plan_review action: expected 'continue', got {d.action!r}"
-    assert d.marker is None, f"plan_review marker: expected None, got {d.marker!r}"
-    assert "thinker review recorded" in d.detail, f"plan_review detail: expected 'thinker review recorded' in {d.detail!r}"
-    assert "verdict=pass" in d.detail, f"plan_review detail: expected 'verdict=pass' in {d.detail!r}"
+    assert d == cli.Directive(
+        ok=True,
+        node="VERIFYING",
+        action="continue",
+        detail=f"thinker review recorded for {plan} (verdict=pass); the plan-review gate is now satisfied for this plan version",
+        marker=None,
+        data={},
+    ), f"plan_review mismatch: got {d}"
