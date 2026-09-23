@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user"
 refs: [2b22784, 24af0bb, a622df4, 0bd7970]
 created: 2026-08-25
-last_verified: 2026-08-25
+last_verified: 2026-09-23
 ---
 
 # An unisolated judge subprocess re-enters the agent; isolating it silently removes file-carried capability
@@ -25,6 +25,16 @@ Close the quota hole so parallel sessions stop eating the window; then keep the 
 ### 2026-08-25 — initial
 - Where it arose: scripts/lib/host_llm.py (isolated_run_kwargs / _lend_auth / _SANDBOX_ROOT), scripts/lib/advisor.py + marker_extract.py subprocess runners, the five judge-invoking scripts/hook-*.py, scripts/verify-judge-isolation.py, scripts/tests/test_judge_child_guard_coverage.py
 - Working plan: /home/the0/.claude-agent/plans/judge-call-context-isolation.toml
+
+
+### 2026-09-23 — 2026-09-23 — macOS: auth is Keychain-carried, not file-carried
+- Where it arose: lib/host_llm.py _lend_auth/_read_oauth_token(_from_keychain); trips project session 0ad1155a-7ef8-4778-9c70-be7a179a0ab2, stage 2 of the0fun-public-bot.toml blocked on this
+- Working plan: No formal plan.toml — user-mandated detour, worked in isolated worktree ~/claude-agent-instructions-judge-keychain-auth (branch judge-keychain-auth), landed via land-on-main.sh to origin/main 075b961
+
+## Common core & variations
+**Common:** This leaf's own initial premise -- 'auth on this fleet is FILE-carried in $CLAUDE_CONFIG_DIR/.credentials.json' -- is itself platform-scoped and was wrong for macOS: `claude login` under a personal Pro/Max subscription writes the OAuth blob into the macOS login Keychain (service 'Claude Code-credentials', optionally hash-suffixed by CLAUDE_CONFIG_DIR) and never creates .credentials.json at all. _lend_auth's file-only read therefore always failed on a real macOS dev machine, so the isolated judge subprocess never authenticated -- surfacing as a permanently fail-open 'judge exited non-zero' with no informative stderr, exactly the silent-capability-loss failure mode this leaf already names, just via a second, platform-specific storage channel the ENUMERATE-what-the-ambient-root-supplies pass had not covered.
+
+**Variations:** Fix: _read_oauth_token_from_keychain shells out to `security find-generic-password` (macOS-only no-op elsewhere), tried only when the file result is genuinely ABSENT (a present-but-broken file short-circuits first), and the plain non-hash-suffixed service name is only tried when config_dir is the actual default root (Path.home()/.claude) -- otherwise a non-default CLAUDE_AGENT_HOME could borrow a different identity's plain-named item. Two independent operational traps surfaced verifying the fix end-to-end: (1) TEST-SHARED-MODULE -- subprocess is one shared module object; a fixture that neutralizes the new Keychain subprocess.run call by patching subprocess.run itself loses to any test that patches the same name LATER in its own body, silently polluting that test's unrelated call-count/order assertions -- the durable fix is a conftest.py autouse fixture patching the whole named function (_read_oauth_token_from_keychain), not the shared subprocess call beneath it. (2) LAND-ON-MAIN LOCAL-CHECKOUT LAG -- land-on-main.sh pushes straight to origin/main via its own isolated worktree; it does NOT fast-forward the caller's own long-lived main checkout, so re-running the fixed code from that checkout immediately after landing still executed the PRE-fix bytes (verified: isolated_run_kwargs() still returned no_credential_file status until `git pull --ff-only` was run) -- a landed fix is not live in a given checkout until that checkout is pulled, and the safest proof is re-running the exact live command/flow the fix was meant to unblock, not just re-reading the merged diff.
 
 ## Cost
 $24.25, 6 spawns, ~50 min active; quality 3 (user) — the result was reached and measured, but two review rounds and the cost overrun beyond the $8 tier label made the process dearer than the work warranted.
