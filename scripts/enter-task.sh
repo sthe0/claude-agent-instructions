@@ -34,6 +34,12 @@
 # relative to the arc backend's checkout root). --tracker/--queue on --register record
 # tracker_backend/tracker_queue (written only when non-empty).
 #
+# --key persists the ticket -> mount-name binding it derives on first resolve
+# (project_entry/task_mount_registry.py, machine-local) and reuses it on every
+# later call for the same ticket key, regardless of a title change in the
+# tracker afterward — a bare slug-from-title recompute would otherwise point a
+# renamed ticket at a second, disconnected mount.
+#
 # --dry-run performs ZERO external effects (no git/gh/compose side effects).
 set -uo pipefail
 
@@ -277,7 +283,18 @@ case "$selector" in
     [[ -n "$sel_arg" ]] || die "--key needs a value"
     [[ "$tr_name" != "none" ]] || die "--key requires a tracker backend (got none)"
     IFS=$'\t' read -r tkey tslug < <(tracker_resolve "$sel_arg") || die "tracker_resolve failed for '$sel_arg'"
-    name="$tkey${tslug:+-$tslug}"; branch="$name"
+    # Reuse a previously-bound mount name for this ticket key if one exists, so
+    # a title change in the tracker after the mount was created does not point
+    # a later --key call at a second, disconnected mount. First resolve for a
+    # given key derives the name as before and persists it.
+    _tm_stored="$(python3 "$_SCRIPT_DIR/project_entry/task_mount_registry.py" get "$tkey" 2>/dev/null)"
+    if [[ -n "$_tm_stored" ]]; then
+      name="$_tm_stored"
+    else
+      name="$tkey${tslug:+-$tslug}"
+      python3 "$_SCRIPT_DIR/project_entry/task_mount_registry.py" set "$tkey" "$name" 2>/dev/null || true
+    fi
+    branch="$name"
     ;;
   new)
     [[ -n "$sel_arg" ]] || die "--new needs a title"

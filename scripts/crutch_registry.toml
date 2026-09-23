@@ -2149,6 +2149,22 @@ disposition = "keep"
 ground = "Project/registry entry-point routing keyed on config values and path shape, not free-text meaning."
 
 [[entry]]
+id = "6a3026b74372ffc1"
+domain = "code"
+file = "scripts/project_entry/task_mount_registry.py"
+class = "structural"
+disposition = "keep"
+ground = "Project/registry entry-point routing keyed on config values and path shape, not free-text meaning."
+
+[[entry]]
+id = "ce31b41c7ef7d398"
+domain = "code"
+file = "scripts/project_entry/task_mount_registry.py"
+class = "structural"
+disposition = "keep"
+ground = "Project/registry entry-point routing keyed on config values and path shape, not free-text meaning."
+
+[[entry]]
 id = "7f0b3fb33c16d4bc"
 domain = "code"
 file = "scripts/record-experience.py"
@@ -10176,6 +10192,14 @@ ground = "Project/registry entry-point routing keyed on config values and path s
 id = "320cac162d53d94b"
 domain = "code_file_rollup"
 file = "scripts/project_entry/projects.py"
+class = "structural"
+disposition = "keep"
+ground = "Project/registry entry-point routing keyed on config values and path shape, not free-text meaning. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "9ceb057b6beef880"
+domain = "code_file_rollup"
+file = "scripts/project_entry/task_mount_registry.py"
 class = "structural"
 disposition = "keep"
 ground = "Project/registry entry-point routing keyed on config values and path shape, not free-text meaning. (file-level rollup of the file's scopes.)"
