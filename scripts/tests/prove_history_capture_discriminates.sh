@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# D9 mutation catalogue for tests/test_history_capture.py.
+# D9 mutation catalogue for scripts/tests/test_history_capture.py.
 #
 # A passing test suite proves the six capture points work TODAY; it says
 # nothing about whether the assertions actually pin the fields they claim to
@@ -10,10 +10,14 @@
 # substantive), each stripped by its own mutation against its own test, so a
 # red earned by one site is never read as certifying the other two. A ninth
 # mutation injects an actual refusal on an absent new argument, proving
-# test_seven_command_directives_pinned_under_pre_d9_argument_shapes would
-# catch a D9 regression that breaks the "no new refusal path" invariant,
+# test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes
+# would catch a D9 regression that breaks the "no new refusal path" invariant,
 # which a mere gates.py function-count check cannot see (a refusal added
-# INSIDE an existing function changes no function count).
+# INSIDE an existing function changes no function count). Two further
+# mutations remove present-plan's --rejection-text and replan's --reason
+# add_argument() calls outright, proving the two argv-level tests actually
+# depend on parse_args() reaching those flags rather than merely constructing
+# a Namespace with the field already set by hand.
 #
 # Fields actually proven, one per capture point: declare -> expected;
 # critique -> functional_ground; each replan site -> cause_source;
@@ -33,22 +37,20 @@
 # unmutated pristine copy, so a stale target test name is reported as such
 # rather than as a mutation result.
 #
-# Runs entirely inside a scratch copy of the worktree root's scripts/, tests/
-# and config.md (preserving their relative layout, since
-# test_history_capture.py resolves scripts/tests/ via `../scripts/tests`
-# relative to its own path) — the real worktree is never mutated. Safe to run
-# inside the working checkout.
+# Runs entirely inside a scratch copy of the repo root's scripts/ (which
+# carries test_history_capture.py at scripts/tests/, beside this script) and
+# config.md — the real worktree is never mutated. Safe to run inside the
+# working checkout.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd -P)"
-ROOT="$(cd "$HERE/.." && pwd -P)"
+ROOT="$(cd "$HERE/../.." && pwd -P)"
 
 WORK="$(mktemp -d)"
 trap '[[ -n "${WORK:-}" ]] && rm -rf "$WORK"' EXIT
 
 mkdir -p "$WORK/pristine"
 cp -R "$ROOT/scripts" "$WORK/pristine/scripts"
-cp -R "$ROOT/tests" "$WORK/pristine/tests"
 # agentctl/config.py reads config.md from the repo root, three levels above
 # itself; without it every test crashes before any mutation matters.
 cp "$ROOT/config.md" "$WORK/pristine/config.md"
@@ -67,20 +69,49 @@ EXPECT() {
     present_plan)   printf '%s\t%s\n' test_present_plan_event_captures_rejection_text "KeyError: 'rejection_text'" ;;
     reviewer_token) printf '%s\t%s\n' test_plan_review_event_captures_reviewer_token_and_raw "KeyError: 'reviewer_token'" ;;
     reviewer_raw)   printf '%s\t%s\n' test_plan_review_event_captures_reviewer_token_and_raw "KeyError: 'reviewer_raw'" ;;
-    refusal)        printf '%s\t%s\n' test_seven_command_directives_pinned_under_pre_d9_argument_shapes "replan mismatch" ;;
+    refusal)        printf '%s\t%s\n' test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes "replan mismatch" ;;
   esac
 }
 
-# Runs one test of tests/test_history_capture.py inside a scratch copy, echoing
-# pytest's combined output and returning its exit code. The verdict below
-# depends on --tb=line and on colour being off, so both live only here.
+# label -> "<the one argv-level test this mutation must turn RED><TAB><the
+# argparse error substring its output must carry>". Unlike EXPECT()'s nine
+# labels above (each a KeyError raised by the target test's own assertion),
+# these two mutations delete an add_argument() call outright, so argparse
+# itself raises SystemExit(2) with an "unrecognized arguments: --X" message —
+# never a line inside test_history_capture.py (verified empirically: under
+# --tb=line the crash line reads ".../argparse.py:NNNN: SystemExit: 2", not
+# a test_history_capture.py:N: line). FLAG_EXPECT and its verdict loop below
+# are a separate, parallel mechanism from EXPECT/mutate/pristine_check for
+# exactly this reason.
+FLAG_EXPECT() {
+  case "$1" in
+    flag_rejection_text) printf '%s\t%s\n' test_present_plan_argv_rejection_text_reaches_history "unrecognized arguments: --rejection-text" ;;
+    flag_reason)         printf '%s\t%s\n' test_replan_argv_reason_reaches_history "unrecognized arguments: --reason" ;;
+  esac
+}
+
+# Runs one test of scripts/tests/test_history_capture.py inside a scratch
+# copy, echoing pytest's combined output and returning its exit code. The
+# verdict below depends on --tb=line and on colour being off, so both live
+# only here.
 run_target() {
   # $1 = scratch copy root, $2 = test name
   # PY_COLORS=0 rather than --color=no: with PY_COLORS=1 in the caller's
   # environment, --color=no still left no matchable crash line and every
   # correct mutation was rejected; PY_COLORS=0 overrides both PY_COLORS=1 and
   # FORCE_COLOR=1 from the caller.
-  (cd "$1" && PY_COLORS=0 python3 -m pytest "tests/test_history_capture.py::$2" -q --no-header --tb=line -p no:cacheprovider 2>&1)
+  (cd "$1" && PY_COLORS=0 python3 -m pytest "scripts/tests/test_history_capture.py::$2" -q --no-header --tb=line -p no:cacheprovider 2>&1)
+}
+
+# Same as run_target, but WITHOUT --tb=line: argparse's "unrecognized
+# arguments: --X" message lives in pytest's "Captured stderr call" section,
+# which --tb=line suppresses entirely (verified empirically — under --tb=line
+# the report shows only the SystemExit crash line, never the captured-output
+# section). The flag_* labels' verdict needs that section, so they use this
+# instead of run_target for their post-mutation run.
+run_target_full() {
+  # $1 = scratch copy root, $2 = test name
+  (cd "$1" && PY_COLORS=0 python3 -m pytest "scripts/tests/test_history_capture.py::$2" -q --no-header -p no:cacheprovider 2>&1)
 }
 
 # Returns 0 if the named test function's own source contains what raises the
@@ -115,10 +146,28 @@ pristine_check() {
   out="$(run_target "$WORK/pristine" "$test_name")"
   rc=$?
   if [[ "$rc" -eq 0 ]]; then
-    if ! signature_in_source "$WORK/pristine/tests/test_history_capture.py" "$test_name" "$signature"; then
+    if ! signature_in_source "$WORK/pristine/scripts/tests/test_history_capture.py" "$test_name" "$signature"; then
       echo "\"$signature\" cannot be raised by $test_name's own source"
       return 2
     fi
+    return 0
+  fi
+  case "$rc" in
+    2|4|5) echo "collection/import error (rc=$rc) — target test not found, not collected, or its module fails to import: $(tail -3 <<< "$out" | tr '\n' ' ')" ;;
+    *)     echo "pre-existing failure against the pristine copy (rc=$rc): $(tail -3 <<< "$out" | tr '\n' ' ')" ;;
+  esac
+  return 1
+}
+
+# Same collected-and-green precondition as pristine_check, without the
+# signature_in_source check: the two flag_* labels' signature is an argparse
+# error string the target test's own source never contains (it is raised by
+# argparse, not asserted by the test), so that check does not apply here.
+flag_pristine_check() {
+  local test_name="$1" out rc
+  out="$(run_target "$WORK/pristine" "$test_name")"
+  rc=$?
+  if [[ "$rc" -eq 0 ]]; then
     return 0
   fi
   case "$rc" in
@@ -220,6 +269,30 @@ elif label == "refusal":
         '        return Directive(False, state.node, "replan", "reason argument now required")',
         1, "refusal",
     )
+elif label == "flag_rejection_text":
+    text = replace_exact(
+        text,
+        '''    sp.add_argument("--rejection-text", dest="rejection_text", default=None,
+                    help="what the user said when sending a PRIOR presentation of this "
+                         "plan back (a correction or rejection), captured for history "
+                         "only; omit on a first presentation or a clean approval — never "
+                         "required")
+''',
+        "",
+        1, "flag_rejection_text",
+    )
+elif label == "flag_reason":
+    text = replace_exact(
+        text,
+        '''    sp.add_argument("--reason", default=None,
+                    help="free-text cause for this replan, captured for history only; used "
+                         "only when no active difficulty record supplies one (a bare "
+                         "refinement/no_change replan outside DIAGNOSING) — never required, "
+                         "and its absence never refuses the command")
+''',
+        "",
+        1, "flag_reason",
+    )
 else:
     raise SystemExit(f"unknown mutation label: {label}")
 
@@ -283,6 +356,51 @@ for label in $LABELS; do
     FAILCOUNT=$((FAILCOUNT+1))
   else
     echo "PASS $label: $test_name went RED because of the mutation ($crash_line)"
+  fi
+done
+
+FLAG_LABELS="flag_rejection_text flag_reason"
+for label in $FLAG_LABELS; do
+  TOTAL=$((TOTAL+1))
+
+  IFS=$'\t' read -r test_name signature <<< "$(FLAG_EXPECT "$label")"
+  if [[ -z "$test_name" || -z "$signature" ]]; then
+    echo "FAIL $label: no target test and expected failure signature registered in FLAG_EXPECT"
+    FAILCOUNT=$((FAILCOUNT+1))
+    continue
+  fi
+
+  why="$(flag_pristine_check "$test_name")"
+  if [[ $? -ne 0 ]]; then
+    echo "FAIL $label: target test $test_name is not collected-and-green on the pristine copy ($why)"
+    FAILCOUNT=$((FAILCOUNT+1))
+    continue
+  fi
+
+  mut_dir="$WORK/mut_$label"
+  rm -rf "$mut_dir"
+  cp -R "$WORK/pristine" "$mut_dir"
+
+  if ! mutate "$mut_dir/scripts/agentctl/cli.py" "$label"; then
+    echo "FAIL $label: could not apply mutation (substitution did not match; see stderr above)"
+    FAILCOUNT=$((FAILCOUNT+1))
+    continue
+  fi
+
+  out="$(run_target_full "$mut_dir" "$test_name")"
+  rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    echo "FAIL $label: $test_name stayed green against the mutated cli.py"
+    echo "$out" | tail -5
+    FAILCOUNT=$((FAILCOUNT+1))
+  elif [[ "$rc" -ne 1 ]]; then
+    echo "FAIL $label: $test_name went RED for the wrong reason (rc=$rc, not a test failure — expected rc=1 with \"$signature\"): $(tail -3 <<< "$out" | tr '\n' ' ')"
+    FAILCOUNT=$((FAILCOUNT+1))
+  elif [[ "$out" != *"$signature"* ]]; then
+    echo "FAIL $label: $test_name went RED for the wrong reason (rc=1, but output lacks \"$signature\"): $(tail -3 <<< "$out" | tr '\n' ' ')"
+    FAILCOUNT=$((FAILCOUNT+1))
+  else
+    echo "PASS $label: $test_name went RED because argparse rejected the removed flag (\"$signature\" in output)"
   fi
 done
 

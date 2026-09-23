@@ -11,52 +11,21 @@ and test_replan.py's `_no_replan_authorization_gate` conventions exactly, so
 this module drives real CLI dispatch end-to-end rather than calling gate
 functions in isolation.
 
-Lives at the worktree-root `tests/` rather than beside the rest of the suite in
-scripts/tests/: the stage's frozen verify_command runs at verify_venue
-"delivery" (SessionState.resolve_check_venue resolves that to the delivery
-worktree root), and names this file as the literal repo-root-relative path
-`tests/test_history_capture.py`. Rather than duplicate scripts/tests/
-conftest.py's ~15 autouse isolation fixtures (env-var gate defaults, ledger/
-store redirection), this module puts scripts/tests/ on sys.path and imports
-them directly — pytest registers an imported fixture exactly like a local one,
-and each fixture's own `__file__`-relative logic (e.g. `fixtures_dir`) still
-resolves against conftest.py's real location, so the legacy fixtures/ directory
-is reused rather than copied."""
+Lives at scripts/tests/, beside the rest of the suite: conftest.py's autouse
+isolation fixtures (env-var gate defaults, ledger/store redirection) and its
+sys.path setup for `agentctl` apply automatically to every module in this
+directory, and `store`/`fixtures_dir` are ordinary conftest fixtures requested
+by name as test parameters — no import needed for any of them."""
 from __future__ import annotations
 
 import hashlib
-import sys
 from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
-_LEGACY_TESTS_DIR = Path(__file__).resolve().parent.parent / "scripts" / "tests"
-if str(_LEGACY_TESTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_LEGACY_TESTS_DIR))
-
-import conftest  # noqa: E402,F401 - side effect: puts scripts/ on sys.path for agentctl below
-from agentctl import cli  # noqa: E402
-from agentctl.state import Node  # noqa: E402
-from conftest import (  # noqa: E402,F401 - reuse the suite's fixtures rather than duplicate them
-    store,
-    fixtures_dir,
-    _isolate_task_quality_ledger,
-    _plan_review_gate_off_by_default,
-    _plan_presentation_gate_off_by_default,
-    _premise_gate_off_by_default,
-    _no_real_enumeration_launch_by_default,
-    _code_review_gate_off_by_default,
-    _stage_review_gate_off_by_default,
-    _acceptance_gate_off_by_default,
-    _advisor_off_by_default,
-    _isolate_self_diagnose_store,
-    _isolate_judge_ledger,
-    _isolate_task_accumulator,
-    _no_ambient_recursion_depth,
-    _no_ambient_project_dir,
-    _default_claude_runtime_host,
-)
+from agentctl import cli
+from agentctl.state import Node
 
 
 def ns(**kw) -> Namespace:
@@ -285,7 +254,7 @@ def test_plan_review_event_captures_reviewer_token_and_raw(store, fixtures_dir):
 
 # --- no-new-argument behavior-unchanged control -----------------------------------
 
-def test_seven_command_directives_pinned_under_pre_d9_argument_shapes(store, fixtures_dir, tmp_path):
+def test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes(store, fixtures_dir, tmp_path):
     """Pins the FULL Directive — every field, not just a truthy `.ok` — of all
     seven commands this DIAGNOSING-then-VERIFYING walk drives (declare,
     investigate, critique, normalize, replan, present_plan, plan_review) when
@@ -395,3 +364,51 @@ def test_seven_command_directives_pinned_under_pre_d9_argument_shapes(store, fix
         marker=None,
         data={},
     ), f"plan_review mismatch: got {d}"
+
+
+# --- argv-level: the two D9 arguments reach history through real parsing -----------
+
+def test_present_plan_argv_rejection_text_reaches_history(store, fixtures_dir, tmp_path):
+    """Drives --rejection-text through build_parser()/resolve_arg_text() (the real
+    argv path a coordinator invocation takes), not a hand-built Namespace — proves
+    the flag is wired all the way from the command line, and doubles as the
+    independent negative control's selector (`-k rejection_text`) for a deletion
+    of present-plan's --rejection-text add_argument call."""
+    sid = "hist-p2"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_executing_stage1(store, sid, plan, task="hist-present-plan-argv")
+
+    argv = [
+        "present-plan", "--session", sid, "--kind", "full",
+        "--rendering-file", _rendering(tmp_path, name="rendering_argv.txt"),
+        "--rejection-text", "too verbose, trim stage 2",
+    ]
+    args = cli.build_parser().parse_args(argv)
+    cli.resolve_arg_text(args)
+    d = cli.cmd_present_plan(args, store=store)
+    assert d.ok is True, d.detail
+
+    event = store.load(sid).history[-1]
+    assert event["event"] == "present_plan"
+    assert event["rejection_text"] == "too verbose, trim stage 2"
+
+
+def test_replan_argv_reason_reaches_history(store, fixtures_dir, tmp_path):
+    """Drives --reason through build_parser()/resolve_arg_text() — proves the flag
+    is wired all the way from the command line, and doubles as the independent
+    negative control's selector (`-k reason`) for a deletion of replan's --reason
+    add_argument call."""
+    sid = "hist-r5"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_executing_stage1(store, sid, plan, task="hist-replan-argv")
+
+    refined = _refined_plan(fixtures_dir, tmp_path, name="plan_refined_argv.toml")
+    argv = ["replan", "--session", sid, "--plan", refined, "--reason", "user asked to fix a typo"]
+    args = cli.build_parser().parse_args(argv)
+    cli.resolve_arg_text(args)
+    d = cli.cmd_replan(args, store=store)
+    assert d.ok is True, d.detail
+
+    event = _last_event(store, sid, "replan")
+    assert event["cause_source"] == "reason"
+    assert event["reason"] == "user asked to fix a typo"
