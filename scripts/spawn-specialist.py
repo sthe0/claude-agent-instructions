@@ -334,6 +334,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--budget", choices=("small", "medium", "large"), default="medium", help="budget tier from config.md (kind=developer floors small->medium: the static prefix alone ~$1)")
     p.add_argument("--project-permissions", type=Path, help="project-scope permissions.json to also include in the digest")
     p.add_argument(
+        "--project-settings",
+        type=Path,
+        help="kind=developer only: a target project's own .claude/settings.local.json, whose "
+             "permissions.allow/deny entries are merged into this child's --settings grant "
+             "(distinct from --project-permissions, which only affects the prose digest)",
+    )
+    p.add_argument(
         "--permission-mode",
         choices=("acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"),
         help="claude --permission-mode for the spawned process. Default: acceptEdits for kind=developer (unattended local writes, and no wider), harness default otherwise. See resolve_permission_mode for why NOT bypassPermissions.",
@@ -720,13 +727,60 @@ def repo_root_add_dir_args(kind: str, cwd: str) -> list[str]:
     return ["--add-dir", root]
 
 
-def build_child_settings(kind: str, plans_directory: "Path | None" = None) -> dict:
+def project_settings_permission_rules(project_settings_file: "Path | None") -> tuple[list[str], list[str]]:
+    """(allow, deny) lifted from a target project's own `.claude/settings.local.json`
+    `permissions.allow`/`permissions.deny` arrays — the same shape the harness
+    itself reads for an ordinary (unspawned) session in that project.
+
+    This is deliberately NOT `permissions_digest`/`--project-permissions`: that
+    mechanism reads a `permissions/*.json` AUDIT-LOG file (pattern/granted_at/
+    context records) and embeds a prose digest into the PROMPT — it never
+    reaches the child's actual `--settings` grant, so a developer spawned with
+    only that flag remains exactly as sandboxed as one spawned without it. A
+    project that has already, deliberately, allow-listed its own build/test
+    commands in `.claude/settings.local.json` gets no benefit from that
+    grant unless those entries reach the `--settings` JSON directly, which is
+    what this function is for (see dispatch-project-permissions leaf).
+
+    Fails open to `([], [])` — a missing file, a directory, or unparseable /
+    unexpected-shape JSON changes nothing rather than crashing the spawn; the
+    project simply gets no extra grant, same as before this function existed.
+    """
+    if project_settings_file is None:
+        return [], []
+    try:
+        data = json.loads(project_settings_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [], []
+    if not isinstance(data, dict):
+        return [], []
+    permissions = data.get("permissions")
+    if not isinstance(permissions, dict):
+        return [], []
+    allow = permissions.get("allow", [])
+    deny = permissions.get("deny", [])
+    allow = [r for r in allow if isinstance(r, str)] if isinstance(allow, list) else []
+    deny = [r for r in deny if isinstance(r, str)] if isinstance(deny, list) else []
+    return allow, deny
+
+
+def build_child_settings(
+    kind: str,
+    plans_directory: "Path | None" = None,
+    project_settings_file: "Path | None" = None,
+) -> dict:
     """Child `--settings` payload: the auto-compaction window pin for every kind
     (both forms, mirroring settings/base.json — the env key wins in the client's
     window resolution, the top-level key is the settings-path fallback), plus the
     developer-scoped grant of exactly the verbs a developer brief requires, plus
     the plans-directory grant for the kinds that need it (merged with the
-    developer allow, never replacing it)."""
+    developer allow, never replacing it), plus — for kind=="developer" only —
+    the target project's own `.claude/settings.local.json` permissions.allow/deny
+    (see project_settings_permission_rules): a spawned developer inherits the
+    same project-scope grants an interactive session in that project already
+    has, instead of being limited to the fleet-wide DEVELOPER_SETTINGS_ALLOW
+    list, which is scoped to this repo's own verifiers and knows nothing about
+    a target project's build/test commands."""
     settings: dict = {
         "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(SPAWN_AUTOCOMPACT_WINDOW_TOKENS)},
         "autoCompactWindow": SPAWN_AUTOCOMPACT_WINDOW_TOKENS,
@@ -735,6 +789,9 @@ def build_child_settings(kind: str, plans_directory: "Path | None" = None) -> di
     deny: list[str] = []
     if kind == "developer":
         allow.extend(DEVELOPER_SETTINGS_ALLOW)
+        project_allow, project_deny = project_settings_permission_rules(project_settings_file)
+        allow.extend(project_allow)
+        deny.extend(project_deny)
     if plans_directory is not None:
         plans_allow, plans_deny = plans_permission_rules(kind, plans_directory)
         allow.extend(plans_allow)
@@ -1067,7 +1124,7 @@ def main(argv: list[str] | None = None) -> int:
         # work: settings.json env is applied after process start and wins (see
         # memory-global leaf claude-code-settings-env-precedence.md).
         "--settings",
-        json.dumps(build_child_settings(args.kind, plans_directory)),
+        json.dumps(build_child_settings(args.kind, plans_directory, args.project_settings)),
     ]
     cmd.extend(plans_add_dir_args(args.kind, plans_directory))
     cmd.extend(repo_root_add_dir_args(args.kind, os.getcwd()))

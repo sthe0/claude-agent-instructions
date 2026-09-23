@@ -4308,6 +4308,25 @@ def _try_reattest(
 _EFFORT_BY_COST_TIER = {"small": "low", "medium": "medium", "large": "high"}
 
 
+def _dispatch_project_settings_path(state) -> str | None:
+    """Absolute path to the delivery venue's own `.claude/settings.local.json`,
+    when one exists — forwarded to a spawned developer so it inherits the same
+    project-scope Bash/tool grants an interactive session in that project
+    already has (see spawn-specialist.py's project_settings_permission_rules).
+
+    Resolved off the SAME venue cmd_dispatch already pins the child's cwd to
+    (resolve_check_venue(DELIVERY)) — the tree the spawned developer actually
+    writes in and runs commands in, not an unrelated repo_root. None when the
+    venue is unresolved or the file doesn't exist: dispatch then behaves
+    exactly as before this function existed (no --project-settings forwarded,
+    the child gets only the fleet-wide DEVELOPER_SETTINGS_ALLOW grant)."""
+    venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+    if not venue:
+        return None
+    candidate = Path(venue) / ".claude" / "settings.local.json"
+    return str(candidate) if candidate.is_file() else None
+
+
 def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                  perm_checker=None) -> Directive:
     state = _require(store, args.session)
@@ -4370,6 +4389,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         # and delivery is where a spawned developer must write.
         cwd=state.resolve_check_venue(CheckVenue.DELIVERY.value),
         runtime_host=host,
+        project_settings=_dispatch_project_settings_path(state),
     )
     if dry_run:
         # #10: a dry-run is a pure preview — no event log, no state save, no

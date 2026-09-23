@@ -77,6 +77,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
+id = "f056c25e4e5e4207"
+domain = "code"
+file = "scripts/agentctl/cli.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "d51131dae30933c2"
 domain = "code"
 file = "scripts/agentctl/cli.py"
@@ -3792,6 +3800,62 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "ed580f2f907dda2f"
 domain = "code"
 file = "scripts/tests/test_dispatch_host.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b3c25310a6bfdfa7"
+domain = "code"
+file = "scripts/tests/test_dispatch_project_settings.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b0b23d708e6ef232"
+domain = "code"
+file = "scripts/tests/test_dispatch_project_settings.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "2eb6d1b413be3b05"
+domain = "code"
+file = "scripts/tests/test_dispatch_project_settings.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "55deca9faec1f912"
+domain = "code"
+file = "scripts/tests/test_dispatch_project_settings.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "6aea8e4e54d86b41"
+domain = "code"
+file = "scripts/tests/test_dispatch_project_settings.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "ce09e67191961348"
+domain = "code"
+file = "scripts/tests/test_dispatch_project_settings.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "61d1d88504f8470b"
+domain = "code"
+file = "scripts/tests/test_dispatch_project_settings.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -8725,6 +8789,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "032cad53f6f7cbf3"
+domain = "code"
+file = "scripts/tests/test_spawn_project_settings.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "e31ab0c119fe947b"
+domain = "code"
+file = "scripts/tests/test_spawn_project_settings.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "da0132ed57502d03"
 domain = "code"
 file = "scripts/tests/test_spawn_runaway_cap.py"
@@ -10533,6 +10613,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "6d71f8e636e335b1"
+domain = "code_file_rollup"
+file = "scripts/tests/test_dispatch_project_settings.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "bf032b243dc64619"
 domain = "code_file_rollup"
 file = "scripts/tests/test_dispatch_recursion_cap.py"
@@ -11232,6 +11320,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "932401b548f57f8a"
 domain = "code_file_rollup"
 file = "scripts/tests/test_spawn_plans_reachability.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "99491775e9809f34"
+domain = "code_file_rollup"
+file = "scripts/tests/test_spawn_project_settings.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -17850,6 +17946,14 @@ ground = "Experience leaves (difficulty/v1) are historical narrative records of 
 
 [[entry]]
 id = "8e6a86d8c32f93c9"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-25-unisolated-judge-subprocess-recursion.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "1b704ab46fc52de8"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-08-25-unisolated-judge-subprocess-recursion.md"
 class = "not-normative"

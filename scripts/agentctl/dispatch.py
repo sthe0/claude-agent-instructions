@@ -157,6 +157,7 @@ def build_argv(
     constraints: str = "",
     done_criterion: str | None = None,
     runtime_host: str = HOST_CLAUDE,
+    project_settings: str | None = None,
 ) -> list[str]:
     kind = stage.spawn_kind()
     if not kind:
@@ -185,6 +186,12 @@ def build_argv(
         argv.extend(["--continue-worktree", continue_worktree])
     if constraints:
         argv.extend(["--constraints", constraints])
+    # kind-agnostic here (spawn-specialist.py itself only acts on this flag
+    # for kind=="developer") so the forwarding logic stays in ONE place —
+    # build_child_settings — rather than duplicated at every dispatch call
+    # site that might one day dispatch a non-developer spawn kind.
+    if project_settings:
+        argv.extend(["--project-settings", project_settings])
     if dry_run:
         argv.append("--dry-run")
     return argv
@@ -236,6 +243,7 @@ def dispatch_stage(
     cwd: str | None = None,
     constraints: str = "",
     runtime_host: str = HOST_CLAUDE,
+    project_settings: str | None = None,
 ) -> RunResult:
     staged: list[Path] = []
     try:
@@ -253,7 +261,7 @@ def dispatch_stage(
             stage, plan_path, budget=budget, complexity=complexity, effort=effort,
             dry_run=dry_run, continue_worktree=continue_worktree,
             constraints=norm_constraints, done_criterion=norm_done_criterion,
-            runtime_host=runtime_host,
+            runtime_host=runtime_host, project_settings=project_settings,
         )
         run = runner or subprocess_runner
         # cwd is only threaded to the runner when set, so every pre-existing
