@@ -18041,6 +18041,38 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
+id = "9a4c6b29aa06fd59"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-09-22-tool-scope-judged-by-contract-not-pattern.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "57c820a22852e83a"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-09-22-tool-scope-judged-by-contract-not-pattern.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "1f213081b54af11a"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-09-22-tool-scope-judged-by-contract-not-pattern.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "8fc0b805ed254396"
+domain = "prose"
+file = "memory-global/leaves/experience/MEMORY.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
 id = "601413a531d7703d"
 domain = "prose"
 file = "memory-global/leaves/experience/MEMORY.md"
@@ -19137,6 +19169,14 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "e5e000ca70306f2e"
+domain = "prose"
+file = "memory-global/leaves/long-job-monitoring.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "5444aa576f5595ab"
 domain = "prose"
 file = "memory-global/leaves/long-job-monitoring.md"
@@ -19178,6 +19218,14 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "b390cbb823f9e3ec"
+domain = "prose"
+file = "memory-global/leaves/long-job-monitoring.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "8703d36ae58840b6"
 domain = "prose"
 file = "memory-global/leaves/long-job-monitoring.md"
 class = "perception"
@@ -19468,6 +19516,14 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 id = "049796eaa8a2ce04"
 domain = "prose"
 file = "memory-global/leaves/outcome-format.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "7f7a2742bc877f31"
+domain = "prose"
+file = "memory-global/leaves/own-research-precedes-escalation.md"
 class = "perception"
 disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
@@ -22257,6 +22313,14 @@ disposition = "keep"
 ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
 
 [[entry]]
+id = "e6db4fb87665694f"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/MEMORY.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
 id = "ea4b3962b3a24b08"
 domain = "prose"
 file = "memory-global/leaves/system-knowledge/agentctl-acceptance-judge-gate.md"
@@ -24473,7 +24537,15 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "d17c22daba2897dc"
+id = "ac68e2570686e5fc"
+domain = "prose"
+file = "skills/specializations/planner/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "bc33f5c71c47cf91"
 domain = "prose"
 file = "skills/specializations/planner/SKILL.md"
 class = "already-mechanized"
@@ -24719,6 +24791,14 @@ file = "skills/specializations/planner/policy.md"
 class = "perception"
 disposition = "keep"
 ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "f0edbf586e619f58"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
 id = "5af845daeda83570"
@@ -25138,6 +25218,14 @@ ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the s
 
 [[entry]]
 id = "8c0a84a7652d81a3"
+domain = "prose"
+file = "skills/tracker-management/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "a5c3fcfc3c6660db"
 domain = "prose"
 file = "skills/tracker-management/SKILL.md"
 class = "perception"
