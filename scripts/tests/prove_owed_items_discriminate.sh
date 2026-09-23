@@ -79,9 +79,9 @@ disarm_out="$(run_variant disarm "$WORK/tree_disarm" 2>&1)"
 echo "$disarm_out"
 disarm_red="$(grep -oE '^FAILED scripts/tests/test_owed_items\.py::test_[A-Za-z0-9_]+' <<< "$disarm_out" | sed 's#.*::##' | sort -u)"
 if [[ "$disarm_red" == "test_armed_value_matches_derivation_record" ]]; then
-  echo "  VERDICT: ok — exactly test_armed_value_matches_derivation_record red"
+  echo "PASS disarm — exactly test_armed_value_matches_derivation_record red"
 else
-  echo "  VERDICT: FAIL — expected exactly test_armed_value_matches_derivation_record red, got: $disarm_red"
+  echo "FAIL disarm — expected exactly test_armed_value_matches_derivation_record red, got: $disarm_red"
   overall=1
 fi
 
@@ -128,9 +128,9 @@ blocker_out="$(run_variant record_only_to_blocker "$WORK/tree_blocker" 2>&1)"
 echo "$blocker_out"
 blocker_red="$(grep -oE '^FAILED scripts/tests/test_owed_items\.py::test_[A-Za-z0-9_]+' <<< "$blocker_out" | sed 's#.*::##' | sort -u)"
 if [[ "$blocker_red" == "test_engine_probe_record_only_never_blocks_and_other_scales_stay_live" ]]; then
-  echo "  VERDICT: ok — exactly test_engine_probe_record_only_never_blocks_and_other_scales_stay_live red"
+  echo "PASS record_only_to_blocker — exactly test_engine_probe_record_only_never_blocks_and_other_scales_stay_live red"
 else
-  echo "  VERDICT: FAIL — expected exactly test_engine_probe_record_only_never_blocks_and_other_scales_stay_live red, got: $blocker_red"
+  echo "FAIL record_only_to_blocker — expected exactly test_engine_probe_record_only_never_blocks_and_other_scales_stay_live red, got: $blocker_red"
   overall=1
 fi
 
