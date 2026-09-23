@@ -1550,12 +1550,19 @@ class SessionState:
     #   effort_fires       one record per firing (scale, multiple, history_len).
     #   effort_spend_seen  plan_path -> ledger total already booked, keyed BY PATH.
     #   user_prompt_count  interactions actual, stamped by hook-engine-start.py.
+    #   effort_crossings   RECORD_ONLY_SCALES observations (effort.record_crossing) —
+    #                      SESSION-scoped like user_prompt_count itself, deliberately NOT
+    #                      a PlanFrame field: a record-only crossing describes the whole
+    #                      session's interaction count, not one plan's, so it must survive
+    #                      sub-plan push/pop untouched rather than snapshot/reset with the
+    #                      rest of the effort custody block.
     effort_estimate: dict | None = None
     effort_baseline: dict | None = None
     effort_actuals: dict = field(default_factory=dict)
     effort_fires: list[dict] = field(default_factory=list)
     effort_spend_seen: dict = field(default_factory=dict)
     user_prompt_count: int = 0
+    effort_crossings: list[dict] = field(default_factory=list)
     # DIAGNOSING-renegotiation audit trail (GitHub #177) — one record per customer
     # decision at the diagnosing_replan round-release gate, keyed by string (decision,
     # note, by, ts, task_replan_count_at_decision). Same plain list[dict] shape as

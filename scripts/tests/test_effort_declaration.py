@@ -298,7 +298,11 @@ def test_every_effort_accessor_reads_a_row_that_exists_in_config_md():
     thr = Thresholds()
     assert thr.effort_divergence_multiple() > 0
     assert thr.effort_replan_absolute() > 0
-    assert thr.effort_absolute_interactions() == 0  # ships accounting-only
+    # Superseded 2026-09-23 (D8): armed in RECORD-ONLY mode at the observed p90 (43,
+    # see docs/operations/effort-interactions-arming.json) — no longer the accounting-
+    # only 0. Nonzero here does NOT mean the scale fires: effort.RECORD_ONLY_SCALES
+    # excludes it from divergence() unconditionally regardless of this value.
+    assert thr.effort_absolute_interactions() == 43
     for tier in _COST_TIERS:
         assert thr.effort_stage_minutes(tier) > 0
         assert thr.budget_usd_float(tier) > 0

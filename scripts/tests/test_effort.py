@@ -363,16 +363,37 @@ def test_zero_threshold_makes_a_scale_accounting_only():
     assert effort.deltas(state)[effort.SCALE_INTERACTIONS] == 10_000
 
 
-def test_interactions_fire_once_the_scale_is_re_enabled():
-    """The accounting-only state is a CONFIG choice, not a missing implementation."""
+def test_interactions_is_record_only_never_a_divergence():
+    """Supersedes the old contract asserting a re-enabled (nonzero) threshold made
+    interactions FIRE via effort.divergence(). D8 (2026-09-23) armed the scale in
+    RECORD-ONLY mode: RECORD_ONLY_SCALES excludes it from divergence()'s loop
+    UNCONDITIONALLY — no config value re-enables firing through that path — and
+    crossing is observed instead via effort.record_crossing(), never effort.record_fire()."""
     enabled = Thresholds({**THR._c, "effort-absolute-interactions": "40"})
     state = substantive([stage(0, "spawn:developer")])
     effort.arm(state, enabled)
     state.user_prompt_count = 39
     assert effort.divergence(state, enabled) is None
     state.user_prompt_count = 40
-    fired = effort.divergence(state, enabled)
-    assert fired is not None and fired.scale == effort.SCALE_INTERACTIONS
+    assert effort.divergence(state, enabled) is None
+    assert effort.SCALE_INTERACTIONS in effort.RECORD_ONLY_SCALES
+
+
+def test_record_crossing_appends_observation_without_firing():
+    state = substantive([stage(0, "spawn:developer")])
+    effort.arm(state, THR)
+    record = effort.record_crossing(
+        state, effort.SCALE_INTERACTIONS, actual=43.0, estimate=43.0, now=1000.0,
+    )
+    assert record is not None and record["scale"] == effort.SCALE_INTERACTIONS
+    assert state.effort_crossings == [record]
+    assert state.effort_fires == []
+    # Same baseline -> dedup, no second record.
+    again = effort.record_crossing(
+        state, effort.SCALE_INTERACTIONS, actual=44.0, estimate=43.0, now=1001.0,
+    )
+    assert again is None
+    assert len(state.effort_crossings) == 1
 
 
 # --- selection & framing ------------------------------------------------------

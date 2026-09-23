@@ -1,0 +1,13 @@
+{
+  "command": "python3 -m pytest scripts/tests/_tmp_compute_p90.py -q (scratch test computing sha256/rows/p90 of the ledger, deleted after use; formula: sorted(values)[min(n-1, round(0.9*(n-1)))])",
+  "ledger_path": "~/.local/log/claude-task-quality.jsonl",
+  "ledger_sha256": "f9a9ed5a82aed10fbcdbfdb4bca15bd2ccc62e687ca046ff008efca103009f8d",
+  "ledger_rows": 186,
+  "row_count": 76,
+  "values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 7, 7, 7, 7, 8, 9, 9, 9, 11, 11, 12, 12, 13, 14, 14, 17, 18, 19, 20, 21, 21, 24, 25, 25, 27, 30, 31, 32, 33, 33, 34, 40, 40, 42, 43, 47, 48, 58, 72, 155, 161, 203],
+  "formula": "sorted(values)[min(n-1, round(0.9*(n-1)))]",
+  "p90_idx": 68,
+  "p90": 43,
+  "armed_value": 43,
+  "measured_at": "2026-09-23"
+}

@@ -4801,6 +4801,16 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     div = effort.divergence(
         state, cross_session_totals=task_accumulator.get(state.task_id)["per_axis_totals"],
     )
+    if effort.armed(state):
+        _cross = task_accumulator.get(state.task_id)["per_axis_totals"]
+        _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross)
+        _ro_comparand = effort.comparands(state, Thresholds())
+        for _ro_scale in effort.RECORD_ONLY_SCALES:
+            if _ro_comparand[_ro_scale] > 0 and _ro_delta[_ro_scale] >= _ro_comparand[_ro_scale]:
+                effort.record_crossing(
+                    state, _ro_scale, actual=_ro_delta[_ro_scale],
+                    estimate=_ro_comparand[_ro_scale], now=_utcnow(),
+                )
 
     state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
 
@@ -4915,6 +4925,16 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     div = effort.divergence(
         state, cross_session_totals=task_accumulator.get(state.task_id)["per_axis_totals"],
     )
+    if effort.armed(state):
+        _cross = task_accumulator.get(state.task_id)["per_axis_totals"]
+        _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross)
+        _ro_comparand = effort.comparands(state, Thresholds())
+        for _ro_scale in effort.RECORD_ONLY_SCALES:
+            if _ro_comparand[_ro_scale] > 0 and _ro_delta[_ro_scale] >= _ro_comparand[_ro_scale]:
+                effort.record_crossing(
+                    state, _ro_scale, actual=_ro_delta[_ro_scale],
+                    estimate=_ro_comparand[_ro_scale], now=_utcnow(),
+                )
     # Final-gate execution (defense in depth): re-run every measurable stage's
     # verify_command — a later stage may have regressed an earlier one. Any
     # non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
@@ -6249,20 +6269,35 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
         kind = "ratio" if scale in effort.RATIO_SCALES else "absolute"
         trigger = multiple if kind == "ratio" else 1.0
         observed = ratio[scale]
+        record_only = scale in effort.RECORD_ONLY_SCALES
         scales.append({
             "scale": scale, "label": label, "unit": unit, "kind": kind,
             "actual": delta[scale], "comparand": comparand[scale], "ratio": observed,
             # Normalized "how far past its OWN line", so the four scales rank against
             # each other — the same footing effort.divergence puts them on.
             "past_own_trigger": (observed / trigger) if observed is not None else None,
-            "at_or_past_threshold": observed is not None and observed >= trigger,
+            # RECORD_ONLY_SCALES never fire, so forced False here mirrors
+            # effort.divergence's own skip of these scales — a watch that showed
+            # at_or_past_threshold=True for a scale that can never diverge would read
+            # as an alarm nothing acts on.
+            "at_or_past_threshold": (not record_only) and observed is not None and observed >= trigger,
             # Whether the accumulator, not this session's own history, supplied the
             # number — so a reader of the line knows the count is the TASK's, not the
             # session's, without having to open the accumulator to find out.
             "cross_session": delta[scale] > local[scale],
+            "record_only": record_only,
         })
     div = effort.divergence(state, thr, cross_session_totals=cross_totals)
     over = [s["scale"] for s in scales if s["at_or_past_threshold"]]
+    # Separate from `over_threshold`: the true crossing state of a record-only scale,
+    # reported for visibility but never folded into `over`/`would_fire` — those two
+    # stay reserved for scales the divergence trigger can actually act on.
+    record_only_over = [
+        s["scale"] for s in scales
+        if s["record_only"] and s["ratio"] is not None and s["ratio"] >= (
+            multiple if s["kind"] == "ratio" else 1.0
+        )
+    ]
     detail = (
         f"effort divergence on {', '.join(over)}" if over
         else "no scale at or past its threshold"
@@ -6276,6 +6311,7 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
             # alarm on a session where the trigger is switched off.
             "active": gates.effort_active(state),
             "over_threshold": over,
+            "record_only_over_threshold": record_only_over,
             "would_fire": div.scale if div is not None else None,
             "framing": div.framing if div is not None else None,
             "scales": scales,

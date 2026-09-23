@@ -142,6 +142,12 @@ ABSOLUTE_SCALES = (SCALE_REPLANS, SCALE_INTERACTIONS)
 #: diverge by the same multiple.
 SCALE_ORDER = (SCALE_SPEND, SCALE_WALL_CLOCK, SCALE_REPLANS, SCALE_INTERACTIONS)
 
+#: Scales armed but excluded from divergence(): crossing the threshold is observed and
+#: appended to SessionState.effort_crossings, but never returned as a Divergence — no
+#: fire, no baseline rebase, no DIAGNOSING route. See config.md's
+#: `effort-absolute-interactions` for why this scale specifically is record-only.
+RECORD_ONLY_SCALES = frozenset({SCALE_INTERACTIONS})
+
 _LABEL = {
     SCALE_SPEND: "attributed spend",
     SCALE_WALL_CLOCK: "active wall-clock",
@@ -503,6 +509,8 @@ def divergence(
 
     candidates: list[Divergence] = []
     for scale in SCALE_ORDER:
+        if scale in RECORD_ONLY_SCALES:
+            continue
         observed = rat[scale]
         if observed is None:
             continue
@@ -637,4 +645,31 @@ def record_fire(state: SessionState, div: Divergence, *, now: float) -> dict:
         "ts": now,
     }
     state.effort_fires.append(record)
+    return record
+
+
+def record_crossing(
+    state: SessionState, scale: str, *, actual: float, estimate: float, now: float
+) -> dict | None:
+    """Observe-only counterpart to `record_fire()` for RECORD_ONLY_SCALES: append a
+    crossing to `SessionState.effort_crossings` — never `effort_fires`, never a baseline
+    rebase, no DIAGNOSING route. Deduplicates against the SAME baseline: a scale that
+    stays past its threshold across repeated `record_result`/`verify_final` calls with
+    an unchanged baseline records once, not once per call; a later baseline change (a
+    genuine re-arm elsewhere) allows a fresh record. `now` is REQUIRED, same reasoning
+    as `record_fire()` — this module reads no clock."""
+    baseline = float((state.effort_baseline or {}).get(scale) or 0.0)
+    for prior in reversed(state.effort_crossings):
+        if prior.get("scale") == scale:
+            if float(prior.get("baseline") or 0.0) == baseline:
+                return None
+            break
+    record = {
+        "scale": scale,
+        "actual": actual,
+        "estimate": estimate,
+        "baseline": baseline,
+        "ts": now,
+    }
+    state.effort_crossings.append(record)
     return record
