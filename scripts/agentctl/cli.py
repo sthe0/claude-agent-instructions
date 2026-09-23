@@ -6858,7 +6858,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("premises", ("ledger-add",)),
     ("basis", ("ledger-add", "question-dispose", "risk-accept")),
     ("reason", ("ledger-dispose", "question-retire", "question-candidate-dispose",
-                "order-dispose", "reject", "block", "task-reset")),
+                "order-dispose", "reject", "block", "task-reset", "replan")),
     ("element", ("order-raise",)),
     ("question", ("question-raise", "question-candidate-dispose")),
     ("attempted", ("question-research",)),
@@ -6887,6 +6887,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("bypass_reason", ("accept",)),
     ("reopen_reason", ("reset",)),
     ("reopen_user_decision", ("reset",)),
+    ("rejection_text", ("present-plan",)),
 )
 
 # (dest, subcommands that declare it, why '@' means nothing here)
