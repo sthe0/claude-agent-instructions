@@ -63,12 +63,12 @@ EXPECT() {
   case "$1" in
     declare)        printf '%s\t%s\n' test_declare_event_captures_declaration "KeyError: 'expected'" ;;
     critique)       printf '%s\t%s\n' test_critique_event_captures_critique "KeyError: 'functional_ground'" ;;
-    replan_no_change)   printf '%s\t%s\n' test_replan_event_captures_cause_from_difficulty "KeyError: 'cause_source'" ;;
-    replan_refinement)  printf '%s\t%s\n' test_replan_event_captures_cause_from_explicit_reason "KeyError: 'cause_source'" ;;
-    replan_substantive) printf '%s\t%s\n' test_substantive_replan_event_captures_cause_from_difficulty "KeyError: 'cause_source'" ;;
+    replan_no_change)   printf '%s\t%s\n' test_replan_no_change_event_captures_cause_from_difficulty "KeyError: 'cause_source'" ;;
+    replan_refinement)  printf '%s\t%s\n' test_replan_refinement_event_captures_cause_from_explicit_reason "KeyError: 'cause_source'" ;;
+    replan_substantive) printf '%s\t%s\n' test_replan_substantive_event_captures_cause_from_difficulty "KeyError: 'cause_source'" ;;
     present_plan)   printf '%s\t%s\n' test_present_plan_event_captures_rejection_text "KeyError: 'rejection_text'" ;;
-    reviewer_token) printf '%s\t%s\n' test_plan_review_event_captures_reviewer_token_and_raw "KeyError: 'reviewer_token'" ;;
-    reviewer_raw)   printf '%s\t%s\n' test_plan_review_event_captures_reviewer_token_and_raw "KeyError: 'reviewer_raw'" ;;
+    reviewer_token) printf '%s\t%s\n' test_plan_review_event_captures_reviewer_token "KeyError: 'reviewer_token'" ;;
+    reviewer_raw)   printf '%s\t%s\n' test_plan_review_event_captures_reviewer_raw "KeyError: 'reviewer_raw'" ;;
     refusal)        printf '%s\t%s\n' test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes "replan mismatch" ;;
   esac
 }

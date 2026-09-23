@@ -141,7 +141,7 @@ def test_critique_event_captures_critique(store, fixtures_dir):
 
 # --- replan --------------------------------------------------------------------
 
-def test_replan_event_captures_cause_from_difficulty(store, fixtures_dir):
+def test_replan_no_change_event_captures_cause_from_difficulty(store, fixtures_dir):
     sid = "hist-r1"
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_diagnosing(store, plan, sid, task="hist-replan-diff")
@@ -161,7 +161,7 @@ def test_replan_event_captures_cause_from_difficulty(store, fixtures_dir):
     assert event["replanning_task"] == "rt-cause"
 
 
-def test_replan_event_captures_cause_from_explicit_reason(store, fixtures_dir, tmp_path):
+def test_replan_refinement_event_captures_cause_from_explicit_reason(store, fixtures_dir, tmp_path):
     sid = "hist-r2"
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan, task="hist-replan-reason")
@@ -177,7 +177,7 @@ def test_replan_event_captures_cause_from_explicit_reason(store, fixtures_dir, t
     assert event["reason"] == "user asked to fix a typo"
 
 
-def test_substantive_replan_event_captures_cause_from_difficulty(store, fixtures_dir):
+def test_replan_substantive_event_captures_cause_from_difficulty(store, fixtures_dir):
     sid = "hist-r4"
     plan = str(fixtures_dir / "plan_two_stage.toml")
     bigger = str(fixtures_dir / "plan_two_stage_substantive.toml")
@@ -233,7 +233,7 @@ def test_present_plan_event_captures_rejection_text(store, fixtures_dir, tmp_pat
 
 # --- plan_review reviewer_token / reviewer_raw ------------------------------------
 
-def test_plan_review_event_captures_reviewer_token_and_raw(store, fixtures_dir):
+def test_plan_review_event_captures_reviewer_token(store, fixtures_dir):
     sid = "hist-pr1"
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan, task="hist-plan-review")
@@ -248,8 +248,24 @@ def test_plan_review_event_captures_reviewer_token_and_raw(store, fixtures_dir):
     event = store.load(sid).history[-1]
     assert event["event"] == "plan_review"
     assert event["reviewer"] == "Thinker (fresh context)"
-    assert event["reviewer_raw"] == "Thinker (fresh context)"
     assert event["reviewer_token"] == "thinker"
+
+
+def test_plan_review_event_captures_reviewer_raw(store, fixtures_dir):
+    sid = "hist-pr2"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_executing_stage1(store, sid, plan, task="hist-plan-review-raw")
+
+    d = cli.cmd_plan_review(ns(
+        session=sid, target=None, scope=None, verdict="pass",
+        reviewer="Thinker (fresh context)", concerns=None, note="",
+        plan_digest=_sha256_file(plan), findings_blocking=None, findings_nonblocking=None,
+    ), store=store)
+    assert d.ok is True, d.detail
+
+    event = store.load(sid).history[-1]
+    assert event["event"] == "plan_review"
+    assert event["reviewer_raw"] == "Thinker (fresh context)"
 
 
 # --- no-new-argument behavior-unchanged control -----------------------------------
