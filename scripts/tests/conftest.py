@@ -11,7 +11,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from agentctl.store import FileStateStore  # noqa: E402
-from lib import judge_ledger  # noqa: E402
+from lib import host_llm, judge_ledger  # noqa: E402
 
 # The plan-level places a SUBSTANTIVE plan owes the submission seam, as TOML an author
 # would write. Every fixture plan in the suite that expects to SUBMIT CLEAN splices these
@@ -335,6 +335,35 @@ def _no_ambient_project_dir(monkeypatch):
 def _default_claude_runtime_host(monkeypatch):
     """Default CLAUDE_CODE_SESSION_ID so runtime_host.detect_host() resolves to claude."""
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "agentctl-test-session")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_keychain_lookup_by_default(monkeypatch):
+    """Default `_lend_auth`'s macOS-Keychain fallback to a clean miss for the
+    suite at large, the same accommodation as `_advisor_off_by_default` above
+    and for the same reason: on a real dev machine this fallback finds a live,
+    working credential and shells out via the bare `subprocess.run` — the same
+    module object several unrelated tests monkeypatch directly (e.g.
+    `advisor.subprocess.run` in test_enumerate_detach.py /
+    test_judge_usage.py). Patching only the subprocess call (rather than this
+    whole function) does NOT protect those tests: their own `monkeypatch.
+    setattr(advisor.subprocess, "run", fake_run)` runs later in the test body
+    and would still intercept the keychain's `security` invocation as an extra,
+    uncounted call to their `subprocess.run` stub — which is exactly what broke
+    `test_record_result_acceptance_judge_still_uses_plain_subprocess_runner`
+    and `test_subprocess_runner_writes_started_before_the_subprocess_call` the
+    first time this fallback shipped. Patching the whole function instead means
+    no subprocess call happens at all by default, so no later, unrelated
+    patch of the shared `subprocess.run` object can pick it up.
+
+    `_read_oauth_token_from_keychain`'s own logic is proven for real by the six
+    `test_keychain_lookup_*` tests in test_host_llm.py, which explicitly
+    restore the genuine function via that file's own `real_keychain_reader`
+    fixture rather than relying on this default."""
+    monkeypatch.setattr(
+        host_llm, "_read_oauth_token_from_keychain",
+        lambda config_dir: (None, host_llm.TOKEN_NONE_KEYCHAIN_ABSENT),
+    )
 
 
 @pytest.fixture

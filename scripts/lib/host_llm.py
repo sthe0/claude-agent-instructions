@@ -15,10 +15,14 @@ advisor's ~20s judge calls and the marker extractor's ~30s classification call.
 from __future__ import annotations
 
 import fnmatch
+import getpass
+import hashlib
 import json
 import os
 import shutil
 import stat
+import subprocess
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -230,18 +234,53 @@ _GATEWAY_MODE_ENV_VARS = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX")
 JUDGE_TOKEN_STATUS_ENV_VAR = "AGENTCTL_JUDGE_TOKEN_STATUS"
 
 TOKEN_BORROWED = "borrowed"
+TOKEN_BORROWED_KEYCHAIN = "borrowed_keychain"
 TOKEN_ENV_AUTH = "env_auth"
 TOKEN_NONE_ABSENT = "no_credential_file"
 TOKEN_NONE_UNREADABLE = "credential_unreadable"
 TOKEN_NONE_MALFORMED = "credential_malformed"
 TOKEN_NONE_SELF_REFERENTIAL = "credential_root_is_sandbox"
+TOKEN_NONE_KEYCHAIN_ABSENT = "no_credential_keychain"
+TOKEN_NONE_KEYCHAIN_MALFORMED = "credential_keychain_malformed"
 
 # The statuses under which the child holds SOME credential. Its complement is
 # the one failure mode this isolation seam can itself cause, which is why it
 # gets a failure reason of its own rather than sharing the quota bucket: "we
 # could not supply a token" and "the service refused us" have different
 # operators and different fixes.
-AUTHENTICATED_TOKEN_STATUSES = frozenset({TOKEN_BORROWED, TOKEN_ENV_AUTH})
+AUTHENTICATED_TOKEN_STATUSES = frozenset(
+    {TOKEN_BORROWED, TOKEN_BORROWED_KEYCHAIN, TOKEN_ENV_AUTH}
+)
+
+# macOS Keychain service names the client's own credential writer uses,
+# checked in this order. The plain name is the historical/default form; the
+# hashed form is what a non-default CLAUDE_CONFIG_DIR gets (the writer mixes
+# the config dir path into the service name so two config roots on one
+# machine don't collide on one Keychain item). Confirmed empirically on this
+# machine 2026-09-23: both forms resolved to a readable item, so trying the
+# hashed one first costs nothing when the plain one would also have worked,
+# and matters on a machine where only the hashed one is populated.
+_KEYCHAIN_SERVICE_BASE = "Claude Code-credentials"
+
+
+def _keychain_service_candidates(config_dir: Path) -> list[str]:
+    """Service names to try, for `config_dir`, in preference order.
+
+    The plain name is scoped to the actual default config root (`~/.claude`,
+    the same root `lib.config_root.harness_config_root` falls back to when no
+    `CLAUDE_CONFIG_DIR` override is set) rather than offered unconditionally.
+    Without that guard, a non-default `config_dir` (a per-project or
+    per-identity `CLAUDE_AGENT_HOME`) whose own hashed item was never written
+    would silently borrow whatever account happens to be logged in under the
+    plain item instead — a different identity than the one `ambient` names,
+    which is exactly the identity-blurring `_lend_auth`'s other checks (the
+    self-referential sandbox guard, the env-auth precedence) exist to avoid.
+    """
+    digest = hashlib.sha256(str(config_dir).encode("utf-8")).hexdigest()[:8]
+    candidates = [f"{_KEYCHAIN_SERVICE_BASE}-{digest}"]
+    if config_dir == Path.home() / ".claude":
+        candidates.append(_KEYCHAIN_SERVICE_BASE)
+    return candidates
 
 
 def _read_oauth_token(path: Path) -> tuple[str | None, str]:
@@ -270,6 +309,56 @@ def _read_oauth_token(path: Path) -> tuple[str | None, str]:
     return token, TOKEN_BORROWED
 
 
+def _read_oauth_token_from_keychain(config_dir: Path) -> tuple[str | None, str]:
+    """Read claudeAiOauth.accessToken out of the macOS login Keychain.
+
+    On macOS, `claude login` writes the OAuth blob into the Keychain (service
+    "Claude Code-credentials", optionally suffixed with a hash of
+    CLAUDE_CONFIG_DIR) instead of `.credentials.json` — per public docs and
+    community reports (not independently re-verified against the CLI's
+    source), the file is not created at all on that platform, at least as of
+    the client version observed on this machine 2026-09-23. So
+    `_read_oauth_token` finding it absent there is not a missing-login
+    signal, it is the normal state. Never
+    raises, for the same reason `_read_oauth_token` never does: the sole
+    caller is `_lend_auth`, reached from inside `subprocess_runner`'s
+    fail-open try block.
+
+    No-op (returns absent) off macOS or when the `security` binary is
+    missing — this is a fallback for one platform's storage choice, not a
+    generic keyring integration.
+
+    Per-candidate `timeout=2` keeps a worst-case two-candidate lookup well
+    under the caller's own subprocess timeout — this call happens INSIDE
+    `isolated_run_kwargs()`, before the judge's own `subprocess.run(...,
+    timeout=...)` even starts, so it is not counted against that budget at
+    all; a real `security` lookup normally answers in well under 100ms, so 2s
+    is generous slack, not a tight ceiling.
+    """
+    if sys.platform != "darwin" or shutil.which("security") is None:
+        return None, TOKEN_NONE_KEYCHAIN_ABSENT
+    account = os.environ.get("USER") or getpass.getuser()
+    for service in _keychain_service_candidates(config_dir):
+        try:
+            result = subprocess.run(
+                ["security", "find-generic-password", "-a", account,
+                 "-s", service, "-w"],
+                capture_output=True, text=True, timeout=2,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode != 0 or not result.stdout.strip():
+            continue
+        try:
+            token = json.loads(result.stdout)["claudeAiOauth"]["accessToken"]
+        except Exception:
+            return None, TOKEN_NONE_KEYCHAIN_MALFORMED
+        if isinstance(token, str) and token.strip():
+            return token, TOKEN_BORROWED_KEYCHAIN
+        return None, TOKEN_NONE_KEYCHAIN_MALFORMED
+    return None, TOKEN_NONE_KEYCHAIN_ABSENT
+
+
 def _lend_auth(env: dict) -> str:
     """Give `env` exactly one credential and return why it has the one it has.
 
@@ -278,13 +367,27 @@ def _lend_auth(env: dict) -> str:
     consulted FIRST: a machine that already carries env auth (an API key, an
     auth token, a Bedrock/Vertex gateway flag, or a previously-lent OAuth
     token) is left untouched — no file read, no borrow, no strip. Only a
-    machine with no env auth reaches the credential file, and only then does
+    machine with no env auth reaches the credential store, and only then does
     the token get lent through the child's environment.
 
-    A machine authenticated by `apiKeyHelper` genuinely loses auth under
+    Two stores are tried, in the order this seam checks them: `.credentials.json`
+    first, then the macOS login Keychain (which store the client itself would
+    prefer when both happen to hold a credential is not something this was
+    verified against — only the Keychain-vs-absent-file case was probed live).
+    This is not redundant with the file check — on macOS the client writes the OAuth blob
+    ONLY to the Keychain and never creates the file at all, so a machine
+    authenticated that way always fell through the file read; this seam
+    stayed silent about it because a missing file "degrades" the same way a
+    missing token does, until it was traced to a live machine that logs in
+    successfully yet had no `.credentials.json` anywhere under its config
+    root (see `_read_oauth_token_from_keychain`'s docstring). Off macOS this
+    second lookup is a no-op and the behavior is unchanged.
+
+    A machine authenticated by `apiKeyHelper` still genuinely loses auth under
     isolation, because the helper is a command name declared in settings.json
-    and isolation is precisely the removal of settings.json; no borrow can fix
-    that, and what this returns for it is loudness rather than function.
+    and isolation is precisely the removal of settings.json; neither store
+    holds a credential for that machine, so what this returns for it is
+    loudness rather than function.
     """
     if _has_env_auth(env):
         # Env-auth outranks the stored credential on the client's ladder, so
@@ -301,13 +404,24 @@ def _lend_auth(env: dict) -> str:
 
     token, status = _read_oauth_token(ambient / _CREDENTIALS_FILENAME)
     if token is None:
-        return status
+        # Only fall to the Keychain when the file itself said nothing —
+        # present-but-broken (unreadable/malformed) is already the more
+        # actionable signal than anything a second store could add, so
+        # skip a `security` shell-out whose result would just be discarded.
+        if status != TOKEN_NONE_ABSENT:
+            return status
+        token, keychain_status = _read_oauth_token_from_keychain(ambient)
+        if token is None:
+            # A plain absence on both stores collapses to the keychain
+            # status only when it is itself informative (malformed).
+            return keychain_status if keychain_status != TOKEN_NONE_KEYCHAIN_ABSENT else status
+        status = TOKEN_BORROWED_KEYCHAIN
 
     # No strip loop: _has_env_auth returned False above, which means every
     # variable in _OTHER_AUTH_ENV_VARS was already absent. A pop here would be
     # a dead no-op and would read as a live guard the code no longer needs.
     env[_OAUTH_TOKEN_ENV_VAR] = token
-    return TOKEN_BORROWED
+    return status
 
 
 def _has_env_auth(env: dict) -> bool:

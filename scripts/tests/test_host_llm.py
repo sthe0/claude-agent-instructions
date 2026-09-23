@@ -35,6 +35,21 @@ def _load_probe():
 probe = _load_probe()
 
 
+# Captured at collection time, before conftest.py's autouse fixture (see
+# `_no_real_keychain_lookup_by_default` there) has a chance to patch the name.
+_REAL_READ_OAUTH_TOKEN_FROM_KEYCHAIN = host_llm._read_oauth_token_from_keychain
+
+
+@pytest.fixture
+def real_keychain_reader(monkeypatch):
+    """Undo conftest.py's suite-wide default-miss patch on
+    `_read_oauth_token_from_keychain` for the handful of tests below that mean
+    to exercise the reader's own logic directly, rather than through a stub."""
+    monkeypatch.setattr(
+        host_llm, "_read_oauth_token_from_keychain", _REAL_READ_OAUTH_TOKEN_FROM_KEYCHAIN
+    )
+
+
 # --- binary_for ------------------------------------------------------------------
 
 def test_binary_for_claude_is_the_literal_name_regardless_of_path(monkeypatch):
@@ -634,6 +649,206 @@ def test_an_unreadable_credential_degrades_with_its_own_signal(monkeypatch, tmp_
         (ambient / host_llm._CREDENTIALS_FILENAME).chmod(0o600)
 
     assert env[host_llm.JUDGE_TOKEN_STATUS_ENV_VAR] == host_llm.TOKEN_NONE_UNREADABLE
+
+
+# --- keychain fallback ------------------------------------------------------
+
+def _stub_security(monkeypatch, *, by_service=None, exit_ok=True, stdout="", raises=None):
+    """Replace host_llm.subprocess.run with a fake `security` invocation.
+
+    `by_service` maps a candidate service name to (returncode, stdout) so a
+    test can make one candidate miss and the next hit, mirroring
+    _keychain_service_candidates trying the hashed name before the plain one.
+    """
+    def fake_run(argv, **kwargs):
+        if raises is not None:
+            raise raises
+        service = argv[argv.index("-s") + 1]
+        if by_service is not None:
+            rc, out = by_service.get(service, (1, ""))
+        else:
+            rc, out = (0, stdout) if exit_ok else (1, "")
+        return type("R", (), {"returncode": rc, "stdout": out})()
+
+    monkeypatch.setattr(host_llm.subprocess, "run", fake_run)
+
+
+def test_keychain_lookup_is_a_noop_off_darwin(monkeypatch, real_keychain_reader):
+    monkeypatch.setattr(host_llm.sys, "platform", "linux")
+
+    def refuse(*a, **k):
+        raise AssertionError("security must not be invoked off macOS")
+
+    monkeypatch.setattr(host_llm.subprocess, "run", refuse)
+
+    token, status = host_llm._read_oauth_token_from_keychain(Path("/tmp/whatever"))
+
+    assert token is None
+    assert status == host_llm.TOKEN_NONE_KEYCHAIN_ABSENT
+
+
+def test_keychain_lookup_is_a_noop_when_security_binary_is_absent(monkeypatch, real_keychain_reader):
+    monkeypatch.setattr(host_llm.sys, "platform", "darwin")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: None)
+
+    def refuse(*a, **k):
+        raise AssertionError("security must not be invoked when absent from PATH")
+
+    monkeypatch.setattr(host_llm.subprocess, "run", refuse)
+
+    token, status = host_llm._read_oauth_token_from_keychain(Path("/tmp/whatever"))
+
+    assert token is None
+    assert status == host_llm.TOKEN_NONE_KEYCHAIN_ABSENT
+
+
+def test_keychain_lookup_finds_the_hashed_service_first(monkeypatch, tmp_path, real_keychain_reader):
+    monkeypatch.setattr(host_llm.sys, "platform", "darwin")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/security")
+    hashed = host_llm._keychain_service_candidates(tmp_path)[0]
+    blob = json.dumps({"claudeAiOauth": {"accessToken": "tok-from-keychain"}})
+    _stub_security(monkeypatch, by_service={hashed: (0, blob)})
+
+    token, status = host_llm._read_oauth_token_from_keychain(tmp_path)
+
+    assert token == "tok-from-keychain"
+    assert status == host_llm.TOKEN_BORROWED_KEYCHAIN
+
+
+def test_keychain_lookup_falls_back_to_the_plain_service_name(monkeypatch, tmp_path, real_keychain_reader):
+    """A config root with no hash-suffixed item still resolves via the plain
+    'Claude Code-credentials' service — the default-CLAUDE_CONFIG_DIR shape.
+    Scoped to the actual default root (Path.home() faked to `tmp_path`): the
+    plain name is only tried there (see `_keychain_service_candidates`'s
+    docstring) — trying it for an arbitrary non-default root is exactly the
+    cross-root credential leak that guard exists to prevent."""
+    monkeypatch.setattr(host_llm.sys, "platform", "darwin")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/security")
+    monkeypatch.setattr(host_llm.Path, "home", classmethod(lambda cls: tmp_path))
+    config_dir = tmp_path / ".claude"
+    plain = host_llm._KEYCHAIN_SERVICE_BASE
+    blob = json.dumps({"claudeAiOauth": {"accessToken": "tok-plain"}})
+    _stub_security(monkeypatch, by_service={plain: (0, blob)})
+
+    token, status = host_llm._read_oauth_token_from_keychain(config_dir)
+
+    assert token == "tok-plain"
+    assert status == host_llm.TOKEN_BORROWED_KEYCHAIN
+
+
+def test_keychain_lookup_does_not_try_the_plain_service_for_a_non_default_root(
+    monkeypatch, tmp_path, real_keychain_reader
+):
+    """The should-fix from review: a non-default config root (a custom
+    CLAUDE_AGENT_HOME) must not fall through to the plain service name, even
+    when an item is sitting there under the plain name — that item belongs to
+    a DIFFERENT identity than the one `config_dir` names."""
+    monkeypatch.setattr(host_llm.sys, "platform", "darwin")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/security")
+    monkeypatch.setattr(host_llm.Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    plain = host_llm._KEYCHAIN_SERVICE_BASE
+    blob = json.dumps({"claudeAiOauth": {"accessToken": "tok-plain-but-wrong-identity"}})
+    _stub_security(monkeypatch, by_service={plain: (0, blob)})
+
+    token, status = host_llm._read_oauth_token_from_keychain(tmp_path / "custom-root")
+
+    assert token is None
+    assert status == host_llm.TOKEN_NONE_KEYCHAIN_ABSENT
+
+
+def test_keychain_lookup_absent_when_no_candidate_service_resolves(monkeypatch, tmp_path, real_keychain_reader):
+    monkeypatch.setattr(host_llm.sys, "platform", "darwin")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/security")
+    _stub_security(monkeypatch, exit_ok=False)
+
+    token, status = host_llm._read_oauth_token_from_keychain(tmp_path)
+
+    assert token is None
+    assert status == host_llm.TOKEN_NONE_KEYCHAIN_ABSENT
+
+
+def test_keychain_lookup_malformed_blob_degrades_with_its_own_signal(monkeypatch, tmp_path, real_keychain_reader):
+    monkeypatch.setattr(host_llm.sys, "platform", "darwin")
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/security")
+    _stub_security(monkeypatch, exit_ok=True, stdout="not json")
+
+    token, status = host_llm._read_oauth_token_from_keychain(tmp_path)
+
+    assert token is None
+    assert status == host_llm.TOKEN_NONE_KEYCHAIN_MALFORMED
+
+
+def test_lend_auth_borrows_from_keychain_when_the_file_is_absent(monkeypatch, tmp_path):
+    """The macOS shape this fallback exists for: the client never creates
+    .credentials.json at all and keeps the OAuth blob in the Keychain only."""
+    _sandbox(monkeypatch, tmp_path)
+    _ambient(monkeypatch, tmp_path)  # no credential file
+    monkeypatch.setattr(
+        host_llm, "_read_oauth_token_from_keychain",
+        lambda config_dir: ("tok-keychain", host_llm.TOKEN_BORROWED_KEYCHAIN),
+    )
+
+    env = host_llm.isolated_run_kwargs()["env"]
+
+    assert env[host_llm._OAUTH_TOKEN_ENV_VAR] == "tok-keychain"
+    assert env[host_llm.JUDGE_TOKEN_STATUS_ENV_VAR] == host_llm.TOKEN_BORROWED_KEYCHAIN
+    assert env[host_llm.JUDGE_TOKEN_STATUS_ENV_VAR] in host_llm.AUTHENTICATED_TOKEN_STATUSES
+
+
+def test_lend_auth_prefers_the_file_over_the_keychain_when_both_exist(monkeypatch, tmp_path):
+    _sandbox(monkeypatch, tmp_path)
+    _ambient(monkeypatch, tmp_path, token="tok-file")
+
+    def refuse(config_dir):
+        raise AssertionError("the keychain must not be consulted when the file already answered")
+
+    monkeypatch.setattr(host_llm, "_read_oauth_token_from_keychain", refuse)
+
+    env = host_llm.isolated_run_kwargs()["env"]
+
+    assert env[host_llm._OAUTH_TOKEN_ENV_VAR] == "tok-file"
+    assert env[host_llm.JUDGE_TOKEN_STATUS_ENV_VAR] == host_llm.TOKEN_BORROWED
+
+
+def test_lend_auth_reports_absent_when_neither_store_has_a_credential(monkeypatch, tmp_path):
+    _sandbox(monkeypatch, tmp_path)
+    _ambient(monkeypatch, tmp_path)  # no file; default fixture makes keychain miss too
+
+    env = host_llm.isolated_run_kwargs()["env"]
+
+    assert env[host_llm.JUDGE_TOKEN_STATUS_ENV_VAR] == host_llm.TOKEN_NONE_ABSENT
+    assert host_llm._OAUTH_TOKEN_ENV_VAR not in env
+
+
+def test_lend_auth_surfaces_a_malformed_keychain_blob_when_the_file_is_merely_absent(
+    monkeypatch, tmp_path
+):
+    """Absent-file is uninformative (macOS never writes the file); a keychain
+    item that DOES exist but fails to parse is the more actionable signal, so
+    it wins over the generic TOKEN_NONE_ABSENT."""
+    _sandbox(monkeypatch, tmp_path)
+    _ambient(monkeypatch, tmp_path)  # no file
+    monkeypatch.setattr(
+        host_llm, "_read_oauth_token_from_keychain",
+        lambda config_dir: (None, host_llm.TOKEN_NONE_KEYCHAIN_MALFORMED),
+    )
+
+    env = host_llm.isolated_run_kwargs()["env"]
+
+    assert env[host_llm.JUDGE_TOKEN_STATUS_ENV_VAR] == host_llm.TOKEN_NONE_KEYCHAIN_MALFORMED
+
+
+def test_lend_auth_keeps_the_files_own_malformed_status_over_a_keychain_miss(
+    monkeypatch, tmp_path
+):
+    """A broken file is a more specific signal than 'the keychain also has
+    nothing' — the file status must not be overwritten by a plain miss."""
+    _sandbox(monkeypatch, tmp_path)
+    _ambient(monkeypatch, tmp_path, raw="{}")  # present but malformed
+
+    env = host_llm.isolated_run_kwargs()["env"]
+
+    assert env[host_llm.JUDGE_TOKEN_STATUS_ENV_VAR] == host_llm.TOKEN_NONE_MALFORMED
 
 
 def test_the_seam_refuses_to_borrow_from_itself(monkeypatch, tmp_path):
