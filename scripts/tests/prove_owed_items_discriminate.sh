@@ -30,14 +30,14 @@ TESTS="$HERE/test_owed_items.py"
 WORK="$(mktemp -d)"
 trap '[[ -n "${WORK:-}" ]] && rm -rf "$WORK"' EXIT
 
-# Full working copy (tracked files only) so PYTHONPATH-relative imports and the
-# venue-relative config.md read resolve exactly as they do for a real run.
-# --cached + --others (not just --cached): this stage's own new files
-# (test_owed_items.py, this script itself, the JSON derivation record) are not yet
-# committed when this proof first runs against them.
-git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard -- scripts config.md docs/operations/effort-interactions-arming.json \
-  | (cd "$REPO_ROOT" && xargs -0 tar cf -) \
-  | (mkdir -p "$WORK/tree" && cd "$WORK/tree" && tar xf -)
+# Full working copy so PYTHONPATH-relative imports and the venue-relative config.md
+# read resolve exactly as they do for a real run. Works both in a git checkout and
+# in a plain copy (without .git), so this script can run in the verification
+# control's differential copy arms (one plain, one neutered).
+mkdir -p "$WORK/tree"
+(cd "$REPO_ROOT" && tar --exclude='.git' --exclude='.claude' --exclude='__pycache__' --exclude='*.pyc' \
+  -cf - scripts/ config.md docs/operations/effort-interactions-arming.json 2>/dev/null) \
+  | (cd "$WORK/tree" && tar xf -)
 
 run_variant() {
   local label="$1" tree="$2"

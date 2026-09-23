@@ -379,7 +379,12 @@ def test_interactions_is_record_only_never_a_divergence():
     assert effort.SCALE_INTERACTIONS in effort.RECORD_ONLY_SCALES
 
 
-def test_record_crossing_appends_observation_without_firing():
+def test_interactions_records_rather_than_fires_once_armed():
+    """The record-only contract test that stage 2 verify pins by name.
+
+    When record_crossing is called, it appends an observation to state.effort_crossings
+    without writing to state.effort_fires (which would block dispatch/replan/submit_plan).
+    Same baseline band -> dedup, no second record."""
     state = substantive([stage(0, "spawn:developer")])
     effort.arm(state, THR)
     record = effort.record_crossing(
