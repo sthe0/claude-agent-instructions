@@ -202,6 +202,10 @@ _LEGACY_REF_ALLOWLIST = {
                                              "CLI's own, not a legacy fallback",
     "scripts/hook-guard-destructive-rm.py":  "protective denylist covers BOTH roots",
     "scripts/install-reminder-hooks.sh":     "the personal root IS the prune-only second file",
+    "scripts/lib/host_llm.py":               "the CLI's default ~/.claude owns the unhashed "
+                                             "Keychain item — an identity test, not a fallback",
+    "scripts/project_entry/task_mount_registry.py": "legacy task-mounts.d read fallback when "
+                                             "no ~/.claude-agent exists",
 }
 
 
