@@ -1,10 +1,10 @@
 ---
 name: agentctl-acceptance-judge-gate
-description: "How agentctl's acceptance-judge gate on record-result --status passed actually works: a haiku model compares --observation against stage.subject.result, verdicts live in state.stage_reviews (not an 'advisor' key); the predicted short-observation mitigation is now falsified by a THIRD confirmed occurrence"
+description: "How agentctl's acceptance-judge gate on record-result --status passed actually works: a haiku model compares --observation against stage.subject.result, verdicts live in state.stage_reviews (not an 'advisor' key); the predicted short-observation mitigation is now falsified; a FOURTH occurrence measured 20 blocks on 7 of 8 stages of one plan, and revise verdicts are not kept in engine history"
 type: reference
 schema: leaf/v1
 created: 2026-08-26
-last_verified: 2026-09-22
+last_verified: 2026-09-24
 ---
 
 ## Difficulty
@@ -153,6 +153,26 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
   adequacy call) remains proposed but unimplemented; each new occurrence is cheaper to resolve
   (recognize-and-override, no wasted resubmission rounds) but the underlying gate is still
   unfixed.
+- **FOURTH occurrence, first one measured across a whole plan (2026-09-24,
+  `plan-convergence-methodology`, 8 stages):** the judge blocked `record-result` **20** times on
+  **7 of 8** stages (per stage 1/4/0/5/1/4/3/2). In every case the stage's mechanical check was
+  already green, or turned green with no change to the delivery — only the observation was
+  rewritten. Stages 4, 6 and 8 cleared only via a user-authorized override, so **3** user asks
+  were spent on the judge alone. Goalposts moved on stage 8: after "only the format was checked,
+  not the content" was answered section by section, the next verdict objected that the
+  `proposals.json` structure was not described. **Observability gap:** the engine's event history
+  does not keep `revise` verdicts — `state.stage_reviews` holds only the latest verdict per stage.
+  These counts had to be rebuilt from the session transcript; engine state alone cannot produce
+  them.
+- **Related friction at resolution (same plan):** a 2-line fix to two `verify_command`/
+  `final_check` checks at verify-final (a foreign unparsable file in the live `plans/` corpus; a
+  `weight_class` case mismatch against the quality ledger storing `SUBSTANTIVE`) changed the plan
+  digest. That (1) staled the recorded `AcceptanceReview`, so the user had to re-accept the same
+  deliverables; (2) re-armed a whole-plan question enumeration, which raised 18 candidates, none
+  about the changed checks; (3) hit a review-round budget reported "exhausted at round 1", which
+  required a whole-plan thinker review. Budget roughly one extra user ask plus ~30 engine calls
+  for any verify-final check fix; keep final checks robust to live, shared corpora
+  (explicit, bounded skip-lists) at authoring time.
 
 ## See also
 
