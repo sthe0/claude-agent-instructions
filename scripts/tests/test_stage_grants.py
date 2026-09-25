@@ -12,6 +12,7 @@ materialization defect vs an uncovered one to a genuine user ask.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -19,6 +20,7 @@ import pytest
 from argparse import Namespace
 
 from agentctl import cli
+from agentctl import plan as plan_mod
 from agentctl.dispatch import RunResult
 from agentctl.grants import (
     AddDirGrant,
@@ -30,6 +32,7 @@ from agentctl.grants import (
     validate_rule,
 )
 from lib import config_root, widening_targets
+from conftest import STAGE_OBSERVATIONS
 
 
 def ns(**kw):
@@ -266,6 +269,23 @@ def test_bash_unresolvable_segment_never_covered_even_if_rule_matches_text():
     assert not grant_covers_call(grants, "Bash", {"command": "echo $FOO"})
 
 
+def test_bash_bare_redirect_segment_not_covered_under_a_matching_prefix_grant():
+    """A prefix grant naming the command's own literal text (`echo hi`) does
+    not extend to a `>` redirect appended onto that same text -- the
+    redirect's target is not something the grant text ever named, so the
+    call is a planning miss (uncovered), never a materialization defect."""
+    grants = _grants_with_bash("Bash(echo hi:*)")
+    assert not grant_covers_call(grants, "Bash", {"command": "echo hi > /tmp/out"})
+
+
+def test_bash_command_substitution_segment_not_covered_under_a_matching_prefix_grant():
+    """Same rule, for a `$(...)` command-substitution segment: `Bash(echo:*)`
+    textually prefix-matches `echo $(whoami)`, but the substitution's actual
+    argument cannot be read off the rule text, so the call stays uncovered."""
+    grants = _grants_with_bash("Bash(echo:*)")
+    assert not grant_covers_call(grants, "Bash", {"command": "echo $(whoami)"})
+
+
 def test_bash_empty_or_missing_command_not_covered():
     grants = _grants_with_bash("Bash(git status:*)")
     assert not grant_covers_call(grants, "Bash", {"command": ""})
@@ -417,8 +437,8 @@ def test_effective_tuple_detects_a_real_addition():
 # --- (4) cli.py integration: cmd_stage_grants / cmd_grant_stats / resolve-permission
 
 
-def _to_executing(store, sid, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def _to_executing(store, sid, fixtures_dir, plan_path=None):
+    plan = plan_path or str(fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(ns(session=sid, task="t", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -431,6 +451,122 @@ def _to_executing(store, sid, fixtures_dir):
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
     return cli.cmd_next_stage(ns(session=sid), store=store)
+
+
+def _write_plan_with_grants_block(fixtures_dir, tmp_path, grants_toml: str, name: str) -> str:
+    """`plan_two_stage.toml` with a `[stage.grants]` table added to stage 1 --
+    the same base fixture every other integration test in this section already
+    submits successfully, so the only variable under test is the declared
+    grants block itself."""
+    text = (fixtures_dir / "plan_two_stage.toml").read_text()
+    text = text.replace(
+        'output_artifacts = ["mod.py"]\n',
+        'output_artifacts = ["mod.py"]\n\n' + grants_toml,
+        1,
+    )
+    out = tmp_path / name
+    out.write_text(text)
+    return str(out)
+
+
+def _write_declared_grants_plan(fixtures_dir, tmp_path) -> str:
+    return _write_plan_with_grants_block(
+        fixtures_dir, tmp_path,
+        "[stage.grants]\nallow = [\"Bash(git status:*)\"]\n",
+        "plan_two_stage_declared_grants.toml",
+    )
+
+
+def test_load_plan_refuses_declared_wildcard_interpreter_rule(fixtures_dir, tmp_path):
+    """(#5) A declared grant that would be refused standalone by
+    `validate_rule` must fail the WHOLE plan load with `PlanError` -- an
+    invalid declared grant can never reach a spawned child's --settings
+    just because it arrived via `[stage.grants]` instead of a direct
+    `resolve-permission --rule` call."""
+    plan_path = _write_plan_with_grants_block(
+        fixtures_dir, tmp_path,
+        "[stage.grants]\nallow = [\"Bash(python3:*)\"]\n",
+        "plan_bad_declared_rule.toml",
+    )
+    with pytest.raises(plan_mod.PlanError):
+        plan_mod.load_plan(plan_path)
+
+
+def test_load_plan_refuses_declared_write_add_dir_on_home(fixtures_dir, tmp_path):
+    """(#5) Same refusal, for a declared `add_dirs` entry naming a write grant
+    on a protected root (the home dir) -- `validate_add_dir`'s refusal must
+    also surface as a `PlanError` at load time, not silently pass through."""
+    home = str(config_root.agent_home().parent)  # the home dir itself, an ancestor of every protected root
+    grants_toml = (
+        "[stage.grants]\n"
+        f'add_dirs = [{{ path = "{home}", mode = "write" }}]\n'
+    )
+    plan_path = _write_plan_with_grants_block(
+        fixtures_dir, tmp_path, grants_toml, "plan_bad_declared_add_dir.toml",
+    )
+    with pytest.raises(plan_mod.PlanError):
+        plan_mod.load_plan(plan_path)
+
+
+def test_diff_plans_classifies_declared_grants_only_change_as_substantive(fixtures_dir, tmp_path):
+    """(#6a) Two plans that are otherwise identical, differing ONLY by a
+    declared `[stage.grants]` block added to stage 1, must classify as
+    "substantive" -- the grant-growth escalation in `diff_plans` must fire
+    on its own even when nothing else about the plan's structural signature
+    or prose changed."""
+    base = plan_mod.load_plan(str(fixtures_dir / "plan_two_stage.toml"))
+    changed_path = _write_declared_grants_plan(fixtures_dir, tmp_path)
+    changed = plan_mod.load_plan(changed_path)
+    assert plan_mod.diff_plans(base, changed) == "substantive"
+
+
+def test_cmd_stage_grants_reports_declared_grant_through_full_submit_approve_flow(
+    store, fixtures_dir, tmp_path,
+):
+    """(#2) A stage's declared `[stage.grants]` block must survive the real
+    cmd_submit_plan -> cmd_approve -> cmd_stage_grants path (not just the pure
+    loader) and come back with provenance "declared"."""
+    sid = "stage-grants-declared-full-flow"
+    plan_path = _write_declared_grants_plan(fixtures_dir, tmp_path)
+    _to_executing(store, sid, fixtures_dir, plan_path=plan_path)
+    directive = cli.cmd_stage_grants(ns(session=sid, stage=1, json=True), store=store)
+    assert directive.ok
+    entries = directive.data["grants"]
+    declared = [e for e in entries if e.get("rule") == "Bash(git status:*)"]
+    assert len(declared) == 1
+    assert declared[0]["provenance"] == "declared"
+
+
+def test_cmd_stage_grants_unaffected_by_live_plan_path_edit_after_approval(store, fixtures_dir, tmp_path):
+    """(#7) `cmd_stage_grants` reads declared/derived entries from the
+    hash-verified snapshot taken at approval time, never the live
+    `state.plan_path` -- editing the live file in place after approval (the
+    coordinator is free to do this, e.g. a REVISE-verdict plan-review edit
+    still pending its own re-approval) must not change what `cmd_stage_grants`
+    reports for the already-approved stage.
+
+    Submits a private tmp COPY of the shared `plan_two_stage.toml` fixture
+    (never the committed fixture path itself) -- `state.plan_path` aliases
+    whatever path was submitted rather than copying it, so writing to it in
+    place, as this test's whole point is to do, would otherwise permanently
+    corrupt the fixture every other test in this module reads."""
+    sid = "stage-grants-live-edit-after-approval"
+    plan_path = tmp_path / "plan_two_stage_live_edit.toml"
+    plan_path.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    _to_executing(store, sid, fixtures_dir, plan_path=str(plan_path))
+    state = store.load(sid)
+    before = cli.cmd_stage_grants(ns(session=sid, stage=1, json=True), store=store)
+    assert before.ok
+
+    live_text = Path(state.plan_path).read_text()
+    live_text = live_text.replace(
+        'output_artifacts = ["mod.py"]', 'output_artifacts = ["mod.py", "extra.py"]', 1,
+    )
+    Path(state.plan_path).write_text(live_text)
+
+    after = cli.cmd_stage_grants(ns(session=sid, stage=1, json=True), store=store)
+    assert after.ok
+    assert after.data == before.data
 
 
 def test_cmd_stage_grants_reports_derived_dr_o_for_stage_one(store, fixtures_dir):
@@ -449,6 +585,74 @@ def test_cmd_stage_grants_reports_derived_dr_o_for_stage_one(store, fixtures_dir
     assert "Bash(python3 mod.py:*)" in derived_rules
     matching = [e for e in entries if e.get("rule") == "Bash(python3 mod.py:*)"]
     assert matching and matching[0]["provenance"] == "derived:DR-O"
+
+
+def test_cmd_stage_grants_reports_runtime_grant_alongside_derived_rule_idempotently(
+    store, fixtures_dir,
+):
+    """(#4) A runtime grant recorded via `resolve-permission --scope stage` must
+    show up in `cmd_stage_grants`'s flat entry list next to the stage's derived
+    rule (not replacing it, not requiring a separate call), and a second read
+    must return byte-identical output -- the command is a pure read, so nothing
+    about calling it once should change what a second call sees."""
+    sid = "stage-grants-runtime-alongside-derived"
+    _to_executing(store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.permission_request = cli.PermissionRequest(action="need pytest", stage_index=1, raw="need pytest")
+    store.save(state)
+    resolved = cli.cmd_resolve_permission(
+        ns(session=sid, decision="granted", scope="stage",
+           rules=["Bash(python3 -m pytest scripts/tests/test_mod.py:*)"], add_dirs=None),
+        store=store,
+    )
+    assert resolved.ok
+
+    first = cli.cmd_stage_grants(ns(session=sid, stage=1, json=True), store=store)
+    assert first.ok
+    entries = first.data["grants"]
+    derived_rules = {
+        e.get("rule") for e in entries if str(e.get("provenance", "")).startswith("derived:")
+    }
+    runtime_rules = {e.get("rule") for e in entries if e.get("provenance") == "runtime"}
+    assert "Bash(python3 mod.py:*)" in derived_rules
+    assert "Bash(python3 -m pytest scripts/tests/test_mod.py:*)" in runtime_rules
+
+    second = cli.cmd_stage_grants(ns(session=sid, stage=1, json=True), store=store)
+    assert second.ok
+    assert second.data == first.data
+
+
+def test_replan_refinement_branch_refreshes_runtime_grant_stage_title(store, fixtures_dir, monkeypatch):
+    """(#8b) `cmd_replan`'s "refinement" branch retitles stage 1 in place
+    (same index, new title) via `_apply_refined_stage_fields` -- a runtime
+    grant already stamped with the OLD title at that index must have its
+    `stage_title` refreshed to the new one in the same call, else a later
+    substantive approve's re-key-by-title would find zero matches and drop
+    the grant for no reason a user could see."""
+    # This test is not exercising the replan-authorization gate (a bare
+    # refinement replan without a prior diff presentation) -- see
+    # test_replan.py's identical, module-wide `_no_replan_authorization_gate`.
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+    sid = "stage-grants-refresh-title-via-replan"
+    _to_executing(store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.permission_request = cli.PermissionRequest(action="need pytest", stage_index=1, raw="need pytest")
+    store.save(state)
+    cli.cmd_resolve_permission(
+        ns(session=sid, decision="granted", scope="stage",
+           rules=["Bash(python3 -m pytest scripts/tests/test_mod.py:*)"], add_dirs=None),
+        store=store,
+    )
+    state = store.load(sid)
+    assert state.runtime_grants["1"][0]["stage_title"] == "Scaffold module"
+
+    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
+    assert d.action == "continue"  # refinement resumes execution, no re-approval
+
+    state = store.load(sid)
+    assert state.stage(1).title == "Scaffold the module skeleton"
+    assert state.runtime_grants["1"][0]["stage_title"] == "Scaffold the module skeleton"
 
 
 def test_stage_grant_entries_empty_when_snapshot_bytes_dont_match_stamped_hash(store, fixtures_dir):
@@ -647,6 +851,66 @@ def test_dispatch_permission_request_not_covered_asks_user(store, fixtures_dir):
     assert not state.materialization_defects
     assert len(state.planning_misses) == 1
     assert state.planning_misses[0]["source"] == "permission-request"
+    assert state.planning_misses[0]["asked_user"] is True
+
+
+def test_dispatch_permission_request_redirect_segment_under_prefix_grant_asks_user(store, fixtures_dir):
+    """Stage 1 already carries a derived DR-O grant `Bash(python3 mod.py:*)`
+    (a wildcard "prefix" grant covering `python3 mod.py` plus any args) --
+    but the child's self-reported `Rule:` line appends a bare `>` redirect
+    onto that same command. `_rule_line_to_call`/`grant_covers_call` must
+    still refuse it (an unresolvable segment, per
+    test_bash_bare_redirect_segment_not_covered_under_a_matching_prefix_grant
+    above), so this is a planning miss the user is asked about, never a
+    materialization defect."""
+    sid = "perm-request-redirect-uncovered"
+    _to_executing(store, sid, fixtures_dir)
+
+    def runner(argv, cwd=None):
+        return RunResult(
+            0,
+            stdout=(
+                "PERMISSION-REQUEST: need to log output\n"
+                "Rule: Bash(python3 mod.py > /tmp/log:*)\n"
+            ),
+        )
+
+    directive = cli.cmd_dispatch(
+        ns(session=sid, budget="medium", complexity="medium", dry_run=False),
+        store=store, runner=runner,
+    )
+    assert directive.marker == "PERMISSION-REQUEST"
+    state = store.load(sid)
+    assert not state.materialization_defects
+    assert len(state.planning_misses) == 1
+    assert state.planning_misses[0]["asked_user"] is True
+
+
+def test_dispatch_permission_request_command_substitution_segment_under_prefix_grant_asks_user(
+    store, fixtures_dir,
+):
+    """Same rule, for a `$(...)` command-substitution segment appended onto
+    the same derived-prefix-covered command."""
+    sid = "perm-request-subshell-uncovered"
+    _to_executing(store, sid, fixtures_dir)
+
+    def runner(argv, cwd=None):
+        return RunResult(
+            0,
+            stdout=(
+                "PERMISSION-REQUEST: need to log the user\n"
+                "Rule: Bash(python3 mod.py $(whoami):*)\n"
+            ),
+        )
+
+    directive = cli.cmd_dispatch(
+        ns(session=sid, budget="medium", complexity="medium", dry_run=False),
+        store=store, runner=runner,
+    )
+    assert directive.marker == "PERMISSION-REQUEST"
+    state = store.load(sid)
+    assert not state.materialization_defects
+    assert len(state.planning_misses) == 1
     assert state.planning_misses[0]["asked_user"] is True
 
 
@@ -880,3 +1144,47 @@ def test_enumerate_live_settings_ignores_non_four_location_settings_file(tmp_pat
     assert other_settings not in found
     assert len(found) == 4
     assert widening_targets.is_live_settings(str(other / "settings.json"))
+
+
+# --- (5) cmd_resolve quality row: planning_misses_asked / planning_misses_unasked --
+
+
+def test_cmd_resolve_quality_row_separates_asked_and_unasked_planning_misses(store, fixtures_dir):
+    """(#12b) `state.planning_misses` mixes asked (a PERMISSION-REQUEST the
+    manager surfaced to the user) and unasked (seen only via transcript
+    classification) rows -- `cmd_resolve`'s quality-ledger row must count each
+    kind separately, not just report a single combined total."""
+    sid = "resolve-quality-planning-misses"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_executing(store, sid, fixtures_dir, plan_path=plan)
+    state = store.load(sid)
+    state.planning_misses = [
+        {"stage_index": 1, "asked_user": True, "ts": "t1"},
+        {"stage_index": 1, "asked_user": True, "ts": "t2"},
+        {"stage_index": 2, "asked_user": False, "ts": "t3"},
+    ]
+    store.save(state)
+    cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                             control="reviewed: ok", observation=STAGE_OBSERVATIONS[0],
+                             cost_log=None), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                             control="reviewed: ok", observation=STAGE_OBSERVATIONS[1],
+                             cost_log=None), store=store)
+    cli.cmd_verify_final(ns(session=sid), store=store)
+    cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched",
+                             note=""), store=store)
+    cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="skipped",
+                             note="test fixture, nothing to record"), store=store)
+    d = cli.cmd_resolve(ns(session=sid, by="user", quality=5, quality_by="user-confirmed",
+                           quality_note=None, cost_log=None), store=store)
+    assert d.ok is True
+
+    rows = [
+        json.loads(line)
+        for line in cli.TASK_QUALITY_LOG.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    row = rows[-1]
+    assert row["planning_misses_asked"] == 2
+    assert row["planning_misses_unasked"] == 1

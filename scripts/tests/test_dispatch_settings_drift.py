@@ -214,3 +214,49 @@ def test_rekey_runtime_grants_drops_entry_when_title_no_longer_present(store, fi
     doc = _FakeStageDoc([_FakeStage(2, "Some other stage")])
     cli._rekey_runtime_grants(state, doc)
     assert state.runtime_grants == {}
+
+
+# --- _refresh_runtime_grant_titles -------------------------------------------------
+#
+# Unlike `_rekey_runtime_grants` (used only on `approve`, after a substantive
+# replan may have renumbered stage indices, so it must re-key by title match),
+# `_refresh_runtime_grant_titles` is used by the "no_change"/"refinement"
+# replan branches, which never renumber -- it just overwrites `stage_title`
+# in place for whatever entries already sit at the given index.
+
+def test_refresh_runtime_grant_titles_overwrites_title_at_the_given_index(store, fixtures_dir):
+    sid = "refresh-titles-basic"
+    _to_executing(store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.runtime_grants["1"] = [
+        {"rule": "Bash(x:*)", "provenance": "runtime", "stage_title": "Old title"},
+    ]
+    cli._refresh_runtime_grant_titles(state, 1, "New title")
+    assert state.runtime_grants["1"][0]["stage_title"] == "New title"
+
+
+def test_refresh_runtime_grant_titles_updates_every_entry_at_the_index(store, fixtures_dir):
+    sid = "refresh-titles-multiple-entries"
+    _to_executing(store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.runtime_grants["1"] = [
+        {"rule": "Bash(x:*)", "provenance": "runtime", "stage_title": "Old title"},
+        {"rule": "Bash(y:*)", "provenance": "runtime", "stage_title": "Old title"},
+    ]
+    cli._refresh_runtime_grant_titles(state, 1, "New title")
+    assert all(e["stage_title"] == "New title" for e in state.runtime_grants["1"])
+
+
+def test_refresh_runtime_grant_titles_leaves_other_stage_indices_untouched(store, fixtures_dir):
+    sid = "refresh-titles-other-index-untouched"
+    _to_executing(store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.runtime_grants["1"] = [
+        {"rule": "Bash(x:*)", "provenance": "runtime", "stage_title": "Stage one"},
+    ]
+    state.runtime_grants["2"] = [
+        {"rule": "Bash(y:*)", "provenance": "runtime", "stage_title": "Stage two"},
+    ]
+    cli._refresh_runtime_grant_titles(state, 1, "Renamed stage one")
+    assert state.runtime_grants["1"][0]["stage_title"] == "Renamed stage one"
+    assert state.runtime_grants["2"][0]["stage_title"] == "Stage two"
