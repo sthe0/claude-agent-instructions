@@ -96,6 +96,9 @@ _UNCLAIMED_STAGE_LEAVES = {
                             "`grants.allow.rule`",
     "grants.add_dirs.provenance": "the grant's origin label, same exclusion as its "
                                   "sibling `grants.add_dirs.path`",
+    "outcome.checked_tree_identity": "the mutable execution record, not the declaration",
+    "outcome.checked_tree_ok": "the mutable execution record, not the declaration",
+    "outcome.record_attempts": "the mutable execution record, not the declaration",
 }
 
 _BARE_STAGE = {
