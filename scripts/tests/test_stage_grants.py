@@ -40,6 +40,10 @@ _ACCEPTED_RULES = [
     "Bash(git status)",
     "Bash(python3 scripts/tests/test_foo.py:*)",
     "Bash(python3 -m pytest scripts/tests -q:*)",
+    # A `;` inside a single-quoted argument is inert to the shell and must not
+    # be mistaken for a real top-level separator -- regression pin for the
+    # quote-unaware segmentation bug DR-V's derivation hit.
+    "Bash(python -c 'import mod; assert True':*)",
     "Edit(//home/user/repo/scripts/foo.py)",
     "Read(//home/user/repo/README.md)",
     "WebFetch(domain:code.claude.com)",
@@ -259,6 +263,42 @@ def test_unknown_tool_name_never_covered():
     assert not grant_covers_call(grants, "SomeOtherTool", {"file_path": "/x"})
 
 
+def test_dot_claude_under_non_protected_venue_still_matched(tmp_path):
+    # A project-local `.claude/agent-memory/` directory (not the harness's
+    # own `~/.claude` or the agentctl state dir) is a legitimate write
+    # target -- e.g. project memory -- and must still be matchable; only
+    # the specific protected roots widening_targets names are excluded,
+    # not any path with a `.claude` component in general.
+    mem_dir = tmp_path / ".claude" / "agent-memory"
+    mem_dir.mkdir(parents=True)
+    target = mem_dir / "leaf.md"
+    target.write_text("x")
+    grants = StageGrants(add_dirs=[AddDirGrant(path=str(tmp_path), mode="write", provenance="declared")])
+    assert grant_covers_call(grants, "Write", {"file_path": str(target)})
+
+
+def test_edit_rule_covers_write_and_notebookedit_calls(tmp_path):
+    # The harness treats Edit-family rules as covering every file-editing
+    # tool, so an `Edit(...)` grant must cover a `Write`/`NotebookEdit`
+    # call onto the same resolved path even though the rule's own tool
+    # token literally says "Edit".
+    target = tmp_path / "foo.py"
+    target.write_text("x")
+    grants = StageGrants(allow=[RuleGrant(rule=f"Edit(//{target})", provenance="declared")])
+    assert grant_covers_call(grants, "Write", {"file_path": str(target)})
+    assert grant_covers_call(grants, "NotebookEdit", {"file_path": str(target)})
+
+
+def test_edit_rule_does_not_cover_read_call(tmp_path):
+    # The Edit-covers-Write/NotebookEdit widening is scoped to the other
+    # file-EDITING tools only -- an Edit rule is not a general "any tool"
+    # grant, so a Read call onto the same path stays uncovered.
+    target = tmp_path / "foo.py"
+    target.write_text("x")
+    grants = StageGrants(allow=[RuleGrant(rule=f"Edit(//{target})", provenance="declared")])
+    assert not grant_covers_call(grants, "Read", {"file_path": str(target)})
+
+
 # --- (3) effective_tuple() order-independence -------------------------------
 
 
@@ -313,8 +353,49 @@ def test_cmd_stage_grants_reports_derived_dr_o_for_stage_one(store, fixtures_dir
     _to_executing(store, sid, fixtures_dir)
     directive = cli.cmd_stage_grants(ns(session=sid, stage=1, json=True), store=store)
     assert directive.ok
-    derived_rules = {e.get("rule") for e in directive.data["grants"]["derived"]}
+    # Flat list, not a {"declared": [...], "derived": [...]} nesting -- each
+    # entry names its own kind via "provenance" instead.
+    entries = directive.data["grants"]
+    assert isinstance(entries, list)
+    derived_rules = {
+        e.get("rule") for e in entries
+        if str(e.get("provenance", "")).startswith("derived:")
+    }
     assert "Bash(python3 mod.py:*)" in derived_rules
+    matching = [e for e in entries if e.get("rule") == "Bash(python3 mod.py:*)"]
+    assert matching and matching[0]["provenance"] == "derived:DR-O"
+
+
+def test_stage_grant_entries_empty_when_snapshot_bytes_dont_match_stamped_hash(store, fixtures_dir):
+    # A tampered/corrupted snapshot must fail CLOSED -- no declared, no derived
+    # entries -- rather than trust bytes that no longer match what was hashed
+    # at approval time.
+    sid = "stage-grants-tampered-snapshot"
+    _to_executing(store, sid, fixtures_dir)
+    state = store.load(sid)
+    assert state.plan_snapshot_path and state.plan_snapshot_hash
+    with open(state.plan_snapshot_path, "a", encoding="utf-8") as f:
+        f.write("\n# tampered\n")
+
+    declared, derived, dropped = cli._stage_grant_entries(state, 1)
+    assert declared == []
+    assert derived == []
+    assert dropped == []
+
+
+def test_stage_grant_entries_derived_empty_when_approved_grants_sha256_stale(store, fixtures_dir):
+    # The live re-derivation must re-hash to `approved_grants_sha256` before
+    # a derived entry is trusted -- a stale/mismatched digest (materialization
+    # code changed underneath the approval, or state corruption) drops every
+    # derived entry even though the snapshot itself is intact.
+    sid = "stage-grants-stale-approved-hash"
+    _to_executing(store, sid, fixtures_dir)
+    state = store.load(sid)
+    assert state.approved_grants_sha256
+    state.approved_grants_sha256 = "0" * 64
+
+    _declared, derived, _dropped = cli._stage_grant_entries(state, 1)
+    assert derived == []
 
 
 def test_cmd_resolve_permission_scope_stage_records_runtime_rule_grant(store, fixtures_dir):

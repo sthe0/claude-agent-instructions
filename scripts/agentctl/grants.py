@@ -84,7 +84,7 @@ class StageGrants:
         grant sets for GROWTH (diff_plans' substantive check) without
         caring about provenance-label churn or declaration order."""
         return (
-            frozenset((r.rule) for r in self.allow),
+            frozenset(r.rule for r in self.allow),
             frozenset((a.path, a.mode) for a in self.add_dirs),
             self.permission_mode,
         )
@@ -126,8 +126,13 @@ _WRITE_CAPABLE_PROGRAMS = frozenset(
     {"tee", "cp", "mv", "sed", "dd", "install", "rsync", "ln", "truncate", "touch"}
 )
 
+# Bare interpreter/launcher without a script (or `-m module`) operand:
+# `python3` alone, `bash` alone, `sh` alone — refused, since such a rule
+# would grant an unbounded interactive-equivalent invocation surface.
+_INTERPRETERS = frozenset({"bash", "sh", "zsh", "python", "python3", "node", "ruby", "perl"})
 
-def _rule_program_and_arg(rule: str) -> tuple[str, str] | None:
+
+def rule_program_and_arg(rule: str) -> tuple[str, str] | None:
     """Parse `Tool(arg)` into `(Tool, arg)`; `None` if the shape doesn't
     match (the validator refuses anything that doesn't parse this way)."""
     if "(" not in rule or not rule.endswith(")"):
@@ -137,7 +142,7 @@ def _rule_program_and_arg(rule: str) -> tuple[str, str] | None:
     return tool.strip(), arg
 
 
-def _bash_command_from_rule_arg(arg: str) -> str:
+def bash_command_from_rule_arg(arg: str) -> str:
     """A `Bash(<command>[:*])` rule's argument, with a trailing `:*`
     wildcard suffix stripped — the wildcard means "this command and any
     arguments", not a literal character to tokenize."""
@@ -154,7 +159,7 @@ def validate_rule(rule: str) -> None:
     if not isinstance(rule, str) or not rule.strip():
         raise GrantValidationError(f"empty or non-string rule: {rule!r}")
 
-    parsed = _rule_program_and_arg(rule)
+    parsed = rule_program_and_arg(rule)
     if parsed is None:
         raise GrantValidationError(
             f"rule {rule!r} is not of the form Tool(arg) — refused for lack of a "
@@ -168,7 +173,7 @@ def validate_rule(rule: str) -> None:
         return
 
     wildcard = arg.endswith(":*")
-    command = _bash_command_from_rule_arg(arg)
+    command = bash_command_from_rule_arg(arg)
     if not command.strip():
         raise GrantValidationError(f"rule {rule!r} names no command")
 
@@ -217,7 +222,7 @@ def validate_rule(rule: str) -> None:
     if widening_targets.is_crontab_target(command):
         raise GrantValidationError(f"rule {rule!r} invokes crontab — a launch surface — refused")
 
-    stripped = widening_targets._strip_wrappers(tokens)
+    stripped = widening_targets.strip_wrappers(tokens)
     if not stripped:
         # A leading wrapper/launcher run (env, timeout, npx, exec, nohup,
         # command, ...) that consumes the entire token list leaves no program
@@ -227,14 +232,10 @@ def validate_rule(rule: str) -> None:
         raise GrantValidationError(
             f"rule {rule!r} is a bare wrapper/launcher with no operand — refused"
         )
-    prog = widening_targets._program_name(stripped[0])
+    prog = widening_targets.program_name(stripped[0])
     operand_tokens = stripped[1:]
 
-    # Bare interpreter/launcher without a script (or `-m module`) operand:
-    # `python3` alone, `bash` alone, `sh` alone — refused, since such a rule
-    # would grant an unbounded interactive-equivalent invocation surface.
-    _INTERPRETERS = frozenset({"bash", "sh", "zsh", "python", "python3", "node", "ruby", "perl"})
-    is_interpreter = prog in _INTERPRETERS or widening_targets._INTERPRETER_RE.match(prog)
+    is_interpreter = prog in _INTERPRETERS or widening_targets.INTERPRETER_RE.match(prog)
     if is_interpreter and not operand_tokens:
         raise GrantValidationError(
             f"rule {rule!r} is a bare interpreter/launcher with no script operand — refused"
@@ -365,7 +366,8 @@ def validate_grants(grants: StageGrants) -> None:
 
 # --- derivation ---------------------------------------------------------------
 
-_SEGMENT_SPLIT_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", "|&"})
+_TWO_CHAR_SEGMENT_SEPARATORS = frozenset({"&&", "||", "|&"})
+_ONE_CHAR_SEGMENT_SEPARATORS = frozenset({";", "|", "&"})
 
 
 def _is_unresolvable_segment(seg: str) -> bool:
@@ -379,20 +381,61 @@ def _raw_top_level_segments(command: str) -> list[str] | None:
     stripping a leading `!` from each and dropping empty ones. `None` on a
     lex failure (unbalanced quote). Every segment is returned, resolvable
     or not — the two callers below disagree on what an unresolvable
-    segment MEANS, so neither policy lives here."""
-    try:
-        tokens = shell_tokens.separator_exact_split(command)
-    except ValueError:
+    segment MEANS, so neither policy lives here.
+
+    Walks the (newline-normalized) text character-by-character and slices
+    ORIGINAL substrings between top-level separators, rather than
+    reconstructing segment text from `shell_tokens.separator_exact_split`'s
+    token stream. That tokenizer's posix-mode quote stripping is exactly
+    right for word-boundary detection but wrong here: rejoining its
+    unquoted tokens discards the very quotes that made a `;`/`|`/`&`
+    inside a quoted argument (e.g. `python -c 'import mod; assert
+    True'`) inert, so a DR-V rule built from that reconstructed text
+    (`Bash(python -c import mod; assert True:*)`) came back through this
+    same function on a later validation pass looking like a genuine
+    2-segment compound command and was wrongly refused. Slicing spans of
+    the original text keeps a quoted separator's quotes intact in the
+    returned segment, so it is never re-split on that later pass."""
+    text = shell_tokens.normalize_newline_separators(command)
+    n = len(text)
+    i = 0
+    quote: str | None = None
+    seg_start = 0
+    raw_segments: list[str] = []
+    while i < n:
+        c = text[i]
+        if quote:
+            if c == "\\" and quote == '"' and i + 1 < n:
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if c in "'\"":
+            quote = c
+            i += 1
+            continue
+        if text[i:i + 2] in _TWO_CHAR_SEGMENT_SEPARATORS:
+            raw_segments.append(text[seg_start:i])
+            i += 2
+            seg_start = i
+            continue
+        if c in _ONE_CHAR_SEGMENT_SEPARATORS:
+            raw_segments.append(text[seg_start:i])
+            i += 1
+            seg_start = i
+            continue
+        i += 1
+    if quote is not None:
         return None
-    segments: list[list[str]] = [[]]
-    for tok in tokens:
-        if tok in _SEGMENT_SPLIT_SEPARATORS:
-            segments.append([])
-        else:
-            segments[-1].append(tok)
+    raw_segments.append(text[seg_start:])
     out = []
-    for seg_tokens in segments:
-        seg = " ".join(seg_tokens).strip()
+    for seg in raw_segments:
+        seg = seg.strip()
         if seg.startswith("!"):
             seg = seg[1:].strip()
         if seg:
@@ -551,8 +594,20 @@ def grant_covers_call(grants: StageGrants, tool_name: str, tool_input: dict) -> 
 
 def _resolve_for_match(path: str) -> str | None:
     """Normalize `..`/`.` segments and resolve symlinks before matching a
-    file-tool path against a glob/add_dir. An unresolvable path (one whose
-    components cannot be stat'd) is treated as unmatched by the caller."""
+    file-tool path against a glob/add_dir. `resolve(strict=False)` never
+    raises for a path that merely doesn't exist yet — only a resolution
+    failure with another cause (e.g. a symlink loop) raises and is treated
+    as unmatched by the caller.
+
+    A path under any `.git` directory is also treated as unmatched — a
+    broad in-venue add_dir must never be read as silently covering repo
+    internals (git hooks are an executable, supply-chain-relevant
+    surface), regardless of which repo it is. A path under a protected
+    `~/.claude`/agentctl-state root is likewise unmatched, but that check
+    is scoped to the specific protected roots `widening_targets` names —
+    NOT any `.claude` path component in general, since a project's own
+    `.claude/agent-memory/` is a legitimate write target a stage may be
+    explicitly granted."""
     from pathlib import Path
 
     try:
@@ -562,7 +617,9 @@ def _resolve_for_match(path: str) -> str | None:
         return None
     resolved_str = str(resolved)
     parts = resolved_str.split("/")
-    if ".git" in parts or ".claude" in parts:
+    if ".git" in parts:
+        return None
+    if widening_targets.add_dir_under_protected_root(resolved_str):
         return None
     return resolved_str
 
@@ -572,11 +629,13 @@ def _path_call_covered(grants: StageGrants, tool_name: str, path: str) -> bool:
     if resolved is None:
         return False
     for r in grants.allow:
-        parsed = _rule_program_and_arg(r.rule)
+        parsed = rule_program_and_arg(r.rule)
         if parsed is None:
             continue
         tool, arg = parsed
-        if tool != tool_name:
+        if tool != tool_name and not (
+            tool == "Edit" and tool_name in ("Write", "NotebookEdit")
+        ):
             continue
         rule_path = arg[2:] if arg.startswith("//") else arg
         rule_resolved = _resolve_for_match(rule_path)
@@ -616,10 +675,10 @@ def _bash_call_covered(grants: StageGrants, command: str) -> bool:
 
 def _segment_covered(grants: StageGrants, segment: str) -> bool:
     for r in grants.allow:
-        parsed = _rule_program_and_arg(r.rule)
+        parsed = rule_program_and_arg(r.rule)
         if parsed is None or parsed[0] != "Bash":
             continue
-        rule_command = _bash_command_from_rule_arg(parsed[1])
+        rule_command = bash_command_from_rule_arg(parsed[1])
         wildcard = parsed[1].endswith(":*")
         if wildcard:
             if segment == rule_command or segment.startswith(rule_command + " "):

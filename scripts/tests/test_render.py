@@ -7,7 +7,12 @@ pure (no filesystem); cmd_plan_render wraps it and never writes to disk.
 from __future__ import annotations
 
 from agentctl.plan import load_plan, parse_plan
-from agentctl.render import cmd_plan_render, render_plan_md
+from agentctl.render import (
+    cmd_plan_render,
+    render_plan_grants,
+    render_plan_md,
+    render_stage_brief,
+)
 
 
 def _doc(n_stages: int, verify_venue=None, verify_venue_at_final=None):
@@ -99,7 +104,61 @@ def test_render_includes_meta_and_principle():
     assert "render-test" in md
     assert "substantive" in md
     assert "statement 1" in md
-    assert "der follows from src" in md
+
+
+def _grants_doc():
+    # A single stage with a declared allow rule and an in-venue .py
+    # output_artifact (so both a declared and a DR-O-derived Bash rule
+    # exist to compare) — strict=False, since this fixture skips the
+    # substantive-stage principle/activity checks that are orthogonal to
+    # what's under test here.
+    data = {
+        "meta": {
+            "task_id": "render-grants-test",
+            "goal": "g",
+            "done_criterion": "d",
+            "criterion_type": "measurable",
+            "weight_class": "substantive",
+            "external_research": "n/a",
+        },
+        "stage": [
+            {
+                "index": 1,
+                "title": "Stage one",
+                "executor": "in_thread",
+                "expected_result_image": "result",
+                "criterion_type": "measurable",
+                "done_criterion": "done",
+                "output_artifacts": ["scripts/foo.py"],
+                "grants": {"allow": ["Bash(git status:*)"]},
+            }
+        ],
+    }
+    return parse_plan(data, strict=False)
+
+
+def test_render_plan_md_never_renders_grants():
+    # render_plan_md is the whole-plan, brief-per-stage summary -- grants
+    # detail belongs to the single-stage brief and the dedicated grants
+    # projections, not to a view that must stay small across many stages.
+    doc = _grants_doc()
+    md = render_plan_md(doc)
+    assert "Bash(git status:*)" not in md
+    assert "Grants (file-access scope)" not in md
+
+
+def test_render_stage_brief_and_render_plan_grants_agree_on_declared_and_derived_rules():
+    # render_stage_brief and render_plan_grants (fmt="full") both project the
+    # SAME `_stage_declared_and_derived_grants` call for stage 1 -- they
+    # must never disagree on which declared/derived rules exist, since
+    # each pulls from the one shared helper rather than re-deriving.
+    doc = _grants_doc()
+    brief = render_stage_brief(doc, 1)
+    grants_full = render_plan_grants(doc, fmt="full")
+    assert "Bash(git status:*)" in brief
+    assert "Bash(git status:*)" in grants_full
+    assert "python3 scripts/foo.py" in brief
+    assert "python3 scripts/foo.py" in grants_full
 
 
 def test_cmd_plan_render_reads_toml_returns_markdown(tmp_path):

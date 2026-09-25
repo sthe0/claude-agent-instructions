@@ -193,7 +193,7 @@ def add_dir_under_protected_root(path: str) -> bool:
 # --- claude / agentctl program detection ------------------------------------
 
 _WRAPPER_TOKENS = frozenset({"env", "npx", "exec", "nohup", "timeout", "command"})
-_INTERPRETER_RE = re.compile(r"^python[0-9.]*$")
+INTERPRETER_RE = re.compile(r"^python[0-9.]*$")
 
 # agentctl subcommands that exercise USER authority — approving a plan,
 # resolving a permission request, closing out a session, etc. A grant that
@@ -214,7 +214,7 @@ AGENTCTL_USER_AUTHORITY_VERBS = frozenset({
 })
 
 
-def _strip_wrappers(tokens: list[str]) -> list[str]:
+def strip_wrappers(tokens: list[str]) -> list[str]:
     """Drop a leading run of wrapper tokens (`env FOO=bar`, `npx`, `exec`,
     `nohup`, `timeout 30`, `command`) so the real program name surfaces.
     `env` consumes any leading `KEY=VALUE` assignments and a `-i`/`-u NAME`
@@ -242,7 +242,7 @@ def _strip_wrappers(tokens: list[str]) -> list[str]:
     return tokens[i:]
 
 
-def _program_name(token: str) -> str:
+def program_name(token: str) -> str:
     """The basename of a program token, stripping a leading absolute/relative
     path so `/usr/bin/python3`, `./scripts/agentctl-cli.py`, and `python3`
     are all recognized the same way."""
@@ -252,10 +252,10 @@ def _program_name(token: str) -> str:
 def is_claude_program(tokens: list[str]) -> bool:
     """True iff, after stripping wrapper tokens, the leading program token is
     `claude` in any spelling (bare, absolute path, or via a wrapper)."""
-    stripped = _strip_wrappers(tokens)
+    stripped = strip_wrappers(tokens)
     if not stripped:
         return False
-    return _program_name(stripped[0]) == "claude"
+    return program_name(stripped[0]) == "claude"
 
 
 def agentctl_invocation_verb(tokens: list[str]) -> tuple[bool, str | None]:
@@ -276,15 +276,15 @@ def agentctl_invocation_verb(tokens: list[str]) -> tuple[bool, str | None]:
     venv-path interpreter like `/home/x/.venv/bin/python3`), not only the
     literal `python3` spelling, so a grant cannot dodge this refusal by
     naming a differently-versioned or venv-relative interpreter."""
-    stripped = _strip_wrappers(tokens)
+    stripped = strip_wrappers(tokens)
     if not stripped:
         return False, None
-    prog = _program_name(stripped[0])
+    prog = program_name(stripped[0])
     rest = stripped[1:]
-    if _INTERPRETER_RE.match(prog):
+    if INTERPRETER_RE.match(prog):
         if len(rest) >= 1 and rest[0] == "-m" and len(rest) >= 2 and rest[1] == "agentctl":
             return True, (rest[2] if len(rest) >= 3 else None)
-        if rest and _program_name(rest[0]).endswith("agentctl-cli.py"):
+        if rest and program_name(rest[0]).endswith("agentctl-cli.py"):
             return True, (rest[1] if len(rest) >= 2 else None)
         return False, None
     if prog.endswith("agentctl-cli.py"):
@@ -332,16 +332,16 @@ def is_settings_channel_program(tokens: list[str]) -> bool:
     basename is a known settings-channel program — matched regardless of an
     interpreter prefix (`bash apply-settings.sh`), a relative or absolute
     path, or further arguments."""
-    stripped = _strip_wrappers(tokens)
+    stripped = strip_wrappers(tokens)
     if not stripped:
         return False
-    prog = _program_name(stripped[0])
+    prog = program_name(stripped[0])
     if prog in SETTINGS_CHANNEL_PROGRAMS:
         return True
     # `bash <script>` / `sh <script>`: the interpreter is the leading token,
     # the script is the next one.
     if prog in ("bash", "sh") and len(stripped) >= 2:
-        return _program_name(stripped[1]) in SETTINGS_CHANNEL_PROGRAMS
-    if _INTERPRETER_RE.match(prog) and len(stripped) >= 2:
-        return _program_name(stripped[1]) in SETTINGS_CHANNEL_PROGRAMS
+        return program_name(stripped[1]) in SETTINGS_CHANNEL_PROGRAMS
+    if INTERPRETER_RE.match(prog) and len(stripped) >= 2:
+        return program_name(stripped[1]) in SETTINGS_CHANNEL_PROGRAMS
     return False

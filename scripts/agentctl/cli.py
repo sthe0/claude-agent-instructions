@@ -2896,8 +2896,6 @@ def _record_plan_presentation(state: SessionState, presentation: PlanPresentatio
 _PLAN_PRESENTATION_STAGE_ANCHOR_RE = re.compile(r"^\[stage (\d+)\]", re.MULTILINE)
 
 
-
-
 def _plan_presentation_skeleton(stages: list[Stage]) -> str:
     """Deterministic `full`-rendering skeleton: one `[stage N] <title>` anchor
     line per stage, in plan order. present-plan's completeness check parses
@@ -3006,7 +3004,7 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
         # perception, not checked here; `essence` has no analogous check at all
         # (free-form by design — a stage-enumerated essence would just be `full`).
         try:
-            doc = load_plan(state.plan_path)
+            doc = load_plan(target)
         except Exception as exc:
             return Directive(False, state.node, "noop", f"cannot load plan: {exc}")
         expected = {s.index for s in doc.stages}
@@ -3048,8 +3046,8 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
         _fold_pres_bag = state.plugins.get("premise")
         if _fold_pres_bag is not None:
             try:
-                _fold_pres_doc = load_plan(state.plan_path)
-                if _fold_enumeration_sidecar(state, _fold_pres_doc, state.plan_path):
+                _fold_pres_doc = load_plan(target)
+                if _fold_enumeration_sidecar(state, _fold_pres_doc, target):
                     store.save(state)
             except (OSError, PlanError):
                 # The same load-plan failure modes every other `load_plan` call site
@@ -3086,7 +3084,7 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
         # plan that grants anything must show the reader what, right here,
         # not only in the on-request `full`/`plan-grants` detail view.
         try:
-            _grants_doc = load_plan(state.plan_path)
+            _grants_doc = load_plan(target)
         except (OSError, PlanError):
             _grants_doc = None  # surfaced already by the coverage/anchor checks above
         if _grants_doc is not None and plan_has_any_grants(_grants_doc):
@@ -4742,12 +4740,12 @@ def _rule_line_to_call(rule: str) -> tuple[str, dict] | None:
     string into the `(tool_name, tool_input)` pair `grants.grant_covers_call`
     checks -- the inverse of how a derived/declared rule names a call. Unparseable
     -> None, which `grant_covers_call`'s caller must treat as NOT covered."""
-    parsed = _grants._rule_program_and_arg(rule)
+    parsed = _grants.rule_program_and_arg(rule)
     if parsed is None:
         return None
     tool, arg = parsed
     if tool == "Bash":
-        return "Bash", {"command": _grants._bash_command_from_rule_arg(arg)}
+        return "Bash", {"command": _grants.bash_command_from_rule_arg(arg)}
     if tool in ("Edit", "Write", "Read", "NotebookEdit"):
         path = arg[2:] if arg.startswith("//") else arg
         return tool, {"file_path": path}
@@ -5030,28 +5028,33 @@ def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -
         e for e in state.runtime_grants.get(str(stage_index), [])
         if not e.get("consumed")
     ]
+    # Flat, not {"declared": [...], "derived": [...], "runtime": [...]} -- every
+    # entry already carries its own "provenance" (RuleGrant/AddDirGrant.to_dict,
+    # and the runtime constructors in this file, all stamp it), so a second,
+    # positional grouping on top just gives callers two disagreeing ways to ask
+    # "what kind of grant is this" and invites them to drift apart.
+    all_entries = declared_entries + derived_entries + runtime_entries
 
     data = {
         "stage": stage_index,
         "executor": stage.actor.executor,
-        "grants": {
-            "declared": declared_entries,
-            "derived": derived_entries,
-            "runtime": runtime_entries,
-        },
+        "grants": all_entries,
         "dropped": dropped,
     }
     if getattr(args, "json", False):
         text = json.dumps(data, indent=2, sort_keys=True)
     else:
         lines = [f"Stage {stage_index} ({stage.actor.executor}):"]
-        for label in ("declared", "derived", "runtime"):
-            entries = data["grants"][label]
+        for label, entries in (
+            ("declared", declared_entries),
+            ("derived", derived_entries),
+            ("runtime", runtime_entries),
+        ):
             if not entries:
                 continue
             rendered = ", ".join(e.get("rule") or f"{e.get('path')}:{e.get('mode')}" for e in entries)
             lines.append(f"  {label}: {rendered}")
-        if not (declared_entries or derived_entries or runtime_entries):
+        if not all_entries:
             lines.append("  (no grants)")
         text = "\n".join(lines) + "\n"
     return Directive(True, state.node, "inspect", text, data=data)

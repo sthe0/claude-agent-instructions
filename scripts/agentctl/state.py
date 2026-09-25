@@ -1611,11 +1611,16 @@ class SessionState:
     #   runtime_grants            str(stage_index) -> list of RuleGrant/AddDirGrant
     #                              dicts (provenance "runtime") resolve-permission has
     #                              granted for that stage during THIS execution. Keyed
-    #                              by index, not title: a substantive replan that
-    #                              retitles or renumbers a stage is exactly the case
-    #                              that should NOT silently carry a runtime grant
-    #                              forward onto a stage the user never saw it granted
-    #                              for the diff_plans is drawing over the NEW plan.
+    #                              by index for lookup, but each entry also stamps the
+    #                              stage_title it was granted under; a substantive
+    #                              replan that renumbers stages re-keys every entry to
+    #                              whichever new-snapshot stage shares that title (see
+    #                              `_rekey_runtime_grants`, run on every `approve`) —
+    #                              zero or several title matches drops the entry rather
+    #                              than guessing, since only THAT case (the stage the
+    #                              grant was about no longer has a stable identity in
+    #                              the new plan) is where silently carrying it forward
+    #                              would misattribute it.
     #   approved_grants_sha256    sha256 of the effective (declared+derived) grant set
     #                              hashed at the last successful `approve`, over the
     #                              plan snapshot approve just froze. `stage-grants` only

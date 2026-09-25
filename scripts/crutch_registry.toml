@@ -1909,14 +1909,6 @@ disposition = "keep"
 ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
 
 [[entry]]
-id = "2019a1f09d3f6d71"
-domain = "code"
-file = "scripts/lib/widening_targets.py"
-class = "structural"
-disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
-
-[[entry]]
 id = "01d3ea4d822b553b"
 domain = "code"
 file = "scripts/lib/widening_targets.py"
@@ -1942,6 +1934,14 @@ ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifie
 
 [[entry]]
 id = "9e55e87d7f0653ad"
+domain = "code"
+file = "scripts/lib/widening_targets.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+
+[[entry]]
+id = "e7779b82d2f937ca"
 domain = "code"
 file = "scripts/lib/widening_targets.py"
 class = "structural"
@@ -4008,6 +4008,38 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "ea780790304c88ce"
 domain = "code"
 file = "scripts/tests/test_dispatch_semantics.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "a4323dda80d97a66"
+domain = "code"
+file = "scripts/tests/test_dispatch_settings_drift.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "c1ccc2dd6ee3854b"
+domain = "code"
+file = "scripts/tests/test_dispatch_settings_drift.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "c57c6803f46c2b58"
+domain = "code"
+file = "scripts/tests/test_dispatch_settings_drift.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "81e20b338002129f"
+domain = "code"
+file = "scripts/tests/test_dispatch_settings_drift.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -10848,6 +10880,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "cfab3c8a3d8905b4"
 domain = "code_file_rollup"
 file = "scripts/tests/test_dispatch_semantics.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "f1ce8ee4267aa8c5"
+domain = "code_file_rollup"
+file = "scripts/tests/test_dispatch_settings_drift.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

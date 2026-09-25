@@ -77,6 +77,18 @@ def test_dr_v_strips_leading_bang():
     assert "Bash(git diff --stat:*)" in _rules(grants)
 
 
+def test_dr_v_preserves_quoted_separator_as_one_segment():
+    # A `;` inside a single-quoted argument is inert to the shell -- DR-V must
+    # keep the quotes in the derived rule text so a later validate_rule pass
+    # over that SAME text does not mistake it for a real segment boundary and
+    # refuse the rule as a "compound command" (regression: the derived rule
+    # used to be built from quote-stripped, rejoined tokens).
+    stage = _stage(verify_command="python -c 'import mod; assert True'")
+    grants, dropped = derive_stage_grants(stage, venue="/repo")
+    assert "Bash(python -c 'import mod; assert True':*)" in _rules(grants)
+    assert not dropped
+
+
 def test_dr_v_drops_unresolvable_segment():
     stage = _stage(verify_command="echo $FOO")
     grants, dropped = derive_stage_grants(stage, venue="/repo")
@@ -86,6 +98,35 @@ def test_dr_v_drops_unresolvable_segment():
 
 def test_dr_v_absent_when_no_verify_command():
     stage = _stage(verify_command=None)
+    grants, dropped = derive_stage_grants(stage, venue="/repo")
+    assert not _rules(grants)
+    assert not dropped
+
+
+def test_dr_v_drops_redirection_segment():
+    # `>` names a write target this function cannot read off the text alone
+    # -- same "unresolvable" bucket as a `$`/backtick expansion, never proposed.
+    stage = _stage(verify_command="python3 -m pytest scripts/tests > out.txt")
+    grants, dropped = derive_stage_grants(stage, venue="/repo")
+    assert not _rules(grants)
+    assert not dropped
+
+
+def test_dr_v_proposes_each_segment_of_a_cd_and_command_chain():
+    # `cd` has no special status in this function -- it is just another
+    # resolvable segment, and each side of `&&` gets its own Bash(...) rule.
+    stage = _stage(verify_command="cd scripts && python3 -m pytest tests")
+    grants, _dropped = derive_stage_grants(stage, venue="/repo")
+    rules = _rules(grants)
+    assert "Bash(cd scripts:*)" in rules
+    assert "Bash(python3 -m pytest tests:*)" in rules
+
+
+def test_dr_v_proposes_nothing_for_an_unbalanced_quote():
+    # A lex failure makes `_raw_top_level_segments` return None -- derivation
+    # must fail silent (no rule, no dropped-entry noise) rather than guess at
+    # segments it could not actually parse.
+    stage = _stage(verify_command="echo 'unterminated")
     grants, dropped = derive_stage_grants(stage, venue="/repo")
     assert not _rules(grants)
     assert not dropped

@@ -21,6 +21,21 @@ from .directive import Directive
 from .plan import PlanDoc, _venue_for, grants_sha256, load_plan
 
 
+def _stage_declared_and_derived_grants(s, venue: str):
+    """A stage's declared grants (an empty `StageGrants` when the stage
+    authors none) plus its derived grants and dropped-entry list — the one
+    place that pairs a stage with `grants.derive_stage_grants`'s
+    venue-scoped output, shared by `render_stage_brief`, `render_plan_grants`,
+    and `cmd_plan_grants` so the three projections can never drift apart
+    on how a stage's effective grant set is computed. `render_plan_md`
+    (the whole-plan, brief-per-stage view) never renders grants at all —
+    that detail belongs to the single-stage brief and the dedicated
+    grants projections, not to the summary of every stage at once."""
+    declared = s.grants if getattr(s, "grants", None) else _grants.StageGrants()
+    derived, dropped = _grants.derive_stage_grants(s, venue=venue)
+    return declared, derived, dropped
+
+
 def render_plan_md(doc: PlanDoc) -> str:
     """Pure: a PlanDoc -> a markdown prose view. Renders every stage in order."""
     m = doc.meta
@@ -258,8 +273,9 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
             lines.append(f"  - {edge}")
     if s.control:
         lines.append(f"- **Control (prior attestation):** {s.control}")
-    declared_grants = s.grants if getattr(s, "grants", None) else _grants.StageGrants()
-    derived_grants, _dropped = _grants.derive_stage_grants(s, venue=_venue_for(doc))
+    declared_grants, derived_grants, _dropped = _stage_declared_and_derived_grants(
+        s, _venue_for(doc)
+    )
     declared_rules = [r.rule for r in declared_grants.allow]
     declared_dirs = [f"{a.path}:{a.mode}" for a in declared_grants.add_dirs]
     derived_rules = [r.rule for r in derived_grants.allow]
@@ -321,8 +337,7 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
     venue = _venue_for(doc)
     lines: list[str] = []
     for s in doc.stages:
-        declared = s.grants if getattr(s, "grants", None) else _grants.StageGrants()
-        derived, dropped = _grants.derive_stage_grants(s, venue=venue)
+        declared, derived, dropped = _stage_declared_and_derived_grants(s, venue)
         declared_rules = [r.rule for r in declared.allow]
         declared_dirs = [f"{a.path}:{a.mode}" for a in declared.add_dirs]
         dr_v = [r.rule for r in derived.allow if r.provenance == "derived:DR-V"]
@@ -384,8 +399,7 @@ def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:
         venue = _venue_for(doc)
         stages = {}
         for s in doc.stages:
-            declared = s.grants if getattr(s, "grants", None) else _grants.StageGrants()
-            derived, dropped = _grants.derive_stage_grants(s, venue=venue)
+            declared, derived, dropped = _stage_declared_and_derived_grants(s, venue)
             stages[str(s.index)] = {
                 "declared": declared.to_dict(),
                 "derived": derived.to_dict(),
