@@ -51,18 +51,62 @@ def test_check_permission_denied_on_nonzero_exit():
 
 # --- dispatch routing -------------------------------------------------------
 
-def test_already_granted_continues_without_parking(store, fixtures_dir):
+def test_global_checker_grant_never_skips_the_ask(store, fixtures_dir):
+    """A permissions-cli global grant is checked (its own audit row is still
+    written) but its answer no longer auto-continues the spawn: that grant never
+    reaches the child's --settings/--add-dir, so the old skip just re-spawned into
+    the identical denial. Absent any materialized (declared/derived/runtime) grant
+    covering the action, dispatch still parks and asks."""
     _to_executing(store, "p1", fixtures_dir)
     d = _dispatch(store, "p1", "PERMISSION-REQUEST: deploy to staging\n",
                   perm_checker=lambda action: True)
     assert d.ok is True
-    assert d.action == "continue_spawn"
+    assert d.action == "ask_user_permission"
     assert d.marker == "PERMISSION-REQUEST"
     assert d.data["action"] == "deploy to staging"
-    assert "GRANTED" in d.data["continuation"]
-    # nothing parked — the gate was a no-op
-    assert store.load("p1").permission_request is None
+    parked = store.load("p1").permission_request
+    assert parked is not None
+    assert parked.action == "deploy to staging"
     assert d.node == Node.EXECUTING.value
+    misses = store.load("p1").planning_misses
+    assert len(misses) == 1
+    assert misses[0]["asked_user"] is True
+    assert misses[0]["source"] == "permission-request"
+    assert misses[0]["stage_index"] == 1
+
+
+def test_self_reported_rule_line_covered_by_runtime_grant_is_materialization_defect(
+        store, fixtures_dir):
+    """A PERMISSION-REQUEST whose body carries a `Rule:` line already covered by the
+    stage's effective grant set (here: a runtime grant) is a materialization
+    defect — the grant existed, the child's own settings just didn't carry it — so
+    the stage is recorded FAILED and the session routed straight to DIAGNOSING, no
+    re-ask, no re-dispatch."""
+    _to_executing(store, "p6", fixtures_dir)
+    state = store.load("p6")
+    state.runtime_grants["1"] = [
+        {"rule": "Bash(git push origin release:*)", "provenance": "runtime",
+         "consumed": False, "stage_title": state.stage(1).title},
+    ]
+    store.save(state)
+    d = _dispatch(
+        store, "p6",
+        "PERMISSION-REQUEST: push to release branch\nRule: Bash(git push origin release:*)\n",
+        perm_checker=lambda action: False,
+    )
+    assert d.ok is False
+    assert d.action == "declare"
+    assert d.marker == "OVERCOME-DIFFICULTY"
+    after = store.load("p6")
+    assert after.node == Node.DIAGNOSING.value
+    assert after.permission_request is None
+    assert after.stage(1).outcome.status == "FAILED"
+    assert len(after.materialization_defects) == 1
+    assert after.materialization_defects[0]["evidence"] == "self-reported"
+    assert after.materialization_defects[0]["stage_index"] == 1
+    assert after.difficulty is not None
+    assert after.difficulty.declaration is not None
+    assert not after.planning_misses  # covered -> never counted as a miss
 
 
 def test_ungranted_parks_and_asks(store, fixtures_dir):

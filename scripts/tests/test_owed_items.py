@@ -81,7 +81,7 @@ def test_gates_gained_no_new_blocker_for_the_record_only_scale():
     from agentctl import gates
 
     names = [n for n, _ in inspect.getmembers(gates, inspect.isfunction) if n.endswith("_blockers")]
-    assert len(names) == 18, f"expected 18 *_blockers functions, found {len(names)}: {sorted(names)}"
+    assert len(names) == 19, f"expected 19 *_blockers functions, found {len(names)}: {sorted(names)}"
 
 
 def test_engine_probe_record_only_never_blocks_and_other_scales_stay_live():

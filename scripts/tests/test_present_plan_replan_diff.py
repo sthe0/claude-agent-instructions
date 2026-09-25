@@ -14,6 +14,8 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli
+from agentctl.plan import load_plan
+from agentctl.render import render_plan_grants
 from agentctl.state import AUTHORIZE_REPLAN_MARKER
 
 
@@ -44,6 +46,14 @@ def _to_plan_ready(store, sid, plan) -> None:
     )
     cli.cmd_plan(ns(session=sid), store=store)
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
+
+
+def _grants_block(plan_path) -> str:
+    """The compact grants block cmd_present_plan(kind="essence") requires verbatim
+    in the rendering text whenever the plan has any declared or derived grant --
+    plan_two_stage.toml derives DR-O/DR-E entries from its stages' output_artifact
+    and executor even though it declares no [stage.grants] block itself."""
+    return render_plan_grants(load_plan(plan_path), fmt="compact").strip()
 
 
 def _write_rendering(tmp_path, text, name="rendering.txt") -> str:
@@ -216,7 +226,8 @@ def test_essence_and_replan_diff_receipts_coexist_independently(
     _to_plan_ready(store, sid, plan)
 
     _pass_review(store, sid, plan)
-    essence_rendering = _write_rendering(tmp_path, "Essence.", name="essence.txt")
+    essence_rendering = _write_rendering(
+        tmp_path, "Essence.\n" + _grants_block(plan), name="essence.txt")
     d_essence = cli.cmd_present_plan(
         ns(session=sid, kind="essence", plan=None, rendering_file=essence_rendering,
            emit_skeleton=False),
@@ -246,7 +257,7 @@ def test_confirm_delivery_replan_diff_not_satisfied_by_essence_receipt(
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     _pass_review(store, sid, plan)
-    rendering = _write_rendering(tmp_path, "Essence.")
+    rendering = _write_rendering(tmp_path, "Essence.\n" + _grants_block(plan))
     d_present = cli.cmd_present_plan(
         ns(session=sid, kind="essence", plan=None, rendering_file=rendering,
            emit_skeleton=False),

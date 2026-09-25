@@ -66,7 +66,7 @@ def enumerate_live_settings(child_cwd: str | None, root_cwd: str | None) -> list
     `.claude` directories (e.g. a sibling checkout) — this is a drift
     record of the locations THIS dispatch could plausibly affect, not a
     system-wide settings audit. Sorted, deduplicated by resolved path."""
-    dirs: list[Path] = [config_root.agent_home(), Path.home() / ".claude"]
+    dirs: list[Path] = [config_root.agent_home(), config_root.harness_config_root()]
     for cwd in (child_cwd, root_cwd):
         if cwd:
             dirs.append(Path(cwd) / ".claude")
@@ -144,7 +144,7 @@ def protected_roots() -> list[str]:
     return [
         _norm(str(Path.home())),
         _norm(str(config_root.agent_home())),
-        _norm(str(Path.home() / ".claude")),
+        _norm(str(config_root.harness_config_root())),
         _norm(str(config_root.agentctl_state_dir())),
     ]
 
@@ -174,7 +174,7 @@ def add_dir_under_protected_root(path: str) -> bool:
     if not isinstance(path, str) or not path.strip():
         return False
     norm = _norm(path)
-    for root in (_norm(str(Path.home() / ".claude")), _norm(str(config_root.agentctl_state_dir()))):
+    for root in (_norm(str(config_root.harness_config_root())), _norm(str(config_root.agentctl_state_dir()))):
         if norm == root or norm.startswith(root + "/"):
             return True
     return False

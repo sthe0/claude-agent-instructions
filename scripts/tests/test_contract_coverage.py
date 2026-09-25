@@ -36,6 +36,7 @@ from pathlib import Path
 import pytest
 
 from agentctl.cli import _apply_refined_stage_fields
+from agentctl.grants import AddDirGrant, RuleGrant, StageGrants
 from agentctl.plan import (
     PlanDoc, PlanMeta, diff_plans, stage_carry_key, stage_question_key,
 )
@@ -599,6 +600,10 @@ def _stage(index=2, **over):
         conditions="cond", preconditions="pre", knowledge="know",
         supplies=[Supply(on=1, element="result", artifact="x")],
         output_artifacts=["out/path.py"], outcome=Outcome(), control=None,
+        grants=StageGrants(
+            allow=[RuleGrant(rule="Bash(pytest -q:*)", provenance="declared")],
+            add_dirs=[AddDirGrant(path="scratch", mode="read", provenance="declared")],
+        ),
     )
     fields.update(over)
     return Stage(**fields)
@@ -727,6 +732,12 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "outcome.spawn_count": frozenset(),
     "outcome.delivered_head": frozenset(),
     "control": frozenset(),
+    "grants.allow.rule": frozenset({"diff_plans"}),
+    "grants.allow.provenance": frozenset(),
+    "grants.add_dirs.path": frozenset({"diff_plans"}),
+    "grants.add_dirs.mode": frozenset({"diff_plans"}),
+    "grants.add_dirs.provenance": frozenset(),
+    "grants.permission_mode": frozenset({"diff_plans"}),
 }
 
 

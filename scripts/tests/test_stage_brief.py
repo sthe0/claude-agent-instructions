@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 from agentctl.dispatch import build_argv
+from agentctl.grants import AddDirGrant, RuleGrant, StageGrants
 from agentctl.plan import PlanDoc, PlanMeta, load_plan
 from agentctl.render import cmd_plan_render, render_stage_brief
 from agentctl.state import (
@@ -245,6 +246,10 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         supplies=[Supply(on=7, element="ELEMENT_V", artifact="ARTIFACT_V")],
         output_artifacts=["OUTPUT_ARTIFACT_V"],
         control="CONTROL_V",
+        grants=StageGrants(
+            allow=[RuleGrant(rule="GRANTS_RULE_V", provenance="declared")],
+            add_dirs=[AddDirGrant(path="GRANTS_ADDDIR_V", mode="read", provenance="declared")],
+        ),
     )
     meta = PlanMeta(
         task_id="TASK_ID_V",
@@ -268,6 +273,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         "DERIVATION_V", "CONFIDENCE_V", "REFUTATION_V", "CONDITIONS_V",
         "MATERIAL_REF_V", "KNOWLEDGE_V", "KNOWLEDGE_REF_V", "PROCEDURE_V", "PRECONDITIONS_V",
         "OUTPUT_ARTIFACT_V", "CONTROL_V", "on stage 7", "ELEMENT_V", "ARTIFACT_V",
+        "GRANTS_RULE_V", "GRANTS_ADDDIR_V",
         "TASK_ID_V", "GOAL_V", "OVERALL_DONE_CRITERION_V", "OVERALL_CRITERION_TYPE_V",
         "WEIGHT_CLASS_V", "EXTERNAL_RESEARCH_V", "REPO_ROOT_V", "DELIVERY_WORKTREE_V",
         "FC_LABEL_V",
@@ -292,6 +298,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (Stage, "conditions"), (Stage, "supplies"), (Stage, "output_artifacts"),
         (Stage, "outcome"),  # excluded: engine execution history
         (Stage, "control"), (Stage, "knowledge"), (Stage, "preconditions"),
+        (Stage, "grants"),
         (Subject, "material"), (Subject, "result"), (Subject, "invariants"),
         (Subject, "material_refs"), (Subject, "knowledge_refs"),
         (Means, "means"), (Means, "method"), (Means, "procedure"),

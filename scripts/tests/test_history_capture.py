@@ -25,6 +25,8 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli
+from agentctl.plan import load_plan
+from agentctl.render import render_plan_grants
 from agentctl.state import Node
 
 
@@ -74,11 +76,24 @@ def _last_event(store, sid: str, name: str) -> dict:
     return next(e for e in reversed(store.load(sid).history) if e["event"] == name)
 
 
+def _grants_block(plan_path, fmt="full") -> str:
+    """The declared+derived grants rendering cmd_present_plan requires verbatim
+    in a rendering whose plan has any grants — `fmt` must match the presented
+    `kind` ("full" checks the full rendering, "compact" the essence one); see
+    test_present_plan_replan_diff.py's sibling helper."""
+    return render_plan_grants(load_plan(plan_path), fmt=fmt).strip()
+
+
 def _rendering(tmp_path, name="rendering.txt") -> str:
     """A `full`-kind rendering covering exactly plan_two_stage.toml's two stage
-    anchors, so cmd_present_plan's completeness check never refuses it."""
+    anchors plus its grants block, so cmd_present_plan's completeness check
+    never refuses it."""
+    plan = Path(__file__).parent / "fixtures" / "plan_two_stage.toml"
     p = tmp_path / name
-    p.write_text("[stage 1]\nfoo\n\n[stage 2]\nbar\n", encoding="utf-8")
+    p.write_text(
+        "[stage 1]\nfoo\n\n[stage 2]\nbar\n\n" + _grants_block(plan, fmt="full") + "\n",
+        encoding="utf-8",
+    )
     return str(p)
 
 

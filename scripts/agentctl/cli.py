@@ -24,7 +24,7 @@ from dataclasses import fields
 from pathlib import Path
 
 import proc_tree
-from lib import argv_text, config_root
+from lib import argv_text, config_root, transcript_stops
 
 from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, gates, grants as _grants, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
 from .checkrun import format_observations, observe_stage_checks
@@ -4033,6 +4033,8 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     state.approved_grants_sha256 = (
         grants_sha256(_approved_doc) if _approved_doc is not None else None
     )
+    if _approved_doc is not None:
+        _rekey_runtime_grants(state, _approved_doc)
     state.node = transition(state.node, "approve")
     snap = _snapshot_approved_plan(store, state)
     if snap:
@@ -4511,6 +4513,16 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     marker, body = parse_marker(result.stdout)
     base = {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
 
+    # After every dispatched child returns (any marker, not just PERMISSION-REQUEST):
+    # classify any permission-denial stop its transcript recorded against the stage's
+    # PRE-LAUNCH effective grant set. Currently a no-op in practice (no cost-log row
+    # carries `transcript_path` until stage 2 lands it on the ledger); the
+    # PERMISSION-REQUEST branch below covers the same ground via its own
+    # self-reported `Rule:`-line fallback in the meantime.
+    coverage = _effective_stage_grants(state, stage.index)
+    _defects_before = len(state.materialization_defects)
+    _classify_transcript_denials(state, stage, coverage, getattr(result, "transcript_path", None))
+
     if marker == "COMPLETED":
         store.save(state)
         return Directive(
@@ -4549,20 +4561,40 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         )
     if marker == "PERMISSION-REQUEST":
         action = body
+        # The permissions-cli check still runs for its own audit-row side effect, but
+        # its answer no longer skips the ask: a global grant recorded there never
+        # reaches the child's own --settings/--add-dir, so the old auto-continue just
+        # re-spawned into the identical denial (removed per the plan's design).
         checker = perm_checker or permissions.check_permission
-        if checker(action):
-            # already granted — skip the user ask, re-spawn with the granted note
-            store.save(state)
-            return Directive(
-                True, state.node, "continue_spawn",
-                f"stage {stage.index} requested permission already granted: {action}",
-                marker="PERMISSION-REQUEST",
-                data={**base, "action": action,
-                      "continuation": continuations.permission_granted(action, "global")},
+        checker(action)
+        transcript_covered = len(state.materialization_defects) > _defects_before
+        # The optional `Rule:` line is a SEPARATE line from the marker's own first
+        # line, so it must be read off the full child stdout -- parse_marker's
+        # `body` is only the text after "PERMISSION-REQUEST:" on that first line.
+        rule_line = _parse_rule_line(result.stdout)
+        call = _rule_line_to_call(rule_line) if rule_line else None
+        self_covered = call is not None and _grants.grant_covers_call(coverage, call[0], call[1])
+        if transcript_covered or self_covered:
+            if not transcript_covered:
+                state.materialization_defects.append({
+                    "stage_index": stage.index, "action": action,
+                    "tool_name": call[0],
+                    "tool_input_digest": _digest(json.dumps(call[1], sort_keys=True)),
+                    "evidence": "self-reported", "ts": _utcnow(),
+                })
+            return _diagnose_materialization_defect(
+                state, store, stage, action=action,
+                evidence="transcript" if transcript_covered else "self-reported",
             )
         state.permission_request = PermissionRequest(
             action=action, stage_index=stage.index, raw=body
         )
+        state.planning_misses.append({
+            "stage_index": stage.index, "asked_user": True, "ts": _utcnow(),
+            "tool_name": call[0] if call else None,
+            "tool_input_digest": _digest(json.dumps(call[1], sort_keys=True)) if call else None,
+            "action": action, "source": "permission-request",
+        })
         state.log("permission_request", stage=stage.index, action=action)
         store.save(state)
         return Directive(
@@ -4615,6 +4647,199 @@ def _parse_add_dir_spec(spec: str) -> tuple[str, str] | None:
     if not path or mode not in ("read", "write"):
         return None
     return path, mode
+
+
+def _parse_rule_line(body: str) -> str | None:
+    """The optional trailing `Rule: <rule>` line a specialist's PERMISSION-REQUEST
+    body may carry -- the self-reported fallback `cmd_dispatch` classifies a denial
+    against when no transcript is resolvable (stage 2 has not yet wired
+    `transcript_path` onto the cost-log ledger, so this is presently the primary
+    path). Returns the rule string verbatim, or None if no such line is present."""
+    for line in reversed(body.splitlines()):
+        line = line.strip()
+        if line.startswith("Rule:"):
+            rule = line[len("Rule:"):].strip()
+            return rule or None
+    return None
+
+
+def _rule_line_to_call(rule: str) -> tuple[str, dict] | None:
+    """Convert a `Bash(X:*)`/`Bash(X)`/`Edit(//abs/path)`-shaped permission-rule
+    string into the `(tool_name, tool_input)` pair `grants.grant_covers_call`
+    checks -- the inverse of how a derived/declared rule names a call. Unparseable
+    -> None, which `grant_covers_call`'s caller must treat as NOT covered."""
+    parsed = _grants._rule_program_and_arg(rule)
+    if parsed is None:
+        return None
+    tool, arg = parsed
+    if tool == "Bash":
+        return "Bash", {"command": _grants._bash_command_from_rule_arg(arg)}
+    if tool in ("Edit", "Write", "Read", "NotebookEdit"):
+        path = arg[2:] if arg.startswith("//") else arg
+        return tool, {"file_path": path}
+    return None
+
+
+def _stage_grant_entries(state: SessionState, stage_index: int) -> tuple[list[dict], list[dict], list[dict]]:
+    """Read one stage's declared + derived grant entries from the hash-verified plan
+    snapshot -- the shared read behind both `cmd_stage_grants`'s report and
+    `_effective_stage_grants`'s merged coverage object, so the two never drift on
+    when a grant becomes trustworthy (snapshot presence, `approved_grants_sha256`
+    re-hash gate over the live derivation code). Returns
+    (declared_entries, derived_entries, dropped)."""
+    declared_entries: list[dict] = []
+    derived_entries: list[dict] = []
+    dropped: list[dict] = []
+    snap_path = state.plan_snapshot_path
+    snap_hash = state.plan_snapshot_hash
+    if snap_path and snap_hash and Path(snap_path).exists():
+        if hashlib.sha256(Path(snap_path).read_bytes()).hexdigest() == snap_hash:
+            try:
+                snap_doc = load_plan(snap_path)
+            except (OSError, PlanError):
+                snap_doc = None
+            if snap_doc is not None:
+                snap_stage = next((s for s in snap_doc.stages if s.index == stage_index), None)
+                if snap_stage is not None:
+                    declared = snap_stage.grants if getattr(snap_stage, "grants", None) \
+                        else _grants.StageGrants()
+                    declared_entries = [r.to_dict() for r in declared.allow] + \
+                        [a.to_dict() for a in declared.add_dirs]
+                    if state.approved_grants_sha256 and \
+                            grants_sha256(snap_doc) == state.approved_grants_sha256:
+                        venue = _venue_for(snap_doc)
+                        derived, dropped = _grants.derive_stage_grants(snap_stage, venue=venue)
+                        derived_entries = [r.to_dict() for r in derived.allow] + \
+                            [a.to_dict() for a in derived.add_dirs]
+    return declared_entries, derived_entries, dropped
+
+
+def _refresh_runtime_grant_titles(state: SessionState, stage_index: int, new_title: str) -> None:
+    """A refinement/no_change replan keeps every stage at its existing index (only a
+    substantive replan can renumber -- that case is `_rekey_runtime_grants`, run on
+    the next approve), but MAY retitle a stage the same replan touches. A runtime
+    grant's stamped `stage_title` must track that retitle in place, else a later
+    substantive approve's re-key-by-title finds zero matches for the grant's now-stale
+    title and drops it (round-4 F2)."""
+    for entry in state.runtime_grants.get(str(stage_index), []):
+        entry["stage_title"] = new_title
+
+
+def _rekey_runtime_grants(state: SessionState, doc) -> None:
+    """A runtime grant is keyed by stage INDEX but was granted for a stage IDENTIFIED
+    by its title at grant time -- a replan can renumber stages (insert/remove before
+    it) without changing what the grant was actually about. Called on every approve
+    (fresh snapshot, fresh indices): for each stage index currently holding runtime
+    grants, re-key each entry to whichever new-snapshot stage has the SAME title it
+    was stamped with. Zero or several matches (title now shared or gone) drops the
+    entry with a stderr note rather than guessing."""
+    title_to_indices: dict[str, list[int]] = {}
+    for s in doc.stages:
+        title_to_indices.setdefault(s.title, []).append(s.index)
+    rekeyed: dict[str, list[dict]] = {}
+    for old_key, entries in state.runtime_grants.items():
+        for entry in entries:
+            title = entry.get("stage_title")
+            matches = title_to_indices.get(title, []) if title else []
+            if len(matches) != 1:
+                print(
+                    f"stage-grants: dropping runtime grant stamped for stage title "
+                    f"{title!r} (was stage {old_key}) -- {len(matches)} stages now "
+                    "match that title",
+                    file=sys.stderr,
+                )
+                continue
+            new_key = str(matches[0])
+            rekeyed.setdefault(new_key, []).append(entry)
+    state.runtime_grants = rekeyed
+
+
+def _effective_stage_grants(state: SessionState, stage_index: int) -> _grants.StageGrants:
+    """The merged declared + derived + unconsumed-runtime grant set for one stage --
+    what `grants.grant_covers_call` checks a denied call against in `cmd_dispatch`.
+    An entry dict carrying a "rule" key becomes a RuleGrant; a "path"/"mode" pair
+    becomes an AddDirGrant -- the same two shapes `cmd_stage_grants` already reports
+    separately by provenance."""
+    declared_entries, derived_entries, _dropped = _stage_grant_entries(state, stage_index)
+    runtime_entries = [
+        e for e in state.runtime_grants.get(str(stage_index), [])
+        if not e.get("consumed")
+    ]
+    allow: list[_grants.RuleGrant] = []
+    add_dirs: list[_grants.AddDirGrant] = []
+    for e in declared_entries + derived_entries + runtime_entries:
+        if "rule" in e:
+            allow.append(_grants.RuleGrant.from_dict(e))
+        elif "path" in e and "mode" in e:
+            add_dirs.append(_grants.AddDirGrant.from_dict(e))
+    return _grants.StageGrants(allow=allow, add_dirs=add_dirs)
+
+
+def _classify_transcript_denials(
+    state: SessionState, stage: Stage, coverage: _grants.StageGrants, transcript_path: str | None,
+) -> None:
+    """After a dispatched child returns, classify every permission-denial stop its
+    transcript recorded against the stage's PRE-LAUNCH coverage set: covered ->
+    `materialization_defects` (the grant existed; --settings/--add-dir
+    materialization failed to carry it), uncovered -> `planning_misses` (a genuine
+    miss the child correctly worked around without asking). A stop already present
+    in either ledger by `tool_use_id` is never re-appended, so a later
+    PERMISSION-REQUEST self-report for the SAME call doesn't double-count it.
+    No resolvable transcript (no `transcript_path`, or the file is absent -- the
+    common case until stage 2 wires `transcript_path` onto the cost-log ledger) is a
+    no-op; the `Rule:`-line self-reported fallback is `cmd_dispatch`'s job instead."""
+    if not transcript_path or not Path(transcript_path).exists():
+        return
+    known_ids = {m.get("tool_use_id") for m in state.materialization_defects} | \
+        {m.get("tool_use_id") for m in state.planning_misses}
+    for use in transcript_stops.parse_bash_tool_uses(transcript_path):
+        if use.stop_kind != "permission-denial" or use.tool_use_id in known_ids:
+            continue
+        row_base = {
+            "stage_index": stage.index, "tool_use_id": use.tool_use_id,
+            "tool_name": "Bash", "tool_input_digest": _digest(use.command), "ts": _utcnow(),
+        }
+        if _grants.grant_covers_call(coverage, "Bash", {"command": use.command}):
+            state.materialization_defects.append({**row_base, "evidence": "transcript"})
+        else:
+            state.planning_misses.append({**row_base, "asked_user": False, "source": "transcript"})
+
+
+def _diagnose_materialization_defect(
+    state: SessionState, store: StateStore, stage: Stage, *, action: str, evidence: str,
+) -> Directive:
+    """Route a PERMISSION-REQUEST whose denied call WAS covered by the stage's
+    effective grant set into FAILED/DIAGNOSING -- the grant existed, materialization
+    into the child's --settings/--add-dir simply failed to carry it, so re-asking the
+    user (or re-dispatching unchanged) would only reproduce the same denial. Mirrors
+    `cmd_record_result`'s failed-stage branch, including its two-step EXECUTING ->
+    VERIFYING -> DIAGNOSING transition (`machine.TRANSITIONS` permits `diagnose`
+    only from VERIFYING), but pre-frames the Declaration from the grant/call/evidence
+    triple instead of leaving it for a human to write from scratch. The caller is
+    responsible for having already appended the triggering row to
+    `state.materialization_defects` -- this function only transitions and reports."""
+    stage.outcome.status = StageStatus.FAILED.value
+    note = f"permission request already covered by materialized grants ({evidence}): {action}"
+    stage.outcome.actual = (stage.outcome.actual + "\n" + note) if stage.outcome.actual else note
+    state.log("materialization_defect", stage=stage.index, action=action, evidence=evidence)
+    state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
+    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
+    state.difficulty = Difficulty(declaration=Declaration(
+        expected=f"stage {stage.index}'s materialized grants should have covered: {action}",
+        actual=f"the child was denied and asked permission for: {action}",
+        mismatch="the effective grant set declares/derives coverage for this call, but "
+                 "the child's own --settings/--add-dir materialization failed to carry "
+                 "it through -- a materialization defect, not a planning miss.",
+    ))
+    store.save(state)
+    return Directive(
+        False, state.node, "declare",
+        f"stage {stage.index} permission request was already covered by its "
+        f"materialized grants ({evidence}) -- this is a materialization defect, not "
+        "a planning miss; run overcome-difficulty (investigate why materialization "
+        "failed to carry the grant, then critique); no re-dispatch, no user ask",
+        marker="OVERCOME-DIFFICULTY",
+    )
 
 
 def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -4705,36 +4930,7 @@ def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -
     except KeyError:
         return Directive(False, state.node, "noop", f"no stage with index {stage_index}")
 
-    declared_entries: list[dict] = []
-    derived_entries: list[dict] = []
-    dropped: list[dict] = []
-    snap_path = state.plan_snapshot_path
-    snap_hash = state.plan_snapshot_hash
-    if snap_path and snap_hash and Path(snap_path).exists():
-        if hashlib.sha256(Path(snap_path).read_bytes()).hexdigest() == snap_hash:
-            try:
-                snap_doc = load_plan(snap_path)
-            except (OSError, PlanError):
-                snap_doc = None
-            if snap_doc is not None:
-                snap_stage = next((s for s in snap_doc.stages if s.index == stage_index), None)
-                if snap_stage is not None:
-                    declared = snap_stage.grants if getattr(snap_stage, "grants", None) \
-                        else _grants.StageGrants()
-                    declared_entries = [r.to_dict() for r in declared.allow] + \
-                        [a.to_dict() for a in declared.add_dirs]
-                    # Derived grants are trustworthy only while the CURRENT derivation
-                    # code, run over these SAME frozen snapshot bytes, still hashes to
-                    # what was actually approved -- a materialization-layer code change
-                    # after approval must never silently widen a stage without a fresh
-                    # approve.
-                    if state.approved_grants_sha256 and \
-                            grants_sha256(snap_doc) == state.approved_grants_sha256:
-                        venue = _venue_for(snap_doc)
-                        derived, dropped = _grants.derive_stage_grants(snap_stage, venue=venue)
-                        derived_entries = [r.to_dict() for r in derived.allow] + \
-                            [a.to_dict() for a in derived.add_dirs]
-
+    declared_entries, derived_entries, dropped = _stage_grant_entries(state, stage_index)
     runtime_entries = [
         e for e in state.runtime_grants.get(str(stage_index), [])
         if not e.get("consumed")
@@ -5381,6 +5577,13 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         "effort_ratio_max": max(_effort_ratios) if _effort_ratios else None,
         "effort_fires": state.effort_fires,
         "effort_interactions": state.user_prompt_count,
+        "planning_misses_asked": sum(
+            1 for m in state.planning_misses if m.get("asked_user")
+        ),
+        "planning_misses_unasked": sum(
+            1 for m in state.planning_misses if not m.get("asked_user")
+        ),
+        "materialization_defects": len(state.materialization_defects),
     }
     _write_quality_row(quality_row)
     # Whether to stamp is fully decidable from observed state (resolved + a known
@@ -6198,6 +6401,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             except KeyError:
                 continue
             _apply_refined_stage_fields(cur, ns)
+            _refresh_runtime_grant_titles(state, ns.index, ns.title)
         # final_check is meta-level (not per-stage), so it needs its own refresh
         # next to the stage loop above — a self-diffed no_change still means the
         # FILE changed relative to what was cached at submit-plan/last replan.
@@ -6251,6 +6455,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             # state so a difficulty-driven refinement actually re-selects the means
             # (not just prose).
             _apply_refined_stage_fields(cur, ns)
+            _refresh_runtime_grant_titles(state, ns.index, ns.title)
             if cur.outcome.status == StageStatus.FAILED.value:
                 cur.outcome.status = StageStatus.PENDING.value
         state.plan_path = args.plan
@@ -7179,7 +7384,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("control", ("question-raise",),
      "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
      "grammar-bound name, never the prose --control of record-result/close"),
-    ("plan", ("plan-render", "plan-review-delta", "submit-plan", "replan", "drive",
+    ("plan", ("plan-render", "plan-grants", "plan-review-delta", "submit-plan", "replan", "drive",
               "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
               "question-rebind", "question-raise", "present-plan", "order-dispose"),
@@ -7216,6 +7421,10 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("quality_by", ("resolve", "close"), "how the quality rating was obtained — a fixed token"),
     ("confirmed_by", ("close",), "who confirmed — a name, not a narrative"),
     ("approved_by", ("drive",), "who approved — a name, not a narrative"),
+    ("rules", ("resolve-permission",),
+     "Bash/Edit/etc rule strings — grant syntax tokens, not narrative"),
+    ("add_dirs", ("resolve-permission",),
+     "'PATH:MODE' tokens — grant syntax, not narrative"),
 )
 
 _ARG_RESOLVE: frozenset[tuple[str, str]] = frozenset(
