@@ -1,0 +1,39 @@
+[meta]
+# Synthetic, path-free fixture reproducing this repo's own plan's grant-bearing
+# shape (spawn-permission-grant-model.toml stages 6 and 7's [stage.grants]
+# allow rules verbatim, plus their add_dir under a placeholder agent home).
+# The `__CLAUDE_AGENT_HOME__` token is text-substituted by the loading test
+# with a tmp path before the file is written to disk and parsed — never a
+# real machine path, so this file is safe to commit as-is.
+weight_class = "substantive"
+task_id = "self-grants-fixture"
+goal = "Reproduce a real plan's declared-grant shape for grants.py tests"
+done_criterion = "n/a - fixture only, never dispatched"
+criterion_type = "measurable"
+
+[[stage]]
+index = 1
+title = "Probe stage (mirrors a real plan stage's declared allow rules)"
+executor = "spawn:developer"
+expected_result_image = "n/a - fixture only"
+criterion_type = "measurable"
+done_criterion = "n/a - fixture only"
+depends_on = []
+output_artifacts = ["scripts/fixture_probe.py"]
+
+[stage.grants]
+allow = ["Bash(python3 scripts/probe-hook-decision-semantics.py:*)", "Bash(git push origin perm-grants)"]
+
+[[stage]]
+index = 2
+title = "Guard stage (mirrors a real plan stage's declared allow rules + add_dir)"
+executor = "spawn:developer"
+expected_result_image = "n/a - fixture only"
+criterion_type = "measurable"
+done_criterion = "n/a - fixture only"
+depends_on = [1]
+output_artifacts = ["scripts/fixture_guard.sh"]
+
+[stage.grants]
+allow = ["Bash(python3 scripts/replay-permission-guard.py:*)", "Bash(python3 scripts/gen_crutch_registry.py:*)", "Bash(git ls-tree:*)", "Bash(git cat-file:*)", "Bash(git push origin perm-grants)", "WebFetch(domain:code.claude.com)"]
+add_dirs = [{ path = "__CLAUDE_AGENT_HOME__/projects", mode = "read" }]

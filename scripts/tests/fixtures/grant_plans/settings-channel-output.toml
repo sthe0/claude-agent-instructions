@@ -1,0 +1,21 @@
+[meta]
+# Synthetic fixture: a stage whose output_artifact is a settings-channel
+# program (see widening_targets.SETTINGS_CHANNEL_PROGRAMS). DR-O proposes
+# Bash(scripts/install-reminder-hooks.sh:*) for it like any other in-venue
+# .sh output_artifact, and the validator refuses it — the entry must land
+# in derive_stage_grants's `dropped` list, never in `allow`.
+weight_class = "substantive"
+task_id = "settings-channel-output-fixture"
+goal = "Exercise DR-O refusing a settings-channel-program output_artifact"
+done_criterion = "n/a - fixture only, never dispatched"
+criterion_type = "measurable"
+
+[[stage]]
+index = 1
+title = "Install-hooks stage (output_artifact is a settings-channel program)"
+executor = "spawn:developer"
+expected_result_image = "n/a - fixture only"
+criterion_type = "measurable"
+done_criterion = "n/a - fixture only"
+depends_on = []
+output_artifacts = ["scripts/install-reminder-hooks.sh"]
