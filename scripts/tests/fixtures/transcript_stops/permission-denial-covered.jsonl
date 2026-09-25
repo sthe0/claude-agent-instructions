@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_fixture_denial_covered_1", "name": "Bash", "input": {"command": "python3 mod.py"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_fixture_denial_covered_1", "content": "Permission to use Bash with command python3 mod.py has been denied.", "is_error": true}]}, "toolDenialKind": "permission-rule"}

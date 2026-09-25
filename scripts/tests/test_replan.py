@@ -152,9 +152,17 @@ def test_verify_command_change_classifies_as_substantive(fixtures_dir):
     `_grants_grew` intercepts this before the prose comparison is ever reached — a
     verify_command edit that does not change the derived rule (e.g. a pure
     non-semantic edit outside the derivable segment) still falls through to
-    'refinement', but this fixture pair's two commands ARE textually different."""
-    base = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix.toml"))
-    changed = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_changed.toml"))
+    'refinement', but this fixture pair's two commands ARE textually different.
+
+    Uses a dedicated `_grantgrowth` fixture pair rather than the widely-shared
+    `plan_two_stage_verifyfix[.toml/_changed.toml]` pair: both of THOSE plans'
+    verify_commands are `python -c '...'` (inline code, no positional script-file
+    operand), which the interpreter/launcher allowlist now refuses outright for
+    BOTH plans equally, collapsing `_grants_grew`'s difference to nothing and
+    falling through to 'refinement' -- this pair uses a real script-file operand
+    (`python3 mod.py` / `python3 mod.py --strict`) so DR-V actually derives a rule."""
+    base = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml"))
+    changed = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml"))
     assert diff_plans(base, changed) == "substantive"
 
 
@@ -164,17 +172,17 @@ def test_substantive_verify_command_change_carries_into_state(store, fixtures_di
     part of that transition -- same carry-forward machinery as any other substantive
     replan, no separate approve needed to observe it."""
     sid = "vc"
-    base = str(fixtures_dir / "plan_two_stage_verifyfix.toml")
-    changed = str(fixtures_dir / "plan_two_stage_verifyfix_changed.toml")
+    base = str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml")
+    changed = str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml")
     _to_executing_stage1(store, sid, base)
 
-    assert store.load(sid).stage(1).criterion.verify_command == "python -c 'import mod'"
+    assert store.load(sid).stage(1).criterion.verify_command == "python3 mod.py"
 
     d = cli.cmd_replan(ns(session=sid, plan=changed), store=store)
     assert d.marker == "PLAN-READY"
     state = store.load(sid)
     assert state.node == Node.PLAN_READY.value
-    assert state.stage(1).criterion.verify_command == "python -c 'import mod; assert True'"
+    assert state.stage(1).criterion.verify_command == "python3 mod.py --strict"
 
 
 def test_substantive_verify_command_change_resets_passed_stage(store, fixtures_dir):
@@ -185,8 +193,8 @@ def test_substantive_verify_command_change_resets_passed_stage(store, fixtures_d
     re-verification (contrast test_substantive_replan_carries_forward_passed_unchanged_stage,
     where the PASSED stage's own definition is untouched)."""
     sid = "pp"
-    base = str(fixtures_dir / "plan_two_stage_verifyfix.toml")
-    changed = str(fixtures_dir / "plan_two_stage_verifyfix_changed.toml")
+    base = str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml")
+    changed = str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml")
     _to_executing_stage1(store, sid, base)
 
     state = store.load(sid)
@@ -198,7 +206,7 @@ def test_substantive_verify_command_change_resets_passed_stage(store, fixtures_d
     assert d.marker == "PLAN-READY"
     state = store.load(sid)
     assert state.stage(1).outcome.status == StageStatus.PENDING.value
-    assert state.stage(1).criterion.verify_command == "python -c 'import mod; assert True'"
+    assert state.stage(1).criterion.verify_command == "python3 mod.py --strict"
 
 
 def test_repo_root_change_classifies_as_refinement_and_updates_state(store, fixtures_dir):

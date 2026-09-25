@@ -30,6 +30,7 @@ whose answer gates whether a stage is marked passed without ever asking.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 
 from lib import bash_write_targets, shell_tokens, widening_targets
@@ -486,10 +487,22 @@ _TWO_CHAR_SEGMENT_SEPARATORS = frozenset({"&&", "||", "|&"})
 _ONE_CHAR_SEGMENT_SEPARATORS = frozenset({";", "|", "&"})
 
 
+_REDIRECT_MERGE_RE = re.compile(r"\d*>&\d*|&>>?")
+
+
 def _is_unresolvable_segment(seg: str) -> bool:
     """True iff `seg`'s actual target cannot be read off its text alone —
-    a `$`/backtick expansion, a redirection, or a subshell paren."""
-    return any(ch in seg for ch in ("$", "`", "<", ">")) or "(" in seg or ")" in seg
+    a `$`/backtick expansion, a redirection to an unreadable target, or a
+    subshell paren. A stream-merge redirect (`2>&1`, `>&2`, `&>`, `&>>`)
+    names no file target at all, so its presence alone does not make the
+    segment unresolvable — `validate_rule` (via `_validate_no_redirect_to_g_target`)
+    already draws the same line, refusing only a redirect that resolves to
+    an actual G-target path, so this stays consistent with the validator a
+    derived rule is re-checked against before use."""
+    if any(ch in seg for ch in ("$", "`")) or "(" in seg or ")" in seg:
+        return True
+    stripped = _REDIRECT_MERGE_RE.sub("", seg)
+    return "<" in stripped or ">" in stripped
 
 
 def _raw_top_level_segments(command: str) -> list[str] | None:

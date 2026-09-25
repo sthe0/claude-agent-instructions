@@ -731,13 +731,14 @@ def test_dispatch_permission_request_routes_via_transcript_covered_evidence(
     (evidence="transcript") is reachable independently of `self_covered`
     (evidence="self-reported") -- the child's own marker asks about a DIFFERENT
     action with no `Rule:` line (so `self_covered` is False), but the transcript
-    already recorded a covered denial for `python3 scripts/verify-all.py` (this
-    fixture is shared with the promotion test above). `_diagnose_materialization_defect`
-    must fire with evidence="transcript", and no duplicate row is appended for
-    the same tool_use_id."""
+    already recorded a denial for `python3 mod.py`, which IS covered by stage
+    1's DR-O-derived `Bash(python3 mod.py:*)` rule (plan_two_stage.toml declares
+    `output_artifacts = ["mod.py"]`). `_diagnose_materialization_defect` must
+    fire with evidence="transcript", and no duplicate row is appended for the
+    same tool_use_id."""
     sid = "perm-request-transcript-covered-evidence"
     _to_executing(store, sid, fixtures_dir)
-    transcript_path = fixtures_dir / "transcript_stops" / "permission-denial.jsonl"
+    transcript_path = fixtures_dir / "transcript_stops" / "permission-denial-covered.jsonl"
 
     def runner(argv, cwd=None):
         return RunResult(
