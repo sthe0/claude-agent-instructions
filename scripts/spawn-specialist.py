@@ -35,6 +35,7 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+from agentctl import grants  # the sole validator every materialized rule/add_dir passes through
 from agentctl.plan import load_plan  # parse the TOML plan for a single-stage brief projection
 from agentctl.render import render_stage_brief  # pure PlanDoc+index -> markdown brief
 from lib import argv_text  # one place decides how an argv value names its text
@@ -177,7 +178,16 @@ def brief_eligible(args: argparse.Namespace) -> bool:
     return brief_plan_path(args) is not None
 
 
-def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> str:
+def assemble_prompt(
+    args: argparse.Namespace,
+    depth: int,
+    permissions: str,
+    *,
+    workdir: "str | None" = None,
+    permission_mode: "str | None" = None,
+    add_dir_paths: "list[str] | None" = None,
+    stage_grant_entries: "list[dict] | None" = None,
+) -> str:
     plan = argv_text.read_required_file(args.plan, "--plan")
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
     done_criterion = argv_text.read_arg_text(args.done_criterion)
@@ -235,6 +245,20 @@ def assemble_prompt(args: argparse.Namespace, depth: int, permissions: str) -> s
             permissions,
             "",
         ]
+    if workdir is not None or permission_mode is not None or add_dir_paths or stage_grant_entries:
+        scope_lines = ["## File-access scope", ""]
+        if workdir is not None:
+            scope_lines.append(f"- Working directory: `{workdir}`")
+        if permission_mode is not None:
+            scope_lines.append(f"- Permission mode: `{permission_mode}`")
+        if add_dir_paths:
+            for path in add_dir_paths:
+                scope_lines.append(f"- Additional directory: `{path}`")
+        if stage_grant_entries:
+            scope_lines.append("- Stage grants (provenance):")
+            scope_lines.extend(stage_grant_provenance_lines(stage_grant_entries))
+        scope_lines.append("")
+        sections += scope_lines
     if getattr(args, "kind", None) == "developer":
         sections += [
             "## Verification command hygiene",
@@ -342,8 +366,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--permission-mode",
-        choices=("acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"),
-        help="claude --permission-mode for the spawned process. Default: acceptEdits for kind=developer (unattended local writes, and no wider), harness default otherwise. See resolve_permission_mode for why NOT bypassPermissions.",
+        choices=("default", "plan"),
+        help="claude --permission-mode for the spawned process. The wider modes "
+        "(acceptEdits/auto/bypassPermissions/dontAsk) are no longer user-settable "
+        "here -- they are internal decisions resolve_permission_mode makes per "
+        "kind (acceptEdits for developer/tech-writer), never a flag value a "
+        "caller can widen to. Default: harness default (per-kind via "
+        "resolve_permission_mode) when unset.",
     )
     model_group = p.add_mutually_exclusive_group(required=True)
     model_group.add_argument(
@@ -391,6 +420,30 @@ def build_parser() -> argparse.ArgumentParser:
         "load-bearing; max = rare, only for the most contested judgment calls.",
     )
     p.add_argument("--stage-index", type=int, default=None, help="index of the plan stage this spawn serves (optional; enables per-stage cost attribution)")
+    p.add_argument(
+        "--session",
+        default=None,
+        help="engine session id owning this spawn; combined with --stage-index and "
+        "a matching --kind, materializes the stage's engine-recorded grants "
+        "(declared/derived/runtime) into --settings/--add-dir and into the "
+        "prompt's File-access scope section. Read-only introspection "
+        "(stage-grants) -- never grants the spawned child agentctl user-authority "
+        "verbs itself.",
+    )
+    p.add_argument(
+        "--state-root",
+        type=Path,
+        default=None,
+        help="override the engine's state-store root used to resolve --session "
+        "(defaults to the store's own default root; for tests/fixtures)",
+    )
+    p.add_argument(
+        "--workdir",
+        type=Path,
+        default=None,
+        help="child process working directory (must already exist); defaults to "
+        "this process's own cwd when unset",
+    )
     p.add_argument(
         "--plan-brief",
         action="store_true",
@@ -521,105 +574,165 @@ def prompt_exceeds_ceiling(prompt: str, model: str | None = None) -> bool:
     return len(prompt) > dispatch_prompt_ceiling_chars(model)
 
 
-# Code-executing permission scoped to developer spawns only, injected into the
-# child's --settings payload rather than settings/base.json (which is merged
-# fleet-wide on `git pull` without a prompt and must stay read-only-only per
+# Per-kind baseline permission set, injected into the child's --settings
+# payload rather than settings/base.json (which is merged fleet-wide on
+# `git pull` without a prompt and must stay read-only-only per
 # lint-settings-base.py). See memory-global leaf settings-permission-tiers.md.
 #
-# EVERY VERB A DEVELOPER IS REQUIRED TO RUN MUST BE HERE. `acceptEdits` auto-grants
+# Difficulty removed: before this table, only kind=="developer" got any Bash
+# baseline at all (build_child_settings's `if kind == "developer":` gate) —
+# every other kind ran under a bare acceptEdits-or-nothing mode with NO
+# explicit Bash grant, so even side-effect-free inspection commands prompted
+# for a decision no headless child could answer (acceptEdits auto-grants
 # file writes and NOTHING else — unlike `defaultMode: auto`, it does not
-# auto-approve even side-effect-free Bash — so a brief that says "run the suite,
-# run the verifiers, commit when green" and a grant that stops at pytest together
-# reproduce the defect this whole file's permission handling exists to remove: a
-# requirement whose means are withheld. Observed 2026-08-05, when a stage's whole
-# implementation landed green but uncommitted because `git add` and
-# `python3 scripts/verify-all.py` were both refused.
+# auto-approve Bash). Each kind's entries are the measured, justified
+# minimum against 30 days of real spawned-child Bash-prefix/denial data —
+# see /home/the0/.claude-agent/plans/evidence/spawn-permission-grant-model/
+# kind-tool-inventory.md — not a guess at what a role "should" need.
 #
-# The list stays narrow and enumerated rather than becoming a mode: read-only
-# inspection, the repo's own verifiers, the git verbs that record work on the
-# assigned branch, and the ones that integrate trunk into it. `git push` is
-# deliberately ABSENT — landing is the coordinator's gate, not a spawn's, and a
-# spawn that can merge trunk in still cannot publish anything out.
-DEVELOPER_SETTINGS_ALLOW = [
-    # verification the brief mandates
-    "Bash(python3 -m pytest:*)",
-    "Bash(python3 scripts/verify-all.py:*)",
-    "Bash(python3 scripts/verify-agentctl.py:*)",
-    "Bash(python3 scripts/gen_crutch_registry.py:*)",
-    # read-only inspection (acceptEdits does not imply defaultMode auto's classifier)
+# `sed` is deliberately absent from every bucket even though it is a top-3
+# measured prefix for all five kinds: grants.py's `_WRITE_CAPABLE_PROGRAMS`
+# treats ANY `sed` invocation as write-capable, so a wildcarded
+# `Bash(sed:*)` is refused outright by validate_rule regardless of the fact
+# that every measured call was `sed -n` (read-only) — no static settings
+# rule can express "the -n form only". A `python3 -m agentctl` verb beyond
+# classify/status (plan-review, code-review, stage-grants, ...) is likewise
+# absent: those verbs are either AGENTCTL_USER_AUTHORITY_VERBS (refused
+# unconditionally — see plugins_review_dispatch.py, whose directive text
+# routes plan-review/code-review recording through the ROOT instead) or are
+# exactly what the new --session/--stage-index engine-grant materialization
+# below exists to supply per-stage instead of guessing a fleet-wide list.
+_READ_ONLY_INSPECTION = [
     "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)",
     "Bash(grep:*)", "Bash(rg:*)", "Bash(find:*)", "Bash(stat:*)", "Bash(pwd)",
     "Bash(shasum:*)", "Bash(sha256sum:*)",
-    # recording work on the assigned branch — never `git push`
     "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)",
-    "Bash(git add:*)", "Bash(git commit:*)",
-    # integrating trunk INTO the assigned branch — the same defect one step later.
-    # Observed 2026-08-10: a stage whose whole material was "merge origin/main into
-    # the delivery branch and resolve the conflicts" was dispatched with a grant that
-    # stopped at `git commit`, and every mutating verb it needed was refused across
-    # five command shapes. Reading trunk's own baseline needs the detached checkout;
-    # resolving a conflict needs checkout/restore on a path; ff-vs-true-merge needs
-    # merge-base and rev-list. Landing stays absent: `git push` is the coordinator's.
-    "Bash(git fetch:*)", "Bash(git merge:*)", "Bash(git merge-base:*)",
-    "Bash(git rev-list:*)", "Bash(git checkout:*)", "Bash(git restore:*)",
-    # spawn-outcome-typing stage 4 measures marker_extract's own latency via
-    # real host calls — scoped to the driver script only. User-authorized
-    # 2026-08-20 as a temporary unblock; a proper per-stage/plan-declared
-    # permission mechanism (agentctl dispatch reading extra grants from the
-    # plan TOML instead of a static fleet-wide list) is filed separately
-    # rather than built under this stage's time pressure.
-    #
-    # A sibling "Bash(claude -p --model haiku:*)" grant was added alongside
-    # this one at first, then removed the same day on code-review: the
-    # script drives claude via host_llm.build_prompt_argv +
-    # marker_extract.subprocess_runner INSIDE this already-permitted
-    # python3 process, never through the Bash tool directly, so the extra
-    # grant was both unused and, being "claude -p ... :*" (unbounded
-    # trailing args), a bypass of spawn-specialist.py's own outcome-typing
-    # ledger for any developer that DID reach for it directly — the exact
-    # defect this plan exists to fix.
-    "Bash(python3 scripts/measure-marker-extractor-latency.py:*)",
-    # hook-resolution-reminder-pretooluse-gap stage 1 needs to compile its own
-    # edits, check the engine's own worktree-local gate state, and run the new
-    # judge's real-call latency sampler. User-authorized 2026-08-28 as another
-    # narrow, named unblock — same precedent as the grant above, not a
-    # broadening to "any python3". The deferred dynamic per-plan grant
-    # mechanism referenced above still does not exist; this is another
-    # static addition until it does. Root cause of needing this at all:
-    # `agentctl resolve-permission --decision granted` only clears engine
-    # state and returns a continuation string (continuations.py
-    # permission_granted()) — it never writes to any permissions file and
-    # never touches this list, so three consecutive PERMISSION-REQUEST/grant
-    # cycles for this exact stage reproduced the identical block each time.
-    "Bash(python3 -m py_compile:*)",
-    "Bash(python3 -m agentctl classify:*)",
-    "Bash(python3 -m agentctl status:*)",
-    "Bash(python3 samples/judge-latency/sample_landing_discipline.py:*)",
-    # tech-writer-publication-gate stage 6's method is a real in-harness
-    # observation: spawn two actual `claude -p` children (deny arm, allow
-    # arm) against a scratch hook and independently re-check the recorded
-    # timestamps/acts, which a stdin-fed rerun of the hook cannot establish.
-    # User-authorized 2026-09-02 as the same narrow, named, temporary
-    # unblock pattern as the two grants above (the deferred dynamic
-    # per-plan grant mechanism they reference still does not exist). Unlike
-    # the removed "claude -p --model haiku:*" grant noted above, a direct
-    # `claude -p` spawn is this stage's actual deliverable, not an avoidable
-    # implementation detail routed through an already-permitted python3
-    # process — so the raw Bash grant is scoped here, not just the wrapper.
-    "Bash(python3 scripts/check-in-harness-observation.py:*)",
-    "Bash(python3 scripts/check-live-run-evidence.py:*)",
-    "Bash(python3 _ptg_scratch/probe/launch_probe.py:*)",
-    "Bash(claude -p:*)",
+    "Bash(python3 -m agentctl classify:*)", "Bash(python3 -m agentctl status:*)",
 ]
+
+KIND_BASELINES: dict[str, list[str]] = {
+    # thinker: 4563 Bash calls sampled, overwhelmingly read-only inspection
+    # (grep/python3 -m agentctl introspection/ls/shasum/cat/git log); the
+    # measured 42 `python3 -m agentctl` denials are user-authority verbs the
+    # read-only bucket correctly excludes, not a baseline gap (see above).
+    "thinker": list(_READ_ONLY_INSPECTION),
+    # planner: 1629 Bash calls, same read-only shape as thinker, plus the
+    # plan-authoring repo verifier it measurably runs on its own output
+    # (37 combined calls to python3 [scripts/]check-order-coverage.py).
+    # Edit access to plans_dir() itself is a separate, pre-existing grant
+    # (PLANS_WRITE_KINDS/plans_permission_rules) layered on in
+    # build_child_settings, not duplicated here.
+    "planner": list(_READ_ONLY_INSPECTION) + [
+        "Bash(python3 check-order-coverage.py:*)",
+        "Bash(python3 scripts/check-order-coverage.py:*)",
+    ],
+    # code-reviewer: 1808 Bash calls, read-only bucket dominant (git
+    # diff/show/log/status — all now common), plus the test
+    # runner (63 measured calls, 2 denied) and the one repo verifier it was
+    # measurably denied on (python3 scripts/verify-semantic-gates.py: 2
+    # denials) — a reviewer needs to run checks, not just read diffs.
+    "code-reviewer": list(_READ_ONLY_INSPECTION) + [
+        "Bash(python3 -m pytest:*)",
+        "Bash(python3 scripts/verify-semantic-gates.py:*)",
+    ],
+    # tech-writer: only 13 Bash calls sampled across 10 transcripts (mostly
+    # `wc`, covered by the read-only bucket) — too small a sample to justify
+    # anything beyond the one measured, narrow, role-appropriate addition:
+    # `gh issue` (ticket/README publication is this kind's actual job).
+    "tech-writer": list(_READ_ONLY_INSPECTION) + [
+        "Bash(gh issue:*)",
+    ],
+    # developer: the historical DEVELOPER_SETTINGS_ALLOW list, restructured
+    # into this table verbatim except for the removed "Bash(claude -p:*)"
+    # entry below (see its own history) — every line here already carries
+    # its own measured justification (see the per-grant comments).
+    "developer": list(_READ_ONLY_INSPECTION) + [
+        # verification the brief mandates
+        "Bash(python3 -m pytest:*)",
+        "Bash(python3 scripts/verify-all.py:*)",
+        "Bash(python3 scripts/verify-agentctl.py:*)",
+        "Bash(python3 scripts/gen_crutch_registry.py:*)",
+        # recording work on the assigned branch — never `git push`
+        "Bash(git add:*)", "Bash(git commit:*)",
+        # integrating trunk INTO the assigned branch — the same defect one step
+        # later. Observed 2026-08-10: a stage whose whole material was "merge
+        # origin/main into the delivery branch and resolve the conflicts" was
+        # dispatched with a grant that stopped at `git commit`, and every
+        # mutating verb it needed was refused across five command shapes.
+        # Reading trunk's own baseline needs the detached checkout; resolving a
+        # conflict needs checkout/restore on a path; ff-vs-true-merge needs
+        # merge-base and rev-list. Landing stays absent: `git push` is the
+        # coordinator's.
+        "Bash(git fetch:*)", "Bash(git merge:*)", "Bash(git merge-base:*)",
+        "Bash(git rev-list:*)", "Bash(git checkout:*)", "Bash(git restore:*)",
+        # spawn-outcome-typing stage 4 measures marker_extract's own latency via
+        # real host calls — scoped to the driver script only. User-authorized
+        # 2026-08-20 as a temporary unblock; a proper per-stage/plan-declared
+        # permission mechanism (this stage's own --session/--stage-index engine
+        # grant materialization) is what stage 2 of this same plan builds.
+        #
+        # A sibling "Bash(claude -p --model haiku:*)" grant was added alongside
+        # this one at first, then removed the same day on code-review: the
+        # script drives claude via host_llm.build_prompt_argv +
+        # marker_extract.subprocess_runner INSIDE this already-permitted
+        # python3 process, never through the Bash tool directly, so the extra
+        # grant was both unused and, being "claude -p ... :*" (unbounded
+        # trailing args), a bypass of spawn-specialist.py's own outcome-typing
+        # ledger for any developer that DID reach for it directly — the exact
+        # defect this plan exists to fix.
+        "Bash(python3 scripts/measure-marker-extractor-latency.py:*)",
+        # hook-resolution-reminder-pretooluse-gap stage 1 needs to compile its own
+        # edits, check the engine's own worktree-local gate state, and run the new
+        # judge's real-call latency sampler. User-authorized 2026-08-28 as another
+        # narrow, named unblock — same precedent as the grant above, not a
+        # broadening to "any python3". Root cause of needing this at all:
+        # `agentctl resolve-permission --decision granted` only clears engine
+        # state and returns a continuation string (continuations.py
+        # permission_granted()) — it never writes to any permissions file and
+        # never touches this list, so three consecutive PERMISSION-REQUEST/grant
+        # cycles for this exact stage reproduced the identical block each time.
+        "Bash(python3 -m py_compile:*)",
+        "Bash(python3 samples/judge-latency/sample_landing_discipline.py:*)",
+        # tech-writer-publication-gate stage 6's method is a real in-harness
+        # observation: spawn two actual `claude -p` children (deny arm, allow
+        # arm) against a scratch hook and independently re-check the recorded
+        # timestamps/acts, which a stdin-fed rerun of the hook cannot establish.
+        # User-authorized 2026-09-02 as the same narrow, named, temporary
+        # unblock pattern as the two grants above. Unlike the removed
+        # "claude -p --model haiku:*" grant noted above, a direct `claude -p`
+        # spawn is this stage's actual deliverable, not an avoidable
+        # implementation detail routed through an already-permitted python3
+        # process — so the raw Bash grant is scoped here, not just the wrapper.
+        "Bash(python3 scripts/check-in-harness-observation.py:*)",
+        "Bash(python3 scripts/check-live-run-evidence.py:*)",
+        "Bash(python3 _ptg_scratch/probe/launch_probe.py:*)",
+        # "Bash(claude -p:*)" REMOVED (was here through 2026-09-24): unbounded
+        # trailing args on the one program grants.validate_rule refuses
+        # unconditionally in every OTHER position (is_claude_program) — its
+        # presence here was a pre-existing exception this stage's brief
+        # explicitly names for removal, not a measured need (no measured Bash
+        # call in the inventory actually invokes `claude` directly; every
+        # in-harness-observation stage above drives it via host_llm's argv
+        # builder inside the already-permitted python3 process).
+    ],
+    # default: any kind with no dedicated row above (e.g. a project-local
+    # specialization under <cwd>/.claude/skills/specializations/) gets the
+    # read-only bucket and nothing role-specific — same principle as every
+    # other row: only a MEASURED usage pattern earns an addition here.
+    "default": list(_READ_ONLY_INSPECTION),
+}
 
 # The plan-artifact directory (lib.config_root.plans_dir()) is where a
 # planner's SKILL.md tells it to write its deliverable and where a reviewer's
 # SKILL.md tells it to read the plan under review — a contract naming a
 # directory neither kind was ever granted. planner writes; thinker and
-# code-reviewer only read, plus the one Bash prefix that lets a reviewer bind
-# its own verdict to the plan bytes via `agentctl plan-review --plan-digest`
-# (see the plan's stage-2 material). Rides the same --settings seam
-# DEVELOPER_SETTINGS_ALLOW uses, never settings/base.json.
+# code-reviewer only read, plus the one Bash prefix that lets a reviewer
+# compute the plan's own sha256 to report in its REVIEW message (as a
+# `Plan digest: <sha256>` line) — the reviewer never runs `agentctl
+# plan-review --plan-digest` itself (that call needs --session, which a
+# review spawn is never given; see plugins_review_dispatch.py's directive
+# text), only the ROOT does, once the reviewer's digest is in hand. Rides
+# the same --settings seam KIND_BASELINES uses, never settings/base.json.
 #
 # Three facts measured live against the CLI on 2026-08-05 (probes A-D in the
 # stage-2 continuation), none of them documented anywhere the plan's authors
@@ -703,9 +816,9 @@ def _vcs_root(cwd: str) -> "str | None":
 
 def repo_root_add_dir_args(kind: str, cwd: str) -> list[str]:
     """`--add-dir` argv granting a `developer` spawn the same VCS-repo-root
-    scope its parent session already has, when the spawn's cwd (inherited
-    from the parent process — nothing in this module passes an explicit
-    `cwd=` to the child launch) sits strictly below that root.
+    scope its parent session already has, when the spawn's cwd (the
+    resolved `--workdir`, or the parent process's own cwd when unset — see
+    `main`) sits strictly below that root.
 
     Difficulty removed: a monorepo mount can hold several product subtrees
     under one repo_root (e.g. `team-a/service` and a sibling
@@ -764,31 +877,128 @@ def project_settings_permission_rules(project_settings_file: "Path | None") -> t
     return allow, deny
 
 
+def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
+    """(allow, deny) rule strings materialized from a flat stage-grants list
+    (agentctl `cmd_stage_grants`'s `.data["grants"]` shape: each entry
+    carries either `"rule"`, or `"path"`+`"mode"`, plus `"provenance"` —
+    provenance is not consumed here, only by `stage_grant_provenance_lines`
+    for the prompt header). A `"rule"` entry passes through
+    `grants.validate_rule` here too — an engine grant is never trusted more
+    than a declared one materialized straight from the plan TOML, per this
+    module's own validate-at-every-entry-point invariant.
+
+    A `path`+`mode` entry (an add_dir grant) is validated via
+    `grants.validate_add_dir`, never `grants.validate_rule`: a directory-glob
+    Edit/Read rule (`Edit(//<path>/**)`) is categorically refused by
+    `grants.validate_rule` (unbounded/unpredictable path expansion — see its
+    `_GLOB_METACHARS` check), so no ALLOW rule is ever synthesized for a
+    `write` add_dir — `--add-dir` alone already grants write under
+    `acceptEdits`/`auto` (developer/tech-writer, the only kinds
+    `KIND_BASELINES` pins there); a `write` add_dir declared for a
+    `default`-mode kind (thinker/planner/code-reviewer) needs an explicit
+    per-file `"rule"` grant instead, since no directory-glob allow can ever
+    validate. A `read` add_dir DOES pair with a synthesized Edit DENY,
+    mirroring `plans_permission_rules`' own directional-pair pattern — but
+    that DENY is never passed through `grants.validate_rule` (deny rules are
+    outside its scope by design; `grants.validate_grants` itself iterates
+    only `allow` and `add_dirs`), so the same glob shape that would refuse an
+    allow rule is fine here."""
+    allow: list[str] = []
+    deny: list[str] = []
+    for entry in entries:
+        rule = entry.get("rule")
+        if rule is not None:
+            grants.validate_rule(rule)
+            allow.append(rule)
+            continue
+        path = entry.get("path")
+        mode = entry.get("mode")
+        if path is None or mode is None:
+            continue
+        grants.validate_add_dir(path, mode)
+        if mode == "read":
+            deny.append(f"Edit({grants.rule_file_arg(path.rstrip('/') + '/**')})")
+    return allow, deny
+
+
+def stage_grant_add_dir_args(entries: list[dict]) -> list[str]:
+    """`--add-dir` argv for every `path`+`mode` entry in a flat stage-grants
+    list — a permissions.allow rule alone does not put a directory outside
+    the child's cwd into its workspace (same reasoning as
+    `plans_add_dir_args`)."""
+    args: list[str] = []
+    for entry in entries:
+        path = entry.get("path")
+        mode = entry.get("mode")
+        if path is None or mode is None:
+            continue
+        grants.validate_add_dir(path, mode)
+        args.extend(["--add-dir", path])
+    return args
+
+
+def _paths_from_add_dir_argv(argv: list[str]) -> list[str]:
+    """Recover the bare directory paths from a flat `["--add-dir", path, ...]`
+    argv list (the shape every `*_add_dir_args` helper returns), for the
+    prompt's File-access scope section, which lists paths, not argv."""
+    return argv[1::2]
+
+
+def stage_grant_provenance_lines(entries: list[dict]) -> list[str]:
+    """One `<destination> — <provenance>` markdown bullet per stage-grant
+    entry, for `assemble_prompt`'s File-access scope section — the brief
+    arrives with not just WHAT it may access but WHY (declared by the plan
+    author, derived from its own verify_command/output_artifacts, or
+    granted at runtime for this one stage)."""
+    lines = []
+    for entry in entries:
+        dest = entry.get("rule") or f"{entry.get('path')} ({entry.get('mode')})"
+        lines.append(f"- `{dest}` — {entry.get('provenance', 'unknown')}")
+    return lines
+
+
 def build_child_settings(
     kind: str,
     plans_directory: "Path | None" = None,
     project_settings_file: "Path | None" = None,
+    engine_grants: "list[dict] | None" = None,
 ) -> dict:
     """Child `--settings` payload: the auto-compaction window pin for every kind
     (both forms, mirroring settings/base.json — the env key wins in the client's
-    window resolution, the top-level key is the settings-path fallback), plus the
-    developer-scoped grant of exactly the verbs a developer brief requires, plus
-    the plans-directory grant for the kinds that need it (merged with the
-    developer allow, never replacing it), plus — for kind=="developer" only —
-    the target project's own `.claude/settings.local.json` permissions.allow/deny
-    (see project_settings_permission_rules): a spawned developer inherits the
-    same project-scope grants an interactive session in that project already
-    has, instead of being limited to the fleet-wide DEVELOPER_SETTINGS_ALLOW
-    list, which is scoped to this repo's own verifiers and knows nothing about
-    a target project's build/test commands."""
+    window resolution, the top-level key is the settings-path fallback), plus
+    every kind's `KIND_BASELINES` grant (uniform for all kinds — no
+    kind-gate here; `KIND_BASELINES.get(kind, KIND_BASELINES["default"])`
+    covers an unknown kind too), plus the plans-directory grant for the
+    kinds that need it, plus — for kind=="developer" only — the target
+    project's own `.claude/settings.local.json` permissions.allow/deny (see
+    project_settings_permission_rules): a spawned developer inherits the
+    same project-scope grants an interactive session in that project
+    already has, instead of being limited to the fleet-wide developer
+    baseline, which is scoped to this repo's own verifiers and knows
+    nothing about a target project's build/test commands. Plus, when
+    `engine_grants` is given (the stage's own declared/derived/runtime
+    grant set — see `load_engine_stage_grants`), those too.
+
+    `grants.validate_rule` gates only the baseline and `engine_grants`
+    sources — the four categories the stage-grants model actually names
+    (baseline/declared/derived/runtime). `plans_allow`/`project_allow` are a
+    pre-existing, orthogonal mechanism (plans_permission_rules,
+    project_settings_permission_rules) whose directory-glob rule shape
+    (`Read(//<dir>/**)`) `grants.validate_rule` categorically refuses — see
+    `stage_grant_rules` — so routing them through the same validator would
+    reject rules that already worked before this stage's change; they keep
+    their own, separate acceptance path."""
     settings: dict = {
         "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(SPAWN_AUTOCOMPACT_WINDOW_TOKENS)},
         "autoCompactWindow": SPAWN_AUTOCOMPACT_WINDOW_TOKENS,
     }
     allow: list[str] = []
     deny: list[str] = []
+    baseline = KIND_BASELINES.get(kind, KIND_BASELINES["default"])
+    for rule in baseline:
+        grants.validate_rule(rule)
+    allow.extend(baseline)
     if kind == "developer":
-        allow.extend(DEVELOPER_SETTINGS_ALLOW)
         project_allow, project_deny = project_settings_permission_rules(project_settings_file)
         allow.extend(project_allow)
         deny.extend(project_deny)
@@ -796,6 +1006,10 @@ def build_child_settings(
         plans_allow, plans_deny = plans_permission_rules(kind, plans_directory)
         allow.extend(plans_allow)
         deny.extend(plans_deny)
+    if engine_grants:
+        engine_allow, engine_deny = stage_grant_rules(engine_grants)
+        allow.extend(engine_allow)
+        deny.extend(engine_deny)
     permissions: dict = {}
     if allow:
         permissions["allow"] = allow
@@ -804,6 +1018,42 @@ def build_child_settings(
     if permissions:
         settings["permissions"] = permissions
     return settings
+
+
+def load_engine_stage_grants(
+    session_id: str,
+    stage_index: int,
+    kind: str,
+    state_root: "Path | None" = None,
+) -> "list[dict] | None":
+    """The stage's effective grant set (declared + derived + unconsumed
+    runtime) from the agentctl engine, or `None` when `kind` disagrees with
+    the stage's own declared executor (a spawn whose --kind is not this
+    stage's authorized actor gets no engine grants — its KIND_BASELINES-only
+    settings are all it receives) or the session/stage cannot be resolved.
+
+    Direct in-process import of `agentctl.cli`/`agentctl.store`, mirroring
+    this file's existing `agentctl.plan`/`agentctl.render` import
+    precedent, rather than a subprocess call to the `agentctl` CLI
+    executable — spawn-specialist.py already trusts the engine's Python
+    surface directly for the plan-brief projection, so the grant read uses
+    the same seam instead of introducing a second, shell-mediated one."""
+    from agentctl import cli as agentctl_cli
+    from agentctl.store import FileStateStore
+
+    store = FileStateStore(state_root) if state_root is not None else FileStateStore()
+    try:
+        directive = agentctl_cli.cmd_stage_grants(
+            argparse.Namespace(session=session_id, stage=stage_index, json=True),
+            store=store,
+        )
+    except KeyError:
+        return None
+    if not directive.ok:
+        return None
+    if directive.data.get("executor") != f"spawn:{kind}":
+        return None
+    return directive.data.get("grants", [])
 
 
 def _snapshot_transcripts() -> set[Path]:
@@ -894,10 +1144,12 @@ def deregister_child_scope(
 def resolve_permission_mode(args: argparse.Namespace) -> str | None:
     """Pick the permission mode passed to `claude -p`.
 
-    Default policy: the developer specialization needs unattended Read/Grep/Write
-    in a trusted local mount, so use `acceptEdits` — the narrowest mode granting
-    exactly that. Other specializations stay on harness defaults (interactive
-    prompts) since they are mostly read-only.
+    Default policy: the developer and tech-writer specializations need
+    unattended Read/Grep/Write in a trusted local mount, so use `acceptEdits`
+    — the narrowest mode granting exactly that. thinker/planner/code-reviewer
+    are explicitly pinned to `default` (interactive-prompt semantics) since
+    they are mostly read-only and any write they need goes through an
+    explicit, reviewable grant instead.
 
     NOT bypassPermissions, for two independent reasons. It is far wider than the
     need: it waives EVERY permission class, not only file writes. And on a fleet
@@ -909,14 +1161,18 @@ def resolve_permission_mode(args: argparse.Namespace) -> str | None:
     AND actually takes effect.
 
     Any capability beyond file writes belongs in an explicit, reviewable grant
-    (`DEVELOPER_SETTINGS_ALLOW`), never in a blanket waiver.
+    (`KIND_BASELINES`), never in a blanket waiver. `--permission-mode` itself is
+    narrowed at the CLI layer to `default`/`plan` only — the wider modes below
+    are resolved here, never accepted as a caller-supplied flag value.
 
     User-supplied `--permission-mode` always wins.
     """
     if args.permission_mode is not None:
         return args.permission_mode
-    if args.kind == "developer":
+    if args.kind in ("developer", "tech-writer"):
         return "acceptEdits"
+    if args.kind in ("thinker", "planner", "code-reviewer"):
+        return "default"
     return None
 
 
@@ -1071,9 +1327,44 @@ def main(argv: list[str] | None = None) -> int:
     # kill fires only on a true runaway, not on legitimate large work.
     tier_label_usd = budget_value(args.budget, constants)
     cap = runaway_ceiling(constants)
+
+    if args.workdir is not None and not args.workdir.is_dir():
+        print(f"error: --workdir does not exist or is not a directory: {args.workdir}", file=sys.stderr)
+        log_refused("workdir-not-found", {"kind": args.kind, "workdir": str(args.workdir)})
+        return 2
+    workdir = str(args.workdir) if args.workdir is not None else os.getcwd()
+
+    plans_directory = plans_dir()
+    # engine_grants stays None unless BOTH --session and --stage-index are given
+    # AND the engine's own executor field for that stage matches --kind (checked
+    # inside load_engine_stage_grants) -- a mismatch or unknown session falls
+    # back to kind-baseline-only settings rather than failing the spawn.
+    engine_grants: "list[dict] | None" = None
+    if args.session is not None and args.stage_index is not None:
+        engine_grants = load_engine_stage_grants(
+            args.session, args.stage_index, args.kind, state_root=args.state_root
+        )
+
+    add_dir_argv: list[str] = []
+    add_dir_argv.extend(plans_add_dir_args(args.kind, plans_directory))
+    add_dir_argv.extend(repo_root_add_dir_args(args.kind, workdir))
+    if engine_grants:
+        add_dir_argv.extend(stage_grant_add_dir_args(engine_grants))
+    add_dir_paths = _paths_from_add_dir_argv(add_dir_argv)
+
+    permission_mode = resolve_permission_mode(args)
+
     perms = permissions_digest(args.project_permissions)
     try:
-        prompt = assemble_prompt(args, depth_next, perms)
+        prompt = assemble_prompt(
+            args,
+            depth_next,
+            perms,
+            workdir=workdir,
+            permission_mode=permission_mode,
+            add_dir_paths=add_dir_paths,
+            stage_grant_entries=engine_grants,
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         log_refused(
@@ -1107,8 +1398,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 5
 
-    plans_directory = plans_dir()
-
     cmd = [
         "claude",
         "-p",
@@ -1124,11 +1413,9 @@ def main(argv: list[str] | None = None) -> int:
         # work: settings.json env is applied after process start and wins (see
         # memory-global leaf claude-code-settings-env-precedence.md).
         "--settings",
-        json.dumps(build_child_settings(args.kind, plans_directory, args.project_settings)),
+        json.dumps(build_child_settings(args.kind, plans_directory, args.project_settings, engine_grants)),
     ]
-    cmd.extend(plans_add_dir_args(args.kind, plans_directory))
-    cmd.extend(repo_root_add_dir_args(args.kind, os.getcwd()))
-    permission_mode = resolve_permission_mode(args)
+    cmd.extend(add_dir_argv)
     if permission_mode is not None:
         cmd.extend(["--permission-mode", permission_mode])
     cmd.extend(["--model", model])
@@ -1175,7 +1462,7 @@ def main(argv: list[str] | None = None) -> int:
     # a manual `kill` of the wrapper lands the same SIGTERM), so the claude -p
     # subtree is never orphaned.
     proc = proc_tree.launch_supervised(
-        cmd, env=env, stdin=subprocess.PIPE,
+        cmd, env=env, cwd=workdir, stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
     proc_tree.install_teardown(proc)
@@ -1198,6 +1485,7 @@ def main(argv: list[str] | None = None) -> int:
             print("spawn-specialist: transcript=<not-found-within-10s>", file=sys.stderr, flush=True)
 
     announcer = threading.Thread(target=_announce_transcript, daemon=True)
+    child_session_id: "str | None" = None
     try:
         announcer.start()
         stdout_str, stderr_str = proc.communicate(input=prompt)
@@ -1209,8 +1497,12 @@ def main(argv: list[str] | None = None) -> int:
         # lives in this same finally (not after it) so it fires on every exit
         # path — including one that raises before the result JSON is parsed
         # below — using whatever of {stdout, transcript_path} it managed to get.
+        # child_session_id is captured to the outer variable here (rather than
+        # recomputed later) so the spawn-costs ledger row below can carry it
+        # without a second resolve_child_session_id call.
         proc_tree.kill_tree(proc)
-        deregister_child_scope(resolve_child_session_id(stdout_str, transcript_path))
+        child_session_id = resolve_child_session_id(stdout_str, transcript_path)
+        deregister_child_scope(child_session_id)
     completed = subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout_str, stderr=stderr_str)
     duration_ms = int((time.monotonic() - started) * 1000)
 
@@ -1270,6 +1562,8 @@ def main(argv: list[str] | None = None) -> int:
         "extractor_degraded": extraction.degraded if extraction is not None else None,
         "extraction_reason": extraction.reason if extraction is not None else None,
         "outcome_class": outcome_class,
+        "child_session_id": child_session_id,
+        "transcript_path": str(transcript_path) if transcript_path is not None else None,
         **_spawn_tags(),
     })
 
