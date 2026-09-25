@@ -20,9 +20,14 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 35  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+from .grants import StageGrants
+
+SCHEMA_VERSION = 36  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
+                     # 36: Stage gains `grants` (declared [stage.grants]); SessionState
+                     # gains runtime_grants/approved_grants_sha256/planning_misses/
+                     # materialization_defects/settings_drift (permission-grant model)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1266,6 +1271,13 @@ class Stage:
     # Optional on any stage; required non-empty for spawn:developer when recording passed,
     # because review is the value the control criterion takes for the developer special case.
     control: str | None = None
+    # Declared [stage.grants] (schema 36) — validated by grants.validate_grants at plan
+    # load, never trusted unvalidated. None on every plan authored before this field (and
+    # on any stage that declares no grants block at all), which is byte-identical to "no
+    # declared grants": derive_stage_grants still runs at dispatch time, so an old plan's
+    # spawned children keep receiving the same DERIVED grants they always did. See
+    # grants.py's module docstring for why this is the sole validated entry point.
+    grants: StageGrants | None = None
 
     @property
     def depends_on(self) -> list[int]:
@@ -1314,6 +1326,7 @@ class Stage:
                 output_artifacts=list(d.get("output_artifacts", [])),
                 outcome=Outcome(**d["outcome"]) if d.get("outcome") else Outcome(),
                 control=d.get("control"),
+                grants=StageGrants.from_dict(d.get("grants")),
             )
         # legacy FLAT shape -> nested groups (migration shim)
         return cls(
@@ -1350,6 +1363,7 @@ class Stage:
                 fail_digests=list(d.get("fail_digests", [])),
             ),
             control=d.get("control"),
+            grants=StageGrants.from_dict(d.get("grants")),
         )
 
 
@@ -1579,6 +1593,47 @@ class SessionState:
     # so `dispatch --re-attest` has no observable and falls back to a normal
     # dispatch (fail-closed toward the more expensive, never the cheaper, path).
     reattest_stash: list[ReattestStash] = field(default_factory=list)
+    # Permission-grant model custody (schema 36) — grants.py is the sole validation/
+    # coverage authority; these fields are the durable record of what it decided.
+    # Plain dict-of-list-of-dict, same shape discipline as effort_fires/renegotiations
+    # above (no dataclass wrapping): each row is written once and only ever appended
+    # to or read, never field-by-field mutated, so a typed dataclass would buy nothing
+    # here that from_dict couldn't already give it by leaving the value alone.
+    #   runtime_grants            str(stage_index) -> list of RuleGrant/AddDirGrant
+    #                              dicts (provenance "runtime") resolve-permission has
+    #                              granted for that stage during THIS execution. Keyed
+    #                              by index, not title: a substantive replan that
+    #                              retitles or renumbers a stage is exactly the case
+    #                              that should NOT silently carry a runtime grant
+    #                              forward onto a stage the user never saw it granted
+    #                              for the diff_plans is drawing over the NEW plan.
+    #   approved_grants_sha256    sha256 of the effective (declared+derived) grant set
+    #                              hashed at the last successful `approve`, over the
+    #                              plan snapshot approve just froze. `stage-grants` only
+    #                              emits DERIVED grants when the live plan snapshot
+    #                              re-hashes to this value — see grants.py's docstring
+    #                              on why a derivation-code change or unapproved plan
+    #                              drift must never silently grant something new.
+    #   planning_misses           one dict per denial classified NOT covered by the
+    #                              stage's effective grant set (asked_user: bool, ts,
+    #                              stage_index, tool_name, tool_input digest).
+    #   materialization_defects   one dict per denial classified COVERED by the
+    #                              effective grant set but denied anyway (grant
+    #                              existed, materialization into --settings/--add-dir
+    #                              failed) — routes the stage to FAILED -> DIAGNOSING,
+    #                              never a re-ask.
+    #   settings_drift            one dict per stage whose enumerate_live_settings()
+    #                              hash differs between immediately-before-launch and
+    #                              immediately-after-exit (a live settings document
+    #                              changed underneath the spawn).
+    # All five are absent on every pre-schema-36 state (absent key -> dataclass default
+    # via from_dict's cls(**data)): {}/None/[]/[]/[] is exactly "no grant activity has
+    # ever been recorded", which is true of every session that predates this field.
+    runtime_grants: dict[str, list[dict]] = field(default_factory=dict)
+    approved_grants_sha256: str | None = None
+    planning_misses: list[dict] = field(default_factory=list)
+    materialization_defects: list[dict] = field(default_factory=list)
+    settings_drift: list[dict] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:

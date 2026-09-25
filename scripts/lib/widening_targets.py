@@ -1,0 +1,320 @@
+"""G-target predicates: paths and programs a stage grant can never cover.
+
+Difficulty removed: `agentctl/grants.py`'s validator needs one shared,
+structural answer to "is this a widening of the agent's own permission
+surface" so a grant that would let a spawned child rewrite its own
+permissions, launch surface, or coordination-authority verbs can be refused
+by SHAPE rather than by a list of literal strings scattered across the
+validator, the guard hook, and a probe script. This module is that shape —
+predicates only, no policy about what to DO with a match (that is the
+validator's job).
+
+Every predicate here fails toward TREATING SOMETHING AS A G-TARGET on
+ambiguity — the caller (grants.validate_grants) refuses on True, so the
+asymmetric cost of a false positive (a legitimate grant refused, surfaced to
+the user as a plan-authoring error) is far cheaper than a false negative (a
+widening grant silently accepted).
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path, PurePosixPath
+
+from . import config_root
+
+# --- settings documents -----------------------------------------------------
+
+_SETTINGS_BASENAME_RE = re.compile(r"^settings[^/]*\.json$")
+
+
+def _norm(path: str) -> str:
+    """Expanduser + POSIX-slash normalization, without resolving symlinks or
+    requiring existence — a grant-form path is a string in a TOML file, not
+    yet a filesystem entry."""
+    return str(PurePosixPath(str(Path(path).expanduser())))
+
+
+def is_live_settings(path: str) -> bool:
+    """True iff `path` names a settings document the harness or the system
+    actually loads from: `$CLAUDE_AGENT_HOME/settings*.json`,
+    `~/.claude/settings*.json`, or `.../.claude/settings*.json` at any depth
+    (a project-local settings file). Broader than `enumerate_live_settings`'s
+    four concrete locations on purpose — this predicate exists to REFUSE a
+    grant, so it must catch every settings document a plan could name, not
+    only the ones this machine happens to have today."""
+    if not isinstance(path, str) or not path.strip():
+        return False
+    norm = _norm(path)
+    basename = norm.rsplit("/", 1)[-1]
+    if not _SETTINGS_BASENAME_RE.match(basename):
+        return False
+    parts = norm.split("/")
+    if ".claude" in parts[:-1] or ".claude-agent" in parts[:-1]:
+        return True
+    agent_home_norm = _norm(str(config_root.agent_home()))
+    if norm.startswith(agent_home_norm + "/") or norm == agent_home_norm:
+        return True
+    return False
+
+
+def enumerate_live_settings(child_cwd: str | None, root_cwd: str | None) -> list[str]:
+    """The existing settings*.json documents among exactly the FOUR named
+    locations a live harness could actually be loading from: the agent
+    home's own settings, the personal `~/.claude` settings, and a
+    project-local `.claude/settings*.json` under each of `child_cwd` and
+    `root_cwd`. Deliberately does NOT walk the filesystem for other
+    `.claude` directories (e.g. a sibling checkout) — this is a drift
+    record of the locations THIS dispatch could plausibly affect, not a
+    system-wide settings audit. Sorted, deduplicated by resolved path."""
+    dirs: list[Path] = [config_root.agent_home(), Path.home() / ".claude"]
+    for cwd in (child_cwd, root_cwd):
+        if cwd:
+            dirs.append(Path(cwd) / ".claude")
+    seen: set[str] = set()
+    out: list[str] = []
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for doc in sorted(d.glob("settings*.json")):
+            try:
+                key = str(doc.resolve())
+            except OSError:  # pragma: no cover - unresolvable path
+                key = str(doc)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(key)
+    return sorted(out)
+
+
+# --- state dir / launch surfaces / protected roots --------------------------
+
+
+def is_agentctl_state_path(path: str) -> bool:
+    """True iff `path` is under agentctl's own state directory — a grant that
+    could Edit/write there could forge a stage outcome or gate record."""
+    if not isinstance(path, str) or not path.strip():
+        return False
+    norm = _norm(path)
+    state_dir = _norm(str(config_root.agentctl_state_dir()))
+    agentctl_dir = _norm(str(config_root.agentctl_dir()))
+    return norm == state_dir or norm.startswith(state_dir + "/") or \
+        norm == agentctl_dir or norm.startswith(agentctl_dir + "/")
+
+
+_LAUNCH_SURFACE_SEGMENTS = (
+    "Library/LaunchAgents",
+    "Library/LaunchDaemons",
+    ".config/systemd/user",
+)
+
+
+def is_launch_surface(path: str) -> bool:
+    """True iff `path` is under a persistent-launch-registration surface: a
+    macOS LaunchAgent/LaunchDaemon directory or a systemd user-unit
+    directory. A grant reaching here could make a spawned child install
+    something that runs again after this session ends."""
+    if not isinstance(path, str) or not path.strip():
+        return False
+    norm = _norm(path)
+    home_norm = _norm(str(Path.home()))
+    for seg in _LAUNCH_SURFACE_SEGMENTS:
+        target = _norm(f"{home_norm}/{seg}")
+        if norm == target or norm.startswith(target + "/"):
+            return True
+    return False
+
+
+def is_crontab_target(command: str) -> bool:
+    """True iff `command` invokes `crontab` — the third launch surface,
+    named by program rather than by path (crontab has no file target a
+    plan-authored rule could point at)."""
+    if not isinstance(command, str):
+        return False
+    return re.search(r"(^|[/\s])crontab(\s|$)", command) is not None
+
+
+_PROTECTED_ROOTS_ENV_RELATIVE = ("~",)
+
+
+def protected_roots() -> list[str]:
+    """The roots an add_dir grant may never be, or contain: `$HOME`,
+    `$CLAUDE_AGENT_HOME`, `~/.claude`, and the agentctl state dir. Returned
+    as normalized absolute path strings."""
+    return [
+        _norm(str(Path.home())),
+        _norm(str(config_root.agent_home())),
+        _norm(str(Path.home() / ".claude")),
+        _norm(str(config_root.agentctl_state_dir())),
+    ]
+
+
+def add_dir_is_or_contains_protected_root(path: str) -> bool:
+    """True iff an add_dir grant of `path` IS a protected root, or CONTAINS
+    one (an ancestor of a protected root) — either direction hands a
+    spawned child write access to agent-home-level state. Does not itself
+    check the opposite containment (`path` UNDER a protected root); that is
+    `add_dir_under_protected_root` below, checked separately because the
+    validator treats "under ~/.claude" as always-refused regardless of mode
+    while "contains a protected root" is refused for a WRITE add_dir."""
+    if not isinstance(path, str) or not path.strip():
+        return False
+    norm = _norm(path)
+    for root in protected_roots():
+        if norm == root or root.startswith(norm + "/"):
+            return True
+    return False
+
+
+def add_dir_under_protected_root(path: str) -> bool:
+    """True iff `path` is under `~/.claude` or the agentctl state dir
+    specifically — refused in EITHER add_dir mode (read or write), unlike
+    the broader protected-root containment check above which only bites a
+    write add_dir."""
+    if not isinstance(path, str) or not path.strip():
+        return False
+    norm = _norm(path)
+    for root in (_norm(str(Path.home() / ".claude")), _norm(str(config_root.agentctl_state_dir()))):
+        if norm == root or norm.startswith(root + "/"):
+            return True
+    return False
+
+
+# --- claude / agentctl program detection ------------------------------------
+
+_WRAPPER_TOKENS = frozenset({"env", "npx", "exec", "nohup", "timeout", "command"})
+_INTERPRETER_RE = re.compile(r"^python[0-9.]*$")
+
+# agentctl subcommands that exercise USER authority — approving a plan,
+# resolving a permission request, closing out a session, etc. A grant that
+# lets a spawned child invoke any of these bypasses the coordination spine
+# entirely: the child could self-approve its own plan or self-grant its own
+# permission request. Read-only introspection verbs (status, plan-render,
+# stage-grants, plan-grants, grant-stats, question-list, question-check,
+# order-list) are deliberately NOT in this set.
+AGENTCTL_USER_AUTHORITY_VERBS = frozenset({
+    "start", "reset", "approve", "resolve-permission", "resolve", "reject",
+    "accept", "risk-accept", "plan-review", "code-review", "stage-review",
+    "confirm-delivery", "present-plan", "submit-plan", "dispatch",
+    "record-result", "verify-final", "replan", "close", "fire-acknowledge",
+    "block", "unblock", "drive", "push-subplan", "pop-subplan", "task-reset",
+    "declare", "investigate", "critique", "normalize", "partition",
+    "partition-units", "next-stage", "plugin-activate", "plugin-deactivate",
+    "plugin-record",
+})
+
+
+def _strip_wrappers(tokens: list[str]) -> list[str]:
+    """Drop a leading run of wrapper tokens (`env FOO=bar`, `npx`, `exec`,
+    `nohup`, `timeout 30`, `command`) so the real program name surfaces.
+    `env` consumes any leading `KEY=VALUE` assignments and a `-i`/`-u NAME`
+    flag form; `timeout` consumes its duration operand."""
+    i = 0
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        if tok == "env":
+            i += 1
+            while i < n and ("=" in tokens[i] or tokens[i].startswith("-")):
+                if tokens[i].startswith("-u") and tokens[i] == "-u":
+                    i += 1  # consume the flag's separate NAME operand too
+                i += 1
+            continue
+        if tok == "timeout":
+            i += 1
+            while i < n and (tokens[i].startswith("-") or re.match(r"^[0-9.]+[smhd]?$", tokens[i])):
+                i += 1
+            continue
+        if tok in _WRAPPER_TOKENS:
+            i += 1
+            continue
+        break
+    return tokens[i:]
+
+
+def _program_name(token: str) -> str:
+    """The basename of a program token, stripping a leading absolute/relative
+    path so `/usr/bin/python3`, `./scripts/agentctl-cli.py`, and `python3`
+    are all recognized the same way."""
+    return token.rsplit("/", 1)[-1]
+
+
+def is_claude_program(tokens: list[str]) -> bool:
+    """True iff, after stripping wrapper tokens, the leading program token is
+    `claude` in any spelling (bare, absolute path, or via a wrapper)."""
+    stripped = _strip_wrappers(tokens)
+    if not stripped:
+        return False
+    return _program_name(stripped[0]) == "claude"
+
+
+def agentctl_user_authority_call(tokens: list[str]) -> str | None:
+    """If `tokens` (after stripping wrapper tokens) invokes agentctl and
+    names a user-authority verb, in EITHER spelling this repo supports —
+    `python3 -m agentctl <verb>` or an absolute-path entry-point script
+    (`python3 <path>/agentctl-cli.py <verb>` or a bare `agentctl-cli.py
+    <verb>`) — returns that verb; else `None`.
+
+    The interpreter check matches any `python[0-9.]*` name (including a
+    venv-path interpreter like `/home/x/.venv/bin/python3`), not only the
+    literal `python3` spelling, so a grant cannot dodge this refusal by
+    naming a differently-versioned or venv-relative interpreter."""
+    stripped = _strip_wrappers(tokens)
+    if not stripped:
+        return None
+    prog = _program_name(stripped[0])
+    rest = stripped[1:]
+    if _INTERPRETER_RE.match(prog):
+        if len(rest) >= 2 and rest[0] == "-m" and rest[1] == "agentctl":
+            verb = rest[2] if len(rest) >= 3 else None
+        elif rest and _program_name(rest[0]).endswith("agentctl-cli.py"):
+            verb = rest[1] if len(rest) >= 2 else None
+        else:
+            return None
+    elif prog.endswith("agentctl-cli.py"):
+        verb = rest[0] if rest else None
+    else:
+        return None
+    if verb in AGENTCTL_USER_AUTHORITY_VERBS:
+        return verb
+    return None
+
+
+# --- settings-channel programs -----------------------------------------------
+
+# Programs whose entire purpose is to write or install into a live settings
+# surface. Refused in EVERY invocation form (bare, absolute path, via a
+# wrapper) regardless of arguments — there is no safe argument subset for a
+# program whose job is to mutate the harness's own permission/hook wiring.
+# `scripts/tests/test_stage_grants.py::SETTINGS_REFERENCE_CLASSIFICATION`
+# is the committed, self-testing classification of every script this repo's
+# own settings-file references touch, so a newly added settings-writing
+# script fails that test until it is added here too.
+SETTINGS_CHANNEL_PROGRAMS = frozenset({
+    "apply-settings.sh",
+    "apply-mcp-local.sh",
+    "install-reminder-hooks.sh",
+    "set-context-cap.sh",
+    "migrate-to-isolated.sh",
+    "setup-symlinks.sh",
+})
+
+
+def is_settings_channel_program(tokens: list[str]) -> bool:
+    """True iff, after stripping wrapper tokens, the leading program token's
+    basename is a known settings-channel program — matched regardless of an
+    interpreter prefix (`bash apply-settings.sh`), a relative or absolute
+    path, or further arguments."""
+    stripped = _strip_wrappers(tokens)
+    if not stripped:
+        return False
+    prog = _program_name(stripped[0])
+    if prog in SETTINGS_CHANNEL_PROGRAMS:
+        return True
+    # `bash <script>` / `sh <script>`: the interpreter is the leading token,
+    # the script is the next one.
+    if prog in ("bash", "sh") and len(stripped) >= 2:
+        return _program_name(stripped[1]) in SETTINGS_CHANNEL_PROGRAMS
+    if _INTERPRETER_RE.match(prog) and len(stripped) >= 2:
+        return _program_name(stripped[1]) in SETTINGS_CHANNEL_PROGRAMS
+    return False
