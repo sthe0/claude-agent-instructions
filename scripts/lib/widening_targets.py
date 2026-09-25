@@ -160,8 +160,14 @@ def add_dir_is_or_contains_protected_root(path: str) -> bool:
     if not isinstance(path, str) or not path.strip():
         return False
     norm = _norm(path)
+    # `norm` is always POSIX-absolute (starts with "/"); the ancestor prefix
+    # is `norm` itself only when norm == "/" (its own trailing slash), else
+    # `norm + "/"` — using `norm + "/"` unconditionally breaks at the
+    # filesystem root, since "//" is not a prefix of any real path, silently
+    # letting an add_dir of "/" (which contains every protected root) pass.
+    prefix = norm if norm == "/" else norm + "/"
     for root in protected_roots():
-        if norm == root or root.startswith(norm + "/"):
+        if norm == root or root.startswith(prefix):
             return True
     return False
 

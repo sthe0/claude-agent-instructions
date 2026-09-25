@@ -192,7 +192,16 @@ def validate_rule(rule: str) -> None:
         raise GrantValidationError(f"rule {rule!r} invokes crontab — a launch surface — refused")
 
     stripped = widening_targets._strip_wrappers(tokens)
-    prog = widening_targets._program_name(stripped[0]) if stripped else ""
+    if not stripped:
+        # A leading wrapper/launcher run (env, timeout, npx, exec, nohup,
+        # command, ...) that consumes the entire token list leaves no program
+        # to validate against — e.g. bare `env` or `timeout 30` with nothing
+        # after it. Refuse outright: `_segment_covered`'s wildcard prefix
+        # match would otherwise let `Bash(env:*)` cover any `env <anything>`.
+        raise GrantValidationError(
+            f"rule {rule!r} is a bare wrapper/launcher with no operand — refused"
+        )
+    prog = widening_targets._program_name(stripped[0])
     operand_tokens = stripped[1:]
 
     # Bare interpreter/launcher without a script (or `-m module`) operand:
@@ -203,8 +212,6 @@ def validate_rule(rule: str) -> None:
         raise GrantValidationError(
             f"rule {rule!r} is a bare interpreter/launcher with no script operand — refused"
         )
-    if prog == "env" and stripped == [prog]:
-        raise GrantValidationError(f"rule {rule!r} is a bare launcher with no operand — refused")
 
     if prog in _WRITE_CAPABLE_PROGRAMS:
         _validate_write_capable_bash(rule, prog, operand_tokens)
