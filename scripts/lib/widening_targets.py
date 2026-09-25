@@ -129,6 +129,27 @@ def is_launch_surface(path: str) -> bool:
     return False
 
 
+def add_dir_is_or_contains_launch_surface(path: str) -> bool:
+    """True iff an add_dir grant of `path` is under a launch surface
+    (`is_launch_surface`'s own direction) OR IS/CONTAINS one — an ancestor
+    of `~/Library/LaunchAgents` etc. — mirroring
+    `add_dir_is_or_contains_protected_root`'s both-directions shape: a
+    write add_dir at either end of that relationship hands a spawned child
+    a path from which a launch-surface file is reachable via `Edit`."""
+    if not isinstance(path, str) or not path.strip():
+        return False
+    if is_launch_surface(path):
+        return True
+    norm = _norm(path)
+    prefix = norm if norm == "/" else norm + "/"
+    home_norm = _norm(str(Path.home()))
+    for seg in _LAUNCH_SURFACE_SEGMENTS:
+        target = _norm(f"{home_norm}/{seg}")
+        if target.startswith(prefix):
+            return True
+    return False
+
+
 def is_crontab_target(command: str) -> bool:
     """True iff `command` invokes `crontab` — the third launch surface,
     named by program rather than by path (crontab has no file target a

@@ -40,7 +40,7 @@ from agentctl.plan import load_plan  # parse the TOML plan for a single-stage br
 from agentctl.render import render_stage_brief  # pure PlanDoc+index -> markdown brief
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
-from lib.config_root import iter_transcripts, plans_dir, skills_dir  # config-root resolver (isolated system root)
+from lib.config_root import plans_dir, projects_roots, skills_dir  # config-root resolver (isolated system root)
 from lib.planner_plan_check import (  # single shared home for return-marker + plan checks
     MARKER_RE,
     PLAN_PATH_RE,
@@ -259,6 +259,22 @@ def assemble_prompt(
             scope_lines.extend(stage_grant_provenance_lines(stage_grant_entries))
         scope_lines.append("")
         sections += scope_lines
+    if getattr(args, "kind", None) == "planner":
+        sections += [
+            "## Prescribed research commands",
+            "",
+            "Before drafting, run these against the ENGINE'S own state rather than "
+            "assuming a stage's grants will materialize as you expect, or that a "
+            "past denial means what its transcript text alone suggests:",
+            "",
+            f"- `python3 {SCRIPTS_DIR}/agentctl-cli.py plan-grants --plan <plan-path> "
+            "--format compact` — what each stage's declared/derived grants will "
+            "actually materialize to in a spawned child's --settings.",
+            f"- `python3 {SCRIPTS_DIR}/check-spawn-tool-run.py --list-denied "
+            "--transcript <transcript-path>` — every tool call a past transcript was "
+            "actually refused, so a stage's grants can be sized against real denials.",
+            "",
+        ]
     if getattr(args, "kind", None) == "developer":
         sections += [
             "## Verification command hygiene",
@@ -610,6 +626,18 @@ _READ_ONLY_INSPECTION = [
     "Bash(python3 -m agentctl classify:*)", "Bash(python3 -m agentctl status:*)",
 ]
 
+# Absolute-path Bash rules for the planner kind: the harness matches a Bash
+# rule against the LITERAL command string, so a relative `scripts/foo.py` or
+# bare `foo.py` rule only ever matches when the child's cwd happens to be the
+# right one — a planner spawned with --workdir outside this repo (the normal
+# case) silently loses the grant. Every planner rule below is instead built
+# from this repo's own absolute scripts/ dir, so it matches regardless of the
+# child's cwd; see also PROJECT_SETTINGS_KINDS.
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+PLANNER_CHECK_ORDER_COVERAGE_RULE = f"Bash(python3 {SCRIPTS_DIR}/check-order-coverage.py:*)"
+PLANNER_PLAN_GRANTS_RULE = f"Bash(python3 {SCRIPTS_DIR}/agentctl-cli.py plan-grants:*)"
+PLANNER_LIST_DENIED_RULE = f"Bash(python3 {SCRIPTS_DIR}/check-spawn-tool-run.py --list-denied:*)"
+
 KIND_BASELINES: dict[str, list[str]] = {
     # thinker: 4563 Bash calls sampled, overwhelmingly read-only inspection
     # (grep/python3 -m agentctl introspection/ls/shasum/cat/git log); the
@@ -617,14 +645,21 @@ KIND_BASELINES: dict[str, list[str]] = {
     # read-only bucket correctly excludes, not a baseline gap (see above).
     "thinker": list(_READ_ONLY_INSPECTION),
     # planner: 1629 Bash calls, same read-only shape as thinker, plus the
-    # plan-authoring repo verifier it measurably runs on its own output
-    # (37 combined calls to python3 [scripts/]check-order-coverage.py).
-    # Edit access to plans_dir() itself is a separate, pre-existing grant
+    # plan-authoring repo verifier it measurably runs on its own output (37
+    # combined calls to check-order-coverage.py), plus two research commands
+    # this stage's own "Prescribed research commands" prompt section
+    # (assemble_prompt) tells the planner to run before drafting: plan-grants
+    # (what a stage's own grants will materialize to) and --list-denied (what
+    # a past transcript was actually refused). All three are absolute-path
+    # rules (see SCRIPTS_DIR above), not the prior relative `scripts/foo.py`
+    # shape, which only matched from this repo's own cwd. Edit access to
+    # plans_dir() itself is a separate, pre-existing grant
     # (PLANS_WRITE_KINDS/plans_permission_rules) layered on in
     # build_child_settings, not duplicated here.
     "planner": list(_READ_ONLY_INSPECTION) + [
-        "Bash(python3 check-order-coverage.py:*)",
-        "Bash(python3 scripts/check-order-coverage.py:*)",
+        PLANNER_CHECK_ORDER_COVERAGE_RULE,
+        PLANNER_PLAN_GRANTS_RULE,
+        PLANNER_LIST_DENIED_RULE,
     ],
     # code-reviewer: 1808 Bash calls, read-only bucket dominant (git
     # diff/show/log/status — all now common), plus the test
@@ -633,7 +668,7 @@ KIND_BASELINES: dict[str, list[str]] = {
     # denials) — a reviewer needs to run checks, not just read diffs.
     "code-reviewer": list(_READ_ONLY_INSPECTION) + [
         "Bash(python3 -m pytest:*)",
-        "Bash(python3 scripts/verify-semantic-gates.py:*)",
+        f"Bash(python3 {SCRIPTS_DIR}/verify-semantic-gates.py:*)",
     ],
     # tech-writer: only 13 Bash calls sampled across 10 transcripts (mostly
     # `wc`, covered by the read-only bucket) — too small a sample to justify
@@ -650,9 +685,9 @@ KIND_BASELINES: dict[str, list[str]] = {
     "developer": list(_READ_ONLY_INSPECTION) + [
         # verification the brief mandates
         "Bash(python3 -m pytest:*)",
-        "Bash(python3 scripts/verify-all.py:*)",
-        "Bash(python3 scripts/verify-agentctl.py:*)",
-        "Bash(python3 scripts/gen_crutch_registry.py:*)",
+        f"Bash(python3 {SCRIPTS_DIR}/verify-all.py:*)",
+        f"Bash(python3 {SCRIPTS_DIR}/verify-agentctl.py:*)",
+        f"Bash(python3 {SCRIPTS_DIR}/gen_crutch_registry.py:*)",
         # recording work on the assigned branch — never `git push`
         "Bash(git add:*)", "Bash(git commit:*)",
         # integrating trunk INTO the assigned branch — the same defect one step
@@ -681,7 +716,7 @@ KIND_BASELINES: dict[str, list[str]] = {
         # trailing args), a bypass of spawn-specialist.py's own outcome-typing
         # ledger for any developer that DID reach for it directly — the exact
         # defect this plan exists to fix.
-        "Bash(python3 scripts/measure-marker-extractor-latency.py:*)",
+        f"Bash(python3 {SCRIPTS_DIR}/measure-marker-extractor-latency.py:*)",
         # hook-resolution-reminder-pretooluse-gap stage 1 needs to compile its own
         # edits, check the engine's own worktree-local gate state, and run the new
         # judge's real-call latency sampler. User-authorized 2026-08-28 as another
@@ -704,8 +739,8 @@ KIND_BASELINES: dict[str, list[str]] = {
         # spawn is this stage's actual deliverable, not an avoidable
         # implementation detail routed through an already-permitted python3
         # process — so the raw Bash grant is scoped here, not just the wrapper.
-        "Bash(python3 scripts/check-in-harness-observation.py:*)",
-        "Bash(python3 scripts/check-live-run-evidence.py:*)",
+        f"Bash(python3 {SCRIPTS_DIR}/check-in-harness-observation.py:*)",
+        f"Bash(python3 {SCRIPTS_DIR}/check-live-run-evidence.py:*)",
         "Bash(python3 _ptg_scratch/probe/launch_probe.py:*)",
         # The direct `claude -p` grant REMOVED (was here through 2026-09-24):
         # unbounded trailing args on the one program grants.validate_rule refuses
@@ -899,17 +934,21 @@ def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
     `grants.validate_add_dir`, never `grants.validate_rule`: a directory-glob
     Edit/Read rule (`Edit(//<path>/**)`) is categorically refused by
     `grants.validate_rule` (unbounded/unpredictable path expansion — see its
-    `_GLOB_METACHARS` check), so no ALLOW rule is ever synthesized for a
-    `write` add_dir — `--add-dir` alone already grants write under
-    `acceptEdits`/`auto` (developer/tech-writer, the only kinds
-    `KIND_BASELINES` pins there); a `write` add_dir declared for a
-    `default`-mode kind (thinker/planner/code-reviewer) needs an explicit
-    per-file `"rule"` grant instead, since no directory-glob allow can ever
-    validate. A `read` add_dir DOES pair with a synthesized Edit DENY,
-    mirroring `plans_permission_rules`' own directional-pair pattern — but
-    that DENY is never passed through `grants.validate_rule` (deny rules are
-    outside its scope by design; `grants.validate_grants` itself iterates
-    only `allow` and `add_dirs`), so the same glob shape that would refuse an
+    `_GLOB_METACHARS` check), so a `write` add_dir's ALLOW rule is
+    synthesized directly here, from the plain path string
+    `grants.validate_add_dir` already accepted, bypassing `validate_rule`
+    entirely — `validate_add_dir`'s own write-mode checks (glob/absolute/
+    `.git`/launch-surface) are what stand in for it. The synthesized allow
+    is paired with four guard DENYs (`.claude/`, `settings*.json`, `.git/`,
+    `.git`) under the same prefix, since `--add-dir` alone would otherwise
+    hand the child raw filesystem write into those without the kind's own
+    baseline denies (which only ever cover this repo's and the plans dir's
+    own such paths, never an arbitrary declared add_dir). A `read` add_dir
+    DOES pair with a synthesized Edit DENY only, mirroring
+    `plans_permission_rules`' own directional-pair pattern — but that DENY
+    is never passed through `grants.validate_rule` (deny rules are outside
+    its scope by design; `grants.validate_grants` itself iterates only
+    `allow` and `add_dirs`), so the same glob shape that would refuse an
     allow rule is fine here."""
     allow: list[str] = []
     deny: list[str] = []
@@ -924,8 +963,19 @@ def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
         if path is None or mode is None:
             continue
         grants.validate_add_dir(path, mode)
+        base = grants.rule_file_arg(path.rstrip("/"))
         if mode == "read":
-            deny.append(f"Edit({grants.rule_file_arg(path.rstrip('/') + '/**')})")
+            deny.append(f"Edit({base}/**)")
+        elif mode == "write":
+            allow.append(f"Edit({base}/**)")
+            deny.extend(
+                [
+                    f"Edit({base}/**/.claude/**)",
+                    f"Edit({base}/**/settings*.json)",
+                    f"Edit({base}/**/.git/**)",
+                    f"Edit({base}/**/.git)",
+                ]
+            )
     return allow, deny
 
 
@@ -963,6 +1013,53 @@ def stage_grant_provenance_lines(entries: list[dict]) -> list[str]:
         dest = entry.get("rule") or f"{entry.get('path')} ({entry.get('mode')})"
         lines.append(f"- `{dest}` — {entry.get('provenance', 'unknown')}")
     return lines
+
+
+class GrantShadowError(ValueError):
+    """A write add_dir grant lands inside a directory another source (the
+    plans-dir deny, a target project's own deny) has already denied Edit
+    onto — the two grants only meet inside `build_child_settings`, since
+    each source validates independently and neither knows about the
+    other's rules."""
+
+
+def _deny_rule_directory_prefix(deny_rule: str) -> "str | None":
+    """The absolute directory `deny_rule` denies Edit onto, if `deny_rule`
+    is an `Edit(//<prefix>/**)` glob deny; `None` for any other shape
+    (a single-file deny, a non-Edit rule, ...) — those can never shadow an
+    entire add_dir."""
+    parsed = grants.rule_program_and_arg(deny_rule)
+    if parsed is None or parsed[0] != "Edit":
+        return None
+    tool_arg = parsed[1]
+    if not tool_arg.startswith("//") or not tool_arg.endswith("/**"):
+        return None
+    return grants.rule_file_path(tool_arg[: -len("/**")])
+
+
+def _check_write_add_dirs_not_shadowed(entries: list[dict], existing_deny: list[str]) -> None:
+    """Refuse a `write` add_dir entry whose path is-or-is-under a directory
+    an already-accumulated deny rule covers — materializing the ALLOW
+    anyway would silently lose to a later-applied deny at best, and at
+    worst the two-rule ordering the harness resolves is not something this
+    module controls, so the shadow is refused outright rather than
+    trusted to resolve safely."""
+    for entry in entries:
+        if entry.get("mode") != "write":
+            continue
+        path = entry.get("path")
+        if path is None:
+            continue
+        norm_path = str(Path(path))
+        for deny_rule in existing_deny:
+            prefix = _deny_rule_directory_prefix(deny_rule)
+            if prefix is None:
+                continue
+            if norm_path == prefix or norm_path.startswith(prefix.rstrip("/") + "/"):
+                raise GrantShadowError(
+                    f"write add_dir {path!r} is shadowed by existing deny rule "
+                    f"{deny_rule!r} — refused"
+                )
 
 
 def build_child_settings(
@@ -1015,6 +1112,7 @@ def build_child_settings(
         allow.extend(plans_allow)
         deny.extend(plans_deny)
     if engine_grants:
+        _check_write_add_dirs_not_shadowed(engine_grants, deny)
         engine_allow, engine_deny = stage_grant_rules(engine_grants)
         allow.extend(engine_allow)
         deny.extend(engine_deny)
@@ -1064,25 +1162,51 @@ def load_engine_stage_grants(
     return directive.data.get("grants", [])
 
 
-def _snapshot_transcripts() -> set[Path]:
-    """Set of `<config root>/projects/**/*.jsonl` that exist right now, across both
-    roots — a child spawned by a bare-`claude` manager writes under the HARNESS
-    root, so reading only the agent root made the diff below always empty."""
-    return set(iter_transcripts("**/*.jsonl"))
+def _project_dir_name(cwd: str) -> str:
+    """Directory name the harness uses under `<config root>/projects/` for a
+    given cwd — every byte outside `[A-Za-z0-9]` (path separators, dots,
+    tildes) becomes `-`, mirroring the harness's own encoding."""
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
 
 
-def _discover_transcript_path(known_before: set[Path], timeout: float = 10.0) -> Path | None:
-    """Find a new `<config root>/projects/**/*.jsonl` that didn't exist before the
-    spawn. Polls every 0.5s up to `timeout` seconds.
+def _iter_workdir_transcripts(workdir: str) -> list[Path]:
+    """Every `*.jsonl` transcript (including per-session `subagents/` ones)
+    under the `--workdir`-scoped project directory, across all config roots.
 
-    Filtering by "not in known_before" avoids picking the parent manager's own
-    live transcript (which is being touched concurrently and would otherwise
-    win on mtime). Returns the freshest new jsonl, or None on timeout.
+    Scoping by workdir — rather than scanning every project directory and
+    picking the globally freshest file — is what makes discovery correct when
+    an unrelated session is writing its own transcript concurrently: that
+    session's project directory is a different one (unless it shares this
+    exact workdir), so its transcript is never a candidate here regardless of
+    its mtime.
+    """
+    name = _project_dir_name(workdir)
+    out: list[Path] = []
+    for root in projects_roots():
+        out.extend((root / name).glob("**/*.jsonl"))
+    return sorted(out)
+
+
+def _snapshot_transcripts(workdir: str) -> set[Path]:
+    """Set of the `--workdir`-scoped project's `*.jsonl` transcripts that exist
+    right now, across both config roots — a child spawned by a bare-`claude`
+    manager writes under the HARNESS root, so reading only the agent root made
+    the diff below always empty."""
+    return set(_iter_workdir_transcripts(workdir))
+
+
+def _discover_transcript_path(workdir: str, known_before: set[Path], timeout: float = 10.0) -> Path | None:
+    """Find a new transcript under the `--workdir`-scoped project directory that
+    didn't exist before the spawn. Polls every 0.5s up to `timeout` seconds.
+
+    Filtering by "not in known_before" avoids picking up a transcript this same
+    workdir's project directory already held from an earlier spawn. Returns the
+    freshest new jsonl, or None on timeout.
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
         candidates: list[tuple[float, Path]] = []
-        for p in iter_transcripts("**/*.jsonl"):
+        for p in _iter_workdir_transcripts(workdir):
             if p in known_before:
                 continue
             try:
@@ -1149,15 +1273,16 @@ def deregister_child_scope(
         )
 
 
-def resolve_permission_mode(args: argparse.Namespace) -> str | None:
+def resolve_permission_mode(args: argparse.Namespace) -> str:
     """Pick the permission mode passed to `claude -p`.
 
     Default policy: the developer and tech-writer specializations need
     unattended Read/Grep/Write in a trusted local mount, so use `acceptEdits`
-    — the narrowest mode granting exactly that. thinker/planner/code-reviewer
-    are explicitly pinned to `default` (interactive-prompt semantics) since
-    they are mostly read-only and any write they need goes through an
-    explicit, reviewable grant instead.
+    — the narrowest mode granting exactly that. Every other kind — including
+    thinker/planner/code-reviewer and any kind outside KIND_BASELINES — gets
+    `default` (interactive-prompt semantics), since they are mostly read-only
+    and any write they need goes through an explicit, reviewable grant
+    instead.
 
     NOT bypassPermissions, for two independent reasons. It is far wider than the
     need: it waives EVERY permission class, not only file writes. And on a fleet
@@ -1179,9 +1304,7 @@ def resolve_permission_mode(args: argparse.Namespace) -> str | None:
         return args.permission_mode
     if args.kind in ("developer", "tech-writer"):
         return "acceptEdits"
-    if args.kind in ("thinker", "planner", "code-reviewer"):
-        return "default"
-    return None
+    return "default"
 
 
 def _build_extraction(result_text: str, kind: str) -> "marker_extract.Extraction | None":
@@ -1303,6 +1426,16 @@ def main(argv: list[str] | None = None) -> int:
         log_refused("unknown-kind", {"kind": args.kind})
         return 2
 
+    if args.project_settings is not None and tuple(args.project_settings.parts[-2:]) != (".claude", "settings.local.json"):
+        print(
+            f"error: --project-settings must be a path ending in .claude/settings.local.json, "
+            f"got {args.project_settings} — refusing to merge an arbitrary file's permissions "
+            f"into this child's --settings grant",
+            file=sys.stderr,
+        )
+        log_refused("project-settings-path-shape", {"kind": args.kind})
+        return 2
+
     constants = parse_config_md()
     depth_now = int(os.environ.get("AGENT_RECURSION_DEPTH", "0"))
     depth_next = depth_now + 1
@@ -1406,6 +1539,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 5
 
+    try:
+        child_settings = build_child_settings(args.kind, plans_directory, args.project_settings, engine_grants)
+    except GrantShadowError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
+        return 2
+
     cmd = [
         "claude",
         "-p",
@@ -1421,7 +1561,7 @@ def main(argv: list[str] | None = None) -> int:
         # work: settings.json env is applied after process start and wins (see
         # memory-global leaf claude-code-settings-env-precedence.md).
         "--settings",
-        json.dumps(build_child_settings(args.kind, plans_directory, args.project_settings, engine_grants)),
+        json.dumps(child_settings),
     ]
     cmd.extend(add_dir_argv)
     if permission_mode is not None:
@@ -1459,7 +1599,7 @@ def main(argv: list[str] | None = None) -> int:
     # Snapshot existing transcripts BEFORE spawning so we can identify the
     # child's new jsonl (the parent manager's own live transcript would
     # otherwise win on mtime).
-    transcripts_before = _snapshot_transcripts()
+    transcripts_before = _snapshot_transcripts(workdir)
     started = time.monotonic()
 
     # Use Popen so we can print the child's transcript path to stderr early —
@@ -1486,7 +1626,7 @@ def main(argv: list[str] | None = None) -> int:
     # is what avoids the pipe-buffer deadlock a manual write()+read() would risk.
     def _announce_transcript() -> None:
         nonlocal transcript_path
-        transcript_path = _discover_transcript_path(transcripts_before, timeout=10.0)
+        transcript_path = _discover_transcript_path(workdir, transcripts_before, timeout=10.0)
         if transcript_path is not None:
             print(f"spawn-specialist: transcript={transcript_path}", file=sys.stderr, flush=True)
         else:

@@ -4429,7 +4429,7 @@ def _dispatch_project_settings_path(state) -> str | None:
     writes in and runs commands in, not an unrelated repo_root. None when the
     venue is unresolved or the file doesn't exist: dispatch then behaves
     exactly as before this function existed (no --project-settings forwarded,
-    the child gets only the fleet-wide DEVELOPER_SETTINGS_ALLOW grant)."""
+    the child gets only the fleet-wide KIND_BASELINES["developer"] grant)."""
     venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
     if not venue:
         return None
