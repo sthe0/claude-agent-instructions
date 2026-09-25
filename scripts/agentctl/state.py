@@ -744,9 +744,15 @@ class PlanPresentation:
 @dataclass
 class JudgeBypass:
     stage_index: int
-    kind: str  # "killswitch" | "override"
+    kind: str  # "killswitch" | "override" | "fail_open"
     reviewer: str = ""
     note: str = ""
+    # Set only for kind="fail_open" (R4): binds the bypass to the exact observation
+    # the judge call failed on, so a fail-open recorded for an EARLIER (superseded)
+    # observation cannot wave through a later, unjudged one — see
+    # gates.acceptance_review_blockers and cli._record_bypass. "killswitch"/"override"
+    # leave this "" and dedupe exactly as before (see _record_bypass's docstring).
+    observation_sha256: str = ""
 
 
 @dataclass
@@ -1229,6 +1235,20 @@ class Outcome:
     # records a result; absent on every pre-schema-23 state (default via
     # from_dict), so legacy states load unchanged.
     delivered_head: str | None = None
+    # Green-check cache (R4): the venue tree identity (HEAD sha + status/diff digest,
+    # see cli._venue_tree_identity) at the last time this stage's verify_command was
+    # actually RUN, and whether that run was green. A later record-result call whose
+    # identity still matches AND whose cached result was green skips re-running the
+    # command (cli._cached_check_hit) — a red result is never cached, so a genuinely
+    # broken check is always re-run rather than trusted to still be broken. Absent on
+    # every pre-R4 state (defaults via from_dict), so legacy states load unchanged.
+    checked_tree_identity: str | None = None
+    checked_tree_ok: bool | None = None
+    # Unconditional per-stage attempt counter (R4 (f)): incremented on every
+    # record-result call regardless of outcome, so a diagnosing session can see every
+    # attempt made against this stage, including ones a gate blocked before any
+    # verification ran.
+    record_attempts: int = 0
 
 
 @dataclass

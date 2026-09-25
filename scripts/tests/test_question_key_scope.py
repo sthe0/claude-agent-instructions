@@ -84,6 +84,9 @@ _UNCLAIMED_STAGE_LEAVES = {
     "outcome.duration_ms": "the mutable execution record, not the declaration",
     "outcome.spawn_count": "the mutable execution record, not the declaration",
     "outcome.delivered_head": "the mutable execution record, not the declaration",
+    "outcome.checked_tree_identity": "the mutable execution record, not the declaration",
+    "outcome.checked_tree_ok": "the mutable execution record, not the declaration",
+    "outcome.record_attempts": "the mutable execution record, not the declaration",
 }
 
 _BARE_STAGE = {

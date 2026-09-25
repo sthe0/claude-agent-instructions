@@ -4,7 +4,7 @@ description: "How agentctl's acceptance-judge gate on record-result --status pas
 type: reference
 schema: leaf/v1
 created: 2026-08-26
-last_verified: 2026-09-24
+last_verified: 2026-09-25
 ---
 
 ## Difficulty
@@ -173,6 +173,31 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
   required a whole-plan thinker review. Budget roughly one extra user ask plus ~30 engine calls
   for any verify-final check fix; keep final checks robust to live, shared corpora
   (explicit, bounded skip-lists) at authoring time.
+
+- **R4 fix (2026-09-25, `convergence-levers-r1-r2-r4` plan, stage 2): the judge now runs strictly
+  AFTER the stage's mechanical check, and a judge CALL failure fails genuinely open instead of
+  wedging the pass.** Two of this leaf's own long-standing gaps are addressed here. First, a red
+  `verify_command`/`landed` check previously did not stop `cmd_record_result` from also spending a
+  judge call on the same submission; the check now runs first, and only a green result (or a stage
+  with no check at all) reaches the judge — `_venue_tree_identity`/`_cached_check_hit` cache a
+  green result against the venue tree's HEAD sha + `git status --porcelain` + diff, so a repeated
+  `record-result` on an unchanged tree skips re-running the command but still re-queries the judge
+  every time (the judge is never cached, only the mechanical check is). Second, and more directly
+  relevant to the "stale"-wording confusion documented above: a `None` verdict (judge disabled,
+  timed out, non-zero exit, no output, or an unparseable answer — every `_classify` fail-open path)
+  now auto-records a `JudgeBypass(kind="fail_open", note=<the judge's own reason>)` bound to the
+  submitted observation's sha256, and `gates.acceptance_review_blockers` accepts that bypass in
+  place of a passing `StageReview` — the pass proceeds immediately, with no `stage-review --verdict
+  override` round-trip needed for a judge-call failure. A **genuine** `revise` verdict (the judge
+  answered and said no) is unaffected by this change: it still blocks, and still needs either a
+  better observation or the override escape above. Every verdict, including `revise`, now writes an
+  `acceptance_judge_verdict` entry to `state.log` (stage, verdict, reason, `observation_sha256`),
+  which closes the "these counts had to be rebuilt from the transcript" observability gap the
+  fourth occurrence hit — a future occurrence can read `state.log` directly instead of replaying
+  the session transcript by hand. `advisor.acceptance_judge` also now shares `_classify`/
+  `_record_result`/`_record_raised` with `judge_binary_ask`, so every call (verdict or fail-open)
+  writes a `judge_ledger` `decided` line — previously it called `begin_attributed_call` but never
+  `decided`, so a busy session's judge calls left zero ledger rows.
 
 ## See also
 

@@ -365,14 +365,18 @@ def acceptance_judge(
     enabled: bool,
     runtime_host: str = HOST_CLAUDE,
     timeout: int = _ACCEPTANCE_JUDGE_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
 ) -> tuple[str | None, str]:
     """Cheap external judge for an acceptance observation, backing the acceptance-review
     gate. Returns (verdict, reason) where verdict is 'pass' | 'revise' | None.
 
     Fail-OPEN: a disabled judge, a None runner, a non-zero exit, an unparseable answer,
-    or any exception returns (None, <reason>) — NEVER a false 'pass'. The caller records
-    a StageReview only for a non-None verdict, and the PURE gate fails CLOSED on the
-    resulting absence, so an unavailable judge stalls the pass safely.
+    a timeout, or any exception returns (None, <reason>) — NEVER a false 'pass'. The
+    caller records a StageReview only for a non-None verdict; a None verdict now (R4)
+    also records a `fail_open` JudgeBypass bound to the observation, which the PURE
+    gate accepts in place of a StageReview — an unavailable judge stalls only until
+    that bypass authorizes the pass, rather than blocking it forever.
 
     The prompt is lifted from _PROMPTS['acceptance_observation'] (the same criterion the
     warn-only advisor applies) and wrapped with a strict YES/NO + one-line-reason
@@ -382,10 +386,27 @@ def acceptance_judge(
     ``timeout`` is explicit at the call site because this judge runs inside the
     engine, not inside a hook: nothing above it kills a hung call, so the number
     cannot be left to the runner's own default. Its latency row is UNMEASURED,
-    so the default is the last-resort ceiling rather than a per-judge one."""
-    if not enabled or runner is None:
-        return None, "judge disabled or no runner (fail-open)"
+    so the default is the last-resort ceiling rather than a per-judge one.
+
+    R4: this now shares `_classify`/`_record_result`/`_record_raised`/
+    `_judge_unavailable` with `judge_binary_ask` instead of parsing the result
+    inline, so every call — genuine verdict or fail-open — writes a `judge_ledger`
+    `decided` line (previously it never did, despite calling
+    `begin_attributed_call`)."""
+    if not enabled:
+        _, reason = _judge_unavailable(
+            "acceptance_judge", _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+        return None, reason
+    if runner is None:
+        _, reason = _judge_unavailable(
+            "acceptance_judge", _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+        return None, reason
     judge_ledger.begin_attributed_call("acceptance_judge")
+    start = time.monotonic()
     try:
         criterion = _PROMPTS["acceptance_observation"].format(
             payload={"expected": expected, "observation": observation}
@@ -399,20 +420,24 @@ def acceptance_judge(
         result = runner(
             _prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt
         )
-        if result.returncode != 0:
-            return None, "judge exited non-zero (fail-open)"
+        verdict_bool, reason = _record_result(
+            "acceptance_judge", result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+        if reason:
+            return None, reason
+        # A genuine verdict: re-derive the human-readable second-line reason from the
+        # raw output (`_classify`'s own `reason` is "" for a genuine verdict, since it
+        # exists to flag a fail-open outcome, not to carry the judge's rationale).
         lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
-        if not lines:
-            return None, "judge returned no output (fail-open)"
-        head = lines[0].upper()
-        reason = lines[1] if len(lines) > 1 else lines[0]
-        if head.startswith("YES"):
-            return _JUDGE_PASS, reason
-        if head.startswith("NO"):
-            return _JUDGE_REVISE, reason
-        return None, f"judge answer unparseable: {lines[0]!r} (fail-open)"
+        human_reason = lines[1] if len(lines) > 1 else lines[0]
+        return (_JUDGE_PASS if verdict_bool else _JUDGE_REVISE), human_reason
     except Exception:
-        return None, "judge raised (fail-open)"
+        _, reason = _record_raised(
+            "acceptance_judge", duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+        return None, reason
     finally:
         judge_ledger.set_current_judge(None)
 

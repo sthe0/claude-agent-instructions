@@ -726,6 +726,9 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "outcome.duration_ms": frozenset(),
     "outcome.spawn_count": frozenset(),
     "outcome.delivered_head": frozenset(),
+    "outcome.checked_tree_identity": frozenset(),
+    "outcome.checked_tree_ok": frozenset(),
+    "outcome.record_attempts": frozenset(),
     "control": frozenset(),
 }
 

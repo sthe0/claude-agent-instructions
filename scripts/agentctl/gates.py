@@ -1505,23 +1505,42 @@ def _stage_review_for(state: SessionState, stage_index: int):
     return match[-1] if match else None
 
 
+def _judge_bypass_for(state: SessionState, stage_index: int, kind: str, observation_sha256: str | None = None):
+    """The most-recently-recorded JudgeBypass for `stage_index`/`kind`. When
+    `observation_sha256` is given, only a bypass recorded for that EXACT observation
+    counts — used by acceptance_review_blockers so a fail_open bypass from a prior
+    (superseded) observation cannot authorize a pass of a different one."""
+    matches = [b for b in state.judge_bypassed if b.stage_index == stage_index and b.kind == kind]
+    if observation_sha256 is not None:
+        matches = [b for b in matches if b.observation_sha256 == observation_sha256]
+    return matches[-1] if matches else None
+
+
 def acceptance_review_blockers(state: SessionState, stage: "_Stage") -> list[str]:
     """Precondition guardian for `record-result --status passed` on an acceptance_review
     stage: a recorded StageReview with a passing (or user-overridden) verdict, BOUND to
-    the exact observation bytes being recorded, must exist. An INTERNAL command
-    precondition mirroring plan_review_blockers — deliberately ABSENT from GUARDIANS so
-    verify-agentctl requires no new hook. PURE: reads ONLY the recorded StageReview and
-    hashes the observation's own bytes; never a subprocess/socket/network reach. [] == ok.
+    the exact observation bytes being recorded, must exist — OR a `fail_open` JudgeBypass
+    bound to that same observation (R4: the judge call itself failed, which is not
+    evidence against the observation, so it must not block indefinitely). An INTERNAL
+    command precondition mirroring plan_review_blockers — deliberately ABSENT from
+    GUARDIANS so verify-agentctl requires no new hook. PURE: reads ONLY the recorded
+    StageReview/JudgeBypass and hashes the observation's own bytes; never a
+    subprocess/socket/network reach. [] == ok.
 
     Inactive (chat / small-change / AGENTCTL_STAGE_REVIEW=0) => [] always. Active checks:
-      - a review must exist — else the gate is unmet (fail-CLOSED: a fail-open judge that
-        produced no verdict leaves no review, and that must block, never pass);
+      - a fail_open bypass bound to the current observation authorizes the pass outright;
+      - else a review must exist — else the gate is unmet (fail-CLOSED: a judge call that
+        never happened, or one whose result was neither recorded nor bypassed, blocks);
       - it must be bound to the observation being recorded (observation_sha256 == the
         sha256 of stage.criterion.observation) — a verdict granted to a different
         observation is stale; empty stored hash degrades to verdict-only (legacy);
       - the verdict must be `pass`, or `override` with a non-empty reviewer AND note
         (the explicit user escape); `revise`/unknown blocks."""
     if not stage_review_active(state):
+        return []
+    observation = getattr(stage.criterion, "observation", "") or ""
+    expected = hashlib.sha256(observation.encode("utf-8")).hexdigest()
+    if _judge_bypass_for(state, stage.index, "fail_open", expected) is not None:
         return []
     review = _stage_review_for(state, stage.index)
     if review is None:
@@ -1530,8 +1549,6 @@ def acceptance_review_blockers(state: SessionState, stage: "_Stage") -> list[str
             "(disabled/errored/timed out) or none was recorded; an acceptance pass is "
             "blocked until a passing verdict (or an explicit override) binds to the observation"
         ]
-    observation = getattr(stage.criterion, "observation", "") or ""
-    expected = hashlib.sha256(observation.encode("utf-8")).hexdigest()
     if review.observation_sha256 and review.observation_sha256 != expected:
         return [
             "acceptance judge verdict is stale — it judged a different observation than the "

@@ -255,9 +255,17 @@ def _acceptance_bypass_surface(state: SessionState) -> dict | None:
 def _record_bypass(state: SessionState, bypass: JudgeBypass) -> None:
     """Append a JudgeBypass (never cleared by a later passing review) so verify-final
     and the resolution summary can surface every acceptance pass that skipped a genuine
-    judge verdict. Deduplicated on (stage_index, kind) so a re-run of the same passed
-    record does not multiply entries."""
-    if any(b.stage_index == bypass.stage_index and b.kind == bypass.kind for b in state.judge_bypassed):
+    judge verdict. Deduplicated on (stage_index, kind, observation_sha256) — the third
+    key matters only for kind="fail_open" (override/killswitch always carry "" and so
+    dedupe exactly as before): a fail_open bypass is scoped to the OBSERVATION it waved
+    through (see gates.acceptance_review_blockers), so a second fail-open on a
+    DIFFERENT observation for the same stage records its own entry rather than being
+    silently absorbed by the first."""
+    if any(
+        b.stage_index == bypass.stage_index and b.kind == bypass.kind
+        and b.observation_sha256 == bypass.observation_sha256
+        for b in state.judge_bypassed
+    ):
         return
     state.judge_bypassed.append(bypass)
 
@@ -660,6 +668,39 @@ def _verify_command_result(stage, runner: Runner | None, cwd: str | None = None)
     if not crit.verify_command or crit.criterion_type != CriterionType.MEASURABLE.value:
         return True, None
     return _run_check(crit.verify_command, crit.expected_exit, runner, cwd)
+
+
+def _venue_tree_identity(cwd: str | None, runner: Runner | None) -> str | None:
+    """Digest identifying the current state of a verify_command's venue: HEAD sha
+    plus a hash of `git status --porcelain` and the working-tree diff. Returns None
+    when the venue has no git repo (rev-parse fails) — the record-result green-check
+    cache (see _cached_check_hit) then never treats the check as skippable, so a
+    git-less venue keeps re-running its check on every call, unchanged from pre-R4
+    behaviour. `cwd=None` mirrors _verify_command_result's own default: the venue is
+    plain repo_root."""
+    run = runner or subprocess_runner
+    prefix = ["git", "-C", cwd if cwd else str(REPO_ROOT)]
+    head = run(prefix + ["rev-parse", "HEAD"])
+    if head.returncode != 0 or not head.stdout.strip():
+        return None
+    status = run(prefix + ["status", "--porcelain"])
+    diff = run(prefix + ["diff"])
+    payload = "\n".join([head.stdout.strip(), status.stdout or "", diff.stdout or ""])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _cached_check_hit(stage, identity: str | None) -> bool:
+    """True iff `stage.outcome` already recorded a GREEN check result for this exact
+    venue tree identity (R4): a repeated record-result call whose tree hasn't moved
+    since the last green run skips re-running the check and goes straight to the
+    judge. A red result is never cached (see the call site), so a genuinely broken
+    check is always re-run rather than trusted to still be broken. `identity=None`
+    (no resolvable git tree) never hits."""
+    return (
+        identity is not None
+        and stage.outcome.checked_tree_identity == identity
+        and stage.outcome.checked_tree_ok is True
+    )
 
 
 def _resolve_or_refuse(state: SessionState, venue: str) -> tuple[str | None, str | None]:
@@ -4706,6 +4747,16 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     stage.outcome.actual = actual
     passed = args.status == "passed"
 
+    # Unconditional attempt log (R4 (f)): every record-result call for this stage
+    # counts and logs, including one a later gate blocks before any verification
+    # runs — a diagnosing session scanning history must see every attempt made,
+    # not just the ones that got past the first gate.
+    stage.outcome.record_attempts = (stage.outcome.record_attempts or 0) + 1
+    state.log(
+        "record_result_attempt", stage=stage.index,
+        attempt=stage.outcome.record_attempts, status=args.status,
+    )
+
     # General control-criterion attestation: optional on any stage, but required
     # non-empty for spawn:developer + passed (review is the control criterion of a
     # developer-actor stage; reviewer ⊂ controller, developer ⊂ executor).
@@ -4784,39 +4835,121 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 f"{OBSERVATION_CONTRACT} "
                 "(supply: record-result --observation '<what you observed>')",
             )
-
-        # Cheap-judge COGNITION + PURE gate. When the acceptance-review gate is active
-        # (substantive session / AGENTCTL_STAGE_REVIEW=1), run the fail-open haiku judge
-        # over the observation, record its verdict as a StageReview bound to the
-        # observation bytes, then block the pass on gates.acceptance_review_blockers
-        # (which reads ONLY that record). The judge fails open (no verdict on
-        # timeout/error) and the gate fails closed (no verdict blocks), so an
-        # unavailable judge stalls the pass rather than waving it through.
-        # bind the observation to the stage now so the gate's sha recompute sees it.
+        # bind the observation to the stage now so the judge gate's sha recompute
+        # (run below, AFTER the mechanical check — R4) sees it.
         stage.criterion.observation = observation
+
+    # Delivered-head freeze: stamp what commit this stage delivered BEFORE any
+    # verification below dispatches — a landed check self-referencing this same
+    # stage must find its own frozen head already present (see
+    # _freeze_delivered_head). Only when some landed check in the plan actually
+    # names this stage as its delivered_stage (_needs_delivered_head_freeze) —
+    # a plan with no landed check makes no extra runner call, unchanged from
+    # before schema 23.
+    if _needs_delivered_head_freeze(state, stage.index):
+        _freeze_delivered_head(state, stage, runner)
+
+    # Machine-executed verification: for a measurable stage carrying a verify_command
+    # (or a `kind = "landed"` check), the engine runs it and OVERRIDES a 'passed'
+    # claim the command contradicts. A contradicted pass becomes a real failure
+    # (digest + DIAGNOSING), so "report honestly" is an invariant for the
+    # measurable subset, not a discipline. R4: this now runs BEFORE the cheap judge
+    # below — a check the command itself contradicts must never spend a judge call.
+    if passed:
+        crit = stage.criterion
+        if crit.criterion_type == CriterionType.MEASURABLE.value and crit.verify_kind == CheckKind.LANDED.value:
+            ok, refusal, result = _landed_check_result(state, crit.landed, runner)
+            if refusal:
+                store.save(state)
+                return Directive(
+                    False, state.node, "fix_venue",
+                    f"stage {stage.index} landed check refused: {refusal}",
+                )
+            if not ok:
+                passed = False
+                note = (
+                    f"landed check: delivered commit not (yet) contained in "
+                    f"{crit.landed.target!r} (or {crit.landed.remote}/{crit.landed.target})"
+                )
+                actual = (actual + "\n" + note) if actual else note
+                stage.outcome.actual = actual
+        else:
+            cwd = None
+            has_check = crit.verify_command and crit.criterion_type == CriterionType.MEASURABLE.value
+            if has_check:
+                cwd, refusal = _resolve_or_refuse(state, crit.verify_venue)
+                if refusal:
+                    store.save(state)
+                    return Directive(
+                        False, state.node, "fix_venue",
+                        f"stage {stage.index} verify_command refused: {refusal}",
+                    )
+            # Green-check cache (R4): a repeated record-result call whose venue tree
+            # hasn't moved since the last GREEN run skips re-running the command and
+            # goes straight to the judge below. A red result is never cached, so a
+            # genuinely broken check is always re-run rather than trusted to still
+            # be broken. Only computed when there is an actual check to cache
+            # (measurable + verify_command) — an acceptance_review stage's
+            # verify_command, if present, is never machine-run, so identity must
+            # never be probed for it either.
+            identity = _venue_tree_identity(cwd, runner) if has_check else None
+            if _cached_check_hit(stage, identity):
+                ok, result = True, None
+            else:
+                ok, result = _verify_command_result(stage, runner, cwd=cwd)
+                if identity is not None:
+                    stage.outcome.checked_tree_identity = identity
+                    stage.outcome.checked_tree_ok = ok
+            if not ok:
+                passed = False
+                note = (
+                    f"verify_command exit {result.returncode} != expected "
+                    f"{stage.criterion.expected_exit}: {stage.criterion.verify_command}"
+                )
+                actual = (actual + "\n" + note) if actual else note
+                stage.outcome.actual = actual
+
+    # Cheap-judge COGNITION + PURE gate (R4: moved to AFTER the mechanical check
+    # above, so a check the command itself contradicts never spends a judge call).
+    # When the acceptance-review gate is active (substantive session /
+    # AGENTCTL_STAGE_REVIEW=1), run the fail-open haiku judge over the observation,
+    # record its verdict as a StageReview bound to the observation bytes, then block
+    # the pass on gates.acceptance_review_blockers (which reads that record AND any
+    # fail_open JudgeBypass bound to the same observation). A judge call that itself
+    # fails (disabled/errored/timed out) now records a `fail_open` JudgeBypass and
+    # the pass proceeds — fail-open in effect, not just in name.
+    if passed and requires_observation:
         if gates.stage_review_active(state):
             judge_runner = runner if runner is not None else advisor.subprocess_runner
             verdict, judge_reason = advisor.acceptance_judge(
                 observation, stage.subject.result, judge_runner, enabled=True,
                 timeout=advisor._ACCEPTANCE_JUDGE_TIMEOUT_S)
+            obs_sha = _observation_sha256(observation)
             if verdict is not None:
+                state.log(
+                    "acceptance_judge_verdict", stage=stage.index, verdict=verdict,
+                    reason=judge_reason, observation_sha256=obs_sha,
+                )
                 _record_stage_review(
                     state,
                     StageReview(
                         stage_index=stage.index, verdict=verdict,
                         reviewer=advisor.JUDGE_REVIEWER, note=judge_reason,
-                        observation_sha256=_observation_sha256(observation),
+                        observation_sha256=obs_sha,
                     ),
                     from_judge=True,
                 )
             else:
-                # Fail-open: the judge CALL ITSELF failed (disabled/errored/timed out),
-                # leaving no StageReview — acceptance_review_blockers below then reports
-                # "no acceptance judge verdict recorded", wording that reads as "the
-                # observation is weak, judge it again" rather than "the judge was
-                # unreachable". Log the judge's own reason so a session review can tell
-                # the two apart even if the caller only looks at the blocking Directive.
+                # Fail-open: the judge CALL ITSELF failed (disabled/errored/timed out).
+                # Record it as a bypass bound to THIS observation so the pure gate below
+                # waves the pass through instead of stalling it indefinitely — a judge
+                # outage is not evidence against the observation. Log the judge's own
+                # reason so a session review can tell an outage apart from a genuine
+                # revise even if the caller only looks at the recorded bypass.
                 state.log("acceptance_judge_fail_open", stage=stage.index, reason=judge_reason)
+                _record_bypass(state, JudgeBypass(
+                    stage_index=stage.index, kind="fail_open", reviewer="",
+                    note=judge_reason, observation_sha256=obs_sha))
             ab = gates.acceptance_review_blockers(state, stage)
             if ab:
                 store.save(state)
@@ -4845,59 +4978,6 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
             _record_bypass(state, JudgeBypass(
                 stage_index=stage.index, kind="killswitch", reviewer="",
                 note="AGENTCTL_STAGE_REVIEW=0"))
-
-    # Delivered-head freeze: stamp what commit this stage delivered BEFORE any
-    # verification below dispatches — a landed check self-referencing this same
-    # stage must find its own frozen head already present (see
-    # _freeze_delivered_head). Only when some landed check in the plan actually
-    # names this stage as its delivered_stage (_needs_delivered_head_freeze) —
-    # a plan with no landed check makes no extra runner call, unchanged from
-    # before schema 23.
-    if _needs_delivered_head_freeze(state, stage.index):
-        _freeze_delivered_head(state, stage, runner)
-
-    # Machine-executed verification: for a measurable stage carrying a verify_command
-    # (or a `kind = "landed"` check), the engine runs it and OVERRIDES a 'passed'
-    # claim the command contradicts. A contradicted pass becomes a real failure
-    # (digest + DIAGNOSING), so "report honestly" is an invariant for the
-    # measurable subset, not a discipline.
-    if passed:
-        crit = stage.criterion
-        if crit.criterion_type == CriterionType.MEASURABLE.value and crit.verify_kind == CheckKind.LANDED.value:
-            ok, refusal, result = _landed_check_result(state, crit.landed, runner)
-            if refusal:
-                store.save(state)
-                return Directive(
-                    False, state.node, "fix_venue",
-                    f"stage {stage.index} landed check refused: {refusal}",
-                )
-            if not ok:
-                passed = False
-                note = (
-                    f"landed check: delivered commit not (yet) contained in "
-                    f"{crit.landed.target!r} (or {crit.landed.remote}/{crit.landed.target})"
-                )
-                actual = (actual + "\n" + note) if actual else note
-                stage.outcome.actual = actual
-        else:
-            cwd = None
-            if crit.verify_command and crit.criterion_type == CriterionType.MEASURABLE.value:
-                cwd, refusal = _resolve_or_refuse(state, crit.verify_venue)
-                if refusal:
-                    store.save(state)
-                    return Directive(
-                        False, state.node, "fix_venue",
-                        f"stage {stage.index} verify_command refused: {refusal}",
-                    )
-            ok, result = _verify_command_result(stage, runner, cwd=cwd)
-            if not ok:
-                passed = False
-                note = (
-                    f"verify_command exit {result.returncode} != expected "
-                    f"{stage.criterion.expected_exit}: {stage.criterion.verify_command}"
-                )
-                actual = (actual + "\n" + note) if actual else note
-                stage.outcome.actual = actual
 
     # Read the cost log unconditionally — not just for is_spawn() stages — because
     # effort.refresh_spend (below) sums by plan_path alone and needs to see the
