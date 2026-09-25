@@ -3401,11 +3401,31 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                 f"({live!r}) at {target!r}: the reviewer read a different or stale "
                 "plan; re-read the current plan and re-run plan-review",
             )
+    # R1 terminal-pass check: a `revise` arriving after a PASS already recorded
+    # for this scope this approval cycle only overturns it with run-demonstrated
+    # regression evidence — see gates.plan_review_prior_pass /
+    # _plan_review_regression_evidence. `prior_pass` is history within the
+    # cycle, not "the current authoritative record": it stays found even after
+    # a later evidenced revise supersedes it, because the requirement is "a
+    # pass has been recorded this cycle", not "the most recent verdict is one".
+    prior_pass = gates.plan_review_prior_pass(state, scope, target)
+    is_post_pass_revise = args.verdict == gates._PLAN_REVIEW_REVISE and prior_pass is not None
+    regression_command = (getattr(args, "regression_command", "") or "").strip()
+    regression_exit: int | None = None
+    regression_command_error: str | None = None
+    if is_post_pass_revise and regression_command:
+        try:
+            _, result = _run_check(regression_command, 0, runner, cwd=state.repo_root)
+            regression_exit = result.returncode if result is not None else None
+        except Exception as exc:  # noqa: BLE001 - never let a broken regression command crash recording
+            regression_exit = None
+            regression_command_error = str(exc)
+    concerns = list(getattr(args, "concerns", None) or [])
     review = PlanReview(
         plan_path=target,
         verdict=args.verdict,
         reviewer=getattr(args, "reviewer", "") or "",
-        concerns=list(getattr(args, "concerns", None) or []),
+        concerns=concerns,
         note=getattr(args, "note", "") or "",
         plan_sha256=attested,
         scope=scope,
@@ -3414,11 +3434,96 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             {str(k): v for k, v in plan_stage_digests(doc).items()} if doc is not None else {}
         ),
         concern_ids=list(getattr(args, "concern_ids", None) or []),
+        regression_command=regression_command if is_post_pass_revise else "",
+        regression_exit=regression_exit if is_post_pass_revise else None,
+        remedy_tags=[gates._remedy_tag_for_concern(c) for c in concerns],
     )
+    evidenced = is_post_pass_revise and gates._plan_review_regression_evidence(prior_pass, review, doc)
+    if is_post_pass_revise and not evidenced:
+        # The prior PASS stays authoritative — plan_review_passes is never
+        # touched here, so gates.plan_review_prior_pass keeps reporting it as
+        # found — meaning THIS revise does not reopen the gate by itself
+        # (requirement (a)). Recorded as a non-blocking note instead
+        # (requirement (b)) — logged under its own event name, with the
+        # concern text surfaced verbatim in the Directive so the user (not
+        # another thinker round) decides override vs. editing the plan.
+        #
+        # That is not the same as the gate being clear: the plan may have been
+        # EDITED since the pass, which stales its coverage independently of
+        # this revise (gates._plan_review_blockers_coverage). Reporting
+        # ok/continue while gates.plan_review_blockers is still non-empty would
+        # claim the pass is "in force" when it no longer covers the current
+        # plan — so the real blockers are computed below and, if non-empty,
+        # returned instead of the swallowed-note continue.
+        #
+        # Whether plan_review/plan_stage_reviews[scope] gets overwritten with
+        # THIS revise is conditional, not "never": it matters only when this
+        # scope's OWN part actually moved since the prior pass, because that
+        # is the one case _plan_review_blockers_coverage will go looking for a
+        # record at this scope next — leaving nothing there would make
+        # risk-accept/override at this scope find nothing to discharge
+        # (gates.plan_review_scope_moved_since_pass's docstring). An unmoved
+        # scope has no such lookup coming, so the prior pass stays the sole
+        # record there (test_stage_scoped_revise_after_whole_plan_pass_is_terminal).
+        remedy_cut = review.remedy_tags.count("cut")
+        remedy_add = review.remedy_tags.count("add")
+        if gates.plan_review_scope_moved_since_pass(prior_pass, doc, scope):
+            if scope:
+                state.plan_stage_reviews[scope] = review
+            else:
+                state.plan_review = review
+        state.log("plan_review_post_pass_unevidenced", target=target, scope=scope,
+                   reviewer=review.reviewer, concerns=review.concerns, note=review.note,
+                   regression_command=review.regression_command,
+                   regression_exit=review.regression_exit,
+                   regression_command_error=regression_command_error,
+                   remedy_cut=remedy_cut, remedy_add=remedy_add)
+        store.save(state)
+        concern_text = "; ".join(review.concerns) if review.concerns else "(no concern text given)"
+        data = {
+            "plan_review_post_pass_unevidenced": True,
+            "prior_pass_reviewer": prior_pass.reviewer,
+            "concerns": review.concerns,
+            "remedy_tags": review.remedy_tags,
+            "regression_command_error": regression_command_error,
+        }
+        real_blockers = gates.plan_review_blockers(state, target)
+        if real_blockers:
+            round_release = _note_round_release(state, real_blockers, store)
+            return Directive(
+                False, state.node, "plan_review",
+                f"thinker revise recorded for {target} at scope {scope!r} does not "
+                "overturn the prior PASS (no run-demonstrated regression evidence), "
+                "and the plan-review gate is still blocked on its own terms — the "
+                "pass is stale, not in force "
+                f"(concern raised: {concern_text!r}). This is not another thinker "
+                "round: the decision is the user's — override (plan-review "
+                "--verdict override --reviewer <you> --note <why it is acceptable>), "
+                "or edit the plan as the concern proposes (cut or add).",
+                data={**data, "blockers": real_blockers, "plan_review_round_release": round_release},
+            )
+        return Directive(
+            True, state.node, "continue",
+            f"thinker revise recorded for {target} at scope {scope!r} but does not "
+            "overturn the whole-plan/stage PASS already recorded this approval cycle "
+            "(R1: a recorded pass is terminal without run-demonstrated regression "
+            "evidence — a --regression-command that actually exits non-zero — naming "
+            "a part changed since that pass; see gates._plan_review_regression_evidence). "
+            f"Concern raised: {concern_text!r}. This is a non-blocking note, not another "
+            "thinker round: the decision is the user's — override "
+            "(plan-review --verdict override --reviewer <you> --note <why it is "
+            "acceptable>), or edit the plan as the concern proposes (cut or add).",
+            data=data,
+        )
     if scope:
         state.plan_stage_reviews[scope] = review
     else:
         state.plan_review = review
+    if review.verdict == gates._PLAN_REVIEW_PASS and review.plan_sha256:
+        # Attested pass only — an unattested one never clears the gate (see the
+        # CONTRACT INVERSION note on the pass path of _plan_review_verdict_blockers),
+        # so it must not become a terminal pass either.
+        state.plan_review_passes[scope] = review
     # POST-APPROVAL round counting. cmd_submit_plan's increment covers only the
     # pre-approval resubmission loop; review cycles overwhelmingly recur AFTER
     # approval, on the `replan` path, where the same thinker review is demanded and
@@ -3455,14 +3560,23 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
               concerns=review.concerns,
               note=review.note,
               findings_blocking=getattr(args, "findings_blocking", None),
-              findings_nonblocking=getattr(args, "findings_nonblocking", None))
+              findings_nonblocking=getattr(args, "findings_nonblocking", None),
+              remedy_cut=review.remedy_tags.count("cut"),
+              remedy_add=review.remedy_tags.count("add"),
+              regression_command=review.regression_command,
+              regression_exit=review.regression_exit,
+              regression_command_error=regression_command_error)
     store.save(state)
     if blockers:
         round_release = _note_round_release(state, blockers, store)
         return Directive(
             False, state.node, "plan_review",
             "thinker review recorded but does not clear the gate",
-            data={"blockers": blockers, "plan_review_round_release": round_release},
+            data={
+                "blockers": blockers,
+                "plan_review_round_release": round_release,
+                "regression_command_error": regression_command_error,
+            },
         )
     return Directive(
         True, state.node, "continue",
@@ -3971,6 +4085,10 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # against the newly-approved plan, so friction spent reviewing code under the
     # PRIOR plan version should not count against this one.
     state.code_review_rounds = 0
+    # R1 terminal-pass custody: a fresh approval cycle starts with no pass on
+    # record for any scope — the same "current approval cycle" boundary
+    # plan_review_rounds resets at, immediately above.
+    state.plan_review_passes = {}
     state.node = transition(state.node, "approve")
     snap = _snapshot_approved_plan(store, state)
     if snap:
@@ -5908,6 +6026,9 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # Reset alongside the pair above (item A) — same reasoning: rounds spent
     # code-reviewing the previous plan version are settled once a corrected plan lands.
     state.code_review_rounds = 0
+    # R1 terminal-pass custody — same "current approval cycle" boundary as the
+    # pair above: a replanned plan starts with no pass on record for any scope.
+    state.plan_review_passes = {}
     # Stamped HERE and not up at the seam: every refusal path of this command is now behind
     # us — the last of them being the critique-coverage gate just above — so like seam (a)
     # the digest only ever names bytes the session ACCEPTED. (Not an enumeration: this
@@ -6982,6 +7103,9 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("quality_by", ("resolve", "close"), "how the quality rating was obtained — a fixed token"),
     ("confirmed_by", ("close",), "who confirmed — a name, not a narrative"),
     ("approved_by", ("drive",), "who approved — a name, not a narrative"),
+    ("regression_command", ("plan-review",),
+     "shell command run verbatim via the runner (R1 terminal-pass evidence) — an "
+     "invocation string, not narrative prose for the @<path> convention"),
 )
 
 _ARG_RESOLVE: frozenset[tuple[str, str]] = frozenset(
@@ -7311,6 +7435,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--findings-nonblocking", dest="findings_nonblocking", type=int,
                     default=None,
                     help="count of non-blocking findings this round produced (audit trail)")
+    sp.add_argument("--regression-command", dest="regression_command", default=None,
+                    help="R1: a command the engine runs in repo_root to demonstrate a "
+                         "regression against a plan version that already carries a "
+                         "recorded whole-plan/stage PASS this approval cycle. Required "
+                         "(and must exit non-zero) for a 'revise' after such a pass to "
+                         "block approve/replan — a command that was never run, or that "
+                         "exits 0, is refused as evidence; see "
+                         "gates._plan_review_regression_evidence. Ignored on every other "
+                         "verdict/situation.")
     sp = add("plan-review-delta"); sp.add_argument("--session", required=True)
     sp.add_argument("--plan", default=None,
                     help="plan file to diff against recorded reviews (defaults to the "

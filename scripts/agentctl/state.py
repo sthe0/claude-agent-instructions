@@ -20,9 +20,11 @@ import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
-SCHEMA_VERSION = 35  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 36  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
+                     # 36: PlanReview gains regression_command/regression_exit/remedy_tags;
+                     # SessionState gains plan_review_passes (R1)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -420,7 +422,15 @@ class PlanReview:
     acceptance. Shorter than `concerns` (or empty) on any record whose concerns were
     given no explicit id; `plan_review_concern_ids` fills the gap with a
     position-derived id, which is also what a legacy pre-schema-28 record gets in
-    full."""
+    full.
+
+    `regression_command`/`regression_exit` (schema 36, R1) are set only on a
+    `revise` recorded after a whole-plan/stage PASS already stands this cycle: the
+    command the reviewer supplied to demonstrate the regression, and the actual
+    exit code the engine observed running it in `repo_root` — never trusted from
+    the reviewer's say-so. `remedy_tags` (schema 36, R1) is the leading `cut:`/
+    `add:` tag parsed off each entry in `concerns`, positionally paired like
+    `concern_ids`; `""` where a concern carries no such tag."""
     plan_path: str
     verdict: str
     reviewer: str
@@ -431,6 +441,9 @@ class PlanReview:
     reviewed_meta_digest: str = ""
     reviewed_stage_keys: dict[str, str] = field(default_factory=dict)
     concern_ids: list[str] = field(default_factory=list)
+    regression_command: str = ""
+    regression_exit: "int | None" = None
+    remedy_tags: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "PlanReview | None":
@@ -447,6 +460,9 @@ class PlanReview:
             reviewed_meta_digest=d.get("reviewed_meta_digest", ""),
             reviewed_stage_keys=dict(raw) if isinstance(raw := d.get("reviewed_stage_keys"), dict) else {},
             concern_ids=list(d.get("concern_ids", [])),
+            regression_command=d.get("regression_command", ""),
+            regression_exit=d.get("regression_exit"),
+            remedy_tags=list(d.get("remedy_tags", [])),
         )
 
 
@@ -1393,6 +1409,17 @@ class SessionState:
     # which is what makes the coverage gate in gates.py fall back to plan_review
     # alone, unchanged.
     plan_stage_reviews: dict[str, "PlanReview"] = field(default_factory=dict)
+    # Historical record (schema 36, R1) of the LAST attested PASS recorded per scope
+    # this approval cycle, keyed like plan_stage_reviews (whole-plan under ""). Unlike
+    # plan_review/plan_stage_reviews (the CURRENT authoritative record, which a
+    # resubmission's staleness-clear or a later revise can move on), this is never
+    # cleared mid-cycle — only reset at cmd_approve/cmd_replan — so
+    # gates.plan_review_prior_pass keeps reporting a pass as "found" even after the
+    # current record has moved past it. Whether ANY pass has landed this cycle (the
+    # round-release message template selector) is derived as `bool(plan_review_passes)`
+    # rather than tracked as a separate flag. Empty on legacy states (absent key ->
+    # dataclass default via from_dict).
+    plan_review_passes: dict[str, "PlanReview"] = field(default_factory=dict)
     # Recorded risk acceptances discharging `revise` concerns (schema 28) — see
     # RiskAcceptance's docstring for the binding. Empty on legacy pre-schema-28
     # states (absent key -> dataclass default via from_dict), which is what makes
@@ -1740,6 +1767,7 @@ class SessionState:
         data["approval"] = GateRecord(**data["approval"])
         data["resolution"] = GateRecord(**data["resolution"])
         data.pop("self_improvement", None)  # legacy field (schema <=4); self-improvement now runs on the standard spine
+        data.pop("plan_review_pass_occurred", None)  # legacy field (schema 36, R1); now derived as bool(plan_review_passes)
         # `plan_digest` was renamed to `accepted_plan_digest` (same meaning). from_dict ends
         # in cls(**data) and filters nothing, so without this a state.json written before the
         # rename dies on load with an unexpected-keyword TypeError and no recovery edge. The
@@ -1767,6 +1795,10 @@ class SessionState:
         data["plan_review"] = PlanReview.from_dict(data.get("plan_review"))
         data["plan_stage_reviews"] = {
             scope: r for scope, v in (data.get("plan_stage_reviews") or {}).items()
+            if (r := PlanReview.from_dict(v)) is not None
+        }
+        data["plan_review_passes"] = {
+            scope: r for scope, v in (data.get("plan_review_passes") or {}).items()
             if (r := PlanReview.from_dict(v)) is not None
         }
         data["risk_acceptances"] = [

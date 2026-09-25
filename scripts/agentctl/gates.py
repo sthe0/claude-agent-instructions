@@ -35,6 +35,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import os
+import re
 from pathlib import Path
 
 from lib import config_root
@@ -535,6 +536,129 @@ def _plan_review_baseline(pr) -> dict:
     return {"meta": pr.reviewed_meta_digest, "stages": pr.reviewed_stage_keys}
 
 
+#: Matches a LEADING structural part token (`meta:`, `order:`, `stage:<n>`) a
+#: reviewer typed into a `--concern` string, optionally after an already-parsed
+#: `cut:`/`add:` remedy prefix (`_REMEDY_TAG_PREFIX_RE`) — anchored at the start
+#: of the string, exactly like that remedy prefix, so the bare English word
+#: "order" or "meta" appearing anywhere in ordinary prose never counts as naming
+#: a part. This parses an explicit PROTOCOL token the engine itself defines
+#: (`plan_review_scope_for_stage`, plus the `meta:`/`order:` tags below), not
+#: free-text meaning — the permitted case under
+#: regex-not-for-semantic-classification.md, not the forbidden one.
+_PLAN_REVIEW_PART_TOKEN_RE = re.compile(
+    r"^\s*(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
+)
+
+
+def _concern_names_part(text: str, part_name: str) -> bool:
+    m = _PLAN_REVIEW_PART_TOKEN_RE.match(text)
+    return m is not None and m.group(1) == part_name
+
+
+def plan_review_prior_pass(state: SessionState, scope: str, target_plan: str | None):
+    """The recorded terminal PASS binding `scope` (state.plan_review_passes), if
+    it still binds `target_plan` — same path, or the same bytes across a rename
+    (`_binds_across_path_change`), mirroring how every other staleness check in
+    this module treats path drift. A stage scope with no pass of its own falls
+    back to the whole-plan pass (`scope == ""`): a whole-plan PASS already
+    covered every stage, so a stage-scoped revise is bound by the same terminal
+    rule, not a loophole around it. None when no pass binds this scope at all
+    this approval cycle, or when the recorded one no longer binds the target —
+    both are treated as "no terminal pass in force", so cli.cmd_plan_review falls
+    back to today's unconditional record-and-overwrite behaviour."""
+    prior = state.plan_review_passes.get(scope)
+    if prior is None and scope:
+        prior = state.plan_review_passes.get("")
+    if prior is None or not target_plan:
+        return None
+    if prior.plan_path != target_plan and not _binds_across_path_change(prior, target_plan):
+        return None
+    return prior
+
+
+def _plan_review_regression_evidence(prior_pass, review, doc) -> bool:
+    """Whether a post-pass `revise` review carries run-demonstrated evidence
+    sufficient to overturn `prior_pass` (a whole-plan or stage-scoped PASS
+    recorded earlier this approval cycle — see `state.plan_review_passes`).
+
+    Two independent conditions, both required:
+      1. `review.regression_command` was actually RUN and exited non-zero
+         (`regression_exit` non-None and non-zero) — a command that never ran,
+         or that came back green, proves nothing about the plan having
+         regressed and is refused as evidence (see PlanReview.regression_command's
+         docstring).
+      2. At least one of `review.concerns` names, via the `_concern_names_part`
+         structural token match, a part (`meta:`/`order:`, or `stage:<n>`) that
+         `changed_parts` reports as changed since `prior_pass` was recorded —
+         reusing the SAME staleness machinery `_plan_review_blockers_coverage`/
+         `plan_review_delta` already use. Without this, a red regression command
+         on an UNRELATED part of the plan could overturn a pass that never
+         claimed anything about that part.
+
+    `doc` may be None (an unloadable target plan) — a change-since-pass claim
+    cannot be established against no plan at all, so this returns False rather
+    than guessing."""
+    if review.regression_exit is None or review.regression_exit == 0:
+        return False
+    if doc is None or not review.concerns:
+        return False
+    meta_moved, moved_stages = changed_parts(doc, _plan_review_baseline(prior_pass))
+    changed_names: set[str] = set()
+    if meta_moved:
+        changed_names.add("meta:")
+        changed_names.add("order:")
+    changed_names.update(_plan_review_scope_for_stage(i) for i in moved_stages)
+    if not changed_names:
+        return False
+    for concern in review.concerns:
+        text = _normalize_string(concern)
+        if any(_concern_names_part(text, name) for name in changed_names):
+            return True
+    return False
+
+
+def plan_review_scope_moved_since_pass(prior_pass, doc, scope: str) -> bool:
+    """Whether `scope`'s OWN part (the whole plan's meta/order for `""`, or one
+    stage for `"stage:<n>"`) is among the parts `changed_parts` reports as moved
+    since `prior_pass` was recorded — the same staleness computation
+    `_plan_review_regression_evidence` runs, but asking about ONE scope rather
+    than searching every concern for a name match.
+
+    cli.cmd_plan_review's post-pass-unevidenced branch uses this to decide
+    whether to record the revise at its own scope (`state.plan_stage_reviews`/
+    `state.plan_review`): recording matters only when THIS scope's coverage is
+    actually what `_plan_review_blockers_coverage` will demand next — a
+    stage-scoped revise at an UNMOVED stage has nothing to cover (the loop over
+    `moved_stages` never reaches it), so leaving the prior pass as the sole
+    record there is correct, not an oversight (test_stage_scoped_revise_after_
+    whole_plan_pass_is_terminal). A moved scope with no record would otherwise
+    make `risk-accept`/`override` at that scope find nothing to discharge
+    (test_risk_accept_scope_stage_clears_the_gate_end_to_end).
+
+    `doc is None` (unloadable target) answers False, same fail-closed default
+    as `_plan_review_regression_evidence` — a change-since-pass claim cannot be
+    established against no plan at all."""
+    if doc is None:
+        return False
+    meta_moved, moved_stages = changed_parts(doc, _plan_review_baseline(prior_pass))
+    if not scope:
+        return meta_moved
+    stage_index = _plan_review_scope_stage_index(scope)
+    return stage_index is not None and stage_index in moved_stages
+
+
+#: Leading structural remedy prefix a reviewer may type onto a `--concern` string
+#: — "cut" to propose narrowing scope, "add" to propose adding it. Descriptive
+#: telemetry only (PlanReview.remedy_tags docstring): the engine holds no
+#: preference between the two.
+_REMEDY_TAG_PREFIX_RE = re.compile(r"^\s*(cut|add):\s*")
+
+
+def _remedy_tag_for_concern(concern: str) -> str:
+    m = _REMEDY_TAG_PREFIX_RE.match(concern or "")
+    return m.group(1) if m else ""
+
+
 def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -> list[str]:
     """The whole-plan review covers everything it passed on the day its recorded
     keys still match; a moved stage owes its own stage-scoped pass at the CURRENT
@@ -622,6 +746,32 @@ _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
     "`replan --plan <edited>` after it — but the budget does not refill, so cutting "
     "scope does not by itself open this gate; `approve` still answers to every other "
     "gate as well"
+)
+
+#: R1 variant of the message above, substituted instead whenever
+#: `state.plan_review_passes` is non-empty — a whole-plan or stage pass was
+#: already recorded this approval cycle, which R1 makes terminal (see
+#: `_plan_review_regression_evidence`). "Run a fresh whole-plan thinker review"
+#: is dropped as an exit here on purpose: an on-budget pass ALWAYS still clears
+#: the gate directly (`_round_release_wrap` never substitutes when blockers is
+#: already empty), so this message is only ever reached with blockers non-empty
+#: while a pass stands recorded — i.e. an unevidenced post-pass revise, or a
+#: revise that genuinely overturned the pass with regression evidence. Neither
+#: is fixed by spending a further review round; only override or a scope edit
+#: is.
+_PLAN_REVIEW_ROUND_RELEASE_MESSAGE_POST_PASS = (
+    "review round budget exhausted at round {rounds} (Rule-of-Three — config.md's "
+    "effort-replan-absolute, reused) — a whole-plan or stage thinker PASS was already "
+    "recorded this approval cycle, which R1 makes terminal: 'run a fresh whole-plan "
+    "thinker review' is no longer an exit, because an on-budget pass would have "
+    "cleared the gate directly rather than reaching this message at all. The decision "
+    "is yours and must be recorded. Two exits, both executable from this state: (1) go "
+    "ahead with the plan as it stands, without a further review, by running "
+    "plan-review --verdict override --reviewer <you> --note <why it is acceptable>; or "
+    "(2) edit the plan as the concern proposes (cut or add) and re-apply it by the "
+    "route your state allows — `submit-plan` before approval, `replan --plan <edited>` "
+    "after it — but the budget does not refill, so editing the plan does not by itself "
+    "open this gate; `approve` still answers to every other gate as well"
 )
 
 
@@ -809,7 +959,12 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
         blockers = _plan_review_blockers_whole(state.plan_review, target_plan, state=state, doc=doc)
     else:
         blockers = _plan_review_blockers_coverage(state, target_plan, doc)
-    return _round_release_wrap(blockers, state, _PLAN_REVIEW_ROUND_COUNTER, _PLAN_REVIEW_ROUND_RELEASE_MESSAGE)
+    template = (
+        _PLAN_REVIEW_ROUND_RELEASE_MESSAGE_POST_PASS
+        if state.plan_review_passes
+        else _PLAN_REVIEW_ROUND_RELEASE_MESSAGE
+    )
+    return _round_release_wrap(blockers, state, _PLAN_REVIEW_ROUND_COUNTER, template)
 
 
 def plan_review_delta(state: SessionState, doc) -> "tuple[bool, set[int]]":

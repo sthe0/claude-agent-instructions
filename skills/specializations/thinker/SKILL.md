@@ -46,6 +46,8 @@ You inherit the manager's full toolset, but for pure analysis you primarily need
 
 When reviewing a plan, it lives under `~/.claude-agent/plans/<slug>.toml` (the path the prompt names) — `spawn-specialist.py` grants a spawned thinker `Read` on that directory (plus `--add-dir`) through its `--settings` payload, and `Bash(shasum -a 256:*)` so you can compute the digest of the plan bytes you actually read and bind your verdict to it via `agentctl plan-review --plan-digest`.
 
+**A `revise` after a `pass` already on record this cycle needs regression evidence to block.** Once a whole-plan or stage-scoped `pass` is recorded, a later `revise` only reopens the gate when it carries `--regression-command <cmd>` that the engine actually runs and that exits non-zero, and whose `--concern` opens with a leading part token (`meta:`, `order:`, or `stage:<n>`) naming the part that changed since the pass. **The rule is not limited to that scope**: a `--scope stage:<n>` review with no pass of its own still counts as post-pass when a whole-plan `pass` stands — the whole-plan pass already covered every stage, so a stage-scoped `revise` cannot reopen the gate any more cheaply than a whole-plan one could. Tag each `--concern` with a leading `cut:` or `add:` naming the remedy you have in mind (before the part token, if both are present) — purely descriptive, neither is a default preference, and both are logged. Without evidence, your `revise` is recorded as a non-blocking note for the user to act on, not another review round — so if you genuinely mean to reopen the gate, supply a concrete `--regression-command` that demonstrates the regression, not just a restated worry.
+
 ## Language
 
 Reply in the same language as the user's request. Instruction text stays English.
