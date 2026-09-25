@@ -712,6 +712,14 @@ class PlanPresentation:
     rendering_sha256: str
     rendering_text: str
     presented_ts: float
+    # sha256 of the plan's effective (declared+derived) grant set AT PRESENTATION
+    # TIME (schema 36) — `approve` re-derives the live plan's grants_sha256 and
+    # refuses on mismatch, so a materialization-layer change or an unreviewed
+    # plan edit between present-plan and approve can never silently carry a
+    # wider grant into an approved stage. None on every pre-schema-36 receipt
+    # (absent key -> None via from_dict's .get), which approve treats as "no
+    # grants digest was ever bound" rather than "matches" (fail-closed).
+    grants_sha256: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "PlanPresentation":
@@ -722,6 +730,7 @@ class PlanPresentation:
             rendering_sha256=d["rendering_sha256"],
             rendering_text=d["rendering_text"],
             presented_ts=d["presented_ts"],
+            grants_sha256=d.get("grants_sha256"),
         )
 
 

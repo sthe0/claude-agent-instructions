@@ -26,7 +26,7 @@ from pathlib import Path
 import proc_tree
 from lib import argv_text, config_root
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, gates, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, gates, grants as _grants, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
 from .checkrun import format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -47,7 +47,9 @@ from .plan import (
     PlanError,
     changed_parts,
     check_venue_warnings,
+    grants_sha256,
     load_plan,
+    plan_has_any_grants,
     plan_meta_digest,
     plan_meta_element_key,
     plan_meta_element_keys,
@@ -58,9 +60,10 @@ from .plan import (
     stage_reattest_digest,
     verify_command_reachability_blockers,
     verify_command_scope_warnings,
+    _venue_for,
 )
 from .text_shape import WHOLE_STAGE_ELEMENT
-from .render import cmd_plan_render, render_plan_md, render_stages_md
+from .render import cmd_plan_grants, cmd_plan_render, render_plan_grants, render_plan_md, render_stages_md
 from .submission import submission_advice, submission_violations
 from .state import (
     _EXECUTION_NODES,
@@ -2893,6 +2896,8 @@ def _record_plan_presentation(state: SessionState, presentation: PlanPresentatio
 _PLAN_PRESENTATION_STAGE_ANCHOR_RE = re.compile(r"^\[stage (\d+)\]", re.MULTILINE)
 
 
+
+
 def _plan_presentation_skeleton(stages: list[Stage]) -> str:
     """Deterministic `full`-rendering skeleton: one `[stage N] <title>` anchor
     line per stage, in plan order. present-plan's completeness check parses
@@ -3019,6 +3024,19 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                 "full rendering is incomplete; stamping nothing — " + "; ".join(problems),
                 data={"missing": missing, "extra": extra},
             )
+        # Same containment discipline as the anchor check just above, over a
+        # DIFFERENT engine-generated block: a plan that grants anything must
+        # show the reader exactly what, in the SAME rendering the approval ask
+        # is assembled from (never a later, easy-to-skip detail view).
+        if plan_has_any_grants(doc):
+            full_grants_block = render_plan_grants(doc, fmt="full")
+            if full_grants_block.strip() not in text:
+                return Directive(
+                    False, state.node, "noop",
+                    "full rendering omits the grants block; stamping nothing — "
+                    "paste this block into it verbatim and re-run",
+                    data={"grants_block": full_grants_block},
+                )
 
     if kind == PLAN_PRESENTATION_KIND_ESSENCE:
         # Fold any landed enumerator sidecar BEFORE computing the coverage block,
@@ -3063,6 +3081,39 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                     + "; ".join(missing),
                     data={"coverage_block": block, "missing_lines": missing},
                 )
+        # Same containment discipline, this time over the COMPACT grants
+        # projection — the essence is the approval ask's raw material, so a
+        # plan that grants anything must show the reader what, right here,
+        # not only in the on-request `full`/`plan-grants` detail view.
+        try:
+            _grants_doc = load_plan(state.plan_path)
+        except (OSError, PlanError):
+            _grants_doc = None  # surfaced already by the coverage/anchor checks above
+        if _grants_doc is not None and plan_has_any_grants(_grants_doc):
+            compact_grants_block = render_plan_grants(_grants_doc, fmt="compact")
+            if compact_grants_block.strip() not in text:
+                return Directive(
+                    False, state.node, "noop",
+                    "essence rendering omits the grants block; stamping nothing — "
+                    "paste this block into it verbatim and re-run",
+                    data={"grants_block": compact_grants_block},
+                )
+
+    # grants_sha256 over whatever doc this branch already loaded (full/essence);
+    # replan_diff loads its own, since neither branch above populated one for it.
+    # A load failure here leaves the digest None rather than raising — the same
+    # fail-closed posture PlanPresentation.grants_sha256 documents, and consistent
+    # with essence's own tolerance of a failed `_grants_doc` load above.
+    if kind == PLAN_PRESENTATION_KIND_FULL:
+        _sha_doc = doc
+    elif kind == PLAN_PRESENTATION_KIND_ESSENCE:
+        _sha_doc = _grants_doc
+    else:
+        try:
+            _sha_doc = load_plan(target)
+        except (OSError, PlanError):
+            _sha_doc = None
+    presented_grants_sha256 = grants_sha256(_sha_doc) if _sha_doc is not None else None
 
     presentation = PlanPresentation(
         plan_path=target,
@@ -3071,6 +3122,7 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
         rendering_sha256=hashlib.sha256(raw).hexdigest(),
         rendering_text=text,
         presented_ts=time.time(),
+        grants_sha256=presented_grants_sha256,
     )
     _record_plan_presentation(state, presentation)
     # D9 capture: what the user said when sending a PRIOR presentation of this plan
@@ -3926,6 +3978,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         + plugins.plugin_gate_blockers(state, "plan_approval")
         + review_blockers
         + gates.plan_presentation_blockers(state, state.plan_path)
+        + gates.grants_approval_blockers(state, state.plan_path)
     )
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty approver: --by must name who approved"]
@@ -3971,6 +4024,15 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # against the newly-approved plan, so friction spent reviewing code under the
     # PRIOR plan version should not count against this one.
     state.code_review_rounds = 0
+    # Bind the approved grant set: stage-grants only returns DERIVED grants when a
+    # live re-derivation still hashes to this value, so a materialization-layer
+    # change after approval can never silently widen what a dispatched stage
+    # receives without a fresh approve. None (rather than a stale prior digest) on
+    # a plan that failed to load or grants nothing, matching grants_approval_
+    # blockers' own fail-open reading of the same two conditions.
+    state.approved_grants_sha256 = (
+        grants_sha256(_approved_doc) if _approved_doc is not None else None
+    )
     state.node = transition(state.node, "approve")
     snap = _snapshot_approved_plan(store, state)
     if snap:
@@ -4542,27 +4604,195 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     return _park_blocked(state, store, stage, marker, base)
 
 
+def _parse_add_dir_spec(spec: str) -> tuple[str, str] | None:
+    """Parse a `--add-dir 'PATH:MODE'` CLI spec into `(path, mode)`, or None on
+    any shape that doesn't parse — the caller turns that into a refusal rather
+    than guessing. Splits from the RIGHT so a path containing ':' (rare, but
+    not impossible) still parses correctly; MODE itself never contains ':'."""
+    if ":" not in spec:
+        return None
+    path, mode = spec.rsplit(":", 1)
+    if not path or mode not in ("read", "write"):
+        return None
+    return path, mode
+
+
 def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Resume a session parked on a PERMISSION-REQUEST once the manager has the
     user's decision. The user ask is cognitive; this only records the outcome,
-    clears the parked request, and hands back the continuation to re-spawn with."""
+    clears the parked request, and hands back the continuation to re-spawn with.
+
+    `--scope stage` additionally MATERIALIZES `--rule`/`--add-dir` entries as
+    RUNTIME grants on the active stage (state.runtime_grants), validated through
+    `grants.validate_rule`/`grants.validate_add_dir` -- the same validator every
+    declared/derived grant passes through, so a runtime grant is never trusted
+    more than either. This is ADDITIVE to the pre-existing decision/continuation
+    logic below, never a replacement for it: a `--scope stage` grant with a
+    validation failure refuses the WHOLE call (nothing partially recorded) so the
+    manager can correct the rule/add-dir spec and retry, rather than leaving a
+    parked request half-resolved."""
     state = _require(store, args.session)
     req = state.permission_request
     if req is None:
         return Directive(False, state.node, "noop", "no pending permission request to resolve")
+    scope = getattr(args, "scope", "once")
+    new_entries: list[dict] = []
+    if args.decision == "granted" and scope == "stage":
+        stage = state.active_stage()
+        if stage is None:
+            return Directive(False, state.node, "noop",
+                              "--scope stage requires an active stage to grant onto")
+        for rule in (getattr(args, "rules", None) or []):
+            try:
+                _grants.validate_rule(rule)
+            except _grants.GrantValidationError as exc:
+                return Directive(False, state.node, "noop", f"refused rule grant: {exc}")
+            new_entries.append({
+                "rule": rule, "provenance": "runtime", "consumed": False,
+                "stage_title": stage.title,
+            })
+        for spec in (getattr(args, "add_dirs", None) or []):
+            parsed = _parse_add_dir_spec(spec)
+            if parsed is None:
+                return Directive(False, state.node, "noop",
+                                  f"malformed --add-dir spec (want 'PATH:read|write'): {spec}")
+            path, mode = parsed
+            try:
+                _grants.validate_add_dir(path, mode)
+            except _grants.GrantValidationError as exc:
+                return Directive(False, state.node, "noop", f"refused add_dir grant: {exc}")
+            new_entries.append({
+                "path": path, "mode": mode, "provenance": "runtime", "consumed": False,
+                "stage_title": stage.title,
+            })
     if args.decision == "granted":
-        cont = continuations.permission_granted(req.action, getattr(args, "scope", "once"))
+        cont = continuations.permission_granted(req.action, scope)
         detail = f"permission granted for {req.action}; re-spawn the stage"
     else:
         cont = continuations.permission_denied(req.action)
         detail = f"permission denied for {req.action}; re-spawn with the fallback"
+    if new_entries:
+        key = str(state.active_stage().index)
+        state.runtime_grants.setdefault(key, []).extend(new_entries)
     state.permission_request = None
     state.log("resolve_permission", action=req.action, decision=args.decision)
     store.save(state)
     return Directive(
         True, state.node, "continue_spawn", detail,
-        data={"action": req.action, "decision": args.decision, "continuation": cont},
+        data={"action": req.action, "decision": args.decision, "continuation": cont,
+              "runtime_grants_added": new_entries},
     )
+
+
+def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Report the EFFECTIVE grant set for one stage — declared + derived (only when
+    the live re-derivation still re-hashes to `approved_grants_sha256`, per
+    grants.py's docstring) + unconsumed runtime grants — the read `dispatch_stage`
+    (stage 2) is meant to consult before materializing a child's `--settings`/
+    `--add-dir`. Declared/derived are read from the hash-verified
+    `plan_snapshot_path`/`plan_snapshot_hash` snapshot, NEVER from live `plan_path`
+    -- the snapshot is the frozen, human-approved bytes; a live plan_path may
+    already carry an unreviewed in-place edit at plan-mutable PLAN_READY of the
+    NEXT plan. `--stage` defaults to the session's active stage."""
+    state = _require(store, args.session)
+    stage_index = getattr(args, "stage", None)
+    if stage_index is None:
+        stage_index = state.current_stage
+    if stage_index is None:
+        return Directive(False, state.node, "noop", "no active stage and no --stage given")
+    try:
+        stage = state.stage(stage_index)
+    except KeyError:
+        return Directive(False, state.node, "noop", f"no stage with index {stage_index}")
+
+    declared_entries: list[dict] = []
+    derived_entries: list[dict] = []
+    dropped: list[dict] = []
+    snap_path = state.plan_snapshot_path
+    snap_hash = state.plan_snapshot_hash
+    if snap_path and snap_hash and Path(snap_path).exists():
+        if hashlib.sha256(Path(snap_path).read_bytes()).hexdigest() == snap_hash:
+            try:
+                snap_doc = load_plan(snap_path)
+            except (OSError, PlanError):
+                snap_doc = None
+            if snap_doc is not None:
+                snap_stage = next((s for s in snap_doc.stages if s.index == stage_index), None)
+                if snap_stage is not None:
+                    declared = snap_stage.grants if getattr(snap_stage, "grants", None) \
+                        else _grants.StageGrants()
+                    declared_entries = [r.to_dict() for r in declared.allow] + \
+                        [a.to_dict() for a in declared.add_dirs]
+                    # Derived grants are trustworthy only while the CURRENT derivation
+                    # code, run over these SAME frozen snapshot bytes, still hashes to
+                    # what was actually approved -- a materialization-layer code change
+                    # after approval must never silently widen a stage without a fresh
+                    # approve.
+                    if state.approved_grants_sha256 and \
+                            grants_sha256(snap_doc) == state.approved_grants_sha256:
+                        venue = _venue_for(snap_doc)
+                        derived, dropped = _grants.derive_stage_grants(snap_stage, venue=venue)
+                        derived_entries = [r.to_dict() for r in derived.allow] + \
+                            [a.to_dict() for a in derived.add_dirs]
+
+    runtime_entries = [
+        e for e in state.runtime_grants.get(str(stage_index), [])
+        if not e.get("consumed")
+    ]
+
+    data = {
+        "stage": stage_index,
+        "executor": stage.actor.executor,
+        "grants": {
+            "declared": declared_entries,
+            "derived": derived_entries,
+            "runtime": runtime_entries,
+        },
+        "dropped": dropped,
+    }
+    if getattr(args, "json", False):
+        text = json.dumps(data, indent=2, sort_keys=True)
+    else:
+        lines = [f"Stage {stage_index} ({stage.actor.executor}):"]
+        for label in ("declared", "derived", "runtime"):
+            entries = data["grants"][label]
+            if not entries:
+                continue
+            rendered = ", ".join(e.get("rule") or f"{e.get('path')}:{e.get('mode')}" for e in entries)
+            lines.append(f"  {label}: {rendered}")
+        if not (declared_entries or derived_entries or runtime_entries):
+            lines.append("  (no grants)")
+        text = "\n".join(lines) + "\n"
+    return Directive(True, state.node, "inspect", text, data=data)
+
+
+def cmd_grant_stats(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Report the session's accumulated grant-classification ledgers:
+    planning_misses (denials NOT covered by a stage's effective grant set --
+    correctly asked the user), materialization_defects (denials the effective
+    grant set DID cover, but the child's own --settings/--add-dir materialization
+    failed to carry -- routes the stage to FAILED/DIAGNOSING, never a re-ask), and
+    settings_drift (a stage's live settings document changed underneath the
+    spawn). A pure read of state.planning_misses/materialization_defects/
+    settings_drift -- see state.py's schema-36 field block for each row's shape."""
+    state = _require(store, args.session)
+    asked = sum(1 for m in state.planning_misses if m.get("asked_user"))
+    unasked = len(state.planning_misses) - asked
+    data = {
+        "planning_misses": state.planning_misses,
+        "materialization_defects": state.materialization_defects,
+        "settings_drift": state.settings_drift,
+        "planning_miss_counts": {"asked": asked, "unasked": unasked},
+    }
+    if getattr(args, "json", False):
+        text = json.dumps(data, indent=2, sort_keys=True)
+    else:
+        text = (
+            f"planning_misses: {len(state.planning_misses)} (asked={asked}, unasked={unasked})\n"
+            f"materialization_defects: {len(state.materialization_defects)}\n"
+            f"settings_drift: {len(state.settings_drift)}\n"
+        )
+    return Directive(True, state.node, "inspect", text, data=data)
 
 
 def _cost_rows(args) -> list[dict]:
@@ -6801,6 +7031,7 @@ COMMANDS = {
     "classify": cmd_classify,
     "plan": cmd_plan,
     "plan-render": cmd_plan_render,
+    "plan-grants": cmd_plan_grants,
     "submit-plan": cmd_submit_plan,
     "present-plan": cmd_present_plan,
     "confirm-delivery": cmd_confirm_delivery,
@@ -6816,6 +7047,8 @@ COMMANDS = {
     "next-stage": cmd_next_stage,
     "dispatch": cmd_dispatch,
     "resolve-permission": cmd_resolve_permission,
+    "stage-grants": cmd_stage_grants,
+    "grant-stats": cmd_grant_stats,
     "record-result": cmd_record_result,
     "declare": cmd_declare,
     "investigate": cmd_investigate,
@@ -6874,10 +7107,11 @@ _SESSION_COMMANDS = (
     "question-enumerate", "question-enumerate-worker", "question-enumerate-escape",
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
-    "plan-render", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
+    "plan-render", "plan-grants", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "risk-accept",
     "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
-    "next-stage", "dispatch", "resolve-permission", "record-result", "declare",
+    "next-stage", "dispatch", "resolve-permission", "stage-grants", "grant-stats",
+    "record-result", "declare",
     "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
     "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status",
     "drive", "close", "push-subplan", "pop-subplan", "task-reset",
@@ -7245,6 +7479,12 @@ def build_parser() -> argparse.ArgumentParser:
     # (_inject_default_session) is a no-op here: rendering is a pure, session-free
     # read of the plan file, unlike every other verb which drives session state.
     sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-grants"); sp.add_argument("--plan", required=True,
+        help="TOML plan whose per-stage grant set (declared + derived) to render "
+             "on demand (a projection, never written to disk)")
+    sp.add_argument("--format", choices=["compact", "full", "json"], default="compact")
+    # Session-free read, same reason as plan-render's suppressed --session above.
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
     sp = add("submit-plan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
     sp = add("present-plan"); sp.add_argument("--session", required=True)
     sp.add_argument("--kind", choices=list(PLAN_PRESENTATION_KINDS), default=PLAN_PRESENTATION_KIND_ESSENCE,
@@ -7409,7 +7649,23 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--re-attest", action="store_true")
     sp = add("resolve-permission"); sp.add_argument("--session", required=True)
     sp.add_argument("--decision", choices=["granted", "denied"], required=True)
-    sp.add_argument("--scope", choices=["once", "project", "global"], default="once")
+    sp.add_argument("--scope", choices=["once", "project", "global", "stage"], default="once",
+                    help="'stage' additionally materializes --rule/--add-dir as a RUNTIME "
+                         "grant on the active stage (state.runtime_grants), validated through "
+                         "grants.py exactly like a declared grant -- so the next dispatch of "
+                         "this stage carries it into the child's --settings/--add-dir")
+    sp.add_argument("--rule", dest="rules", action="append", default=None,
+                    help="a Bash/Edit/etc rule string to grant (repeatable); only meaningful "
+                         "with --scope stage, validated via grants.validate_rule before storage")
+    sp.add_argument("--add-dir", dest="add_dirs", action="append", default=None,
+                    help="'PATH:MODE' (mode: read|write) to grant (repeatable); only meaningful "
+                         "with --scope stage, validated via grants.validate_add_dir before storage")
+    sp = add("stage-grants"); sp.add_argument("--session", required=True)
+    sp.add_argument("--stage", type=int, default=None,
+                    help="stage index to report (defaults to the session's active stage)")
+    sp.add_argument("--json", action="store_true")
+    sp = add("grant-stats"); sp.add_argument("--session", required=True)
+    sp.add_argument("--json", action="store_true")
     sp = add("record-result"); sp.add_argument("--session", required=True)
     sp.add_argument("--status", choices=["passed", "failed"], required=True)
     sp.add_argument("--actual", default="")

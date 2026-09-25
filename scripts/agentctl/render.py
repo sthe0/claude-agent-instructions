@@ -14,8 +14,11 @@ carries every stage's index and title.
 """
 from __future__ import annotations
 
+import json
+
+from . import grants as _grants
 from .directive import Directive
-from .plan import PlanDoc, load_plan
+from .plan import PlanDoc, _venue_for, grants_sha256, load_plan
 
 
 def render_plan_md(doc: PlanDoc) -> str:
@@ -278,6 +281,103 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
+    """Render the plan's per-stage grant set — declared (plan-authored, in
+    `[stage.grants]`) plus derived (mechanically proposed by
+    `grants.derive_stage_grants` from the stage's OTHER fields) — as a
+    projection, exactly like `render_plan_md`: never written to disk, the typed
+    plan (+ the pure derivation function) is the one source of truth.
+
+    `fmt="compact"`: one line per stage — every DECLARED allow rule and
+    add_dir (with its mode) verbatim, every DR-O and DR-R DERIVED entry
+    verbatim (a reader needs to see exactly what output-artifact/outside-venue
+    grant a stage is about to receive), DR-V and DR-E entries only COUNTED (a
+    verify_command can carry many segments and a developer/tech-writer stage
+    many in-venue refs — spelling every one out would defeat "compact"), plus
+    a dropped-count for whatever the validator refused. `fmt="full"`: every
+    entry verbatim, including DR-V/DR-E, plus each dropped entry with its
+    refusal reason. A machine-readable form (`--format json`) is not produced
+    here — `cmd_plan_grants` builds that directly from `StageGrants.to_dict()`."""
+    venue = _venue_for(doc)
+    lines: list[str] = []
+    for s in doc.stages:
+        declared = s.grants if getattr(s, "grants", None) else _grants.StageGrants()
+        derived, dropped = _grants.derive_stage_grants(s, venue=venue)
+        declared_rules = [r.rule for r in declared.allow]
+        declared_dirs = [f"{a.path}:{a.mode}" for a in declared.add_dirs]
+        dr_v = [r.rule for r in derived.allow if r.provenance == "derived:DR-V"]
+        dr_o = [r.rule for r in derived.allow if r.provenance == "derived:DR-O"]
+        dr_e = [r.rule for r in derived.allow if r.provenance == "derived:DR-E"]
+        dr_r = [f"{a.path}:{a.mode}" for a in derived.add_dirs if a.provenance == "derived:DR-R"]
+        if fmt == "full":
+            lines.append(f"Stage {s.index} ({s.title}):")
+            if declared_rules:
+                lines.append(f"  declared allow: {', '.join(declared_rules)}")
+            if declared_dirs:
+                lines.append(f"  declared add_dirs: {', '.join(declared_dirs)}")
+            if declared.permission_mode:
+                lines.append(f"  declared permission_mode: {declared.permission_mode}")
+            if dr_v:
+                lines.append(f"  DR-V (verify_command): {', '.join(dr_v)}")
+            if dr_o:
+                lines.append(f"  DR-O (output artifacts): {', '.join(dr_o)}")
+            if dr_e:
+                lines.append(f"  DR-E (in-venue edit): {', '.join(dr_e)}")
+            if dr_r:
+                lines.append(f"  DR-R (outside-venue read): {', '.join(dr_r)}")
+            for d in dropped:
+                lines.append(f"  dropped: {d['entry']} ({d['reason']})")
+            if not (declared_rules or declared_dirs or dr_v or dr_o or dr_e or dr_r):
+                lines.append("  (no grants)")
+        else:
+            parts = [f"Stage {s.index} ({s.title}):"]
+            if declared_rules:
+                parts.append("declared allow=[" + ", ".join(declared_rules) + "]")
+            if declared_dirs:
+                parts.append("declared add_dirs=[" + ", ".join(declared_dirs) + "]")
+            if dr_o:
+                parts.append("DR-O=[" + ", ".join(dr_o) + "]")
+            if dr_r:
+                parts.append("DR-R=[" + ", ".join(dr_r) + "]")
+            if dr_v:
+                parts.append(f"DR-V={len(dr_v)} derived")
+            if dr_e:
+                parts.append(f"DR-E={len(dr_e)} derived")
+            if dropped:
+                parts.append(f"dropped={len(dropped)}")
+            if len(parts) == 1:
+                parts.append("(no grants)")
+            lines.append(" ".join(parts))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:
+    """Render the plan's per-stage grant set on demand — a read-only PROJECTION,
+    never written to disk, mirroring `cmd_plan_render`'s pattern exactly. `--format
+    json` returns a machine-readable per-stage breakdown (declared/derived/dropped,
+    each with provenance) plus the plan's `grants_sha256` — the same digest
+    `present-plan`/`approve` bind — for a caller that wants to script against it
+    rather than read prose."""
+    doc = load_plan(args.plan)
+    fmt = getattr(args, "format", "compact") or "compact"
+    if fmt == "json":
+        venue = _venue_for(doc)
+        stages = {}
+        for s in doc.stages:
+            declared = s.grants if getattr(s, "grants", None) else _grants.StageGrants()
+            derived, dropped = _grants.derive_stage_grants(s, venue=venue)
+            stages[str(s.index)] = {
+                "declared": declared.to_dict(),
+                "derived": derived.to_dict(),
+                "dropped": dropped,
+            }
+        data = {"grants_sha256": grants_sha256(doc), "stages": stages}
+        text = json.dumps(data, indent=2, sort_keys=True)
+        return Directive(True, "(render)", "inspect", text, data=data)
+    text = render_plan_grants(doc, fmt=fmt)
+    return Directive(True, "(render)", "inspect", text, data={"markdown": text})
 
 
 def cmd_plan_render(args, *, store=None, runner=None) -> Directive:

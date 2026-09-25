@@ -47,8 +47,10 @@ from .plan import (
     PlanError,
     changed_parts,
     grants_place,
+    grants_sha256,
     load_plan,
     order_place,
+    plan_has_any_grants,
     stage_question_key,
 )
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
@@ -1058,6 +1060,45 @@ def plan_presentation_blockers(
     if stale is not None:
         return [stale]
     return _delivery_stamp_blocker(state, receipt, probe)
+
+
+def grants_approval_blockers(state: SessionState, target_plan: str | None) -> list[str]:
+    """Precondition guardian for `approve`: when the target plan grants ANYTHING
+    (plan_has_any_grants), the essence presentation receipt that plan_presentation_
+    blockers already required must ALSO carry a grants_sha256 matching the plan's
+    CURRENT effective (declared+derived) grant set — so a materialization-layer
+    change (grants.py's derivation rules) or an out-of-band plan edit between
+    present-plan and approve is never silently carried forward as already-reviewed.
+    Piggybacks on plan_presentation_blockers' own receipt (never queries a second
+    one) and never duplicates ITS blockers — a missing/stale/undelivered receipt is
+    plan_presentation_blockers' job to name, so this function fails open (returns
+    []) whenever that receipt is missing or already stale, trusting the sibling
+    guardian to report it. Fails OPEN on a plan that does not load and on a plan
+    that grants nothing at all (a grants_sha256 comparison is meaningless with no
+    grants to bind). [] == may pass."""
+    if not plan_presentation_active(state):
+        return []
+    if not target_plan:
+        return []
+    try:
+        doc = load_plan(target_plan)
+    except (OSError, PlanError):
+        return []
+    if not plan_has_any_grants(doc):
+        return []
+    receipt = _plan_presentation_for(state, _PLAN_PRESENTATION_KIND_ESSENCE)
+    if receipt is None:
+        return []  # plan_presentation_blockers already names this
+    if _receipt_binding_blocker(receipt, target_plan, "plan presentation") is not None:
+        return []  # ditto -- stale receipt already blocked elsewhere
+    current = grants_sha256(doc)
+    if getattr(receipt, "grants_sha256", None) != current:
+        return [
+            "the plan's grant set changed since it was presented (or the "
+            "presentation predates the grants model) — re-run present-plan so "
+            "the grants block reflects the current effective grant set"
+        ]
+    return []
 
 
 def replan_authorization_active(state: SessionState) -> bool:

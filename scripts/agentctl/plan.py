@@ -2057,6 +2057,31 @@ def _grants_grew(old: PlanDoc, new: PlanDoc) -> bool:
     return False
 
 
+def plan_has_any_grants(doc: PlanDoc) -> bool:
+    """Whether ANY stage's effective (declared+derived) grant set is non-empty —
+    shared by the present-plan grants-block containment check and the approve
+    grants_sha256 binding check (both only fire on a plan that actually grants
+    something; a plan with zero grants anywhere needs neither)."""
+    return any(rules or dirs for rules, dirs, _mode in _grants_effective_map(doc).values())
+
+
+def grants_sha256(doc: PlanDoc) -> str:
+    """Stable sha256 hex digest of the plan's EFFECTIVE (declared+derived) grant set,
+    one entry per stage index. `present-plan` stamps this onto the receipt and
+    `approve` re-derives and compares it, so a materialization-layer change
+    (grants.py's derivation rules) or an out-of-band plan edit between presentation
+    and approval is never silently carried forward as already-reviewed. Same
+    `repr(...)`-then-sha256 style as the other digests in this module; the map is
+    sorted by stage index and each stage's rule/add_dir tuples are themselves
+    sorted (via `effective_tuple()`) so the digest never depends on iteration or
+    declaration order."""
+    payload = repr(tuple(
+        (idx, tuple(sorted(rules)), tuple(sorted(dirs)), mode)
+        for idx, (rules, dirs, mode) in sorted(_grants_effective_map(doc).items())
+    ))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     """Return 'no_change' | 'refinement' | 'substantive'."""
     if _structural_signature(old) != _structural_signature(new):
