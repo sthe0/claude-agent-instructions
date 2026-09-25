@@ -145,15 +145,24 @@ def test_refinement_applies_changed_means_to_state(store, fixtures_dir):
     assert state.stage(1).means.method == "establish the import context the working caller uses"
 
 
-def test_verify_command_change_classifies_as_refinement(fixtures_dir):
-    """diff_plans returns 'refinement' (not 'no_change') when only verify_command differs."""
+def test_verify_command_change_classifies_as_substantive(fixtures_dir):
+    """diff_plans returns 'substantive' (not 'refinement') when verify_command changes
+    to a textually different command: DR-V derives a Bash(<verify_command>:*) rule
+    straight from the literal text, so the two plans' effective grant sets differ and
+    `_grants_grew` intercepts this before the prose comparison is ever reached — a
+    verify_command edit that does not change the derived rule (e.g. a pure
+    non-semantic edit outside the derivable segment) still falls through to
+    'refinement', but this fixture pair's two commands ARE textually different."""
     base = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix.toml"))
     changed = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_changed.toml"))
-    assert diff_plans(base, changed) == "refinement"
+    assert diff_plans(base, changed) == "substantive"
 
 
-def test_refinement_carries_verify_command_into_state(store, fixtures_dir):
-    """refinement replan must land the new verify_command in live state."""
+def test_substantive_verify_command_change_carries_into_state(store, fixtures_dir):
+    """A verify_command change that widens/changes the derived DR-V grant re-arms the
+    plan gate (PLAN-READY), and the new verify_command lands in state immediately as
+    part of that transition -- same carry-forward machinery as any other substantive
+    replan, no separate approve needed to observe it."""
     sid = "vc"
     base = str(fixtures_dir / "plan_two_stage_verifyfix.toml")
     changed = str(fixtures_dir / "plan_two_stage_verifyfix_changed.toml")
@@ -162,14 +171,19 @@ def test_refinement_carries_verify_command_into_state(store, fixtures_dir):
     assert store.load(sid).stage(1).criterion.verify_command == "python -c 'import mod'"
 
     d = cli.cmd_replan(ns(session=sid, plan=changed), store=store)
-    assert d.action == "continue"
+    assert d.marker == "PLAN-READY"
     state = store.load(sid)
-    assert state.node == Node.EXECUTING.value
+    assert state.node == Node.PLAN_READY.value
     assert state.stage(1).criterion.verify_command == "python -c 'import mod; assert True'"
 
 
-def test_refinement_preserves_passed_stage_on_verify_command_change(store, fixtures_dir):
-    """A verify_command-only refinement must not reset an already-PASSED stage."""
+def test_substantive_verify_command_change_resets_passed_stage(store, fixtures_dir):
+    """`verify_command` is itself part of `stage_carry_key` (#12), so a substantive
+    replan that changes stage 1's OWN verify_command must NOT carry its PASSED
+    status forward -- the prior PASS was attested against the old check and is no
+    longer trustworthy against the new one, so the stage resets to PENDING for
+    re-verification (contrast test_substantive_replan_carries_forward_passed_unchanged_stage,
+    where the PASSED stage's own definition is untouched)."""
     sid = "pp"
     base = str(fixtures_dir / "plan_two_stage_verifyfix.toml")
     changed = str(fixtures_dir / "plan_two_stage_verifyfix_changed.toml")
@@ -181,9 +195,9 @@ def test_refinement_preserves_passed_stage_on_verify_command_change(store, fixtu
     store.save(state)
 
     d = cli.cmd_replan(ns(session=sid, plan=changed), store=store)
-    assert d.action == "continue"
+    assert d.marker == "PLAN-READY"
     state = store.load(sid)
-    assert state.stage(1).outcome.status == StageStatus.PASSED.value
+    assert state.stage(1).outcome.status == StageStatus.PENDING.value
     assert state.stage(1).criterion.verify_command == "python -c 'import mod; assert True'"
 
 
