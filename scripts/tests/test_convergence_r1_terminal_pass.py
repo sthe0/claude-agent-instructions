@@ -177,6 +177,7 @@ def test_regression_concern_must_name_part_changed_since_pass(store, fixtures_di
     # the pass stays authoritative, but the plan's CONTENT moved (the retitled
     # fixture) independently of this revise -- the gate must not report a stale
     # pass as still "in force".
+    assert d.ok is False
     assert gates.plan_review_blockers(state, str(plan)) != []
 
 
@@ -268,3 +269,44 @@ def test_concern_remedy_tags_are_logged_on_ordinary_review(store, fixtures_dir, 
     assert event["event"] == "plan_review"
     assert event["remedy_cut"] == 1
     assert event["remedy_add"] == 1
+
+
+# --- 9. an unevidenced stage-scoped revise on a scope that ITSELF moved since
+#         the pass still blocks (the pass is stale, not "in force" there
+#         either), and a distinct-reviewer stage-scoped override clears the
+#         gate exactly as it would without a prior pass in the picture --------
+
+def test_moved_scope_revise_then_stage_override_clears_gate(store, fixtures_dir, tmp_path, gate_on):
+    sid = "r1-9"
+    plan = tmp_path / "plan.toml"
+    plan.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    _to_plan_ready(store, sid, str(plan))
+    cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="pass",
+                           reviewer="thinker", concerns=None, note="",
+                           plan_digest=_sha256_file(plan), regression_command=None),
+                        store=store)
+
+    # stage 1 itself moves -- an unevidenced revise scoped to stage:1 is bound
+    # by the same terminal rule as a whole-plan revise, and the whole-plan pass
+    # no longer covers this scope's current content either way.
+    plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    d = cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="revise",
+                               reviewer="thinker", concerns=["stage:1 reconsider"], note="",
+                               plan_digest=None, regression_command=None),
+                            store=store)
+
+    assert d.ok is False
+    assert d.data.get("plan_review_post_pass_unevidenced") is True
+    state = store.load(sid)
+    assert gates.plan_review_blockers(state, str(plan)) != []
+
+    d2 = cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="override",
+                                reviewer="user", concerns=None,
+                                note="stage 1 retitle is cosmetic, proceeding",
+                                plan_digest=None, regression_command=None),
+                             store=store)
+
+    assert d2.ok is True
+    state = store.load(sid)
+    assert state.plan_stage_reviews["stage:1"].verdict == "override"
+    assert gates.plan_review_blockers(state, str(plan)) == []
