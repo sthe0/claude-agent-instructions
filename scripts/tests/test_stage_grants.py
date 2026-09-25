@@ -106,6 +106,10 @@ _REFUSED_RULES = [
     "Edit(//**)",
     "Edit(**)",
     "Edit(//home/the0/**)",
+    # A `..` segment must not carry a rule past the protected-target check:
+    # the harness form `//abs` decodes to `/abs` before normalization.
+    f"Edit(//{str(config_root.agentctl_state_dir()).lstrip('/')}/../state/s.json)",
+    f"Edit(//{str(config_root.harness_config_root()).lstrip('/')}/x/../settings.json)",
 ]
 
 
@@ -218,6 +222,29 @@ def test_edit_rule_covers_exact_resolved_path(tmp_path):
     target.write_text("x")
     grants = StageGrants(allow=[RuleGrant(rule=f"Edit(//{target})", provenance="declared")])
     assert grant_covers_call(grants, "Edit", {"file_path": str(target)})
+
+
+def test_edit_rule_in_harness_double_slash_form_covers_absolute_path(tmp_path):
+    """`Edit(//abs/path)` is the form DR-E emits and the harness matches; it
+    must decode to `/abs/path`, not to the relative `abs/path`."""
+    target = tmp_path / "foo.py"
+    target.write_text("x")
+    rule = f"Edit(//{str(target).lstrip('/')})"
+    grants = StageGrants(allow=[RuleGrant(rule=rule, provenance="derived:DR-E")])
+    assert grant_covers_call(grants, "Edit", {"file_path": str(target)})
+    assert grant_covers_call(grants, "Write", {"file_path": str(target)})
+    assert grant_covers_call(grants, "NotebookEdit", {"file_path": str(target)})
+
+
+def test_project_relative_edit_rule_is_not_covered(tmp_path, monkeypatch):
+    """A single-slash or bare rule path is project-relative; the child's
+    project root is unknown to the check, so it fails toward not-covered."""
+    target = tmp_path / "foo.py"
+    target.write_text("x")
+    monkeypatch.chdir(tmp_path)
+    for rule in ("Edit(foo.py)", "Edit(/foo.py)"):
+        grants = StageGrants(allow=[RuleGrant(rule=rule, provenance="declared")])
+        assert not grant_covers_call(grants, "Edit", {"file_path": str(target)})
 
 
 def test_edit_not_covered_by_unrelated_rule(tmp_path):

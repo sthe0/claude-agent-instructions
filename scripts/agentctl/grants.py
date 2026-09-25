@@ -132,6 +132,13 @@ _WRITE_CAPABLE_PROGRAMS = frozenset(
 _INTERPRETERS = frozenset({"bash", "sh", "zsh", "python", "python3", "node", "ruby", "perl"})
 
 
+def rule_file_path(arg: str) -> str:
+    """Decode a file-tool rule's path argument. The harness reads `//abs` as the
+    absolute path `/abs`; a single leading `/` or no slash is project-relative
+    and is returned as written, for callers to treat as unresolvable."""
+    return "/" + arg.lstrip("/") if arg.startswith("//") else arg
+
+
 def rule_program_and_arg(rule: str) -> tuple[str, str] | None:
     """Parse `Tool(arg)` into `(Tool, arg)`; `None` if the shape doesn't
     match (the validator refuses anything that doesn't parse this way)."""
@@ -310,7 +317,7 @@ def _is_g_target_path(path: str) -> bool:
 
 
 def _validate_non_bash_rule(rule: str, tool: str, arg: str) -> None:
-    path = arg[2:] if arg.startswith("//") else arg
+    path = rule_file_path(arg)
     if not path.strip():
         raise GrantValidationError(
             f"rule {rule!r} ({tool}) names an empty path — refused"
@@ -637,8 +644,11 @@ def _path_call_covered(grants: StageGrants, tool_name: str, path: str) -> bool:
             tool == "Edit" and tool_name in ("Write", "NotebookEdit")
         ):
             continue
-        rule_path = arg[2:] if arg.startswith("//") else arg
-        rule_resolved = _resolve_for_match(rule_path)
+        if not arg.startswith("//"):
+            # A project-relative rule path needs the child's project root to
+            # resolve; unknown here, so it fails toward not-covered.
+            continue
+        rule_resolved = _resolve_for_match(rule_file_path(arg))
         if rule_resolved is not None and rule_resolved == resolved:
             return True
     for a in grants.add_dirs:

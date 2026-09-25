@@ -4747,8 +4747,7 @@ def _rule_line_to_call(rule: str) -> tuple[str, dict] | None:
     if tool == "Bash":
         return "Bash", {"command": _grants.bash_command_from_rule_arg(arg)}
     if tool in ("Edit", "Write", "Read", "NotebookEdit"):
-        path = arg[2:] if arg.startswith("//") else arg
-        return tool, {"file_path": path}
+        return tool, {"file_path": _grants.rule_file_path(arg)}
     return None
 
 
