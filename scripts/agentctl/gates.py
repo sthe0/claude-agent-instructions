@@ -748,9 +748,9 @@ _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
     "gate as well"
 )
 
-#: R1 variant of the message above, substituted instead whenever
+#: Terminal-pass variant of the message above, substituted instead whenever
 #: `state.plan_review_passes` is non-empty — a whole-plan or stage pass was
-#: already recorded this approval cycle, which R1 makes terminal (see
+#: already recorded this approval cycle, which makes it terminal (see
 #: `_plan_review_regression_evidence`). "Run a fresh whole-plan thinker review"
 #: is dropped as an exit here on purpose: an on-budget pass ALWAYS still clears
 #: the gate directly (`_round_release_wrap` never substitutes when blockers is
@@ -1520,7 +1520,7 @@ def acceptance_review_blockers(state: SessionState, stage: "_Stage") -> list[str
     """Precondition guardian for `record-result --status passed` on an acceptance_review
     stage: a recorded StageReview with a passing (or user-overridden) verdict, BOUND to
     the exact observation bytes being recorded, must exist — OR a `fail_open` JudgeBypass
-    bound to that same observation (R4: the judge call itself failed, which is not
+    bound to that same observation (the judge call itself failed, which is not
     evidence against the observation, so it must not block indefinitely). An INTERNAL
     command precondition mirroring plan_review_blockers — deliberately ABSENT from
     GUARDIANS so verify-agentctl requires no new hook. PURE: reads ONLY the recorded
@@ -1528,7 +1528,12 @@ def acceptance_review_blockers(state: SessionState, stage: "_Stage") -> list[str
     subprocess/socket/network reach. [] == ok.
 
     Inactive (chat / small-change / AGENTCTL_STAGE_REVIEW=0) => [] always. Active checks:
-      - a fail_open bypass bound to the current observation authorizes the pass outright;
+      - a fail_open bypass bound to the current observation authorizes the pass outright
+        UNLESS a standing `revise` (or other non-pass/override) StageReview is ALSO bound
+        to that same observation — a real "no" from an earlier judge call must never be
+        overridable by a later call's mere INABILITY to answer (a None verdict is not
+        evidence against the observation, but it is not evidence FOR it either; it cannot
+        outrank a verdict that already IS evidence against it);
       - else a review must exist — else the gate is unmet (fail-CLOSED: a judge call that
         never happened, or one whose result was neither recorded nor bypassed, blocks);
       - it must be bound to the observation being recorded (observation_sha256 == the
@@ -1540,9 +1545,15 @@ def acceptance_review_blockers(state: SessionState, stage: "_Stage") -> list[str
         return []
     observation = getattr(stage.criterion, "observation", "") or ""
     expected = hashlib.sha256(observation.encode("utf-8")).hexdigest()
-    if _judge_bypass_for(state, stage.index, "fail_open", expected) is not None:
-        return []
     review = _stage_review_for(state, stage.index)
+    review_binds = review is not None and (
+        not review.observation_sha256 or review.observation_sha256 == expected
+    )
+    standing_revise = review_binds and review.verdict not in (
+        _STAGE_REVIEW_PASS, _STAGE_REVIEW_OVERRIDE,
+    )
+    if not standing_revise and _judge_bypass_for(state, stage.index, "fail_open", expected) is not None:
+        return []
     if review is None:
         return [
             "no acceptance judge verdict recorded — the cheap judge produced no verdict "

@@ -24,7 +24,7 @@ SCHEMA_VERSION = 36  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: PlanReview gains regression_command/regression_exit/remedy_tags;
-                     # SessionState gains plan_review_passes (R1)
+                     # SessionState gains plan_review_passes
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -424,11 +424,11 @@ class PlanReview:
     position-derived id, which is also what a legacy pre-schema-28 record gets in
     full.
 
-    `regression_command`/`regression_exit` (schema 36, R1) are set only on a
+    `regression_command`/`regression_exit` (schema 36) are set only on a
     `revise` recorded after a whole-plan/stage PASS already stands this cycle: the
     command the reviewer supplied to demonstrate the regression, and the actual
     exit code the engine observed running it in `repo_root` — never trusted from
-    the reviewer's say-so. `remedy_tags` (schema 36, R1) is the leading `cut:`/
+    the reviewer's say-so. `remedy_tags` (schema 36) is the leading `cut:`/
     `add:` tag parsed off each entry in `concerns`, positionally paired like
     `concern_ids`; `""` where a concern carries no such tag."""
     plan_path: str
@@ -747,7 +747,7 @@ class JudgeBypass:
     kind: str  # "killswitch" | "override" | "fail_open"
     reviewer: str = ""
     note: str = ""
-    # Set only for kind="fail_open" (R4): binds the bypass to the exact observation
+    # Set only for kind="fail_open": binds the bypass to the exact observation
     # the judge call failed on, so a fail-open recorded for an EARLIER (superseded)
     # observation cannot wave through a later, unjudged one — see
     # gates.acceptance_review_blockers and cli._record_bypass. "killswitch"/"override"
@@ -1235,16 +1235,18 @@ class Outcome:
     # records a result; absent on every pre-schema-23 state (default via
     # from_dict), so legacy states load unchanged.
     delivered_head: str | None = None
-    # Green-check cache (R4): the venue tree identity (HEAD sha + status/diff digest,
-    # see cli._venue_tree_identity) at the last time this stage's verify_command was
+    # Green-check cache: the venue tree identity (HEAD sha + a diff against HEAD
+    # covering staged and unstaged changes + untracked files' contents, see
+    # cli._venue_tree_identity) at the last time this stage's verify_command was
     # actually RUN, and whether that run was green. A later record-result call whose
     # identity still matches AND whose cached result was green skips re-running the
     # command (cli._cached_check_hit) — a red result is never cached, so a genuinely
     # broken check is always re-run rather than trusted to still be broken. Absent on
-    # every pre-R4 state (defaults via from_dict), so legacy states load unchanged.
+    # every state predating this field (defaults via from_dict), so legacy states
+    # load unchanged.
     checked_tree_identity: str | None = None
     checked_tree_ok: bool | None = None
-    # Unconditional per-stage attempt counter (R4 (f)): incremented on every
+    # Unconditional per-stage attempt counter: incremented on every
     # record-result call regardless of outcome, so a diagnosing session can see every
     # attempt made against this stage, including ones a gate blocked before any
     # verification ran.
@@ -1429,7 +1431,7 @@ class SessionState:
     # which is what makes the coverage gate in gates.py fall back to plan_review
     # alone, unchanged.
     plan_stage_reviews: dict[str, "PlanReview"] = field(default_factory=dict)
-    # Historical record (schema 36, R1) of the LAST attested PASS recorded per scope
+    # Historical record (schema 36) of the LAST attested PASS recorded per scope
     # this approval cycle, keyed like plan_stage_reviews (whole-plan under ""). Unlike
     # plan_review/plan_stage_reviews (the CURRENT authoritative record, which a
     # resubmission's staleness-clear or a later revise can move on), this is never

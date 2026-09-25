@@ -671,27 +671,50 @@ def _verify_command_result(stage, runner: Runner | None, cwd: str | None = None)
 
 
 def _venue_tree_identity(cwd: str | None, runner: Runner | None) -> str | None:
-    """Digest identifying the current state of a verify_command's venue: HEAD sha
-    plus a hash of `git status --porcelain` and the working-tree diff. Returns None
-    when the venue has no git repo (rev-parse fails) — the record-result green-check
-    cache (see _cached_check_hit) then never treats the check as skippable, so a
-    git-less venue keeps re-running its check on every call, unchanged from pre-R4
-    behaviour. `cwd=None` mirrors _verify_command_result's own default: the venue is
-    plain repo_root."""
+    """Digest identifying the current state of a verify_command's venue: HEAD sha,
+    a diff of every tracked change against HEAD (staged AND unstaged, binary files
+    included via `--binary` rather than the content-blind "Binary files ... differ"
+    line plain `git diff` prints), and the actual BYTES of every untracked file —
+    not just their names. `git status --porcelain` alone (the pre-fix key) lists an
+    untracked file's path but never its contents, and `git diff` with no revision
+    only covers the unstaged half of the tree — either gap lets an edit inside the
+    venue (staging a change, or editing an already-untracked file's content without
+    touching its name) go unnoticed, so a stale GREEN check keeps getting served
+    from the cache (see _cached_check_hit) against a tree that has since changed
+    underneath it. Returns None when the venue has no git repo (rev-parse fails) —
+    the cache then never treats the check as skippable, so a git-less venue keeps
+    re-running its check on every call. `cwd=None`
+    mirrors _verify_command_result's own default: the venue is plain repo_root."""
     run = runner or subprocess_runner
-    prefix = ["git", "-C", cwd if cwd else str(REPO_ROOT)]
+    base = Path(cwd) if cwd else REPO_ROOT
+    prefix = ["git", "-C", str(base)]
     head = run(prefix + ["rev-parse", "HEAD"])
     if head.returncode != 0 or not head.stdout.strip():
         return None
-    status = run(prefix + ["status", "--porcelain"])
-    diff = run(prefix + ["diff"])
-    payload = "\n".join([head.stdout.strip(), status.stdout or "", diff.stdout or ""])
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    diff = run(prefix + ["diff", "HEAD", "--binary"])
+    untracked = run(prefix + ["ls-files", "-o", "--exclude-standard"])
+    digest = hashlib.sha256()
+    digest.update(head.stdout.strip().encode("utf-8"))
+    digest.update(b"\x00")
+    digest.update((diff.stdout or "").encode("utf-8", errors="surrogateescape"))
+    for rel in sorted(line.strip() for line in (untracked.stdout or "").splitlines() if line.strip()):
+        digest.update(b"\x00")
+        digest.update(rel.encode("utf-8", errors="surrogateescape"))
+        digest.update(b"\x00")
+        try:
+            digest.update((base / rel).read_bytes())
+        except OSError:
+            # Vanished between `ls-files` and the read (deleted, or a broken
+            # symlink) — fold the miss itself into the digest rather than
+            # silently treating the file as absent, so the identity still
+            # moves if the file reappears with different content later.
+            digest.update(b"<unreadable>")
+    return digest.hexdigest()
 
 
 def _cached_check_hit(stage, identity: str | None) -> bool:
     """True iff `stage.outcome` already recorded a GREEN check result for this exact
-    venue tree identity (R4): a repeated record-result call whose tree hasn't moved
+    venue tree identity: a repeated record-result call whose tree hasn't moved
     since the last green run skips re-running the check and goes straight to the
     judge. A red result is never cached (see the call site), so a genuinely broken
     check is always re-run rather than trusted to still be broken. `identity=None`
@@ -3442,7 +3465,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                 f"({live!r}) at {target!r}: the reviewer read a different or stale "
                 "plan; re-read the current plan and re-run plan-review",
             )
-    # R1 terminal-pass check: a `revise` arriving after a PASS already recorded
+    # Terminal-pass check: a `revise` arriving after a PASS already recorded
     # for this scope this approval cycle only overturns it with run-demonstrated
     # regression evidence — see gates.plan_review_prior_pass /
     # _plan_review_regression_evidence. `prior_pass` is history within the
@@ -4126,7 +4149,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # against the newly-approved plan, so friction spent reviewing code under the
     # PRIOR plan version should not count against this one.
     state.code_review_rounds = 0
-    # R1 terminal-pass custody: a fresh approval cycle starts with no pass on
+    # Terminal-pass custody: a fresh approval cycle starts with no pass on
     # record for any scope — the same "current approval cycle" boundary
     # plan_review_rounds resets at, immediately above.
     state.plan_review_passes = {}
@@ -4747,7 +4770,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     stage.outcome.actual = actual
     passed = args.status == "passed"
 
-    # Unconditional attempt log (R4 (f)): every record-result call for this stage
+    # Unconditional attempt log: every record-result call for this stage
     # counts and logs, including one a later gate blocks before any verification
     # runs — a diagnosing session scanning history must see every attempt made,
     # not just the ones that got past the first gate.
@@ -4764,6 +4787,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     if control:
         stage.control = control
     if passed and stage.needs_control() and not stage.has_control():
+        store.save(state)
         return Directive(
             False, state.node, "attest_control",
             f"stage {stage.index} is a spawn:developer stage; the control criterion of a "
@@ -4821,6 +4845,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                  "with goal at every stage)"
         )
         if not norm_obs:
+            store.save(state)
             return Directive(
                 False, state.node, "attest_observation",
                 f"stage {stage.index} {reason}; pass requires recording an observation — "
@@ -4828,6 +4853,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 "(supply: record-result --observation '<what you observed>')",
             )
         if norm_obs == norm_img:
+            store.save(state)
             return Directive(
                 False, state.node, "attest_observation",
                 f"stage {stage.index} {reason}; pass requires recording an observation, "
@@ -4836,7 +4862,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 "(supply: record-result --observation '<what you observed>')",
             )
         # bind the observation to the stage now so the judge gate's sha recompute
-        # (run below, AFTER the mechanical check — R4) sees it.
+        # (run below, AFTER the mechanical check) sees it.
         stage.criterion.observation = observation
 
     # Delivered-head freeze: stamp what commit this stage delivered BEFORE any
@@ -4853,7 +4879,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     # (or a `kind = "landed"` check), the engine runs it and OVERRIDES a 'passed'
     # claim the command contradicts. A contradicted pass becomes a real failure
     # (digest + DIAGNOSING), so "report honestly" is an invariant for the
-    # measurable subset, not a discipline. R4: this now runs BEFORE the cheap judge
+    # measurable subset, not a discipline. This runs BEFORE the cheap judge
     # below — a check the command itself contradicts must never spend a judge call.
     if passed:
         crit = stage.criterion
@@ -4884,14 +4910,17 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                         False, state.node, "fix_venue",
                         f"stage {stage.index} verify_command refused: {refusal}",
                     )
-            # Green-check cache (R4): a repeated record-result call whose venue tree
+            # Green-check cache: a repeated record-result call whose venue tree
             # hasn't moved since the last GREEN run skips re-running the command and
             # goes straight to the judge below. A red result is never cached, so a
             # genuinely broken check is always re-run rather than trusted to still
             # be broken. Only computed when there is an actual check to cache
             # (measurable + verify_command) — an acceptance_review stage's
             # verify_command, if present, is never machine-run, so identity must
-            # never be probed for it either.
+            # never be probed for it either. The cache assumes the check reads only
+            # the venue tree (see _venue_tree_identity) — a check that also reads
+            # files outside it (the plan TOML, proposals.json, ...) can be served
+            # stale even though its own venue is unchanged.
             identity = _venue_tree_identity(cwd, runner) if has_check else None
             if _cached_check_hit(stage, identity):
                 ok, result = True, None
@@ -4909,8 +4938,8 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 actual = (actual + "\n" + note) if actual else note
                 stage.outcome.actual = actual
 
-    # Cheap-judge COGNITION + PURE gate (R4: moved to AFTER the mechanical check
-    # above, so a check the command itself contradicts never spends a judge call).
+    # Cheap-judge COGNITION + PURE gate (runs AFTER the mechanical check above, so
+    # a check the command itself contradicts never spends a judge call).
     # When the acceptance-review gate is active (substantive session /
     # AGENTCTL_STAGE_REVIEW=1), run the fail-open haiku judge over the observation,
     # record its verdict as a StageReview bound to the observation bytes, then block
@@ -6106,7 +6135,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # Reset alongside the pair above (item A) — same reasoning: rounds spent
     # code-reviewing the previous plan version are settled once a corrected plan lands.
     state.code_review_rounds = 0
-    # R1 terminal-pass custody — same "current approval cycle" boundary as the
+    # Terminal-pass custody — same "current approval cycle" boundary as the
     # pair above: a replanned plan starts with no pass on record for any scope.
     state.plan_review_passes = {}
     # Stamped HERE and not up at the seam: every refusal path of this command is now behind
@@ -7184,7 +7213,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("confirmed_by", ("close",), "who confirmed — a name, not a narrative"),
     ("approved_by", ("drive",), "who approved — a name, not a narrative"),
     ("regression_command", ("plan-review",),
-     "shell command run verbatim via the runner (R1 terminal-pass evidence) — an "
+     "shell command run verbatim via the runner (terminal-pass evidence) — an "
      "invocation string, not narrative prose for the @<path> convention"),
 )
 

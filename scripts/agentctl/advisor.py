@@ -373,7 +373,7 @@ def acceptance_judge(
 
     Fail-OPEN: a disabled judge, a None runner, a non-zero exit, an unparseable answer,
     a timeout, or any exception returns (None, <reason>) — NEVER a false 'pass'. The
-    caller records a StageReview only for a non-None verdict; a None verdict now (R4)
+    caller records a StageReview only for a non-None verdict; a None verdict now
     also records a `fail_open` JudgeBypass bound to the observation, which the PURE
     gate accepts in place of a StageReview — an unavailable judge stalls only until
     that bypass authorizes the pass, rather than blocking it forever.
@@ -388,7 +388,7 @@ def acceptance_judge(
     cannot be left to the runner's own default. Its latency row is UNMEASURED,
     so the default is the last-resort ceiling rather than a per-judge one.
 
-    R4: this now shares `_classify`/`_record_result`/`_record_raised`/
+    This now shares `_classify`/`_record_result`/`_record_raised`/
     `_judge_unavailable` with `judge_binary_ask` instead of parsing the result
     inline, so every call — genuine verdict or fail-open — writes a `judge_ledger`
     `decided` line (previously it never did, despite calling

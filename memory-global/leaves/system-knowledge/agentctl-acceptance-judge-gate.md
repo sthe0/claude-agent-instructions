@@ -180,9 +180,12 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
   `verify_command`/`landed` check previously did not stop `cmd_record_result` from also spending a
   judge call on the same submission; the check now runs first, and only a green result (or a stage
   with no check at all) reaches the judge — `_venue_tree_identity`/`_cached_check_hit` cache a
-  green result against the venue tree's HEAD sha + `git status --porcelain` + diff, so a repeated
-  `record-result` on an unchanged tree skips re-running the command but still re-queries the judge
-  every time (the judge is never cached, only the mechanical check is). Second, and more directly
+  green result against the venue tree's HEAD sha, a diff against HEAD covering both staged and
+  unstaged changes, and every untracked file's actual bytes, so a repeated `record-result` on an
+  unchanged tree skips re-running the command but still re-queries the judge every time (the judge
+  is never cached, only the mechanical check is). The cache assumes the check reads only the venue
+  tree — a check that also reads files outside it (the plan TOML, `proposals.json`, ...) can be
+  served stale even though its own venue is unchanged. Second, and more directly
   relevant to the "stale"-wording confusion documented above: a `None` verdict (judge disabled,
   timed out, non-zero exit, no output, or an unparseable answer — every `_classify` fail-open path)
   now auto-records a `JudgeBypass(kind="fail_open", note=<the judge's own reason>)` bound to the
