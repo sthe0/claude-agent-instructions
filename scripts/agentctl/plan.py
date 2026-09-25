@@ -2162,27 +2162,29 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     # requirement, a corrected functional place or a coverage entry pointed at a different
     # control would diff as 'no_change' and be silently dropped. Its scope half is already
     # in `_structural_signature`, so what reaches this line is only the wording.
+    # `_structural_signature` already catches a changed DECLARED grant (via
+    # `grants_place`), but a plan that adds no new [stage.grants] line can still
+    # widen what a stage will actually be spawned with — an output_artifacts edit
+    # that derives a new Edit rule, or a `verify_command` edit that derives a
+    # wider DR-V, say — without moving a single field `_structural_signature`
+    # OR the prose/`_fc`/`order_place` keys below compare, or while only moving
+    # a field the prose keys below DO compare. Checked HERE, before the prose
+    # comparison, and unconditionally: the approved done criterion is "grant
+    # edits and effective-set growth are substantive", full stop — a
+    # `verify_command` edit that also derives a wider DR-V rule (or any other
+    # field whose edit both registers in `_prose` and widens the derived set)
+    # is substantive precisely BECAUSE it widens the derived set, not merely
+    # 'refinement with a grant on the side'. A `verify_command` edit that does
+    # NOT grow the effective set is untouched by this check and falls through
+    # to the ordinary `_prose` comparison, so it still classifies only as
+    # 'refinement'. "Did the EFFECTIVE grant set grow" is not folded into
+    # `_structural_signature` itself because it is not a pure function of the
+    # two docs' own bytes alone (it also calls the same deriver dispatch will).
+    if _grants_grew(old, new):
+        return "substantive"
     if (_prose(old) != _prose(new) or old.meta.goal != new.meta.goal
             or old.meta.repo_root != new.meta.repo_root
             or _fc(old) != _fc(new)
             or order_place(old.meta) != order_place(new.meta)):
         return "refinement"
-    # `_structural_signature` already catches a changed DECLARED grant (via
-    # `grants_place`), but a plan that adds no new [stage.grants] line can still
-    # widen what a stage will actually be spawned with — an output_artifacts edit
-    # that derives a new Edit rule, say — without moving a single field
-    # `_structural_signature` OR the prose/`_fc`/`order_place` keys just above
-    # compare. Checked LAST and only as an escalation of what would otherwise be
-    # 'no_change': every field that can itself derive a grant (`verify_command` via
-    # DR-V) already sits in `_prose`, so a change that also widens the derived set
-    # already reads as 'refinement' on its own — visible, just not the heaviest
-    # tier — and grant growth has nothing left to add there. Escalating an
-    # already-'refinement' result to 'substantive' would need every such edit
-    # (an ordinary verify_command fix, say) to pay for the re-approval a genuinely
-    # silent widening needs, which is a different failure from the one this check
-    # exists to close. "Did the EFFECTIVE grant set grow" is not folded into
-    # `_structural_signature` itself because it is not a pure function of the two
-    # docs' own bytes alone (it also calls the same deriver dispatch will).
-    if _grants_grew(old, new):
-        return "substantive"
     return "no_change"

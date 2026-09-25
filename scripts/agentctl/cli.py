@@ -24,7 +24,7 @@ from dataclasses import fields
 from pathlib import Path
 
 import proc_tree
-from lib import argv_text, config_root, transcript_stops
+from lib import argv_text, config_root, transcript_stops, widening_targets
 
 from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, gates, grants as _grants, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
 from .checkrun import format_observations, observe_stage_checks
@@ -4465,6 +4465,21 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     effort_tier = getattr(args, "effort", None) or _EFFORT_BY_COST_TIER.get(
         stage.actor.cost_tier, "medium"
     )
+    child_cwd = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+    # Pre-launch: read the stage's effective grant set and hash the live
+    # settings documents BEFORE the child runs. Grant coverage is captured
+    # here (not after dispatch_stage returns) so a denial is classified
+    # against what the stage was ACTUALLY spawned with, not against whatever
+    # runtime_grants happens to hold once the child has already exited --
+    # the two can differ if this session's grants are touched concurrently.
+    # The settings hashes are the pre-image half of the settings_drift check
+    # below: a spawned developer is untrusted to touch settings*.json, so any
+    # difference after the child returns is itself the signal, independent of
+    # whatever marker the child reports.
+    coverage = _effective_stage_grants(state, stage.index)
+    _defects_before = len(state.materialization_defects)
+    _settings_paths = widening_targets.enumerate_live_settings(child_cwd, state.repo_root)
+    _settings_before = {p: _plan_file_sha256(p) for p in _settings_paths}
     result = dispatch_stage(
         stage, state.plan_path or "",
         runner=runner,
@@ -4479,7 +4494,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         # than relying on the dispatching process's ambient cwd. Always
         # "delivery" — dispatch has no verify_venue/venue of its own to read,
         # and delivery is where a spawned developer must write.
-        cwd=state.resolve_check_venue(CheckVenue.DELIVERY.value),
+        cwd=child_cwd,
         runtime_host=host,
         project_settings=_dispatch_project_settings_path(state),
     )
@@ -4513,15 +4528,31 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     marker, body = parse_marker(result.stdout)
     base = {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
 
+    # Post-launch half of the settings_drift check: re-hash the SAME paths
+    # enumerated before dispatch_stage ran. A spawned child is never granted
+    # write access to a settings document, so any difference here is itself
+    # the signal regardless of what marker the child reports -- recorded and
+    # surfaced on every Directive this call returns, not only on a denial.
+    _settings_after = {p: _plan_file_sha256(p) for p in _settings_paths}
+    if _settings_after != _settings_before:
+        drift_row = {
+            "stage_index": stage.index,
+            "changed": sorted(
+                p for p in _settings_paths if _settings_before.get(p) != _settings_after.get(p)
+            ),
+            "ts": _utcnow(),
+        }
+        state.settings_drift.append(drift_row)
+        base["settings_drift"] = drift_row
+
     # After every dispatched child returns (any marker, not just PERMISSION-REQUEST):
     # classify any permission-denial stop its transcript recorded against the stage's
-    # PRE-LAUNCH effective grant set. Currently a no-op in practice (no cost-log row
-    # carries `transcript_path` until stage 2 lands it on the ledger); the
-    # PERMISSION-REQUEST branch below covers the same ground via its own
-    # self-reported `Rule:`-line fallback in the meantime.
-    coverage = _effective_stage_grants(state, stage.index)
-    _defects_before = len(state.materialization_defects)
-    _classify_transcript_denials(state, stage, coverage, getattr(result, "transcript_path", None))
+    # PRE-LAUNCH effective grant set (`coverage`, captured before dispatch_stage ran
+    # above). The PERMISSION-REQUEST branch below covers the same ground via its own
+    # self-reported `Rule:`-line fallback for the case this transcript-based path
+    # finds nothing (announcer-thread timeout, or discovery failed).
+    _classify_transcript_denials(state, stage, coverage, _parse_transcript_path(result.stderr))
+    _consume_once_grants(state, stage.index)
 
     if marker == "COMPLETED":
         store.save(state)
@@ -4649,12 +4680,33 @@ def _parse_add_dir_spec(spec: str) -> tuple[str, str] | None:
     return path, mode
 
 
+_TRANSCRIPT_PATH_RE = re.compile(r"^spawn-specialist: transcript=(.+)$")
+
+
+def _parse_transcript_path(stderr: str) -> str | None:
+    """The dispatched child's transcript path, read off the
+    `spawn-specialist: transcript=<path>` line spawn-specialist.py's own
+    `_announce_transcript` writes to its stderr on every launch -- the one
+    place this process learns the path today (RunResult carries no dedicated
+    field, and the cost-log ledger does not carry it either until stage 2).
+    The `<not-found-within-10s>` sentinel (and any other non-path text) reads
+    as "no transcript available", same as a missing line -- never mistaken
+    for a literal path."""
+    for line in reversed((stderr or "").splitlines()):
+        m = _TRANSCRIPT_PATH_RE.match(line.strip())
+        if m:
+            path = m.group(1).strip()
+            return path if path and not path.startswith("<") else None
+    return None
+
+
 def _parse_rule_line(body: str) -> str | None:
     """The optional trailing `Rule: <rule>` line a specialist's PERMISSION-REQUEST
     body may carry -- the self-reported fallback `cmd_dispatch` classifies a denial
-    against when no transcript is resolvable (stage 2 has not yet wired
-    `transcript_path` onto the cost-log ledger, so this is presently the primary
-    path). Returns the rule string verbatim, or None if no such line is present."""
+    against when the transcript-based classification above found nothing (the
+    child exited before spawn-specialist.py's announcer thread resolved a path,
+    or discovery timed out). Returns the rule string verbatim, or None if no
+    such line is present."""
     for line in reversed(body.splitlines()):
         line = line.strip()
         if line.startswith("Rule:"):
@@ -4773,6 +4825,20 @@ def _effective_stage_grants(state: SessionState, stage_index: int) -> _grants.St
         elif "path" in e and "mode" in e:
             add_dirs.append(_grants.AddDirGrant.from_dict(e))
     return _grants.StageGrants(allow=allow, add_dirs=add_dirs)
+
+
+def _consume_once_grants(state: SessionState, stage_index: int) -> None:
+    """Mark every `scope: "once"` runtime grant on this stage as consumed after
+    a dispatch that used it. A once-scoped grant exists to get a single denied
+    call past a single re-launch (`cmd_resolve_permission --scope once`); left
+    live it would silently widen every LATER launch of the same stage index
+    (a re-dispatch, a replan) beyond what that one approval covered, exactly
+    the un-scoped growth the "stage" scope already avoids by staying live only
+    for the stage's remaining launches. `scope: "stage"` and declared/derived
+    entries carry no "scope" key (or a different one) and are untouched."""
+    for entry in state.runtime_grants.get(str(stage_index), []):
+        if entry.get("scope") == "once" and not entry.get("consumed"):
+            entry["consumed"] = True
 
 
 def _classify_transcript_denials(
