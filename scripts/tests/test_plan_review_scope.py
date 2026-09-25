@@ -18,6 +18,7 @@ import pytest
 
 from agentctl import cli, gates
 from agentctl.plan import load_plan, plan_meta_digest, plan_stage_digests
+from agentctl.render import render_plan_grants
 from agentctl.state import Node, PlanReview, SessionState
 
 
@@ -311,8 +312,10 @@ def test_delta_no_gap_when_fully_covered(store, fixtures_dir, tmp_path, gate_on)
 
 # --- 9. present-plan --kind essence under a stage-scoped review ---------------
 
-def _write_rendering(tmp_path, text, name="rendering.txt") -> str:
+def _write_rendering(tmp_path, text, name="rendering.txt", plan=None) -> str:
     p = tmp_path / name
+    if plan is not None:
+        text = text + "\n\n" + render_plan_grants(load_plan(str(plan)), fmt="compact").strip()
     p.write_text(text, encoding="utf-8")
     return str(p)
 
@@ -333,7 +336,7 @@ def test_essence_allowed_when_stage_scoped_review_covers_the_moved_stage(
                            reviewer="thinker", concerns=None, note="",
                            plan_digest=_sha256_file(plan)), store=store)
 
-    rendering = _write_rendering(tmp_path, "Summary of the plan.")
+    rendering = _write_rendering(tmp_path, "Summary of the plan.", plan=plan)
     d = cli.cmd_present_plan(
         ns(session=sid, kind="essence", rendering_file=rendering, emit_skeleton=False),
         store=store,

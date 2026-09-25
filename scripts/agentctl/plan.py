@@ -2031,9 +2031,9 @@ def _effective_grants_for_stage(stage, venue: str) -> "StageGrants":
     )
 
 
-def _grants_effective_map(doc: PlanDoc) -> dict[int, tuple]:
-    venue = _venue_for(doc)
-    return {s.index: _effective_grants_for_stage(s, venue).effective_tuple() for s in doc.stages}
+def _grants_effective_map(doc: PlanDoc, *, venue: str | None = None) -> dict[int, tuple]:
+    v = venue if venue is not None else _venue_for(doc)
+    return {s.index: _effective_grants_for_stage(s, v).effective_tuple() for s in doc.stages}
 
 
 def _grants_grew(old: PlanDoc, new: PlanDoc) -> bool:
@@ -2045,9 +2045,18 @@ def _grants_grew(old: PlanDoc, new: PlanDoc) -> bool:
     already forcing 'substantive' via `_structural_signature`'s differing stage-index
     sets, and cheap insurance if that ever changes independently. A SHRINKING or
     unchanged grant set is deliberately not growth: narrowing what a stage may touch
-    never needs the re-approval a widening does."""
-    old_map = _grants_effective_map(old)
-    new_map = _grants_effective_map(new)
+    never needs the re-approval a widening does.
+
+    Both maps are derived against `new`'s OWN venue, not each document's own
+    `_venue_for` result: DR-E bakes the venue string into its `Edit(//{venue}/...)`
+    rule literal, so comparing each doc against its own venue would read a bare
+    `repo_root`/`delivery_worktree` relocation — already excluded from
+    `_structural_signature` and (for `delivery_worktree`) from `diff_plans`' prose
+    keys — as a rule that "grew" purely because the two literals differ textually,
+    not because anything the stage may touch actually widened."""
+    shared_venue = _venue_for(new)
+    old_map = _grants_effective_map(old, venue=shared_venue)
+    new_map = _grants_effective_map(new, venue=shared_venue)
     for idx, (new_rules, new_dirs, new_mode) in new_map.items():
         old_rules, old_dirs, old_mode = old_map.get(idx, (frozenset(), frozenset(), None))
         if (new_rules - old_rules) or (new_dirs - old_dirs):
@@ -2085,18 +2094,6 @@ def grants_sha256(doc: PlanDoc) -> str:
 def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     """Return 'no_change' | 'refinement' | 'substantive'."""
     if _structural_signature(old) != _structural_signature(new):
-        return "substantive"
-    # `_structural_signature` already catches a changed DECLARED grant (via
-    # `grants_place`), but a plan that adds no new [stage.grants] line can still
-    # widen what a stage will actually be spawned with — a verify_command edit that
-    # derives a new Bash rule, or an output_artifacts edit that derives a new Edit
-    # rule. Both change what the spawned child may touch without moving a single
-    # field `_structural_signature` compares, so this is a second, independent
-    # substantive trigger rather than folded into that signature: unlike every field
-    # there, "did the EFFECTIVE grant set grow" is not a pure function of the two
-    # docs' own bytes alone (it also calls the same deriver dispatch will), and
-    # forcing it into a dict literal would make `_structural_signature` impure.
-    if _grants_grew(old, new):
         return "substantive"
     # Structurally identical — any other change is a refinement. The means/method/
     # conditions/invariants are included so that adjusting a stage's MEANS to remove
@@ -2170,4 +2167,22 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
             or _fc(old) != _fc(new)
             or order_place(old.meta) != order_place(new.meta)):
         return "refinement"
+    # `_structural_signature` already catches a changed DECLARED grant (via
+    # `grants_place`), but a plan that adds no new [stage.grants] line can still
+    # widen what a stage will actually be spawned with — an output_artifacts edit
+    # that derives a new Edit rule, say — without moving a single field
+    # `_structural_signature` OR the prose/`_fc`/`order_place` keys just above
+    # compare. Checked LAST and only as an escalation of what would otherwise be
+    # 'no_change': every field that can itself derive a grant (`verify_command` via
+    # DR-V) already sits in `_prose`, so a change that also widens the derived set
+    # already reads as 'refinement' on its own — visible, just not the heaviest
+    # tier — and grant growth has nothing left to add there. Escalating an
+    # already-'refinement' result to 'substantive' would need every such edit
+    # (an ordinary verify_command fix, say) to pay for the re-approval a genuinely
+    # silent widening needs, which is a different failure from the one this check
+    # exists to close. "Did the EFFECTIVE grant set grow" is not folded into
+    # `_structural_signature` itself because it is not a pure function of the two
+    # docs' own bytes alone (it also calls the same deriver dispatch will).
+    if _grants_grew(old, new):
+        return "substantive"
     return "no_change"

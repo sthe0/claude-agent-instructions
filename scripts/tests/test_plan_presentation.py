@@ -15,6 +15,8 @@ import pytest
 
 from agentctl import cli, delivery, gates
 from agentctl.delivery import DeliveryStamp
+from agentctl.plan import load_plan
+from agentctl.render import render_plan_grants
 from agentctl.state import (
     Node,
     PLAN_PRESENTATION_RENDERING_CAP_BYTES,
@@ -78,9 +80,22 @@ def _to_plan_ready(store, sid, plan) -> None:
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
 
 
+def _grants_blocks() -> str:
+    """Both the compact (essence-kind) and full (full-kind) grants renderings
+    of plan_two_stage.toml, so appending this once satisfies
+    cmd_present_plan's completeness check regardless of which `kind` the
+    caller presents."""
+    doc = load_plan(str(Path(__file__).resolve().parent / "fixtures" / "plan_two_stage.toml"))
+    return (
+        render_plan_grants(doc, fmt="compact").strip()
+        + "\n\n"
+        + render_plan_grants(doc, fmt="full").strip()
+    )
+
+
 def _write_rendering(tmp_path, text, name="rendering.txt") -> str:
     p = tmp_path / name
-    p.write_text(text, encoding="utf-8")
+    p.write_text(text + "\n\n" + _grants_blocks(), encoding="utf-8")
     return str(p)
 
 
@@ -288,7 +303,7 @@ def test_supersede_essence_leaves_one_receipt_the_newest(store, fixtures_dir, tm
 
     essence = [p for p in store.load(sid).plan_presentations if p.kind == "essence"]
     assert len(essence) == 1
-    assert essence[0].rendering_text == "second"
+    assert essence[0].rendering_text == "second\n\n" + _grants_blocks()
 
 
 def test_essence_and_full_presentations_leave_two_receipts(store, fixtures_dir, tmp_path, gate_on):
