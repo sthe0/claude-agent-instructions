@@ -167,7 +167,6 @@ def _write_add_dir_denies(path: str) -> list[str]:
 # --- point 1: write add_dir materializes allow + guard denies ----------------
 
 
-@_xfail("1 write add_dir materializes Edit allow plus .claude/settings/.git denies")
 @pytest.mark.parametrize("kind", ALL_KINDS)
 def test_p01_write_add_dir_materializes_edit_allow_and_guard_denies(
     kind, tmp_path, plans, two_stage_plan, monkeypatch, capsys,
@@ -203,22 +202,21 @@ def test_p01b_read_add_dir_keeps_its_edit_deny(kind, tmp_path, plans, two_stage_
 # --- point 2: validate_add_dir(write) refusals --------------------------------
 
 _HOME = str(Path.home())
-_XF2 = _xfail("2 validate_add_dir(write) refuses launch surfaces, globs, relative, .git")
 
 _P02_REFUSED = [
-    pytest.param(f"{_HOME}/Library/LaunchAgents", id="launch-agents", marks=_XF2),
-    pytest.param(f"{_HOME}/Library/LaunchAgents/sub", id="under-launch-agents", marks=_XF2),
-    pytest.param(f"{_HOME}/Library", id="library-parent", marks=_XF2),
-    pytest.param(f"{_HOME}/.config/systemd/user", id="systemd-user", marks=_XF2),
-    pytest.param(f"{_HOME}/.config/systemd/user/sub", id="under-systemd-user", marks=_XF2),
-    pytest.param(f"{_HOME}/.config/systemd", id="systemd-parent", marks=_XF2),
-    pytest.param(f"{_HOME}/.config", id="config-parent", marks=_XF2),
-    pytest.param(f"{_HOME}/*", id="glob-star-home", marks=_XF2),
-    pytest.param("/tmp/a?b", id="glob-question", marks=_XF2),
-    pytest.param("/tmp/[ab]", id="glob-bracket", marks=_XF2),
-    pytest.param("/tmp/{a,b}", id="glob-brace", marks=_XF2),
-    pytest.param("relative/dir", id="not-absolute", marks=_XF2),
-    pytest.param("/tmp/repo/.git/hooks", id="inside-git-dir", marks=_XF2),
+    pytest.param(f"{_HOME}/Library/LaunchAgents", id="launch-agents"),
+    pytest.param(f"{_HOME}/Library/LaunchAgents/sub", id="under-launch-agents"),
+    pytest.param(f"{_HOME}/Library", id="library-parent"),
+    pytest.param(f"{_HOME}/.config/systemd/user", id="systemd-user"),
+    pytest.param(f"{_HOME}/.config/systemd/user/sub", id="under-systemd-user"),
+    pytest.param(f"{_HOME}/.config/systemd", id="systemd-parent"),
+    pytest.param(f"{_HOME}/.config", id="config-parent"),
+    pytest.param(f"{_HOME}/*", id="glob-star-home"),
+    pytest.param("/tmp/a?b", id="glob-question"),
+    pytest.param("/tmp/[ab]", id="glob-bracket"),
+    pytest.param("/tmp/{a,b}", id="glob-brace"),
+    pytest.param("relative/dir", id="not-absolute"),
+    pytest.param("/tmp/repo/.git/hooks", id="inside-git-dir"),
 ]
 
 
@@ -270,7 +268,6 @@ def test_p04_no_dry_run_emits_edit_glob_allow_with_metachar_prefix(
 # --- point 5: write add_dir shadowed by the plans-dir deny is refused ---------
 
 
-@_xfail("5 write add_dir under the plans dir for a PLANS_READ kind is refused")
 @pytest.mark.parametrize("kind", MOD.PLANS_READ_KINDS)
 def test_p05_write_add_dir_shadowed_by_plans_deny_is_refused(
     kind, plans, two_stage_plan, monkeypatch, capsys,
@@ -301,7 +298,6 @@ def _bash_tokens(rule: str) -> "list[str] | None":
     return shlex.split(grants.bash_command_from_rule_arg(parsed[1]))
 
 
-@_xfail("6 planner carries absolute plan-grants/list-denied rules; no relative scripts/ baselines")
 def test_p06_planner_research_rules_absolute_and_no_relative_baselines(plans, two_stage_plan, capsys):
     run = _dry_run(capsys, _base_argv("planner", two_stage_plan))
 
@@ -321,7 +317,6 @@ def test_p06_planner_research_rules_absolute_and_no_relative_baselines(plans, tw
 # --- point 7: prescribed planner commands work from outside the repo ----------
 
 
-@_xfail("7 header-prescribed planner commands are covered and run from outside the repo")
 def test_p07_prescribed_planner_commands_covered_and_run_outside_repo(
     tmp_path, plans, monkeypatch, capsys,
 ):
@@ -373,7 +368,6 @@ def test_p07_prescribed_planner_commands_covered_and_run_outside_repo(
 UNKNOWN_KIND = "yandex-cloud-expert"
 
 
-@_xfail("8 a kind outside KIND_BASELINES gets --permission-mode default and the default baseline")
 def test_p08_unknown_kind_gets_default_mode_and_default_baseline(plans, two_stage_plan, capsys):
     assert MOD.skill_path(UNKNOWN_KIND).exists()
     assert UNKNOWN_KIND not in MOD.KIND_BASELINES
@@ -575,7 +569,6 @@ def test_p13_header_add_dirs_equal_argv_add_dirs(tmp_path, plans, two_stage_plan
 # --- point 14: --project-settings accepts only .claude/settings.local.json ----
 
 
-@_xfail("14 --project-settings accepts only a path ending in .claude/settings.local.json")
 def test_p14_project_settings_only_accepts_settings_local_json(tmp_path, plans, two_stage_plan, capsys):
     payload = json.dumps({"permissions": {"allow": ["Bash(make test:*)"]}})
     good = tmp_path / "proj" / ".claude" / "settings.local.json"
@@ -618,7 +611,6 @@ class _FakeProc:
         return self._stdout, ""
 
 
-@_xfail("15 ledger row names the child transcript under the projects dir of --workdir")
 def test_p15_ledger_row_has_real_child_ids_under_workdir_projects(
     tmp_path, plans, two_stage_plan, monkeypatch, capsys,
 ):
