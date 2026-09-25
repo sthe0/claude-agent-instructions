@@ -107,9 +107,13 @@ def test_developer_spawns_ask_for_the_narrowest_write_mode():
 
 
 def test_non_developer_spawns_request_no_elevated_mode():
+    """thinker/planner/code-reviewer are pinned to "default" (not acceptEdits,
+    not None) -- resolve_permission_mode always resolves to a concrete mode
+    now that the CLI's own --permission-mode choices are narrowed to
+    default/plan (see its help text)."""
     mod = _load_spawn_module()
     args = argparse.Namespace(permission_mode=None, kind="thinker")
-    assert mod.resolve_permission_mode(args) is None
+    assert mod.resolve_permission_mode(args) == "default"
 
 
 def test_an_explicit_permission_mode_still_wins():

@@ -1,5 +1,5 @@
 """A spawned developer's `--settings` payload only ever carried the fleet-wide
-DEVELOPER_SETTINGS_ALLOW list (scoped to this repo's own verifiers) plus the
+KIND_BASELINES["developer"] list (scoped to this repo's own verifiers) plus the
 plans-directory grant — never the TARGET project's own `.claude/settings.local.json`
 permissions.allow/deny, even when that project has already, deliberately,
 allow-listed its own build/test commands. `--project-permissions` looked like
@@ -105,9 +105,10 @@ def test_build_child_settings_project_settings_ignored_for_non_developer_kind(tm
 
 def test_build_child_settings_no_project_settings_file_unchanged():
     """Back-compat: omitting project_settings_file produces the exact same
-    payload as before this parameter existed."""
+    payload as before this parameter existed -- the developer KIND_BASELINES
+    row, unmerged with anything project-specific."""
     with_none = MOD.build_child_settings("developer")
-    assert with_none["permissions"]["allow"] == list(MOD.DEVELOPER_SETTINGS_ALLOW)
+    assert with_none["permissions"]["allow"] == list(MOD.KIND_BASELINES["developer"])
 
 
 def test_build_child_settings_merges_project_deny_alongside_plans_deny(tmp_path):

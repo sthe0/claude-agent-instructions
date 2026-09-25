@@ -289,6 +289,7 @@ _WRAPPER_DO_NOT_WRAP: dict[str, dict[str, str]] = {
         "kind": "specialization name — an id from a fixed catalog (SKILL.md directory names), not prose",
         "model": "model alias/id (e.g. sonnet, opus) — a token, not prose",
         "continue_worktree": "a worktree path — a filesystem reference, not prose",
+        "session": "engine session id — an opaque store key, not prose",
     },
     "spawn-cursor-specialist.py": {
         "kind": "specialization name — an id from a fixed catalog (SKILL.md directory names), not prose",

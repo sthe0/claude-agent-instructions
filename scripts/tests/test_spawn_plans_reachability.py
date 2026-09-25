@@ -156,7 +156,7 @@ def test_build_child_settings_developer_pytest_allow_survives_alongside_plans_gr
     non-empty assertion keeps the prefix check from passing vacuously."""
     settings = MOD.build_child_settings("developer", tmp_path)
     allow = settings["permissions"]["allow"]
-    brief = list(MOD.DEVELOPER_SETTINGS_ALLOW)
+    brief = list(MOD.KIND_BASELINES["developer"])
     assert brief
     assert allow[: len(brief)] == brief
     assert "Bash(python3 -m pytest:*)" in allow
@@ -166,9 +166,12 @@ def test_build_child_settings_developer_pytest_allow_survives_alongside_plans_gr
 
 def test_build_child_settings_no_plans_directory_arg_still_works(tmp_path):
     """Back-compat: existing callers that pass only `kind` (no plans_directory)
-    must behave exactly as before this change."""
+    still get their KIND_BASELINES grant unchanged -- the baseline no longer
+    gates on plans_directory being given; only the plans-specific Read/Edit
+    rules are absent without it."""
     settings = MOD.build_child_settings("planner")
-    assert "permissions" not in settings
+    assert settings["permissions"]["allow"] == list(MOD.KIND_BASELINES["planner"])
+    assert "deny" not in settings["permissions"]
 
 
 def test_build_child_settings_still_carries_both_autocompact_keys_for_every_granted_kind(tmp_path):
@@ -178,6 +181,10 @@ def test_build_child_settings_still_carries_both_autocompact_keys_for_every_gran
         assert "autoCompactWindow" in settings
 
 
-def test_ungranted_kind_settings_omit_permissions_key(tmp_path):
+def test_kind_with_no_plans_access_gets_baseline_only(tmp_path):
+    """tech-writer is in neither PLANS_READ_KINDS nor PLANS_WRITE_KINDS, so
+    passing plans_directory is a no-op for it: the settings payload carries
+    only its KIND_BASELINES row, no plans-specific Read/Edit rules."""
     settings = MOD.build_child_settings("tech-writer", tmp_path)
-    assert "permissions" not in settings
+    assert settings["permissions"]["allow"] == list(MOD.KIND_BASELINES["tech-writer"])
+    assert "deny" not in settings["permissions"]

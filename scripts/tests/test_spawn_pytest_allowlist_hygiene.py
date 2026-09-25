@@ -79,9 +79,13 @@ def test_developer_child_settings_never_grant_push():
     assert not any(e.startswith("Bash(git push") for e in allow)
 
 
-def test_non_developer_child_settings_omit_permissions_key():
+def test_non_developer_child_settings_carry_baseline_only():
+    """A non-developer kind still gets its KIND_BASELINES row unconditionally
+    now -- the omitted piece is the developer-specific pytest/git grant, not
+    the permissions key itself."""
     settings = MOD.build_child_settings("thinker")
-    assert "permissions" not in settings
+    assert settings["permissions"]["allow"] == list(MOD.KIND_BASELINES["thinker"])
+    assert "deny" not in settings["permissions"]
 
 
 def test_developer_child_settings_still_carry_autocompact_env():
