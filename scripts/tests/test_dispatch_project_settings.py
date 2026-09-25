@@ -3,7 +3,7 @@ to a spawned `spawn:developer` via `--project-settings`, so a project that has
 already, deliberately, allow-listed its own build/test commands (e.g.
 `Bash(python3 scripts/test_render_site.py:*)`) doesn't have to fight the spawn
 sandbox on every stage. Before this fix `dispatch_stage` only ever forwarded
-the fleet-wide DEVELOPER_SETTINGS_ALLOW list, scoped to this repo's own
+the fleet-wide KIND_BASELINES["developer"] list, scoped to this repo's own
 verifiers, regardless of the target project.
 
 Covers both layers: `dispatch_stage`/`build_argv`'s injectable

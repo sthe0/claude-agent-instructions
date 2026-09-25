@@ -376,7 +376,7 @@ def test_spawn_specialist_snapshots_transcripts_from_both_roots(monkeypatch, tmp
     monkeypatch.setattr(config_root, "harness_config_root", lambda: harness.parent)
 
     mod = _load("spawn-specialist")
-    assert mod._snapshot_transcripts() == {a, b}
+    assert mod._snapshot_transcripts("proj") == {a, b}
 
 
 def test_spawn_specialist_discovers_a_new_transcript_under_the_harness_root(
@@ -391,7 +391,7 @@ def test_spawn_specialist_discovers_a_new_transcript_under_the_harness_root(
     monkeypatch.setattr(config_root, "harness_config_root", lambda: harness.parent)
 
     mod = _load("spawn-specialist")
-    assert mod._discover_transcript_path(set(), timeout=1.0) == fresh
+    assert mod._discover_transcript_path("proj", set(), timeout=1.0) == fresh
 
 
 # ---------------------------------------------------------------------------

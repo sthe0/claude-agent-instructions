@@ -68,7 +68,7 @@ def test_developer_child_settings_grant_every_mandated_verb():
     green but uncommitted, which is what happened on 2026-08-05.
     """
     allow = MOD.build_child_settings("developer")["permissions"]["allow"]
-    for entry in ("Bash(python3 scripts/verify-all.py:*)", "Bash(git add:*)",
+    for entry in (f"Bash(python3 {MOD.SCRIPTS_DIR}/verify-all.py:*)", "Bash(git add:*)",
                   "Bash(git commit:*)", "Bash(git status:*)", "Bash(grep:*)"):
         assert entry in allow, entry
 

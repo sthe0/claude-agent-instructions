@@ -62,7 +62,7 @@ def _run_main(monkeypatch, tmp_path, prompt_size):
     monkeypatch.setattr(mod.proc_tree, "launch_supervised", fake_launch)
     monkeypatch.setattr(mod.proc_tree, "install_teardown", lambda p: None)
     monkeypatch.setattr(mod.proc_tree, "kill_tree", lambda p: None)
-    monkeypatch.setattr(mod, "_snapshot_transcripts", lambda: set())
+    monkeypatch.setattr(mod, "_snapshot_transcripts", lambda *a, **k: set())
     monkeypatch.setattr(mod, "_discover_transcript_path", lambda *a, **k: None)
     monkeypatch.setattr(mod, "permissions_digest", lambda *a, **k: "")
     monkeypatch.setattr(mod, "log_cost_entry", lambda entry: None)

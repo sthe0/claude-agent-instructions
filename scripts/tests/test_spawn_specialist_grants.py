@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 
+from agentctl import grants as GRANTS
 from agentctl.grants import GrantValidationError
 from test_stage_grants import _to_executing, _write_declared_grants_plan, ns
 
@@ -67,11 +68,17 @@ def test_read_add_dir_entry_yields_no_allow_but_an_edit_deny(tmp_path):
     assert deny == [f"Edit(//{str(tmp_path).lstrip('/')}/**)"]
 
 
-def test_write_add_dir_entry_yields_neither_allow_nor_deny(tmp_path):
+def test_write_add_dir_entry_yields_edit_allow_and_guard_denies(tmp_path):
     entries = [{"path": str(tmp_path), "mode": "write", "provenance": "declared"}]
     allow, deny = MOD.stage_grant_rules(entries)
-    assert allow == []
-    assert deny == []
+    base = GRANTS.rule_file_arg(str(tmp_path))
+    assert allow == [f"Edit({base}/**)"]
+    assert deny == [
+        f"Edit({base}/**/.claude/**)",
+        f"Edit({base}/**/settings*.json)",
+        f"Edit({base}/**/.git/**)",
+        f"Edit({base}/**/.git)",
+    ]
 
 
 def test_add_dir_entry_is_validated_and_a_protected_write_root_raises(tmp_path):
