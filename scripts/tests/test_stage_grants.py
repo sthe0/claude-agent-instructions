@@ -20,6 +20,7 @@ import pytest
 from argparse import Namespace
 
 from agentctl import cli
+from agentctl.state import Node, StageStatus
 from agentctl import plan as plan_mod
 from agentctl.dispatch import RunResult
 from agentctl.grants import (
@@ -828,6 +829,8 @@ def test_dispatch_permission_request_covered_by_derived_grant_routes_to_diagnosi
     assert len(state.materialization_defects) == 1
     assert state.materialization_defects[0]["evidence"] == "self-reported"
     assert state.permission_request is None
+    assert state.node == Node.DIAGNOSING.value
+    assert state.stage(1).outcome.status == StageStatus.FAILED.value
 
 
 def test_dispatch_permission_request_not_covered_asks_user(store, fixtures_dir):
