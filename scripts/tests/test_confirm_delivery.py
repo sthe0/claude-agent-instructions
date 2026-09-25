@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli, delivery
+from agentctl.plan import load_plan
+from agentctl.render import render_plan_grants
 from agentctl.store import FileStateStore
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -64,12 +66,14 @@ def _presented(store, sid: str, tmp_path: Path) -> None:
     cli.cmd_plan(ns(session=sid), store=store)
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
     rendering = tmp_path / "rendering.md"
-    rendering.write_text("essence text", encoding="utf-8")
-    cli.cmd_present_plan(
+    grants_block = render_plan_grants(load_plan(plan), fmt="compact").strip()
+    rendering.write_text("essence text\n\n" + grants_block, encoding="utf-8")
+    d = cli.cmd_present_plan(
         ns(session=sid, kind="essence", rendering_file=str(rendering),
            emit_skeleton=False),
         store=store,
     )
+    assert d.ok is True, d.detail
 
 
 def _stamp(store, sid: str) -> delivery.DeliveryStamp | None:

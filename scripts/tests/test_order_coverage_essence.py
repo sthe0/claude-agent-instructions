@@ -24,6 +24,8 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli, plugins_premise, premise
+from agentctl.plan import load_plan
+from agentctl.render import render_plan_grants
 from agentctl.state import PLAN_PRESENTATION_KIND_ESSENCE
 
 _PLAN = str(Path(__file__).resolve().parent / "fixtures" / "plan_two_stage.toml")
@@ -72,9 +74,13 @@ def _block(store, sid) -> str:
     return plugins_premise.coverage_block(state, state.plugins["premise"])
 
 
+def _grants_block() -> str:
+    return render_plan_grants(load_plan(_PLAN), fmt="compact").strip()
+
+
 def _present(store, sid, text, tmp_path, name="essence.md"):
     p = tmp_path / name
-    p.write_text(text, encoding="utf-8")
+    p.write_text(text + "\n\n" + _grants_block(), encoding="utf-8")
     return cli.cmd_present_plan(
         ns(session=sid, kind=PLAN_PRESENTATION_KIND_ESSENCE,
            rendering_file=str(p), emit_skeleton=False),

@@ -19,6 +19,7 @@ import pytest
 
 from agentctl import cli, enumerate_sidecar, plugins, plugins_premise
 from agentctl.plan import PlanError, load_plan
+from agentctl.render import render_plan_grants
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -59,7 +60,11 @@ def _to_plan_ready_with_premise(store, sid, plan):
                           store=store)
 
 
-def _write_rendering(path, content="Plan essence: fold test.\n"):
+def _write_rendering(path, content=None):
+    if content is None:
+        grants_block = render_plan_grants(
+            load_plan(str(FIXTURES / "plan_two_stage.toml")), fmt="compact").strip()
+        content = "Plan essence: fold test.\n\n" + grants_block
     path.write_text(content, encoding="utf-8")
     return path
 
