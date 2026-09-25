@@ -3766,6 +3766,16 @@ def cmd_code_review(args, *, store: StateStore, runner: Runner | None = None) ->
             "only to developer-produced code",
         )
     code_ref = getattr(args, "code_ref", None) or None
+    not_checked = getattr(args, "not_checked", None) or ""
+    if args.verdict == gates.CODE_REVIEW_VERDICTS[0] and not not_checked:
+        # CODE_REVIEW_VERDICTS[0] is "pass" — an approving verdict with no stated
+        # axis coverage is exactly the omission verify-right-axis-report-honestly
+        # forbids: a reviewer approving without running tests and saying nothing
+        # about it (issue #92). Refused, not just noted — nothing is recorded.
+        return Directive(
+            False, state.node, "rejected",
+            "pass verdict requires --not-checked (axes not checked, or 'none')",
+        )
     if gates._code_review_for(state, stage.index) is not None:
         # A re-review of a stage already reviewed once — the code-review axis's
         # round-release counter (item A / issue #96), mirroring plan_review_rounds'
@@ -3780,10 +3790,11 @@ def cmd_code_review(args, *, store: StateStore, runner: Runner | None = None) ->
             concerns=list(getattr(args, "concerns", None) or []),
             note=getattr(args, "note", "") or "",
             code_sha256=_digest(code_ref) if code_ref else "",
+            not_checked=not_checked,
         ),
     )
     state.log("code_review", stage=stage.index, verdict=args.verdict,
-              reviewer=getattr(args, "reviewer", "") or "")
+              reviewer=getattr(args, "reviewer", "") or "", not_checked=not_checked)
     store.save(state)
     return Directive(
         True, state.node, "continue",
@@ -7565,6 +7576,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("quality_by", ("resolve", "close"), "how the quality rating was obtained — a fixed token"),
     ("confirmed_by", ("close",), "who confirmed — a name, not a narrative"),
     ("approved_by", ("drive",), "who approved — a name, not a narrative"),
+    ("not_checked", ("code-review",),
+     "short axis name(s) or 'none' — a fixed-vocabulary token, not review narrative"),
     ("rules", ("resolve-permission",),
      "Bash/Edit/etc rule strings — grant syntax tokens, not narrative"),
     ("add_dirs", ("resolve-permission",),
@@ -7949,6 +7962,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--code-ref", dest="code_ref", default=None,
                     help="the reviewed-code revision/digest the reviewer names; binds the "
                          "verdict so a later record-result with a different --code-ref is stale")
+    sp.add_argument("--not-checked", dest="not_checked", default=None,
+                    help="axes this review did NOT check (e.g. 'tests'), or 'none' — required "
+                         "for a pass verdict, so an unchecked axis is an explicit field rather "
+                         "than a silent omission (verify-right-axis-report-honestly)")
     sp = add("accept"); sp.add_argument("--session", required=True)
     sp.add_argument("--author", default="",
                     help="acceptance author id; must match [meta.order].customer_id when set")

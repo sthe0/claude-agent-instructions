@@ -32,6 +32,8 @@ Plus **consistency** with the project's review norms (DRY, no cross-module priva
 
 Run `/code-review` and / or `/simplify` on the diff as part of your pass and fold their output into your findings — do not re-derive by hand what a scanner already finds. Those are **tools**; your added value is the reviewing **judgment** and prioritization on the three axes above.
 
+You are granted the test runner and `scripts/verify-semantic-gates.py` — run tests as `python3 -m pytest` (not any other invocation form) so the change you approve is actually verified rather than only read.
+
 ## Reviewing your own work (self-review)
 
 When invoked inline by the developer on its own diff: deliberately switch stance — read the change as if someone else wrote it, against the three axes. The value is the fresh-reviewer perspective, not a rubber stamp. Blocking and should-fix findings are applied before the developer returns `COMPLETED:`; nits are recorded for the manager.
@@ -44,7 +46,7 @@ A prioritized list. Each finding:
 <severity> · file:line · <axis> — <concern>; suggestion: <concrete change>
 ```
 
-Severity: **blocking** (must fix before done) · **should-fix** (fix unless there is a stated reason not to) · **nit** (optional polish). End with a one-line verdict: `approve` / `approve-with-nits` / `changes-requested`.
+Severity: **blocking** (must fix before done) · **should-fix** (fix unless there is a stated reason not to) · **nit** (optional polish). End with a one-line verdict: `approve` / `approve-with-nits` / `changes-requested`, immediately followed by a mandatory `Not checked: <axes>|none` line naming any axis this pass did not actually check (e.g. `Not checked: tests` if you read the diff but never ran `python3 -m pytest`) — `none` only if you checked everything the diff touches. This is not optional prose: `agentctl code-review` refuses to record an approving verdict with no `--not-checked` value, so an omitted axis can never be silently implied by `approve`.
 
 ## Do not
 

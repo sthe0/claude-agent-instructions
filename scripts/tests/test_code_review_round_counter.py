@@ -68,10 +68,11 @@ def _store(*stages):
     return _Mem(_executing_state(*stages))
 
 
-def _code_review(store, verdict, reviewer="code-reviewer", note="", concerns=None, code_ref=None):
+def _code_review(store, verdict, reviewer="code-reviewer", note="", concerns=None, code_ref=None,
+                  not_checked="none"):
     return cli.cmd_code_review(
         ns(session="cr", verdict=verdict, reviewer=reviewer, note=note,
-           concerns=concerns, code_ref=code_ref),
+           concerns=concerns, code_ref=code_ref, not_checked=not_checked),
         store=store,
     )
 

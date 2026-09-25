@@ -88,10 +88,11 @@ def _store(*stages, weight="SUBSTANTIVE"):
     return _Mem(_executing_state(*stages, weight=weight))
 
 
-def _code_review(store, verdict, reviewer="code-reviewer", note="", concerns=None, code_ref=None):
+def _code_review(store, verdict, reviewer="code-reviewer", note="", concerns=None, code_ref=None,
+                  not_checked="none"):
     return cli.cmd_code_review(
         Namespace(session="cr", verdict=verdict, reviewer=reviewer, note=note,
-                   concerns=concerns, code_ref=code_ref),
+                   concerns=concerns, code_ref=code_ref, not_checked=not_checked),
         store=store,
     )
 
@@ -119,6 +120,40 @@ def test_cli_code_review_recorder_writes_bound_review():
     assert reviews[0].verdict == "pass"
     assert reviews[0].stage_index == 1
     assert reviews[0].code_sha256  # bound from --code-ref, non-empty
+
+
+def test_cli_code_review_recorder_rejects_pass_without_not_checked():
+    """A `pass` verdict with no --not-checked is refused outright — nothing is
+    recorded — so an unchecked axis can never be silently implied by an approving
+    verdict (verify-right-axis-report-honestly; issue #92)."""
+    store = _store(_dev_stage())
+    d = _code_review(store, "pass", not_checked=None)
+    assert d.ok is False
+    assert d.action == "rejected"
+    assert store.s.code_reviews == []
+    d2 = _code_review(store, "pass", not_checked="")
+    assert d2.ok is False
+    assert store.s.code_reviews == []
+
+
+def test_cli_code_review_recorder_accepts_pass_with_not_checked_none():
+    store = _store(_dev_stage())
+    d = _code_review(store, "pass", not_checked="none")
+    assert d.ok is True
+    assert store.s.code_reviews[0].not_checked == "none"
+
+
+def test_cli_code_review_recorder_records_stated_not_checked_axes():
+    store = _store(_dev_stage())
+    d = _code_review(store, "pass", not_checked="tests")
+    assert d.ok is True
+    assert store.s.code_reviews[0].not_checked == "tests"
+
+
+def test_cli_code_review_recorder_does_not_require_not_checked_for_revise():
+    store = _store(_dev_stage())
+    d = _code_review(store, "revise", not_checked=None)
+    assert d.ok is True
 
 
 def test_cli_code_review_recorder_rejects_non_developer_stage():

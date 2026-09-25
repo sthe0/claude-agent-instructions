@@ -3,7 +3,7 @@ name: settings-permission-tiers
 description: Where a tool permission belongs by class — read-only → versioned settings/base.json; code-executing needed by spawned developers → spawn-specialist.py --settings injection; never an exec entry in base.json.
 type: reference
 created: 2026-07-23
-last_verified: 2026-07-23
+last_verified: 2026-09-26
 schema: leaf/v1
 ---
 
@@ -48,8 +48,82 @@ permission mode; the allow entry is what lifts it. Verify a permission change to
 spawn end-to-end with a **live** diagnostic spawn (does the child actually run the
 command without an approval prompt), not just a static test asserting the entry exists.
 
+## Grant channel — a third home, for stage-scoped grants
+
+Neither `settings/base.json` (fleet-wide, read-only only) nor a machine-local
+settings entry (not durable) is the home for a grant that is neither
+fleet-wide nor read-only, but is also not the kind of standing exec allow
+`spawn-specialist.py`'s per-kind `KIND_BASELINES` hard-codes. A **third
+channel** exists for exactly this: a plan's `[stage.grants]` table
+(`scripts/agentctl/README.md` § `[stage.grants]`), validated by
+`scripts/agentctl/grants.py` and materialized only into the ONE spawned
+child's own `--settings`/`--add-dir` for that ONE stage — never fleet-wide,
+never durable beyond the stage. A grant reaches the child through exactly one
+of three provenances (declared by the plan author, derived automatically from
+the stage's own `verify_command`/output artifacts via `derive_stage_grants`,
+or granted at runtime via `resolve-permission` and consumed once at
+dispatch) — see [[spawning-specialists]] § File-access scope for the
+provenance labels as they appear in a spawned child's own prompt.
+
+**Approval binding.** A derived grant is not free of review just because a
+human never typed it: `agentctl approve`/`replan` binds the plan's
+`grants_sha256` (the digest of every stage's effective grant set, declared
++ derived) alongside `plan_sha256`, so a plan edit that silently grows the
+effective grant set — even purely through derivation, with no `[stage.grants]`
+line touched — is a **substantive diff** requiring re-approval, on the same
+"an ask's options must span the full set" logic that governs any other scope
+widening.
+
+**Never-grantable forms** — `grants.validate_rule`/`validate_add_dir` refuse
+these unconditionally, regardless of provenance or wildcard: a bare `*`
+Bash command; a compound command (`&&`/`||`/`;`/`|`/`&`/`|&` — one Bash rule
+covers exactly one top-level segment); the `claude` program itself; an
+agentctl invocation naming a user-authority verb (`AGENTCTL_USER_AUTHORITY_
+VERBS` in `lib/widening_targets.py` — these are the **review boundaries**:
+verbs only a human-driven `approve`/`resolve`/`plan-review` call may invoke,
+never a spawned child's own grant) or a wildcarded agentctl call with no
+pinned verb at all; a **settings-channel program**
+(`widening_targets.is_settings_channel_program` — anything that could touch
+the harness's own settings files); `crontab` (a launch surface); the DSL
+family with an unbounded exec primitive (`awk`/`gawk`/`nawk`/`mawk`,
+refused unconditionally); `find … -exec/-execdir/-ok/-okdir` (runs an
+arbitrary command per matched file); a write-capable program (`tee`, `cp`,
+`mv`, `sed`, `dd`, `install`, `rsync`, `ln`, `truncate`, `touch`) named with a
+`:*` wildcard, or with no destination argument, or whose destination argument
+is a protected G-target; any output redirect (`>`/`>>`/`&>`/`>|`) resolving to
+a G-target; and, on the file-tool side, a glob path, a path under `.git`, or a
+path that is-or-contains/lies-under a protected root
+(`widening_targets.is_live_settings`, `is_agentctl_state_path`,
+`is_launch_surface`, `add_dir_is_or_contains_protected_root`,
+`add_dir_under_protected_root` — the shared predicates both the Bash-rule and
+the file-tool-rule validators call).
+
+**The interpreter-mediated residual.** `validate_rule`'s interpreter
+allowlist (`python3`/`bash`/`node`/… ) accepts a rule only when it names a
+script-file operand or a safe `-m <module>` (refusing a bare interpreter, an
+inline `-c`/`-e`/`-p` eval flag, and a launcher module like `runpy`/`pip`/
+`pdb`). That check is a shape check on the **invocation**, not a content
+check on the **script**: a validated rule like `Bash(python3
+/repo/scripts/foo.py:*)` grants running whatever `foo.py` contains AT
+MATERIALIZATION TIME, which may differ from what the reviewer read when the
+grant was declared or derived. This residual is bounded by ordinary code
+review of the script file itself (it lives in the repo, under the same
+review discipline as any other change), not by the grant validator — the
+validator's job ends at "this invocation names a script, not inline code."
+
+**`settings_drift`.** A materialized child's actual `--settings` payload can
+diverge from what a stage's declared+derived grant set implies it should be
+(a stale cached digest, a hand-edited `--settings` argument bypassing
+`spawn-specialist.py`'s own assembly). `agentctl` records this divergence as
+a `settings_drift` finding (see `scripts/agentctl/README.md` §
+`grant-stats`) rather than silently trusting either side — a drifted spawn
+is a signal to re-derive and re-materialize, not to patch the symptom.
+
 ## See also
 
 - [[instructions-repo-layout]] — the broader repo tree and setup-symlinks path table.
 - [[claude-code-settings-env-precedence]] — why the child gets the autocompact knob
   via `--settings` rather than process env (same precedence ladder).
+- [[spawning-specialists]] § File-access scope — the grant channel as it appears
+  in a spawned child's own generated prompt (provenance lines, write add_dir
+  shape, symlink/launch-surface residuals).

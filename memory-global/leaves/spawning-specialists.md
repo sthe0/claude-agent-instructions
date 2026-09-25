@@ -1,9 +1,9 @@
 ---
 name: spawning-specialists
-description: Full mechanics of spawning a specialist via claude -p — spawn template inputs, budget tiers, recursion cap, monitoring a running spawn, after-spawn checks, bypassPermissions discipline, return markers.
+description: Full mechanics of spawning a specialist via claude -p — spawn template inputs, budget tiers, file-access scope (--workdir, stage-grant provenance, write add_dir shape, symlink/launch-surface residuals), recursion cap, monitoring a running spawn, after-spawn checks, bypassPermissions discipline, return markers.
 type: reference
 created: 2026-06-04
-last_verified: 2026-08-26
+last_verified: 2026-09-26
 ---
 
 # Spawning specialists
@@ -45,6 +45,25 @@ Cognitive inputs the manager supplies (mechanics are in `--help`):
 | `large` | Cross-cutting change, multi-stage plan, full feature, expensive research |
 
 A specialist that hits its cap returns control with whatever it has.
+
+## File-access scope
+
+Every spawn's prompt carries a generated `## File-access scope` header (`spawn-specialist.py`'s `assemble_prompt`) naming exactly what the child may touch — not a prose brief the child is trusted to honor, but a direct readout of what its `--settings` payload actually materializes:
+
+- **`--workdir`** — the directory `claude -p` runs in (defaults to the parent's own cwd when unset). A spawn given `--workdir` outside this repo needs **absolute-path** Bash rules in its kind baseline (`KIND_BASELINES`) — the harness matches a `Bash(...)` rule against the literal command string, so a relative-path rule that resolves fine from this repo's root resolves to nothing from a different workdir.
+- **Permission mode** — `resolve_permission_mode` returns `acceptEdits` for `developer`/`tech-writer` only (the two kinds needing unattended Read/Grep/Write) and `default` for **every other kind**, including thinker/planner/code-reviewer and any kind outside `KIND_BASELINES` — see § Permission mode below for why never `bypassPermissions`.
+- **Stage grants** — each entry the header lists carries a `Rule:`-shaped destination (`Edit(//abs/path)`, `Bash(git status:*)`, or a `path (mode)` add_dir) plus its **provenance**, one of three:
+  - `declared` — the plan author wrote the grant into the stage's `[stage.grants]` table by hand.
+  - `derived:DR-V` / `derived:DR-O` / `derived:DR-E` / `derived:DR-R` — `agentctl/grants.py`'s `derive_stage_grants` proposed it automatically from the stage's own declared elements (a `verify_command` segment, an in-venue `.py`/`.sh` output artifact, a developer/tech-writer output artifact or material ref, an outside-venue reference's containing directory). See `scripts/agentctl/README.md` § `[stage.grants]` for the full derivation-rule table.
+  - `runtime` — granted for this one stage via `agentctl resolve-permission`, consumed once at dispatch.
+
+  Every entry, regardless of provenance, passes through `grants.validate_rule`/`validate_add_dir` before it can reach the child's `--settings` — a derived or runtime grant is never trusted more than a declared one.
+
+**The write add_dir shape** (what a `write`-mode add_dir grant actually materializes, per `stage_grant_rules`): an ALLOW `Edit(//<path>/**)`, paired with four mandatory guard DENYs under the same prefix — `Edit(//<path>/**/.claude/**)`, `Edit(//<path>/**/settings*.json)`, `Edit(//<path>/**/.git/**)`, `Edit(//<path>/**/.git)` — so a broad write grant can never reach the child's own settings or VCS internals. `validate_add_dir` refuses a `write` add_dir outright (before it ever reaches materialization) if the path is a glob, is not absolute, lies inside a `.git` directory, or is/contains a launch surface; a `read` add_dir only refuses is-or-contains-a-protected-root and never gains an Edit allow at all, so none of the write-mode refusals apply to it. A grant that would land inside a directory another source already denies is refused at validation time as a `GrantShadowError`, never silently shadowed.
+
+**Two named residuals** neither this stage nor stage 2 closes — bounded by review, not by code:
+- **Symlink resolution.** `validate_add_dir`/`validate_rule` check the path **string** only; they do not resolve symlinks. A write add_dir whose subtree contains a symlink pointing at a protected root or a launch surface is not caught at validation, and the harness's own `Edit(//<path>/**)` allow matches the literal declared path regardless of what it later resolves to on disk. Bounded by PR-C's (stage 7) global permission-surface guard and by plan-approval review — do not implement symlink resolution here.
+- **Launch-surface set is home-anchored.** `widening_targets.is_launch_surface` (and its add-dir sibling `add_dir_is_or_contains_launch_surface`) covers the surfaces reachable under the user's home directory (e.g. `~/Library/LaunchAgents`); it does **not** cover system-wide launch surfaces (`/Library/LaunchDaemons`, `/etc/systemd`). A grant reaching one of those is not refused by this validator — it is a residual for review to catch.
 
 ## Recursion cap
 

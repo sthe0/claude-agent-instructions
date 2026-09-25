@@ -577,13 +577,18 @@ class CodeReview:
     it; empty on a record that declined to bind (degrades the gate to
     verdict-only, mirroring StageReview's observation-only fallback). `reviewer`
     is the reviewer tag ("code-reviewer") for an automated verdict or a human
-    name for a manual/override record."""
+    name for a manual/override record. `not_checked` is the axes this review did
+    NOT check (or "none") — cli.cmd_code_review refuses to record a `pass`
+    verdict without it (an unchecked axis must be explicit, never silently
+    implied by an approving verdict); empty on a `revise`/`override` record,
+    where the field does not apply."""
     stage_index: int
     verdict: str
     reviewer: str
     concerns: list[str] = field(default_factory=list)
     note: str = ""
     code_sha256: str = ""
+    not_checked: str = ""
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "CodeReview | None":
@@ -596,6 +601,7 @@ class CodeReview:
             concerns=list(d.get("concerns", [])),
             note=d.get("note", ""),
             code_sha256=d.get("code_sha256", ""),
+            not_checked=d.get("not_checked", ""),
         )
 
 
