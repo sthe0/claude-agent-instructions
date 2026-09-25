@@ -84,6 +84,20 @@ _UNCLAIMED_STAGE_LEAVES = {
     "outcome.duration_ms": "the mutable execution record, not the declaration",
     "outcome.spawn_count": "the mutable execution record, not the declaration",
     "outcome.delivered_head": "the mutable execution record, not the declaration",
+    "grants.allow.rule": "a declared permission surface, not a place an answer can rest "
+                        "on — no target names it; covered instead by "
+                        "gates._renorm_stage_residual via plan.grants_place, on the same "
+                        "footing as actor.cost_tier above",
+    "grants.allow.provenance": "the grant's origin label, same exclusion as its sibling "
+                               "`grants.allow.rule`",
+    "grants.add_dirs.path": "a declared permission surface, same exclusion as "
+                            "`grants.allow.rule`",
+    "grants.add_dirs.mode": "a declared permission surface, same exclusion as "
+                            "`grants.allow.rule`",
+    "grants.add_dirs.provenance": "the grant's origin label, same exclusion as its "
+                                  "sibling `grants.add_dirs.path`",
+    "grants.permission_mode": "a declared permission surface, same exclusion as "
+                              "`grants.allow.rule`",
 }
 
 _BARE_STAGE = {

@@ -121,6 +121,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import grants as _grants
+from .grants import AddDirGrant, RuleGrant, StageGrants
 from .state import (
     Actor,
     CheckKind,
@@ -254,6 +256,45 @@ def _parse_landed_venue(raw_venue: object, context: str) -> str:
             f"silently overridden"
         )
     return value
+
+
+def _parse_stage_grants(raw: object, context: str, *, strict: bool) -> "StageGrants | None":
+    """Parse a stage's optional `[stage.grants]` table into a validated
+    `StageGrants`, or None when the stage declares no grants block at all —
+    byte-identical to every plan authored before this field existed. Every
+    entry is validated through `grants.validate_grants` (the sole authority
+    grants.py's module docstring names) when `strict` — the same load-time
+    refusal every other required-shape field in this loader gets — so an
+    invalid declared grant can never reach a spawned child's --settings.
+
+    Read-only baseline loads (strict=False) skip validation, matching every
+    other field parsed here under that flag: a plan snapshot frozen before a
+    grant became invalid (validator tightened after approval) must still
+    load for diffing, not raise."""
+    if not raw:
+        return None
+    if not isinstance(raw, dict):
+        raise PlanError(f"{context}: grants must be a table, got {type(raw).__name__}")
+    allow = []
+    for r in raw.get("allow", []):
+        if not isinstance(r, str):
+            raise PlanError(f"{context}: grants.allow entries must be strings, got {r!r}")
+        allow.append(RuleGrant(rule=r, provenance="declared"))
+    add_dirs = []
+    for a in raw.get("add_dirs", []):
+        if not isinstance(a, dict) or not a.get("path"):
+            raise PlanError(f"{context}: grants.add_dirs entries need a 'path', got {a!r}")
+        add_dirs.append(
+            AddDirGrant(path=str(a["path"]), mode=str(a.get("mode", "read")), provenance="declared")
+        )
+    permission_mode = str(raw["permission_mode"]) if raw.get("permission_mode") else None
+    stage_grants = StageGrants(allow=allow, add_dirs=add_dirs, permission_mode=permission_mode)
+    if strict:
+        try:
+            _grants.validate_grants(stage_grants)
+        except _grants.GrantValidationError as exc:
+            raise PlanError(f"{context}: grants: {exc}") from exc
+    return stage_grants if not stage_grants.is_empty() else None
 
 
 # A landed check's target/remote are git ref NAMES, never shell content: no
@@ -1386,6 +1427,7 @@ def parse_plan(
                 supplies=_build_supplies(s, index),
                 output_artifacts=[str(p) for p in s.get("output_artifacts", [])],
                 outcome=Outcome(status=StageStatus.PENDING.value),
+                grants=_parse_stage_grants(s.get("grants"), stage_ctx, strict=strict),
             )
         )
 
@@ -1484,6 +1526,7 @@ def _structural_signature(doc: PlanDoc) -> dict:
                 tuple(sorted(s.depends_on)),
                 s.criterion.done_criterion,
                 s.criterion.criterion_type,
+                *grants_place(s),
             )
             for s in doc.stages
         },
@@ -1580,6 +1623,35 @@ def procedure_place(stage) -> tuple:
     nothing there, while retagging `verify_venue_at_final` in the two KEYS would flip
     every already-disposed question of every live session."""
     return () if not stage.means.procedure else (("procedure", stage.means.procedure),)
+
+
+def grants_place(stage) -> tuple:
+    """The stage's DECLARED `[stage.grants]` — never the derived half, which
+    depends on a venue this function does not take — as a contribution to a
+    change-decision key: a ONE-element tuple holding `StageGrants.effective_tuple()`,
+    or the EMPTY tuple when the stage declares no grants block at all.
+
+    Unlike `knowledge_place`/`preconditions_place`/`procedure_place`, this is not
+    shared with `stage_carry_key`/`stage_question_key`: no name in the question-target
+    vocabulary (`text_shape.ELEMENT_NAMES`) names a stage's permission surface, so a
+    disposed Question can never target it, and `grants` is listed in
+    `test_question_key_scope.py`'s `_UNCLAIMED_STAGE_LEAVES` for that reason. It IS
+    spliced into `_structural_signature` (below) and into `gates._renorm_stage_residual`
+    (imported from here), on the same footing as `actor.cost_tier` and
+    `output_artifacts` there: declaring or widening what a stage may touch is a norm an
+    executor may not silently move under the light (`--renormalize`) path, and a plan
+    edit that adds or widens a declared grant needs the same re-approval a new resource
+    or external action does.
+
+    Declared-only and one-element-tuple-wrapped for the reason `preconditions_place`
+    documents: a plan predating this field (every plan before schema 36) keeps the
+    exact structural signature it had — `_structural_signature` is compared by
+    `diff_plans` on every replan, and an unconditional contribution would reclassify
+    every existing plan's next refinement as substantive for no edit anyone made."""
+    g = getattr(stage, "grants", None)
+    if g is None or g.is_empty():
+        return ()
+    return (g.effective_tuple(),)
 
 
 def stage_carry_key(stage) -> tuple:
@@ -1933,9 +2005,73 @@ def changed_parts(doc: PlanDoc, baseline_digests: dict) -> tuple[bool, set[int]]
     return (baseline_digests.get("meta") or "") != plan_meta_digest(doc), moved
 
 
+def _venue_for(doc: PlanDoc) -> str:
+    """The venue `derive_stage_grants` resolves DR-E/in-venue paths against —
+    `delivery_worktree` when declared else `repo_root`, mirroring
+    `PlanFrame.resolve_check_venue`'s identical fallback in state.py — with a
+    last-resort "." so a plan declaring neither (permitted; every verify_command
+    then runs in the invoker's own cwd) still gets a non-empty venue string
+    rather than the malformed absolute path an empty one would build in DR-E."""
+    return doc.meta.delivery_worktree or doc.meta.repo_root or "."
+
+
+def _effective_grants_for_stage(stage, venue: str) -> "StageGrants":
+    """DECLARED plus DERIVED, in that order — the set `grant_covers_call` checks an
+    actual tool call against and the set `_grants_grew` compares across a replan.
+    `derive_stage_grants` never sees the declared half (it derives from the stage's
+    OTHER fields only), so the two lists are concatenated here rather than inside
+    grants.py, keeping that module's derivation pure of any notion of "already
+    declared"."""
+    declared = stage.grants if getattr(stage, "grants", None) else StageGrants()
+    derived, _dropped = _grants.derive_stage_grants(stage, venue=venue)
+    return StageGrants(
+        allow=list(declared.allow) + list(derived.allow),
+        add_dirs=list(declared.add_dirs) + list(derived.add_dirs),
+        permission_mode=declared.permission_mode,
+    )
+
+
+def _grants_effective_map(doc: PlanDoc) -> dict[int, tuple]:
+    venue = _venue_for(doc)
+    return {s.index: _effective_grants_for_stage(s, venue).effective_tuple() for s in doc.stages}
+
+
+def _grants_grew(old: PlanDoc, new: PlanDoc) -> bool:
+    """Whether any stage's EFFECTIVE (declared+derived) grant set grew from `old` to
+    `new` — a strictly wider Bash/Edit rule set, a strictly wider set of add_dirs, or
+    a newly-set `permission_mode` where none was set before. A stage present only in
+    `new` (an added stage) is compared against the empty grant set, so its own
+    declared/derivable grants always count as growth — consistent with an added stage
+    already forcing 'substantive' via `_structural_signature`'s differing stage-index
+    sets, and cheap insurance if that ever changes independently. A SHRINKING or
+    unchanged grant set is deliberately not growth: narrowing what a stage may touch
+    never needs the re-approval a widening does."""
+    old_map = _grants_effective_map(old)
+    new_map = _grants_effective_map(new)
+    for idx, (new_rules, new_dirs, new_mode) in new_map.items():
+        old_rules, old_dirs, old_mode = old_map.get(idx, (frozenset(), frozenset(), None))
+        if (new_rules - old_rules) or (new_dirs - old_dirs):
+            return True
+        if new_mode and new_mode != old_mode:
+            return True
+    return False
+
+
 def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     """Return 'no_change' | 'refinement' | 'substantive'."""
     if _structural_signature(old) != _structural_signature(new):
+        return "substantive"
+    # `_structural_signature` already catches a changed DECLARED grant (via
+    # `grants_place`), but a plan that adds no new [stage.grants] line can still
+    # widen what a stage will actually be spawned with — a verify_command edit that
+    # derives a new Bash rule, or an output_artifacts edit that derives a new Edit
+    # rule. Both change what the spawned child may touch without moving a single
+    # field `_structural_signature` compares, so this is a second, independent
+    # substantive trigger rather than folded into that signature: unlike every field
+    # there, "did the EFFECTIVE grant set grow" is not a pure function of the two
+    # docs' own bytes alone (it also calls the same deriver dispatch will), and
+    # forcing it into a dict literal would make `_structural_signature` impure.
+    if _grants_grew(old, new):
         return "substantive"
     # Structurally identical — any other change is a refinement. The means/method/
     # conditions/invariants are included so that adjusting a stage's MEANS to remove

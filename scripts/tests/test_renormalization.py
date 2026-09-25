@@ -687,6 +687,18 @@ _STAGE_RESIDUAL_COVERAGE = {
     "principle.derivation": "stage_question_key",
     "principle.confidence": "stage_question_key",
     "principle.refutation": "stage_question_key",
+    "grants.allow.rule": "the residual's own splice — outside stage_question_key because "
+                        "no Question.target names it, inside here because a declared "
+                        "grant is part of what the stage's definition authorizes a "
+                        "spawned child to touch, same footing as actor.cost_tier above",
+    "grants.allow.provenance": "the residual's own splice, same reason as its sibling "
+                               "`grants.allow.rule`",
+    "grants.add_dirs.path": "the residual's own splice, same reason as `grants.allow.rule`",
+    "grants.add_dirs.mode": "the residual's own splice, same reason as `grants.allow.rule`",
+    "grants.add_dirs.provenance": "the residual's own splice, same reason as its sibling "
+                                  "`grants.add_dirs.path`",
+    "grants.permission_mode": "the residual's own splice, same reason as "
+                              "`grants.allow.rule`",
 }
 
 

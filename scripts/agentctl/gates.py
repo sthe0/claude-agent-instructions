@@ -43,7 +43,14 @@ from lib import hook_wiring
 from . import advisor as _advisor
 from . import delivery
 from .config import Thresholds
-from .plan import PlanError, changed_parts, load_plan, order_place, stage_question_key
+from .plan import (
+    PlanError,
+    changed_parts,
+    grants_place,
+    load_plan,
+    order_place,
+    stage_question_key,
+)
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
 from .state import Node, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
@@ -1881,14 +1888,18 @@ def _renorm_stage_residual(stage) -> tuple:
     `plan.stage_question_key` is most of it, and would have been all of it but for its
     own scope: that key answers whether a disposed Question still targets the same
     bytes, and a Question.target may only name a stage field the plan's author writes
-    as an activity element. Two engine-consumed fields fall outside that and are spliced
-    on here, because a renormalization is defined by what it does NOT touch:
+    as an activity element. Three engine-consumed fields fall outside that and are
+    spliced on here, because a renormalization is defined by what it does NOT touch:
 
     * `actor.cost_tier` — the dispatch budget label and the effort-divergence estimate's
       input. Re-tiering a stage from `small` to `large` under the light path would move
       the norm the divergence trigger reads a stage's overrun against.
     * `output_artifacts` — the paths the verify-command reachability lint reads as
       produced-by-this-plan. Re-declaring them changes which green a check can reach.
+    * `grants` (via `plan.grants_place`) — the declared permission surface a spawned
+      child is authorized to touch. Widening it under the light path would let an
+      executor grant himself Bash/Edit/add_dir access the plan's own approval never
+      saw, through a channel meant only for re-sequencing operations.
 
     Deliberately outside, and the only things outside: `index` (the key both sides are
     matched ON, so a change there is an added/removed stage, refused above), and the
@@ -1898,11 +1909,12 @@ def _renorm_stage_residual(stage) -> tuple:
 
     Hand-written, like every membership list of this family, and pinned the same way:
     `test_the_stage_residual_exhausts_the_stage_s_field_set` goes red when a field is
-    added to `Stage` and to neither the key nor the two splices above."""
+    added to `Stage` and to neither the key nor the three splices above."""
     return (
         stage_question_key(stage),
         stage.actor.cost_tier,
         tuple(stage.output_artifacts),
+        *grants_place(stage),
     )
 
 
