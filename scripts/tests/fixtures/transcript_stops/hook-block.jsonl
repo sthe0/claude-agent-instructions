@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_fixture_hook_1", "name": "Bash", "input": {"command": "find / -maxdepth 2 -iname '*fixture*'"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_fixture_hook_1", "content": "PreToolUse:Bash hook error: This search is rooted at '/', which spans several FUSE mounts under /home (network-backed filesystems). Re-scope the search root to the specific repository or directory you need.", "is_error": true}]}, "toolDenialKind": "permission-rule"}

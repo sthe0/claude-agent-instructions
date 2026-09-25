@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_fixture_ran_1", "name": "Bash", "input": {"command": "echo hello"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_fixture_ran_1", "content": "hello\n", "is_error": false}]}}
