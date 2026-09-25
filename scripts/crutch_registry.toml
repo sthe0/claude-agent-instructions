@@ -3013,6 +3013,70 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "2eed803ba1ba6f4e"
+domain = "code"
+file = "scripts/tests/test_check_spawn_tool_run.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "5b46b95707494901"
+domain = "code"
+file = "scripts/tests/test_check_spawn_tool_run.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b834d6bc21366bc9"
+domain = "code"
+file = "scripts/tests/test_check_spawn_tool_run.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "82b0e333cf1f72e5"
+domain = "code"
+file = "scripts/tests/test_check_spawn_tool_run.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "06e389baf97a4cb7"
+domain = "code"
+file = "scripts/tests/test_check_spawn_tool_run.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "e72c2398c148380b"
+domain = "code"
+file = "scripts/tests/test_check_spawn_tool_run.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "280d73105b13bdfd"
+domain = "code"
+file = "scripts/tests/test_check_spawn_tool_run.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "bacde71505df8bf7"
+domain = "code"
+file = "scripts/tests/test_check_spawn_tool_run.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "3b1f164ac9c6683b"
 domain = "code"
 file = "scripts/tests/test_cli_directives.py"
@@ -10896,6 +10960,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "c2da0a06e23d70d0"
 domain = "code_file_rollup"
 file = "scripts/tests/test_check_live_run_evidence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "ff13e284984340ed"
+domain = "code_file_rollup"
+file = "scripts/tests/test_check_spawn_tool_run.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

@@ -1,0 +1,10 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_fixture_order_1", "name": "Bash", "input": {"command": "ls -la"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_fixture_order_1", "content": "total 0\n", "is_error": false}]}}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_fixture_order_2", "name": "Bash", "input": {"command": "echo start"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_fixture_order_2", "content": "start\n", "is_error": false}]}}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_fixture_order_3", "name": "Bash", "input": {"command": "curl -sS https://example.com/x"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_fixture_order_3", "content": "Permission to use Bash with command curl -sS https://example.com/x has been denied.", "is_error": true}]}, "toolDenialKind": "permission-rule"}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_fixture_order_4", "name": "Bash", "input": {"command": "echo start"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_fixture_order_4", "content": "start\n", "is_error": false}]}}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_fixture_order_5", "name": "Bash", "input": {"command": "echo end"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_fixture_order_5", "content": "end\n", "is_error": false}]}}
