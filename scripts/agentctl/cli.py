@@ -4478,6 +4478,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     # whatever marker the child reports.
     coverage = _effective_stage_grants(state, stage.index)
     _defects_before = len(state.materialization_defects)
+    _misses_before = len(state.planning_misses)
     _settings_paths = widening_targets.enumerate_live_settings(child_cwd, state.repo_root)
     _settings_before = {p: _plan_file_sha256(p) for p in _settings_paths}
     result = dispatch_stage(
@@ -4552,7 +4553,12 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     # self-reported `Rule:`-line fallback for the case this transcript-based path
     # finds nothing (announcer-thread timeout, or discovery failed).
     _classify_transcript_denials(state, stage, coverage, _parse_transcript_path(result.stderr))
-    _consume_once_grants(state, stage.index)
+    if marker not in (CHILD_INFRA_FAILURE, CHILD_EXHAUSTED):
+        # A transient/resource marker means the child never meaningfully ran
+        # against the once-scoped grant this launch was meant to spend — the
+        # launch didn't count, so consuming a single-use grant here would
+        # burn it for a re-dispatch that gets no benefit from having used it.
+        _consume_once_grants(state, stage.index)
 
     if marker == "COMPLETED":
         store.save(state)
@@ -4620,12 +4626,28 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         state.permission_request = PermissionRequest(
             action=action, stage_index=stage.index, raw=body
         )
-        state.planning_misses.append({
-            "stage_index": stage.index, "asked_user": True, "ts": _utcnow(),
-            "tool_name": call[0] if call else None,
-            "tool_input_digest": _digest(json.dumps(call[1], sort_keys=True)) if call else None,
-            "action": action, "source": "permission-request",
-        })
+        # `_classify_transcript_denials` above may already have appended a
+        # planning_misses row for this SAME denial (source="transcript",
+        # asked_user=False) before we knew the marker would ask the user.
+        # Promote that row in place rather than appending a second one for
+        # the same event -- search only the rows THIS dispatch call added
+        # (`_misses_before:`), most-recent first, since an earlier stage's
+        # unrelated miss must never be touched.
+        _promoted = None
+        for _row in reversed(state.planning_misses[_misses_before:]):
+            if _row.get("source") == "transcript" and not _row.get("asked_user"):
+                _promoted = _row
+                break
+        if _promoted is not None:
+            _promoted["asked_user"] = True
+            _promoted["action"] = action
+        else:
+            state.planning_misses.append({
+                "stage_index": stage.index, "asked_user": True, "ts": _utcnow(),
+                "tool_name": call[0] if call else None,
+                "tool_input_digest": _digest(json.dumps(call[1], sort_keys=True)) if call else None,
+                "action": action, "source": "permission-request",
+            })
         state.log("permission_request", stage=stage.index, action=action)
         store.save(state)
         return Directive(
@@ -4928,11 +4950,18 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
         return Directive(False, state.node, "noop", "no pending permission request to resolve")
     scope = getattr(args, "scope", "once")
     new_entries: list[dict] = []
-    if args.decision == "granted" and scope == "stage":
+    # `once` materializes a runtime grant exactly like `stage` does -- the
+    # difference is lifetime, not whether a --rule/--add-dir gets recorded at
+    # all: `_consume_once_grants` marks a `scope: "once"` entry consumed
+    # after the next dispatch, while a `scope: "stage"` entry stays live for
+    # the stage's remaining launches. Without this branch also firing for
+    # "once", a --scope once resolution silently dropped its --rule/--add-dir
+    # on the floor instead of granting a single re-launch past the denial.
+    if args.decision == "granted" and scope in ("once", "stage"):
         stage = state.active_stage()
         if stage is None:
             return Directive(False, state.node, "noop",
-                              "--scope stage requires an active stage to grant onto")
+                              "--scope stage/once requires an active stage to grant onto")
         for rule in (getattr(args, "rules", None) or []):
             try:
                 _grants.validate_rule(rule)
@@ -4940,7 +4969,7 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
                 return Directive(False, state.node, "noop", f"refused rule grant: {exc}")
             new_entries.append({
                 "rule": rule, "provenance": "runtime", "consumed": False,
-                "stage_title": stage.title,
+                "stage_title": stage.title, "scope": scope,
             })
         for spec in (getattr(args, "add_dirs", None) or []):
             parsed = _parse_add_dir_spec(spec)
@@ -4954,7 +4983,7 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
                 return Directive(False, state.node, "noop", f"refused add_dir grant: {exc}")
             new_entries.append({
                 "path": path, "mode": mode, "provenance": "runtime", "consumed": False,
-                "stage_title": stage.title,
+                "stage_title": stage.title, "scope": scope,
             })
     if args.decision == "granted":
         cont = continuations.permission_granted(req.action, scope)

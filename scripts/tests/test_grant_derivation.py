@@ -112,6 +112,13 @@ def test_dr_o_excludes_tests_prefixed_artifact():
     assert not any(r.startswith("Bash(") for r in _rules(grants))
 
 
+def test_dr_o_excludes_artifact_with_tests_as_any_path_component():
+    # "tests" appears as a middle component, not just a leading prefix.
+    stage = _stage(output_artifacts=["scripts/tests/test_foo.py"])
+    grants, _dropped = derive_stage_grants(stage, venue="/repo")
+    assert not any(r.startswith("Bash(") for r in _rules(grants))
+
+
 def test_dr_o_skips_outside_venue_artifact():
     stage = _stage(output_artifacts=["/etc/foo.py"])
     grants, _dropped = derive_stage_grants(stage, venue="/repo")
@@ -130,13 +137,17 @@ def test_dr_o_ignores_non_py_sh_extension():
 def test_dr_e_developer_gets_edit_grant_for_output_artifact():
     stage = _stage(executor="spawn:developer", output_artifacts=["scripts/foo.py"])
     grants, _dropped = derive_stage_grants(stage, venue="/repo")
-    assert "Edit(///repo/scripts/foo.py)" in _rules(grants)
+    # Double leading slash, not triple: the absolute-path Edit rule form is
+    # literally "//" + path.lstrip("/") (spawn-specialist.py's own parsing).
+    assert "Edit(//repo/scripts/foo.py)" in _rules(grants)
+    assert "Edit(///repo/scripts/foo.py)" not in _rules(grants)
 
 
 def test_dr_e_tech_writer_gets_edit_grant_for_material_ref():
     stage = _stage(executor="spawn:tech-writer", material_refs=["docs/README.md"])
     grants, _dropped = derive_stage_grants(stage, venue="/repo")
-    assert "Edit(///repo/docs/README.md)" in _rules(grants)
+    assert "Edit(//repo/docs/README.md)" in _rules(grants)
+    assert "Edit(///repo/docs/README.md)" not in _rules(grants)
 
 
 def test_dr_e_absent_for_non_developer_non_writer_executor():

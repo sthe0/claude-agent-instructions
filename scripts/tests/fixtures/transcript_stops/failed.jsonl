@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_fixture_failed_1", "name": "Bash", "input": {"command": "python3 scripts/tests/test_foo.py"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_fixture_failed_1", "content": "AssertionError: expected 1 got 2\nExit code 1", "is_error": true}]}}

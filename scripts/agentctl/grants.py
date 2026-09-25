@@ -29,6 +29,7 @@ whose answer gates whether a stage is marked passed without ever asking.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from lib import shell_tokens, widening_targets
@@ -121,7 +122,9 @@ _FORBIDDEN_PERMISSION_MODES = frozenset({"bypasspermissions", "dontask", "auto"}
 # own lexed destination argument(s) are provably not a G-target. A rule
 # naming one of these with NO destination argument at all (e.g. bare
 # `Bash(dd:*)`) is refused outright — there is nothing to prove safe.
-_WRITE_CAPABLE_PROGRAMS = frozenset({"tee", "cp", "mv", "sed", "dd", "install", "rsync"})
+_WRITE_CAPABLE_PROGRAMS = frozenset(
+    {"tee", "cp", "mv", "sed", "dd", "install", "rsync", "ln", "truncate", "touch"}
+)
 
 
 def _rule_program_and_arg(rule: str) -> tuple[str, str] | None:
@@ -164,9 +167,24 @@ def validate_rule(rule: str) -> None:
         _validate_non_bash_rule(rule, tool, arg)
         return
 
+    wildcard = arg.endswith(":*")
     command = _bash_command_from_rule_arg(arg)
     if not command.strip():
         raise GrantValidationError(f"rule {rule!r} names no command")
+
+    if command.strip() == "*":
+        raise GrantValidationError(
+            f"rule {rule!r} is a bare `*` command — matches any command at "
+            f"materialization time — refused"
+        )
+
+    segments = _raw_top_level_segments(command)
+    if segments is not None and len(segments) > 1:
+        raise GrantValidationError(
+            f"rule {rule!r} names a compound command ({len(segments)} top-level "
+            f"segments joined by &&/||/;/|/&/|&) — a single Bash rule may cover "
+            f"only one segment; refused"
+        )
 
     try:
         tokens = shell_tokens.separator_exact_split(command)
@@ -179,11 +197,19 @@ def validate_rule(rule: str) -> None:
     if widening_targets.is_claude_program(tokens):
         raise GrantValidationError(f"rule {rule!r} invokes the `claude` program — refused")
 
-    verb = widening_targets.agentctl_user_authority_call(tokens)
-    if verb is not None:
-        raise GrantValidationError(
-            f"rule {rule!r} invokes agentctl user-authority verb {verb!r} — refused"
-        )
+    invokes_agentctl, agentctl_verb = widening_targets.agentctl_invocation_verb(tokens)
+    if invokes_agentctl:
+        if agentctl_verb in widening_targets.AGENTCTL_USER_AUTHORITY_VERBS:
+            raise GrantValidationError(
+                f"rule {rule!r} invokes agentctl user-authority verb "
+                f"{agentctl_verb!r} — refused"
+            )
+        if agentctl_verb is None and wildcard:
+            raise GrantValidationError(
+                f"rule {rule!r} invokes agentctl with a `:*` wildcard and no "
+                f"pinned verb — would match any verb, including a "
+                f"user-authority one, at materialization time — refused"
+            )
 
     if widening_targets.is_settings_channel_program(tokens):
         raise GrantValidationError(f"rule {rule!r} invokes a settings-channel program — refused")
@@ -208,16 +234,51 @@ def validate_rule(rule: str) -> None:
     # `python3` alone, `bash` alone, `sh` alone — refused, since such a rule
     # would grant an unbounded interactive-equivalent invocation surface.
     _INTERPRETERS = frozenset({"bash", "sh", "zsh", "python", "python3", "node", "ruby", "perl"})
-    if (prog in _INTERPRETERS or widening_targets._INTERPRETER_RE.match(prog)) and not operand_tokens:
+    is_interpreter = prog in _INTERPRETERS or widening_targets._INTERPRETER_RE.match(prog)
+    if is_interpreter and not operand_tokens:
         raise GrantValidationError(
             f"rule {rule!r} is a bare interpreter/launcher with no script operand — refused"
         )
 
+    # A trailing `-c`/`-e`/`-m` with nothing after it is operand-less: at
+    # materialization time a `:*` wildcard would let the actual child process
+    # supply arbitrary inline code/module/expression text the rule text never
+    # named. Refused regardless of the wildcard suffix — a bare flag with no
+    # argument is meaningless/dangerous even without one.
+    _UNBOUNDED_INTERPRETER_FLAGS = frozenset({"-c", "-e", "-m"})
+    if (
+        is_interpreter
+        and operand_tokens
+        and operand_tokens[-1] in _UNBOUNDED_INTERPRETER_FLAGS
+    ):
+        raise GrantValidationError(
+            f"rule {rule!r} names interpreter flag {operand_tokens[-1]!r} with no "
+            f"argument — an unbounded inline-code/module surface — refused"
+        )
+
+    # `eval`/`sudo`/`xargs` with no operand at all is a bare launcher: it
+    # names no concrete downstream command for this validator to have
+    # checked, so it stands for an unbounded invocation surface.
+    _BARE_LAUNCHER_PROGRAMS = frozenset({"eval", "sudo", "xargs"})
+    if prog in _BARE_LAUNCHER_PROGRAMS and not operand_tokens:
+        raise GrantValidationError(
+            f"rule {rule!r} names bare launcher {prog!r} with no operand — refused"
+        )
+
     if prog in _WRITE_CAPABLE_PROGRAMS:
-        _validate_write_capable_bash(rule, prog, operand_tokens)
+        _validate_write_capable_bash(rule, prog, operand_tokens, wildcard=wildcard)
 
 
-def _validate_write_capable_bash(rule: str, prog: str, operand_tokens: list[str]) -> None:
+def _validate_write_capable_bash(
+    rule: str, prog: str, operand_tokens: list[str], *, wildcard: bool
+) -> None:
+    if wildcard:
+        raise GrantValidationError(
+            f"rule {rule!r} names write-capable program {prog!r} with a `:*` "
+            f"wildcard suffix — extra arguments the wildcard admits at "
+            f"materialization time could bypass the argument-based G-target "
+            f"check below — refused outright"
+        )
     if not operand_tokens:
         raise GrantValidationError(
             f"rule {rule!r} names write-capable program {prog!r} with no destination "
@@ -249,8 +310,21 @@ def _is_g_target_path(path: str) -> bool:
 
 def _validate_non_bash_rule(rule: str, tool: str, arg: str) -> None:
     path = arg[2:] if arg.startswith("//") else arg
-    if not path:
-        return
+    if not path.strip():
+        raise GrantValidationError(
+            f"rule {rule!r} ({tool}) names an empty path — refused"
+        )
+    if "*" in path:
+        # A glob path (`Edit(//**)`, `Edit(**)`, `Edit(//home/the0/**)`, ...)
+        # can expand to match an unbounded — or merely unpredictable — set of
+        # real paths at materialization time, including a protected root. A
+        # per-prefix containment check would need to correctly reconstruct
+        # the real absolute path from this rule's double-slash convention
+        # (see validate_rule's DR-E docstring) for every possible glob shape;
+        # refused outright rather than risk that reconstruction being wrong.
+        raise GrantValidationError(
+            f"rule {rule!r} ({tool} onto {path!r}) is a glob path — refused"
+        )
     if _is_g_target_path(path):
         raise GrantValidationError(
             f"rule {rule!r} ({tool} onto {path!r}) is a protected G-target — refused"
@@ -291,7 +365,7 @@ def validate_grants(grants: StageGrants) -> None:
 
 # --- derivation ---------------------------------------------------------------
 
-_SEGMENT_SPLIT_SEPARATORS = frozenset({"&&", "||", ";", "|"})
+_SEGMENT_SPLIT_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", "|&"})
 
 
 def _is_unresolvable_segment(seg: str) -> bool:
@@ -341,7 +415,29 @@ def _verify_command_segments(verify_command: str) -> list[str]:
 
 
 def _in_venue(path: str, venue: str) -> bool:
-    return not path.startswith("/")  # a relative path is venue-local by construction
+    """True iff `path`, joined against `venue` and normalized, resolves to
+    somewhere inside `venue`. An absolute `path` is never venue-local. A
+    relative `path` is joined against `venue` and `..`-collapsed via
+    `os.path.normpath` before the containment check — a bare
+    `not path.startswith("/")` (the prior form) would treat an escaping
+    relative path like `../../etc/passwd` as venue-local just because it
+    lacks a leading slash.
+
+    Containment is decided via `os.path.relpath` rather than a
+    `joined.startswith(venue_norm + "/")` string check: when `venue` is `"."`
+    (the fallback for a plan declaring neither `delivery_worktree` nor
+    `repo_root` — see `plan._venue_for`), `os.path.normpath` collapses the
+    joined path's `./` prefix away entirely, so a startswith check against
+    `"./"` never matches even for a genuinely in-venue path. `relpath` has no
+    such blind spot: it returns a path starting with `..` iff `joined` falls
+    outside `venue_norm`, regardless of whether either side is absolute or
+    relative."""
+    if path.startswith("/"):
+        return False
+    joined = os.path.normpath(os.path.join(venue, path))
+    venue_norm = os.path.normpath(venue)
+    rel = os.path.relpath(joined, venue_norm)
+    return rel == os.curdir or not rel.startswith(os.pardir)
 
 
 def derive_stage_grants(stage, *, venue: str) -> tuple[StageGrants, list[dict]]:
@@ -391,7 +487,7 @@ def derive_stage_grants(stage, *, venue: str) -> tuple[StageGrants, list[dict]]:
     for artifact in stage.output_artifacts:
         if not _in_venue(artifact, venue):
             continue
-        if artifact.startswith("tests/"):
+        if "tests" in artifact.split("/"):
             continue
         if artifact.endswith(".py"):
             _try_rule(f"Bash(python3 {artifact}:*)", "derived:DR-O")
@@ -403,7 +499,12 @@ def derive_stage_grants(stage, *, venue: str) -> tuple[StageGrants, list[dict]]:
             if not _in_venue(artifact, venue):
                 continue
             abs_path = f"{venue.rstrip('/')}/{artifact}"
-            _try_rule(f"Edit(//{abs_path})", "derived:DR-E")
+            # An absolute-path Edit rule's form is a DOUBLE leading slash
+            # (`Edit(//abs/without/leading/slash)`, i.e. literally
+            # `"//" + path.lstrip("/")`) — `abs_path` already starts with
+            # "/", so naively prefixing another "//" produces a triple-slash
+            # rule spawn-specialist.py's own parsing does not recognize.
+            _try_rule(f"Edit(//{abs_path.lstrip('/')})", "derived:DR-E")
 
     all_refs = (
         list(stage.subject.material_refs)

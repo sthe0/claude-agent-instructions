@@ -6,22 +6,28 @@ versus a genuine `planning_miss` (no grant covers this call, so asking the user 
 correct) requires reading the ACTUAL transcript of what the harness denied and why
 — not trusting a re-ask's own prose, which cannot tell the two apart. This module is
 the one parser: given a transcript JSONL path, it yields one `BashToolUse` per Bash
-`tool_use`/`tool_result` pair, classified into exactly one of four stop kinds —
-`ran`, `permission-denial`, `hook-block`, `user-rejected` — for `grants.grant_covers_call`
-to then classify against a stage's effective grant set.
+`tool_use`/`tool_result` pair, classified into exactly one of five stop kinds —
+`ran`, `permission-denial`, `hook-block`, `user-rejected`, `failed` — for
+`grants.grant_covers_call` to then classify against a stage's effective grant set.
 
 Stop-kind classification order matters (see `_classify`): `toolDenialKind` alone
-cannot distinguish a `hook-block` from a `permission-denial`. The two committed
-fixture transcripts under
-`/home/the0/.claude-agent/plans/evidence/spawn-permission-grant-model/transcript-fixtures/`
-carry the SAME `toolDenialKind: "permission-rule"` on both — a permission-rule
-refusal and a `PreToolUse` hook's own refusal are indistinguishable by that field
-alone. The only distinguishing signal is the stop text itself: a hook's refusal is
-always prefixed `<HookEvent>:<Tool> hook error:` (verified against the committed
-`hook-block.jsonl` fixture's exact text), while a permission-rule refusal reads
+cannot distinguish a `hook-block` from a `permission-denial`. The committed
+fixture transcripts under `scripts/tests/fixtures/transcript_stops/` carry the
+SAME `toolDenialKind: "permission-rule"` on both `permission-denial.jsonl` and
+`hook-block.jsonl` — a permission-rule refusal and a `PreToolUse` hook's own
+refusal are indistinguishable by that field alone. The only distinguishing signal
+is the stop text itself: a hook's refusal is always prefixed
+`<HookEvent>:<Tool> hook error:` (verified against the committed `hook-block.jsonl`
+fixture's exact text), while a permission-rule refusal reads
 `Permission to use <Tool> with command ... has been denied.` `user-rejected` IS
 distinguishable by `toolDenialKind` alone (`"user-rejected"`), checked first because
 it is the one unambiguous signal.
+
+A `permission-denial` classification requires a POSITIVE match — either the
+`has been denied` marker in the stop text, or `toolDenialKind == "permission-rule"`
+— never a bare `is_error` fallback: an ordinary failing command (a non-zero exit
+with no denial marker at all) classifies as `failed`, a fifth stop kind distinct
+from all three denial-shaped kinds above.
 """
 from __future__ import annotations
 
@@ -29,9 +35,11 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-STOP_KINDS = ("ran", "permission-denial", "hook-block", "user-rejected")
+STOP_KINDS = ("ran", "permission-denial", "hook-block", "user-rejected", "failed")
 
 _HOOK_ERROR_MARKER = "hook error:"
+_PERMISSION_DENIAL_MARKER = "has been denied"
+_PERMISSION_DENIAL_KINDS = frozenset({"permission-rule"})
 
 
 @dataclass(frozen=True)
@@ -66,7 +74,9 @@ def _classify(denial_kind: object, is_error: bool, text: str) -> str:
         return "user-rejected"
     if _HOOK_ERROR_MARKER in text:
         return "hook-block"
-    return "permission-denial"
+    if denial_kind in _PERMISSION_DENIAL_KINDS or _PERMISSION_DENIAL_MARKER in text:
+        return "permission-denial"
+    return "failed"
 
 
 def parse_bash_tool_uses(path: str | Path) -> list[BashToolUse]:

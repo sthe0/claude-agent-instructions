@@ -1917,7 +1917,7 @@ disposition = "keep"
 ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
 
 [[entry]]
-id = "2805a3c91d4cca55"
+id = "01d3ea4d822b553b"
 domain = "code"
 file = "scripts/lib/widening_targets.py"
 class = "structural"
@@ -9101,6 +9101,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "af7571cb645cf1d7"
+domain = "code"
+file = "scripts/tests/test_stage_grants.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "66808f099a83d396"
+domain = "code"
+file = "scripts/tests/test_stage_grants.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "60b2b0b33602e35e"
 domain = "code"
 file = "scripts/tests/test_stage_grants.py"
@@ -9110,6 +9126,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "7acb9e17f30da253"
+domain = "code"
+file = "scripts/tests/test_stage_grants.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "2416771e1d6117ce"
 domain = "code"
 file = "scripts/tests/test_stage_grants.py"
 class = "not-a-gate"

@@ -17,6 +17,7 @@ widening grant silently accepted).
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path, PurePosixPath
 
@@ -28,10 +29,13 @@ _SETTINGS_BASENAME_RE = re.compile(r"^settings[^/]*\.json$")
 
 
 def _norm(path: str) -> str:
-    """Expanduser + POSIX-slash normalization, without resolving symlinks or
-    requiring existence — a grant-form path is a string in a TOML file, not
-    yet a filesystem entry."""
-    return str(PurePosixPath(str(Path(path).expanduser())))
+    """Expanduser + `..`/`.`-collapsing + POSIX-slash normalization, without
+    resolving symlinks or requiring existence — a grant-form path is a string
+    in a TOML file, not yet a filesystem entry. `os.path.normpath` collapses
+    a `..` segment textually (e.g. `~/.claude/../../etc` -> `/etc`) so an
+    escaping relative component cannot dodge a protected-root containment
+    check by riding along uncollapsed."""
+    return str(PurePosixPath(os.path.normpath(str(Path(path).expanduser()))))
 
 
 def is_live_settings(path: str) -> bool:
@@ -254,12 +258,19 @@ def is_claude_program(tokens: list[str]) -> bool:
     return _program_name(stripped[0]) == "claude"
 
 
-def agentctl_user_authority_call(tokens: list[str]) -> str | None:
-    """If `tokens` (after stripping wrapper tokens) invokes agentctl and
-    names a user-authority verb, in EITHER spelling this repo supports —
-    `python3 -m agentctl <verb>` or an absolute-path entry-point script
-    (`python3 <path>/agentctl-cli.py <verb>` or a bare `agentctl-cli.py
-    <verb>`) — returns that verb; else `None`.
+def agentctl_invocation_verb(tokens: list[str]) -> tuple[bool, str | None]:
+    """`(invokes_agentctl, verb)` — `invokes_agentctl` is True iff `tokens`
+    (after stripping wrapper tokens) invokes agentctl in either spelling this
+    repo supports (`python3 -m agentctl <verb>`, or an entry-point script
+    `.../agentctl-cli.py <verb>`); `verb` is the token immediately following,
+    or `None` when no such token is present at all (a BARE invocation naming
+    no verb, e.g. `python3 -m agentctl` or `agentctl-cli.py` alone).
+
+    `invokes_agentctl is True and verb is None` matters on its own: a
+    wildcarded rule built from such a bare invocation (`Bash(python3 -m
+    agentctl:*)`) covers EVERY verb at materialization time, including a
+    user-authority one, even though no single verb token is present in the
+    rule text for `agentctl_user_authority_call` below to match against.
 
     The interpreter check matches any `python[0-9.]*` name (including a
     venv-path interpreter like `/home/x/.venv/bin/python3`), not only the
@@ -267,19 +278,29 @@ def agentctl_user_authority_call(tokens: list[str]) -> str | None:
     naming a differently-versioned or venv-relative interpreter."""
     stripped = _strip_wrappers(tokens)
     if not stripped:
-        return None
+        return False, None
     prog = _program_name(stripped[0])
     rest = stripped[1:]
     if _INTERPRETER_RE.match(prog):
-        if len(rest) >= 2 and rest[0] == "-m" and rest[1] == "agentctl":
-            verb = rest[2] if len(rest) >= 3 else None
-        elif rest and _program_name(rest[0]).endswith("agentctl-cli.py"):
-            verb = rest[1] if len(rest) >= 2 else None
-        else:
-            return None
-    elif prog.endswith("agentctl-cli.py"):
-        verb = rest[0] if rest else None
-    else:
+        if len(rest) >= 1 and rest[0] == "-m" and len(rest) >= 2 and rest[1] == "agentctl":
+            return True, (rest[2] if len(rest) >= 3 else None)
+        if rest and _program_name(rest[0]).endswith("agentctl-cli.py"):
+            return True, (rest[1] if len(rest) >= 2 else None)
+        return False, None
+    if prog.endswith("agentctl-cli.py"):
+        return True, (rest[0] if rest else None)
+    return False, None
+
+
+def agentctl_user_authority_call(tokens: list[str]) -> str | None:
+    """If `tokens` invokes agentctl (see `agentctl_invocation_verb`) and
+    names a user-authority verb, returns that verb; else `None`. Deliberately
+    does NOT flag a bare, verb-less agentctl invocation — that is
+    `agentctl_invocation_verb`'s own `(True, None)` case, checked separately
+    by `grants.validate_rule` against a rule's wildcard suffix, since a bare
+    invocation names no verb for THIS function to recognize as unsafe."""
+    invokes, verb = agentctl_invocation_verb(tokens)
+    if not invokes:
         return None
     if verb in AGENTCTL_USER_AUTHORITY_VERBS:
         return verb

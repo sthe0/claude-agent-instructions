@@ -19,8 +19,21 @@ from lib.transcript_stops import STOP_KINDS, parse_bash_tool_uses
 _FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "transcript_stops"
 
 
-def test_stop_kinds_is_exactly_the_named_four():
-    assert set(STOP_KINDS) == {"ran", "permission-denial", "hook-block", "user-rejected"}
+def test_stop_kinds_is_exactly_the_named_five():
+    assert set(STOP_KINDS) == {
+        "ran", "permission-denial", "hook-block", "user-rejected", "failed",
+    }
+
+
+def test_a_plain_nonzero_exit_with_no_denial_marker_classifies_as_failed():
+    """The regression finding #1 exists to guard against: an ordinary failing
+    command (no `has been denied` text, no `toolDenialKind`) must NOT default to
+    `permission-denial` just because `is_error` is true — a plain command failure
+    (an assertion, a non-zero exit) is a distinct `failed` stop kind."""
+    [use] = parse_bash_tool_uses(_FIXTURES / "failed.jsonl")
+    assert use.stop_kind == "failed"
+    assert use.stop_text is not None
+    assert "has been denied" not in use.stop_text
 
 
 def test_a_successful_bash_call_classifies_as_ran():

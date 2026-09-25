@@ -70,6 +70,38 @@ _REFUSED_RULES = [
     "Bash(cp foo.txt ~/.claude-agent/state/x:*)",
     "Edit(//home/the0/.claude/settings.json)",
     f"Edit(//{config_root.agentctl_state_dir()}/session.json)",
+    # finding #2: bare `*` command matches anything at materialization time.
+    "Bash(*)",
+    # finding #2: a trailing bare `-c`/`-e`/`-m` names no inline code/module
+    # text -- the wildcard would let the child supply arbitrary text the rule
+    # never pinned.
+    "Bash(python3 -c:*)",
+    "Bash(node -e:*)",
+    "Bash(python3 -m:*)",
+    # finding #2: eval/sudo/xargs with no operand at all name no concrete
+    # downstream command for the validator to have checked.
+    "Bash(eval:*)",
+    "Bash(sudo:*)",
+    "Bash(xargs:*)",
+    # finding #2: a wildcarded agentctl invocation naming no verb covers every
+    # verb at materialization time, including a user-authority one.
+    "Bash(python3 -m agentctl:*)",
+    "Bash(agentctl-cli.py:*)",
+    # finding #5 (second half): ANY `:*` wildcard on a write-capable program
+    # is refused outright, even when the declared argument is not itself a
+    # G-target -- the wildcard admits extra args at materialization time the
+    # rule text never named.
+    "Bash(tee /tmp/foo.txt:*)",
+    "Bash(cp foo.txt /tmp/bar.txt:*)",
+    # finding #3: an empty non-Bash path must be refused, not silently
+    # accepted.
+    "Edit()",
+    "Edit(//)",
+    # finding #3: a glob path can expand to match an unbounded/unpredictable
+    # set of real paths, including a protected root -- refused outright.
+    "Edit(//**)",
+    "Edit(**)",
+    "Edit(//home/the0/**)",
 ]
 
 
@@ -303,6 +335,79 @@ def test_cmd_resolve_permission_scope_stage_records_runtime_rule_grant(store, fi
     assert any(e.get("rule") == "Bash(python3 -m pytest scripts/tests/test_mod.py:*)" for e in runtime)
 
 
+def test_cmd_resolve_permission_scope_once_records_runtime_rule_grant_with_scope_key(
+    store, fixtures_dir,
+):
+    """Finding #9: `--scope once` must materialize `--rule`/`--add-dir` onto
+    `runtime_grants` exactly like `--scope stage` does (only the lifetime
+    differs), and the recorded entry must carry a `"scope"` key so
+    `_consume_once_grants` can later find and expire it."""
+    sid = "resolve-permission-once-scope"
+    _to_executing(store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.permission_request = cli.PermissionRequest(action="need pytest", stage_index=1, raw="need pytest")
+    store.save(state)
+
+    directive = cli.cmd_resolve_permission(
+        ns(session=sid, decision="granted", scope="once",
+           rules=["Bash(python3 -m pytest scripts/tests/test_mod.py:*)"], add_dirs=None),
+        store=store,
+    )
+    assert directive.ok
+    state = store.load(sid)
+    runtime = state.runtime_grants.get("1", [])
+    entry = next(e for e in runtime if e.get("rule") == "Bash(python3 -m pytest scripts/tests/test_mod.py:*)")
+    assert entry["scope"] == "once"
+    assert entry["consumed"] is False
+
+
+def test_dispatch_consumes_once_grant_after_an_ordinary_dispatch(store, fixtures_dir):
+    sid = "once-grant-consumed"
+    _to_executing(store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.runtime_grants["1"] = [
+        {"rule": "Bash(git push origin release:*)", "provenance": "runtime",
+         "consumed": False, "stage_title": state.stage(1).title, "scope": "once"},
+    ]
+    store.save(state)
+
+    def runner(argv, cwd=None):
+        return RunResult(0, stdout="COMPLETED: done\n")
+
+    directive = cli.cmd_dispatch(
+        ns(session=sid, budget="medium", complexity="medium", dry_run=False),
+        store=store, runner=runner,
+    )
+    assert directive.marker == "COMPLETED"
+    state = store.load(sid)
+    assert state.runtime_grants["1"][0]["consumed"] is True
+
+
+def test_dispatch_does_not_consume_once_grant_on_child_infra_failure(store, fixtures_dir):
+    """Finding #9: a CHILD_INFRA_FAILURE/CHILD_EXHAUSTED launch never
+    meaningfully used the once-scoped grant, so it must stay live for the
+    retry the caller is expected to make."""
+    sid = "once-grant-survives-infra-failure"
+    _to_executing(store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.runtime_grants["1"] = [
+        {"rule": "Bash(git push origin release:*)", "provenance": "runtime",
+         "consumed": False, "stage_title": state.stage(1).title, "scope": "once"},
+    ]
+    store.save(state)
+
+    def runner(argv, cwd=None):
+        return RunResult(0, stdout="CHILD_INFRA_FAILURE: transient network error\n")
+
+    directive = cli.cmd_dispatch(
+        ns(session=sid, budget="medium", complexity="medium", dry_run=False),
+        store=store, runner=runner,
+    )
+    assert directive.marker == "CHILD_INFRA_FAILURE"
+    state = store.load(sid)
+    assert state.runtime_grants["1"][0]["consumed"] is False
+
+
 def test_cmd_resolve_permission_scope_stage_refuses_invalid_rule_wholesale(store, fixtures_dir):
     sid = "resolve-permission-refused"
     _to_executing(store, sid, fixtures_dir)
@@ -377,3 +482,39 @@ def test_dispatch_permission_request_not_covered_asks_user(store, fixtures_dir):
     assert len(state.planning_misses) == 1
     assert state.planning_misses[0]["source"] == "permission-request"
     assert state.planning_misses[0]["asked_user"] is True
+
+
+def test_dispatch_permission_request_promotes_existing_transcript_miss_not_a_duplicate(
+    store, fixtures_dir,
+):
+    """Finding #8 regression: `_classify_transcript_denials` runs BEFORE the
+    PERMISSION-REQUEST branch and may already append an uncovered denial to
+    `planning_misses` (source="transcript", asked_user=False). The branch
+    must PROMOTE that same row (asked_user -> True) rather than appending a
+    second row for the identical event."""
+    sid = "perm-request-promotes-transcript-miss"
+    _to_executing(store, sid, fixtures_dir)
+    transcript_path = fixtures_dir / "transcript_stops" / "permission-denial.jsonl"
+
+    def runner(argv, cwd=None):
+        return RunResult(
+            0,
+            stdout=(
+                "PERMISSION-REQUEST: need to run verify-all\n"
+                "Rule: Bash(python3 scripts/verify-all.py:*)\n"
+            ),
+            stderr=f"spawn-specialist: transcript={transcript_path}\n",
+        )
+
+    directive = cli.cmd_dispatch(
+        ns(session=sid, budget="medium", complexity="medium", dry_run=False),
+        store=store, runner=runner,
+    )
+    assert directive.marker == "PERMISSION-REQUEST"
+    state = store.load(sid)
+    assert not state.materialization_defects
+    assert len(state.planning_misses) == 1
+    only = state.planning_misses[0]
+    assert only["source"] == "transcript"
+    assert only["asked_user"] is True
+    assert only["action"] == "need to run verify-all"
