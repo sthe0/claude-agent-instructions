@@ -158,6 +158,7 @@ def build_argv(
     done_criterion: str | None = None,
     runtime_host: str = HOST_CLAUDE,
     project_settings: str | None = None,
+    session_id: str | None = None,
 ) -> list[str]:
     kind = stage.spawn_kind()
     if not kind:
@@ -181,6 +182,14 @@ def build_argv(
         effort,
     ]
     argv.extend(["--stage-index", str(stage.index)])
+    # Present only when the caller has a live engine session to hand -- the
+    # stage's own dispatch, never a review spawn (plugins_review_dispatch.py
+    # gives those --workdir instead). Combined with --stage-index and a
+    # --kind matching the stage's executor, this is spawn-specialist.py's
+    # load_engine_stage_grants trigger for materializing declared/derived/
+    # runtime grants into the child's --settings/--add-dir.
+    if session_id:
+        argv.extend(["--session", session_id])
     argv.append("--plan-brief")
     if continue_worktree:
         argv.extend(["--continue-worktree", continue_worktree])
@@ -244,6 +253,7 @@ def dispatch_stage(
     constraints: str = "",
     runtime_host: str = HOST_CLAUDE,
     project_settings: str | None = None,
+    session_id: str | None = None,
 ) -> RunResult:
     staged: list[Path] = []
     try:
@@ -262,6 +272,7 @@ def dispatch_stage(
             dry_run=dry_run, continue_worktree=continue_worktree,
             constraints=norm_constraints, done_criterion=norm_done_criterion,
             runtime_host=runtime_host, project_settings=project_settings,
+            session_id=session_id,
         )
         run = runner or subprocess_runner
         # cwd is only threaded to the runner when set, so every pre-existing

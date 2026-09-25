@@ -4516,6 +4516,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         cwd=child_cwd,
         runtime_host=host,
         project_settings=_dispatch_project_settings_path(state),
+        session_id=state.session_id,
     )
     if dry_run:
         # #10: a dry-run is a pure preview — no event log, no state save, no
