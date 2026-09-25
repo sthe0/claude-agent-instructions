@@ -29,6 +29,17 @@ This module covers two slots:
 slot (a third engine-required, non-stage-actor specialist) adds one table
 entry plus one observer function, without touching the existing ones.
 
+Both directives name `--workdir <delivery venue>` for the review spawn and
+NEVER `--session`: a review spawn is not the plan's stage executor, so its
+`--kind` can never match a stage's `spawn_kind()` and `--session` would buy
+it nothing but the temptation to run a `agentctl ... --session` user-authority
+verb itself. `_obs_submit_plan` in particular has the reviewer compute the
+plan's own sha256 (it has Bash(shasum -a 256:*) via PLANS_READ_KINDS, not
+agentctl user-authority) and report it as a `Plan digest: <sha256>` line in
+its REVIEW message; the ROOT reads that line and records the verdict itself
+via `agentctl plan-review --session <id> --plan-digest <sha256>` — the
+reviewer never calls `agentctl plan-review` itself.
+
 Deliberately does NOT observe `replan`: an Observer's signature is
 `(state, bag)` — it never sees `args.plan`, the corrected plan a replan
 applies — and `cmd_replan` early-returns WITHOUT `store.save` on a rejected
@@ -60,7 +71,7 @@ import os
 
 from . import gates
 from .plugins import Plugin, PluginDirective, register
-from .state import Node, WeightClass
+from .state import CheckVenue, Node, WeightClass
 
 _SLOT_SPECIALIST = {
     "plan_review": "thinker",
@@ -94,14 +105,18 @@ def _obs_submit_plan(state, bag) -> list[PluginDirective]:
     if not blockers:
         return []
     specialist = _SLOT_SPECIALIST["plan_review"]
+    venue = state.resolve_check_venue(CheckVenue.DELIVERY.value) or "<delivery venue>"
     return [PluginDirective(
         plugin="review_dispatch",
         action="spawn_thinker_review",
         detail=(
-            f"spawn the `{specialist}` specialization to review the plan; feed it "
+            f"spawn the `{specialist}` specialization with --workdir {venue} (never "
+            f"--session -- a review spawn is not the plan's executor); feed it "
             f"`agentctl plan-render --plan {target_plan}` and `agentctl question-list "
             f"--session {state.session_id} --format md`; the reviewer must compute the "
-            f"sha256 of {target_plan} from its OWN read and record with `agentctl "
+            f"sha256 of {target_plan} from its OWN read and report it as a `Plan digest: "
+            f"<sha256-hex>` line in its REVIEW message -- it never calls `agentctl "
+            f"plan-review` itself. The ROOT then records the verdict: `agentctl "
             f"plan-review --session {state.session_id} --verdict pass|revise|override "
             f"--reviewer {specialist} --plan-digest <sha256-hex>` (a pass does NOT bind "
             f"without a matching --plan-digest)"
@@ -127,13 +142,19 @@ def _obs_dispatch(state, bag) -> list[PluginDirective]:
     if not blockers:
         return []
     specialist = _SLOT_SPECIALIST["code_review"]
+    venue = state.resolve_check_venue(CheckVenue.DELIVERY.value) or "<delivery venue>"
     return [PluginDirective(
         plugin="review_dispatch",
         action="spawn_code_review",
         detail=(
-            f"spawn the `{specialist}` specialization to review stage {stage.index}'s "
-            f"diff; then record with `agentctl code-review --session {state.session_id} "
-            f"--verdict pass|revise|override --reviewer {specialist} [--code-ref <rev>]`"
+            f"spawn the `{specialist}` specialization with --workdir {venue} (never "
+            f"--session -- a review spawn is not the stage's executor) to review stage "
+            f"{stage.index}'s diff; `code-review` is an agentctl user-authority verb "
+            f"(AGENTCTL_USER_AUTHORITY_VERBS), so the reviewer is never granted it -- it "
+            f"reports its verdict (pass|revise|override) and rationale in its own REVIEW "
+            f"message instead. The ROOT then records it: `agentctl code-review --session "
+            f"{state.session_id} --verdict pass|revise|override --reviewer {specialist} "
+            f"[--code-ref <rev>]`"
         ),
         blocking=True,
         data={"slot": "code_review", "specialist": specialist, "stage": stage.index, "blockers": blockers},
