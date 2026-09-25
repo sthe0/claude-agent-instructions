@@ -579,9 +579,9 @@ def prompt_exceeds_ceiling(prompt: str, model: str | None = None) -> bool:
 # `git pull` without a prompt and must stay read-only-only per
 # lint-settings-base.py). See memory-global leaf settings-permission-tiers.md.
 #
-# Difficulty removed: before this table, only kind=="developer" got any Bash
-# baseline at all (build_child_settings's `if kind == "developer":` gate) —
-# every other kind ran under a bare acceptEdits-or-nothing mode with NO
+# Difficulty removed: before this table, only the developer kind got any Bash
+# baseline at all (build_child_settings's old kind-equality gate) — every
+# other kind ran under a bare acceptEdits-or-nothing mode with NO
 # explicit Bash grant, so even side-effect-free inspection commands prompted
 # for a decision no headless child could answer (acceptEdits auto-grants
 # file writes and NOTHING else — unlike `defaultMode: auto`, it does not
@@ -643,9 +643,10 @@ KIND_BASELINES: dict[str, list[str]] = {
         "Bash(gh issue:*)",
     ],
     # developer: the historical DEVELOPER_SETTINGS_ALLOW list, restructured
-    # into this table verbatim except for the removed "Bash(claude -p:*)"
-    # entry below (see its own history) — every line here already carries
-    # its own measured justification (see the per-grant comments).
+    # into this table verbatim except for the removed unbounded direct
+    # `claude -p` grant below (see its own history) — every line here
+    # already carries its own measured justification (see the per-grant
+    # comments).
     "developer": list(_READ_ONLY_INSPECTION) + [
         # verification the brief mandates
         "Bash(python3 -m pytest:*)",
@@ -671,9 +672,9 @@ KIND_BASELINES: dict[str, list[str]] = {
         # permission mechanism (this stage's own --session/--stage-index engine
         # grant materialization) is what stage 2 of this same plan builds.
         #
-        # A sibling "Bash(claude -p --model haiku:*)" grant was added alongside
-        # this one at first, then removed the same day on code-review: the
-        # script drives claude via host_llm.build_prompt_argv +
+        # A sibling grant for invoking `claude -p --model haiku` directly was
+        # added alongside this one at first, then removed the same day on
+        # code-review: the script drives claude via host_llm.build_prompt_argv +
         # marker_extract.subprocess_runner INSIDE this already-permitted
         # python3 process, never through the Bash tool directly, so the extra
         # grant was both unused and, being "claude -p ... :*" (unbounded
@@ -706,8 +707,8 @@ KIND_BASELINES: dict[str, list[str]] = {
         "Bash(python3 scripts/check-in-harness-observation.py:*)",
         "Bash(python3 scripts/check-live-run-evidence.py:*)",
         "Bash(python3 _ptg_scratch/probe/launch_probe.py:*)",
-        # "Bash(claude -p:*)" REMOVED (was here through 2026-09-24): unbounded
-        # trailing args on the one program grants.validate_rule refuses
+        # The direct `claude -p` grant REMOVED (was here through 2026-09-24):
+        # unbounded trailing args on the one program grants.validate_rule refuses
         # unconditionally in every OTHER position (is_claude_program) — its
         # presence here was a pre-existing exception this stage's brief
         # explicitly names for removal, not a measured need (no measured Bash
@@ -768,6 +769,13 @@ KIND_BASELINES: dict[str, list[str]] = {
 # norm it is measured against.
 PLANS_WRITE_KINDS = ("planner",)
 PLANS_READ_KINDS = ("thinker", "code-reviewer", "developer")
+
+# The only kind whose spawn inherits the target project's own
+# `.claude/settings.local.json` permissions (see build_child_settings) —
+# named the same way as the plans-access tuples above, rather than a
+# hardcoded `kind == "developer"` check, so the grant is discoverable
+# alongside its siblings and not a one-off literal buried in a function body.
+PROJECT_SETTINGS_KINDS = ("developer",)
 
 
 def plans_permission_rules(kind: str, plans_directory: Path) -> tuple[list[str], list[str]]:
@@ -998,7 +1006,7 @@ def build_child_settings(
     for rule in baseline:
         grants.validate_rule(rule)
     allow.extend(baseline)
-    if kind == "developer":
+    if kind in PROJECT_SETTINGS_KINDS:
         project_allow, project_deny = project_settings_permission_rules(project_settings_file)
         allow.extend(project_allow)
         deny.extend(project_deny)
