@@ -3506,9 +3506,9 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             True, state.node, "continue",
             f"thinker revise recorded for {target} at scope {scope!r} but does not "
             "overturn the whole-plan/stage PASS already recorded this approval cycle "
-            "(R1: a recorded pass is terminal without run-demonstrated regression "
+            "(a recorded pass is terminal without run-demonstrated regression "
             "evidence — a --regression-command that actually exits non-zero — naming "
-            "a part changed since that pass; see gates._plan_review_regression_evidence). "
+            "a part changed since that pass). "
             f"Concern raised: {concern_text!r}. This is a non-blocking note, not another "
             "thinker round: the decision is the user's — override "
             "(plan-review --verdict override --reviewer <you> --note <why it is "
@@ -7436,13 +7436,12 @@ def build_parser() -> argparse.ArgumentParser:
                     default=None,
                     help="count of non-blocking findings this round produced (audit trail)")
     sp.add_argument("--regression-command", dest="regression_command", default=None,
-                    help="R1: a command the engine runs in repo_root to demonstrate a "
+                    help="a command the engine runs in repo_root to demonstrate a "
                          "regression against a plan version that already carries a "
                          "recorded whole-plan/stage PASS this approval cycle. Required "
                          "(and must exit non-zero) for a 'revise' after such a pass to "
                          "block approve/replan — a command that was never run, or that "
-                         "exits 0, is refused as evidence; see "
-                         "gates._plan_review_regression_evidence. Ignored on every other "
+                         "exits 0, is refused as evidence. Ignored on every other "
                          "verdict/situation.")
     sp = add("plan-review-delta"); sp.add_argument("--session", required=True)
     sp.add_argument("--plan", default=None,

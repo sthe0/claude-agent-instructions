@@ -762,8 +762,8 @@ _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
 _PLAN_REVIEW_ROUND_RELEASE_MESSAGE_POST_PASS = (
     "review round budget exhausted at round {rounds} (Rule-of-Three — config.md's "
     "effort-replan-absolute, reused) — a whole-plan or stage thinker PASS was already "
-    "recorded this approval cycle, which R1 makes terminal: 'run a fresh whole-plan "
-    "thinker review' is no longer an exit, because an on-budget pass would have "
+    "recorded this approval cycle, and a recorded pass is terminal: 'run a fresh "
+    "whole-plan thinker review' is no longer an exit, because an on-budget pass would have "
     "cleared the gate directly rather than reaching this message at all. The decision "
     "is yours and must be recorded. Two exits, both executable from this state: (1) go "
     "ahead with the plan as it stands, without a further review, by running "

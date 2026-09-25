@@ -1767,7 +1767,6 @@ class SessionState:
         data["approval"] = GateRecord(**data["approval"])
         data["resolution"] = GateRecord(**data["resolution"])
         data.pop("self_improvement", None)  # legacy field (schema <=4); self-improvement now runs on the standard spine
-        data.pop("plan_review_pass_occurred", None)  # legacy field (schema 36, R1); now derived as bool(plan_review_passes)
         # `plan_digest` was renamed to `accepted_plan_digest` (same meaning). from_dict ends
         # in cls(**data) and filters nothing, so without this a state.json written before the
         # rename dies on load with an unexpected-keyword TypeError and no recovery edge. The
