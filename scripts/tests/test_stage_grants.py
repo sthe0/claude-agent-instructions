@@ -67,6 +67,10 @@ _REFUSED_RULES = [
     # bare form above, now that sudo/doas/xargs/eval/time/nice/stdbuf are
     # wrapper tokens too.
     "Bash(sudo claude --print hi:*)",
+    "Bash(stdbuf -o0 claude:*)",
+    "Bash(nice -n 5 claude:*)",
+    "Bash(sudo -u x claude:*)",
+    "Bash(setsid claude:*)",
     "Bash(doas claude --print hi:*)",
     "Bash(time claude --print hi:*)",
     "Bash(nice claude --print hi:*)",

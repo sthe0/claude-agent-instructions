@@ -195,6 +195,7 @@ def add_dir_under_protected_root(path: str) -> bool:
 _WRAPPER_TOKENS = frozenset({
     "env", "npx", "exec", "nohup", "timeout", "command",
     "sudo", "doas", "xargs", "eval", "time", "nice", "stdbuf",
+    "setsid", "ionice", "chrt", "taskset", "unbuffer", "flock",
 })
 INTERPRETER_RE = re.compile(r"^python[0-9.]*$")
 
@@ -254,11 +255,18 @@ def program_name(token: str) -> str:
 
 def is_claude_program(tokens: list[str]) -> bool:
     """True iff, after stripping wrapper tokens, the leading program token is
-    `claude` in any spelling (bare, absolute path, or via a wrapper)."""
+    `claude` in any spelling (bare, absolute path, or via a wrapper).
+
+    A wrapper's own options (`nice -n 5`, `sudo -u x`, `stdbuf -o0`) are not
+    parsed per wrapper, so once any wrapper was stripped, `claude` anywhere in
+    the remaining tokens counts: fail toward refused."""
     stripped = strip_wrappers(tokens)
     if not stripped:
         return False
-    return program_name(stripped[0]) == "claude"
+    if program_name(stripped[0]) == "claude":
+        return True
+    wrapped = len(stripped) < len(tokens)
+    return wrapped and any(program_name(t) == "claude" for t in stripped)
 
 
 def agentctl_invocation_verb(tokens: list[str]) -> tuple[bool, str | None]:
