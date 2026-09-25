@@ -82,10 +82,33 @@ def test_dr_v_preserves_quoted_separator_as_one_segment():
     # keep the quotes in the derived rule text so a later validate_rule pass
     # over that SAME text does not mistake it for a real segment boundary and
     # refuse the rule as a "compound command" (regression: the derived rule
-    # used to be built from quote-stripped, rejoined tokens).
+    # used to be built from quote-stripped, rejoined tokens). The segment
+    # ALSO happens to carry a `-c` inline-code flag, which finding B1's
+    # interpreter allowlist now refuses unconditionally regardless of
+    # segmentation -- so the entry lands in `dropped` with an inline-code
+    # reason, not in `allow`, and NOT with the old "compound command" reason
+    # this test pinned before B1's allowlist rework.
     stage = _stage(verify_command="python -c 'import mod; assert True'")
     grants, dropped = derive_stage_grants(stage, venue="/repo")
-    assert "Bash(python -c 'import mod; assert True':*)" in _rules(grants)
+    assert "Bash(python -c 'import mod; assert True':*)" not in _rules(grants)
+    matches = [
+        d for d in dropped
+        if d["entry"] == "Bash(python -c 'import mod; assert True':*)"
+    ]
+    assert len(matches) == 1
+    assert "compound command" not in matches[0]["reason"]
+    assert "inline-code" in matches[0]["reason"]
+
+
+def test_dr_v_proposes_redirect_merge_segment_as_one_segment():
+    # `2>&1` must stay glued to its Bash(...) rule as one segment rather than
+    # being mis-split at the bare `&` (finding S1) -- DR-V's derived rule text
+    # is exactly the segment `_raw_top_level_segments` returns, so this pins
+    # the derivation side of the same fix `_ACCEPTED_RULES` pins for
+    # `validate_rule` directly in test_stage_grants.py.
+    stage = _stage(verify_command="pytest -q 2>&1")
+    grants, dropped = derive_stage_grants(stage, venue="/repo")
+    assert "Bash(pytest -q 2>&1:*)" in _rules(grants)
     assert not dropped
 
 

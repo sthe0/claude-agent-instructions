@@ -192,7 +192,10 @@ def add_dir_under_protected_root(path: str) -> bool:
 
 # --- claude / agentctl program detection ------------------------------------
 
-_WRAPPER_TOKENS = frozenset({"env", "npx", "exec", "nohup", "timeout", "command"})
+_WRAPPER_TOKENS = frozenset({
+    "env", "npx", "exec", "nohup", "timeout", "command",
+    "sudo", "doas", "xargs", "eval", "time", "nice", "stdbuf",
+})
 INTERPRETER_RE = re.compile(r"^python[0-9.]*$")
 
 # agentctl subcommands that exercise USER authority — approving a plan,
@@ -324,6 +327,7 @@ SETTINGS_CHANNEL_PROGRAMS = frozenset({
     "set-context-cap.sh",
     "migrate-to-isolated.sh",
     "setup-symlinks.sh",
+    "sync-instructions-repo.sh",
 })
 
 

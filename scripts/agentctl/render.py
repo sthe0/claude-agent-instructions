@@ -25,15 +25,40 @@ def _stage_declared_and_derived_grants(s, venue: str):
     """A stage's declared grants (an empty `StageGrants` when the stage
     authors none) plus its derived grants and dropped-entry list — the one
     place that pairs a stage with `grants.derive_stage_grants`'s
-    venue-scoped output, shared by `render_stage_brief`, `render_plan_grants`,
-    and `cmd_plan_grants` so the three projections can never drift apart
-    on how a stage's effective grant set is computed. `render_plan_md`
-    (the whole-plan, brief-per-stage view) never renders grants at all —
-    that detail belongs to the single-stage brief and the dedicated
-    grants projections, not to the summary of every stage at once."""
+    venue-scoped output, shared by `render_stage_brief`, `render_plan_md`,
+    `render_plan_grants`, and `cmd_plan_grants` so no projection can drift
+    from another on how a stage's effective grant set is computed."""
     declared = s.grants if getattr(s, "grants", None) else _grants.StageGrants()
     derived, dropped = _grants.derive_stage_grants(s, venue=venue)
     return declared, derived, dropped
+
+
+def _grants_lines(s, venue: str) -> list[str]:
+    """The `- **Grants (file-access scope):**` block for one stage, or `[]`
+    when the stage has neither a declared nor a derived grant to show —
+    shared by `render_stage_brief` and `render_plan_md`'s per-stage loop so
+    the whole-plan view can no longer omit the one detail (a stage's actual
+    file-access scope) that a plan reviewer needs to audit without opening
+    the single-stage brief for every stage in turn."""
+    declared_grants, derived_grants, _dropped = _stage_declared_and_derived_grants(s, venue)
+    declared_rules = [r.rule for r in declared_grants.allow]
+    declared_dirs = [f"{a.path}:{a.mode}" for a in declared_grants.add_dirs]
+    derived_rules = [r.rule for r in derived_grants.allow]
+    derived_dirs = [f"{a.path}:{a.mode}" for a in derived_grants.add_dirs]
+    if not (declared_rules or declared_dirs or derived_rules or derived_dirs or declared_grants.permission_mode):
+        return []
+    out = ["- **Grants (file-access scope):**"]
+    if declared_rules:
+        out.append(f"  - declared allow: {', '.join(declared_rules)}")
+    if declared_dirs:
+        out.append(f"  - declared add_dirs: {', '.join(declared_dirs)}")
+    if declared_grants.permission_mode:
+        out.append(f"  - declared permission_mode: {declared_grants.permission_mode}")
+    if derived_rules:
+        out.append(f"  - derived allow: {', '.join(derived_rules)}")
+    if derived_dirs:
+        out.append(f"  - derived add_dirs: {', '.join(derived_dirs)}")
+    return out
 
 
 def render_plan_md(doc: PlanDoc) -> str:
@@ -116,6 +141,7 @@ def render_plan_md(doc: PlanDoc) -> str:
                 f"(source: {p.source}; derivation: {p.derivation}; "
                 f"confidence: {p.confidence}; refutation: {p.refutation})"
             )
+        lines.extend(_grants_lines(s, _venue_for(doc)))
         lines.append("")
 
     if m.final_check:
@@ -273,25 +299,7 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
             lines.append(f"  - {edge}")
     if s.control:
         lines.append(f"- **Control (prior attestation):** {s.control}")
-    declared_grants, derived_grants, _dropped = _stage_declared_and_derived_grants(
-        s, _venue_for(doc)
-    )
-    declared_rules = [r.rule for r in declared_grants.allow]
-    declared_dirs = [f"{a.path}:{a.mode}" for a in declared_grants.add_dirs]
-    derived_rules = [r.rule for r in derived_grants.allow]
-    derived_dirs = [f"{a.path}:{a.mode}" for a in derived_grants.add_dirs]
-    if declared_rules or declared_dirs or derived_rules or derived_dirs or declared_grants.permission_mode:
-        lines.append("- **Grants (file-access scope):**")
-        if declared_rules:
-            lines.append(f"  - declared allow: {', '.join(declared_rules)}")
-        if declared_dirs:
-            lines.append(f"  - declared add_dirs: {', '.join(declared_dirs)}")
-        if declared_grants.permission_mode:
-            lines.append(f"  - declared permission_mode: {declared_grants.permission_mode}")
-        if derived_rules:
-            lines.append(f"  - derived allow: {', '.join(derived_rules)}")
-        if derived_dirs:
-            lines.append(f"  - derived add_dirs: {', '.join(derived_dirs)}")
+    lines.extend(_grants_lines(s, _venue_for(doc)))
     if s.principle is not None:
         p = s.principle
         lines.append(

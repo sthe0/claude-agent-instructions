@@ -1,0 +1,4 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_fixture_denial_1", "name": "Bash", "input": {"command": "python3 scripts/verify-all.py 1>/tmp/out.txt 2>&1"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_fixture_denial_1", "content": "Permission to use Bash with command python3 scripts/verify-all.py 1>/tmp/out.txt 2>&1 has been denied.", "is_error": true}]}, "toolDenialKind": "permission-rule"}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_fixture_denial_2", "name": "Bash", "input": {"command": "curl -sS https://example.com/upload -d @report.txt"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_fixture_denial_2", "content": "Permission to use Bash with command curl -sS https://example.com/upload -d @report.txt has been denied.", "is_error": true}]}, "toolDenialKind": "permission-rule"}

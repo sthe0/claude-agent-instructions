@@ -12,6 +12,9 @@ materialization defect vs an uncovered one to a genuine user ask.
 """
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 from argparse import Namespace
 
@@ -26,7 +29,7 @@ from agentctl.grants import (
     validate_add_dir,
     validate_rule,
 )
-from lib import config_root
+from lib import config_root, widening_targets
 
 
 def ns(**kw):
@@ -40,10 +43,14 @@ _ACCEPTED_RULES = [
     "Bash(git status)",
     "Bash(python3 scripts/tests/test_foo.py:*)",
     "Bash(python3 -m pytest scripts/tests -q:*)",
-    # A `;` inside a single-quoted argument is inert to the shell and must not
-    # be mistaken for a real top-level separator -- regression pin for the
-    # quote-unaware segmentation bug DR-V's derivation hit.
-    "Bash(python -c 'import mod; assert True':*)",
+    # `-m <module>` naming an ordinary (non-launcher) module is accepted --
+    # only a module itself capable of launching arbitrary code is refused
+    # (finding B1).
+    "Bash(python3 -m json.tool data.json:*)",
+    # A redirect-merge form (`2>&1`) must not be mistaken for a top-level
+    # `&`-separator and split into a bogus 2-segment compound command
+    # (finding S1).
+    "Bash(pytest -q 2>&1:*)",
     "Edit(//home/user/repo/scripts/foo.py)",
     "Read(//home/user/repo/README.md)",
     "WebFetch(domain:code.claude.com)",
@@ -55,6 +62,15 @@ _REFUSED_RULES = [
     "Bash()",
     "Bash( :*)",
     "Bash(claude --print hi:*)",
+    # finding B1: a wrapper token stripped before judging the program --
+    # a wrapped `claude` invocation is refused via the same check as the
+    # bare form above, now that sudo/doas/xargs/eval/time/nice/stdbuf are
+    # wrapper tokens too.
+    "Bash(sudo claude --print hi:*)",
+    "Bash(doas claude --print hi:*)",
+    "Bash(time claude --print hi:*)",
+    "Bash(nice claude --print hi:*)",
+    "Bash(stdbuf claude --print hi:*)",
     # `agentctl_user_authority_call` only recognizes `python -m agentctl <verb>`
     # or a path literally ending `agentctl-cli.py <verb>` -- not the module
     # file `scripts/agentctl/cli.py` (a different, non-recognized spelling).
@@ -87,6 +103,27 @@ _REFUSED_RULES = [
     "Bash(eval:*)",
     "Bash(sudo:*)",
     "Bash(xargs:*)",
+    # finding B1 (interpreter allowlist): a `-c`/`-e` flag WITH an argument is
+    # refused just as readily as the bare trailing form above -- the flag
+    # itself is the danger, not merely its absence of an operand. A `;`
+    # inside the single-quoted argument is inert to the shell and must not
+    # be mistaken for a real top-level separator -- also the regression pin
+    # for the quote-unaware segmentation bug DR-V's derivation hit (this
+    # rule used to be in _ACCEPTED_RULES before the allowlist rework).
+    "Bash(python -c 'import mod; assert True':*)",
+    "Bash(python3 -c 'import os; os.system(1)':*)",
+    # finding B1: `-m <module>` naming a module that is ITSELF a launcher
+    # (runpy/code/pip/...) is refused -- it turns the interpreter into an
+    # unbounded shell/REPL-equivalent even though the rule text names a
+    # "module", not raw inline code.
+    "Bash(python3 -m runpy foo.py:*)",
+    "Bash(python3 -m pip install x:*)",
+    "Bash(python3 -m code:*)",
+    # finding B1: `awk`/`find ... -exec` are refused unconditionally --
+    # each is a DSL (or a find-clause) with an unbounded command-execution
+    # primitive, regardless of the specific arguments named.
+    "Bash(awk '{print}' file:*)",
+    "Bash(find . -exec rm {} \\;:*)",
     # finding #2: a wildcarded agentctl invocation naming no verb covers every
     # verb at materialization time, including a user-authority one.
     "Bash(python3 -m agentctl:*)",
@@ -106,10 +143,27 @@ _REFUSED_RULES = [
     "Edit(//**)",
     "Edit(**)",
     "Edit(//home/the0/**)",
+    # finding B2: `?` (single-char wildcard) and `[...]` (character class)
+    # are glob metacharacters too, not only `*` -- each can expand to match
+    # an unpredictable set of real paths at materialization time.
+    "Edit(//home/user/repo/scripts/foo?.py)",
+    "Edit(//home/user/repo/scripts/fo[o].py)",
+    "Edit(//home/user/repo/scripts/{foo,bar}.py)",
     # A `..` segment must not carry a rule past the protected-target check:
     # the harness form `//abs` decodes to `/abs` before normalization.
     f"Edit(//{str(config_root.agentctl_state_dir()).lstrip('/')}/../state/s.json)",
     f"Edit(//{str(config_root.harness_config_root()).lstrip('/')}/x/../settings.json)",
+    # finding N3: a path under a `.git` directory (git hooks are an
+    # executable, supply-chain-relevant surface) is refused, matching the
+    # same exclusion `_resolve_for_match` already applies on the coverage
+    # side.
+    "Edit(//home/user/repo/.git/hooks/pre-commit)",
+    # finding B3: an output redirect (`>`/`>>`) in a declared Bash rule
+    # whose destination is a G-target is refused, even when the invoked
+    # program itself is not one of the write-capable programs checked
+    # above.
+    "Bash(echo hi > ~/.claude/settings.json:*)",
+    f"Bash(echo hi >> {config_root.agentctl_state_dir()}/session.json:*)",
 ]
 
 
@@ -625,4 +679,199 @@ def test_dispatch_permission_request_promotes_existing_transcript_miss_not_a_dup
     only = state.planning_misses[0]
     assert only["source"] == "transcript"
     assert only["asked_user"] is True
-    assert only["action"] == "need to run verify-all"
+
+
+def test_dispatch_permission_request_disambiguates_between_two_transcript_misses(
+    store, fixtures_dir,
+):
+    """Finding S2 regression: two prior transcript denials sit in
+    `planning_misses` (e.g. one Bash call, one unrelated one). The
+    PERMISSION-REQUEST branch's self-reported `Rule:` line must promote the
+    ONE row whose raw command is a prefix match for the rule's parsed
+    command, not the most-recently-appended row and not a fresh duplicate."""
+    sid = "perm-request-disambiguates-two-misses"
+    _to_executing(store, sid, fixtures_dir)
+    transcript_path = fixtures_dir / "transcript_stops" / "two-permission-denials.jsonl"
+
+    def runner(argv, cwd=None):
+        return RunResult(
+            0,
+            stdout=(
+                "PERMISSION-REQUEST: need to run verify-all\n"
+                "Rule: Bash(python3 scripts/verify-all.py:*)\n"
+            ),
+            stderr=f"spawn-specialist: transcript={transcript_path}\n",
+        )
+
+    directive = cli.cmd_dispatch(
+        ns(session=sid, budget="medium", complexity="medium", dry_run=False),
+        store=store, runner=runner,
+    )
+    assert directive.marker == "PERMISSION-REQUEST"
+    state = store.load(sid)
+    assert not state.materialization_defects
+    # Both transcript denials are recorded (one promoted, one untouched) --
+    # never a spurious third row for the promoted one.
+    assert len(state.planning_misses) == 2
+    promoted = [
+        row for row in state.planning_misses
+        if row["command"].startswith("python3 scripts/verify-all.py")
+    ]
+    assert len(promoted) == 1
+    assert promoted[0]["asked_user"] is True
+    other = [row for row in state.planning_misses if row is not promoted[0]]
+    assert len(other) == 1
+    assert other[0]["asked_user"] is False
+
+
+def test_dispatch_permission_request_routes_via_transcript_covered_evidence(
+    store, fixtures_dir,
+):
+    """S3 regression: the PERMISSION-REQUEST branch's `transcript_covered` path
+    (evidence="transcript") is reachable independently of `self_covered`
+    (evidence="self-reported") -- the child's own marker asks about a DIFFERENT
+    action with no `Rule:` line (so `self_covered` is False), but the transcript
+    already recorded a covered denial for `python3 scripts/verify-all.py` (this
+    fixture is shared with the promotion test above). `_diagnose_materialization_defect`
+    must fire with evidence="transcript", and no duplicate row is appended for
+    the same tool_use_id."""
+    sid = "perm-request-transcript-covered-evidence"
+    _to_executing(store, sid, fixtures_dir)
+    transcript_path = fixtures_dir / "transcript_stops" / "permission-denial.jsonl"
+
+    def runner(argv, cwd=None):
+        return RunResult(
+            0,
+            stdout="PERMISSION-REQUEST: need to do something unrelated\n",
+            stderr=f"spawn-specialist: transcript={transcript_path}\n",
+        )
+
+    directive = cli.cmd_dispatch(
+        ns(session=sid, budget="medium", complexity="medium", dry_run=False),
+        store=store, runner=runner,
+    )
+    assert directive.marker == "OVERCOME-DIFFICULTY"
+    state = store.load(sid)
+    assert len(state.materialization_defects) == 1
+    assert state.materialization_defects[0]["evidence"] == "transcript"
+    assert state.permission_request is None
+    assert not state.planning_misses
+
+
+# --- (5) B4: SETTINGS_REFERENCE_CLASSIFICATION -------------------------------
+
+# The same shape widening_targets.enumerate_live_settings/is_live_settings
+# match against a real path, applied here as a plain-text scan so this test
+# needs no filesystem I/O beyond reading the repo's own source: any non-test
+# .py/.sh file whose text names a `settings*.json`-shaped string is a hit.
+_SETTINGS_REFERENCE_RE = re.compile(r"settings[^/\s\"'`]*\.json")
+
+# Finding B4: every non-test file this repo's own scripts/ tree contains that
+# names a `settings*.json`-shaped path, classified by what it actually does
+# with that reference -- "writer" (mutates a live settings*.json document, or
+# directly orchestrates a script that does), "reader" (reads/parses/greps a
+# live settings*.json document without writing it), or "mention" (the string
+# appears only in a docstring/comment/path-helper -- no I/O on the file's
+# content). A newly added settings-writing script fails
+# test_settings_reference_classification_has_no_unclassified_hit until it is
+# added here too.
+SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
+    "agentctl/cli.py": "reader",
+    "agentctl/classify.py": "mention",
+    "agentctl/exempt_paths.py": "mention",
+    "apply-mcp-local.sh": "writer",
+    "apply-settings.sh": "writer",
+    "doctor.sh": "reader",
+    "hook-canon-guard-wired-check.py": "reader",
+    "hook-guard-canon-readonly.py": "mention",
+    "hook-instructions-refresh-due.py": "reader",
+    "install-reminder-hooks.sh": "writer",
+    "lib/config_root.py": "mention",
+    "lib/dispatch_witness_snapshot.py": "mention",
+    "lib/hook_wiring.py": "writer",
+    "lib/host_llm.py": "reader",
+    "lib/widening_targets.py": "reader",
+    "lint-settings-base.py": "mention",
+    "migrate-to-isolated.sh": "mention",
+    "self-diagnose.py": "reader",
+    "set-context-cap.sh": "writer",
+    "setup-symlinks.sh": "writer",
+    "spawn-specialist.py": "writer",
+    "sync-instructions-repo.sh": "writer",
+    "verify-judge-isolation.py": "writer",
+}
+
+
+def _settings_referencing_files(scripts_root: Path) -> set[str]:
+    """Every non-test `.py`/`.sh` file under `scripts_root` whose text names a
+    `settings*.json`-shaped path -- the population
+    SETTINGS_REFERENCE_CLASSIFICATION above must classify exactly."""
+    hits: set[str] = set()
+    for pattern in ("*.py", "*.sh"):
+        for path in scripts_root.rglob(pattern):
+            rel = path.relative_to(scripts_root)
+            if rel.parts[0] == "tests":
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if _SETTINGS_REFERENCE_RE.search(text):
+                hits.add(rel.as_posix())
+    return hits
+
+
+def test_settings_reference_classification_has_no_unclassified_hit():
+    scripts_root = Path(__file__).resolve().parent.parent
+    hits = _settings_referencing_files(scripts_root)
+    classified = set(SETTINGS_REFERENCE_CLASSIFICATION)
+    unclassified = hits - classified
+    assert not unclassified, (
+        "settings*.json-referencing file(s) missing from "
+        f"SETTINGS_REFERENCE_CLASSIFICATION: {sorted(unclassified)}"
+    )
+    stale = classified - hits
+    assert not stale, (
+        "SETTINGS_REFERENCE_CLASSIFICATION names file(s) that no longer "
+        f"reference settings*.json: {sorted(stale)}"
+    )
+
+
+def test_settings_channel_programs_covers_every_sh_writer():
+    """Every `.sh` file classified "writer" above either IS a
+    SETTINGS_CHANNEL_PROGRAMS entry or is excluded from that unconditional-
+    refusal set for a reason outside this table's scope (none currently are)
+    -- the two lists name settings-mutating entry points from two directions
+    and must not silently drift apart."""
+    writer_sh_basenames = {
+        Path(rel).name
+        for rel, verdict in SETTINGS_REFERENCE_CLASSIFICATION.items()
+        if verdict == "writer" and rel.endswith(".sh")
+    }
+    assert writer_sh_basenames <= widening_targets.SETTINGS_CHANNEL_PROGRAMS
+
+
+# --- (6) S3: enumerate_live_settings ignores a non-four-location file ------
+
+def test_enumerate_live_settings_ignores_non_four_location_settings_file(tmp_path, monkeypatch):
+    """`enumerate_live_settings` only reports the four named locations (agent
+    home, harness config root, and each of child/root cwd's `.claude` dir) --
+    a settings*.json sitting in some OTHER directory (e.g. a sibling checkout
+    this dispatch never touches) must never appear, even though
+    `is_live_settings` (the broader refusal predicate) would still refuse a
+    grant naming it directly."""
+    agent_home = tmp_path / "agent_home"
+    harness_home = tmp_path / "harness_home"
+    child_cwd = tmp_path / "child_repo"
+    root_cwd = tmp_path / "root_repo"
+    other = tmp_path / "unrelated_checkout" / ".claude"
+    for d in (agent_home, harness_home, child_cwd / ".claude", root_cwd / ".claude", other):
+        d.mkdir(parents=True)
+        (d / "settings.json").write_text("{}")
+
+    monkeypatch.setattr(config_root, "agent_home", lambda: agent_home)
+    monkeypatch.setattr(config_root, "harness_config_root", lambda: harness_home)
+
+    found = widening_targets.enumerate_live_settings(str(child_cwd), str(root_cwd))
+
+    other_settings = str((other / "settings.json").resolve())
+    assert other_settings not in found
+    assert len(found) == 4
+    assert widening_targets.is_live_settings(str(other / "settings.json"))

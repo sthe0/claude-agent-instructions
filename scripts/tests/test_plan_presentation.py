@@ -15,7 +15,7 @@ import pytest
 
 from agentctl import cli, delivery, gates
 from agentctl.delivery import DeliveryStamp
-from agentctl.plan import load_plan
+from agentctl.plan import grants_sha256, load_plan, plan_has_any_grants
 from agentctl.render import render_plan_grants
 from agentctl.state import (
     Node,
@@ -399,6 +399,31 @@ def test_present_plan_over_cap_rejected_not_truncated(store, fixtures_dir, tmp_p
     assert store.load(sid).plan_presentations == []
 
 
+def test_present_plan_essence_missing_grants_block_rejected_nothing_stamped(
+    store, fixtures_dir, tmp_path, gate_on
+):
+    """`plan_two_stage.toml` derives a grant on both stages (DR-O from each
+    stage's `output_artifacts`), so `plan_has_any_grants` is True and the
+    essence rendering must contain the COMPACT grants projection verbatim —
+    an essence written without it (unlike every other test in this file,
+    which goes through `_write_rendering`/`_grants_blocks`) is refused and
+    stamps nothing."""
+    sid = "pp5"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_plan_ready(store, sid, plan)
+    rendering = tmp_path / "rendering.txt"
+    rendering.write_text("Summary of the plan.\n", encoding="utf-8")
+
+    d = cli.cmd_present_plan(
+        ns(session=sid, kind="essence", rendering_file=str(rendering), emit_skeleton=False),
+        store=store,
+    )
+    assert d.ok is False
+    assert "omits the grants block" in d.detail
+    assert "grants_block" in d.data
+    assert store.load(sid).plan_presentations == []
+
+
 # --- receipt-side blockers (unit level) ----------------------------------------
 
 def _subst(**kw) -> SessionState:
@@ -480,6 +505,114 @@ def test_content_hash_empty_stored_hash_is_path_only(gate_on, tmp_path):
     s = _subst(plan_path=str(plan), plan_presentations=[pp])
     blockers = gates.plan_presentation_blockers(s, str(plan))
     assert blockers and "delivery proof" in blockers[0]
+
+
+# --- grants_approval_blockers (S3: approve refusing a stale grants_sha256) ----
+
+def test_grants_approval_blockers_stale_digest_blocks(fixtures_dir, gate_on):
+    """`plan_two_stage.toml` derives a grant on both stages (DR-O), so a
+    receipt whose bound `grants_sha256` no longer matches the plan's current
+    effective grant set must refuse `approve` — the materialization-layer
+    (or out-of-band plan edit) drift `grants_approval_blockers` exists to
+    catch, distinct from `plan_presentation_blockers`' own staleness check."""
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    doc = load_plan(plan)
+    assert plan_has_any_grants(doc)
+    pp = PlanPresentation(
+        plan_path=plan, kind="essence", plan_sha256=_sha256_file(plan),
+        rendering_sha256="r", rendering_text="t", presented_ts=1.0,
+        grants_sha256="stale-digest-does-not-match",
+    )
+    blockers = gates.grants_approval_blockers(_subst(plan_presentations=[pp]), plan)
+    assert blockers and "grant set changed" in blockers[0]
+
+
+def test_grants_approval_blockers_missing_digest_blocks_fail_closed(fixtures_dir, gate_on):
+    """A pre-schema-36 receipt has no `grants_sha256` at all (`None`) --
+    treated as "never bound", not "matches", per the field's fail-closed
+    docstring."""
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    pp = PlanPresentation(
+        plan_path=plan, kind="essence", plan_sha256=_sha256_file(plan),
+        rendering_sha256="r", rendering_text="t", presented_ts=1.0,
+    )
+    assert pp.grants_sha256 is None
+    blockers = gates.grants_approval_blockers(_subst(plan_presentations=[pp]), plan)
+    assert blockers and "grant set changed" in blockers[0]
+
+
+def test_grants_approval_blockers_matching_digest_passes(fixtures_dir, gate_on):
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    doc = load_plan(plan)
+    pp = PlanPresentation(
+        plan_path=plan, kind="essence", plan_sha256=_sha256_file(plan),
+        rendering_sha256="r", rendering_text="t", presented_ts=1.0,
+        grants_sha256=grants_sha256(doc),
+    )
+    assert gates.grants_approval_blockers(_subst(plan_presentations=[pp]), plan) == []
+
+
+def test_grants_approval_blockers_passes_across_pure_retitle(fixtures_dir, gate_on):
+    # A stage retitle is a cosmetic refinement (CLAUDE.md's "Substantive plan
+    # changes" refinement carve-out) -- it must not perturb the stage's derived
+    # grant set, so a grants_sha256 stamped against the ORIGINAL title still
+    # matches after the plan file is swapped for the retitled fixture (the two
+    # fixtures differ ONLY in stage 1's title, confirmed by diff).
+    original = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    retitled = str(fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
+    original_doc = load_plan(original)
+    retitled_doc = load_plan(retitled)
+    assert grants_sha256(original_doc) == grants_sha256(retitled_doc)
+
+    pp = PlanPresentation(
+        plan_path=retitled, kind="essence", plan_sha256=_sha256_file(retitled),
+        rendering_sha256="r", rendering_text="t", presented_ts=1.0,
+        grants_sha256=grants_sha256(original_doc),
+    )
+    assert gates.grants_approval_blockers(_subst(plan_path=retitled, plan_presentations=[pp]), retitled) == []
+
+
+def test_grants_approval_blockers_fails_open_when_plan_grants_nothing(tmp_path, gate_on):
+    plan = tmp_path / "plan.toml"
+    plan.write_text(
+        "[meta]\n"
+        "weight_class = \"small_change\"\n"
+        "task_id = \"no-grants-demo\"\n"
+        "goal = \"g\"\n"
+        "done_criterion = \"d\"\n"
+        "criterion_type = \"measurable\"\n"
+        "\n"
+        "[[stage]]\n"
+        "index = 1\n"
+        "title = \"Look something up\"\n"
+        "executor = \"in_thread\"\n"
+        "expected_result_image = \"result\"\n"
+        "criterion_type = \"measurable\"\n"
+        "done_criterion = \"done\"\n"
+    )
+    doc = load_plan(str(plan))
+    assert not plan_has_any_grants(doc)
+    pp = PlanPresentation(
+        plan_path=str(plan), kind="essence", plan_sha256=_sha256_file(plan),
+        rendering_sha256="r", rendering_text="t", presented_ts=1.0,
+    )
+    s = _subst(plan_path=str(plan), plan_presentations=[pp])
+    # No grants_sha256 bound and none needed -- a comparison is meaningless
+    # against a plan that grants nothing, so this fails open ([]).
+    assert gates.grants_approval_blockers(s, str(plan)) == []
+
+
+def test_grants_approval_blockers_fails_open_on_unparseable_plan(tmp_path, gate_on):
+    plan = tmp_path / "plan.toml"
+    plan.write_text("not a valid plan\n")
+    pp = PlanPresentation(
+        plan_path=str(plan), kind="essence", plan_sha256=_sha256_file(plan),
+        rendering_sha256="r", rendering_text="t", presented_ts=1.0,
+    )
+    s = _subst(plan_path=str(plan), plan_presentations=[pp])
+    # load_plan raises on this content -> fails open ([]), trusting
+    # plan_presentation_blockers/plan_review_blockers to name the real problem.
+    assert gates.grants_approval_blockers(s, str(plan)) == []
 
 
 # --- delivery-side blockers (unit level, real sidecar via home_store) ---------

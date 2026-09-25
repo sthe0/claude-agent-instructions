@@ -151,6 +151,26 @@ def _digest(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
 
 
+def _bash_rule_command_from_call(call: tuple[str, dict] | None) -> str | None:
+    """The parsed Bash rule's command text from a self-reported
+    `Rule: Bash(<command>:*)` call, or `None` for a non-Bash call (a
+    transcript denial row is Bash-only — see `_classify_transcript_
+    denials` — so a non-Bash call can never match one). Used to match a
+    self-reported PERMISSION-REQUEST against the specific transcript row
+    for the SAME denial, by checking that the row's own stored raw
+    command starts with this rule text — mirroring `_segment_covered`'s
+    wildcard-prefix semantics. Deliberately a PREFIX check, not a digest
+    equality check: the rule a child names is typically a narrower
+    stand-in for the actual invoked command (extra redirects, arguments a
+    `:*` wildcard was meant to admit), so a byte-identical match between
+    the rule's command and the transcript's raw command would almost
+    never hold even for the correct row."""
+    if call is None or call[0] != "Bash":
+        return None
+    command = call[1].get("command") if isinstance(call[1], dict) else None
+    return command if isinstance(command, str) and command.strip() else None
+
+
 def _plan_file_sha256(target: str | None) -> str:
     """sha256 of a plan file's bytes, or '' when there is no readable file (#16).
 
@@ -4630,12 +4650,32 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         # Promote that row in place rather than appending a second one for
         # the same event -- search only the rows THIS dispatch call added
         # (`_misses_before:`), most-recent first, since an earlier stage's
-        # unrelated miss must never be touched.
+        # unrelated miss must never be touched. A single dispatch call can
+        # legitimately add MULTIPLE unasked transcript rows (one per denial
+        # stop in the transcript), so "most recent unasked" alone is not
+        # enough to identify the SAME denial the self-report names --
+        # require the row's own stored `command` to be prefixed by this
+        # call's rule command (via `_bash_rule_command_from_call`); a
+        # `None` call command (no Rule: line, or a non-Bash call) never
+        # promotes, since it cannot be confirmed to be the same event, and
+        # appending a second row is a cheaper mistake than silently
+        # mutating the wrong denial's row.
+        _call_command = _bash_rule_command_from_call(call)
         _promoted = None
-        for _row in reversed(state.planning_misses[_misses_before:]):
-            if _row.get("source") == "transcript" and not _row.get("asked_user"):
-                _promoted = _row
-                break
+        if _call_command is not None:
+            for _row in reversed(state.planning_misses[_misses_before:]):
+                _row_command = _row.get("command")
+                if (
+                    _row.get("source") == "transcript"
+                    and not _row.get("asked_user")
+                    and isinstance(_row_command, str)
+                    and (
+                        _row_command == _call_command
+                        or _row_command.startswith(_call_command + " ")
+                    )
+                ):
+                    _promoted = _row
+                    break
         if _promoted is not None:
             _promoted["asked_user"] = True
             _promoted["action"] = action
@@ -4882,7 +4922,13 @@ def _classify_transcript_denials(
             continue
         row_base = {
             "stage_index": stage.index, "tool_use_id": use.tool_use_id,
-            "tool_name": "Bash", "tool_input_digest": _digest(use.command), "ts": _utcnow(),
+            "tool_name": "Bash", "tool_input_digest": _digest(use.command),
+            # The raw command text itself, not just its digest -- needed so
+            # `cmd_dispatch`'s promotion logic (finding S2) can match a
+            # later self-reported Rule: line against this SPECIFIC row by
+            # prefix (`_bash_rule_command_from_call`), which a digest alone
+            # cannot support since the two texts are rarely byte-identical.
+            "command": use.command, "ts": _utcnow(),
         }
         if _grants.grant_covers_call(coverage, "Bash", {"command": use.command}):
             state.materialization_defects.append({**row_base, "evidence": "transcript"})

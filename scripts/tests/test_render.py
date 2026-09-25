@@ -137,27 +137,58 @@ def _grants_doc():
     return parse_plan(data, strict=False)
 
 
-def test_render_plan_md_never_renders_grants():
-    # render_plan_md is the whole-plan, brief-per-stage summary -- grants
-    # detail belongs to the single-stage brief and the dedicated grants
-    # projections, not to a view that must stay small across many stages.
+def test_render_plan_md_renders_grants_per_stage():
+    # render_plan_md now renders each stage's grants block (finding S4) via
+    # the same `_grants_lines` helper `render_stage_brief` uses, so a reader
+    # of the whole-plan view can audit a stage's file-access scope without
+    # opening the single-stage brief for every stage in turn.
     doc = _grants_doc()
     md = render_plan_md(doc)
-    assert "Bash(git status:*)" not in md
+    assert "Grants (file-access scope)" in md
+    assert "Bash(git status:*)" in md
+
+
+def test_render_plan_md_omits_grants_block_when_stage_has_none():
+    data = {
+        "meta": {
+            "task_id": "render-no-grants-test",
+            "goal": "g",
+            "done_criterion": "d",
+            "criterion_type": "measurable",
+            "weight_class": "substantive",
+            "external_research": "n/a",
+        },
+        "stage": [
+            {
+                "index": 1,
+                "title": "Stage one",
+                "executor": "in_thread",
+                "expected_result_image": "result",
+                "criterion_type": "measurable",
+                "done_criterion": "done",
+            }
+        ],
+    }
+    doc = parse_plan(data, strict=False)
+    md = render_plan_md(doc)
     assert "Grants (file-access scope)" not in md
 
 
 def test_render_stage_brief_and_render_plan_grants_agree_on_declared_and_derived_rules():
-    # render_stage_brief and render_plan_grants (fmt="full") both project the
-    # SAME `_stage_declared_and_derived_grants` call for stage 1 -- they
-    # must never disagree on which declared/derived rules exist, since
-    # each pulls from the one shared helper rather than re-deriving.
+    # render_stage_brief, render_plan_md, and render_plan_grants (fmt="full")
+    # all project the SAME `_stage_declared_and_derived_grants` call for
+    # stage 1 -- they must never disagree on which declared/derived rules
+    # exist, since each pulls from the one shared helper rather than
+    # re-deriving.
     doc = _grants_doc()
     brief = render_stage_brief(doc, 1)
+    plan_md = render_plan_md(doc)
     grants_full = render_plan_grants(doc, fmt="full")
     assert "Bash(git status:*)" in brief
+    assert "Bash(git status:*)" in plan_md
     assert "Bash(git status:*)" in grants_full
     assert "python3 scripts/foo.py" in brief
+    assert "python3 scripts/foo.py" in plan_md
     assert "python3 scripts/foo.py" in grants_full
 
 

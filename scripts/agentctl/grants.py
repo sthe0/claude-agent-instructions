@@ -32,7 +32,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from lib import shell_tokens, widening_targets
+from lib import bash_write_targets, shell_tokens, widening_targets
 
 # --- data shapes -------------------------------------------------------------
 
@@ -129,7 +129,67 @@ _WRITE_CAPABLE_PROGRAMS = frozenset(
 # Bare interpreter/launcher without a script (or `-m module`) operand:
 # `python3` alone, `bash` alone, `sh` alone — refused, since such a rule
 # would grant an unbounded interactive-equivalent invocation surface.
-_INTERPRETERS = frozenset({"bash", "sh", "zsh", "python", "python3", "node", "ruby", "perl"})
+_INTERPRETERS = frozenset({"bash", "sh", "zsh", "dash", "python", "python3", "node", "ruby", "perl"})
+
+# The interpreter-operand ALLOWLIST (finding B1): an interpreter rule is
+# accepted only with a script-file operand or `-m <module>` naming a module
+# NOT in this launcher set — a launcher module turns the interpreter into an
+# unbounded shell/REPL-equivalent even though the rule text names a "module",
+# not raw inline code.
+_LAUNCHER_MODULES = frozenset({"runpy", "code", "pip", "pip3", "pdb", "ensurepip", "venv"})
+
+# A flag that admits inline code/expression text rather than naming a script
+# file — `python3 -c ...`, `node -e ...`, `sh -c ...` — refused regardless of
+# position, since ANY such flag makes the rule's actual command unbounded at
+# materialization time (the old check only looked at a TRAILING bare flag).
+_DANGEROUS_INTERPRETER_SHORT_FLAGS = frozenset({"-c", "-e", "-p"})
+_DANGEROUS_INTERPRETER_LONG_FLAGS = frozenset({"--eval", "--print", "--command"})
+# Characters that make a COMBINED short-flag cluster dangerous even when no
+# single token exactly matches the set above — e.g. bash's `-ic` (interactive
+# + `-c`) or node's `-pe`.
+_DANGEROUS_INTERPRETER_FLAG_CHARS = frozenset({"c", "e", "p"})
+
+# Programs whose entire job is a DSL with an unbounded command-execution
+# primitive — refused unconditionally, in every invocation form, regardless
+# of arguments (finding B1: "awk:* refused").
+_UNCONDITIONALLY_REFUSED_PROGRAMS = frozenset({"awk", "gawk", "nawk", "mawk"})
+
+# `find ... -exec/-execdir/-ok/-okdir ...` runs an arbitrary command per
+# matched file — refused unconditionally (finding B1: "find ... -exec:*
+# refused"), regardless of which other find flags/paths are also present.
+_FIND_EXEC_FLAGS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
+
+
+def _interpreter_operand_is_dangerous(operand_tokens: list[str]) -> bool:
+    """True iff `operand_tokens` (the tokens after an interpreter/launcher
+    program name) contain a flag that admits inline code/expression text
+    rather than naming a script file, either as an exact flag token or as a
+    character inside a combined short-flag cluster."""
+    for tok in operand_tokens:
+        if tok in _DANGEROUS_INTERPRETER_SHORT_FLAGS or tok in _DANGEROUS_INTERPRETER_LONG_FLAGS:
+            return True
+        if tok.startswith("-") and not tok.startswith("--") and len(tok) > 1:
+            if any(ch in _DANGEROUS_INTERPRETER_FLAG_CHARS for ch in tok[1:]):
+                return True
+    return False
+
+
+def _interpreter_operand_named_module(operand_tokens: list[str]) -> str | None:
+    """The module name if `operand_tokens` contains `-m <module>`, else
+    `None`."""
+    for i, tok in enumerate(operand_tokens):
+        if tok == "-m" and i + 1 < len(operand_tokens):
+            return operand_tokens[i + 1]
+    return None
+
+
+def _has_positional_operand(operand_tokens: list[str]) -> bool:
+    """True iff `operand_tokens` names at least one non-flag token — the
+    allowlist's script-file-operand floor. Does not itself distinguish a
+    flag's own value from a genuine script path; `_interpreter_operand_is_
+    dangerous` above is what actually gates safety on the inline-code flags,
+    this only checks that SOMETHING besides flags was named."""
+    return any(not tok.startswith("-") for tok in operand_tokens)
 
 
 def rule_file_path(arg: str) -> str:
@@ -137,6 +197,15 @@ def rule_file_path(arg: str) -> str:
     absolute path `/abs`; a single leading `/` or no slash is project-relative
     and is returned as written, for callers to treat as unresolvable."""
     return "/" + arg.lstrip("/") if arg.startswith("//") else arg
+
+
+def rule_file_arg(abs_path: str) -> str:
+    """Encode an absolute path as a file-tool rule's `//`-prefixed argument —
+    the inverse of `rule_file_path`. `abs_path` already starts with `/`, so
+    naively prefixing another literal `"//"` would produce a triple-slash
+    argument spawn-specialist.py's own parsing does not recognize; `lstrip`
+    strips ALL of `abs_path`'s own leading slashes first."""
+    return "//" + abs_path.lstrip("/")
 
 
 def rule_program_and_arg(rule: str) -> tuple[str, str] | None:
@@ -242,39 +311,48 @@ def validate_rule(rule: str) -> None:
     prog = widening_targets.program_name(stripped[0])
     operand_tokens = stripped[1:]
 
+    if prog in _UNCONDITIONALLY_REFUSED_PROGRAMS:
+        raise GrantValidationError(
+            f"rule {rule!r} invokes {prog!r}, a DSL with an unbounded "
+            f"command-execution primitive — refused unconditionally"
+        )
+    if prog == "find" and any(tok in _FIND_EXEC_FLAGS for tok in operand_tokens):
+        raise GrantValidationError(
+            f"rule {rule!r} invokes find with -exec/-execdir/-ok/-okdir — runs an "
+            f"arbitrary command per matched file — refused unconditionally"
+        )
+
     is_interpreter = prog in _INTERPRETERS or widening_targets.INTERPRETER_RE.match(prog)
-    if is_interpreter and not operand_tokens:
-        raise GrantValidationError(
-            f"rule {rule!r} is a bare interpreter/launcher with no script operand — refused"
-        )
-
-    # A trailing `-c`/`-e`/`-m` with nothing after it is operand-less: at
-    # materialization time a `:*` wildcard would let the actual child process
-    # supply arbitrary inline code/module/expression text the rule text never
-    # named. Refused regardless of the wildcard suffix — a bare flag with no
-    # argument is meaningless/dangerous even without one.
-    _UNBOUNDED_INTERPRETER_FLAGS = frozenset({"-c", "-e", "-m"})
-    if (
-        is_interpreter
-        and operand_tokens
-        and operand_tokens[-1] in _UNBOUNDED_INTERPRETER_FLAGS
-    ):
-        raise GrantValidationError(
-            f"rule {rule!r} names interpreter flag {operand_tokens[-1]!r} with no "
-            f"argument — an unbounded inline-code/module surface — refused"
-        )
-
-    # `eval`/`sudo`/`xargs` with no operand at all is a bare launcher: it
-    # names no concrete downstream command for this validator to have
-    # checked, so it stands for an unbounded invocation surface.
-    _BARE_LAUNCHER_PROGRAMS = frozenset({"eval", "sudo", "xargs"})
-    if prog in _BARE_LAUNCHER_PROGRAMS and not operand_tokens:
-        raise GrantValidationError(
-            f"rule {rule!r} names bare launcher {prog!r} with no operand — refused"
-        )
+    if is_interpreter:
+        # Allowlist (finding B1): an interpreter rule is accepted ONLY with a
+        # script-file operand, or `-m <module>` naming a module that is not
+        # itself a launcher (runpy, code, pip, ...). Everything else about
+        # an interpreter invocation is refused — this replaces the old
+        # denylist, which only caught a bare trailing `-c`/`-e`/`-m` and
+        # missed e.g. `python3 -c 'code' extra_operand` or a combined
+        # short-flag cluster like `-ic`.
+        if _interpreter_operand_is_dangerous(operand_tokens):
+            raise GrantValidationError(
+                f"rule {rule!r} names an interpreter with an inline-code/eval/print "
+                f"flag — an unbounded invocation surface — refused"
+            )
+        named_module = _interpreter_operand_named_module(operand_tokens)
+        if named_module is not None:
+            if named_module in _LAUNCHER_MODULES:
+                raise GrantValidationError(
+                    f"rule {rule!r} names interpreter module {named_module!r}, itself "
+                    f"a launcher — an unbounded invocation surface — refused"
+                )
+        elif not _has_positional_operand(operand_tokens):
+            raise GrantValidationError(
+                f"rule {rule!r} is an interpreter/launcher with no script-file or "
+                f"`-m <module>` operand — refused"
+            )
 
     if prog in _WRITE_CAPABLE_PROGRAMS:
         _validate_write_capable_bash(rule, prog, operand_tokens, wildcard=wildcard)
+
+    _validate_no_redirect_to_g_target(rule, command)
 
 
 def _validate_write_capable_bash(
@@ -302,6 +380,25 @@ def _validate_write_capable_bash(
             )
 
 
+def _validate_no_redirect_to_g_target(rule: str, command: str) -> None:
+    """Refuse a Bash rule whose command contains an output redirect
+    (`>`/`>>`/`&>`/`>|`) whose destination is a G-target (finding B3).
+    `bash_write_targets.command_write_targets` is fail-open by construction
+    (its own docstring: "Fail-open (empty list) on any parse error —
+    matching every other consumer's convention in this hook family") — it
+    never raises, so no defensive try/except is needed here. `eff_cwd="/"`
+    is a neutral base: this validator has no venue/eff_cwd of its own (see
+    module docstring), and a relative redirect target resolved against `/`
+    still surfaces an absolute path that the G-target predicates can judge —
+    an in-venue relative target never resolves onto a protected root."""
+    for target in bash_write_targets.command_write_targets(command, "/"):
+        if _is_g_target_path(target):
+            raise GrantValidationError(
+                f"rule {rule!r} redirects output to {target!r}, a protected "
+                f"G-target — refused"
+            )
+
+
 def _looks_like_path(token: str) -> bool:
     return "/" in token or token.startswith("~")
 
@@ -316,15 +413,23 @@ def _is_g_target_path(path: str) -> bool:
     )
 
 
+_GLOB_METACHARS = frozenset({"*", "?", "[", "]", "{", "}"})
+
+
+def _is_under_git_dir(path: str) -> bool:
+    return ".git" in path.split("/")
+
+
 def _validate_non_bash_rule(rule: str, tool: str, arg: str) -> None:
     path = rule_file_path(arg)
     if not path.strip():
         raise GrantValidationError(
             f"rule {rule!r} ({tool}) names an empty path — refused"
         )
-    if "*" in path:
-        # A glob path (`Edit(//**)`, `Edit(**)`, `Edit(//home/the0/**)`, ...)
-        # can expand to match an unbounded — or merely unpredictable — set of
+    if any(ch in path for ch in _GLOB_METACHARS):
+        # A glob path (`Edit(//**)`, `Edit(//home/the0/file?.py)`,
+        # `Edit(//home/the0/[ab].py)`, `Edit(//home/the0/{a,b}.py)`, ...) can
+        # expand to match an unbounded — or merely unpredictable — set of
         # real paths at materialization time, including a protected root. A
         # per-prefix containment check would need to correctly reconstruct
         # the real absolute path from this rule's double-slash convention
@@ -336,6 +441,10 @@ def _validate_non_bash_rule(rule: str, tool: str, arg: str) -> None:
     if _is_g_target_path(path):
         raise GrantValidationError(
             f"rule {rule!r} ({tool} onto {path!r}) is a protected G-target — refused"
+        )
+    if _is_under_git_dir(path):
+        raise GrantValidationError(
+            f"rule {rule!r} ({tool} onto {path!r}) is under a .git directory — refused"
         )
 
 
@@ -430,6 +539,14 @@ def _raw_top_level_segments(command: str) -> list[str] | None:
             raw_segments.append(text[seg_start:i])
             i += 2
             seg_start = i
+            continue
+        if c == "&" and (
+            (i > 0 and text[i - 1] == ">") or (i + 1 < n and text[i + 1] == ">")
+        ):
+            # A redirect-merge form (`2>&1`, `>&2`, `&>`, `&>>`) — the `&`
+            # here is part of a redirection operator, not a background/
+            # sequencing separator; do not split on it (finding S1).
+            i += 1
             continue
         if c in _ONE_CHAR_SEGMENT_SEPARATORS:
             raw_segments.append(text[seg_start:i])
@@ -549,12 +666,7 @@ def derive_stage_grants(stage, *, venue: str) -> tuple[StageGrants, list[dict]]:
             if not _in_venue(artifact, venue):
                 continue
             abs_path = f"{venue.rstrip('/')}/{artifact}"
-            # An absolute-path Edit rule's form is a DOUBLE leading slash
-            # (`Edit(//abs/without/leading/slash)`, i.e. literally
-            # `"//" + path.lstrip("/")`) — `abs_path` already starts with
-            # "/", so naively prefixing another "//" produces a triple-slash
-            # rule spawn-specialist.py's own parsing does not recognize.
-            _try_rule(f"Edit(//{abs_path.lstrip('/')})", "derived:DR-E")
+            _try_rule(f"Edit({rule_file_arg(abs_path)})", "derived:DR-E")
 
     all_refs = (
         list(stage.subject.material_refs)
