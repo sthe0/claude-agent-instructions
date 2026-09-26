@@ -299,6 +299,16 @@ def _bash_tokens(rule: str) -> "list[str] | None":
 
 
 def test_p06_planner_research_rules_absolute_and_no_relative_baselines(plans, two_stage_plan, capsys):
+    """Scoped to the `planner` kind specifically (round 3): a planner's cwd is
+    normally OUTSIDE this repo, so a relative `scripts/foo.py` rule would
+    silently lose the grant -- every planner rule stays absolute-only. This
+    used to assert the same thing across every kind, but round 3 deliberately
+    gave `developer`/`code-reviewer` BOTH the absolute and the repo-relative
+    spelling of their script rules (`_abs_and_relative_script_rules`), since
+    those kinds' cwd normally IS this repo/worktree and the harness matches a
+    Bash rule against the literal command string with no path resolution --
+    only materializing both spellings keeps the engine's own coverage
+    accounting agreeing with what the harness will actually admit."""
     run = _dry_run(capsys, _base_argv("planner", two_stage_plan))
 
     assert run.rc == 0
@@ -306,11 +316,10 @@ def test_p06_planner_research_rules_absolute_and_no_relative_baselines(plans, tw
     assert PLANNER_LIST_DENIED_RULE in run.allow
 
     offenders = []
-    for kind, rules in MOD.KIND_BASELINES.items():
-        for rule in rules:
-            tokens = _bash_tokens(rule) or []
-            if any(t.startswith("scripts/") or t == "check-order-coverage.py" for t in tokens):
-                offenders.append((kind, rule))
+    for rule in MOD.KIND_BASELINES["planner"]:
+        tokens = _bash_tokens(rule) or []
+        if any(t.startswith("scripts/") or t == "check-order-coverage.py" for t in tokens):
+            offenders.append(("planner", rule))
     assert offenders == []
 
 

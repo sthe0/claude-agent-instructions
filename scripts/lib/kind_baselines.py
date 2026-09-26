@@ -65,6 +65,31 @@ PLANNER_CHECK_ORDER_COVERAGE_RULE = f"Bash(python3 {SCRIPTS_DIR}/check-order-cov
 PLANNER_PLAN_GRANTS_RULE = f"Bash(python3 {SCRIPTS_DIR}/agentctl-cli.py plan-grants:*)"
 PLANNER_LIST_DENIED_RULE = f"Bash(python3 {SCRIPTS_DIR}/check-spawn-tool-run.py --list-denied:*)"
 
+
+def _abs_and_relative_script_rules(*script_names: str) -> list[str]:
+    """Both the absolute and repo-relative `Bash(python3 ...)` rule spelling
+    for each script under `SCRIPTS_DIR` (round 3: `grants._segment_covered`
+    matches a Bash rule against the LITERAL command string, with no notion
+    that an absolute and a repo-relative spelling name the same file, same
+    as the harness itself). Unlike the planner rules above -- deliberately
+    absolute-only because a planner's cwd is normally OUTSIDE this repo --
+    a developer or code-reviewer child's cwd normally IS this repo/worktree,
+    so both `python3 <SCRIPTS_DIR>/x.py` and `python3 scripts/x.py` are real
+    invocation shapes that each need their own literal, materialized rule
+    (the round-2 "every baseline SCRIPT rule must match both absolute and
+    repo-relative invocation forms" intent, previously implemented as an
+    engine-side equivalence match instead of as two materialized rules --
+    see the removed `_path_suffix_equivalent`/`_script_path_swapped` in
+    `agentctl.grants`). Named residual, unchanged from round 2: the relative
+    spelling also matches an unrelated project's own same-named
+    `scripts/<file>` sitting below the child's actual cwd."""
+    rules: list[str] = []
+    for name in script_names:
+        rules.append(f"Bash(python3 {SCRIPTS_DIR}/{name}:*)")
+        rules.append(f"Bash(python3 scripts/{name}:*)")
+    return rules
+
+
 KIND_BASELINES: dict[str, list[str]] = {
     # thinker: 4563 Bash calls sampled, overwhelmingly read-only inspection
     # (grep/python3 -m agentctl introspection/ls/shasum/cat/git log); the
@@ -95,7 +120,7 @@ KIND_BASELINES: dict[str, list[str]] = {
     # denials) — a reviewer needs to run checks, not just read diffs.
     "code-reviewer": list(_READ_ONLY_INSPECTION) + [
         "Bash(python3 -m pytest:*)",
-        f"Bash(python3 {SCRIPTS_DIR}/verify-semantic-gates.py:*)",
+        *_abs_and_relative_script_rules("verify-semantic-gates.py"),
     ],
     # tech-writer: only 13 Bash calls sampled across 10 transcripts (mostly
     # `wc`, covered by the read-only bucket) — too small a sample to justify
@@ -112,9 +137,9 @@ KIND_BASELINES: dict[str, list[str]] = {
     "developer": list(_READ_ONLY_INSPECTION) + [
         # verification the brief mandates
         "Bash(python3 -m pytest:*)",
-        f"Bash(python3 {SCRIPTS_DIR}/verify-all.py:*)",
-        f"Bash(python3 {SCRIPTS_DIR}/verify-agentctl.py:*)",
-        f"Bash(python3 {SCRIPTS_DIR}/gen_crutch_registry.py:*)",
+        *_abs_and_relative_script_rules(
+            "verify-all.py", "verify-agentctl.py", "gen_crutch_registry.py",
+        ),
         # recording work on the assigned branch — never `git push`
         "Bash(git add:*)", "Bash(git commit:*)",
         # integrating trunk INTO the assigned branch — the same defect one step
@@ -127,14 +152,18 @@ KIND_BASELINES: dict[str, list[str]] = {
         # merge-base and rev-list. Landing stays absent: `git push` is the
         # coordinator's.
         #
-        # `git fetch` is narrowed to the `origin` remote (round-2 should-fix,
-        # rereview B1' item 7): an unqualified `Bash(git fetch:*)` also admits
-        # `git fetch --upload-pack=<arbitrary program>`, a code-executing verb
-        # no `KIND_BASELINES` wildcard rule may admit (see
+        # `git fetch` is narrowed to two EXACT (non-wildcard) invocations
+        # (round 3: even `Bash(git fetch origin:*)`, narrowed to the `origin`
+        # remote in round 2, still prefix-admits `git fetch origin
+        # --upload-pack=<arbitrary program>` — a code-executing verb no
+        # `KIND_BASELINES` rule may admit, see
         # `test_code_executing_git_subcommand_not_admitted_by_any_kind_baseline`).
-        # `origin` is the only remote this baseline's own use case (reading
-        # trunk to merge it into the assigned branch) ever needs.
-        "Bash(git fetch origin:*)", "Bash(git merge:*)", "Bash(git merge-base:*)",
+        # These two exact forms are the only invocations this baseline's own
+        # use case (reading trunk to merge it into the assigned branch) ever
+        # needs: fetching `origin`'s default refs, and fetching `origin/main`
+        # by name for the merge-base/rev-list classification above it reads.
+        "Bash(git fetch origin)", "Bash(git fetch origin main)",
+        "Bash(git merge:*)", "Bash(git merge-base:*)",
         "Bash(git rev-list:*)", "Bash(git checkout:*)", "Bash(git restore:*)",
         # spawn-outcome-typing stage 4 measures marker_extract's own latency via
         # real host calls — scoped to the driver script only. User-authorized
@@ -151,7 +180,7 @@ KIND_BASELINES: dict[str, list[str]] = {
         # trailing args), a bypass of spawn-specialist.py's own outcome-typing
         # ledger for any developer that DID reach for it directly — the exact
         # defect this plan exists to fix.
-        f"Bash(python3 {SCRIPTS_DIR}/measure-marker-extractor-latency.py:*)",
+        *_abs_and_relative_script_rules("measure-marker-extractor-latency.py"),
         # hook-resolution-reminder-pretooluse-gap stage 1 needs to compile its own
         # edits, check the engine's own worktree-local gate state, and run the new
         # judge's real-call latency sampler. User-authorized 2026-08-28 as another
@@ -174,8 +203,9 @@ KIND_BASELINES: dict[str, list[str]] = {
         # spawn is this stage's actual deliverable, not an avoidable
         # implementation detail routed through an already-permitted python3
         # process — so the raw Bash grant is scoped here, not just the wrapper.
-        f"Bash(python3 {SCRIPTS_DIR}/check-in-harness-observation.py:*)",
-        f"Bash(python3 {SCRIPTS_DIR}/check-live-run-evidence.py:*)",
+        *_abs_and_relative_script_rules(
+            "check-in-harness-observation.py", "check-live-run-evidence.py",
+        ),
         "Bash(python3 _ptg_scratch/probe/launch_probe.py:*)",
         # The direct `claude -p` grant REMOVED (was here through 2026-09-24):
         # unbounded trailing args on the one program grants.validate_rule refuses

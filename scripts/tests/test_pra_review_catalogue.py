@@ -377,10 +377,7 @@ _CODE_EXECUTING_GIT_COMMANDS = [
     "git submodule foreach x",
     # round 3 (root): narrowing to the `origin` remote does not help --
     # `Bash(git fetch origin:*)` still prefix-admits the same option.
-    pytest.param(
-        "git fetch origin --upload-pack=x",
-        marks=pytest.mark.xfail(strict=True, reason="Bash(git fetch origin:*) prefix-admits it"),
-    ),
+    "git fetch origin --upload-pack=x",
 ]
 
 
@@ -417,11 +414,7 @@ def _harness_admits(allow: list[str], command: str) -> bool:
 
 
 @pytest.mark.parametrize("script", ["verify-all.py", "verify-agentctl.py", "gen_crutch_registry.py"])
-@pytest.mark.parametrize("form", [
-    "absolute",
-    pytest.param("relative", marks=pytest.mark.xfail(
-        strict=True, reason="relative form is engine-covered but not materialized")),
-])
+@pytest.mark.parametrize("form", ["absolute", "relative"])
 def test_baseline_script_rule_both_forms_materialized_and_engine_agrees(tmp_path, script, form):
     allow = SPAWN.build_child_settings("developer", workdir=str(tmp_path))["permissions"]["allow"]
     path = f"{SPAWN.SCRIPTS_DIR}/{script}" if form == "absolute" else f"scripts/{script}"
