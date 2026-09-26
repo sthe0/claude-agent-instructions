@@ -18,69 +18,20 @@ from argparse import Namespace
 
 from agentctl import cli, gates
 from agentctl.dispatch import RunResult
-from agentctl.state import (
-    Actor,
-    Criterion,
-    CriterionType,
-    GateRecord,
-    JudgeBypass,
-    Means,
-    Node,
-    Outcome,
-    Route,
-    SessionState,
-    Stage,
-    StageReview,
-    StageStatus,
-    Subject,
-    WeightClass,
-)
+from agentctl.state import JudgeBypass, StageReview
+from session_fixtures import measurable_session as _measurable_session
 
 
 def ns(**kw):
     return Namespace(**kw)
 
 
-def _measurable_session(store, sid, *, verify_command=None, expected_exit=0,
-                         executor="in_thread"):
-    """Same shape as the sibling R4 test files' helper of the same name -- kept
-    as a local copy per this suite's one-file-one-fixture-set convention."""
-    state = SessionState(
-        session_id=sid,
-        task_id="gate-precedence-test",
-        goal="fix the bug",
-        overall_done_criterion="the test suite passes",
-        overall_criterion_type=CriterionType.MEASURABLE.value,
-        weight_class=WeightClass.SUBSTANTIVE.value,
-        route=Route.IN_THREAD.value,
-        node=Node.EXECUTING.value,
-        approval=GateRecord("plan_approval", armed=True, passed=True, by="test-setup"),
-        stages=[
-            Stage(
-                index=1,
-                title="Fix the bug",
-                subject=Subject(material="the module", result="tests pass with no failures"),
-                means=Means(means="pytest", method="run the test suite"),
-                actor=Actor(executor=executor),
-                criterion=Criterion(
-                    criterion_type=CriterionType.MEASURABLE.value,
-                    done_criterion="pytest exits 0",
-                    verify_command=verify_command,
-                    expected_exit=expected_exit,
-                ),
-                outcome=Outcome(status=StageStatus.ACTIVE.value),
-            )
-        ],
-        current_stage=1,
-    )
-    store.save(state)
-    return state
-
-
 class _Runner:
     """Routes a call by argv shape: a git-flavored call (plain or `env
-    GIT_INDEX_FILE=... git ...`), the verify_command's `bash -c <cmd>`, or a
-    judge call."""
+    GIT_INDEX_FILE=... GIT_OBJECT_DIRECTORY=... GIT_ALTERNATE_OBJECT_DIRECTORIES=...
+    git ...` -- an arbitrary number of env assignments ahead of the trailing `git`
+    token, so the split below locates that token by value rather than by a fixed
+    offset), the verify_command's `bash -c <cmd>`, or a judge call."""
 
     def __init__(self, *, verify_exit=0, judge_stdout="YES\nlooks right", judge_exit=0):
         self.verify_calls = 0
@@ -90,7 +41,10 @@ class _Runner:
         self.verify_exit = verify_exit
 
     def __call__(self, argv, *, timeout=None, stdin=""):
-        git_argv = argv[2:] if argv[:1] == ["env"] else argv
+        if argv[:1] == ["env"] and "git" in argv:
+            git_argv = argv[argv.index("git"):]
+        else:
+            git_argv = argv
         if git_argv[:1] == ["git"]:
             if "rev-parse" in git_argv:
                 if "--git-path" in git_argv:

@@ -12,21 +12,7 @@ from pathlib import Path
 
 from agentctl import cli
 from agentctl.dispatch import RunResult
-from agentctl.state import (
-    Actor,
-    Criterion,
-    CriterionType,
-    GateRecord,
-    Means,
-    Node,
-    Outcome,
-    Route,
-    SessionState,
-    Stage,
-    StageStatus,
-    Subject,
-    WeightClass,
-)
+from session_fixtures import measurable_session as _measurable_session
 
 
 def ns(**kw):
@@ -58,39 +44,17 @@ def make_repo(tmp_path: Path, name: str = "work") -> Path:
     return work
 
 
-def _measurable_session(store, sid, *, verify_command=None, expected_exit=0):
-    """Same shape as the sibling R4 test files' helper of the same name -- kept
-    as a local copy per this suite's one-file-one-fixture-set convention."""
-    state = SessionState(
-        session_id=sid,
-        task_id="venue-identity-test",
-        goal="fix the bug",
-        overall_done_criterion="the test suite passes",
-        overall_criterion_type=CriterionType.MEASURABLE.value,
-        weight_class=WeightClass.SUBSTANTIVE.value,
-        route=Route.IN_THREAD.value,
-        node=Node.EXECUTING.value,
-        approval=GateRecord("plan_approval", armed=True, passed=True, by="test-setup"),
-        stages=[
-            Stage(
-                index=1,
-                title="Fix the bug",
-                subject=Subject(material="the module", result="tests pass with no failures"),
-                means=Means(means="pytest", method="run the test suite"),
-                actor=Actor(executor="in_thread"),
-                criterion=Criterion(
-                    criterion_type=CriterionType.MEASURABLE.value,
-                    done_criterion="the check passes",
-                    verify_command=verify_command,
-                    expected_exit=expected_exit,
-                ),
-                outcome=Outcome(status=StageStatus.ACTIVE.value),
-            )
-        ],
-        current_stage=1,
-    )
-    store.save(state)
-    return state
+def count_all_objects(work: Path) -> int:
+    """Loose + packed object count in `work`'s real store, via `git
+    count-objects -v` -- used to prove a call left the real store untouched
+    rather than hand-rolling a walk of `.git/objects`."""
+    out = git("count-objects", "-v", cwd=work).stdout
+    counts = {}
+    for line in out.splitlines():
+        key, _, val = line.partition(":")
+        if key.strip() in ("count", "in-pack"):
+            counts[key.strip()] = int(val.strip())
+    return counts.get("count", 0) + counts.get("in-pack", 0)
 
 
 # --- content edits the identity must see ------------------------------------
@@ -339,3 +303,126 @@ def test_record_result_end_to_end_non_ascii_untracked_edit_forces_recheck(store,
     )
     assert d2.ok is False  # re-ran (identity moved) and the check now genuinely fails
     assert runner.verify_calls == 2  # a stale hit would leave this at 1
+
+
+# --- the real object store and index are never written to -------------------
+
+def test_real_object_store_untouched_by_new_untracked_content(tmp_path):
+    """`add -A`/`write-tree` write new blob/tree objects for genuinely new
+    content -- these must land in the disposable GIT_OBJECT_DIRECTORY, never
+    the venue's real `.git/objects`, or every identity call would permanently
+    pollute the real store with throwaway objects nobody ever commits."""
+    work = make_repo(tmp_path)
+    before = count_all_objects(work)
+
+    (work / "brand-new-content.txt").write_text("content nobody has hashed before\n")
+    identity = cli._venue_tree_identity(str(work), None)
+
+    assert identity is not None
+    assert count_all_objects(work) == before
+
+
+def test_identity_still_moves_under_object_store_isolation(tmp_path):
+    """Negative control for the isolation test above: isolating new writes into
+    a disposable object directory must not make the function fall back to a
+    stale or empty tree -- the identity still has to move on a genuine content
+    edit, exactly as the unit tests earlier in this file prove without the
+    isolation reasoning spelled out."""
+    work = make_repo(tmp_path)
+
+    (work / "scratch.txt").write_text("v1\n")
+    v1 = cli._venue_tree_identity(str(work), None)
+
+    (work / "scratch.txt").write_text("v2\n")
+    v2 = cli._venue_tree_identity(str(work), None)
+
+    assert v1 is not None
+    assert v1 != v2
+
+
+def test_temp_dir_is_removed_after_call(tmp_path, monkeypatch):
+    """The disposable index+objects directory created per call must not leak on
+    disk after the call returns."""
+    work = make_repo(tmp_path)
+    (work / "scratch.txt").write_text("v1\n")
+
+    real_mkdtemp = cli.tempfile.mkdtemp
+    captured: dict = {}
+
+    def spy_mkdtemp(*args, **kwargs):
+        path = real_mkdtemp(*args, **kwargs)
+        captured["path"] = path
+        return path
+
+    monkeypatch.setattr(cli.tempfile, "mkdtemp", spy_mkdtemp)
+
+    identity = cli._venue_tree_identity(str(work), None)
+
+    assert identity is not None
+    assert captured.get("path")
+    assert not os.path.exists(captured["path"])
+
+
+def test_linked_worktree_shares_real_object_store_untouched(tmp_path):
+    """A linked worktree's `--git-path objects` resolves to the SAME common
+    store as the main checkout -- the isolation must hold from there too, not
+    just from the main checkout's own working tree."""
+    work = make_repo(tmp_path)
+    linked = tmp_path / "linked-wt"
+    git("worktree", "add", "--quiet", "-b", "feature", str(linked), "main", cwd=work)
+
+    before = count_all_objects(linked)
+
+    (linked / "scratch-in-worktree.txt").write_text("from the linked worktree\n")
+    identity = cli._venue_tree_identity(str(linked), None)
+
+    assert identity is not None
+    assert count_all_objects(linked) == before
+
+
+# --- bounded timeout on every git call ---------------------------------------
+
+def test_git_call_timeout_at_any_step_returns_none(tmp_path, monkeypatch):
+    """With no injected runner, every git call goes through the real
+    subprocess_runner with the same bounded timeout, and a timeout on any call in
+    the sequence -- not just the first -- is treated like an ordinary git
+    failure: no caching, always re-run."""
+    work = make_repo(tmp_path)
+    real_runner = cli.subprocess_runner
+    timeouts_seen = []
+
+    def timeout_on_write_tree(argv, *, timeout=None):
+        timeouts_seen.append(timeout)
+        if "write-tree" in argv:
+            return RunResult(-1, stdout="", stderr="timed out after 30s")
+        return real_runner(argv, timeout=timeout)
+
+    monkeypatch.setattr(cli, "subprocess_runner", timeout_on_write_tree)
+
+    assert cli._venue_tree_identity(str(work), None) is None
+    assert len(timeouts_seen) == 6
+    assert all(t == cli._VENUE_IDENTITY_GIT_TIMEOUT_S for t in timeouts_seen)
+
+
+def test_injected_runner_is_called_with_argv_only(tmp_path):
+    """The Runner protocol takes argv only; an injected runner never receives a
+    timeout keyword."""
+    work = make_repo(tmp_path)
+    calls = []
+
+    def argv_only(argv):
+        calls.append(argv)
+        return cli.subprocess_runner(argv)
+
+    assert cli._venue_tree_identity(str(work), argv_only) is not None
+    assert calls
+
+
+def test_subprocess_runner_timeout_returns_failure_result_not_raise():
+    """dispatch.subprocess_runner itself: a real TimeoutExpired must surface as
+    a non-zero RunResult, never raise out of the runner -- callers (starting
+    with _venue_tree_identity) do not catch subprocess.TimeoutExpired."""
+    result = cli.subprocess_runner(["sleep", "2"], timeout=0.05)
+
+    assert result.returncode != 0
+    assert result.timed_out is False

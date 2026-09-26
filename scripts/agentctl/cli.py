@@ -672,11 +672,14 @@ def _verify_command_result(stage, runner: Runner | None, cwd: str | None = None)
     return _run_check(crit.verify_command, crit.expected_exit, runner, cwd)
 
 
+_VENUE_IDENTITY_GIT_TIMEOUT_S = 30
+
+
 def _venue_tree_identity(cwd: str | None, runner: Runner | None) -> str | None:
     """Digest identifying the current state of a verify_command's venue: HEAD sha
     plus the tree sha `git write-tree` would produce from a full `git add -A` of
     the working tree — computed entirely by git itself, in a disposable INDEX
-    copy, never the venue's real one.
+    copy, never the venue's real one OR its real object store.
 
     Rationale for going through git rather than hand-rolling `diff`/`ls-files`/
     `read_bytes`: git's own content addressing already normalizes every path
@@ -696,6 +699,26 @@ def _venue_tree_identity(cwd: str | None, runner: Runner | None) -> str | None:
     write git would otherwise do against `.git/index` to the temp copy, and `add
     -A` never writes to tracked files regardless.
 
+    `add -A`/`write-tree` also WRITE new blob/tree objects for any new or changed
+    content — by default straight into the venue's real `.git/objects`, which
+    would permanently pollute the real object store with throwaway objects from a
+    tree identity nobody ever commits. `GIT_OBJECT_DIRECTORY` redirects every
+    object git writes to a second disposable directory alongside the temp index;
+    `GIT_ALTERNATE_OBJECT_DIRECTORIES`, pointed at the venue's REAL objects dir
+    (`git rev-parse --git-path objects` — shared across a main checkout and its
+    linked worktrees, so this resolves to the one common store from either), lets
+    git still READ every object already committed, so `write-tree` can reuse an
+    existing blob's sha without rewriting it. Only genuinely new/changed content
+    ends up as a loose object, and it lands in the disposable directory, removed
+    with the rest of `tmp_dir` in the `finally` block below — the real store never
+    gains a byte. Worktree-aware for the same reason `index` is: a linked
+    worktree's `--git-path objects` still resolves to the shared common objects
+    dir, not a private one, so this isolation covers a linked-worktree venue too.
+
+    Every git call in this function carries a bounded timeout
+    (`_VENUE_IDENTITY_GIT_TIMEOUT_S`); a hang or an expiry is treated exactly like
+    any other git failure below — no caching, always re-run.
+
     Known limitation, not a bug: a `.gitignore`d file's content is invisible to
     `add -A` exactly as it is to a real commit, so an edit confined to an ignored
     file does not move the identity. A gitlink (an embedded repo, mode 160000) is
@@ -704,26 +727,52 @@ def _venue_tree_identity(cwd: str | None, runner: Runner | None) -> str | None:
     makes this function return None rather than risk a false cache hit.
 
     Returns None (never caches; the check always re-runs) whenever: the venue has
-    no git repo or `HEAD` is unborn; any git call in the sequence fails or a call
-    whose value is used (`rev-parse`, `write-tree`) prints nothing; or the temp
-    index ends up containing a gitlink. `cwd=None` mirrors _verify_command_result's
-    own default: the venue is plain repo_root."""
-    run = runner or subprocess_runner
+    no git repo or `HEAD` is unborn; any git call in the sequence fails, times out,
+    or a call whose value is used (`rev-parse`, `write-tree`) prints nothing; or
+    the temp index ends up containing a gitlink. `cwd=None` mirrors
+    _verify_command_result's own default: the venue is plain repo_root.
+
+    One consequence of the gitlink refusal worth naming: in a checkout whose
+    untracked tree itself contains linked worktrees or embedded repos (e.g. the
+    canonical checkout with its `.claude/worktrees/*` subtrees), `add -A` stages
+    each one as a gitlink the moment it is reached, so the identity always
+    resolves to None there — by design, not a bug the cache is missing out on."""
+    # The Runner protocol takes argv only; the timeout bound applies to the real
+    # subprocess runner, never to an injected one.
+    if runner is None:
+        def run(argv):
+            return subprocess_runner(argv, timeout=_VENUE_IDENTITY_GIT_TIMEOUT_S)
+    else:
+        run = runner
     base = Path(cwd) if cwd else REPO_ROOT
     prefix = ["git", "-C", str(base)]
     head = run(prefix + ["rev-parse", "HEAD"])
     if head.returncode != 0 or not head.stdout.strip():
         return None
-    git_path = run(prefix + ["rev-parse", "--git-path", "index"])
-    if git_path.returncode != 0 or not git_path.stdout.strip():
+    index_path = run(prefix + ["rev-parse", "--git-path", "index"])
+    if index_path.returncode != 0 or not index_path.stdout.strip():
         return None
-    real_index = base / git_path.stdout.strip()
+    real_index = base / index_path.stdout.strip()
+    objects_path = run(prefix + ["rev-parse", "--git-path", "objects"])
+    if objects_path.returncode != 0 or not objects_path.stdout.strip():
+        return None
+    # Resolved to absolute: passed to the subprocess as an env var value below,
+    # which git reads before honouring `-C str(base)` -- a relative alternates
+    # path would be interpreted against this process's own cwd, not the venue.
+    real_objects = (base / objects_path.stdout.strip()).resolve()
     tmp_dir = tempfile.mkdtemp(prefix="agentctl-venue-index-")
     try:
         tmp_index = os.path.join(tmp_dir, "index")
         if real_index.is_file():
             shutil.copyfile(real_index, tmp_index)
-        env_argv = ["env", f"GIT_INDEX_FILE={tmp_index}"] + prefix
+        tmp_objects = os.path.join(tmp_dir, "objects")
+        os.mkdir(tmp_objects)
+        env_argv = [
+            "env",
+            f"GIT_INDEX_FILE={tmp_index}",
+            f"GIT_OBJECT_DIRECTORY={tmp_objects}",
+            f"GIT_ALTERNATE_OBJECT_DIRECTORIES={real_objects}",
+        ] + prefix
         added = run(env_argv + ["add", "-A"])
         if added.returncode != 0:
             return None

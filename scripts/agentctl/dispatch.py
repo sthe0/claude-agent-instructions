@@ -134,8 +134,17 @@ class RunResult:
     timed_out: bool = False
 
 
-def subprocess_runner(argv: list[str], cwd: str | None = None) -> RunResult:
-    proc = subprocess.run(argv, capture_output=True, text=True, cwd=cwd)
+def subprocess_runner(argv: list[str], cwd: str | None = None, *, timeout: float | None = None) -> RunResult:
+    """`timeout=None` (the default) preserves the original unbounded behaviour for
+    every existing caller. A caller that passes a bound gets a non-zero-returncode
+    RunResult on expiry rather than a raised TimeoutExpired -- `timed_out` is left
+    False (see the field's own docstring above: it is set only by
+    agentctl.advisor.subprocess_runner's own branch, a different runner with a
+    different meaning for that flag)."""
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, cwd=cwd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return RunResult(-1, stdout="", stderr=f"subprocess_runner: timed out after {timeout}s")
     return RunResult(proc.returncode, proc.stdout, proc.stderr)
 
 
