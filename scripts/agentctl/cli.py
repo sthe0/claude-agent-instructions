@@ -29,7 +29,7 @@ import proc_tree
 from lib import argv_text, config_root, kind_baselines, transcript_stops, widening_targets
 
 from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, gates, grants as _grants, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
-from .checkrun import format_observations, observe_stage_checks
+from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
@@ -682,16 +682,6 @@ def _run_check(command: str, expected_exit: int, runner: Runner | None, cwd: str
     return result.returncode == expected_exit, result
 
 
-# Shell exit codes 126 ("command found but not executable") and 127 ("command not
-# found") mean the invoked command never ran at all -- a typo or a missing binary
-# in a declared negative_control, not a real outcome on the known-bad input. A
-# structural fact about the exit code alone, decided without reading the command's
-# text or output, so it is never confused with a legitimate discriminating (or
-# non-discriminating) result. Shared between cmd_record_result's refusal and
-# checkrun's advisory NOT_JUDGED labelling.
-NEGATIVE_CONTROL_REFUSED_EXIT_CODES = frozenset({126, 127})
-
-
 def _verify_command_result(stage, runner: Runner | None, cwd: str | None = None):
     """Execute a measurable stage's `verify_command`, if it has one.
 
@@ -823,6 +813,29 @@ def _venue_tree_identity(cwd: str | None, runner: Runner | None) -> str | None:
     digest.update(head.stdout.strip().encode("utf-8"))
     digest.update(b"\x00")
     digest.update(tree.stdout.strip().encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _check_definition_digest(crit) -> str:
+    """Digest of the fields that decide what the check itself DOES —
+    verify_command, expected_exit, negative_control, negative_control_waiver —
+    folded into the cache identity alongside `_venue_tree_identity` (R2 review
+    B). The tree identity alone answers "has the venue moved"; it says nothing
+    about "did a replan change the check we're pointing at the venue", so a
+    tree-only key would let an edited control (or command) inherit a stale
+    green-at-the-old-definition verdict on an otherwise-unmoved tree. Folded in
+    unconditionally — an old recorded `checked_tree_identity` (from before this
+    field existed) simply stops matching, so it degrades to a cache miss (one
+    extra re-run) rather than a crash or a silent wrong hit."""
+    digest = hashlib.sha256()
+    for part in (
+        crit.verify_command or "",
+        str(crit.expected_exit),
+        crit.negative_control or "",
+        crit.negative_control_waiver or "",
+    ):
+        digest.update(part.encode("utf-8"))
+        digest.update(b"\x00")
     return digest.hexdigest()
 
 
@@ -5645,22 +5658,34 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                         f"stage {stage.index} verify_command refused: {refusal}",
                     )
             # Green-check cache: a repeated record-result call whose venue tree
-            # hasn't moved since the last fully-green run (the positive command AND,
-            # if declared, its negative_control) skips re-running BOTH commands and
-            # goes straight to the judge below. checked_tree_ok is only ever set True
-            # once the WHOLE check has cleared -- see state.py's Outcome docstring --
-            # so a cache hit never needs to re-prove the control discriminates: the
-            # tree it discriminated against hasn't moved. A red or non-discriminating
-            # result is never cached, so a genuinely broken check or control is
-            # always re-run rather than trusted to still be broken. Only computed
-            # when there is an actual check to cache (measurable + verify_command) —
-            # an acceptance_review stage's verify_command, if present, is never
-            # machine-run, so identity must never be probed for it either. The cache
-            # assumes the check reads only the venue tree (see _venue_tree_identity)
-            # — a check that also reads files outside it (the plan TOML,
-            # proposals.json, ...) can be served stale even though its own venue is
-            # unchanged.
-            identity = _venue_tree_identity(cwd, runner) if has_check else None
+            # hasn't moved AND whose check definition hasn't changed since the last
+            # fully-green run (the positive command AND, if declared, its
+            # negative_control) skips re-running BOTH commands and goes straight to
+            # the judge below. checked_tree_ok is only ever set True once the WHOLE
+            # check has cleared -- see state.py's Outcome docstring -- so a cache hit
+            # never needs to re-prove the control discriminates: the tree it
+            # discriminated against hasn't moved, under the same definition it
+            # discriminated with. A red or non-discriminating result is never
+            # cached, so a genuinely broken check or control is always re-run
+            # rather than trusted to still be broken. Only computed when there is
+            # an actual check to cache (measurable + verify_command) — an
+            # acceptance_review stage's verify_command, if present, is never
+            # machine-run, so identity must never be probed for it either. The
+            # tree half assumes the check reads only the venue tree (see
+            # _venue_tree_identity) — a check that also reads files outside it
+            # (the plan TOML, proposals.json, ...) can be served stale even though
+            # its own venue is unchanged. The definition half
+            # (_check_definition_digest) is what catches an edited verify_command
+            # or negative_control on an otherwise-unmoved tree (R2 review B) — the
+            # plan-refresh path (_apply_refined_stage_fields) resets a PASSED
+            # stage's own status on any carry-key change, but never touched these
+            # two fields, so an unchanged tree + an edited control used to replay
+            # a stale cache hit straight past the (now different) control.
+            tree_identity = _venue_tree_identity(cwd, runner) if has_check else None
+            identity = (
+                f"{tree_identity}:{_check_definition_digest(crit)}"
+                if tree_identity is not None else None
+            )
             cache_hit = _cached_check_hit(stage, identity)
             if cache_hit:
                 ok, result = True, None
@@ -5677,13 +5702,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 if identity is not None:
                     stage.outcome.checked_tree_identity = identity
                     stage.outcome.checked_tree_ok = False
-            elif cache_hit:
-                # The whole check for this exact venue tree identity already
-                # cleared on a prior call (positive command, plus any negative
-                # control or waiver) -- skip re-running everything below and fall
-                # through to the judge.
-                pass
-            elif has_check and crit.negative_control:
+            elif not cache_hit and has_check and crit.negative_control:
                 # The positive check just went green -- now prove it CAN go red.
                 # Fed the known-bad input, a matching exit code means the check
                 # never discriminated bad state from good in the first place, so
@@ -5726,7 +5745,12 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                     if identity is not None:
                         stage.outcome.checked_tree_identity = identity
                         stage.outcome.checked_tree_ok = True
-            else:
+            elif not cache_hit:
+                # Neither branch above fired: no negative_control to run (a
+                # waiver, or no check at all). A cache hit falls through this
+                # whole chain untouched -- the tree and the check definition
+                # already cleared on a prior call, so there is nothing left to
+                # do before the judge below.
                 if has_check and crit.negative_control_waiver:
                     state.log(
                         "negative_control_waived",

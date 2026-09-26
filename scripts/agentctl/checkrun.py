@@ -43,8 +43,8 @@ refused (exit 126/127 — a typo or missing binary, not a real outcome).
 DISCRIMINATES is only ever assigned when the positive check is GREEN_AT_SUBMIT
 — a RED positive means the check has not yet been shown to pass on ANY input,
 so a control that also fails proves nothing about discrimination (still
-NOT_DISCRIMINATING, since that direction is decidable regardless), and a
-control that passes is NOT_JUDGED ("discrimination undecidable") rather than
+NOT_JUDGED, "discrimination undecidable"), and a control that passes is
+NOT_DISCRIMINATING, since that direction is decidable regardless, rather than
 the misleading DISCRIMINATES. Advisory only, like everything else here:
 submit-time labelling never blocks.
 
@@ -96,10 +96,8 @@ NOT_DISCRIMINATING = "not-discriminating"
 # not found") mean the invoked command never ran at all -- a typo or a missing
 # binary in a declared negative_control, not a real outcome on the known-bad
 # input. A structural fact about the exit code alone, decided without reading
-# the command's text or output. Duplicated in cli.py's own
-# NEGATIVE_CONTROL_REFUSED_EXIT_CODES rather than imported, the same way
-# _run_and_observe already duplicates cli._run_check instead of importing it
-# (cli.py imports FROM checkrun.py; the reverse would be circular).
+# the command's text or output. Imported by cli.py for cmd_record_result's own
+# refusal check, so the two stay in lockstep.
 NEGATIVE_CONTROL_REFUSED_EXIT_CODES = frozenset({126, 127})
 
 
@@ -265,9 +263,10 @@ def observe_stage_checks(
                         NOT_DISCRIMINATING if neg_rc == crit.expected_exit else DISCRIMINATES
                     )
                 elif neg_rc == crit.expected_exit:
-                    # The positive check is RED, but the control ALSO fails
-                    # (matches expected_exit) -- still not-discriminating,
-                    # decidable regardless of the positive check's own state.
+                    # The positive check is RED, but the control matches
+                    # expected_exit too (it "passes" on the known-bad input) --
+                    # still not-discriminating, decidable regardless of the
+                    # positive check's own state.
                     obs.negative_control_label = NOT_DISCRIMINATING
                 else:
                     obs.negative_control_label = NOT_JUDGED

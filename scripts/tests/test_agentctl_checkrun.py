@@ -203,7 +203,7 @@ class _ByCommand:
 
 # --- R2 should-fix 2: DISCRIMINATES only when the positive check is green -----
 
-def test_negative_control_not_discriminating_when_positive_is_red_and_control_also_fails():
+def test_negative_control_red_positive_and_failing_control_is_not_judged():
     stage = _stage("false-positive-cmd", expected_exit=0, negative_control="also-fails-cmd")
     runner = _ByCommand({"false-positive-cmd": 1, "also-fails-cmd": 1})
     [obs] = observe_stage_checks([stage], _resolve_repo_root, runner=runner)

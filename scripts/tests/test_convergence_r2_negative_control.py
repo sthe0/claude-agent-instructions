@@ -386,6 +386,47 @@ def test_cache_hit_skips_rerunning_negative_control(store, monkeypatch):
     assert runner.judge_calls == 2  # judge re-queried regardless of the cache
 
 
+# --- should-fix B: an edited negative_control invalidates the green-check cache
+
+def test_edited_negative_control_reruns_on_unchanged_tree(store, monkeypatch):
+    monkeypatch.delenv("AGENTCTL_STAGE_REVIEW", raising=False)
+    _measurable_session(store, "t9", verify_command="verify-cmd", negative_control="verify-cmd-bad")
+    observation = "pytest printed 12 passed, 0 failed"
+    runner = _Runner(
+        exit_codes={"verify-cmd-bad": 1}, judge_stdout="NO\nnot enough detail",
+    )
+
+    d1 = cli.cmd_record_result(
+        ns(session="t9", status="passed", actual="ran the suite", control=None,
+           observation=observation),
+        store=store, runner=runner,
+    )
+    assert d1.ok is False  # revise verdict blocks -- the check itself cleared
+    assert runner.bash_calls == ["verify-cmd", "verify-cmd-bad"]
+
+    # A replan swaps in a different control -- same venue tree (the fake
+    # runner's git responses are unchanged), nothing else about the stage
+    # changes. The stale cache must NOT be trusted: a cache keyed only on the
+    # tree would replay the OLD control's cleared verdict past the edit.
+    state = store.load("t9")
+    state.stage(1).criterion.negative_control = "verify-cmd-bad-v2"
+    store.save(state)
+
+    runner.judge_stdout = "YES\nlooks right now"
+    runner.exit_codes["verify-cmd-bad-v2"] = 1
+    d2 = cli.cmd_record_result(
+        ns(session="t9", status="passed", actual="ran the suite", control=None,
+           observation=observation),
+        store=store, runner=runner,
+    )
+
+    assert d2.ok is True
+    # The edited control actually ran a second time -- not served a stale hit.
+    assert runner.bash_calls == [
+        "verify-cmd", "verify-cmd-bad", "verify-cmd", "verify-cmd-bad-v2",
+    ]
+
+
 # --- 6: checkrun's submit-time advisory reports DISCRIMINATES/NOT_DISCRIMINATING
 
 def test_checkrun_reports_negative_control_at_submit():
