@@ -4877,12 +4877,54 @@ def _rekey_runtime_grants(state: SessionState, doc) -> None:
     state.runtime_grants = rekeyed
 
 
+_SPAWN_SPECIALIST_MODULE = None
+
+
+def _load_spawn_specialist_module():
+    """Lazy, function-scoped load of `spawn-specialist.py` (a hyphenated
+    filename, not importable as a module) so `_effective_stage_grants` can
+    read its `KIND_BASELINES` table -- the fleet-wide baseline Bash rules
+    injected into every spawned child's `--settings` regardless of stage
+    grants. Loaded via `importlib.util.spec_from_file_location`, never a
+    top-level import: `spawn-specialist.py` itself imports `agentctl.grants`/
+    `agentctl.plan`/`agentctl.render`, so a module-load-time import here
+    would be circular. Memoized at module scope since the file never
+    changes within one process's lifetime."""
+    global _SPAWN_SPECIALIST_MODULE
+    if _SPAWN_SPECIALIST_MODULE is None:
+        import importlib.util
+
+        path = REPO_ROOT / "scripts" / "spawn-specialist.py"
+        spec = importlib.util.spec_from_file_location("agentctl_cli_spawn_specialist", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _SPAWN_SPECIALIST_MODULE = mod
+    return _SPAWN_SPECIALIST_MODULE
+
+
+def _kind_baseline_rule_grants(kind: str) -> list[_grants.RuleGrant]:
+    """The fleet-wide baseline Bash rules `spawn-specialist.py` injects for
+    `kind` (falling back to its own `"default"` baseline, mirroring
+    `KIND_BASELINES.get(kind, KIND_BASELINES["default"])` at the
+    materialization site), each wrapped as a `RuleGrant` with provenance
+    `"baseline"` -- finding S3: a call covered only by this baseline
+    (never by a declared/derived/runtime grant) must classify as a
+    materialization defect, not a planning miss, since the child's actual
+    settings genuinely carry it."""
+    spawn_specialist = _load_spawn_specialist_module()
+    baseline = spawn_specialist.KIND_BASELINES.get(kind, spawn_specialist.KIND_BASELINES["default"])
+    return [_grants.RuleGrant(rule=r, provenance="baseline") for r in baseline]
+
+
 def _effective_stage_grants(state: SessionState, stage_index: int) -> _grants.StageGrants:
-    """The merged declared + derived + unconsumed-runtime grant set for one stage --
-    what `grants.grant_covers_call` checks a denied call against in `cmd_dispatch`.
-    An entry dict carrying a "rule" key becomes a RuleGrant; a "path"/"mode" pair
-    becomes an AddDirGrant -- the same two shapes `cmd_stage_grants` already reports
-    separately by provenance."""
+    """The merged declared + derived + unconsumed-runtime + kind-baseline grant
+    set for one stage -- what `grants.grant_covers_call` checks a denied call
+    against in `cmd_dispatch`. An entry dict carrying a "rule" key becomes a
+    RuleGrant; a "path"/"mode" pair becomes an AddDirGrant -- the same two
+    shapes `cmd_stage_grants` already reports separately by provenance. The
+    kind baseline is unioned in for a `spawn:*` stage only -- an in-thread
+    stage never spawns a child, so no baseline settings ever materialize for
+    it (finding S3)."""
     declared_entries, derived_entries, _dropped = _stage_grant_entries(state, stage_index)
     runtime_entries = [
         e for e in state.runtime_grants.get(str(stage_index), [])
@@ -4895,6 +4937,9 @@ def _effective_stage_grants(state: SessionState, stage_index: int) -> _grants.St
             allow.append(_grants.RuleGrant.from_dict(e))
         elif "path" in e and "mode" in e:
             add_dirs.append(_grants.AddDirGrant.from_dict(e))
+    stage = state.stage(stage_index)
+    if stage.is_spawn():
+        allow.extend(_kind_baseline_rule_grants(stage.spawn_kind()))
     return _grants.StageGrants(allow=allow, add_dirs=add_dirs)
 
 

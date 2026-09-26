@@ -161,6 +161,25 @@ _UNCONDITIONALLY_REFUSED_PROGRAMS = frozenset({"awk", "gawk", "nawk", "mawk"})
 # refused"), regardless of which other find flags/paths are also present.
 _FIND_EXEC_FLAGS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 
+# Per-interpreter flags that consume a SEPARATE following token as their own
+# value (finding B1): `-W ignore`, `-I lib`, `--require x` are not a
+# script-file operand even though the token after the flag doesn't start
+# with `-` — `_has_positional_operand` would otherwise mistake the flag's
+# value for a genuine positional script path and accept a rule that admits
+# an unbounded set of actual values at materialization time.
+_INTERPRETER_VALUE_FLAGS: dict[str, frozenset[str]] = {
+    "python": frozenset({"-W", "-X"}),
+    "python3": frozenset({"-W", "-X"}),
+    "perl": frozenset({"-I", "-M"}),
+    "node": frozenset({"--require", "-r"}),
+    "ruby": frozenset({"-I", "-r"}),
+}
+
+# git subcommands that admit arbitrary git-mediated code execution regardless
+# of other arguments (finding B1): `git config` can set `core.pager`,
+# `alias.*`, or `core.hooksPath` to run anything on the next git invocation.
+_DANGEROUS_GIT_SUBCOMMANDS = frozenset({"config"})
+
 
 def _interpreter_operand_is_dangerous(operand_tokens: list[str]) -> bool:
     """True iff `operand_tokens` (the tokens after an interpreter/launcher
@@ -183,6 +202,27 @@ def _interpreter_operand_named_module(operand_tokens: list[str]) -> str | None:
         if tok == "-m" and i + 1 < len(operand_tokens):
             return operand_tokens[i + 1]
     return None
+
+
+def _strip_interpreter_value_flags(prog: str, operand_tokens: list[str]) -> list[str]:
+    """Remove each of `prog`'s own separate-value flags (`_INTERPRETER_VALUE_
+    FLAGS`) together with its following value token, so the allowlist checks
+    below see only genuine positional operands — a flag's value token is
+    never itself a script-file path (finding B1)."""
+    value_flags = _INTERPRETER_VALUE_FLAGS.get(prog, frozenset())
+    if not value_flags:
+        return operand_tokens
+    result: list[str] = []
+    i = 0
+    n = len(operand_tokens)
+    while i < n:
+        tok = operand_tokens[i]
+        if tok in value_flags:
+            i += 2  # drop the flag AND its separate value token
+            continue
+        result.append(tok)
+        i += 1
+    return result
 
 
 def _has_positional_operand(operand_tokens: list[str]) -> bool:
@@ -338,18 +378,36 @@ def validate_rule(rule: str) -> None:
                 f"rule {rule!r} names an interpreter with an inline-code/eval/print "
                 f"flag — an unbounded invocation surface — refused"
             )
-        named_module = _interpreter_operand_named_module(operand_tokens)
+        filtered_operand_tokens = _strip_interpreter_value_flags(prog, operand_tokens)
+        named_module = _interpreter_operand_named_module(filtered_operand_tokens)
         if named_module is not None:
             if named_module in _LAUNCHER_MODULES:
                 raise GrantValidationError(
                     f"rule {rule!r} names interpreter module {named_module!r}, itself "
                     f"a launcher — an unbounded invocation surface — refused"
                 )
-        elif not _has_positional_operand(operand_tokens):
+        elif not _has_positional_operand(filtered_operand_tokens):
             raise GrantValidationError(
                 f"rule {rule!r} is an interpreter/launcher with no script-file or "
                 f"`-m <module>` operand — refused"
             )
+
+    if prog == "git":
+        # No dedicated refusal existed at all (finding B1): a wildcarded git
+        # root or a `-c` config override admits arbitrary git-mediated code
+        # execution (core.pager, alias.*, hooks via `-c core.hooksPath`, ...).
+        if not operand_tokens:
+            raise GrantValidationError(
+                f"rule {rule!r} invokes bare `git` with no subcommand — refused"
+            )
+        if "-c" in operand_tokens:
+            raise GrantValidationError(
+                f"rule {rule!r} invokes git with -c (arbitrary config override, "
+                f"including alias/hook injection) — refused"
+            )
+        subcommand = next((t for t in operand_tokens if not t.startswith("-")), None)
+        if subcommand in _DANGEROUS_GIT_SUBCOMMANDS:
+            raise GrantValidationError(f"rule {rule!r} invokes git {subcommand!r} — refused")
 
     if prog in _WRITE_CAPABLE_PROGRAMS:
         _validate_write_capable_bash(rule, prog, operand_tokens, wildcard=wildcard)
@@ -419,7 +477,10 @@ _GLOB_METACHARS = frozenset({"*", "?", "[", "]", "{", "}"})
 
 
 def _is_under_git_dir(path: str) -> bool:
-    return ".git" in path.split("/")
+    # Case-insensitive-filesystem variant (finding S2): a `.GIT` component
+    # resolves to the same directory as `.git` on a case-insensitive
+    # filesystem, so the comparison casefolds both sides.
+    return ".git" in {p.casefold() for p in path.split("/")}
 
 
 def _validate_non_bash_rule(rule: str, tool: str, arg: str) -> None:

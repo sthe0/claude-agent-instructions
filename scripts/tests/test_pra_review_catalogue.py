@@ -80,7 +80,6 @@ _B1_REFUSED_RULES = [
 
 
 @pytest.mark.parametrize("rule", _B1_REFUSED_RULES)
-@pytest.mark.xfail(strict=True, reason="B1: strip_wrappers/interpreter-flag/git wildcard gaps not yet fixed")
 def test_b1_wildcard_widening_mutation_refused(rule):
     with pytest.raises(GrantValidationError):
         validate_rule(rule)
@@ -135,14 +134,12 @@ def test_b2_validate_add_dir_refuses_relative_path_in_read_mode(path):
 # --- S1: ~/.claude must be a protected root regardless of harness root ----
 
 
-@pytest.mark.xfail(strict=True, reason="S1: ~/.claude absent from protected_roots()")
 def test_s1_dot_claude_refused_as_write_add_dir():
     dot_claude = str(Path.home() / ".claude")
     with pytest.raises(GrantValidationError):
         validate_add_dir(dot_claude, "write")
 
 
-@pytest.mark.xfail(strict=True, reason="S1: ~/.claude/CLAUDE.md not refused when harness root differs")
 def test_s1_edit_rule_under_dot_claude_refused_even_when_harness_root_differs():
     rule = f"Edit(//{str(Path.home() / '.claude' / 'CLAUDE.md').lstrip('/')})"
     with pytest.raises(GrantValidationError):
@@ -160,13 +157,11 @@ _S2_CASE_VARIANT_RULES = [
 
 
 @pytest.mark.parametrize("rule", _S2_CASE_VARIANT_RULES)
-@pytest.mark.xfail(strict=True, reason="S2: path/.git matching is case-sensitive")
 def test_s2_case_variant_rule_refused(rule):
     with pytest.raises(GrantValidationError):
         validate_rule(rule)
 
 
-@pytest.mark.xfail(strict=True, reason="S2: add_dir case-insensitive .claude variant not refused")
 def test_s2_case_variant_add_dir_refused():
     variant = str(Path.home()) + "/.Claude"
     with pytest.raises(GrantValidationError):
@@ -177,7 +172,6 @@ def test_s2_case_variant_add_dir_refused():
 # defect, not a planning miss ------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="S3: _effective_stage_grants omits KIND_BASELINES")
 def test_s3_kind_baseline_covered_call_is_in_effective_coverage(store, fixtures_dir):
     sid = "s3-kind-baseline-coverage"
     _to_executing(store, sid, fixtures_dir)

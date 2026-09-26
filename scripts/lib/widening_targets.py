@@ -25,7 +25,7 @@ from . import config_root
 
 # --- settings documents -----------------------------------------------------
 
-_SETTINGS_BASENAME_RE = re.compile(r"^settings[^/]*\.json$")
+_SETTINGS_BASENAME_RE = re.compile(r"^settings[^/]*\.json$", re.IGNORECASE)
 
 
 def _norm(path: str) -> str:
@@ -52,11 +52,15 @@ def is_live_settings(path: str) -> bool:
     basename = norm.rsplit("/", 1)[-1]
     if not _SETTINGS_BASENAME_RE.match(basename):
         return False
-    parts = norm.split("/")
-    if ".claude" in parts[:-1] or ".claude-agent" in parts[:-1]:
+    # Case-insensitive-filesystem variants (finding S2): the directory-component
+    # and prefix comparisons below casefold both sides so a `.Claude`/`.CLAUDE`
+    # spelling is caught the same as the lowercase form.
+    parts_cf = [p.casefold() for p in norm.split("/")[:-1]]
+    if ".claude" in parts_cf or ".claude-agent" in parts_cf:
         return True
-    agent_home_norm = _norm(str(config_root.agent_home()))
-    if norm.startswith(agent_home_norm + "/") or norm == agent_home_norm:
+    norm_cf = norm.casefold()
+    agent_home_cf = _norm(str(config_root.agent_home())).casefold()
+    if norm_cf.startswith(agent_home_cf + "/") or norm_cf == agent_home_cf:
         return True
     return False
 
@@ -165,9 +169,17 @@ _PROTECTED_ROOTS_ENV_RELATIVE = ("~",)
 def protected_roots() -> list[str]:
     """The roots an add_dir grant may never be, or contain: `$HOME`,
     `$CLAUDE_AGENT_HOME`, `~/.claude`, and the agentctl state dir. Returned
-    as normalized absolute path strings."""
+    as normalized absolute path strings.
+
+    `~/.claude` is named explicitly (finding S1), not only via
+    `harness_config_root()`: on an isolated machine (`CLAUDE_CONFIG_DIR` set
+    to `~/.claude-agent`) that accessor resolves away from `~/.claude`
+    entirely, yet `~/.claude` commonly still exists as the legacy/personal
+    root and must stay protected regardless of which root the running
+    harness happens to be reading from."""
     return [
         _norm(str(Path.home())),
+        _norm(str(Path.home() / ".claude")),
         _norm(str(config_root.agent_home())),
         _norm(str(config_root.harness_config_root())),
         _norm(str(config_root.agentctl_state_dir())),
@@ -190,9 +202,13 @@ def add_dir_is_or_contains_protected_root(path: str) -> bool:
     # `norm + "/"` — using `norm + "/"` unconditionally breaks at the
     # filesystem root, since "//" is not a prefix of any real path, silently
     # letting an add_dir of "/" (which contains every protected root) pass.
-    prefix = norm if norm == "/" else norm + "/"
+    # Both sides are casefolded (finding S2) so a case-insensitive-filesystem
+    # variant (`.Claude`, `.GIT`) matches the same as the lowercase form.
+    norm_cf = norm.casefold()
+    prefix_cf = norm_cf if norm_cf == "/" else norm_cf + "/"
     for root in protected_roots():
-        if norm == root or root.startswith(prefix):
+        root_cf = root.casefold()
+        if norm_cf == root_cf or root_cf.startswith(prefix_cf):
             return True
     return False
 
@@ -204,9 +220,14 @@ def add_dir_under_protected_root(path: str) -> bool:
     write add_dir."""
     if not isinstance(path, str) or not path.strip():
         return False
-    norm = _norm(path)
-    for root in (_norm(str(config_root.harness_config_root())), _norm(str(config_root.agentctl_state_dir()))):
-        if norm == root or norm.startswith(root + "/"):
+    norm_cf = _norm(path).casefold()
+    for root in (
+        _norm(str(Path.home() / ".claude")),
+        _norm(str(config_root.harness_config_root())),
+        _norm(str(config_root.agentctl_state_dir())),
+    ):
+        root_cf = root.casefold()
+        if norm_cf == root_cf or norm_cf.startswith(root_cf + "/"):
             return True
     return False
 
@@ -239,11 +260,40 @@ AGENTCTL_USER_AUTHORITY_VERBS = frozenset({
 })
 
 
+# Wrapper -> the set of its own short flags that consume a SEPARATE following
+# token as their value (as opposed to a boolean flag, or a flag whose value is
+# conventionally attached with no space, e.g. `-o0`). Finding B1: the prior
+# form stopped at the wrapper token itself and left the flag's own value
+# token (`-n 5`'s `5`, `-u root`'s `root`) as the apparent "program name",
+# so a rule like `Bash(nice -n:*)` validated the flag token `-n` against
+# every downstream check (find/write-capable/interpreter/...) instead of the
+# real program the wildcard could still admit — none of those checks fire on
+# a bare flag, so the rule was silently accepted. Consuming the flag AND its
+# value here makes such a rule reduce to a bare wrapper with no operand,
+# which the caller (`grants.validate_rule`) already refuses outright.
+_WRAPPER_VALUE_FLAGS: dict[str, frozenset[str]] = {
+    "sudo": frozenset({"-u", "-g", "-p", "-r", "-h"}),
+    "doas": frozenset({"-u"}),
+    "nice": frozenset({"-n"}),
+    "ionice": frozenset({"-c", "-n", "-p", "-t"}),
+    "chrt": frozenset({"-p"}),
+    "taskset": frozenset({"-c", "-p"}),
+    "time": frozenset({"-o", "-f"}),
+    "xargs": frozenset({"-n", "-P", "-I", "-a", "-d", "-E", "-L", "-s", "-x"}),
+    "flock": frozenset({"-w"}),
+    "unbuffer": frozenset({"-p"}),
+}
+
+
 def strip_wrappers(tokens: list[str]) -> list[str]:
     """Drop a leading run of wrapper tokens (`env FOO=bar`, `npx`, `exec`,
-    `nohup`, `timeout 30`, `command`) so the real program name surfaces.
-    `env` consumes any leading `KEY=VALUE` assignments and a `-i`/`-u NAME`
-    flag form; `timeout` consumes its duration operand."""
+    `nohup`, `timeout 30`, `command`, `sudo -u x`, `nice -n 5`, ...) so the
+    real program name surfaces. `env` consumes any leading `KEY=VALUE`
+    assignments and a `-i`/`-u NAME` flag form; `timeout` consumes its
+    duration operand; every other wrapper in `_WRAPPER_TOKENS` consumes its
+    own known separate-value flags (`_WRAPPER_VALUE_FLAGS`) together with
+    their value token, and any other `-`-prefixed token as a boolean/attached
+    flag, stopping at the first non-flag token (the real program)."""
     i = 0
     n = len(tokens)
     while i < n:
@@ -261,7 +311,13 @@ def strip_wrappers(tokens: list[str]) -> list[str]:
                 i += 1
             continue
         if tok in _WRAPPER_TOKENS:
+            value_flags = _WRAPPER_VALUE_FLAGS.get(tok, frozenset())
             i += 1
+            while i < n and tokens[i].startswith("-"):
+                if tokens[i] in value_flags:
+                    i += 2  # consume the flag AND its separate value token
+                else:
+                    i += 1  # boolean flag, or a value attached with no space
             continue
         break
     return tokens[i:]
@@ -274,20 +330,25 @@ def program_name(token: str) -> str:
     return token.rsplit("/", 1)[-1]
 
 
+_CLAUDE_PROGRAM_NAMES = frozenset({"claude", "claude-code"})
+
+
 def is_claude_program(tokens: list[str]) -> bool:
     """True iff, after stripping wrapper tokens, the leading program token is
-    `claude` in any spelling (bare, absolute path, or via a wrapper).
+    `claude` in any spelling (bare, absolute path, a `claude-code` alias, an
+    npm-scoped `@anthropic-ai/claude-code` package name — whose basename per
+    `program_name` is `claude-code` — or via a wrapper; finding B1).
 
     A wrapper's own options (`nice -n 5`, `sudo -u x`, `stdbuf -o0`) are not
-    parsed per wrapper, so once any wrapper was stripped, `claude` anywhere in
-    the remaining tokens counts: fail toward refused."""
+    parsed per wrapper, so once any wrapper was stripped, `claude`/`claude-code`
+    anywhere in the remaining tokens counts: fail toward refused."""
     stripped = strip_wrappers(tokens)
     if not stripped:
         return False
-    if program_name(stripped[0]) == "claude":
+    if program_name(stripped[0]) in _CLAUDE_PROGRAM_NAMES:
         return True
     wrapped = len(stripped) < len(tokens)
-    return wrapped and any(program_name(t) == "claude" for t in stripped)
+    return wrapped and any(program_name(t) in _CLAUDE_PROGRAM_NAMES for t in stripped)
 
 
 def agentctl_invocation_verb(tokens: list[str]) -> tuple[bool, str | None]:
