@@ -90,19 +90,26 @@ def _measurable_session(store, sid, *, verify_command=None, negative_control=Non
 
 class _Runner:
     """Routes a call by its argv shape, mirroring the sibling R4 test file's
-    _Runner: a plain or env-wrapped git identity probe, and a `bash -c` call for
+    _Runner: a plain or env-wrapped git identity probe, a `bash -c` call for
     either the positive verify_command or the negative_control -- distinguished
     from each other by which literal command text they carry (every scenario
     below uses a distinct command string for whichever ones must be told
-    apart). Any command text present as a key in `exit_codes` returns that exit
-    code; anything else defaults to 0."""
+    apart) -- and, when `judge_stdout` is set, anything else is a judge
+    model-launch call (the acceptance-judge gate, active on a SUBSTANTIVE
+    session unless AGENTCTL_STAGE_REVIEW is forced off). Any command text
+    present as a key in `exit_codes` returns that exit code; anything else
+    defaults to 0."""
 
-    def __init__(self, *, head="deadbeef", exit_codes=None):
+    def __init__(self, *, head="deadbeef", exit_codes=None,
+                 judge_stdout=None, judge_exit=0):
         self.calls = []
         self.identity_calls = 0
         self.bash_calls = []
+        self.judge_calls = 0
         self.head = head
         self.exit_codes = exit_codes or {}
+        self.judge_stdout = judge_stdout
+        self.judge_exit = judge_exit
 
     def __call__(self, argv, *, timeout=None, stdin=""):
         if argv[:1] == ["env"] and "git" in argv:
@@ -125,6 +132,9 @@ class _Runner:
                 if needle in command:
                     return RunResult(code, stdout="", stderr="")
             return RunResult(0, stdout="", stderr="")
+        if self.judge_stdout is not None:
+            self.judge_calls += 1
+            return RunResult(self.judge_exit, stdout=self.judge_stdout, stderr="")
         raise AssertionError(f"unexpected call: {argv}")
 
 
@@ -190,14 +200,17 @@ def test_waiver_with_reason_is_accepted_and_logged(store):
         store, "waiver1", verify_command="true",
         negative_control_waiver="cannot be automated: destructive",
     )
+    runner = _Runner()
     d = cli.cmd_record_result(
         ns(session="waiver1", status="passed", actual="ran the suite", control=None,
            observation="pytest printed 12 passed, 0 failed"),
-        store=store, runner=_Runner(),
+        store=store, runner=runner,
     )
     assert d.ok is True
     state = store.load("waiver1")
     assert any(h.get("event") == "negative_control_waived" for h in state.history), state.history
+    # A waiver names a reason the control CANNOT be built -- it must never be run.
+    assert runner.bash_calls == ["true"]
 
 
 # --- 3: record-result refuses the pass when the negative control ALSO passes --
@@ -217,6 +230,8 @@ def test_record_result_refuses_when_negative_control_passes(store):
     assert state.node == Node.DIAGNOSING.value
     assert "did not fail on bad input" in state.stages[0].outcome.actual
     assert any(h.get("event") == "control_not_discriminating" for h in state.history), state.history
+    # Structured, not just a history event a caller would have to scan for.
+    assert d.data.get("failure_kind") == "control_not_discriminating"
 
 
 # --- 4: record-result passes when the negative control correctly fails --------
@@ -250,6 +265,125 @@ def test_negative_control_not_run_when_positive_check_red(store):
 
     assert d.ok is False
     assert runner.bash_calls == ["verify-cmd-fails"]
+
+
+# --- 5b: the control runs in the SAME venue as the positive check -------------
+
+def test_negative_control_runs_in_same_venue_as_positive_check(store):
+    state = _measurable_session(
+        store, "t5b", verify_command="verify-cmd", negative_control="verify-cmd-bad",
+    )
+    state.repo_root = "/fake/venue"
+    store.save(state)
+    runner = _Runner(exit_codes={"verify-cmd-bad": 1})
+
+    d = cli.cmd_record_result(
+        ns(session="t5b", status="passed", actual="ran the suite", control=None,
+           observation="pytest printed 12 passed, 0 failed"),
+        store=store, runner=runner,
+    )
+
+    assert d.ok is True
+    assert runner.bash_calls == [
+        "cd /fake/venue && verify-cmd",
+        "cd /fake/venue && verify-cmd-bad",
+    ]
+
+
+# --- 5c: a refused control (exit 126/127) is neither a pass nor a fail --------
+
+def test_negative_control_refused_exit_127_is_fix_control_not_scored(store):
+    _measurable_session(store, "t5c", verify_command="verify-cmd", negative_control="typo-cmd")
+    runner = _Runner(exit_codes={"typo-cmd": 127})
+
+    d = cli.cmd_record_result(
+        ns(session="t5c", status="passed", actual="ran the suite", control=None,
+           observation="pytest printed 12 passed, 0 failed"),
+        store=store, runner=runner,
+    )
+
+    assert d.ok is False
+    assert d.action == "fix_control"
+    assert "127" in d.detail
+    state = store.load("t5c")
+    # Neither verdict was recorded -- a refused control proves nothing either way.
+    assert not any(
+        h.get("event") in ("negative_control_discriminates", "control_not_discriminating")
+        for h in state.history
+    ), state.history
+    # Never cached: a refused control must be re-attempted, not trusted as green.
+    assert state.stages[0].outcome.checked_tree_ok is not True
+
+
+# --- 5d: exemption -- an acceptance_review stage needs no negative_control ----
+
+def test_acceptance_review_stage_exempt_from_negative_control_requirement():
+    doc = parse_plan({
+        "meta": {
+            "task_id": "r2-exempt", "goal": "g", "done_criterion": "d",
+            "criterion_type": "measurable", "weight_class": "substantive",
+            "external_research": "n/a",
+        },
+        "stage": [{
+            "index": 1, "title": "Review the change", "executor": "in_thread",
+            "expected_result_image": "reviewer confirms the change is correct",
+            "criterion_type": "acceptance_review",
+            "done_criterion": "reviewer accepts",
+            "material": "m", "means": "e", "method": "meth",
+            "conditions": "c", "invariants": "inv", "capability_required": "cap",
+            "principle": {
+                "statement": "statement 1", "source": "src",
+                "derivation": "der follows from src", "confidence": "high",
+                "refutation": "ref",
+            },
+        }],
+    })
+    problems = submission_violations(doc)
+    assert not any("negative_control" in p for p in problems), problems
+
+
+# --- 5e: exemption -- a non-substantive (in-thread) plan needs no control ------
+
+def test_non_substantive_plan_exempt_from_negative_control_requirement():
+    data = _plan_data()
+    data["meta"]["weight_class"] = "small_change"
+    doc = parse_plan(data)
+    problems = submission_violations(doc)
+    assert not any("negative_control" in p for p in problems), problems
+
+
+# --- must-fix 1: a cache hit skips re-running the negative control, too -------
+
+def test_cache_hit_skips_rerunning_negative_control(store, monkeypatch):
+    monkeypatch.delenv("AGENTCTL_STAGE_REVIEW", raising=False)
+    _measurable_session(store, "t8", verify_command="verify-cmd", negative_control="verify-cmd-bad")
+    observation = "pytest printed 12 passed, 0 failed"
+    runner = _Runner(
+        exit_codes={"verify-cmd-bad": 1}, judge_stdout="NO\nnot enough detail",
+    )
+
+    d1 = cli.cmd_record_result(
+        ns(session="t8", status="passed", actual="ran the suite", control=None,
+           observation=observation),
+        store=store, runner=runner,
+    )
+    assert d1.ok is False  # genuine revise verdict blocks -- the check itself passed
+    assert runner.bash_calls == ["verify-cmd", "verify-cmd-bad"]
+    assert runner.judge_calls == 1
+
+    # Same venue tree (the fake runner's git responses are unchanged): a second
+    # record-result call must skip re-running BOTH the positive command and the
+    # negative control, and go straight to the judge.
+    runner.judge_stdout = "YES\nlooks right now"
+    d2 = cli.cmd_record_result(
+        ns(session="t8", status="passed", actual="ran the suite", control=None,
+           observation=observation),
+        store=store, runner=runner,
+    )
+
+    assert d2.ok is True
+    assert runner.bash_calls == ["verify-cmd", "verify-cmd-bad"]  # no re-run
+    assert runner.judge_calls == 2  # judge re-queried regardless of the cache
 
 
 # --- 6: checkrun's submit-time advisory reports DISCRIMINATES/NOT_DISCRIMINATING

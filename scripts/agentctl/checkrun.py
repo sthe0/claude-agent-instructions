@@ -38,8 +38,15 @@ same resolved venue, right after the positive check, and labelled DISCRIMINATES
 (it failed on the known-bad input, as a negative control must) or
 NOT_DISCRIMINATING (it matched expected_exit anyway — the same condition
 `cmd_record_result` blocks a stage's pass on) — or NOT_JUDGED under the same
-three conditions as the positive check. Advisory only, like everything else
-here: submit-time labelling never blocks.
+three conditions as the positive check, or because the control itself was
+refused (exit 126/127 — a typo or missing binary, not a real outcome).
+DISCRIMINATES is only ever assigned when the positive check is GREEN_AT_SUBMIT
+— a RED positive means the check has not yet been shown to pass on ANY input,
+so a control that also fails proves nothing about discrimination (still
+NOT_DISCRIMINATING, since that direction is decidable regardless), and a
+control that passes is NOT_JUDGED ("discrimination undecidable") rather than
+the misleading DISCRIMINATES. Advisory only, like everything else here:
+submit-time labelling never blocks.
 
 Scope boundaries:
   - Only stage `verify_command` entries are observed. `[[final_check]]` entries
@@ -85,6 +92,15 @@ RED = "red"
 # shared with the positive check (same three not-run reasons).
 DISCRIMINATES = "discriminates"
 NOT_DISCRIMINATING = "not-discriminating"
+# Shell exit codes 126 ("command found but not executable") and 127 ("command
+# not found") mean the invoked command never ran at all -- a typo or a missing
+# binary in a declared negative_control, not a real outcome on the known-bad
+# input. A structural fact about the exit code alone, decided without reading
+# the command's text or output. Duplicated in cli.py's own
+# NEGATIVE_CONTROL_REFUSED_EXIT_CODES rather than imported, the same way
+# _run_and_observe already duplicates cli._run_check instead of importing it
+# (cli.py imports FROM checkrun.py; the reverse would be circular).
+NEGATIVE_CONTROL_REFUSED_EXIT_CODES = frozenset({126, 127})
 
 
 @dataclass
@@ -235,11 +251,29 @@ def observe_stage_checks(
             if neg_reason:
                 obs.negative_control_label = NOT_JUDGED
                 obs.negative_control_reason = neg_reason
+            elif neg_rc in NEGATIVE_CONTROL_REFUSED_EXIT_CODES:
+                obs.negative_control_returncode = neg_rc
+                obs.negative_control_label = NOT_JUDGED
+                obs.negative_control_reason = (
+                    f"negative_control refused: exit {neg_rc} "
+                    "(command not found or not executable)"
+                )
             else:
                 obs.negative_control_returncode = neg_rc
-                obs.negative_control_label = (
-                    NOT_DISCRIMINATING if neg_rc == crit.expected_exit else DISCRIMINATES
-                )
+                if obs.label == GREEN_AT_SUBMIT:
+                    obs.negative_control_label = (
+                        NOT_DISCRIMINATING if neg_rc == crit.expected_exit else DISCRIMINATES
+                    )
+                elif neg_rc == crit.expected_exit:
+                    # The positive check is RED, but the control ALSO fails
+                    # (matches expected_exit) -- still not-discriminating,
+                    # decidable regardless of the positive check's own state.
+                    obs.negative_control_label = NOT_DISCRIMINATING
+                else:
+                    obs.negative_control_label = NOT_JUDGED
+                    obs.negative_control_reason = (
+                        "positive check not green at submit; discrimination undecidable"
+                    )
         observations.append(obs)
     return observations
 

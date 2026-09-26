@@ -33,7 +33,8 @@ TOML shape (minimal):
                                           # negative_control_waiver below): a command, run
                                           # in the same venue, that must NOT exit
                                           # expected_exit -- proof the check can go red.
-    negative_control_waiver = "n/a"      # alternative to negative_control: a non-empty
+    negative_control_waiver = "check probes a live external service; no safe known-bad input"
+                                          # alternative to negative_control: a non-empty
                                           # reason the check cannot be shown to fail
     cost_tier = "medium"                  # optional; small|medium|large. Declares the
                                           # stage's expected size: dispatch reads it as the
@@ -1353,7 +1354,9 @@ def parse_plan(
             str(s["negative_control"]) if s.get("negative_control") else None
         )
         negative_control_waiver = (
-            str(s["negative_control_waiver"]) if s.get("negative_control_waiver") else None
+            str(s["negative_control_waiver"]).strip()
+            if str(s.get("negative_control_waiver") or "").strip()
+            else None
         )
         stages.append(
             Stage(

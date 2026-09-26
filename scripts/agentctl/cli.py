@@ -659,6 +659,16 @@ def _run_check(command: str, expected_exit: int, runner: Runner | None, cwd: str
     return result.returncode == expected_exit, result
 
 
+# Shell exit codes 126 ("command found but not executable") and 127 ("command not
+# found") mean the invoked command never ran at all -- a typo or a missing binary
+# in a declared negative_control, not a real outcome on the known-bad input. A
+# structural fact about the exit code alone, decided without reading the command's
+# text or output, so it is never confused with a legitimate discriminating (or
+# non-discriminating) result. Shared between cmd_record_result's refusal and
+# checkrun's advisory NOT_JUDGED labelling.
+NEGATIVE_CONTROL_REFUSED_EXIT_CODES = frozenset({126, 127})
+
+
 def _verify_command_result(stage, runner: Runner | None, cwd: str | None = None):
     """Execute a measurable stage's `verify_command`, if it has one.
 
@@ -4850,6 +4860,11 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     actual = args.actual or ""
     stage.outcome.actual = actual
     passed = args.status == "passed"
+    # Set when the mechanical check below fails for a reason worth naming to a
+    # later overcome-difficulty pass without scanning state.history — currently
+    # only "control_not_discriminating" (R2's negative control matched the
+    # stage's expected_exit on a known-bad input).
+    failure_kind: str | None = None
 
     # Unconditional attempt log: every record-result call for this stage
     # counts and logs, including one a later gate blocks before any verification
@@ -4992,24 +5007,27 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                         f"stage {stage.index} verify_command refused: {refusal}",
                     )
             # Green-check cache: a repeated record-result call whose venue tree
-            # hasn't moved since the last GREEN run skips re-running the command and
-            # goes straight to the judge below. A red result is never cached, so a
-            # genuinely broken check is always re-run rather than trusted to still
-            # be broken. Only computed when there is an actual check to cache
-            # (measurable + verify_command) — an acceptance_review stage's
-            # verify_command, if present, is never machine-run, so identity must
-            # never be probed for it either. The cache assumes the check reads only
-            # the venue tree (see _venue_tree_identity) — a check that also reads
-            # files outside it (the plan TOML, proposals.json, ...) can be served
-            # stale even though its own venue is unchanged.
+            # hasn't moved since the last fully-green run (the positive command AND,
+            # if declared, its negative_control) skips re-running BOTH commands and
+            # goes straight to the judge below. checked_tree_ok is only ever set True
+            # once the WHOLE check has cleared -- see state.py's Outcome docstring --
+            # so a cache hit never needs to re-prove the control discriminates: the
+            # tree it discriminated against hasn't moved. A red or non-discriminating
+            # result is never cached, so a genuinely broken check or control is
+            # always re-run rather than trusted to still be broken. Only computed
+            # when there is an actual check to cache (measurable + verify_command) —
+            # an acceptance_review stage's verify_command, if present, is never
+            # machine-run, so identity must never be probed for it either. The cache
+            # assumes the check reads only the venue tree (see _venue_tree_identity)
+            # — a check that also reads files outside it (the plan TOML,
+            # proposals.json, ...) can be served stale even though its own venue is
+            # unchanged.
             identity = _venue_tree_identity(cwd, runner) if has_check else None
-            if _cached_check_hit(stage, identity):
+            cache_hit = _cached_check_hit(stage, identity)
+            if cache_hit:
                 ok, result = True, None
             else:
                 ok, result = _verify_command_result(stage, runner, cwd=cwd)
-                if identity is not None:
-                    stage.outcome.checked_tree_identity = identity
-                    stage.outcome.checked_tree_ok = ok
             if not ok:
                 passed = False
                 note = (
@@ -5018,6 +5036,15 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 )
                 actual = (actual + "\n" + note) if actual else note
                 stage.outcome.actual = actual
+                if identity is not None:
+                    stage.outcome.checked_tree_identity = identity
+                    stage.outcome.checked_tree_ok = False
+            elif cache_hit:
+                # The whole check for this exact venue tree identity already
+                # cleared on a prior call (positive command, plus any negative
+                # control or waiver) -- skip re-running everything below and fall
+                # through to the judge.
+                pass
             elif has_check and crit.negative_control:
                 # The positive check just went green -- now prove it CAN go red.
                 # Fed the known-bad input, a matching exit code means the check
@@ -5026,6 +5053,19 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 neg_matched, neg_result = _run_check(
                     crit.negative_control, crit.expected_exit, runner, cwd=cwd,
                 )
+                if neg_result.returncode in NEGATIVE_CONTROL_REFUSED_EXIT_CODES:
+                    # The control command itself never ran (typo, missing binary) —
+                    # a fact about the exit code alone, not a judgment on whether the
+                    # bad input was caught. Refuse like an unresolvable venue: never
+                    # cache, never spend a verdict either way, tell the author to fix
+                    # the command text.
+                    store.save(state)
+                    return Directive(
+                        False, state.node, "fix_control",
+                        f"stage {stage.index} negative_control refused: exit "
+                        f"{neg_result.returncode} (command not found or not "
+                        f"executable): {crit.negative_control}",
+                    )
                 if neg_matched:
                     passed = False
                     note = (
@@ -5035,17 +5075,28 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                     )
                     actual = (actual + "\n" + note) if actual else note
                     stage.outcome.actual = actual
+                    failure_kind = "control_not_discriminating"
                     state.log(
                         "control_not_discriminating",
                         stage=stage.index, negative_control=crit.negative_control,
                     )
+                    if identity is not None:
+                        stage.outcome.checked_tree_identity = identity
+                        stage.outcome.checked_tree_ok = False
                 else:
                     state.log("negative_control_discriminates", stage=stage.index)
-            elif has_check and crit.negative_control_waiver:
-                state.log(
-                    "negative_control_waived",
-                    stage=stage.index, reason=crit.negative_control_waiver,
-                )
+                    if identity is not None:
+                        stage.outcome.checked_tree_identity = identity
+                        stage.outcome.checked_tree_ok = True
+            else:
+                if has_check and crit.negative_control_waiver:
+                    state.log(
+                        "negative_control_waived",
+                        stage=stage.index, reason=crit.negative_control_waiver,
+                    )
+                if identity is not None:
+                    stage.outcome.checked_tree_identity = identity
+                    stage.outcome.checked_tree_ok = True
 
     # Cheap-judge COGNITION + PURE gate (runs AFTER the mechanical check above, so
     # a check the command itself contradicts never spends a judge call).
@@ -5195,12 +5246,13 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
             False, state.node, "escalate",
             f"stage {stage.index} failed twice with same result digest; stop retrying",
             marker="ESCALATE",
+            data={"failure_kind": failure_kind} if failure_kind else {},
         )
     # enter the overcome-difficulty sub-spine: a fresh Difficulty record must be
     # worked through (declare -> investigate -> critique) before replan is allowed.
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
     state.difficulty = Difficulty()
-    data = {}
+    data = {"failure_kind": failure_kind} if failure_kind else {}
     if div is not None and gates.effort_active(state):
         # Already entering DIAGNOSING for the stage failure — attach the divergence
         # instead of re-transitioning or opening a second Difficulty, but still honor

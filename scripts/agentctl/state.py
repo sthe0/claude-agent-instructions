@@ -1249,7 +1249,13 @@ class Outcome:
     # actually RUN, and whether that run was green. A later record-result call whose
     # identity still matches AND whose cached result was green skips re-running the
     # command (cli._cached_check_hit) — a red result is never cached, so a genuinely
-    # broken check is always re-run rather than trusted to still be broken. Absent on
+    # broken check is always re-run rather than trusted to still be broken.
+    # `checked_tree_ok` covers the WHOLE check, not just the positive command: when
+    # the criterion also declares a `negative_control`, it is True only once the
+    # control has also been shown to fail on this exact tree (or the control is
+    # waived) — never on the positive command's result alone. A cache hit then skips
+    # re-running BOTH commands, so a stage carrying a negative_control keeps the same
+    # "unchanged tree re-queries only the judge" guarantee as one without. Absent on
     # every state predating this field (defaults via from_dict), so legacy states
     # load unchanged.
     checked_tree_identity: str | None = None
