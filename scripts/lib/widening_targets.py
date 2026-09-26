@@ -379,12 +379,30 @@ def program_name(token: str) -> str:
 
 _CLAUDE_PROGRAM_NAMES = frozenset({"claude", "claude-code"})
 
+# Round-2 finding (rereview B1' item 1): a basename-only check misses the real
+# `claude` binary invoked by its install path or launcher wrapper -- a
+# per-version `.../claude/versions/<ver>` binary, the bundled npm package's
+# `node .../@anthropic-ai/claude-code/cli.js` entry point, or an `npx
+# @anthropic-ai/claude-code[@tag]` launch -- none of whose LAST path segment
+# is `claude`/`claude-code`, so `program_name` alone never catches them. A
+# plain substring probe (not a path-shaped match) deliberately: the marker
+# must survive appearing anywhere in the token, including with a trailing
+# `@<tag>` (npx) or as a middle path segment (the versions directory).
+_CLAUDE_INSTALL_PATH_MARKERS = ("/claude/versions/", "@anthropic-ai/claude-code")
+
+
+def _is_claude_install_path(token: str) -> bool:
+    tok_cf = token.casefold()
+    return any(marker in tok_cf for marker in _CLAUDE_INSTALL_PATH_MARKERS)
+
 
 def is_claude_program(tokens: list[str]) -> bool:
     """True iff, after stripping wrapper tokens, the leading program token is
     `claude` in any spelling (bare, absolute path, a `claude-code` alias, an
     npm-scoped `@anthropic-ai/claude-code` package name — whose basename per
-    `program_name` is `claude-code` — or via a wrapper; finding B1).
+    `program_name` is `claude-code` — or via a wrapper; finding B1), OR any
+    remaining token names the real binary by its install path or launcher
+    form (round 2, finding B1' item 1 — see `_CLAUDE_INSTALL_PATH_MARKERS`).
 
     A wrapper's own options (`nice -n 5`, `sudo -u x`, `stdbuf -o0`) are not
     parsed per wrapper, so once any wrapper was stripped, `claude`/`claude-code`
@@ -395,6 +413,8 @@ def is_claude_program(tokens: list[str]) -> bool:
     if not stripped:
         return False
     if program_name(stripped[0]).casefold() in _CLAUDE_PROGRAM_NAMES:
+        return True
+    if any(_is_claude_install_path(t) for t in stripped):
         return True
     wrapped = len(stripped) < len(tokens)
     return wrapped and any(program_name(t).casefold() in _CLAUDE_PROGRAM_NAMES for t in stripped)

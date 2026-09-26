@@ -884,20 +884,27 @@ def repo_root_add_dir_args(kind: str, cwd: str) -> list[str]:
 
 
 def repo_root_deny_rules(kind: str, cwd: str) -> list[str]:
-    """Guard `Edit` DENY rules pairing `repo_root_add_dir_args`' own
-    `--add-dir` grant (finding S10): a raw `--add-dir` widens the child's
-    filesystem write surface on its own under `acceptEdits`/`auto`
-    permission modes, with no `Edit` allow rule required — so the repo-root
-    grant otherwise hands a spawned developer unguarded write access to
-    `.claude/`, `settings*.json` and `.git/` anywhere under the repo root,
-    the same surface `stage_grant_rules` already guards for a declared WRITE
-    add_dir. Mirrors that function's four-glob shape exactly. Returns `[]`
-    whenever `repo_root_add_dir_args` itself would (same `kind`/root/cwd
-    gating), so the two stay in lockstep by construction rather than by two
-    separately-maintained conditions."""
-    if not repo_root_add_dir_args(kind, cwd):
+    """Guard `Edit` DENY rules for a `developer` spawn's VCS repo root
+    (finding S10): under `acceptEdits`/`auto` permission modes a `developer`
+    child's own cwd is already unguarded-writable with no `Edit` allow rule
+    required, and `repo_root_add_dir_args` widens that further to the whole
+    repo root when cwd sits strictly below it — either way the spawn reaches
+    `.claude/`, `settings*.json` and `.git/` anywhere under the repo root
+    with no guard, the same surface `stage_grant_rules` already denies for a
+    declared WRITE add_dir. Mirrors that function's four-glob shape exactly.
+
+    Round-2 should-fix (S10 deny gap): this used to return `[]` whenever
+    `repo_root_add_dir_args` did, which included the `cwd == root` case —
+    but that case needs the SAME denies, not none: no `--add-dir` grant is
+    needed to reach a directory the child already starts in, so the deny
+    pairing must not be conditioned on that grant having fired. Fires
+    whenever `cwd` sits inside a VCS repo (root found at all), independent
+    of whether root strictly exceeds cwd."""
+    if kind != "developer":
         return []
     root = _vcs_root(cwd)
+    if not root:
+        return []
     base = grants.rule_file_arg(root.rstrip("/"))
     return [
         f"Edit({base}/**/.claude/**)",

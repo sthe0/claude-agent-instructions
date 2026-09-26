@@ -334,7 +334,6 @@ _INSTALL_PATH_CLAUDE_RULES = [
 
 
 @pytest.mark.parametrize("rule", _INSTALL_PATH_CLAUDE_RULES)
-@pytest.mark.xfail(strict=True, reason="is_claude_program recognizes only the claude/claude-code basename")
 def test_claude_recognized_by_install_path_refused(rule):
     with pytest.raises(GrantValidationError):
         validate_rule(rule)
@@ -344,7 +343,6 @@ def test_claude_recognized_by_install_path_refused(rule):
 # (rereview should-fix "S10 deny gap") --------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="repo_root_deny_rules returns [] when workdir == repo root")
 def test_s10_repo_root_workdir_itself_carries_surface_denies(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
