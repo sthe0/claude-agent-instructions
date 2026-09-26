@@ -12663,7 +12663,7 @@ disposition = "keep"
 ground = "CLAUDE.md's own § Coordination heading names this class explicitly: \"Cognition the engine does NOT replace (always yours)\" — escalation timing, task-weight judgment, verification-axis discipline, and outcome framing are judgment calls over conversational/task content, not predicates decidable from observable repo/engine state."
 
 [[entry]]
-id = "f20637613ceb4852"
+id = "2a1fa683d325447b"
 domain = "prose"
 file = "CLAUDE.md"
 class = "perception"
@@ -12913,7 +12913,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "585a64fe5230439c"
+id = "e55b79d08b618de0"
 domain = "prose"
 file = "memory-global/leaves/acting-without-asking.md"
 class = "perception"
@@ -12921,7 +12921,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "5ec77102a531f537"
+id = "81fd940a9d16b52d"
 domain = "prose"
 file = "memory-global/leaves/acting-without-asking.md"
 class = "perception"
@@ -12929,7 +12929,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "a2cc73f63e1f15af"
+id = "7e144e614ba35e98"
 domain = "prose"
 file = "memory-global/leaves/acting-without-asking.md"
 class = "perception"
@@ -12937,7 +12937,15 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "3aec4d51550b6c24"
+id = "d30acf0665697569"
+domain = "prose"
+file = "memory-global/leaves/acting-without-asking.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "252a12ea98a1083a"
 domain = "prose"
 file = "memory-global/leaves/acting-without-asking.md"
 class = "perception"

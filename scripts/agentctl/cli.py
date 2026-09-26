@@ -2353,7 +2353,8 @@ def _apply_enumeration_result(
             if unread_meta:
                 entry["id"] = _unread_part_slot(candidates, entry)
             final_id = _upsert_candidate(
-                candidates, entry, preserve_disposition=preserve_disposition or unread_meta,
+                candidates, entry,
+                preserve_disposition=preserve_disposition or (unread_meta and honor_dismissed_hashes),
                 carry=carry)
             raised.append(final_id)
             if carry is not None:

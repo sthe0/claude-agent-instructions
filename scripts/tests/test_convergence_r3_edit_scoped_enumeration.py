@@ -577,6 +577,28 @@ def test_narrowed_pass_keeps_a_recorded_meta_question_byte_identical(tmp_path):
     assert bag["candidates"] == [recorded]
 
 
+def test_reopen_dismissed_reopens_a_meta_question_on_a_narrowed_pass(tmp_path):
+    """--reopen-dismissed drops the dismissal record, so the row it described must
+    reopen too, even on a pass that did not read the meta part."""
+    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    doc = load_plan(plan_path)
+    statement = "[plan.goal] who accepts the result?"
+    h = premise.dismissal_hash(statement)
+    bag = {
+        "candidates": [{"id": "qenum-meta-1", "statement": statement, "disposition": "dismissed",
+                        "reason": "answered in the order", "question": "", "target": "plan.goal"}],
+        "dismissed_hashes": {h: [{"reason": "answered in the order", "from_id": "qenum-meta-1",
+                                  "target": "plan.goal"}]},
+        "enumerated": True,
+    }
+
+    cli._apply_enumeration_result(
+        bag, doc, plan_path, [("plan.goal", "who accepts the result?")],
+        True, parts=(False, {1}), honor_dismissed_hashes=False)
+
+    assert bag["candidates"][0]["disposition"] == "raised"
+    assert not bag["dismissed_hashes"].get(h)
+
 def test_hint_lookup_prefers_the_record_that_names_a_target():
     """`record_dismissed_hash` turns a legacy target-less dict into a list and appends
     to it, so one hash can carry [legacy, targeted]; the hint names the targeted one."""
