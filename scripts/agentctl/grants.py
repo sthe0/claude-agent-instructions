@@ -855,6 +855,14 @@ def _path_call_covered(grants: StageGrants, tool_name: str, path: str) -> bool:
         if resolved == dir_resolved or resolved.startswith(dir_resolved + "/"):
             if tool_name in ("Edit", "Write", "NotebookEdit") and a.mode != "write":
                 continue
+            if tool_name in ("Edit", "Write", "NotebookEdit") and widening_targets.write_add_dir_surface_denied(
+                dir_resolved, resolved
+            ):
+                # Finding S4: a write add_dir's materialized ALLOW is paired
+                # with four guard DENYs (spawn-specialist.py's
+                # `stage_grant_rules`) that this same path would actually hit
+                # at the harness level — report NOT-covered, not covered.
+                continue
             return True
     return False
 

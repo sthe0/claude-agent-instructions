@@ -4974,20 +4974,29 @@ def _classify_transcript_denials(
         return
     known_ids = {m.get("tool_use_id") for m in state.materialization_defects} | \
         {m.get("tool_use_id") for m in state.planning_misses}
-    for use in transcript_stops.parse_bash_tool_uses(transcript_path):
+    for use in transcript_stops.parse_tool_uses(transcript_path):
         if use.stop_kind != "permission-denial" or use.tool_use_id in known_ids:
             continue
+        # Finding S4: a file-tool (Edit/Read/Write/NotebookEdit) add_dir
+        # materialization denial must classify the same way a Bash one does
+        # — not just Bash, which is all this loop checked before.
+        if use.tool_name == "Bash":
+            call_input = {"command": use.command}
+            call_text = use.command
+        else:
+            call_input = {"file_path": use.file_path}
+            call_text = use.file_path
         row_base = {
             "stage_index": stage.index, "tool_use_id": use.tool_use_id,
-            "tool_name": "Bash", "tool_input_digest": _digest(use.command),
-            # The raw command text itself, not just its digest -- needed so
-            # `cmd_dispatch`'s promotion logic (finding S2) can match a
+            "tool_name": use.tool_name, "tool_input_digest": _digest(call_text),
+            # The raw command/path text itself, not just its digest -- needed
+            # so `cmd_dispatch`'s promotion logic (finding S2) can match a
             # later self-reported Rule: line against this SPECIFIC row by
             # prefix (`_bash_rule_command_from_call`), which a digest alone
             # cannot support since the two texts are rarely byte-identical.
-            "command": use.command, "ts": _utcnow(),
+            "command": call_text, "ts": _utcnow(),
         }
-        if _grants.grant_covers_call(coverage, "Bash", {"command": use.command}):
+        if _grants.grant_covers_call(coverage, use.tool_name, call_input):
             state.materialization_defects.append({**row_base, "evidence": "transcript"})
         else:
             state.planning_misses.append({**row_base, "asked_user": False, "source": "transcript"})

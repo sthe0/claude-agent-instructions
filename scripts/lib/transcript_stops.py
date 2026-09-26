@@ -51,6 +51,25 @@ class BashToolUse:
     stop_text: str | None  # the tool_result's text; None when stop_kind == "ran"
 
 
+# Finding S4: `_classify_transcript_denials` needs file-tool denials classified
+# too (an add_dir materialization failure denies Edit/Read/Write/NotebookEdit,
+# never Bash), not just Bash — `ToolUse` generalizes `BashToolUse` with a
+# `tool_name` field and a `file_path` (populated for the four file tools,
+# `None` for Bash, mirroring `command`'s Bash-only/`None`-otherwise split).
+_TRACKED_TOOLS = frozenset({"Bash", "Edit", "Read", "Write", "NotebookEdit"})
+
+
+@dataclass(frozen=True)
+class ToolUse:
+    tool_use_id: str
+    tool_name: str
+    command: str | None  # populated for Bash, else None
+    file_path: str | None  # populated for Edit/Read/Write/NotebookEdit, else None
+    line_no: int
+    stop_kind: str
+    stop_text: str | None
+
+
 def _result_text(content: object) -> str:
     """A tool_result's `content` is either a bare string (every fixture observed) or
     a list of content blocks (the shape other tool_result kinds use elsewhere in a
@@ -132,6 +151,72 @@ def parse_bash_tool_uses(path: str | Path) -> list[BashToolUse]:
                     out.append(BashToolUse(
                         tool_use_id=tool_use_id,
                         command=command,
+                        line_no=use_line_no,
+                        stop_kind=stop_kind,
+                        stop_text=text if stop_kind != "ran" else None,
+                    ))
+    return out
+
+
+def parse_tool_uses(path: str | Path) -> list[ToolUse]:
+    """Every tracked tool_use/tool_result pair in a transcript JSONL, in file
+    order — the same shape as `parse_bash_tool_uses`, generalized from
+    Bash-only to `_TRACKED_TOOLS` (Bash, Edit, Read, Write, NotebookEdit) so a
+    file-tool add_dir materialization denial classifies the same way a Bash
+    one does (finding S4). Kept as a separate function from
+    `parse_bash_tool_uses` rather than widening that one in place: an existing
+    regression test pins `parse_bash_tool_uses` DROPPING a non-Bash tool_use
+    even when it has a matching tool_result, so widening its own tool-name
+    filter in place would silently invert an intentionally-pinned behavior."""
+    uses: dict[str, tuple[int, str, str | None, str | None]] = {}
+    out: list[ToolUse] = []
+    with Path(path).open(encoding="utf-8") as fh:
+        for line_no, raw in enumerate(fh, start=1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                entry = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            entry_type = entry.get("type")
+            content = entry.get("message", {}).get("content") or []
+            if entry_type == "assistant":
+                for block in content:
+                    if not isinstance(block, dict) or block.get("type") != "tool_use":
+                        continue
+                    tool_name = block.get("name")
+                    if tool_name not in _TRACKED_TOOLS:
+                        continue
+                    tool_use_id = block.get("id")
+                    if not tool_use_id:
+                        continue
+                    tool_input = block.get("input", {})
+                    if tool_name == "Bash":
+                        command = tool_input.get("command", "")
+                        file_path = None
+                    else:
+                        command = None
+                        file_path = tool_input.get("file_path", "")
+                    uses[tool_use_id] = (line_no, tool_name, command, file_path)
+            elif entry_type == "user":
+                for block in content:
+                    if not isinstance(block, dict) or block.get("type") != "tool_result":
+                        continue
+                    tool_use_id = block.get("tool_use_id")
+                    if tool_use_id not in uses:
+                        continue
+                    use_line_no, tool_name, command, file_path = uses.pop(tool_use_id)
+                    is_error = bool(block.get("is_error"))
+                    text = _result_text(block.get("content"))
+                    stop_kind = _classify(entry.get("toolDenialKind"), is_error, text)
+                    out.append(ToolUse(
+                        tool_use_id=tool_use_id,
+                        tool_name=tool_name,
+                        command=command,
+                        file_path=file_path,
                         line_no=use_line_no,
                         stop_kind=stop_kind,
                         stop_text=text if stop_kind != "ran" else None,

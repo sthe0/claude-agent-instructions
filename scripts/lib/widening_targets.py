@@ -65,6 +65,29 @@ def is_live_settings(path: str) -> bool:
     return False
 
 
+def write_add_dir_surface_denied(base: str, candidate: str) -> bool:
+    """True iff `candidate` (an already-resolved absolute path known to be
+    under the already-resolved absolute `base`) falls inside one of the four
+    guard DENY globs `spawn-specialist.py`'s `stage_grant_rules` pairs with
+    every WRITE add_dir's `Edit(//base/**)` ALLOW: a `.claude` component at
+    any depth, a `.git` component at any depth (covers both `.git/**` and
+    bare `.git`), or a `settings*.json` basename. A write add_dir's raw
+    filesystem grant would otherwise open this surface up underneath itself
+    with no baseline deny to stop it (finding S4) — `grant_covers_call` must
+    answer NOT-covered for exactly the paths the materialized deny rules
+    would actually refuse, or a denial there is misreported as a
+    materialization defect instead of the correctly-denied write it is."""
+    try:
+        rel_parts = PurePosixPath(candidate).relative_to(base).parts
+    except ValueError:
+        return False
+    if not rel_parts:
+        return False
+    if ".claude" in rel_parts or ".git" in rel_parts:
+        return True
+    return bool(_SETTINGS_BASENAME_RE.match(rel_parts[-1]))
+
+
 def enumerate_live_settings(child_cwd: str | None, root_cwd: str | None) -> list[str]:
     """The existing settings*.json documents among exactly the FOUR named
     locations a live harness could actually be loading from: the agent
@@ -179,7 +202,7 @@ def protected_roots() -> list[str]:
     harness happens to be reading from."""
     return [
         _norm(str(Path.home())),
-        _norm(str(Path.home() / ".claude")),
+        _norm(str(config_root.legacy_home())),
         _norm(str(config_root.agent_home())),
         _norm(str(config_root.harness_config_root())),
         _norm(str(config_root.agentctl_state_dir())),
@@ -222,7 +245,7 @@ def add_dir_under_protected_root(path: str) -> bool:
         return False
     norm_cf = _norm(path).casefold()
     for root in (
-        _norm(str(Path.home() / ".claude")),
+        _norm(str(config_root.legacy_home())),
         _norm(str(config_root.harness_config_root())),
         _norm(str(config_root.agentctl_state_dir())),
     ):

@@ -1989,6 +1989,14 @@ disposition = "keep"
 ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
 
 [[entry]]
+id = "c35446061ab9bb6f"
+domain = "code"
+file = "scripts/lib/widening_targets.py"
+class = "structural"
+disposition = "keep"
+ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
+
+[[entry]]
 id = "afa7371a78eed636"
 domain = "code"
 file = "scripts/lib/writer_pass.py"
@@ -9598,6 +9606,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "149968ae62d91544"
+domain = "code"
+file = "scripts/tests/test_stage_grants.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "e5fd8c108640a702"
 domain = "code"
 file = "scripts/tests/test_stage_grants.py"
 class = "not-a-gate"

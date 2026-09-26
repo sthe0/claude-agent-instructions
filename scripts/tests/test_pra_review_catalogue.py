@@ -187,7 +187,6 @@ def test_s3_kind_baseline_covered_call_is_in_effective_coverage(store, fixtures_
 # surface denies must be subtracted by grant_covers_call ---------------------
 
 
-@pytest.mark.xfail(strict=True, reason="S4: grant_covers_call ignores materialized surface denies")
 def test_s4_write_add_dir_surface_deny_not_covered_by_grant_covers_call(tmp_path):
     write_dir = tmp_path / "writedir"
     write_dir.mkdir()

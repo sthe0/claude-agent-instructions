@@ -369,18 +369,25 @@ def test_unknown_tool_name_never_covered():
     assert not grant_covers_call(grants, "SomeOtherTool", {"file_path": "/x"})
 
 
-def test_dot_claude_under_non_protected_venue_still_matched(tmp_path):
-    # A project-local `.claude/agent-memory/` directory (not the harness's
-    # own `~/.claude` or the agentctl state dir) is a legitimate write
-    # target -- e.g. project memory -- and must still be matchable; only
-    # the specific protected roots widening_targets names are excluded,
-    # not any path with a `.claude` component in general.
+def test_dot_claude_under_write_add_dir_is_the_synthesized_surface_deny_not_covered(tmp_path):
+    # A project-local `.claude/agent-memory/` path under a WRITE add_dir is
+    # NOT covered: `spawn-specialist.py`'s `stage_grant_rules` pairs every
+    # write add_dir's Edit ALLOW with an unconditional `Edit({base}/**/
+    # .claude/**)` DENY (finding S4's `write_add_dir_surface_denied`), so
+    # the harness would actually refuse this write regardless of the
+    # parent directory's own write grant -- `grant_covers_call` must agree
+    # with that materialized denial rather than false-positive "covered".
+    # This is unrelated to `_resolve_for_match`'s protected-root exclusion
+    # (only the SPECIFIC roots widening_targets names, e.g. `~/.claude`,
+    # not any `.claude` component in general) -- that check is about
+    # whether the add_dir/rule ITSELF resolves into a protected root, not
+    # about the surface deny synthesized underneath a write add_dir.
     mem_dir = tmp_path / ".claude" / "agent-memory"
     mem_dir.mkdir(parents=True)
     target = mem_dir / "leaf.md"
     target.write_text("x")
     grants = StageGrants(add_dirs=[AddDirGrant(path=str(tmp_path), mode="write", provenance="declared")])
-    assert grant_covers_call(grants, "Write", {"file_path": str(target)})
+    assert not grant_covers_call(grants, "Write", {"file_path": str(target)})
 
 
 def test_edit_rule_covers_write_and_notebookedit_calls(tmp_path):
