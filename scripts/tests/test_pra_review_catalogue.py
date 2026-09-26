@@ -423,3 +423,50 @@ def test_baseline_script_rule_both_forms_materialized_and_engine_agrees(tmp_path
     engine = grant_covers_call(_baseline_grants("developer"), "Bash", {"command": command})
     assert harness, f"child settings do not admit {command!r}"
     assert engine == harness
+
+
+# --- round 4 (root): a wrapper with its own positional operand or an unlisted
+# value flag (`flock <lockfile>`, `timeout -s KILL`) must not hide a program
+# the validator refuses when it stands alone. Stated as a law over every
+# (refused inner command) x (wrapper prefix) pair, not as a list of cases:
+# whatever the validator refuses bare, it refuses wrapped. -----------------
+
+_REFUSED_BARE_COMMANDS = [
+    "apply-settings.sh",
+    "python3 -m agentctl approve",
+    "awk BEGIN",
+    "git config user.name x",
+    "find / -exec rm",
+    "tee /etc/x",
+]
+
+_WRAPPER_PREFIXES = [
+    pytest.param("flock /tmp/x", marks=pytest.mark.xfail(strict=True, reason="wrapper operand hides the program")),
+    pytest.param("flock -w 5 /tmp/x", marks=pytest.mark.xfail(strict=True, reason="wrapper operand hides the program")),
+    pytest.param("timeout -s KILL", marks=pytest.mark.xfail(strict=True, reason="wrapper operand hides the program")),
+    pytest.param("timeout -s KILL 60", marks=pytest.mark.xfail(strict=True, reason="wrapper operand hides the program")),
+    "timeout 60",
+    "nice -n 5",
+    "setsid",
+]
+
+
+@pytest.mark.parametrize("inner", _REFUSED_BARE_COMMANDS)
+def test_refused_bare_command_is_refused(inner):
+    with pytest.raises(GrantValidationError):
+        validate_rule(f"Bash({inner}:*)")
+
+
+@pytest.mark.parametrize("prefix", _WRAPPER_PREFIXES)
+@pytest.mark.parametrize("inner", _REFUSED_BARE_COMMANDS)
+def test_wrapper_does_not_hide_a_refused_command(prefix, inner):
+    with pytest.raises(GrantValidationError):
+        validate_rule(f"Bash({prefix} {inner}:*)")
+
+
+@pytest.mark.parametrize("rule", [
+    "Bash(timeout 600 python3 -m pytest:*)",
+    "Bash(nice -n 5 git log:*)",
+])
+def test_wrapped_benign_command_stays_accepted(rule):
+    validate_rule(rule)
