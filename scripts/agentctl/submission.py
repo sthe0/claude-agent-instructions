@@ -61,7 +61,7 @@ import re
 from .conditions import judge_restatement, restatement_prefilter
 from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
-from .state import WeightClass
+from .state import CheckKind, CriterionType, WeightClass
 from .text_shape import ELEMENT_NAMES
 from .text_shape import normalize_string as _normalize_string
 
@@ -715,6 +715,38 @@ def _edge_violations(stage) -> list[str]:
     return out
 
 
+def _negative_control_violations(stage) -> list[str]:
+    """A measurable, shell-kind verify_command with no way to be shown to fail. [] == clean.
+
+    A check that always passes -- including one that would pass on garbage -- certifies
+    nothing about the state it claims to verify; it only proves the command runs. Requiring
+    a `negative_control` (the same command family, fed a known-bad input, run in the same
+    venue) fed through `cmd_record_result` at record time is the mutation-testing discipline
+    applied to the engine's own gates rather than left to the author's discretion.
+
+    Scoped to exactly the stages that carry an executable positive check: an acceptance_review
+    criterion has no command to discriminate with, and a `landed` criterion's command is
+    engine-synthesized (plan.py's R1 already forbids an author `verify_command` there), so
+    neither is asked for a second one. A `negative_control_waiver` naming a reason stands in
+    for a control that genuinely cannot be built."""
+    crit = stage.criterion
+    if crit.criterion_type != CriterionType.MEASURABLE.value:
+        return []
+    if crit.verify_kind != CheckKind.SHELL.value:
+        return []
+    if not crit.verify_command:
+        return []
+    if crit.negative_control or crit.negative_control_waiver:
+        return []
+    return [
+        f"stage {stage.index} ({stage.title!r}) has a measurable verify_command with no "
+        f"'negative_control' (required for substantive plans): a check that has never been "
+        f"shown to fail on bad input certifies nothing — add negative_control = \"<command "
+        f"that must NOT exit expected_exit>\", run in the same venue, or "
+        f"negative_control_waiver = \"<reason it cannot be built>\""
+    ]
+
+
 def submission_violations(
     doc,
     *,
@@ -774,6 +806,7 @@ def submission_violations(
                 f"{_WHY[label]}"
             )
         out.extend(_edge_violations(stage))
+        out.extend(_negative_control_violations(stage))
         restatement = _conditions_restatement(stage, judge_runner, judge_enabled)
         if restatement:
             out.append(restatement)

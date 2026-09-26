@@ -33,6 +33,14 @@ legitimate, which stays a human/thinker call:
                   discriminating information is whatever the checked command
                   itself printed — not a classifier this module writes.
 
+When a stage also declares `negative_control`, it is run the same way, in the
+same resolved venue, right after the positive check, and labelled DISCRIMINATES
+(it failed on the known-bad input, as a negative control must) or
+NOT_DISCRIMINATING (it matched expected_exit anyway — the same condition
+`cmd_record_result` blocks a stage's pass on) — or NOT_JUDGED under the same
+three conditions as the positive check. Advisory only, like everything else
+here: submit-time labelling never blocks.
+
 Scope boundaries:
   - Only stage `verify_command` entries are observed. `[[final_check]]` entries
     are not (a final_check is typically an aggregate command — a full test
@@ -70,6 +78,13 @@ DEFAULT_HEAD_CHARS = 4000
 NOT_JUDGED = "not-judged"
 GREEN_AT_SUBMIT = "green-at-submit"
 RED = "red"
+# The negative-control half of the same observation: DISCRIMINATES means the
+# control failed on the known-bad input it was fed (the discriminating
+# outcome); NOT_DISCRIMINATING means it matched expected_exit anyway, exactly
+# the failure `cmd_record_result` blocks a stage's pass on. NOT_JUDGED is
+# shared with the positive check (same three not-run reasons).
+DISCRIMINATES = "discriminates"
+NOT_DISCRIMINATING = "not-discriminating"
 
 
 @dataclass
@@ -84,6 +99,11 @@ class CheckObservation:
     returncode: int | None = None
     head: str = field(default="")
     reason: str = field(default="")
+    negative_control: str | None = None
+    negative_control_label: str | None = None
+    negative_control_returncode: int | None = None
+    negative_control_head: str = field(default="")
+    negative_control_reason: str = field(default="")
 
 
 def _default_runner(timeout_s: float) -> Runner:
@@ -184,29 +204,64 @@ def observe_stage_checks(
             expected_exit=crit.expected_exit,
             label=NOT_JUDGED,
             resolved_cwd=cwd,
+            negative_control=crit.negative_control,
         )
         if not cwd or not Path(cwd).is_dir():
             obs.reason = "declared venue does not exist on disk yet"
+            if crit.negative_control:
+                obs.negative_control_label = NOT_JUDGED
+                obs.negative_control_reason = obs.reason
             observations.append(obs)
             continue
 
-        try:
-            result = run(["bash", "-c", f"cd {shlex.quote(cwd)} && {crit.verify_command}"])
-        except Exception as exc:  # noqa: BLE001 - see docstring: the never-raises guarantee lives here
-            obs.reason = f"running the command raised {type(exc).__name__}: {str(exc)[:200]}"
-            observations.append(obs)
-            continue
-        combined = (result.stdout or "") + (result.stderr or "")
-        obs.head = combined[:head_chars]
-        if result.timed_out:
-            obs.reason = f"exceeded {timeout_s:g}s timeout"
+        rc, head, reason = _run_and_observe(crit.verify_command, cwd, run, timeout_s, head_chars)
+        obs.head = head
+        if reason:
+            obs.reason = reason
+            if crit.negative_control:
+                obs.negative_control_label = NOT_JUDGED
+                obs.negative_control_reason = "the positive check was not judged, so the control was not run"
             observations.append(obs)
             continue
 
-        obs.returncode = result.returncode
-        obs.label = GREEN_AT_SUBMIT if result.returncode == crit.expected_exit else RED
+        obs.returncode = rc
+        obs.label = GREEN_AT_SUBMIT if rc == crit.expected_exit else RED
+
+        if crit.negative_control:
+            neg_rc, neg_head, neg_reason = _run_and_observe(
+                crit.negative_control, cwd, run, timeout_s, head_chars,
+            )
+            obs.negative_control_head = neg_head
+            if neg_reason:
+                obs.negative_control_label = NOT_JUDGED
+                obs.negative_control_reason = neg_reason
+            else:
+                obs.negative_control_returncode = neg_rc
+                obs.negative_control_label = (
+                    NOT_DISCRIMINATING if neg_rc == crit.expected_exit else DISCRIMINATES
+                )
         observations.append(obs)
     return observations
+
+
+def _run_and_observe(
+    command: str, cwd: str, run: Runner, timeout_s: float, head_chars: int,
+) -> tuple[int | None, str, str]:
+    """Run `command` in `cwd`; return (returncode, head, reason).
+
+    `returncode` is None and `reason` is non-empty exactly when the command
+    could not be judged (the Runner raised or the command timed out) — the
+    same NOT_JUDGED condition `observe_stage_checks` already applies to the
+    positive check, shared here so the negative control is held to it too."""
+    try:
+        result = run(["bash", "-c", f"cd {shlex.quote(cwd)} && {command}"])
+    except Exception as exc:  # noqa: BLE001 - see module docstring: the never-raises guarantee lives here
+        return None, "", f"running the command raised {type(exc).__name__}: {str(exc)[:200]}"
+    combined = (result.stdout or "") + (result.stderr or "")
+    head = combined[:head_chars]
+    if result.timed_out:
+        return None, head, f"exceeded {timeout_s:g}s timeout"
+    return result.returncode, head, ""
 
 
 def format_observations(observations: list[CheckObservation]) -> list[str]:
@@ -237,5 +292,20 @@ def format_observations(observations: list[CheckObservation]) -> list[str]:
                 f"{where} verify_command is red at submit: venue={obs.declared_venue!r} "
                 f"cwd={obs.resolved_cwd!r} rc={obs.returncode} "
                 f"expected_exit={obs.expected_exit} head={obs.head!r}"
+            )
+        if obs.negative_control_label == NOT_JUDGED:
+            lines.append(
+                f"{where} negative_control not-judged at submit: {obs.negative_control_reason}"
+            )
+        elif obs.negative_control_label == DISCRIMINATES:
+            lines.append(
+                f"{where} negative_control discriminates: rc={obs.negative_control_returncode} "
+                f"!= expected_exit={obs.expected_exit} — the check can go red"
+            )
+        elif obs.negative_control_label == NOT_DISCRIMINATING:
+            lines.append(
+                f"{where} negative_control is not-discriminating: rc="
+                f"{obs.negative_control_returncode} == expected_exit={obs.expected_exit} "
+                f"on a known-bad input, head={obs.negative_control_head!r}"
             )
     return lines

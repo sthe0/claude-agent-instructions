@@ -29,6 +29,7 @@ expected_result_image = "the loader accepts this stage"
 criterion_type = "measurable"
 done_criterion = "load_plan(strict=True) returns a PlanDoc"
 verify_command = "python3 -m pytest scripts/tests/test_knowledge_place.py -q"
+negative_control = "false"
 material = "this fixture file"
 material_refs = ["scripts/tests/fixtures/submission/stage_without_knowledge.toml"]
 knowledge_refs = ["agentctl.plan.load_plan", "agentctl.submission.validate_submission"]

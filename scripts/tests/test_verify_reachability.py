@@ -509,6 +509,7 @@ capability_required = "c"
 conditions = "co"
 preconditions = "p"
 {artifacts}verify_command = "pytest -q"
+negative_control = "false"
 
 [stage.principle]
 statement = "s"
