@@ -84,6 +84,10 @@ _EXEMPT: dict[tuple[str, str], str] = {
         "planner",
         'python3 scripts/record-experience.py search --tier principles "<stage keywords>"',
     ): "pre-existing relative-path example predating this test; only resolves from the repo cwd, a known baseline gap",
+    ("planner", 'git archive <base> | tar -x -C "$(mktemp -d)"'): (
+        "example value for a plan's `negative_control` field — authored by the planner, "
+        "executed by the engine's check runner in the stage venue, never run by the planner child"
+    ),
 }
 
 
