@@ -931,17 +931,23 @@ def test_dispatch_permission_request_promotes_existing_transcript_miss_not_a_dup
     PERMISSION-REQUEST branch and may already append an uncovered denial to
     `planning_misses` (source="transcript", asked_user=False). The branch
     must PROMOTE that same row (asked_user -> True) rather than appending a
-    second row for the identical event."""
+    second row for the identical event.
+
+    The denied command is deliberately a script NO `KIND_BASELINES` rule
+    names (round 3: `scripts/verify-all.py` is baseline-covered once every
+    baseline script rule materializes both its absolute and repo-relative
+    spelling, so a denial on it is a genuine `materialization_defect`, not
+    the transcript-miss-promotion case this test is pinning)."""
     sid = "perm-request-promotes-transcript-miss"
     _to_executing(store, sid, fixtures_dir)
-    transcript_path = fixtures_dir / "transcript_stops" / "permission-denial.jsonl"
+    transcript_path = fixtures_dir / "transcript_stops" / "permission-denial-uncovered.jsonl"
 
     def runner(argv, cwd=None):
         return RunResult(
             0,
             stdout=(
-                "PERMISSION-REQUEST: need to run verify-all\n"
-                "Rule: Bash(python3 scripts/verify-all.py:*)\n"
+                "PERMISSION-REQUEST: need to run an unlisted tool\n"
+                "Rule: Bash(python3 scripts/unlisted-tool.py:*)\n"
             ),
             stderr=f"spawn-specialist: transcript={transcript_path}\n",
         )
@@ -966,17 +972,23 @@ def test_dispatch_permission_request_disambiguates_between_two_transcript_misses
     `planning_misses` (e.g. one Bash call, one unrelated one). The
     PERMISSION-REQUEST branch's self-reported `Rule:` line must promote the
     ONE row whose raw command is a prefix match for the rule's parsed
-    command, not the most-recently-appended row and not a fresh duplicate."""
+    command, not the most-recently-appended row and not a fresh duplicate.
+
+    The promoted command is deliberately a script NO `KIND_BASELINES` rule
+    names (round 3, same reasoning as the sibling promotion test above) --
+    `scripts/verify-all.py` is now baseline-covered in both spellings, which
+    would make this a materialization defect instead of the promotion case
+    under test."""
     sid = "perm-request-disambiguates-two-misses"
     _to_executing(store, sid, fixtures_dir)
-    transcript_path = fixtures_dir / "transcript_stops" / "two-permission-denials.jsonl"
+    transcript_path = fixtures_dir / "transcript_stops" / "two-permission-denials-uncovered.jsonl"
 
     def runner(argv, cwd=None):
         return RunResult(
             0,
             stdout=(
-                "PERMISSION-REQUEST: need to run verify-all\n"
-                "Rule: Bash(python3 scripts/verify-all.py:*)\n"
+                "PERMISSION-REQUEST: need to run an unlisted tool\n"
+                "Rule: Bash(python3 scripts/unlisted-tool.py:*)\n"
             ),
             stderr=f"spawn-specialist: transcript={transcript_path}\n",
         )
@@ -993,7 +1005,7 @@ def test_dispatch_permission_request_disambiguates_between_two_transcript_misses
     assert len(state.planning_misses) == 2
     promoted = [
         row for row in state.planning_misses
-        if row["command"].startswith("python3 scripts/verify-all.py")
+        if row["command"].startswith("python3 scripts/unlisted-tool.py")
     ]
     assert len(promoted) == 1
     assert promoted[0]["asked_user"] is True
