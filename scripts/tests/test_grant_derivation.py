@@ -259,13 +259,7 @@ def test_dr_r_skips_in_venue_ref():
     assert not grants.add_dirs
 
 
-# --- cross-cutting: no derived permission_mode, dropped routing -----------
-
-
-def test_derivation_never_sets_permission_mode():
-    stage = _stage(verify_command="pytest", output_artifacts=["scripts/foo.py"])
-    grants, _dropped = derive_stage_grants(stage, venue="/repo")
-    assert grants.permission_mode is None
+# --- cross-cutting: dropped routing ----------------------------------------
 
 
 def test_validator_refused_derived_entry_lands_in_dropped_not_allow():

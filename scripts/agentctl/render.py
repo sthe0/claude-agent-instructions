@@ -45,15 +45,13 @@ def _grants_lines(s, venue: str) -> list[str]:
     declared_dirs = [f"{a.path}:{a.mode}" for a in declared_grants.add_dirs]
     derived_rules = [r.rule for r in derived_grants.allow]
     derived_dirs = [f"{a.path}:{a.mode}" for a in derived_grants.add_dirs]
-    if not (declared_rules or declared_dirs or derived_rules or derived_dirs or declared_grants.permission_mode):
+    if not (declared_rules or declared_dirs or derived_rules or derived_dirs):
         return []
     out = ["- **Grants (file-access scope):**"]
     if declared_rules:
         out.append(f"  - declared allow: {', '.join(declared_rules)}")
     if declared_dirs:
         out.append(f"  - declared add_dirs: {', '.join(declared_dirs)}")
-    if declared_grants.permission_mode:
-        out.append(f"  - declared permission_mode: {declared_grants.permission_mode}")
     if derived_rules:
         out.append(f"  - derived allow: {', '.join(derived_rules)}")
     if derived_dirs:
@@ -358,8 +356,6 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
                 lines.append(f"  declared allow: {', '.join(declared_rules)}")
             if declared_dirs:
                 lines.append(f"  declared add_dirs: {', '.join(declared_dirs)}")
-            if declared.permission_mode:
-                lines.append(f"  declared permission_mode: {declared.permission_mode}")
             if dr_v:
                 lines.append(f"  DR-V (verify_command): {', '.join(dr_v)}")
             if dr_o:

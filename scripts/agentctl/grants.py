@@ -70,16 +70,12 @@ class RuleGrant:
 class StageGrants:
     """The full grant set a plan (or a runtime grant) may attach to one
     stage. `allow` and `add_dirs` are the two shapes `spawn-specialist.py`
-    materializes; `permission_mode` is data-only here (the validator refuses
-    every value the plan-authoring surface could set — see
-    `validate_grants` — so this field exists to make that refusal explicit
-    in the type, not to carry a real value through)."""
+    materializes."""
     allow: list[RuleGrant] = field(default_factory=list)
     add_dirs: list[AddDirGrant] = field(default_factory=list)
-    permission_mode: str | None = None
 
     def is_empty(self) -> bool:
-        return not self.allow and not self.add_dirs and self.permission_mode is None
+        return not self.allow and not self.add_dirs
 
     def effective_tuple(self) -> tuple:
         """A hashable, order-independent projection used to compare two
@@ -88,14 +84,12 @@ class StageGrants:
         return (
             frozenset(r.rule for r in self.allow),
             frozenset((a.path, a.mode) for a in self.add_dirs),
-            self.permission_mode,
         )
 
     def to_dict(self) -> dict:
         return {
             "allow": [r.to_dict() for r in self.allow],
             "add_dirs": [a.to_dict() for a in self.add_dirs],
-            "permission_mode": self.permission_mode,
         }
 
     @classmethod
@@ -105,7 +99,6 @@ class StageGrants:
         return cls(
             allow=[RuleGrant.from_dict(r) for r in d.get("allow", [])],
             add_dirs=[AddDirGrant.from_dict(a) for a in d.get("add_dirs", [])],
-            permission_mode=d.get("permission_mode"),
         )
 
 
@@ -114,11 +107,6 @@ class GrantValidationError(ValueError):
     entry was refused and why — the refusal is a plan-authoring or
     runtime-grant error, never a silent drop."""
 
-
-# Permission-mode values a grant is never allowed to set, regardless of
-# spelling case: each one removes the ask entirely rather than widening a
-# specific, reviewable surface.
-_FORBIDDEN_PERMISSION_MODES = frozenset({"bypasspermissions", "dontask", "auto"})
 
 # Programs whose write-capable form this module refuses unless the rule's
 # own lexed destination argument(s) are provably not a G-target. A rule
@@ -559,10 +547,6 @@ def validate_grants(grants: StageGrants) -> None:
     the first refused entry (declared-plan parsing surfaces this at load
     time; derived-grant callers catch it per-entry and route to
     `dropped` instead — see `derive_stage_grants`)."""
-    if grants.permission_mode is not None and grants.permission_mode.lower() in _FORBIDDEN_PERMISSION_MODES:
-        raise GrantValidationError(
-            f"permission_mode {grants.permission_mode!r} removes the ask entirely — refused"
-        )
     for r in grants.allow:
         validate_rule(r.rule)
     for a in grants.add_dirs:

@@ -697,8 +697,6 @@ _STAGE_RESIDUAL_COVERAGE = {
     "grants.add_dirs.mode": "the residual's own splice, same reason as `grants.allow.rule`",
     "grants.add_dirs.provenance": "the residual's own splice, same reason as its sibling "
                                   "`grants.add_dirs.path`",
-    "grants.permission_mode": "the residual's own splice, same reason as "
-                              "`grants.allow.rule`",
 }
 
 

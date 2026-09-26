@@ -287,8 +287,15 @@ def _parse_stage_grants(raw: object, context: str, *, strict: bool) -> "StageGra
         add_dirs.append(
             AddDirGrant(path=str(a["path"]), mode=str(a.get("mode", "read")), provenance="declared")
         )
-    permission_mode = str(raw["permission_mode"]) if raw.get("permission_mode") else None
-    stage_grants = StageGrants(allow=allow, add_dirs=add_dirs, permission_mode=permission_mode)
+    if raw.get("permission_mode"):
+        # Finding S7: `permission_mode` is not a field of the grant model at
+        # all — every value the plan-authoring surface could set was refused
+        # anyway, so the field carried no real information; a plan naming it
+        # is refused outright instead of being silently ignored.
+        raise PlanError(
+            f"{context}: grants.permission_mode is not a supported grant field — refused"
+        )
+    stage_grants = StageGrants(allow=allow, add_dirs=add_dirs)
     if strict:
         try:
             _grants.validate_grants(stage_grants)
@@ -2027,7 +2034,6 @@ def _effective_grants_for_stage(stage, venue: str) -> "StageGrants":
     return StageGrants(
         allow=list(declared.allow) + list(derived.allow),
         add_dirs=list(declared.add_dirs) + list(derived.add_dirs),
-        permission_mode=declared.permission_mode,
     )
 
 
@@ -2038,14 +2044,14 @@ def _grants_effective_map(doc: PlanDoc, *, venue: str | None = None) -> dict[int
 
 def _grants_grew(old: PlanDoc, new: PlanDoc) -> bool:
     """Whether any stage's EFFECTIVE (declared+derived) grant set grew from `old` to
-    `new` — a strictly wider Bash/Edit rule set, a strictly wider set of add_dirs, or
-    a newly-set `permission_mode` where none was set before. A stage present only in
-    `new` (an added stage) is compared against the empty grant set, so its own
-    declared/derivable grants always count as growth — consistent with an added stage
-    already forcing 'substantive' via `_structural_signature`'s differing stage-index
-    sets, and cheap insurance if that ever changes independently. A SHRINKING or
-    unchanged grant set is deliberately not growth: narrowing what a stage may touch
-    never needs the re-approval a widening does.
+    `new` — a strictly wider Bash/Edit rule set, or a strictly wider set of add_dirs.
+    A stage present only in `new` (an added stage) is compared against the empty
+    grant set, so its own declared/derivable grants always count as growth —
+    consistent with an added stage already forcing 'substantive' via
+    `_structural_signature`'s differing stage-index sets, and cheap insurance if that
+    ever changes independently. A SHRINKING or unchanged grant set is deliberately
+    not growth: narrowing what a stage may touch never needs the re-approval a
+    widening does.
 
     Both maps are derived against `new`'s OWN venue, not each document's own
     `_venue_for` result: DR-E bakes the venue string into its `Edit(//{venue}/...)`
@@ -2057,11 +2063,9 @@ def _grants_grew(old: PlanDoc, new: PlanDoc) -> bool:
     shared_venue = _venue_for(new)
     old_map = _grants_effective_map(old, venue=shared_venue)
     new_map = _grants_effective_map(new, venue=shared_venue)
-    for idx, (new_rules, new_dirs, new_mode) in new_map.items():
-        old_rules, old_dirs, old_mode = old_map.get(idx, (frozenset(), frozenset(), None))
+    for idx, (new_rules, new_dirs) in new_map.items():
+        old_rules, old_dirs = old_map.get(idx, (frozenset(), frozenset()))
         if (new_rules - old_rules) or (new_dirs - old_dirs):
-            return True
-        if new_mode and new_mode != old_mode:
             return True
     return False
 
@@ -2071,7 +2075,7 @@ def plan_has_any_grants(doc: PlanDoc) -> bool:
     shared by the present-plan grants-block containment check and the approve
     grants_sha256 binding check (both only fire on a plan that actually grants
     something; a plan with zero grants anywhere needs neither)."""
-    return any(rules or dirs for rules, dirs, _mode in _grants_effective_map(doc).values())
+    return any(rules or dirs for rules, dirs in _grants_effective_map(doc).values())
 
 
 def grants_sha256(doc: PlanDoc) -> str:
@@ -2085,8 +2089,8 @@ def grants_sha256(doc: PlanDoc) -> str:
     sorted (via `effective_tuple()`) so the digest never depends on iteration or
     declaration order."""
     payload = repr(tuple(
-        (idx, tuple(sorted(rules)), tuple(sorted(dirs)), mode)
-        for idx, (rules, dirs, mode) in sorted(_grants_effective_map(doc).items())
+        (idx, tuple(sorted(rules)), tuple(sorted(dirs)))
+        for idx, (rules, dirs) in sorted(_grants_effective_map(doc).items())
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

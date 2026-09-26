@@ -96,8 +96,6 @@ _UNCLAIMED_STAGE_LEAVES = {
                             "`grants.allow.rule`",
     "grants.add_dirs.provenance": "the grant's origin label, same exclusion as its "
                                   "sibling `grants.add_dirs.path`",
-    "grants.permission_mode": "a declared permission surface, same exclusion as "
-                              "`grants.allow.rule`",
 }
 
 _BARE_STAGE = {
