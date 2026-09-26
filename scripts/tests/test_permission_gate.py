@@ -116,7 +116,9 @@ def test_ungranted_parks_and_asks(store, fixtures_dir):
     assert d.ok is True
     assert d.action == "ask_user_permission"
     assert d.marker == "PERMISSION-REQUEST"
-    assert d.data["options"] == ["once", "project", "global", "deny"]
+    # Finding S8: "stage" was materializable via --scope stage but missing
+    # from this options list.
+    assert d.data["options"] == ["once", "stage", "project", "global", "deny"]
     parked = store.load("p2").permission_request
     assert parked is not None
     assert parked.action == "push to release branch"
@@ -134,8 +136,26 @@ def test_resolve_permission_granted_clears_and_continues(store, fixtures_dir):
     assert d.action == "continue_spawn"
     assert d.data["decision"] == "granted"
     assert "GRANTED" in d.data["continuation"]
-    assert "global grant" in d.data["continuation"]
+    # Finding S8: "global" scope has no materialization path, so the
+    # continuation must not claim anything was recorded.
+    assert "Recorded" not in d.data["continuation"]
     assert store.load("p3").permission_request is None
+
+
+def test_resolve_permission_scope_global_refuses_rule(store, fixtures_dir):
+    """Finding S8: --rule/--add-dir is silently dropped for --scope
+    project/global today (no persistence path exists for either scope) --
+    refuse the whole call instead."""
+    _to_executing(store, "p3b", fixtures_dir)
+    _dispatch(store, "p3b", "PERMISSION-REQUEST: push to release branch\n",
+              perm_checker=lambda action: False)
+    d = cli.cmd_resolve_permission(
+        ns(session="p3b", decision="granted", scope="global",
+           rules=["Bash(git push origin release:*)"], add_dirs=None),
+        store=store)
+    assert d.ok is False
+    assert d.action == "noop"
+    assert store.load("p3b").permission_request is not None
 
 
 def test_resolve_permission_denied_clears_and_continues(store, fixtures_dir):

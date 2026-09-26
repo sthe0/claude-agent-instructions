@@ -227,7 +227,6 @@ def test_s10_developer_repo_root_add_dir_carries_surface_denies(tmp_path):
 # never to "some" covered denial elsewhere in the same dispatch -------------
 
 
-@pytest.mark.xfail(strict=True, reason="N1: transcript_covered counts ANY covered denial in this dispatch, not this request's own rule")
 def test_n1_uncovered_permission_request_stays_an_ask_even_after_an_unrelated_covered_denial(
     store, fixtures_dir, tmp_path,
 ):

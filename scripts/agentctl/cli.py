@@ -4634,12 +4634,28 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         # re-spawned into the identical denial (removed per the plan's design).
         checker = perm_checker or permissions.check_permission
         checker(action)
-        transcript_covered = len(state.materialization_defects) > _defects_before
         # The optional `Rule:` line is a SEPARATE line from the marker's own first
         # line, so it must be read off the full child stdout -- parse_marker's
         # `body` is only the text after "PERMISSION-REQUEST:" on that first line.
         rule_line = _parse_rule_line(result.stdout)
         call = _rule_line_to_call(rule_line) if rule_line else None
+        # Finding N1: a transcript denial newly recorded THIS dispatch call may
+        # belong to an entirely unrelated command (the stage's transcript can
+        # carry several denials in one launch) -- counting "any new
+        # materialization_defects row" as covering THIS request conflates the
+        # two. When the request names its own `Rule:`, tie transcript_covered
+        # to a new row matching that SAME (tool_name, tool_input) pair; only
+        # absent a `Rule:` line (nothing to disambiguate against) fall back to
+        # the old any-new-row signal.
+        if call is not None:
+            expected_text = call[1].get("command") or call[1].get("file_path")
+            expected_digest = _digest(expected_text) if expected_text is not None else None
+            transcript_covered = any(
+                row.get("tool_name") == call[0] and row.get("tool_input_digest") == expected_digest
+                for row in state.materialization_defects[_defects_before:]
+            )
+        else:
+            transcript_covered = len(state.materialization_defects) > _defects_before
         self_covered = call is not None and _grants.grant_covers_call(coverage, call[0], call[1])
         if transcript_covered or self_covered:
             if not transcript_covered:
@@ -4704,7 +4720,10 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             True, state.node, "ask_user_permission",
             f"stage {stage.index} requests permission: {action}",
             marker="PERMISSION-REQUEST",
-            data={**base, "action": action, "options": ["once", "project", "global", "deny"]},
+            # Finding S8: "stage" was materializable via --scope stage but
+            # missing from this options list, so the root never saw it as an
+            # offered choice.
+            data={**base, "action": action, "options": ["once", "stage", "project", "global", "deny"]},
         )
     if marker == CHILD_INFRA_FAILURE:
         # A transient condition about the RUN, never a judgement about the
@@ -5058,6 +5077,17 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
     if req is None:
         return Directive(False, state.node, "noop", "no pending permission request to resolve")
     scope = getattr(args, "scope", "once")
+    # Finding S8: neither "project" nor "global" scope materializes anything
+    # anywhere in this engine -- there is no persistence path for either, so
+    # a --rule/--add-dir passed alongside them was silently dropped while
+    # continuations.permission_granted told the child it had been "recorded".
+    # Refuse the whole call instead of accepting and discarding.
+    if scope in ("project", "global") and (getattr(args, "rules", None) or getattr(args, "add_dirs", None)):
+        return Directive(
+            False, state.node, "noop",
+            f"--rule/--add-dir is not materialized for --scope {scope} (no persistence path exists); "
+            "use --scope stage or --scope once, or omit --rule/--add-dir",
+        )
     new_entries: list[dict] = []
     # `once` materializes a runtime grant exactly like `stage` does -- the
     # difference is lifetime, not whether a --rule/--add-dir gets recorded at
@@ -8079,11 +8109,13 @@ def build_parser() -> argparse.ArgumentParser:
                          "grants.py exactly like a declared grant -- so the next dispatch of "
                          "this stage carries it into the child's --settings/--add-dir")
     sp.add_argument("--rule", dest="rules", action="append", default=None,
-                    help="a Bash/Edit/etc rule string to grant (repeatable); only meaningful "
-                         "with --scope stage, validated via grants.validate_rule before storage")
+                    help="a Bash/Edit/etc rule string to grant (repeatable); meaningful with "
+                         "--scope stage or once (refused with project/global, which have no "
+                         "materialization path), validated via grants.validate_rule before storage")
     sp.add_argument("--add-dir", dest="add_dirs", action="append", default=None,
-                    help="'PATH:MODE' (mode: read|write) to grant (repeatable); only meaningful "
-                         "with --scope stage, validated via grants.validate_add_dir before storage")
+                    help="'PATH:MODE' (mode: read|write) to grant (repeatable); meaningful with "
+                         "--scope stage or once (refused with project/global, which have no "
+                         "materialization path), validated via grants.validate_add_dir before storage")
     sp = add("stage-grants"); sp.add_argument("--session", required=True)
     sp.add_argument("--stage", type=int, default=None,
                     help="stage index to report (defaults to the session's active stage)")

@@ -19,9 +19,12 @@ def clarify(question: str) -> str:
 
 
 def permission_granted(action: str, scope: str) -> str:
+    # Finding S8: neither "project" nor "global" scope is ever materialized by
+    # cmd_resolve_permission (no --rule/--add-dir persistence path exists for
+    # them) -- this message must not claim otherwise.
     recorded = ""
-    if scope in ("project", "global"):
-        recorded = f"\nRecorded as a {scope} grant in the permissions file."
+    if scope in ("stage", "once"):
+        recorded = f"\nRecorded as a {scope}-scoped runtime grant for the active stage."
     return (
         f"The earlier PERMISSION-REQUEST for {action} was resolved: "
         f"GRANTED (scope: {scope}).{recorded}\n\n"
