@@ -63,6 +63,19 @@ _B1_REFUSED_RULES = [
     # claude-program spelling variants is_claude_program doesn't recognize.
     "Bash(npx @anthropic-ai/claude-code -p:*)",
     "Bash(claude-code:*)",
+    # package-runner wrapper forms besides npx: bunx is a single-token
+    # wrapper like npx; `pnpm dlx`/`pnpm exec`/`yarn dlx` are two-token
+    # wrapper forms strip_wrappers does not special-case at all, so the
+    # wrapper's own SECOND token (dlx/exec) surfaces as the "program name"
+    # to every downstream check and none of them refuse it.
+    "Bash(bunx claude:*)",
+    "Bash(pnpm dlx @anthropic-ai/claude-code:*)",
+    # command-name case: on a case-insensitive filesystem (macOS default) a
+    # differently-cased spelling resolves to the same real binary, but every
+    # classification check here compares tokens by exact string equality.
+    "Bash(Claude:*)",
+    "Bash(GIT -c x=y:*)",
+    "Bash(Sudo -u root:*)",
     # interpreter value-taking flags that are not among the -c/-e/-p/-m
     # dangerous set validate_rule already refuses, but that still let the
     # child supply arbitrary content the rule text never pinned.
@@ -90,7 +103,13 @@ _B1_POSITIVE_CONTROLS = [
     "Bash(git log:*)",
     "Bash(git status:*)",
     "Bash(git diff:*)",
+    "Bash(ls:*)",
     f"Bash(python3 {SPAWN.SCRIPTS_DIR}/agentctl-cli.py plan-grants:*)",
+    # round-6 regression pins: a two-token package-manager verb that is NOT
+    # a launcher form (`pnpm install`/`yarn add`) must stay accepted -- only
+    # `pnpm dlx`/`pnpm exec`/`yarn dlx` are wrappers.
+    "Bash(pnpm install:*)",
+    "Bash(yarn add:*)",
 ]
 
 
