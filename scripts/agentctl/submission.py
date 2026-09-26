@@ -736,7 +736,14 @@ def _negative_control_violations(stage) -> list[str]:
         return []
     if not crit.verify_command:
         return []
-    if crit.negative_control or crit.negative_control_waiver:
+    waiver = str(crit.negative_control_waiver or "").strip()
+    if crit.negative_control and waiver:
+        return [
+            f"stage {stage.index} ({stage.title!r}) declares both 'negative_control' and "
+            f"'negative_control_waiver' — ambiguous: a waiver says no control can be built, "
+            f"but one is present. Keep whichever is actually true and drop the other."
+        ]
+    if crit.negative_control or waiver:
         return []
     return [
         f"stage {stage.index} ({stage.title!r}) has a measurable verify_command with no "

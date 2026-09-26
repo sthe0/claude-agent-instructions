@@ -19,7 +19,9 @@ import subprocess
 import time
 
 from agentctl.checkrun import (
+    DISCRIMINATES,
     GREEN_AT_SUBMIT,
+    NOT_DISCRIMINATING,
     NOT_JUDGED,
     RED,
     format_observations,
@@ -29,7 +31,8 @@ from agentctl.dispatch import REPO_ROOT, RunResult
 from agentctl.state import Actor, Criterion, Means, Outcome, Stage, StageStatus, Subject
 
 
-def _stage(verify_command, expected_exit=0, verify_venue="repo_root", index=1, title="s1"):
+def _stage(verify_command, expected_exit=0, verify_venue="repo_root", index=1, title="s1",
+           negative_control=None):
     return Stage(
         index=index, title=title,
         subject=Subject(material="m", result="img"),
@@ -38,7 +41,7 @@ def _stage(verify_command, expected_exit=0, verify_venue="repo_root", index=1, t
         criterion=Criterion(
             criterion_type="measurable", done_criterion="c",
             verify_command=verify_command, expected_exit=expected_exit,
-            verify_venue=verify_venue,
+            verify_venue=verify_venue, negative_control=negative_control,
         ),
         outcome=Outcome(status=StageStatus.ACTIVE.value),
     )
@@ -179,3 +182,71 @@ def test_green_at_submit_message_names_both_readings_not_a_verdict():
     assert "already done" in line or "already is" in line or "rc reflects" in line
     assert "cannot go red" in line or "cannot discriminate" in line
     assert "worth reconsidering" not in line
+
+
+class _ByCommand:
+    """Routes each `bash -c <command>` call to the exit code registered for the
+    first matching substring of `command`; anything else exits 0."""
+
+    def __init__(self, exit_codes):
+        self.exit_codes = exit_codes
+        self.calls = []
+
+    def __call__(self, argv):
+        self.calls.append(argv)
+        command = argv[2] if argv[:2] == ["bash", "-c"] else ""
+        for needle, code in self.exit_codes.items():
+            if needle in command:
+                return RunResult(code, stdout="", stderr="")
+        return RunResult(0, stdout="", stderr="")
+
+
+# --- R2 should-fix 2: DISCRIMINATES only when the positive check is green -----
+
+def test_negative_control_not_discriminating_when_positive_is_red_and_control_also_fails():
+    stage = _stage("false-positive-cmd", expected_exit=0, negative_control="also-fails-cmd")
+    runner = _ByCommand({"false-positive-cmd": 1, "also-fails-cmd": 1})
+    [obs] = observe_stage_checks([stage], _resolve_repo_root, runner=runner)
+    assert obs.label == RED
+    # The control DID fail (rc=1 != expected_exit=0), matching the same shape a
+    # DISCRIMINATES verdict would have on a green positive -- but the positive
+    # itself has never been shown to pass on ANY input, so "the control caught
+    # something the check would otherwise have missed" cannot be claimed.
+    assert obs.negative_control_label == NOT_JUDGED
+    assert "undecidable" in obs.negative_control_reason
+    [line] = [l for l in format_observations([obs]) if "negative_control" in l]
+    assert "not-judged" in line
+
+
+def test_negative_control_still_not_discriminating_when_positive_red_and_control_passes():
+    stage = _stage("red-positive-cmd", expected_exit=0, negative_control="passes-anyway-cmd")
+    runner = _ByCommand({"red-positive-cmd": 1})  # negative_control defaults to exit 0
+    [obs] = observe_stage_checks([stage], _resolve_repo_root, runner=runner)
+    assert obs.label == RED
+    # This direction stays decidable regardless of the positive check's own
+    # state: the control matched expected_exit, so it plainly did not catch
+    # the known-bad input.
+    assert obs.negative_control_label == NOT_DISCRIMINATING
+
+
+def test_negative_control_discriminates_only_confirmed_against_green_positive():
+    stage = _stage("true", expected_exit=0, negative_control="known-bad-cmd")
+    runner = _ByCommand({"known-bad-cmd": 1})
+    [obs] = observe_stage_checks([stage], _resolve_repo_root, runner=runner)
+    assert obs.label == GREEN_AT_SUBMIT
+    assert obs.negative_control_label == DISCRIMINATES
+
+
+# --- R2 should-fix 3: a refused control (exit 126/127) is not-judged, not scored
+
+def test_negative_control_refused_exit_127_is_not_judged_not_scored():
+    stage = _stage("true", expected_exit=0, negative_control="typo-cmd-not-found")
+    runner = _ByCommand({"typo-cmd-not-found": 127})
+    [obs] = observe_stage_checks([stage], _resolve_repo_root, runner=runner)
+    assert obs.label == GREEN_AT_SUBMIT
+    assert obs.negative_control_label == NOT_JUDGED
+    assert obs.negative_control_returncode == 127
+    assert "refused" in obs.negative_control_reason
+    assert "127" in obs.negative_control_reason
+    [line] = [l for l in format_observations([obs]) if "negative_control" in l]
+    assert "not-judged" in line

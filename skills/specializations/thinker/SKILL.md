@@ -33,7 +33,7 @@ When given a reasoning chain or argument, dissect it:
 3. **Assumptions** — what was taken as obvious? Are any of them false or unverified?
 4. **Contradictions** — incompatible claims, either within the chain or against established knowledge.
 5. **Robustness** — which links carry the conclusion, which are weak? If the weak ones fall, what stands?
-6. **When reviewing a plan stage's control:** does its `negative_control` fail **for the right reason** — the declared known-bad input, run through the same check, genuinely exercises the defect this stage fixes — rather than failing incidentally (a typo, a missing file, an unrelated environment gap) that would fail on any input? A control that merely exits non-zero is not enough; trace *why* it fails and confirm that reason is the one the stage's `principle`/`method` names.
+6. **When reviewing a plan stage's control:** does its `negative_control` fail **for the right reason** — the declared known-bad input, run through the same check, genuinely exercises the defect this stage fixes — rather than failing incidentally (a typo, a missing file, an unrelated environment gap) that would fail on any input? A control that merely exits non-zero is not enough; trace *why* it fails and confirm that reason is the one the stage's `principle`/`method` names. Watch especially for an **always-red literal** (`negative_control = "false"` or `"exit 1"`) — it trivially "discriminates" without ever touching the check under test, so it passes the mechanical gate while certifying nothing.
 
 Report all layers in `COMPLETED:`.
 

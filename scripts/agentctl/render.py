@@ -61,6 +61,17 @@ def _grants_lines(s, venue: str) -> list[str]:
     return out
 
 
+def _negative_control_lines(crit) -> list[str]:
+    """The one-line rendering of a criterion's negative control or its waiver,
+    shared between `render_plan_md` and `render_stage_brief` so the two views
+    can never drift apart on this field."""
+    if crit.negative_control:
+        return [f"- **Negative control:** `{crit.negative_control}`"]
+    if crit.negative_control_waiver:
+        return [f"- **Negative control waived:** {crit.negative_control_waiver}"]
+    return []
+
+
 def render_plan_md(doc: PlanDoc) -> str:
     """Pure: a PlanDoc -> a markdown prose view. Renders every stage in order."""
     m = doc.meta
@@ -132,10 +143,7 @@ def render_plan_md(doc: PlanDoc) -> str:
                     f"re-verified at resolution in "
                     f"{s.criterion.verify_venue_at_final}"
                 )
-            if s.criterion.negative_control:
-                lines.append(f"- **Negative control:** `{s.criterion.negative_control}`")
-            elif s.criterion.negative_control_waiver:
-                lines.append(f"- **Negative control waived:** {s.criterion.negative_control_waiver}")
+            lines.extend(_negative_control_lines(s.criterion))
         if s.depends_on:
             lines.append(f"- **Depends on:** {', '.join(str(d) for d in sorted(s.depends_on))}")
         if s.principle is not None:
@@ -278,10 +286,7 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
                 f"re-verified at resolution in "
                 f"{s.criterion.verify_venue_at_final}"
             )
-        if s.criterion.negative_control:
-            lines.append(f"- **Negative control:** `{s.criterion.negative_control}`")
-        elif s.criterion.negative_control_waiver:
-            lines.append(f"- **Negative control waived:** {s.criterion.negative_control_waiver}")
+        lines.extend(_negative_control_lines(s.criterion))
     if s.criterion.observation:
         lines.append(f"- **Prior observation:** {s.criterion.observation}")
     if s.output_artifacts:
