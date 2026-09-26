@@ -49,12 +49,15 @@ def ns(**kw):
 
 def _measurable_session(store, sid, *, verify_command=None, expected_exit=0):
     """A MEASURABLE-criterion, SUBSTANTIVE stage, optionally carrying a
-    verify_command -- the same shape as test_stage_review_scope.py's
-    `_measurable_session`, extended with the one field this file's cache/ordering
-    tests need."""
+    verify_command. Kept as a local copy rather than importing the shared
+    scripts/tests/session_fixtures.py helper the other two R4 test files use:
+    this module's own docstring above commits it to collecting cleanly against
+    the pre-lever baseline via a single-file copy (no sibling modules), and a
+    freshly-added shared helper would not exist on that baseline -- an
+    ImportError there, not the required AssertionError."""
     state = SessionState(
         session_id=sid,
-        task_id="r4-test",
+        task_id="test",
         goal="fix the bug",
         overall_done_criterion="the test suite passes",
         overall_criterion_type=CriterionType.MEASURABLE.value,
@@ -71,7 +74,7 @@ def _measurable_session(store, sid, *, verify_command=None, expected_exit=0):
                 actor=Actor(executor="in_thread"),
                 criterion=Criterion(
                     criterion_type=CriterionType.MEASURABLE.value,
-                    done_criterion="pytest exits 0",
+                    done_criterion="the check passes",
                     verify_command=verify_command,
                     expected_exit=expected_exit,
                 ),
@@ -87,13 +90,16 @@ def _measurable_session(store, sid, *, verify_command=None, expected_exit=0):
 class _Runner:
     """Routes a call by its argv shape -- the shapes cmd_record_result's verify+judge
     path actually issues: a plain `git -C <cwd> rev-parse ...` call (HEAD, then
-    --git-path index), an `env GIT_INDEX_FILE=... git -C <cwd> {add -A,ls-files
-    -s,write-tree}` call (the venue-identity probe's disposable-index half), the
-    verify_command's `bash -c <cmd>`, and a judge's model-launch argv (starting with
-    "claude"). Each git-flavored call (plain or env-wrapped) counts as an identity
-    call; verify and judge are independently counted so a test can assert exactly
-    which of them ran. `head`/`judge_stdout`/`judge_exit` are mutable between calls
-    so a test can simulate a tree change or a change in judge verdict mid-scenario."""
+    --git-path index), an `env GIT_INDEX_FILE=... GIT_OBJECT_DIRECTORY=... \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=... git -C <cwd> {add -A,ls-files -s,write-tree}`
+    call (the venue-identity probe's disposable-index+objects half -- an arbitrary
+    number of env assignments ahead of the trailing `git` token, so the split below
+    locates that token by value rather than by a fixed offset), the verify_command's
+    `bash -c <cmd>`, and a judge's model-launch argv (starting with "claude"). Each
+    git-flavored call (plain or env-wrapped) counts as an identity call; verify and
+    judge are independently counted so a test can assert exactly which of them ran.
+    `head`/`judge_stdout`/`judge_exit` are mutable between calls so a test can
+    simulate a tree change or a change in judge verdict mid-scenario."""
 
     def __init__(self, *, verify_exit=0, judge_stdout="YES\nlooks right", judge_exit=0,
                  head="deadbeef"):
@@ -107,7 +113,10 @@ class _Runner:
         self.head = head
 
     def __call__(self, argv, *, timeout=None, stdin=""):
-        git_argv = argv[2:] if argv[:1] == ["env"] else argv
+        if argv[:1] == ["env"] and "git" in argv:
+            git_argv = argv[argv.index("git"):]
+        else:
+            git_argv = argv
         if git_argv[:1] == ["git"]:
             self.identity_calls += 1
             if "rev-parse" in git_argv:
