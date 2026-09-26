@@ -2132,7 +2132,8 @@ def _unread_part_slot(candidates: list, entry: dict) -> str:
     """The id a plan-level pair from a pass that did NOT read the meta part lands
     under. Such a pass has no standing to renumber the meta part, so it must not
     take over a `qenum-meta-N` slot holding a different question: the row whose
-    statement is identical keeps its own id (an ordinary in-place upsert), and a
+    statement is identical keeps its own id (an in-place upsert that the caller runs
+    with preserve_disposition, so its recorded/dismissed disposition survives), and a
     new statement gets the next unused `qenum-meta-N`, leaving every existing meta
     candidate — and the disposition recorded against it — exactly as it stands."""
     for existing in candidates:
@@ -2348,10 +2349,12 @@ def _apply_enumeration_result(
                             bag.setdefault("dismissed_hashes", {}), content_hash, target)
             if hint is not None and carry is None:
                 entry["reason"] = premise.dismissal_hint_note(hint)
-            if carry is None and part == META_PART and not meta_covered:
+            unread_meta = carry is None and part == META_PART and not meta_covered
+            if unread_meta:
                 entry["id"] = _unread_part_slot(candidates, entry)
             final_id = _upsert_candidate(
-                candidates, entry, preserve_disposition=preserve_disposition, carry=carry)
+                candidates, entry, preserve_disposition=preserve_disposition or unread_meta,
+                carry=carry)
             raised.append(final_id)
             if carry is not None:
                 carried.append(final_id)

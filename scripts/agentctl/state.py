@@ -429,11 +429,11 @@ class PlanReview:
     position-derived id, which is also what a legacy pre-schema-28 record gets in
     full.
 
-    `regression_command`/`regression_exit` (schema 36) are set only on a
+    `regression_command`/`regression_exit` (schema 37) are set only on a
     `revise` recorded after a whole-plan/stage PASS already stands this cycle: the
     command the reviewer supplied to demonstrate the regression, and the actual
     exit code the engine observed running it in `repo_root` — never trusted from
-    the reviewer's say-so. `remedy_tags` (schema 36) is the leading `cut:`/
+    the reviewer's say-so. `remedy_tags` (schema 37) is the leading `cut:`/
     `add:` tag parsed off each entry in `concerns`, positionally paired like
     `concern_ids`; `""` where a concern carries no such tag."""
     plan_path: str
@@ -1474,7 +1474,7 @@ class SessionState:
     # which is what makes the coverage gate in gates.py fall back to plan_review
     # alone, unchanged.
     plan_stage_reviews: dict[str, "PlanReview"] = field(default_factory=dict)
-    # Historical record (schema 36) of the LAST attested PASS recorded per scope
+    # Historical record (schema 37) of the LAST attested PASS recorded per scope
     # this approval cycle, keyed like plan_stage_reviews (whole-plan under ""). Unlike
     # plan_review/plan_stage_reviews (the CURRENT authoritative record, which a
     # resubmission's staleness-clear or a later revise can move on), this is never

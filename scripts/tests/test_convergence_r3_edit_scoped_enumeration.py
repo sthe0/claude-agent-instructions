@@ -556,3 +556,33 @@ def test_narrowed_pass_never_displaces_an_existing_meta_question(tmp_path):
     assert by_id["qenum-meta-3"]["statement"] == "[plan.goal] what is out of scope?"
     assert len(bag["candidates"]) == 3
     assert sorted(result.raised) == ["qenum-meta-2", "qenum-meta-3"]
+
+
+def test_narrowed_pass_keeps_a_recorded_meta_question_byte_identical(tmp_path):
+    """An identical plan-level pair from a pass that did not read the meta part lands
+    on the existing row, and must leave its recorded disposition intact even on the
+    manual (non-preserving) enumeration path."""
+    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    doc = load_plan(plan_path)
+    recorded = {
+        "id": "qenum-meta-1", "statement": "[plan.goal] who accepts the result?",
+        "disposition": "recorded", "reason": "", "question": "q-7", "target": "plan.goal",
+    }
+    bag = {"candidates": [copy.deepcopy(recorded)], "enumerated": True}
+
+    cli._apply_enumeration_result(
+        bag, doc, plan_path, [("plan.goal", "who accepts the result?")],
+        True, parts=(False, {1}))
+
+    assert bag["candidates"] == [recorded]
+
+
+def test_hint_lookup_prefers_the_record_that_names_a_target():
+    """`record_dismissed_hash` turns a legacy target-less dict into a list and appends
+    to it, so one hash can carry [legacy, targeted]; the hint names the targeted one."""
+    h = premise.dismissal_hash("[stage:1.means] why this tool?")
+    legacy = {"reason": "old", "from_id": "qenum-s1-1"}
+    targeted = {"reason": "new", "from_id": "qenum-s1-2", "target": "stage:1.means"}
+    carry, hint = premise.dismissed_hash_lookup({h: [legacy, targeted]}, h, "stage:3.means")
+    assert carry is None
+    assert hint == targeted

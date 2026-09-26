@@ -26265,7 +26265,7 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "9fc72569dc9fdd14"
+id = "a9048211116a1c3a"
 domain = "prose"
 file = "skills/specializations/planner/policy.md"
 class = "perception"
