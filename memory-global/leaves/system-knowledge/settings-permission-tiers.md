@@ -96,7 +96,12 @@ path that is-or-contains/lies-under a protected root
 (`widening_targets.is_live_settings`, `is_agentctl_state_path`,
 `is_launch_surface`, `add_dir_is_or_contains_protected_root`,
 `add_dir_under_protected_root` — the shared predicates both the Bash-rule and
-the file-tool-rule validators call).
+the file-tool-rule validators call). Program identification (which token is
+the real invoked program, for every check above) looks past a wrapper's own
+operand tokens via `widening_targets.iter_candidate_programs`, not just its
+known dash-flags, so a wrapper's mandatory positional operand (`flock
+<lockfile>`) or an unlisted value-flag (`timeout -s KILL`) cannot hide a
+refused program behind it (review finding B-NEW).
 
 **The launch-surface list is narrower than it looks.** `is_launch_surface`
 (`lib/widening_targets.py:143`) only covers `~/Library/LaunchAgents`,

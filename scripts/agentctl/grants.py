@@ -338,13 +338,30 @@ def validate_rule(rule: str) -> None:
         raise GrantValidationError(
             f"rule {rule!r} is a bare wrapper/launcher with no operand — refused"
         )
-    # Casefolded (finding S2-adjacent, round 6): on a case-insensitive
-    # filesystem (macOS default) a differently-cased spelling (`GIT`,
-    # `Python3`) resolves to the same real binary, so every classification
-    # check below must see the same normalized name regardless of case.
-    prog = widening_targets.program_name(stripped[0]).casefold()
-    operand_tokens = stripped[1:]
+    # `stripped[0]` is not necessarily the real program: a wrapper's own
+    # unlisted value-flag (`timeout -s KILL`) or mandatory positional
+    # operand (`flock <lockfile>`) is left there instead (review finding
+    # B-NEW). Loop every candidate position `iter_candidate_programs`
+    # offers — casefolded (finding S2-adjacent, round 6): on a
+    # case-insensitive filesystem (macOS default) a differently-cased
+    # spelling (`GIT`, `Python3`) resolves to the same real binary, so every
+    # classification check must see the same normalized name regardless of
+    # case.
+    for prog, operand_tokens in widening_targets.iter_candidate_programs(tokens):
+        _validate_candidate_program(rule, prog, operand_tokens, wildcard=wildcard)
 
+    _validate_no_redirect_to_g_target(rule, command)
+
+
+def _validate_candidate_program(
+    rule: str, prog: str, operand_tokens: list[str], *, wildcard: bool
+) -> None:
+    """Refuse `rule` if `prog` — one candidate real-program position from
+    `widening_targets.iter_candidate_programs` — is any of the
+    unconditionally or conditionally refused shapes. Called once per
+    candidate so a wrapper whose own operand left the WRONG token in
+    position 0 cannot hide a refused real program at a later position
+    (review finding B-NEW)."""
     if prog in _UNCONDITIONALLY_REFUSED_PROGRAMS:
         raise GrantValidationError(
             f"rule {rule!r} invokes {prog!r}, a DSL with an unbounded "
@@ -403,8 +420,6 @@ def validate_rule(rule: str) -> None:
 
     if prog in _WRITE_CAPABLE_PROGRAMS:
         _validate_write_capable_bash(rule, prog, operand_tokens, wildcard=wildcard)
-
-    _validate_no_redirect_to_g_target(rule, command)
 
 
 def _validate_write_capable_bash(

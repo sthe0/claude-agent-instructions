@@ -23905,6 +23905,22 @@ disposition = "keep"
 ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
 
 [[entry]]
+id = "0cd5f2136d3d3b9e"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "f506e87f88f8240c"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
 id = "552db2253b23180d"
 domain = "prose"
 file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"

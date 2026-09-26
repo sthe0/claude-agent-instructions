@@ -441,10 +441,10 @@ _REFUSED_BARE_COMMANDS = [
 ]
 
 _WRAPPER_PREFIXES = [
-    pytest.param("flock /tmp/x", marks=pytest.mark.xfail(strict=True, reason="wrapper operand hides the program")),
-    pytest.param("flock -w 5 /tmp/x", marks=pytest.mark.xfail(strict=True, reason="wrapper operand hides the program")),
-    pytest.param("timeout -s KILL", marks=pytest.mark.xfail(strict=True, reason="wrapper operand hides the program")),
-    pytest.param("timeout -s KILL 60", marks=pytest.mark.xfail(strict=True, reason="wrapper operand hides the program")),
+    "flock /tmp/x",
+    "flock -w 5 /tmp/x",
+    "timeout -s KILL",
+    "timeout -s KILL 60",
     "timeout 60",
     "nice -n 5",
     "setsid",

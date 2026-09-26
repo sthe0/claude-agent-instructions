@@ -377,6 +377,42 @@ def program_name(token: str) -> str:
     return token.rsplit("/", 1)[-1]
 
 
+def iter_candidate_programs(tokens: list[str]) -> list[tuple[str, list[str]]]:
+    """Every position in the wrapper-stripped tail that could be the REAL
+    invoked program, paired with the tokens following it, as
+    `(casefolded_basename, operand_tokens)`.
+
+    `strip_wrappers` only ever consumes a wrapper's own known dash-flags and
+    (for `env`/`timeout`) their bespoke operand forms — an unlisted
+    value-flag (`timeout -s KILL`) or a wrapper's own mandatory positional
+    operand (`flock <lockfile>`) is left in `stripped[0]`, which is NOT the
+    real program. Every classifier that trusted `stripped[0]` alone was
+    fooled by such a shape (review finding B-NEW).
+
+    Mirrors `is_claude_program`'s original "fail toward identification"
+    pattern, generalized into one shared helper so no future wrapper shape
+    can reopen the hole for a single classifier only: when NOTHING was
+    stripped (`tokens` itself is the direct invocation, unwrapped) trust
+    `stripped[0]` alone — scanning further would misread the command's OWN
+    trailing arguments as candidate programs, which is not the ambiguity
+    this function exists to resolve. Only once at least one wrapper token
+    was actually consumed does an unrecognized leading token become
+    suspect, so every non-flag position in the remaining tail is offered as
+    a candidate. A caller loops these and accepts on the first match, so a
+    benign wrapped command (`nice -n 5 git log`) is unaffected — none of
+    its candidates match any refused shape."""
+    stripped = strip_wrappers(tokens)
+    if not stripped:
+        return []
+    if len(stripped) == len(tokens):
+        return [(program_name(stripped[0]).casefold(), stripped[1:])]
+    return [
+        (program_name(stripped[j]).casefold(), stripped[j + 1:])
+        for j in range(len(stripped))
+        if not stripped[j].startswith("-")
+    ]
+
+
 _CLAUDE_PROGRAM_NAMES = frozenset({"claude", "claude-code"})
 
 # Round-2 finding (rereview B1' item 1): a basename-only check misses the real
@@ -408,16 +444,15 @@ def is_claude_program(tokens: list[str]) -> bool:
     parsed per wrapper, so once any wrapper was stripped, `claude`/`claude-code`
     anywhere in the remaining tokens counts: fail toward refused. Casefolded
     (round 6) so a `Claude`/`CLAUDE` spelling variant is caught the same as
-    the lowercase form."""
+    the lowercase form. Program identification itself goes through the
+    shared `iter_candidate_programs` (finding B-NEW) — the pattern this
+    function originated."""
     stripped = strip_wrappers(tokens)
     if not stripped:
         return False
-    if program_name(stripped[0]).casefold() in _CLAUDE_PROGRAM_NAMES:
-        return True
     if any(_is_claude_install_path(t) for t in stripped):
         return True
-    wrapped = len(stripped) < len(tokens)
-    return wrapped and any(program_name(t).casefold() in _CLAUDE_PROGRAM_NAMES for t in stripped)
+    return any(prog in _CLAUDE_PROGRAM_NAMES for prog, _ in iter_candidate_programs(tokens))
 
 
 def agentctl_invocation_verb(tokens: list[str]) -> tuple[bool, str | None]:
@@ -437,20 +472,21 @@ def agentctl_invocation_verb(tokens: list[str]) -> tuple[bool, str | None]:
     The interpreter check matches any `python[0-9.]*` name (including a
     venv-path interpreter like `/home/x/.venv/bin/python3`), not only the
     literal `python3` spelling, so a grant cannot dodge this refusal by
-    naming a differently-versioned or venv-relative interpreter."""
-    stripped = strip_wrappers(tokens)
-    if not stripped:
-        return False, None
-    prog_cf = program_name(stripped[0]).casefold()
-    rest = stripped[1:]
-    if INTERPRETER_RE.match(prog_cf):
-        if len(rest) >= 1 and rest[0] == "-m" and len(rest) >= 2 and rest[1] == "agentctl":
-            return True, (rest[2] if len(rest) >= 3 else None)
-        if rest and program_name(rest[0]).casefold().endswith("agentctl-cli.py"):
-            return True, (rest[1] if len(rest) >= 2 else None)
-        return False, None
-    if prog_cf.endswith("agentctl-cli.py"):
-        return True, (rest[0] if rest else None)
+    naming a differently-versioned or venv-relative interpreter.
+
+    Loops `iter_candidate_programs` (finding B-NEW) rather than trusting
+    only the leading stripped token, so a wrapper whose own operand left the
+    wrong token in position 0 (`flock <lockfile>`, `timeout -s KILL`)
+    cannot hide an agentctl invocation at a later position."""
+    for prog_cf, rest in iter_candidate_programs(tokens):
+        if INTERPRETER_RE.match(prog_cf):
+            if len(rest) >= 2 and rest[0] == "-m" and rest[1] == "agentctl":
+                return True, (rest[2] if len(rest) >= 3 else None)
+            if rest and program_name(rest[0]).casefold().endswith("agentctl-cli.py"):
+                return True, (rest[1] if len(rest) >= 2 else None)
+            continue
+        if prog_cf.endswith("agentctl-cli.py"):
+            return True, (rest[0] if rest else None)
     return False, None
 
 
@@ -494,17 +530,21 @@ def is_settings_channel_program(tokens: list[str]) -> bool:
     """True iff, after stripping wrapper tokens, the leading program token's
     basename is a known settings-channel program — matched regardless of an
     interpreter prefix (`bash apply-settings.sh`), a relative or absolute
-    path, or further arguments."""
-    stripped = strip_wrappers(tokens)
-    if not stripped:
-        return False
-    prog = program_name(stripped[0]).casefold()
-    if prog in SETTINGS_CHANNEL_PROGRAMS:
-        return True
-    # `bash <script>` / `sh <script>`: the interpreter is the leading token,
-    # the script is the next one.
-    if prog in ("bash", "sh") and len(stripped) >= 2:
-        return program_name(stripped[1]).casefold() in SETTINGS_CHANNEL_PROGRAMS
-    if INTERPRETER_RE.match(prog) and len(stripped) >= 2:
-        return program_name(stripped[1]).casefold() in SETTINGS_CHANNEL_PROGRAMS
+    path, or further arguments.
+
+    Loops `iter_candidate_programs` (finding B-NEW) rather than trusting
+    only the leading stripped token, so a wrapper whose own operand left the
+    wrong token in position 0 (`flock <lockfile>`, `timeout -s KILL`)
+    cannot hide a settings-channel program at a later position."""
+    for prog, rest in iter_candidate_programs(tokens):
+        if prog in SETTINGS_CHANNEL_PROGRAMS:
+            return True
+        # `bash <script>` / `sh <script>`: the interpreter is the candidate
+        # token, the script is the next one.
+        if prog in ("bash", "sh") and rest:
+            if program_name(rest[0]).casefold() in SETTINGS_CHANNEL_PROGRAMS:
+                return True
+        if INTERPRETER_RE.match(prog) and rest:
+            if program_name(rest[0]).casefold() in SETTINGS_CHANNEL_PROGRAMS:
+                return True
     return False
