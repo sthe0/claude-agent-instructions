@@ -497,8 +497,8 @@ def _validate_non_bash_rule(rule: str, tool: str, arg: str) -> None:
             f"rule {rule!r} ({tool}) names an empty path — refused"
         )
     if any(ch in path for ch in _GLOB_METACHARS):
-        # A glob path (`Edit(//**)`, `Edit(//home/the0/file?.py)`,
-        # `Edit(//home/the0/[ab].py)`, `Edit(//home/the0/{a,b}.py)`, ...) can
+        # A glob path (`Edit(//**)`, `Edit(//home/user/file?.py)`,
+        # `Edit(//home/user/[ab].py)`, `Edit(//home/user/{a,b}.py)`, ...) can
         # expand to match an unbounded — or merely unpredictable — set of
         # real paths at materialization time, including a protected root. A
         # per-prefix containment check would need to correctly reconstruct

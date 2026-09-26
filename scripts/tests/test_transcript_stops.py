@@ -2,9 +2,8 @@
 tool_use/tool_result pair into one of the four stop kinds, and the specific
 regression the module exists to guard against: `toolDenialKind` alone cannot tell a
 `hook-block` from a `permission-denial` apart (both real, committed reference
-transcripts under
-`/home/the0/.claude-agent/plans/evidence/spawn-permission-grant-model/
-transcript-fixtures/` carry `toolDenialKind: "permission-rule"`), so the parser must
+transcripts in the transcript-fixtures/ evidence of plan
+spawn-permission-grant-model carry `toolDenialKind: "permission-rule"`), so the parser must
 fall back to the stop text's `hook error:` marker. The fixtures here are SYNTHETIC
 reconstructions of those three real transcripts (see that directory's README.md for
 the verbatim source) — no real machine path, email or UUID, so the leak-scan the

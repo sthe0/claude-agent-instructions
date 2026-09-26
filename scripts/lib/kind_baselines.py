@@ -30,8 +30,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 # file writes and NOTHING else — unlike `defaultMode: auto`, it does not
 # auto-approve Bash). Each kind's entries are the measured, justified
 # minimum against 30 days of real spawned-child Bash-prefix/denial data —
-# see /home/the0/.claude-agent/plans/evidence/spawn-permission-grant-model/
-# kind-tool-inventory.md — not a guess at what a role "should" need.
+# see the kind-tool-inventory.md evidence of plan spawn-permission-grant-model
+# — not a guess at what a role "should" need.
 #
 # `sed` is deliberately absent from every bucket even though it is a top-3
 # measured prefix for all five kinds: grants.py's `_WRITE_CAPABLE_PROGRAMS`

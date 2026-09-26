@@ -181,8 +181,8 @@ def test_s1_edit_rule_under_dot_claude_refused_even_when_harness_root_differs():
 # lowercase form is refused --------------------------------------------------
 
 _S2_CASE_VARIANT_RULES = [
-    "Edit(//home/the0/.Claude/settings.json)",
-    "Edit(//home/the0/.claude/Settings.local.json)",
+    "Edit(//home/user/.Claude/settings.json)",
+    "Edit(//home/user/.claude/Settings.local.json)",
     "Edit(//home/user/repo/.GIT/hooks/pre-commit)",
 ]
 

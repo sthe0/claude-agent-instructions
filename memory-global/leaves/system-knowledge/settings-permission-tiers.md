@@ -109,7 +109,7 @@ refused program behind it (review finding B-NEW).
 shell rc files (`~/.bashrc`, `~/.zshrc`, …), `~/.ssh/authorized_keys`, or
 `~/.local/bin` (commonly on `PATH`, so a file placed there runs on the
 next invocation of its name) — each is a persistent-launch-registration
-surface in the same sense the covered three are, but `Edit(//home/the0/
+surface in the same sense the covered three are, but `Edit(//home/user/
 .bashrc)` and a write add_dir onto `~/.local/bin` both validate today.
 Separately, a write add_dir onto a project's own `.claude` directory only
 denies `.claude/**` *when the add_dir is a parent of it* — `hooks/`,

@@ -96,7 +96,7 @@ _REFUSED_RULES = [
     "Bash(timeout 30:*)",
     "Bash(tee ~/.claude/settings.json:*)",
     "Bash(cp foo.txt ~/.claude-agent/state/x:*)",
-    "Edit(//home/the0/.claude/settings.json)",
+    "Edit(//home/user/.claude/settings.json)",
     f"Edit(//{config_root.agentctl_state_dir()}/session.json)",
     # finding #2: bare `*` command matches anything at materialization time.
     "Bash(*)",
@@ -150,7 +150,7 @@ _REFUSED_RULES = [
     # set of real paths, including a protected root -- refused outright.
     "Edit(//**)",
     "Edit(**)",
-    "Edit(//home/the0/**)",
+    "Edit(//home/user/**)",
     # finding B2: `?` (single-char wildcard) and `[...]` (character class)
     # are glob metacharacters too, not only `*` -- each can expand to match
     # an unpredictable set of real paths at materialization time.
