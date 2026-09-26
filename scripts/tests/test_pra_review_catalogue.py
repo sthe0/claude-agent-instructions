@@ -14,12 +14,15 @@ it is a `REPLAN:`).
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
 from argparse import Namespace
 
 from agentctl import cli
+from agentctl import grants
 from agentctl.grants import (
     GrantValidationError,
     StageGrants,
@@ -234,11 +237,28 @@ def test_s10_lifted_project_settings_rules_are_validated(tmp_path):
     assert "Bash(claude:*)" not in rules
 
 
-@pytest.mark.xfail(strict=True, reason="S10: repo-root add-dir carries no surface denies")
 def test_s10_developer_repo_root_add_dir_carries_surface_denies(tmp_path):
-    argv = SPAWN.repo_root_add_dir_args("developer", str(tmp_path))
-    argv_text = " ".join(argv)
-    assert ".claude" in argv_text or "settings" in argv_text or ".git" in argv_text
+    """REPLAN-authorized rewrite (root disposition: the oracle test was
+    wrong, not the code -- the original test only probed the `--add-dir`
+    argv, which never carried surface denies in the first place; the actual
+    grant reaching the child is the `--settings` JSON `permissions.deny`
+    array `build_child_settings` builds, paired via `repo_root_deny_rules`).
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    workdir = root / "sub"
+    workdir.mkdir()
+
+    settings = SPAWN.build_child_settings("developer", workdir=str(workdir))
+
+    deny = settings["permissions"]["deny"]
+    root_real = os.path.realpath(str(root))
+    base = grants.rule_file_arg(root_real)
+    assert f"Edit({base}/**/.claude/**)" in deny
+    assert f"Edit({base}/**/settings*.json)" in deny
+    assert f"Edit({base}/**/.git/**)" in deny
+    assert f"Edit({base}/**/.git)" in deny
 
 
 # --- N1: PERMISSION-REQUEST coverage must be tied to its OWN requested Rule,

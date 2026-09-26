@@ -883,6 +883,30 @@ def repo_root_add_dir_args(kind: str, cwd: str) -> list[str]:
     return ["--add-dir", root]
 
 
+def repo_root_deny_rules(kind: str, cwd: str) -> list[str]:
+    """Guard `Edit` DENY rules pairing `repo_root_add_dir_args`' own
+    `--add-dir` grant (finding S10): a raw `--add-dir` widens the child's
+    filesystem write surface on its own under `acceptEdits`/`auto`
+    permission modes, with no `Edit` allow rule required — so the repo-root
+    grant otherwise hands a spawned developer unguarded write access to
+    `.claude/`, `settings*.json` and `.git/` anywhere under the repo root,
+    the same surface `stage_grant_rules` already guards for a declared WRITE
+    add_dir. Mirrors that function's four-glob shape exactly. Returns `[]`
+    whenever `repo_root_add_dir_args` itself would (same `kind`/root/cwd
+    gating), so the two stay in lockstep by construction rather than by two
+    separately-maintained conditions."""
+    if not repo_root_add_dir_args(kind, cwd):
+        return []
+    root = _vcs_root(cwd)
+    base = grants.rule_file_arg(root.rstrip("/"))
+    return [
+        f"Edit({base}/**/.claude/**)",
+        f"Edit({base}/**/settings*.json)",
+        f"Edit({base}/**/.git/**)",
+        f"Edit({base}/**/.git)",
+    ]
+
+
 def project_settings_permission_rules(project_settings_file: "Path | str | None") -> tuple[list[str], list[str]]:
     """(allow, deny) lifted from a target project's own `.claude/settings.local.json`
     `permissions.allow`/`permissions.deny` arrays — the same shape the harness
@@ -1089,6 +1113,7 @@ def build_child_settings(
     plans_directory: "Path | None" = None,
     project_settings_file: "Path | None" = None,
     engine_grants: "list[dict] | None" = None,
+    workdir: "str | None" = None,
 ) -> dict:
     """Child `--settings` payload: the auto-compaction window pin for every kind
     (both forms, mirroring settings/base.json — the env key wins in the client's
@@ -1115,7 +1140,14 @@ def build_child_settings(
     exemption: its directory-glob rule shape (`Read(//<dir>/**)`)
     `grants.validate_rule` categorically refuses — see `stage_grant_rules` —
     so it keeps its own, separate acceptance path rather than being routed
-    through the same validator."""
+    through the same validator.
+
+    `workdir`, when given, feeds `repo_root_deny_rules` (finding S10): for a
+    `kind=="developer"` spawn whose cwd sits below its VCS root,
+    `repo_root_add_dir_args` already grants that whole root via `--add-dir`
+    (see `main`'s call site) — this pairs that grant with the same guard
+    DENYs a declared WRITE add_dir gets, so the widened filesystem surface
+    doesn't reach `.claude/`, `settings*.json` or `.git/` unguarded."""
     settings: dict = {
         "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(SPAWN_AUTOCOMPACT_WINDOW_TOKENS)},
         "autoCompactWindow": SPAWN_AUTOCOMPACT_WINDOW_TOKENS,
@@ -1139,6 +1171,8 @@ def build_child_settings(
         engine_allow, engine_deny = stage_grant_rules(engine_grants)
         allow.extend(engine_allow)
         deny.extend(engine_deny)
+    if workdir is not None:
+        deny.extend(repo_root_deny_rules(kind, workdir))
     permissions: dict = {}
     if allow:
         permissions["allow"] = allow
@@ -1563,7 +1597,9 @@ def main(argv: list[str] | None = None) -> int:
         return 5
 
     try:
-        child_settings = build_child_settings(args.kind, plans_directory, args.project_settings, engine_grants)
+        child_settings = build_child_settings(
+            args.kind, plans_directory, args.project_settings, engine_grants, workdir=workdir
+        )
     except GrantShadowError as exc:
         print(f"error: {exc}", file=sys.stderr)
         log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})

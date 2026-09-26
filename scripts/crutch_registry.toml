@@ -2645,6 +2645,14 @@ disposition = "keep"
 ground = "False pairing: the regex `[A-Z][A-Z0-9]+-\\d+` matches ticket-key IDENTIFIER SYNTAX in the cwd path (structural, not meaning); `_spawn_tags` is flagged hard-behaviour only because its name contains the token \"spawn\" — it builds a label list, it does not itself spawn or dispatch anything."
 
 [[entry]]
+id = "5642dfd5c7313f89"
+domain = "code"
+file = "scripts/spawn-specialist.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "2f6125eb467c5897"
 domain = "code"
 file = "scripts/spawn-specialist.py"
@@ -2678,6 +2686,14 @@ ground = "Regexes found are markdown/frontmatter/command-syntax parsing (heading
 
 [[entry]]
 id = "9cd479647569e7ad"
+domain = "code"
+file = "scripts/spawn-specialist.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "99356a6749c2451e"
 domain = "code"
 file = "scripts/spawn-specialist.py"
 class = "structural"
@@ -23873,7 +23889,31 @@ disposition = "keep"
 ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
 
 [[entry]]
-id = "9c186d61014cc5b0"
+id = "cb098878ec250b9a"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "a583f2794e9411c6"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "3f11c89c35796df3"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "08621ba5079b35ea"
 domain = "prose"
 file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"
 class = "not-normative"
