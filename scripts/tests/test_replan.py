@@ -1115,6 +1115,8 @@ def test_apply_refined_copies_all_criterion_fields_except_engine_written():
             verify_kind=f"shell-{tag}" if tag == "src" else "landed",
             landed=LandedSpec(target=f"target-{tag}", delivered_stage=1 if tag == "src" else 2),
             verify_venue_at_final=f"final-{tag}" if tag == "src" else None,
+            negative_control=f"neg-{tag}" if tag == "src" else None,
+            negative_control_waiver=f"waiver-{tag}" if tag != "src" else None,
         )
 
     cur = Stage(

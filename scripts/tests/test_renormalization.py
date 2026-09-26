@@ -118,6 +118,7 @@ expected_result_image = "The parser reads the new key."
 criterion_type = "measurable"
 done_criterion = "d1"
 verify_command = "pytest -q"
+negative_control = "false"
 material = "m1 (traces to R1)"
 means = "bash"
 method = "Add the field to the typed struct, keeping the corpus loadable."
@@ -144,6 +145,7 @@ expected_result_image = {result}
 criterion_type = "measurable"
 done_criterion = {done_criterion}
 verify_command = "pytest -q"
+negative_control = "false"
 material = "m2 (traces to R1)"
 means = "bash"
 method = {method}
@@ -683,6 +685,8 @@ _STAGE_RESIDUAL_COVERAGE = {
                                         "object",
     "criterion.landed.remote": "stage_question_key, via the whole LandedSpec object",
     "criterion.verify_venue_at_final": "stage_question_key",
+    "criterion.negative_control": "stage_question_key, via negative_control_place",
+    "criterion.negative_control_waiver": "stage_question_key, via negative_control_place",
     "criterion.observation": "outside: what a reviewer actually SAW — an execution "
                              "record, and the one this path most exists to preserve",
     "principle.statement": "stage_question_key",
@@ -973,6 +977,7 @@ expected_result_image = "something new happens"
 criterion_type = "measurable"
 done_criterion = "d3"
 verify_command = "pytest -q"
+negative_control = "false"
 material = "m3 (traces to R1)"
 means = "bash"
 method = "Add the new module beside its siblings."

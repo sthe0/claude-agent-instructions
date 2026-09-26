@@ -229,6 +229,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         observation="OBSERVATION_V",
         verify_venue="VERIFY_VENUE_V",
         verify_venue_at_final="VERIFY_VENUE_AT_FINAL_V",
+        negative_control="NEGATIVE_CONTROL_V",
     )
     stage = Stage(
         index=1,
@@ -264,7 +265,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         "TITLE_V", "MATERIAL_V", "RESULT_V", "INVARIANTS_V", "MEANS_V", "METHOD_V",
         "EXECUTOR_V", "CAPABILITY_V", "COST_TIER_V", "CRITERION_TYPE_V",
         "DONE_CRITERION_V", "VERIFY_COMMAND_V", "42", "OBSERVATION_V",
-        "VERIFY_VENUE_V", "VERIFY_VENUE_AT_FINAL_V", "STATEMENT_V", "SOURCE_V",
+        "VERIFY_VENUE_V", "VERIFY_VENUE_AT_FINAL_V", "NEGATIVE_CONTROL_V", "STATEMENT_V", "SOURCE_V",
         "DERIVATION_V", "CONFIDENCE_V", "REFUTATION_V", "CONDITIONS_V",
         "MATERIAL_REF_V", "KNOWLEDGE_V", "KNOWLEDGE_REF_V", "PROCEDURE_V", "PRECONDITIONS_V",
         "OUTPUT_ARTIFACT_V", "CONTROL_V", "on stage 7", "ELEMENT_V", "ARTIFACT_V",
@@ -301,7 +302,8 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (Criterion, "observation"), (Criterion, "verify_venue"),
         (Criterion, "verify_kind"),  # excluded: branch discriminator, not echoed literally
         (Criterion, "landed"),  # excluded here: covered by the landed-check test below instead
-        (Criterion, "verify_venue_at_final"),
+        (Criterion, "verify_venue_at_final"), (Criterion, "negative_control"),
+        (Criterion, "negative_control_waiver"),  # excluded: rendered only when no negative_control is set
         (Principle, "statement"), (Principle, "source"), (Principle, "derivation"),
         (Principle, "confidence"), (Principle, "refutation"),
         (Supply, "on"), (Supply, "element"), (Supply, "artifact"),

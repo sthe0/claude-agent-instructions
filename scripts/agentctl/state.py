@@ -918,6 +918,14 @@ class Criterion:
     # whose delivery venue disappears once the change lands — see plan.py's
     # V1-V4 validation rules and README.md for the two-moment rationale.
     verify_venue_at_final: str | None = None
+    # A second shell command, run in the same venue as verify_command against a
+    # known-bad input, that submission.py requires for a measurable shell stage
+    # (or a `negative_control_waiver` reason in its place) before the plan can
+    # be submitted: a check that cannot be shown to fail on bad input certifies
+    # nothing. cmd_record_result runs it only after verify_command itself has
+    # gone green, and treats a matching exit code as the stage NOT passing.
+    negative_control: str | None = None
+    negative_control_waiver: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Criterion":

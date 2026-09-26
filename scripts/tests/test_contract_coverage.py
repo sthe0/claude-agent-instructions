@@ -707,6 +707,8 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "criterion.landed.delivered_stage": frozenset(_CD),
     "criterion.landed.remote": frozenset(_CD),
     "criterion.verify_venue_at_final": frozenset(_CD),
+    "criterion.negative_control": frozenset(_CD),
+    "criterion.negative_control_waiver": frozenset(_CD),
     "principle.statement": frozenset({"question_key"}),
     "principle.source": frozenset({"question_key"}),
     "principle.derivation": frozenset({"question_key"}),

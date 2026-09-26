@@ -26,6 +26,15 @@ TOML shape (minimal):
     done_criterion = "python3 -m agentctl status exits 0"
     verify_command = "python3 -m agentctl status"  # optional; executable form of done_criterion
     expected_exit = 0                     # optional (default 0); engine gates passed on this exit
+    negative_control = "python3 -m agentctl status --session does-not-exist"
+                                          # required for a SUBSTANTIVE plan's measurable
+                                          # shell-kind stage that carries verify_command
+                                          # (submission.py refuses to submit without it or
+                                          # negative_control_waiver below): a command, run
+                                          # in the same venue, that must NOT exit
+                                          # expected_exit -- proof the check can go red.
+    negative_control_waiver = "n/a"      # alternative to negative_control: a non-empty
+                                          # reason the check cannot be shown to fail
     cost_tier = "medium"                  # optional; small|medium|large. Declares the
                                           # stage's expected size: dispatch reads it as the
                                           # spawn budget label, and the effort-divergence
@@ -1336,6 +1345,16 @@ def parse_plan(
                     f"delivery_worktree is unset — there is no second venue for "
                     f"it to name (V3)"
                 )
+        # Permissive, unconditional of strict (same treatment as `knowledge` /
+        # `preconditions` below): submission.py's non-raising seam is where the
+        # requirement lives, not the loader, so a legacy plan or an in-session
+        # re-read of an already-accepted plan never breaks over a missing field.
+        negative_control = (
+            str(s["negative_control"]) if s.get("negative_control") else None
+        )
+        negative_control_waiver = (
+            str(s["negative_control_waiver"]) if s.get("negative_control_waiver") else None
+        )
         stages.append(
             Stage(
                 index=index,
@@ -1368,6 +1387,8 @@ def parse_plan(
                     verify_kind=verify_kind,
                     landed=landed,
                     verify_venue_at_final=verify_venue_at_final,
+                    negative_control=negative_control,
+                    negative_control_waiver=negative_control_waiver,
                 ),
                 principle=principle,
                 conditions=str(s["conditions"]) if s.get("conditions") else None,
@@ -1582,6 +1603,28 @@ def procedure_place(stage) -> tuple:
     return () if not stage.means.procedure else (("procedure", stage.means.procedure),)
 
 
+_NEGATIVE_CONTROL_PLACE_ABSENT = (None, None)
+
+
+def negative_control_place(stage) -> tuple:
+    """The stage's negative-control place — `criterion.negative_control` plus its
+    waiver — as a contribution to a change-decision key: a ONE-element tuple holding
+    the pair, or the EMPTY tuple when the stage declares neither.
+
+    Grouped rather than spliced field-by-field for the same collision `knowledge_place`
+    guards against: (negative_control='x', waiver=None) and (negative_control=None,
+    waiver='x') would otherwise both flatten to the same lone element.
+
+    Declared-only, for the reason `preconditions_place` documents: a plan predating
+    this place keeps the exact key it had — stage_question_key is persisted in
+    Question.disposed_at_key and compared across processes, and stage_carry_key gates
+    PASSED carry-forward, so an unconditional contribution (or a `... or ""` default)
+    would flip every disposed question, and every already-PASSED stage, of every live
+    session that predates the field."""
+    place = (stage.criterion.negative_control, stage.criterion.negative_control_waiver)
+    return () if place == _NEGATIVE_CONTROL_PLACE_ABSENT else (place,)
+
+
 def stage_carry_key(stage) -> tuple:
     """Full-fidelity per-stage identity for PASSED carry-forward across a
     substantive replan (#12): a stage keeps its PASSED status only if NOTHING about
@@ -1619,6 +1662,7 @@ def stage_carry_key(stage) -> tuple:
         *knowledge_place(stage),
         *preconditions_place(stage),
         *procedure_place(stage),
+        *negative_control_place(stage),
     )
 
 
@@ -1688,7 +1732,8 @@ _ELEMENT_FIELDS: dict[str, tuple[str, ...] | None] = {
                   "criterion.verify_command", "criterion.expected_exit",
                   "criterion.verify_venue", "criterion.verify_kind",
                   "criterion.landed.target", "criterion.landed.delivered_stage",
-                  "criterion.landed.remote", "criterion.verify_venue_at_final"),
+                  "criterion.landed.remote", "criterion.verify_venue_at_final",
+                  "criterion.negative_control", "criterion.negative_control_waiver"),
     "done_criterion": ("criterion.done_criterion",),
     "principle": ("principle.statement", "principle.source", "principle.derivation",
                   "principle.confidence", "principle.refutation"),
@@ -1837,6 +1882,10 @@ def stage_question_key(stage, element: str | None = None) -> str:
         # re-approval, so an answer given against the old sequence is exactly the kind
         # that goes stale without anyone being asked.
         *procedure_place(stage),
+        # `negative_control`/`negative_control_waiver` are what makes the stage's
+        # positive check trustworthy; an answer given before either was set must be
+        # invalidated once the discriminating input (or its waiver) is supplied.
+        *negative_control_place(stage),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -1990,7 +2039,11 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              # the renormalization branch exists to admit, so without this place here
              # that edit diffs as 'no_change' and the branch is unreachable by
              # construction.
-             *procedure_place(s))
+             *procedure_place(s),
+             # Adding a negative control (or waiving one) changes what the stage's
+             # positive check is trusted to certify — without this place, that edit
+             # diffs as 'no_change'.
+             *negative_control_place(s))
             for s in doc.stages
         ]
     def _fc(doc: PlanDoc):

@@ -1965,6 +1965,8 @@ _RENORM_PROTECTED = (
     ("criterion.verify_venue", "the tree the check observes"),
     ("criterion.verify_kind", "the kind of check"),
     ("criterion.verify_venue_at_final", "the tree the final check observes"),
+    ("criterion.negative_control", "the known-bad input the check must reject"),
+    ("criterion.negative_control_waiver", "the stated reason the check has no negative control"),
 )
 
 

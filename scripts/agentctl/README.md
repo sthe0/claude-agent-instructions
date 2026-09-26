@@ -323,6 +323,16 @@ Plan structure is defined **primarily by typed code**, not prose. `plan.py`'s `p
 
 **Acceptance-review passes require a distinct recorded observation.** When a stage's `criterion_type` is `acceptance_review`, `record-result --status passed` requires `--observation <text>` that (after normalization) differs from `subject.result` (the expected image). The reviewer records what they actually observed, not an echo of the target.
 
+### Negative controls
+
+**A measurable shell stage's `verify_command` is trusted only after being shown it CAN fail.** For every substantive plan's measurable stage with `verify_kind = "shell"` and a `verify_command`, the submission seam (`submission.py`, not `load_plan`) requires either `negative_control` (a shell command, run in the same venue as `verify_command`, that feeds the check a known-bad input) or `negative_control_waiver` (a non-empty reason a control cannot be built). Landed checks, `acceptance_review` stages and `[[final_check]]` entries are exempt. Plans without either field still load — `load_plan` stays permissive; only `submit-plan` on a substantive plan enforces the requirement.
+
+**Authoring one.** The default known-bad input is the pre-change base tree: a control that runs the same check against the commit the stage's diff started from (before the fix/feature landed) — the check must fail there, since that is exactly the state the stage is supposed to have changed. Reuse the positive command's shape rather than inventing an unrelated probe, so venue and timeout handling stay identical.
+
+**At `record-result`**, after the positive check goes green (and before the acceptance judge), the engine runs the negative control. If it exits with the stage's own `expected_exit` — i.e. it did **not** discriminate — the stage does not pass: it routes to `DIAGNOSING` typed `control_not_discriminating`. If the positive check is red, the negative control is never run. A waiver is logged as `negative_control_waived` instead of being executed.
+
+**At `submit-plan`**, `checkrun` additionally runs each declared negative control advisorily and reports `DISCRIMINATES` / `NOT_DISCRIMINATING` alongside the existing `NOT_JUDGED`/`GREEN_AT_SUBMIT`/`RED` labels — advisory only, never a submission blocker. `plan-render` prints each stage's negative control or its waiver.
+
 **Executable end-to-end checks (`[[final_check]]`).** An optional typed `[[final_check]]` list (each entry: `command`, `expected_exit`, `label`) may be added to the plan. `verify-final` runs each entry after the per-stage re-runs; any mismatch refuses the `RESOLUTION` transition. Absent: back-compat (empty list, behaviour unchanged). Turns the plan's *Final verification* from prose the engine never reads into a machine fact.
 
 ### Landed checks (`kind = "landed"`)

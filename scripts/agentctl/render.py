@@ -89,6 +89,10 @@ def render_plan_md(doc: PlanDoc) -> str:
                     f"re-verified at resolution in "
                     f"{s.criterion.verify_venue_at_final}"
                 )
+            if s.criterion.negative_control:
+                lines.append(f"- **Negative control:** `{s.criterion.negative_control}`")
+            elif s.criterion.negative_control_waiver:
+                lines.append(f"- **Negative control waived:** {s.criterion.negative_control_waiver}")
         if s.depends_on:
             lines.append(f"- **Depends on:** {', '.join(str(d) for d in sorted(s.depends_on))}")
         if s.principle is not None:
@@ -230,6 +234,10 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
                 f"re-verified at resolution in "
                 f"{s.criterion.verify_venue_at_final}"
             )
+        if s.criterion.negative_control:
+            lines.append(f"- **Negative control:** `{s.criterion.negative_control}`")
+        elif s.criterion.negative_control_waiver:
+            lines.append(f"- **Negative control waived:** {s.criterion.negative_control_waiver}")
     if s.criterion.observation:
         lines.append(f"- **Prior observation:** {s.criterion.observation}")
     if s.output_artifacts:

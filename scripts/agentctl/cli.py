@@ -5018,6 +5018,34 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 )
                 actual = (actual + "\n" + note) if actual else note
                 stage.outcome.actual = actual
+            elif has_check and crit.negative_control:
+                # The positive check just went green -- now prove it CAN go red.
+                # Fed the known-bad input, a matching exit code means the check
+                # never discriminated bad state from good in the first place, so
+                # the stage does not pass even though the positive check did.
+                neg_matched, neg_result = _run_check(
+                    crit.negative_control, crit.expected_exit, runner, cwd=cwd,
+                )
+                if neg_matched:
+                    passed = False
+                    note = (
+                        f"negative_control exit {neg_result.returncode} == expected "
+                        f"{crit.expected_exit} (did not fail on bad input): "
+                        f"{crit.negative_control}"
+                    )
+                    actual = (actual + "\n" + note) if actual else note
+                    stage.outcome.actual = actual
+                    state.log(
+                        "control_not_discriminating",
+                        stage=stage.index, negative_control=crit.negative_control,
+                    )
+                else:
+                    state.log("negative_control_discriminates", stage=stage.index)
+            elif has_check and crit.negative_control_waiver:
+                state.log(
+                    "negative_control_waived",
+                    stage=stage.index, reason=crit.negative_control_waiver,
+                )
 
     # Cheap-judge COGNITION + PURE gate (runs AFTER the mechanical check above, so
     # a check the command itself contradicts never spends a judge call).

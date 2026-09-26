@@ -90,6 +90,7 @@ expected_result_image = {image}
 criterion_type = "measurable"
 done_criterion = "d"
 verify_command = "pytest -q"
+negative_control = "false"
 material = "m (traces to R1)"
 means = "bash"
 method = "run"
