@@ -371,10 +371,7 @@ def _baseline_grants(kind: str) -> StageGrants:
 
 
 _CODE_EXECUTING_GIT_COMMANDS = [
-    pytest.param(
-        "git fetch --upload-pack=x",
-        marks=pytest.mark.xfail(strict=True, reason="Bash(git fetch:*) in the developer baseline covers it"),
-    ),
+    "git fetch --upload-pack=x",
     "git grep -O cat",
     "git rebase --exec x",
     "git submodule foreach x",

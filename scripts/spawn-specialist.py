@@ -699,7 +699,15 @@ KIND_BASELINES: dict[str, list[str]] = {
         # conflict needs checkout/restore on a path; ff-vs-true-merge needs
         # merge-base and rev-list. Landing stays absent: `git push` is the
         # coordinator's.
-        "Bash(git fetch:*)", "Bash(git merge:*)", "Bash(git merge-base:*)",
+        #
+        # `git fetch` is narrowed to the `origin` remote (round-2 should-fix,
+        # rereview B1' item 7): an unqualified `Bash(git fetch:*)` also admits
+        # `git fetch --upload-pack=<arbitrary program>`, a code-executing verb
+        # no `KIND_BASELINES` wildcard rule may admit (see
+        # `test_code_executing_git_subcommand_not_admitted_by_any_kind_baseline`).
+        # `origin` is the only remote this baseline's own use case (reading
+        # trunk to merge it into the assigned branch) ever needs.
+        "Bash(git fetch origin:*)", "Bash(git merge:*)", "Bash(git merge-base:*)",
         "Bash(git rev-list:*)", "Bash(git checkout:*)", "Bash(git restore:*)",
         # spawn-outcome-typing stage 4 measures marker_extract's own latency via
         # real host calls — scoped to the driver script only. User-authorized

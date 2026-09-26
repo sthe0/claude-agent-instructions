@@ -892,6 +892,45 @@ def _bash_call_covered(grants: StageGrants, command: str) -> bool:
     return True
 
 
+def _path_suffix_equivalent(a: str, b: str) -> bool:
+    """True iff exactly one of `a`/`b` is an absolute path and the other
+    names the same file by a path-boundary-aligned relative suffix of it
+    (round-2 should-fix, rereview B1' item 7: 'every baseline SCRIPT rule
+    must match both absolute and repo-relative invocation forms') --
+    e.g. `/repo/scripts/x.py` and `scripts/x.py`. Deliberately a bare
+    string suffix check, not a real filesystem resolution against a known
+    repo root: `_segment_covered` has no cwd to resolve against. That
+    looseness is also where the named residual comes from -- the same
+    relative spelling also matches an unrelated project's own same-named
+    `scripts/<file>` sitting below the child's actual cwd; accepted, not
+    fixed (see the developer SKILL.md / marker-protocol residual note)."""
+    if a.startswith("/") and not b.startswith("/"):
+        return a == b or a.endswith("/" + b)
+    if b.startswith("/") and not a.startswith("/"):
+        return b == a or b.endswith("/" + a)
+    return False
+
+
+def _script_path_swapped(segment: str, rule_command: str) -> "str | None":
+    """`segment` with its script-path token (the 2nd token, e.g. after
+    `python3`) rewritten to `rule_command`'s own spelling of that token,
+    when the two are the absolute/repo-relative forms of the same path
+    (see `_path_suffix_equivalent`) -- `None` when there is nothing to
+    swap (fewer than two tokens, differing leading program token, or the
+    path tokens are not suffix-equivalent). The rest of the command
+    (flags/args) is left untouched and must still literal-match."""
+    seg_tokens = segment.split(" ")
+    rule_tokens = rule_command.split(" ")
+    if len(seg_tokens) < 2 or len(rule_tokens) < 2:
+        return None
+    if seg_tokens[0] != rule_tokens[0]:
+        return None
+    seg_path, rule_path = seg_tokens[1], rule_tokens[1]
+    if seg_path == rule_path or not _path_suffix_equivalent(seg_path, rule_path):
+        return None
+    return " ".join([seg_tokens[0], rule_path] + seg_tokens[2:])
+
+
 def _segment_covered(grants: StageGrants, segment: str) -> bool:
     for r in grants.allow:
         parsed = rule_program_and_arg(r.rule)
@@ -899,9 +938,14 @@ def _segment_covered(grants: StageGrants, segment: str) -> bool:
             continue
         rule_command = bash_command_from_rule_arg(parsed[1])
         wildcard = parsed[1].endswith(":*")
-        if wildcard:
-            if segment == rule_command or segment.startswith(rule_command + " "):
+        candidates = [segment]
+        swapped = _script_path_swapped(segment, rule_command)
+        if swapped is not None:
+            candidates.append(swapped)
+        for candidate in candidates:
+            if wildcard:
+                if candidate == rule_command or candidate.startswith(rule_command + " "):
+                    return True
+            elif candidate == rule_command:
                 return True
-        elif segment == rule_command:
-            return True
     return False

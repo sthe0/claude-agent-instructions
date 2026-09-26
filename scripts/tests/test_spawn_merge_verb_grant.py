@@ -33,7 +33,10 @@ SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
 # (merge-base, rev-list), performing it (fetch, merge), and resolving a
 # conflicted path (checkout --ours/--theirs, restore).
 MERGE_VERBS = (
-    "Bash(git fetch:*)",
+    # narrowed to `origin` (round-2 should-fix, rereview B1' item 7): an
+    # unqualified `git fetch:*` also admits the code-executing
+    # `git fetch --upload-pack=<program>` form.
+    "Bash(git fetch origin:*)",
     "Bash(git merge:*)",
     "Bash(git merge-base:*)",
     "Bash(git rev-list:*)",
