@@ -85,12 +85,15 @@ def _measurable_session(store, sid, *, verify_command=None, expected_exit=0):
 
 
 class _Runner:
-    """Routes a call by its argv shape -- the three shapes cmd_record_result's
-    verify+judge path actually issues: a `git -C <cwd> ...` venue-identity probe, the
+    """Routes a call by its argv shape -- the shapes cmd_record_result's verify+judge
+    path actually issues: a plain `git -C <cwd> rev-parse ...` call (HEAD, then
+    --git-path index), an `env GIT_INDEX_FILE=... git -C <cwd> {add -A,ls-files
+    -s,write-tree}` call (the venue-identity probe's disposable-index half), the
     verify_command's `bash -c <cmd>`, and a judge's model-launch argv (starting with
-    "claude"). Each is independently counted so a test can assert exactly which of
-    the three ran, and `head`/`judge_stdout`/`judge_exit` are mutable between calls so
-    a test can simulate a tree change or a change in judge verdict mid-scenario."""
+    "claude"). Each git-flavored call (plain or env-wrapped) counts as an identity
+    call; verify and judge are independently counted so a test can assert exactly
+    which of them ran. `head`/`judge_stdout`/`judge_exit` are mutable between calls
+    so a test can simulate a tree change or a change in judge verdict mid-scenario."""
 
     def __init__(self, *, verify_exit=0, judge_stdout="YES\nlooks right", judge_exit=0,
                  head="deadbeef"):
@@ -104,11 +107,16 @@ class _Runner:
         self.head = head
 
     def __call__(self, argv, *, timeout=None, stdin=""):
-        if argv[:1] == ["git"]:
+        git_argv = argv[2:] if argv[:1] == ["env"] else argv
+        if git_argv[:1] == ["git"]:
             self.identity_calls += 1
-            if "rev-parse" in argv:
+            if "rev-parse" in git_argv:
+                if "--git-path" in git_argv:
+                    return RunResult(0, stdout=".git/index", stderr="")
                 return RunResult(0, stdout=self.head, stderr="")
-            return RunResult(0, stdout="", stderr="")
+            if "write-tree" in git_argv:
+                return RunResult(0, stdout=f"tree-of-{self.head}", stderr="")
+            return RunResult(0, stdout="", stderr="")  # add -A, ls-files -s
         if argv[:2] == ["bash", "-c"]:
             self.verify_calls += 1
             self.calls.append("verify")
