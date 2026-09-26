@@ -1,6 +1,6 @@
 """Oracle-first RED catalogue for the whole-PR review of PR-A (spawn-permission-
-grant-model stages 1-3), `/home/the0/.claude-agent/plans/evidence/
-spawn-permission-grant-model/review_pra.md` (verdict: REVIEW: revise).
+grant-model stages 1-3), recorded under the plan slug
+`spawn-permission-grant-model` (verdict: REVIEW: revise).
 
 One test (or parametrized group) per finding ID named in the review's
 "## Fixes" section, covering exactly what that finding requires: B1, B2, S1,
@@ -10,6 +10,16 @@ edits this file may receive after its own oracle commit are the removal of an
 xfail mark once the matching fix lands (see the developer marker-protocol
 brief for this stage: an oracle test believed WRONG is never silently edited,
 it is a `REPLAN:`).
+
+A second round (this file's ORACLE FIRST paragraph in stage 3's procedure
+item 8) adds three more rows on top of the same catalogue, still keyed to
+findings the fix-diff re-review raised: `claude` recognized only by basename
+lets an install-path invocation (`.../claude/versions/<ver>`, `node .../
+cli.js`, `npx @anthropic-ai/claude-code@<tag>`) through `validate_rule`;
+`S10`'s repo-root-deny pairing is skipped when the child's cwd already IS the
+repo root; and a handful of code-executing git subcommands are not refused,
+so a wildcarded baseline rule the developer kind already carries (`Bash(git
+fetch:*)`) can admit one of them.
 """
 from __future__ import annotations
 
@@ -310,3 +320,72 @@ def test_n1_uncovered_permission_request_stays_an_ask_even_after_an_unrelated_co
     state = store.load(sid)
     assert state.permission_request is not None
     assert state.permission_request.action == "need to push a branch"
+
+
+# --- round 2: claude recognized only by basename lets an install-path
+# invocation through validate_rule (rereview B1' item 1) -------------------
+
+_INSTALL_PATH_CLAUDE_RULES = [
+    "Bash(/home/u/.local/share/claude/versions/2.1.282 -p:*)",
+    "Bash(/opt/x/claude/versions/9.9.9:*)",
+    "Bash(node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js:*)",
+    "Bash(npx @anthropic-ai/claude-code@latest:*)",
+]
+
+
+@pytest.mark.parametrize("rule", _INSTALL_PATH_CLAUDE_RULES)
+@pytest.mark.xfail(strict=True, reason="is_claude_program recognizes only the claude/claude-code basename")
+def test_claude_recognized_by_install_path_refused(rule):
+    with pytest.raises(GrantValidationError):
+        validate_rule(rule)
+
+
+# --- round 2: S10 deny gap when the child's cwd already IS the repo root
+# (rereview should-fix "S10 deny gap") --------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="repo_root_deny_rules returns [] when workdir == repo root")
+def test_s10_repo_root_workdir_itself_carries_surface_denies(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+
+    settings = SPAWN.build_child_settings("developer", workdir=str(root))
+
+    deny = settings.get("permissions", {}).get("deny", [])
+    root_real = os.path.realpath(str(root))
+    base = grants.rule_file_arg(root_real)
+    assert f"Edit({base}/**/.claude/**)" in deny
+    assert f"Edit({base}/**/settings*.json)" in deny
+    assert f"Edit({base}/**/.git/**)" in deny
+    assert f"Edit({base}/**/.git)" in deny
+
+
+# --- round 2: code-executing git subcommands must not be admitted by any
+# KIND_BASELINES rule (rereview B1' item 7) ---------------------------------
+
+
+def _baseline_grants(kind: str) -> StageGrants:
+    return StageGrants(allow=[
+        __import__("agentctl.grants", fromlist=["RuleGrant"]).RuleGrant(rule=r, provenance="declared")
+        for r in SPAWN.KIND_BASELINES[kind]
+    ])
+
+
+_CODE_EXECUTING_GIT_COMMANDS = [
+    pytest.param(
+        "git fetch --upload-pack=x",
+        marks=pytest.mark.xfail(strict=True, reason="Bash(git fetch:*) in the developer baseline covers it"),
+    ),
+    "git grep -O cat",
+    "git rebase --exec x",
+    "git submodule foreach x",
+]
+
+
+@pytest.mark.parametrize("command", _CODE_EXECUTING_GIT_COMMANDS)
+def test_code_executing_git_subcommand_not_admitted_by_any_kind_baseline(command):
+    for kind in SPAWN.KIND_BASELINES:
+        assert not grant_covers_call(_baseline_grants(kind), "Bash", {"command": command}), (
+            f"kind {kind!r} admits {command!r}"
+        )
