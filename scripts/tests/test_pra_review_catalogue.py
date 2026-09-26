@@ -203,7 +203,6 @@ def test_s4_write_add_dir_surface_deny_not_covered_by_grant_covers_call(tmp_path
 # validate_rule; developer repo-root add-dir carries surface denies ---------
 
 
-@pytest.mark.xfail(strict=True, reason="S10: lifted project settings rules bypass validate_rule")
 def test_s10_lifted_project_settings_rules_are_validated(tmp_path):
     project_settings = tmp_path / "settings.local.json"
     project_settings.write_text(

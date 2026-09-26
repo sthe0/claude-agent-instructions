@@ -883,7 +883,7 @@ def repo_root_add_dir_args(kind: str, cwd: str) -> list[str]:
     return ["--add-dir", root]
 
 
-def project_settings_permission_rules(project_settings_file: "Path | None") -> tuple[list[str], list[str]]:
+def project_settings_permission_rules(project_settings_file: "Path | str | None") -> tuple[list[str], list[str]]:
     """(allow, deny) lifted from a target project's own `.claude/settings.local.json`
     `permissions.allow`/`permissions.deny` arrays — the same shape the harness
     itself reads for an ordinary (unspawned) session in that project.
@@ -904,8 +904,11 @@ def project_settings_permission_rules(project_settings_file: "Path | None") -> t
     """
     if project_settings_file is None:
         return [], []
+    # Accept either a Path or a bare str (the real call site always passes a
+    # Path; a caller that already has the string form -- e.g. a test -- should
+    # not have to know that distinction).
     try:
-        data = json.loads(project_settings_file.read_text(encoding="utf-8"))
+        data = json.loads(Path(project_settings_file).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return [], []
     if not isinstance(data, dict):
@@ -917,7 +920,26 @@ def project_settings_permission_rules(project_settings_file: "Path | None") -> t
     deny = permissions.get("deny", [])
     allow = [r for r in allow if isinstance(r, str)] if isinstance(allow, list) else []
     deny = [r for r in deny if isinstance(r, str)] if isinstance(deny, list) else []
+    # Finding S10: these are literal Bash/Edit/etc rule strings straight from
+    # a target project's own settings.local.json, never routed through the
+    # validator before reaching the child's --settings -- a project's own
+    # allow-list is not more trustworthy than a declared/derived/runtime
+    # grant, so a rule validate_rule refuses (a wildcarded interpreter/wrapper,
+    # `.claude`/`.git`/settings-file coverage, etc) must not pass through here
+    # either. Only `allow` is filtered: a `deny` entry only narrows, so an
+    # unparseable one is dropped harmlessly rather than refusing the whole
+    # rule (deny's directory-glob shapes are exactly what validate_rule
+    # categorically refuses -- see stage_grant_rules).
+    allow = [r for r in allow if _validates(r)]
     return allow, deny
+
+
+def _validates(rule: str) -> bool:
+    try:
+        grants.validate_rule(rule)
+    except grants.GrantValidationError:
+        return False
+    return True
 
 
 def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
@@ -1084,15 +1106,16 @@ def build_child_settings(
     `engine_grants` is given (the stage's own declared/derived/runtime
     grant set — see `load_engine_stage_grants`), those too.
 
-    `grants.validate_rule` gates only the baseline and `engine_grants`
-    sources — the four categories the stage-grants model actually names
-    (baseline/declared/derived/runtime). `plans_allow`/`project_allow` are a
-    pre-existing, orthogonal mechanism (plans_permission_rules,
-    project_settings_permission_rules) whose directory-glob rule shape
-    (`Read(//<dir>/**)`) `grants.validate_rule` categorically refuses — see
-    `stage_grant_rules` — so routing them through the same validator would
-    reject rules that already worked before this stage's change; they keep
-    their own, separate acceptance path."""
+    `grants.validate_rule` gates the baseline and `engine_grants` sources
+    directly here — the four categories the stage-grants model actually
+    names (baseline/declared/derived/runtime) — plus `project_allow`, which
+    `project_settings_permission_rules` now validates entry-by-entry itself
+    before returning (a lifted project rule is not more trustworthy than a
+    declared/derived/runtime one). `plans_allow` is the one remaining
+    exemption: its directory-glob rule shape (`Read(//<dir>/**)`)
+    `grants.validate_rule` categorically refuses — see `stage_grant_rules` —
+    so it keeps its own, separate acceptance path rather than being routed
+    through the same validator."""
     settings: dict = {
         "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(SPAWN_AUTOCOMPACT_WINDOW_TOKENS)},
         "autoCompactWindow": SPAWN_AUTOCOMPACT_WINDOW_TOKENS,
