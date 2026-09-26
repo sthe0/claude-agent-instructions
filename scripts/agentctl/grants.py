@@ -338,7 +338,11 @@ def validate_rule(rule: str) -> None:
         raise GrantValidationError(
             f"rule {rule!r} is a bare wrapper/launcher with no operand — refused"
         )
-    prog = widening_targets.program_name(stripped[0])
+    # Casefolded (finding S2-adjacent, round 6): on a case-insensitive
+    # filesystem (macOS default) a differently-cased spelling (`GIT`,
+    # `Python3`) resolves to the same real binary, so every classification
+    # check below must see the same normalized name regardless of case.
+    prog = widening_targets.program_name(stripped[0]).casefold()
     operand_tokens = stripped[1:]
 
     if prog in _UNCONDITIONALLY_REFUSED_PROGRAMS:
@@ -394,7 +398,7 @@ def validate_rule(rule: str) -> None:
                 f"including alias/hook injection) — refused"
             )
         subcommand = next((t for t in operand_tokens if not t.startswith("-")), None)
-        if subcommand in _DANGEROUS_GIT_SUBCOMMANDS:
+        if subcommand is not None and subcommand.casefold() in _DANGEROUS_GIT_SUBCOMMANDS:
             raise GrantValidationError(f"rule {rule!r} invokes git {subcommand!r} — refused")
 
     if prog in _WRITE_CAPABLE_PROGRAMS:

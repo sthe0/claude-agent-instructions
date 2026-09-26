@@ -258,11 +258,23 @@ def add_dir_under_protected_root(path: str) -> bool:
 # --- claude / agentctl program detection ------------------------------------
 
 _WRAPPER_TOKENS = frozenset({
-    "env", "npx", "exec", "nohup", "timeout", "command",
+    "env", "npx", "bunx", "exec", "nohup", "timeout", "command",
     "sudo", "doas", "xargs", "eval", "time", "nice", "stdbuf",
     "setsid", "ionice", "chrt", "taskset", "unbuffer", "flock",
 })
 INTERPRETER_RE = re.compile(r"^python[0-9.]*$")
+
+# Two-token package-runner wrapper forms (round-6, S2-adjacent finding): a
+# package manager's own subcommand -- not the manager token itself -- is what
+# turns it into a bunx/npx-equivalent launcher (`pnpm dlx`, `pnpm exec`,
+# `yarn dlx`); `pnpm install`/`pnpm run build` are ordinary, non-wrapping
+# invocations and must not be stripped. Keyed by the (casefolded) leading
+# token, value is the set of (casefolded) SECOND tokens that make it a
+# wrapper.
+_TWO_TOKEN_WRAPPER_VERBS: dict[str, frozenset[str]] = {
+    "pnpm": frozenset({"dlx", "exec"}),
+    "yarn": frozenset({"dlx"}),
+}
 
 # agentctl subcommands that exercise USER authority — approving a plan,
 # resolving a permission request, closing out a session, etc. A grant that
@@ -310,31 +322,43 @@ _WRAPPER_VALUE_FLAGS: dict[str, frozenset[str]] = {
 
 def strip_wrappers(tokens: list[str]) -> list[str]:
     """Drop a leading run of wrapper tokens (`env FOO=bar`, `npx`, `exec`,
-    `nohup`, `timeout 30`, `command`, `sudo -u x`, `nice -n 5`, ...) so the
-    real program name surfaces. `env` consumes any leading `KEY=VALUE`
-    assignments and a `-i`/`-u NAME` flag form; `timeout` consumes its
-    duration operand; every other wrapper in `_WRAPPER_TOKENS` consumes its
-    own known separate-value flags (`_WRAPPER_VALUE_FLAGS`) together with
-    their value token, and any other `-`-prefixed token as a boolean/attached
-    flag, stopping at the first non-flag token (the real program)."""
+    `nohup`, `timeout 30`, `command`, `sudo -u x`, `nice -n 5`, `pnpm dlx`,
+    ...) so the real program name surfaces. `env` consumes any leading
+    `KEY=VALUE` assignments and a `-i`/`-u NAME` flag form; `timeout`
+    consumes its duration operand; a two-token package-runner form
+    (`_TWO_TOKEN_WRAPPER_VERBS`, e.g. `pnpm dlx`/`pnpm exec`/`yarn dlx`)
+    consumes both tokens; every other wrapper in `_WRAPPER_TOKENS` consumes
+    its own known separate-value flags (`_WRAPPER_VALUE_FLAGS`) together
+    with their value token, and any other `-`-prefixed token as a
+    boolean/attached flag, stopping at the first non-flag token (the real
+    program). Every comparison against a known wrapper spelling casefolds
+    `tok` first (finding S2-adjacent, round 6): on a case-insensitive
+    filesystem (macOS default) a differently-cased spelling resolves to the
+    same real binary, so `Sudo -u root` must be recognized exactly like
+    `sudo -u root`."""
     i = 0
     n = len(tokens)
     while i < n:
         tok = tokens[i]
-        if tok == "env":
+        tok_cf = tok.casefold()
+        if tok_cf == "env":
             i += 1
             while i < n and ("=" in tokens[i] or tokens[i].startswith("-")):
                 if tokens[i].startswith("-u") and tokens[i] == "-u":
                     i += 1  # consume the flag's separate NAME operand too
                 i += 1
             continue
-        if tok == "timeout":
+        if tok_cf == "timeout":
             i += 1
             while i < n and (tokens[i].startswith("-") or re.match(r"^[0-9.]+[smhd]?$", tokens[i])):
                 i += 1
             continue
-        if tok in _WRAPPER_TOKENS:
-            value_flags = _WRAPPER_VALUE_FLAGS.get(tok, frozenset())
+        two_token_verbs = _TWO_TOKEN_WRAPPER_VERBS.get(tok_cf)
+        if two_token_verbs is not None and i + 1 < n and tokens[i + 1].casefold() in two_token_verbs:
+            i += 2
+            continue
+        if tok_cf in _WRAPPER_TOKENS:
+            value_flags = _WRAPPER_VALUE_FLAGS.get(tok_cf, frozenset())
             i += 1
             while i < n and tokens[i].startswith("-"):
                 if tokens[i] in value_flags:
@@ -364,14 +388,16 @@ def is_claude_program(tokens: list[str]) -> bool:
 
     A wrapper's own options (`nice -n 5`, `sudo -u x`, `stdbuf -o0`) are not
     parsed per wrapper, so once any wrapper was stripped, `claude`/`claude-code`
-    anywhere in the remaining tokens counts: fail toward refused."""
+    anywhere in the remaining tokens counts: fail toward refused. Casefolded
+    (round 6) so a `Claude`/`CLAUDE` spelling variant is caught the same as
+    the lowercase form."""
     stripped = strip_wrappers(tokens)
     if not stripped:
         return False
-    if program_name(stripped[0]) in _CLAUDE_PROGRAM_NAMES:
+    if program_name(stripped[0]).casefold() in _CLAUDE_PROGRAM_NAMES:
         return True
     wrapped = len(stripped) < len(tokens)
-    return wrapped and any(program_name(t) in _CLAUDE_PROGRAM_NAMES for t in stripped)
+    return wrapped and any(program_name(t).casefold() in _CLAUDE_PROGRAM_NAMES for t in stripped)
 
 
 def agentctl_invocation_verb(tokens: list[str]) -> tuple[bool, str | None]:
@@ -395,15 +421,15 @@ def agentctl_invocation_verb(tokens: list[str]) -> tuple[bool, str | None]:
     stripped = strip_wrappers(tokens)
     if not stripped:
         return False, None
-    prog = program_name(stripped[0])
+    prog_cf = program_name(stripped[0]).casefold()
     rest = stripped[1:]
-    if INTERPRETER_RE.match(prog):
+    if INTERPRETER_RE.match(prog_cf):
         if len(rest) >= 1 and rest[0] == "-m" and len(rest) >= 2 and rest[1] == "agentctl":
             return True, (rest[2] if len(rest) >= 3 else None)
-        if rest and program_name(rest[0]).endswith("agentctl-cli.py"):
+        if rest and program_name(rest[0]).casefold().endswith("agentctl-cli.py"):
             return True, (rest[1] if len(rest) >= 2 else None)
         return False, None
-    if prog.endswith("agentctl-cli.py"):
+    if prog_cf.endswith("agentctl-cli.py"):
         return True, (rest[0] if rest else None)
     return False, None
 
@@ -452,13 +478,13 @@ def is_settings_channel_program(tokens: list[str]) -> bool:
     stripped = strip_wrappers(tokens)
     if not stripped:
         return False
-    prog = program_name(stripped[0])
+    prog = program_name(stripped[0]).casefold()
     if prog in SETTINGS_CHANNEL_PROGRAMS:
         return True
     # `bash <script>` / `sh <script>`: the interpreter is the leading token,
     # the script is the next one.
     if prog in ("bash", "sh") and len(stripped) >= 2:
-        return program_name(stripped[1]) in SETTINGS_CHANNEL_PROGRAMS
+        return program_name(stripped[1]).casefold() in SETTINGS_CHANNEL_PROGRAMS
     if INTERPRETER_RE.match(prog) and len(stripped) >= 2:
-        return program_name(stripped[1]) in SETTINGS_CHANNEL_PROGRAMS
+        return program_name(stripped[1]).casefold() in SETTINGS_CHANNEL_PROGRAMS
     return False
