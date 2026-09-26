@@ -195,6 +195,36 @@ def test_dr_o_ignores_non_py_sh_extension():
     assert not any(r.startswith("Bash(") for r in _rules(grants))
 
 
+def test_dr_o_excludes_artifact_under_lib_dir():
+    # A library module under lib/ is imported, not invoked as a script -- no
+    # `Bash(python3 ...)` run grant should be derived for it.
+    stage = _stage(output_artifacts=["scripts/lib/kind_baselines.py"])
+    grants, _dropped = derive_stage_grants(stage, venue="/repo")
+    assert not any(r.startswith("Bash(") for r in _rules(grants))
+
+
+def test_dr_o_excludes_artifact_in_package_dir_carrying_init(tmp_path):
+    # A .py file living alongside a real __init__.py is a package module,
+    # not a script -- same exclusion, established via the filesystem rather
+    # than a `lib/` path segment. Needs a REAL venue (tmp_path), unlike the
+    # lib/-segment test above, since this check is a filesystem stat.
+    pkg_dir = tmp_path / "scripts" / "mypkg"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "__init__.py").write_text("")
+    stage = _stage(output_artifacts=["scripts/mypkg/mod.py"])
+    grants, _dropped = derive_stage_grants(stage, venue=str(tmp_path))
+    assert not any(r.startswith("Bash(") for r in _rules(grants))
+
+
+def test_dr_o_py_output_artifact_in_dir_without_init_still_derives():
+    # Regression guard: an ordinary in-venue .py artifact not under lib/ and
+    # with no real __init__.py sibling still gets its DR-O run grant -- the
+    # new exclusion must not swallow the common case.
+    stage = _stage(output_artifacts=["scripts/foo.py"])
+    grants, _dropped = derive_stage_grants(stage, venue="/repo")
+    assert "Bash(python3 scripts/foo.py:*)" in _rules(grants)
+
+
 # --- DR-E: Edit(//<abs>) only for spawn:developer/spawn:tech-writer -------
 
 

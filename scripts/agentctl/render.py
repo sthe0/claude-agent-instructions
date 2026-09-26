@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 
+from lib import kind_baselines
+
 from . import grants as _grants
 from .directive import Directive
 from .plan import PlanDoc, _venue_for, grants_sha256, load_plan
@@ -336,7 +338,11 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
     grant a stage is about to receive), DR-V and DR-E entries only COUNTED (a
     verify_command can carry many segments and a developer/tech-writer stage
     many in-venue refs — spelling every one out would defeat "compact"), plus
-    a dropped-count for whatever the validator refused. `fmt="full"`: every
+    a dropped-count for whatever the validator refused. A spawn stage also
+    gets a `kind_baseline=<kind>:<digest>…` segment (`kind_baselines.
+    kind_baseline_sha256`, truncated to 12 hex chars) naming the fleet-wide
+    baseline its child receives, so a reviewer can confirm which baseline
+    applied without diffing `KIND_BASELINES` by eye. `fmt="full"`: every
     entry verbatim, including DR-V/DR-E, plus each dropped entry with its
     refusal reason. A machine-readable form (`--format json`) is not produced
     here — `cmd_plan_grants` builds that directly from `StageGrants.to_dict()`."""
@@ -384,6 +390,10 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
                 parts.append(f"DR-E={len(dr_e)} derived")
             if dropped:
                 parts.append(f"dropped={len(dropped)}")
+            if s.is_spawn():
+                kind = s.spawn_kind()
+                digest = kind_baselines.kind_baseline_sha256(kind)
+                parts.append(f"kind_baseline={kind}:{digest[:12]}…")
             if len(parts) == 1:
                 parts.append("(no grants)")
             lines.append(" ".join(parts))

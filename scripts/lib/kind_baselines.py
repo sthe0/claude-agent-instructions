@@ -12,6 +12,7 @@ the launcher module keep working unchanged.
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -191,3 +192,16 @@ KIND_BASELINES: dict[str, list[str]] = {
     # other row: only a MEASURED usage pattern earns an addition here.
     "default": list(_READ_ONLY_INSPECTION),
 }
+
+
+def kind_baseline_sha256(kind: str) -> str:
+    """Stable sha256 hex digest of one kind's baseline rule list (falling
+    back to the `"default"` baseline for an unknown kind), same
+    `repr(...)`-then-sha256 convention as `plan.grants_sha256` — sorted so
+    the digest never depends on the list's declared order. Lets
+    `plan-grants --format compact` name which baseline a spawned stage's
+    child actually receives without a reader diffing the whole
+    `KIND_BASELINES` table by eye."""
+    baseline = KIND_BASELINES.get(kind, KIND_BASELINES["default"])
+    payload = repr(tuple(sorted(baseline)))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

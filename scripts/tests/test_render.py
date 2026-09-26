@@ -13,6 +13,7 @@ from agentctl.render import (
     render_plan_md,
     render_stage_brief,
 )
+from lib.kind_baselines import kind_baseline_sha256
 
 
 def _doc(n_stages: int, verify_venue=None, verify_venue_at_final=None):
@@ -190,6 +191,50 @@ def test_render_stage_brief_and_render_plan_grants_agree_on_declared_and_derived
     assert "python3 scripts/foo.py" in brief
     assert "python3 scripts/foo.py" in plan_md
     assert "python3 scripts/foo.py" in grants_full
+
+
+def _spawn_grants_doc(executor: str = "spawn:developer"):
+    # Same shape as _grants_doc but with a spawn: executor, so
+    # render_plan_grants (fmt="compact") has a stage to attach a
+    # kind_baseline= segment to.
+    data = {
+        "meta": {
+            "task_id": "render-spawn-grants-test",
+            "goal": "g",
+            "done_criterion": "d",
+            "criterion_type": "measurable",
+            "weight_class": "substantive",
+            "external_research": "n/a",
+        },
+        "stage": [
+            {
+                "index": 1,
+                "title": "Stage one",
+                "executor": executor,
+                "expected_result_image": "result",
+                "criterion_type": "measurable",
+                "done_criterion": "done",
+            }
+        ],
+    }
+    return parse_plan(data, strict=False)
+
+
+def test_render_plan_grants_compact_names_spawn_stage_kind_baseline():
+    # A spawn stage's compact line must name which fleet-wide KIND_BASELINES
+    # baseline its child receives, so a plan reviewer can confirm the
+    # baseline without diffing the whole table by eye (item f).
+    doc = _spawn_grants_doc("spawn:developer")
+    compact = render_plan_grants(doc, fmt="compact")
+    digest = kind_baseline_sha256("developer")
+    assert f"kind_baseline=developer:{digest[:12]}…" in compact
+
+
+def test_render_plan_grants_compact_omits_kind_baseline_for_in_thread_stage():
+    # An in_thread stage spawns no child, so it has no fleet baseline to name.
+    doc = _grants_doc()
+    compact = render_plan_grants(doc, fmt="compact")
+    assert "kind_baseline=" not in compact
 
 
 def test_cmd_plan_render_reads_toml_returns_markdown(tmp_path):

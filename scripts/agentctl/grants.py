@@ -696,10 +696,29 @@ def _in_venue(path: str, venue: str) -> bool:
     return rel == os.curdir or not rel.startswith(os.pardir)
 
 
+def _is_library_module(artifact: str, venue: str) -> bool:
+    """True iff DR-O must NOT propose a `Bash(python3 <artifact>:*)` run
+    grant for this `.py` output_artifact because it is a library module
+    (imported, not invoked), not a script: either its path passes through a
+    `lib/` directory, or its containing directory is a Python package (it
+    carries an `__init__.py` file on disk, in the venue itself — a real
+    directory in production, per `_in_venue`'s own docstring; a DR-O test
+    exercising this branch needs a real `venue`/`tmp_path`, not the fake
+    `"/repo"` string most derivation tests use, since the `lib/`-segment
+    check above needs no filesystem access but this one does)."""
+    parts = artifact.split("/")
+    if "lib" in parts[:-1]:
+        return True
+    directory = "/".join(parts[:-1])
+    init_path = os.path.join(venue, directory, "__init__.py") if directory else os.path.join(venue, "__init__.py")
+    return os.path.isfile(init_path)
+
+
 def derive_stage_grants(stage, *, venue: str) -> tuple[StageGrants, list[dict]]:
     """The pure function from a stage's declared elements to a derived
     grant set: DR-V (one `Bash(<segment>:*)` per top-level verify_command
-    segment), DR-O (an in-venue `.py` output_artifact not under `tests/`
+    segment), DR-O (an in-venue `.py` output_artifact not under `tests/` and
+    not a library module — see `_is_library_module` —
     becomes `Bash(python3 <rel>:*)`; a `.sh` one becomes `Bash(<rel>:*)`),
     DR-E (spawn:developer/spawn:tech-writer only: each in-venue
     output_artifact/material_ref becomes `Edit(//<abs>)`), DR-R (each
@@ -746,6 +765,8 @@ def derive_stage_grants(stage, *, venue: str) -> tuple[StageGrants, list[dict]]:
         if "tests" in artifact.split("/"):
             continue
         if artifact.endswith(".py"):
+            if _is_library_module(artifact, venue):
+                continue
             _try_rule(f"Bash(python3 {artifact}:*)", "derived:DR-O")
         elif artifact.endswith(".sh"):
             _try_rule(f"Bash({artifact}:*)", "derived:DR-O")
