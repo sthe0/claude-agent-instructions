@@ -1516,6 +1516,23 @@ def _judge_bypass_for(state: SessionState, stage_index: int, kind: str, observat
     return matches[-1] if matches else None
 
 
+def standing_revise_bound_to(state: SessionState, stage_index: int, observation_sha256: str) -> bool:
+    """True iff the most-recently-recorded StageReview for `stage_index` binds to
+    `observation_sha256` (its own hash is empty — legacy — or matches exactly) AND
+    its verdict is neither `pass` nor `override` — i.e. a real "no" already stands
+    against this exact observation. Shared by acceptance_review_blockers (a
+    standing revise must outrank a later fail_open bypass) and by the fail-open
+    recording site in cli.py (a fail_open bypass must never even be RECORDED
+    against an observation a standing revise already covers — recording one
+    anyway would be redundant at best and misleading in any surface that lists
+    bypasses without also checking for a standing review)."""
+    review = _stage_review_for(state, stage_index)
+    review_binds = review is not None and (
+        not review.observation_sha256 or review.observation_sha256 == observation_sha256
+    )
+    return review_binds and review.verdict not in (_STAGE_REVIEW_PASS, _STAGE_REVIEW_OVERRIDE)
+
+
 def acceptance_review_blockers(state: SessionState, stage: "_Stage") -> list[str]:
     """Precondition guardian for `record-result --status passed` on an acceptance_review
     stage: a recorded StageReview with a passing (or user-overridden) verdict, BOUND to
@@ -1546,12 +1563,7 @@ def acceptance_review_blockers(state: SessionState, stage: "_Stage") -> list[str
     observation = getattr(stage.criterion, "observation", "") or ""
     expected = hashlib.sha256(observation.encode("utf-8")).hexdigest()
     review = _stage_review_for(state, stage.index)
-    review_binds = review is not None and (
-        not review.observation_sha256 or review.observation_sha256 == expected
-    )
-    standing_revise = review_binds and review.verdict not in (
-        _STAGE_REVIEW_PASS, _STAGE_REVIEW_OVERRIDE,
-    )
+    standing_revise = standing_revise_bound_to(state, stage.index, expected)
     if not standing_revise and _judge_bypass_for(state, stage.index, "fail_open", expected) is not None:
         return []
     if review is None:

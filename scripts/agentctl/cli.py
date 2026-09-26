@@ -17,8 +17,10 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import fields
 from pathlib import Path
@@ -671,44 +673,74 @@ def _verify_command_result(stage, runner: Runner | None, cwd: str | None = None)
 
 
 def _venue_tree_identity(cwd: str | None, runner: Runner | None) -> str | None:
-    """Digest identifying the current state of a verify_command's venue: HEAD sha,
-    a diff of every tracked change against HEAD (staged AND unstaged, binary files
-    included via `--binary` rather than the content-blind "Binary files ... differ"
-    line plain `git diff` prints), and the actual BYTES of every untracked file —
-    not just their names. `git status --porcelain` alone (the pre-fix key) lists an
-    untracked file's path but never its contents, and `git diff` with no revision
-    only covers the unstaged half of the tree — either gap lets an edit inside the
-    venue (staging a change, or editing an already-untracked file's content without
-    touching its name) go unnoticed, so a stale GREEN check keeps getting served
-    from the cache (see _cached_check_hit) against a tree that has since changed
-    underneath it. Returns None when the venue has no git repo (rev-parse fails) —
-    the cache then never treats the check as skippable, so a git-less venue keeps
-    re-running its check on every call. `cwd=None`
-    mirrors _verify_command_result's own default: the venue is plain repo_root."""
+    """Digest identifying the current state of a verify_command's venue: HEAD sha
+    plus the tree sha `git write-tree` would produce from a full `git add -A` of
+    the working tree — computed entirely by git itself, in a disposable INDEX
+    copy, never the venue's real one.
+
+    Rationale for going through git rather than hand-rolling `diff`/`ls-files`/
+    `read_bytes`: git's own content addressing already normalizes every path
+    representation git itself accepts (non-ASCII bytes, leading/trailing spaces,
+    embedded newlines) the way its own commands do, so the identity cannot drift
+    from what `git add -A` would actually stage — a hand-rolled walk has to
+    reinvent that decoding and can disagree with it at the edges.
+
+    Mechanics: resolve the venue's REAL index path (`git rev-parse --git-path
+    index` — worktree-aware, so a linked worktree's own index is used, not the
+    main checkout's), copy its bytes into a throwaway temp file (seeding it from
+    the real index preserves git's stat cache, so `add -A` need not re-hash every
+    unchanged file), then run `add -A` and `write-tree` against that temp file via
+    `GIT_INDEX_FILE` — passed through the `env` argv prefix, since the Runner
+    protocol is argv-only and carries no environment. The real index and the
+    working tree are never touched: `GIT_INDEX_FILE` redirects every read and
+    write git would otherwise do against `.git/index` to the temp copy, and `add
+    -A` never writes to tracked files regardless.
+
+    Known limitation, not a bug: a `.gitignore`d file's content is invisible to
+    `add -A` exactly as it is to a real commit, so an edit confined to an ignored
+    file does not move the identity. A gitlink (an embedded repo, mode 160000) is
+    the other known gap — git cannot see inside its working tree without
+    recursing into that repo — so its PRESENCE in the temp index, changed or not,
+    makes this function return None rather than risk a false cache hit.
+
+    Returns None (never caches; the check always re-runs) whenever: the venue has
+    no git repo or `HEAD` is unborn; any git call in the sequence fails or a call
+    whose value is used (`rev-parse`, `write-tree`) prints nothing; or the temp
+    index ends up containing a gitlink. `cwd=None` mirrors _verify_command_result's
+    own default: the venue is plain repo_root."""
     run = runner or subprocess_runner
     base = Path(cwd) if cwd else REPO_ROOT
     prefix = ["git", "-C", str(base)]
     head = run(prefix + ["rev-parse", "HEAD"])
     if head.returncode != 0 or not head.stdout.strip():
         return None
-    diff = run(prefix + ["diff", "HEAD", "--binary"])
-    untracked = run(prefix + ["ls-files", "-o", "--exclude-standard"])
+    git_path = run(prefix + ["rev-parse", "--git-path", "index"])
+    if git_path.returncode != 0 or not git_path.stdout.strip():
+        return None
+    real_index = base / git_path.stdout.strip()
+    tmp_dir = tempfile.mkdtemp(prefix="agentctl-venue-index-")
+    try:
+        tmp_index = os.path.join(tmp_dir, "index")
+        if real_index.is_file():
+            shutil.copyfile(real_index, tmp_index)
+        env_argv = ["env", f"GIT_INDEX_FILE={tmp_index}"] + prefix
+        added = run(env_argv + ["add", "-A"])
+        if added.returncode != 0:
+            return None
+        listed = run(env_argv + ["ls-files", "-s"])
+        if listed.returncode != 0:
+            return None
+        if any(line.startswith("160000") for line in (listed.stdout or "").splitlines() if line.strip()):
+            return None
+        tree = run(env_argv + ["write-tree"])
+        if tree.returncode != 0 or not tree.stdout.strip():
+            return None
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     digest = hashlib.sha256()
     digest.update(head.stdout.strip().encode("utf-8"))
     digest.update(b"\x00")
-    digest.update((diff.stdout or "").encode("utf-8", errors="surrogateescape"))
-    for rel in sorted(line.strip() for line in (untracked.stdout or "").splitlines() if line.strip()):
-        digest.update(b"\x00")
-        digest.update(rel.encode("utf-8", errors="surrogateescape"))
-        digest.update(b"\x00")
-        try:
-            digest.update((base / rel).read_bytes())
-        except OSError:
-            # Vanished between `ls-files` and the read (deleted, or a broken
-            # symlink) — fold the miss itself into the digest rather than
-            # silently treating the file as absent, so the identity still
-            # moves if the file reappears with different content later.
-            digest.update(b"<unreadable>")
+    digest.update(tree.stdout.strip().encode("utf-8"))
     return digest.hexdigest()
 
 
@@ -4974,11 +5006,17 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 # waves the pass through instead of stalling it indefinitely — a judge
                 # outage is not evidence against the observation. Log the judge's own
                 # reason so a session review can tell an outage apart from a genuine
-                # revise even if the caller only looks at the recorded bypass.
+                # revise even if the caller only looks at the recorded bypass. Skip the
+                # recording entirely when a standing revise already binds to this exact
+                # observation: the gate already refuses to let such a bypass override
+                # that revise (gates.standing_revise_bound_to), so recording one here
+                # would only add a misleading entry to any surface that lists bypasses
+                # without also checking for the standing review.
                 state.log("acceptance_judge_fail_open", stage=stage.index, reason=judge_reason)
-                _record_bypass(state, JudgeBypass(
-                    stage_index=stage.index, kind="fail_open", reviewer="",
-                    note=judge_reason, observation_sha256=obs_sha))
+                if not gates.standing_revise_bound_to(state, stage.index, obs_sha):
+                    _record_bypass(state, JudgeBypass(
+                        stage_index=stage.index, kind="fail_open", reviewer="",
+                        note=judge_reason, observation_sha256=obs_sha))
             ab = gates.acceptance_review_blockers(state, stage)
             if ab:
                 store.save(state)
