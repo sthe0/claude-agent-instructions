@@ -16,6 +16,7 @@ Both fixes are exercised here against the real `cli`/`plugins_premise`/`premise`
 code, never a re-derivation of the logic under test."""
 from __future__ import annotations
 
+import copy
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -300,9 +301,14 @@ def test_reappearance_under_a_different_target_is_a_hint_not_a_carry(store, tmp_
     _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
     _dispose(store, "s", "qenum-s1-1", reason="answered in the order")
 
+    source_before = copy.deepcopy(
+        next(c for c in _bag(store)["candidates"] if c["id"] == "qenum-s1-1"))
+
     _write_plan(plan_path, [(1, "img-one"), (2, "img-two-EDITED")])
     d = _enumerate(store, "s", _runner("stage:2.result\twhy this tool?"))
 
+    source_after = next(c for c in _bag(store)["candidates"] if c["id"] == "qenum-s1-1")
+    assert source_after == source_before
     match = next(c for c in _bag(store)["candidates"]
                  if c["statement"] == "[stage:2.result] why this tool?")
     assert match["disposition"] == "raised"
@@ -483,3 +489,40 @@ def test_dismissed_hashes_survives_launch_clear_and_missing_key_loads_fine(store
         old_bag, doc, plan_path, [("stage:1.means", "why this tool?")], True)
     assert result.carried == []
     assert old_bag["candidates"][0]["disposition"] == "raised"
+
+
+def test_legacy_target_less_dismissal_record_only_hints():
+    """A dismissed_hashes record written before per-target tracking (a bare
+    {reason, from_id} dict) has no target, so it can never match one: the same
+    text is raised with a hint naming an unknown target, never carried."""
+    h = premise.dismissal_hash("[stage:1.means] why this tool?")
+    legacy = {h: {"reason": "answered in the order", "from_id": "qenum-s1-1"}}
+    carry, hint = premise.dismissed_hash_lookup(legacy, h, "stage:1.means")
+    assert carry is None
+    assert hint == legacy[h]
+    assert "unknown target" in premise.dismissal_hint_note(hint)
+
+
+def test_carry_never_reuses_a_dismissed_row_addressed_to_another_target():
+    """`_upsert_candidate`'s tier 2 reuses an existing dismissed row only when it is
+    addressed to the SAME target. A same-text dismissed row at a different target
+    must stay untouched, and the carried entry must land under a fresh id."""
+    other = {
+        "id": "qenum-s1-1", "statement": "[stage:1.means] why this tool?",
+        "disposition": "dismissed", "reason": "answered in the order",
+        "question": "", "target": "stage:1.means",
+    }
+    candidates = [copy.deepcopy(other)]
+    entry = {
+        "id": "qenum-s2-1", "statement": "[stage:2.result] why this tool?",
+        "disposition": "open", "reason": "", "question": "", "target": "stage:2.result",
+    }
+    landed = cli._upsert_candidate(
+        candidates, entry, preserve_disposition=True,
+        carry={"reason": "answered in the order", "from_id": "qenum-old", "target": "stage:2.result"},
+    )
+
+    assert candidates[0] == other
+    assert landed == "qenum-s2-1"
+    assert candidates[1]["target"] == "stage:2.result"
+    assert candidates[1]["disposition"] == "dismissed"

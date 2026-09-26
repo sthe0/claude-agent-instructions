@@ -650,12 +650,14 @@ def dismissed_hash_lookup(
     silent carry (the binding rule: same text AND same target address); any other
     same-hash record, including a legacy target-less one, is a hint only.
     Deterministic tie-break among several other-target records: the
-    earliest-appended one (list order)."""
+    earliest-appended one that names a target, else the earliest one."""
     records = dismissed_hash_records(dismissed_hashes, content_hash)
     for record in records:
         if record.get("target") == target:
             return record, None
-    return (None, records[0]) if records else (None, None)
+    if not records:
+        return None, None
+    return None, next((r for r in records if r.get("target")), records[0])
 
 
 def dismissal_hint_note(hint: dict) -> str:
