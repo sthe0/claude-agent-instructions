@@ -526,3 +526,33 @@ def test_carry_never_reuses_a_dismissed_row_addressed_to_another_target():
     assert landed == "qenum-s2-1"
     assert candidates[1]["target"] == "stage:2.result"
     assert candidates[1]["disposition"] == "dismissed"
+
+
+def test_narrowed_pass_never_displaces_an_existing_meta_question(tmp_path):
+    """A pass that did not read the meta part has no standing to renumber it: a
+    plan-level pair it returns must not overwrite an open `qenum-meta-N` holding a
+    different question. The existing row stays as it was; a new statement takes the
+    next free slot, and an identical one updates its own row in place."""
+    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    doc = load_plan(plan_path)
+    open_meta = {
+        "id": "qenum-meta-1", "statement": "[plan.goal] is the order still current?",
+        "disposition": "raised", "reason": "", "question": "", "target": "plan.goal",
+    }
+    same_text = {
+        "id": "qenum-meta-2", "statement": "[plan.goal] who accepts the result?",
+        "disposition": "raised", "reason": "", "question": "", "target": "plan.goal",
+    }
+    bag = {"candidates": [copy.deepcopy(open_meta), copy.deepcopy(same_text)], "enumerated": True}
+
+    result = cli._apply_enumeration_result(
+        bag, doc, plan_path,
+        [("plan.goal", "who accepts the result?"), ("plan.goal", "what is out of scope?")],
+        True, parts=(False, {1}))
+
+    by_id = {c["id"]: c for c in bag["candidates"]}
+    assert by_id["qenum-meta-1"] == open_meta
+    assert by_id["qenum-meta-2"]["statement"] == same_text["statement"]
+    assert by_id["qenum-meta-3"]["statement"] == "[plan.goal] what is out of scope?"
+    assert len(bag["candidates"]) == 3
+    assert sorted(result.raised) == ["qenum-meta-2", "qenum-meta-3"]

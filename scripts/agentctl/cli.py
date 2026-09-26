@@ -2128,6 +2128,23 @@ def _inherit_disposition(existing: dict, entry: dict, preserve: bool) -> dict:
     return entry
 
 
+def _unread_part_slot(candidates: list, entry: dict) -> str:
+    """The id a plan-level pair from a pass that did NOT read the meta part lands
+    under. Such a pass has no standing to renumber the meta part, so it must not
+    take over a `qenum-meta-N` slot holding a different question: the row whose
+    statement is identical keeps its own id (an ordinary in-place upsert), and a
+    new statement gets the next unused `qenum-meta-N`, leaving every existing meta
+    candidate — and the disposition recorded against it — exactly as it stands."""
+    for existing in candidates:
+        if existing.get("statement") == entry["statement"]:
+            return existing["id"]
+    used = {c.get("id") for c in candidates}
+    n = 1
+    while f"qenum-{META_PART}-{n}" in used:
+        n += 1
+    return f"qenum-{META_PART}-{n}"
+
+
 def _upsert_candidate(
     candidates: list, entry: dict, *, preserve_disposition: bool, carry: dict | None = None,
 ) -> str:
@@ -2259,8 +2276,10 @@ def _apply_enumeration_result(
     it has no standing to disposition a question about it — and is listed in
     `EnumerationApplyResult.out_of_scope` instead, re-evaluated fresh on every pass
     (never carried, never counted against the plan-content digest it did not cover).
-    A plan-level/unparseable target is exempt from this check and upserted as before,
-    the same safe direction `_enumeration_part` and `_candidate_immateriality` take.
+    A plan-level/unparseable target is exempt from this check and still upserted,
+    the same safe direction `_enumeration_part` and `_candidate_immateriality` take —
+    but, the meta part being unread, into a slot that never displaces a different
+    existing meta question (`_unread_part_slot`).
 
     `preserve_disposition` is what separates the two callers. A human running
     `question-enumerate` ASKED for a fresh pass, so re-raising a candidate they had
@@ -2329,6 +2348,8 @@ def _apply_enumeration_result(
                             bag.setdefault("dismissed_hashes", {}), content_hash, target)
             if hint is not None and carry is None:
                 entry["reason"] = premise.dismissal_hint_note(hint)
+            if carry is None and part == META_PART and not meta_covered:
+                entry["id"] = _unread_part_slot(candidates, entry)
             final_id = _upsert_candidate(
                 candidates, entry, preserve_disposition=preserve_disposition, carry=carry)
             raised.append(final_id)
