@@ -48,6 +48,7 @@ Pure module: no filesystem, subprocess, or network access.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 
@@ -590,6 +591,32 @@ VALID_CANDIDATE_DISPOSITIONS = frozenset({"raised", "recorded", "dismissed"})
 # escapes are typed — 'immaterial x N' is a work item, N hand-written sentences are an
 # archive nobody reads.
 CANDIDATE_IMMATERIAL = "immaterial: addressed to no control this plan contains"
+
+# A LABEL, not a disposition value: a pair a narrowed pass parsed as addressed to a
+# stage OUTSIDE the parts it read is never written into bag['candidates'] at all (the
+# pass never read that stage, so it has no standing to disposition it) — it is listed
+# under this label in the Directive's data.out_of_scope instead, re-evaluated fresh on
+# every pass rather than carried. Never appears in VALID_CANDIDATE_DISPOSITIONS.
+CANDIDATE_OUT_OF_EDIT_SCOPE = "out of edit scope: addressed to a stage this pass did not read"
+
+_STATEMENT_TARGET_PREFIX_RE = re.compile(r"^\[[^\]]*\]\s*")
+
+
+def dismissal_hash(statement: str) -> str:
+    """A candidate statement's content identity, for carrying a coordinator's
+    dismissal across the id churn a re-enumeration pass produces (a new part/index
+    suffix, a fold via a different id than the one the coordinator actually
+    dismissed). Strips the leading `[target] ` address (the id-scheme detail, not
+    the question), casefolds and collapses whitespace, then sha256s the rest.
+
+    Deliberately TEXT IDENTITY ONLY — never a paraphrase/semantic match. Two
+    differently-worded questions about the same control get two hashes and neither
+    carries the other's dismissal; that is the safe direction (a coordinator who
+    dismissed one wording has not thereby dismissed a different one), matching this
+    repo's standing rule against regex/hash tricks standing in for meaning."""
+    text = _STATEMENT_TARGET_PREFIX_RE.sub("", statement or "", count=1)
+    normalized = " ".join(text.casefold().split())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 @dataclass

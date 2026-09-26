@@ -237,13 +237,24 @@ def enumeration_is_stale(bag, doc) -> bool:
 def enumeration_run_scope(bag, doc) -> tuple[bool, set[int]]:
     """The parts a re-run must cover — `(whole_plan, {stage indices})`.
 
-    Narrowed to the stages that moved only when a pass has landed and the plan's
-    meta is unchanged; every other case reads the whole plan, so a first pass and an
-    explicitly re-requested one behave exactly as they did before the split. A moved
-    goal / done criterion / order re-opens every stage's fit to it, which is why a
-    meta move widens rather than adding a part."""
+    Narrowed to the stages that moved only when a per-part BASELINE exists (some
+    prior pass landed, at some point) and the plan's meta is unchanged; every other
+    case reads the whole plan, so a first pass and an explicitly re-requested one
+    behave exactly as they did before the split. A moved goal / done criterion /
+    order re-opens every stage's fit to it, which is why a meta move widens rather
+    than adding a part.
+
+    Gated on the BASELINE, not on `bag['enumerated']`: `_launch_enumeration` clears
+    that flag back to False on every submit/replan while leaving the per-part
+    baseline exactly as the last landed pass wrote it, so a manual
+    `question-enumerate` run in that window — before the relaunched background
+    worker lands — used to widen to the whole plan for no reason the baseline
+    doesn't already answer. The baseline, not the flag, is what a narrowed reading
+    is actually scoped against."""
+    baseline = enumeration_baseline(bag)
+    has_baseline = bool(baseline["meta"]) or bool(baseline["stages"])
     meta_stale, stale_stages = stale_enumeration_parts(bag, doc)
-    if stale_stages and not meta_stale and bag.get("enumerated"):
+    if has_baseline and stale_stages and not meta_stale:
         return False, stale_stages
     return True, set(plan.plan_stage_digests(doc))
 
@@ -482,6 +493,15 @@ register(
         state_factory=lambda: {
             "questions": [],
             "candidates": [],
+            # Content hashes (premise.dismissal_hash) of candidate statements a
+            # COORDINATOR dismissed (cmd_question_candidate_dispose --as dismissed),
+            # each mapped to {reason, from_id} — so a later pass's candidate with the
+            # same text carries that dismissal forward under its new id instead of
+            # re-raising a question already answered. Populated only by a genuine
+            # coordinator dismissal, never by the engine's own automatic immaterial
+            # dismissals or by a carry-write itself; survives _launch_enumeration's
+            # clear of enumerated/enumerated_at (a replan does not undo a dismissal).
+            "dismissed_hashes": {},
             "order_elements": [],
             "enumerated": False,
             "enumerated_at": "",

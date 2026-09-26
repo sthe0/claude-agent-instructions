@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 import proc_tree
@@ -2058,6 +2058,14 @@ def cmd_question_candidate_dispose(args, *, store: StateStore, runner: Runner | 
     match.reason = args.reason or ""
     match.question = args.question or ""
     bag["candidates"] = premise.question_candidates_to_dicts(candidates)
+    if args.as_ == "dismissed":
+        # A genuine COORDINATOR dismissal — the only source dismissed_hashes has
+        # (the engine's own automatic immaterial dismissals and out-of-scope
+        # listings never write here; see plugins_premise.py's state_factory).
+        content_hash = premise.dismissal_hash(match.statement)
+        bag.setdefault("dismissed_hashes", {})[content_hash] = {
+            "reason": match.reason, "from_id": match.id,
+        }
     state.log("question_candidate_dispose", candidate=args.id, disposition=args.as_)
     store.save(state)
     return Directive(
@@ -2116,11 +2124,57 @@ def _inherit_disposition(existing: dict, entry: dict, preserve: bool) -> dict:
     return entry
 
 
-def _upsert_candidate(candidates: list, entry: dict, *, preserve_disposition: bool) -> None:
+def _upsert_candidate(
+    candidates: list, entry: dict, *, preserve_disposition: bool, carry: dict | None = None,
+) -> str:
+    """Upsert `entry` into `candidates`, returning the id it actually lands under.
+
+    `carry` is a dismissed_hashes record ({reason, from_id}) when `entry`'s own
+    statement hash matches one on file, None otherwise — checked by the caller,
+    not here, since the caller already holds the bag's dismissed_hashes map. When
+    present it takes priority over the ordinary id/legacy-id matching below and
+    writes `entry` as 'dismissed' with a carried reason, by a 3-tier resolution:
+    (1) an existing row at entry['id'] with the SAME statement — an ordinary
+    in-place update, unless it is already 'recorded' (a recorded disposition is
+    never converted by a carry); (2) failing that, any existing DISMISSED row
+    whose own statement hash matches — reused in place, under ITS id, so the carry
+    never overwrites an OPEN candidate merely because the two happen to share a
+    part/index slot; (3) failing both, a fresh row under a non-colliding id. This
+    is what keeps the invariant "a carried entry never overwrites an open
+    candidate whose text differs" — the ordinary same-id branch below would
+    happily overwrite an unrelated open row at the same id, which is exactly the
+    case tier (2)/(3) exist to avoid."""
+    if carry is not None:
+        carried_entry = {
+            **entry,
+            "disposition": "dismissed",
+            "reason": f"carried: {carry.get('reason', '')} (from {carry.get('from_id', '')})",
+        }
+        for j, existing in enumerate(candidates):
+            if existing.get("id") == entry["id"] and existing.get("statement") == entry["statement"]:
+                if existing.get("disposition") == "recorded":
+                    return existing["id"]
+                candidates[j] = carried_entry
+                return entry["id"]
+        target_hash = premise.dismissal_hash(entry["statement"])
+        for j, existing in enumerate(candidates):
+            if (existing.get("disposition") == "dismissed"
+                    and premise.dismissal_hash(existing.get("statement", "")) == target_hash):
+                candidates[j] = {**carried_entry, "id": existing["id"]}
+                return existing["id"]
+        existing_ids = {c.get("id") for c in candidates}
+        fresh_id = entry["id"]
+        suffix = 2
+        while fresh_id in existing_ids:
+            fresh_id = f"{entry['id']}-carry{suffix}"
+            suffix += 1
+        candidates.append({**carried_entry, "id": fresh_id})
+        return fresh_id
+
     for j, existing in enumerate(candidates):
         if existing.get("id") == entry["id"]:
             candidates[j] = _inherit_disposition(existing, entry, preserve_disposition)
-            return
+            return entry["id"]
     # A candidate raised under the pre-part id scheme is the SAME question when its
     # statement is identical, so it is taken over rather than left standing beside its
     # own successor — otherwise a session carried across the change meets both, and the
@@ -2130,15 +2184,50 @@ def _upsert_candidate(candidates: list, entry: dict, *, preserve_disposition: bo
                 and existing.get("statement") == entry["statement"]):
             taken_over = _inherit_disposition(existing, entry, preserve_disposition)
             candidates[j] = {**taken_over, "id": entry["id"]}
-            return
+            return entry["id"]
     candidates.append(entry)
+    return entry["id"]
+
+
+def _target_stage_index(target: str) -> int | None:
+    """The stage index a target addresses, or None for a plan-level/unparseable one —
+    the same parse _enumeration_part and _candidate_immateriality already run, named
+    for the one extra caller that needs just the index (the out-of-scope check)."""
+    parsed = premise.parse_target(target)
+    if parsed is not None and parsed[0] == "stage":
+        return parsed[1]
+    return None
+
+
+@dataclass
+class EnumerationApplyResult:
+    """`_apply_enumeration_result`'s return value: the candidate ids it upserted as
+    'raised' or freshly 'dismissed' (`raised`, same meaning the bare list[str] this
+    replaces always had — every existing caller that only ever read len() or
+    iterated it keeps working unchanged), the stage-addressed pairs a narrowed pass
+    declined to disposition because their stage was outside its scope (`out_of_scope`,
+    each `{"target", "question"}`), and the ids a content-hash match carried forward
+    from an earlier coordinator dismissal instead of freshly raising (`carried`,
+    a subset of `raised` since a carried candidate still lands in bag['candidates'])."""
+    raised: list[str]
+    out_of_scope: list[dict]
+    carried: list[str]
+
+    def __iter__(self):
+        # A caller that still does `for cid in _apply_enumeration_result(...)`
+        # (none does today, but len() callers exist) keeps iterating `raised`.
+        return iter(self.raised)
+
+    def __len__(self):
+        return len(self.raised)
 
 
 def _apply_enumeration_result(
     bag: dict, doc: PlanDoc, plan_path, pairs: list[tuple[str, str]], runner_ok: bool | None,
     *, parts: tuple[bool, set[int]] | None = None,
     preserve_disposition: bool = False, stderr: str = "",
-) -> list[str]:
+    honor_dismissed_hashes: bool = True,
+) -> EnumerationApplyResult:
     """Upsert `pairs` as QuestionCandidates (last-wins by a deterministic
     `qenum-<part>-N` id) — 'raised', except that a pair the engine can see is
     addressed to no control of this plan is written 'dismissed' with the one
@@ -2159,10 +2248,13 @@ def _apply_enumeration_result(
     parts' digests are refreshed, so a stage nobody re-read stays recorded against
     the bytes it WAS read at, and only those parts' candidate ids are renumbered:
     another part's candidates, and the dispositions recorded against them, are left
-    exactly as they stand. A pass may still raise a pair about a part outside its
-    scope — a cross-cutting question is the thing a narrowed reading is most likely
-    to surface — and that pair is upserted into its own part rather than dropped;
-    what it does not do is refresh that part's digest.
+    exactly as they stand. On a narrowed pass, a pair whose target parses to a STAGE
+    outside `stage_scope` is not upserted at all — the pass never read that stage, so
+    it has no standing to disposition a question about it — and is listed in
+    `EnumerationApplyResult.out_of_scope` instead, re-evaluated fresh on every pass
+    (never carried, never counted against the plan-content digest it did not cover).
+    A plan-level/unparseable target is exempt from this check and upserted as before,
+    the same safe direction `_enumeration_part` and `_candidate_immateriality` take.
 
     `preserve_disposition` is what separates the two callers. A human running
     `question-enumerate` ASKED for a fresh pass, so re-raising a candidate they had
@@ -2173,16 +2265,34 @@ def _apply_enumeration_result(
     unblock. Preservation is keyed on the statement being IDENTICAL, not on the id
     alone: `qenum-s1-3` of a later pass is a different question than `qenum-s1-3` of
     an earlier one unless its text says otherwise, and inheriting a disposition
-    across a changed statement would silently discharge a question nobody read."""
+    across a changed statement would silently discharge a question nobody read.
+
+    `honor_dismissed_hashes` (default True, both callers) is what
+    `question-enumerate --reopen-dismissed` flips to False for one pass: a candidate
+    whose text hash matches bag['dismissed_hashes'] is normally carried forward
+    dismissed under the ORIGINAL reason (see _upsert_candidate) rather than freshly
+    raised, regardless of which id or part produces it this time; False skips that
+    lookup entirely for this call, re-raising it the old fresh-pass way. Either way
+    dismissed_hashes itself is untouched here — it is written only by a genuine
+    coordinator dismissal (cmd_question_candidate_dispose)."""
     live_stages = plan_stage_digests(doc)
     meta_covered, stage_scope = parts if parts is not None else (True, set(live_stages))
+    dismissed_hashes = (bag.get("dismissed_hashes") or {}) if honor_dismissed_hashes else {}
 
+    out_of_scope: list[dict] = []
     by_part: dict[str, list[tuple[str, str]]] = {}
     for target, question in pairs:
+        if not meta_covered:
+            stage_index = _target_stage_index(target)
+            if stage_index is not None and stage_index not in stage_scope:
+                out_of_scope.append({"target": target, "question": question,
+                                    "reason": premise.CANDIDATE_OUT_OF_EDIT_SCOPE})
+                continue
         by_part.setdefault(_enumeration_part(target), []).append((target, question))
 
     candidates = bag.setdefault("candidates", [])
     raised: list[str] = []
+    carried: list[str] = []
     for part, part_pairs in by_part.items():
         for i, (target, question) in enumerate(part_pairs):
             immaterial = _candidate_immateriality(target, doc)
@@ -2190,8 +2300,15 @@ def _apply_enumeration_result(
                      "statement": f"[{target}] {question}",
                      "disposition": "dismissed" if immaterial else "raised",
                      "reason": immaterial, "question": "", "target": target}
-            _upsert_candidate(candidates, entry, preserve_disposition=preserve_disposition)
-            raised.append(entry["id"])
+            carry = (
+                None if immaterial or not dismissed_hashes
+                else dismissed_hashes.get(premise.dismissal_hash(entry["statement"]))
+            )
+            final_id = _upsert_candidate(
+                candidates, entry, preserve_disposition=preserve_disposition, carry=carry)
+            raised.append(final_id)
+            if carry is not None:
+                carried.append(final_id)
 
     bag["enumerated"] = True
     bag["enumerated_at"] = plugins_premise._plan_content_digest(doc)
@@ -2208,7 +2325,7 @@ def _apply_enumeration_result(
     bag["enumerated_runner_stderr"] = stderr
     bag["enumerated_count"] = len(pairs)
     bag["enumerate_pass"] = int(bag.get("enumerate_pass") or 0) + 1
-    return raised
+    return EnumerationApplyResult(raised=raised, out_of_scope=out_of_scope, carried=carried)
 
 
 def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -2289,15 +2406,20 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
     whole_plan, stage_scope = plugins_premise.enumeration_run_scope(bag, doc)
     if not whole_plan:
         plan_text = render_stages_md(doc, stage_scope)
+    scope_source = "whole_plan" if whole_plan else "enumeration_baseline"
 
     run = runner if runner is not None else advisor.enumerate_subprocess_runner
     runner_ok, pairs, stderr = advisor.enumerate_questions_health(
         doc.meta.goal, doc.meta.done_criterion, plan_text, run)
 
-    raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok, stderr=stderr,
-                                       parts=(whole_plan, stage_scope))
-    state.log("question_enumerate", raised=len(raised), runner_ok=runner_ok, via="command",
-              stages=sorted(stage_scope) if not whole_plan else None)
+    result = _apply_enumeration_result(
+        bag, doc, plan_path, pairs, runner_ok, stderr=stderr,
+        parts=(whole_plan, stage_scope),
+        honor_dismissed_hashes=not getattr(args, "reopen_dismissed", False))
+    state.log("question_enumerate", raised=len(result.raised), runner_ok=runner_ok, via="command",
+              stages=sorted(stage_scope) if not whole_plan else None,
+              scope_source=scope_source, out_of_scope=len(result.out_of_scope),
+              carried=len(result.carried))
     store.save(state)
 
     scope_note = "" if whole_plan else (
@@ -2306,12 +2428,14 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
         + " — the only parts whose content moved since the last pass)")
     d = Directive(
         True, state.node, "continue",
-        f"question enumeration cross-check ran; raised {len(raised)} candidate(s)"
+        f"question enumeration cross-check ran; raised {len(result.raised)} candidate(s)"
         f"{scope_note} — "
         "disposition each with `agentctl question-candidate-dispose --id qenum-<part>-N "
         "--as recorded --question <qid> | --as dismissed --reason <text>`",
-        data={"raised": raised, "enumerated": True, "runner_ok": runner_ok,
-              "whole_plan": whole_plan, "stages": sorted(stage_scope)},
+        data={"raised": result.raised, "enumerated": True, "runner_ok": runner_ok,
+              "whole_plan": whole_plan, "stages": sorted(stage_scope),
+              "scope_source": scope_source, "out_of_scope": result.out_of_scope,
+              "carried": result.carried},
     )
     # THREE arms, because runner_ok is three-valued and the three states now have
     # three different truths. `False` no longer discharges anything — the gate
@@ -2851,9 +2975,11 @@ def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> b
     pairs = [tuple(p) for p in payload.get("pairs", [])]
     runner_ok = payload.get("runner_ok")
     sidecar_stages = payload.get("stages")
-    parts = ((True, set(plan_stage_digests(doc))) if sidecar_stages is None
+    whole_plan = sidecar_stages is None
+    parts = ((True, set(plan_stage_digests(doc))) if whole_plan
              else (False, set(sidecar_stages)))
-    raised = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok,
+    scope_source = "whole_plan" if whole_plan else "enumeration_baseline"
+    result = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok,
                                        parts=parts, preserve_disposition=True,
                                        stderr=payload.get("stderr", ""))
     # Surface the oversize escape explicitly so question-list --format md shows
@@ -2867,7 +2993,9 @@ def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> b
     # `via` is stated on BOTH producers rather than encoded as this one's presence:
     # a distinction carried by an absent field reads as a forgotten field to the
     # next person grepping the history, and these rows now have three readers.
-    state.log("question_enumerate", raised=len(raised), runner_ok=runner_ok, via="fold")
+    state.log("question_enumerate", raised=len(result.raised), runner_ok=runner_ok, via="fold",
+              scope_source=scope_source, out_of_scope=len(result.out_of_scope),
+              carried=len(result.carried))
     return True
 
 
@@ -8243,6 +8371,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--plan", default=None,
                     help="enumerate against this plan instead of the session's current "
                          "plan_path (use when preparing a CORRECTED plan for replan)")
+    sp.add_argument("--reopen-dismissed", action="store_true",
+                    help="re-raise a candidate whose text was previously carried forward as "
+                         "dismissed (the old fresh-pass behaviour), instead of carrying it "
+                         "forward again under its recorded reason")
 
     sp = add("question-enumerate-escape"); sp.add_argument("--session", required=True)
     sp.add_argument("--reason", required=True, choices=list(premise.ENUMERATION_ESCAPE_REASONS),
