@@ -122,10 +122,15 @@ inline `-c`/`-e`/`-p` eval flag, and a launcher module like `runpy`/`pip`/
 check on the **script**: a validated rule like `Bash(python3
 /repo/scripts/foo.py:*)` grants running whatever `foo.py` contains AT
 MATERIALIZATION TIME, which may differ from what the reviewer read when the
-grant was declared or derived. This residual is bounded by ordinary code
-review of the script file itself (it lives in the repo, under the same
-review discipline as any other change), not by the grant validator — the
-validator's job ends at "this invocation names a script, not inline code."
+grant was declared or derived. `validate_rule` is a shape check over rule
+TEXT, not a completeness boundary over what a shell command line can do at
+run time — it cannot see the script's contents, and no amount of pattern
+tightening changes that. Ordinary code review of the script file (it lives
+in the repo, under the same review discipline as any other change) narrows
+this residual at commit time, but catching an actual escalation attempt at
+EXECUTION time is PR-C's job — the settings.json-wired guard (G1-G4) — not
+the grant validator's; the validator's job ends at "this invocation names a
+script, not inline code."
 
 **The wildcard-admits-extra-flags residual.** `KIND_BASELINES`'
 `_READ_ONLY_INSPECTION` rules (`spawn-specialist.py:621-627`) grant every
@@ -153,6 +158,47 @@ README.md` § `grant-stats`) — a drifted spawn is a signal that the child
 touched settings on disk, not a comparison against what the stage's
 declared+derived grant set implies the payload should have been (that
 would be a different, not-yet-implemented check).
+
+**Four residuals a round-7 rereview named, gathered here.**
+
+1. **A write-capable kind holding `pytest` holds arbitrary Python.**
+   `Bash(pytest:*)`/`Bash(python3 -m pytest:*)` baseline entries let the
+   child point pytest at any collectable path, including a conftest or a
+   test module it just wrote itself — pytest imports and executes that file
+   to collect it, before any assertion runs. `validate_rule`'s
+   interpreter-allowlist shape check does not apply (pytest is not on that
+   list; it is a plain program name), so this residual is not bounded by
+   the interpreter-mediated residual above — it is bounded the same way:
+   ordinary code review of whatever test file the child wrote, not by the
+   validator.
+2. **A repo-relative baseline script rule also matches another project's
+   `scripts/` tree.** The path-suffix-equivalence matching `_segment_covered`
+   uses to satisfy "match both the absolute and the repo-relative spelling
+   of a baseline script" (`scripts/agentctl/grants.py`) compares only the
+   trailing path segments, so a rule like `Bash(python3 scripts/<name>.py:*)`
+   covers an invocation of a same-named script under ANY repo the child's
+   cwd happens to resolve into, not only the one the rule was baselined for. Accepted
+   because the alternative — duplicating every baseline script rule into an
+   absolute-plus-relative pair across `KIND_BASELINES` — has a wider blast
+   radius for the same coverage; see the `_EXEMPT` entries in
+   `scripts/tests/test_kind_baseline_skill_coverage.py` for the precedent.
+3. **Fleet-inherited allow rules admit more than their name suggests.**
+   Covered above under "The wildcard-admits-extra-flags residual" —
+   `find:*`/`rg:*`/`git log:*`/`git diff:*` are not the only shape; a
+   `python3 -c` style eval flag is refused outright by the
+   interpreter-mediated check, so it is not a residual of this family, but
+   any other fleet-baseline program admitted with a bare `:*` wildcard
+   inherits the same gap without a per-program audit.
+4. **The never-grantable-forms list is a denylist, not a derivation.**
+   The settings-channel / launch-surface / DSL-with-exec-primitive /
+   write-capable-program lists in "Never-grantable forms" above are
+   hand-maintained enumerations of programs known to be dangerous, not a
+   property computed from a program's actual behavior — a dangerous
+   program absent from all four lists validates today. This is the same
+   shape of gap the round-7 user decision (2026-09-26) accepted rather than
+   closing: kind baselines and the plan-approved grant set remain the only
+   two channels, and the fix for an under-enumerated denylist is adding the
+   missing name, not switching to an allowlist structure.
 
 ## See also
 

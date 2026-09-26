@@ -24,7 +24,7 @@ from dataclasses import fields
 from pathlib import Path
 
 import proc_tree
-from lib import argv_text, config_root, transcript_stops, widening_targets
+from lib import argv_text, config_root, kind_baselines, transcript_stops, widening_targets
 
 from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, gates, grants as _grants, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
 from .checkrun import format_observations, observe_stage_checks
@@ -4896,42 +4896,15 @@ def _rekey_runtime_grants(state: SessionState, doc) -> None:
     state.runtime_grants = rekeyed
 
 
-_SPAWN_SPECIALIST_MODULE = None
-
-
-def _load_spawn_specialist_module():
-    """Lazy, function-scoped load of `spawn-specialist.py` (a hyphenated
-    filename, not importable as a module) so `_effective_stage_grants` can
-    read its `KIND_BASELINES` table -- the fleet-wide baseline Bash rules
-    injected into every spawned child's `--settings` regardless of stage
-    grants. Loaded via `importlib.util.spec_from_file_location`, never a
-    top-level import: `spawn-specialist.py` itself imports `agentctl.grants`/
-    `agentctl.plan`/`agentctl.render`, so a module-load-time import here
-    would be circular. Memoized at module scope since the file never
-    changes within one process's lifetime."""
-    global _SPAWN_SPECIALIST_MODULE
-    if _SPAWN_SPECIALIST_MODULE is None:
-        import importlib.util
-
-        path = REPO_ROOT / "scripts" / "spawn-specialist.py"
-        spec = importlib.util.spec_from_file_location("agentctl_cli_spawn_specialist", path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        _SPAWN_SPECIALIST_MODULE = mod
-    return _SPAWN_SPECIALIST_MODULE
-
-
 def _kind_baseline_rule_grants(kind: str) -> list[_grants.RuleGrant]:
-    """The fleet-wide baseline Bash rules `spawn-specialist.py` injects for
-    `kind` (falling back to its own `"default"` baseline, mirroring
-    `KIND_BASELINES.get(kind, KIND_BASELINES["default"])` at the
-    materialization site), each wrapped as a `RuleGrant` with provenance
-    `"baseline"` -- finding S3: a call covered only by this baseline
-    (never by a declared/derived/runtime grant) must classify as a
-    materialization defect, not a planning miss, since the child's actual
-    settings genuinely carry it."""
-    spawn_specialist = _load_spawn_specialist_module()
-    baseline = spawn_specialist.KIND_BASELINES.get(kind, spawn_specialist.KIND_BASELINES["default"])
+    """The fleet-wide baseline Bash rules `kind_baselines.KIND_BASELINES`
+    injects for `kind` (falling back to its own `"default"` baseline),
+    each wrapped as a `RuleGrant` with provenance `"baseline"` -- finding
+    S3: a call covered only by this baseline (never by a
+    declared/derived/runtime grant) must classify as a materialization
+    defect, not a planning miss, since the child's actual settings
+    genuinely carry it."""
+    baseline = kind_baselines.KIND_BASELINES.get(kind, kind_baselines.KIND_BASELINES["default"])
     return [_grants.RuleGrant(rule=r, provenance="baseline") for r in baseline]
 
 

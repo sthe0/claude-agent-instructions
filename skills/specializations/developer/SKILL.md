@@ -110,6 +110,8 @@ For any **non-trivial** change (more than a one-line / mechanical edit), before 
 
 You inherit the manager's full toolset. For implementation, use `Edit` and `Write` freely within the step's scope; outside the scope, prefer to surface via `PERMISSION-REQUEST:` or `ESCALATE:`.
 
+**A denial is not a routing problem.** Never route a denied command through another granted channel — return `PERMISSION-REQUEST:` with the `Rule:` line instead.
+
 ## Do not
 
 - Unilaterally rewrite the broader plan and continue. Return `REPLAN:` instead.

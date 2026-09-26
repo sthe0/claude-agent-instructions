@@ -93,23 +93,7 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
-id = "9bd62be699843fc8"
-domain = "code"
-file = "scripts/agentctl/cli.py"
-class = "structural"
-disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
-
-[[entry]]
 id = "d51131dae30933c2"
-domain = "code"
-file = "scripts/agentctl/cli.py"
-class = "structural"
-disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
-
-[[entry]]
-id = "d154f613aadbfdc4"
 domain = "code"
 file = "scripts/agentctl/cli.py"
 class = "structural"
@@ -23889,6 +23873,14 @@ disposition = "keep"
 ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
 
 [[entry]]
+id = "552db2253b23180d"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
 id = "cb098878ec250b9a"
 domain = "prose"
 file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"
@@ -23914,6 +23906,22 @@ ground = "System-knowledge leaves document durable FACTS about how an external s
 
 [[entry]]
 id = "08621ba5079b35ea"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "81d3e1c37502b909"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "8bc8ba7b980312a0"
 domain = "prose"
 file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"
 class = "not-normative"
@@ -25378,6 +25386,14 @@ ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the s
 
 [[entry]]
 id = "73ce5dbd096e8ed2"
+domain = "prose"
+file = "skills/specializations/developer/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "727495477100db10"
 domain = "prose"
 file = "skills/specializations/developer/SKILL.md"
 class = "perception"

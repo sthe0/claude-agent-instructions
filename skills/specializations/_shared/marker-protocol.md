@@ -47,5 +47,7 @@ Two things do still matter. Do not present a marker you do not mean — the pass
 
   The optional `Rule:` line lets the manager check your request against the stage's own effective grant set (`agentctl stage-grants`) before answering. **If the rule you name is already covered** — declared, derived, or a live unconsumed runtime grant — your request should never have hit a permission prompt at all: that is a **materialization defect** (a covered call denied anyway — stale cached settings, a hand-edited `--settings` payload, a drifted spawn), not a scope gap, and the manager routes it as such rather than granting it again. Omit the line when you cannot state the rule precisely; the manager still handles the request, just without that shortcut.
 
+  **A denial is not a routing problem.** Never route a denied command through another granted channel — return `PERMISSION-REQUEST:` with the `Rule:` line instead.
+
 - `ESCALATE:` — other decision the manager must make (ambiguity in the spec you cannot resolve from context, dependency on another step's output that isn't yet available, a strategic call that affects scope).
 - `REVIEW:` — (thinker) the terminal marker of a plan review: the body is one of `pass` / `revise` / `override`, the same vocabulary `agentctl plan-review --verdict` and `gates.PLAN_REVIEW_VERDICTS` use. The root records the verdict immediately with `agentctl plan-review --verdict <body> --reviewer thinker --target <plan>`, before any further edit to the plan file — the verdict is bound to the plan's sha256 and an edit invalidates the binding.
