@@ -5,7 +5,7 @@ grant-model stages 1-3), recorded under the plan slug
 One test (or parametrized group) per finding ID named in the review's
 "## Fixes" section, covering exactly what that finding requires: B1, B2, S1,
 S2, S3, S4, S10, N1. Every test that fails against the code as it stood when
-this file was authored is marked `@pytest.mark.xfail(strict=True)` -- the ONLY
+this file was authored carries a strict `xfail` mark -- the ONLY
 edits this file may receive after its own oracle commit are the removal of an
 xfail mark once the matching fix lands (see the developer marker-protocol
 brief for this stage: an oracle test believed WRONG is never silently edited,
@@ -375,6 +375,12 @@ _CODE_EXECUTING_GIT_COMMANDS = [
     "git grep -O cat",
     "git rebase --exec x",
     "git submodule foreach x",
+    # round 3 (root): narrowing to the `origin` remote does not help --
+    # `Bash(git fetch origin:*)` still prefix-admits the same option.
+    pytest.param(
+        "git fetch origin --upload-pack=x",
+        marks=pytest.mark.xfail(strict=True, reason="Bash(git fetch origin:*) prefix-admits it"),
+    ),
 ]
 
 
@@ -384,3 +390,43 @@ def test_code_executing_git_subcommand_not_admitted_by_any_kind_baseline(command
         assert not grant_covers_call(_baseline_grants(kind), "Bash", {"command": command}), (
             f"kind {kind!r} admits {command!r}"
         )
+
+
+# --- round 3 (root): the engine's coverage verdict must agree with what the
+# child harness itself admits. The harness matches a Bash rule against the
+# LITERAL command string (no path resolution), so an engine that treats
+# `scripts/x.py` and `/abs/scripts/x.py` as equivalent while the child
+# settings carry only one spelling classifies a real harness denial as a
+# materialization defect. Stage 3 item (c): every baseline script rule must
+# match both invocation forms -- in the materialized settings, not only in
+# the engine. ----------------------------------------------------------------
+
+
+def _harness_admits(allow: list[str], command: str) -> bool:
+    for rule in allow:
+        if not (rule.startswith("Bash(") and rule.endswith(")")):
+            continue
+        arg = rule[len("Bash("):-1]
+        if arg.endswith(":*"):
+            prefix = arg[:-2]
+            if command == prefix or command.startswith(prefix + " "):
+                return True
+        elif command == arg:
+            return True
+    return False
+
+
+@pytest.mark.parametrize("script", ["verify-all.py", "verify-agentctl.py", "gen_crutch_registry.py"])
+@pytest.mark.parametrize("form", [
+    "absolute",
+    pytest.param("relative", marks=pytest.mark.xfail(
+        strict=True, reason="relative form is engine-covered but not materialized")),
+])
+def test_baseline_script_rule_both_forms_materialized_and_engine_agrees(tmp_path, script, form):
+    allow = SPAWN.build_child_settings("developer", workdir=str(tmp_path))["permissions"]["allow"]
+    path = f"{SPAWN.SCRIPTS_DIR}/{script}" if form == "absolute" else f"scripts/{script}"
+    command = f"python3 {path} --flag"
+    harness = _harness_admits(allow, command)
+    engine = grant_covers_call(_baseline_grants("developer"), "Bash", {"command": command})
+    assert harness, f"child settings do not admit {command!r}"
+    assert engine == harness
