@@ -98,6 +98,22 @@ path that is-or-contains/lies-under a protected root
 `add_dir_under_protected_root` — the shared predicates both the Bash-rule and
 the file-tool-rule validators call).
 
+**The launch-surface list is narrower than it looks.** `is_launch_surface`
+(`lib/widening_targets.py:143`) only covers `~/Library/LaunchAgents`,
+`~/Library/LaunchDaemons` and `~/.config/systemd/user`. It does not cover
+shell rc files (`~/.bashrc`, `~/.zshrc`, …), `~/.ssh/authorized_keys`, or
+`~/.local/bin` (commonly on `PATH`, so a file placed there runs on the
+next invocation of its name) — each is a persistent-launch-registration
+surface in the same sense the covered three are, but `Edit(//home/the0/
+.bashrc)` and a write add_dir onto `~/.local/bin` both validate today.
+Separately, a write add_dir onto a project's own `.claude` directory only
+denies `.claude/**` *when the add_dir is a parent of it* — `hooks/`,
+`agents/` and `skills/` directly under a write add_dir rooted AT
+`proj/.claude` itself stay writable, and a read add_dir like `~/.ssh` is
+accepted outright (with no complementary deny), including when DR-R
+derives one from an absolute reference in the plan. None of this is
+mechanized yet; it is a residual the same way the two below are.
+
 **The interpreter-mediated residual.** `validate_rule`'s interpreter
 allowlist (`python3`/`bash`/`node`/… ) accepts a rule only when it names a
 script-file operand or a safe `-m <module>` (refusing a bare interpreter, an
@@ -111,13 +127,32 @@ review of the script file itself (it lives in the repo, under the same
 review discipline as any other change), not by the grant validator — the
 validator's job ends at "this invocation names a script, not inline code."
 
-**`settings_drift`.** A materialized child's actual `--settings` payload can
-diverge from what a stage's declared+derived grant set implies it should be
-(a stale cached digest, a hand-edited `--settings` argument bypassing
-`spawn-specialist.py`'s own assembly). `agentctl` records this divergence as
-a `settings_drift` finding (see `scripts/agentctl/README.md` §
-`grant-stats`) rather than silently trusting either side — a drifted spawn
-is a signal to re-derive and re-materialize, not to patch the symptom.
+**The wildcard-admits-extra-flags residual.** `KIND_BASELINES`'
+`_READ_ONLY_INSPECTION` rules (`spawn-specialist.py:621-627`) grant every
+kind `Bash(find:*)`, `Bash(rg:*)`, `Bash(git log:*)`, `Bash(git diff:*)` as
+"read-only" — but `validate_rule` only ever sees the fixed rule text at
+grant time, never the actual suffix a `:*` wildcard admits at
+materialization time. `find:*` admits `-exec`/`-fprintf`/`-delete`; `rg:*`
+admits `--pre <cmd>`; `git log:*`/`git diff:*` admit `--output=<path>`
+(e.g. `git log --format=… --output=~/.claude-agent/settings.local.json`).
+This is the same shape as the interpreter-mediated residual above — a
+validated rule whose *runtime* invocation can differ from what its *text*
+implied — and, like that one, is bounded by review of what these baseline
+rules actually cover, not by the validator: the "Never-grantable forms"
+paragraph's "regardless of provenance or wildcard" claim does not hold for
+a pre-approved wildcarded baseline rule of this shape. This does not change
+`KIND_BASELINES` itself — pinning these baseline rules to exclude the
+dangerous flags is a separate, not-yet-taken fix.
+
+**`settings_drift`.** A spawned child is never granted write access to
+`settings*.json`, so `agentctl` hashes every live settings document under
+the child's cwd and repo root (`widening_targets.enumerate_live_settings`)
+both before and after the child runs, and records a `settings_drift`
+finding whenever any of those hashes changed (see `scripts/agentctl/
+README.md` § `grant-stats`) — a drifted spawn is a signal that the child
+touched settings on disk, not a comparison against what the stage's
+declared+derived grant set implies the payload should have been (that
+would be a different, not-yet-implemented check).
 
 ## See also
 
