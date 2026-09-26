@@ -125,7 +125,6 @@ def test_b2_validate_add_dir_refuses_relative_path_in_write_mode_already(path):
 
 
 @pytest.mark.parametrize("path", _B2_RELATIVE_PATHS)
-@pytest.mark.xfail(strict=True, reason="B2: validate_add_dir never reaches the absolute-path check in read mode")
 def test_b2_validate_add_dir_refuses_relative_path_in_read_mode(path):
     with pytest.raises(GrantValidationError):
         validate_add_dir(path, "read")

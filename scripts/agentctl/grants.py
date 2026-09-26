@@ -513,14 +513,16 @@ def _validate_non_bash_rule(rule: str, tool: str, arg: str) -> None:
 
 def validate_add_dir(path: str, mode: str) -> None:
     """Refuse an add_dir grant that is-or-contains a protected root (any
-    mode) or is under `~/.claude`/the agentctl state dir (any mode). A
-    `write` mode add_dir additionally refuses a glob path, a non-absolute
-    path, a path inside a `.git` directory, and a path that is-or-contains
-    a launch surface (`~/Library/LaunchAgents` etc.) — a `write` add_dir
-    materializes an `Edit(//path/**)` ALLOW rule (see
-    spawn-specialist.py's `stage_grant_rules`), so any of these unbounded
-    or persistent-effect shapes becomes directly writable, unlike a `read`
-    add_dir, which never gains an Edit allow and so needs none of this."""
+    mode), is under `~/.claude`/the agentctl state dir (any mode), or is a
+    non-absolute path (any mode, finding B2: a relative path resolves
+    against the child's cwd regardless of read/write). A `write` mode
+    add_dir additionally refuses a glob path, a path inside a `.git`
+    directory, and a path that is-or-contains a launch surface
+    (`~/Library/LaunchAgents` etc.) — a `write` add_dir materializes an
+    `Edit(//path/**)` ALLOW rule (see spawn-specialist.py's
+    `stage_grant_rules`), so any of these unbounded or persistent-effect
+    shapes becomes directly writable, unlike a `read` add_dir, which never
+    gains an Edit allow and so needs none of this."""
     if not isinstance(path, str) or not path.strip():
         raise GrantValidationError(f"empty add_dir path: {path!r}")
     if mode not in ("read", "write"):
@@ -533,12 +535,17 @@ def validate_add_dir(path: str, mode: str) -> None:
         raise GrantValidationError(
             f"add_dir {path!r} is under a protected ~/.claude or agentctl-state root — refused"
         )
+    if not Path(path).is_absolute():
+        # Finding B2: a relative path is refused in EVERY mode, not only
+        # `write` — a relative add_dir resolves against whatever the child's
+        # cwd happens to be at materialization time, in `read` mode just as
+        # much as `write`, so the containment checks above cannot be trusted
+        # to have seen the real target directory at all.
+        raise GrantValidationError(f"add_dir {path!r} is not an absolute path — refused")
     if mode != "write":
         return
     if any(ch in path for ch in _GLOB_METACHARS):
         raise GrantValidationError(f"write add_dir {path!r} is a glob path — refused")
-    if not Path(path).is_absolute():
-        raise GrantValidationError(f"write add_dir {path!r} is not an absolute path — refused")
     if _is_under_git_dir(path):
         raise GrantValidationError(f"write add_dir {path!r} is under a .git directory — refused")
     if widening_targets.add_dir_is_or_contains_launch_surface(path):
