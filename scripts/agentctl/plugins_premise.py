@@ -250,11 +250,16 @@ def enumeration_run_scope(bag, doc) -> tuple[bool, set[int]]:
     `question-enumerate` run in that window — before the relaunched background
     worker lands — used to widen to the whole plan for no reason the baseline
     doesn't already answer. The baseline, not the flag, is what a narrowed reading
-    is actually scoped against."""
-    baseline = enumeration_baseline(bag)
-    has_baseline = bool(baseline["meta"]) or bool(baseline["stages"])
+    is actually scoped against.
+
+    No explicit "does a baseline exist at all" check is needed alongside
+    `stale_enumeration_parts`: with no baseline at all, that call either finds the
+    legacy whole-plan digest already matching (so `stale_stages` is empty and the
+    condition below is already False on that alone) or finds it stale (so
+    `meta_stale` is True and the condition is already False on `not meta_stale`) —
+    every no-baseline case is covered without a separate flag."""
     meta_stale, stale_stages = stale_enumeration_parts(bag, doc)
-    if has_baseline and stale_stages and not meta_stale:
+    if stale_stages and not meta_stale:
         return False, stale_stages
     return True, set(plan.plan_stage_digests(doc))
 

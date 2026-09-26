@@ -2058,14 +2058,18 @@ def cmd_question_candidate_dispose(args, *, store: StateStore, runner: Runner | 
     match.reason = args.reason or ""
     match.question = args.question or ""
     bag["candidates"] = premise.question_candidates_to_dicts(candidates)
+    content_hash = premise.dismissal_hash(match.statement)
     if args.as_ == "dismissed":
         # A genuine COORDINATOR dismissal — the only source dismissed_hashes has
         # (the engine's own automatic immaterial dismissals and out-of-scope
         # listings never write here; see plugins_premise.py's state_factory).
-        content_hash = premise.dismissal_hash(match.statement)
-        bag.setdefault("dismissed_hashes", {})[content_hash] = {
-            "reason": match.reason, "from_id": match.id,
-        }
+        premise.record_dismissed_hash(
+            bag.setdefault("dismissed_hashes", {}), content_hash,
+            reason=match.reason, from_id=match.id, target=match.target)
+    else:
+        # The latest ruling countermands any earlier dismissal of this exact
+        # (text, target) — a later pass must not keep silently carrying it.
+        premise.forget_dismissed_hash(bag.get("dismissed_hashes") or {}, content_hash, match.target)
     state.log("question_candidate_dispose", candidate=args.id, disposition=args.as_)
     store.save(state)
     return Directive(
@@ -2129,19 +2133,24 @@ def _upsert_candidate(
 ) -> str:
     """Upsert `entry` into `candidates`, returning the id it actually lands under.
 
-    `carry` is a dismissed_hashes record ({reason, from_id}) when `entry`'s own
-    statement hash matches one on file, None otherwise — checked by the caller,
-    not here, since the caller already holds the bag's dismissed_hashes map. When
-    present it takes priority over the ordinary id/legacy-id matching below and
-    writes `entry` as 'dismissed' with a carried reason, by a 3-tier resolution:
-    (1) an existing row at entry['id'] with the SAME statement — an ordinary
-    in-place update, unless it is already 'recorded' (a recorded disposition is
-    never converted by a carry); (2) failing that, any existing DISMISSED row
-    whose own statement hash matches — reused in place, under ITS id, so the carry
-    never overwrites an OPEN candidate merely because the two happen to share a
-    part/index slot; (3) failing both, a fresh row under a non-colliding id. This
-    is what keeps the invariant "a carried entry never overwrites an open
-    candidate whose text differs" — the ordinary same-id branch below would
+    `carry` is a dismissed_hashes record ({reason, from_id, target}) when `entry`'s
+    own (statement hash, target) matches one on file — the SAME-TARGET requirement
+    is what makes this a silent carry rather than a mere hint (see
+    `premise.dismissed_hash_lookup`); checked by the caller, not here, since the
+    caller already holds the bag's dismissed_hashes map. When present it takes
+    priority over the ordinary id/legacy-id matching below and writes `entry` as
+    'dismissed' with a carried reason, by a 3-tier resolution: (1) an existing row
+    at entry['id'] with the SAME statement — an ordinary in-place update, unless
+    it is already 'recorded' (a recorded disposition is never converted by a
+    carry); (2) failing that, any existing DISMISSED row addressed to the SAME
+    target whose own statement hash matches — reused in place, under ITS id, so
+    the carry never overwrites an OPEN candidate merely because the two happen to
+    share a part/index slot, and never reaches across to a same-text row
+    addressed to a DIFFERENT target (that cross-target case is a hint, not a
+    carry, and never reaches this function at all); (3) failing both, a fresh row
+    under a non-colliding id. This is what keeps the invariant "a carried entry
+    never overwrites an open candidate whose text differs, nor a dismissed row
+    addressed to a different target" — the ordinary same-id branch below would
     happily overwrite an unrelated open row at the same id, which is exactly the
     case tier (2)/(3) exist to avoid."""
     if carry is not None:
@@ -2159,6 +2168,7 @@ def _upsert_candidate(
         target_hash = premise.dismissal_hash(entry["statement"])
         for j, existing in enumerate(candidates):
             if (existing.get("disposition") == "dismissed"
+                    and existing.get("target") == entry.get("target")
                     and premise.dismissal_hash(existing.get("statement", "")) == target_hash):
                 candidates[j] = {**carried_entry, "id": existing["id"]}
                 return existing["id"]
@@ -2202,24 +2212,20 @@ def _target_stage_index(target: str) -> int | None:
 @dataclass
 class EnumerationApplyResult:
     """`_apply_enumeration_result`'s return value: the candidate ids it upserted as
-    'raised' or freshly 'dismissed' (`raised`, same meaning the bare list[str] this
-    replaces always had — every existing caller that only ever read len() or
-    iterated it keeps working unchanged), the stage-addressed pairs a narrowed pass
-    declined to disposition because their stage was outside its scope (`out_of_scope`,
-    each `{"target", "question"}`), and the ids a content-hash match carried forward
-    from an earlier coordinator dismissal instead of freshly raising (`carried`,
-    a subset of `raised` since a carried candidate still lands in bag['candidates'])."""
+    'raised' or freshly 'dismissed' (`raised`), the stage-addressed pairs a narrowed
+    pass declined to disposition because their stage was outside its scope
+    (`out_of_scope`, each `{"target", "question"}`), the ids a (text, target) match
+    silently carried forward from an earlier coordinator dismissal of that SAME
+    target instead of freshly raising (`carried`, a subset of `raised` since a
+    carried candidate still lands in bag['candidates']), and the ids left OPEN but
+    annotated with a `dismissal_hint_note` because their text matches an earlier
+    dismissal recorded against a DIFFERENT (or unknown/legacy) target — a pointer
+    for the coordinator to weigh, never a silent disposition (`carried_hint`, a
+    subset of `raised`, disjoint from `carried`)."""
     raised: list[str]
     out_of_scope: list[dict]
     carried: list[str]
-
-    def __iter__(self):
-        # A caller that still does `for cid in _apply_enumeration_result(...)`
-        # (none does today, but len() callers exist) keeps iterating `raised`.
-        return iter(self.raised)
-
-    def __len__(self):
-        return len(self.raised)
+    carried_hint: list[str]
 
 
 def _apply_enumeration_result(
@@ -2268,16 +2274,25 @@ def _apply_enumeration_result(
     across a changed statement would silently discharge a question nobody read.
 
     `honor_dismissed_hashes` (default True, both callers) is what
-    `question-enumerate --reopen-dismissed` flips to False for one pass: a candidate
-    whose text hash matches bag['dismissed_hashes'] is normally carried forward
-    dismissed under the ORIGINAL reason (see _upsert_candidate) rather than freshly
-    raised, regardless of which id or part produces it this time; False skips that
-    lookup entirely for this call, re-raising it the old fresh-pass way. Either way
-    dismissed_hashes itself is untouched here — it is written only by a genuine
-    coordinator dismissal (cmd_question_candidate_dispose)."""
+    `question-enumerate --reopen-dismissed` flips to False for one pass: a
+    candidate whose (text, target) matches a bag['dismissed_hashes'] record is
+    normally carried forward dismissed under the ORIGINAL reason (see
+    _upsert_candidate) rather than freshly raised, regardless of which id or part
+    produces it this time. False both skips that carry for THIS pass (re-raising
+    it the old fresh-pass way) AND forgets the matching record via
+    `premise.forget_dismissed_hash`, so the very next ORDINARY pass does not
+    silently re-carry a dismissal the coordinator just reopened — forgetting only
+    at lookup time, never speculatively, keeps an unrelated (hash, target) pair
+    that never matched untouched. A same-hash record filed against a DIFFERENT (or
+    unknown/legacy) target is never a carry candidate at all, honored or not — it
+    surfaces as a hint (`premise.dismissal_hint_note`, stamped into the raised
+    entry's `reason`) so the coordinator sees the pointer without an unrelated
+    stage silently reusing someone else's ruling. dismissed_hashes is otherwise
+    untouched here — new dismissals are written only by a genuine coordinator
+    dismissal (cmd_question_candidate_dispose)."""
     live_stages = plan_stage_digests(doc)
     meta_covered, stage_scope = parts if parts is not None else (True, set(live_stages))
-    dismissed_hashes = (bag.get("dismissed_hashes") or {}) if honor_dismissed_hashes else {}
+    all_dismissed_hashes = bag.get("dismissed_hashes") or {}
 
     out_of_scope: list[dict] = []
     by_part: dict[str, list[tuple[str, str]]] = {}
@@ -2293,6 +2308,7 @@ def _apply_enumeration_result(
     candidates = bag.setdefault("candidates", [])
     raised: list[str] = []
     carried: list[str] = []
+    carried_hint: list[str] = []
     for part, part_pairs in by_part.items():
         for i, (target, question) in enumerate(part_pairs):
             immaterial = _candidate_immateriality(target, doc)
@@ -2300,15 +2316,26 @@ def _apply_enumeration_result(
                      "statement": f"[{target}] {question}",
                      "disposition": "dismissed" if immaterial else "raised",
                      "reason": immaterial, "question": "", "target": target}
-            carry = (
-                None if immaterial or not dismissed_hashes
-                else dismissed_hashes.get(premise.dismissal_hash(entry["statement"]))
-            )
+            carry = hint = None
+            if not immaterial and all_dismissed_hashes:
+                content_hash = premise.dismissal_hash(entry["statement"])
+                found_carry, hint = premise.dismissed_hash_lookup(
+                    all_dismissed_hashes, content_hash, target)
+                if found_carry is not None:
+                    if honor_dismissed_hashes:
+                        carry = found_carry
+                    else:
+                        premise.forget_dismissed_hash(
+                            bag.setdefault("dismissed_hashes", {}), content_hash, target)
+            if hint is not None and carry is None:
+                entry["reason"] = premise.dismissal_hint_note(hint)
             final_id = _upsert_candidate(
                 candidates, entry, preserve_disposition=preserve_disposition, carry=carry)
             raised.append(final_id)
             if carry is not None:
                 carried.append(final_id)
+            elif hint is not None:
+                carried_hint.append(final_id)
 
     bag["enumerated"] = True
     bag["enumerated_at"] = plugins_premise._plan_content_digest(doc)
@@ -2325,7 +2352,8 @@ def _apply_enumeration_result(
     bag["enumerated_runner_stderr"] = stderr
     bag["enumerated_count"] = len(pairs)
     bag["enumerate_pass"] = int(bag.get("enumerate_pass") or 0) + 1
-    return EnumerationApplyResult(raised=raised, out_of_scope=out_of_scope, carried=carried)
+    return EnumerationApplyResult(
+        raised=raised, out_of_scope=out_of_scope, carried=carried, carried_hint=carried_hint)
 
 
 def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -2419,23 +2447,36 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
     state.log("question_enumerate", raised=len(result.raised), runner_ok=runner_ok, via="command",
               stages=sorted(stage_scope) if not whole_plan else None,
               scope_source=scope_source, out_of_scope=len(result.out_of_scope),
-              carried=len(result.carried))
+              carried=len(result.carried), carried_hint=len(result.carried_hint))
     store.save(state)
 
     scope_note = "" if whole_plan else (
         " (narrowed to stage(s) "
         + ", ".join(str(index) for index in sorted(stage_scope))
         + " — the only parts whose content moved since the last pass)")
+    # Carried/hinted/out-of-scope are reported separately, not folded into "raised",
+    # because they need three different coordinator reactions: a carried candidate
+    # needs none (already dismissed on file), a hinted one is open and wants a
+    # look before disposing, and an out-of-scope one was never dispositioned this
+    # pass at all.
+    breakdown = []
+    if result.carried:
+        breakdown.append(f"{len(result.carried)} carried (already dismissed on file)")
+    if result.carried_hint:
+        breakdown.append(f"{len(result.carried_hint)} hinted (similar to a dismissal for a different target)")
+    if result.out_of_scope:
+        breakdown.append(f"{len(result.out_of_scope)} out of this pass's scope")
+    breakdown_note = f" ({'; '.join(breakdown)})" if breakdown else ""
     d = Directive(
         True, state.node, "continue",
         f"question enumeration cross-check ran; raised {len(result.raised)} candidate(s)"
-        f"{scope_note} — "
+        f"{scope_note}{breakdown_note} — "
         "disposition each with `agentctl question-candidate-dispose --id qenum-<part>-N "
         "--as recorded --question <qid> | --as dismissed --reason <text>`",
         data={"raised": result.raised, "enumerated": True, "runner_ok": runner_ok,
               "whole_plan": whole_plan, "stages": sorted(stage_scope),
               "scope_source": scope_source, "out_of_scope": result.out_of_scope,
-              "carried": result.carried},
+              "carried": result.carried, "carried_hint": result.carried_hint},
     )
     # THREE arms, because runner_ok is three-valued and the three states now have
     # three different truths. `False` no longer discharges anything — the gate
@@ -2995,7 +3036,7 @@ def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> b
     # next person grepping the history, and these rows now have three readers.
     state.log("question_enumerate", raised=len(result.raised), runner_ok=runner_ok, via="fold",
               scope_source=scope_source, out_of_scope=len(result.out_of_scope),
-              carried=len(result.carried))
+              carried=len(result.carried), carried_hint=len(result.carried_hint))
     return True
 
 

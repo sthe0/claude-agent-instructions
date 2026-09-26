@@ -89,9 +89,9 @@ def _bag(store, sid="s"):
     return store.load(sid).plugins["premise"]
 
 
-def _dispose(store, sid, cid, *, reason):
+def _dispose(store, sid, cid, *, reason="", as_="dismissed", question=""):
     return cli.cmd_question_candidate_dispose(
-        Namespace(session=sid, id=cid, as_="dismissed", reason=reason, question=""),
+        Namespace(session=sid, id=cid, as_=as_, reason=reason, question=question),
         store=store)
 
 
@@ -215,13 +215,16 @@ def test_carried_entry_never_overwrites_open_candidate_with_other_text(store, tm
 # --- (c) a coordinator dismissal carries by content hash, across ids -----------
 
 def test_dismissal_carried_by_content_hash_across_ids(store, tmp_path):
-    """A genuine coordinator dismissal is recorded by content hash
+    """A genuine coordinator dismissal is recorded by content hash AND target
     (bag['dismissed_hashes']), so a LATER pass whose part/index churn produces a
-    DIFFERENT id for the same question text still lands dismissed, carrying the
-    original reason — not freshly raised under its new id. Pre-lever, disposition
-    was keyed purely on id/statement match within the SAME part, so a question that
-    moved to a different id slot (here: stage 1 shrinks from two candidates to one,
-    shifting stage 2's part contents) would have come back 'raised'."""
+    DIFFERENT id for the same question text, still addressed to the SAME target,
+    lands dismissed, carrying the original reason — not freshly raised under its
+    new id. The same-target precondition is what makes this a SILENT carry rather
+    than a mere hint (see test_reappearance_under_a_different_target_is_a_hint_not_a_carry
+    for the cross-target case). Pre-lever, disposition was keyed purely on
+    id/statement match within the SAME part, so a question that moved to a
+    different id slot (here: stage 1 shrinks from two candidates to one) would have
+    come back 'raised'."""
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
     _state(store, plan_path=plan_path)
     _enumerate(store, "s", _runner(
@@ -251,7 +254,10 @@ def test_manual_enumerate_does_not_reraise_dismissed_text(store, tmp_path):
     carry even though `preserve_disposition=False` is exactly the flag that (absent
     the carry lookup) means 'a human asked for a fresh pass, re-raise everything'.
     The carry check runs BEFORE that flag is consulted, so a dismissed text stays
-    dismissed on an ordinary manual re-run; only `--reopen-dismissed` reopens it."""
+    dismissed on an ordinary manual re-run; only `--reopen-dismissed` reopens it —
+    and reopening FORGETS the dismissed_hashes record (not merely skips it for one
+    pass), so the very NEXT ordinary pass must not silently re-carry a dismissal
+    the coordinator just reopened."""
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
     _state(store, plan_path=plan_path)
     _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
@@ -270,6 +276,119 @@ def test_manual_enumerate_does_not_reraise_dismissed_text(store, tmp_path):
     assert match2["disposition"] == "raised"
     assert d2.data["carried"] == []
 
+    # The critical next step: a PLAIN pass right after the reopen must not silently
+    # re-dismiss it. Pre-fix, --reopen-dismissed only skipped honoring the record
+    # for its OWN pass without removing it, so this call would have re-carried it.
+    _write_plan(plan_path, [(1, "img-one-EDITED-YET-AGAIN")])
+    d3 = _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
+    match3 = next(c for c in _bag(store)["candidates"] if c["statement"] == "[stage:1.means] why this tool?")
+    assert match3["disposition"] == "raised"
+    assert d3.data["carried"] == []
+
+
+# --- a same-hash dismissal under a DIFFERENT target is a hint, never a carry ----
+
+def test_reappearance_under_a_different_target_is_a_hint_not_a_carry(store, tmp_path):
+    """A dismissal recorded for one target must NOT silently carry to a same-text
+    candidate addressed to a DIFFERENT target — text identity alone cannot tell
+    "the same question, re-addressed" from "an unrelated stage that happens to
+    provoke identical wording". The re-raised candidate stays OPEN ('raised'), its
+    reason stamped with a hint pointing at the earlier dismissal, and is counted
+    under carried_hint, never carried."""
+    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
+    _state(store, plan_path=plan_path)
+    _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
+    _dispose(store, "s", "qenum-s1-1", reason="answered in the order")
+
+    _write_plan(plan_path, [(1, "img-one"), (2, "img-two-EDITED")])
+    d = _enumerate(store, "s", _runner("stage:2.result\twhy this tool?"))
+
+    match = next(c for c in _bag(store)["candidates"]
+                 if c["statement"] == "[stage:2.result] why this tool?")
+    assert match["disposition"] == "raised"
+    assert match["reason"] == premise.dismissal_hint_note(
+        {"reason": "answered in the order", "from_id": "qenum-s1-1", "target": "stage:1.means"})
+    assert match["id"] not in d.data["carried"]
+    assert match["id"] in d.data["carried_hint"]
+
+
+# --- disposing as anything other than 'dismissed' forgets the hash --------------
+
+def test_disposing_as_recorded_forgets_the_dismissed_hash(store, tmp_path):
+    """Overturning a dismissal — re-dispositioning the SAME candidate as 'recorded'
+    instead — must forget its dismissed_hashes record, so a later re-enumeration of
+    the same (text, target) pair is freshly raised rather than silently carried
+    forward under a ruling that no longer holds."""
+    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    _state(store, plan_path=plan_path)
+    _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
+    _dispose(store, "s", "qenum-s1-1", reason="answered in the order")
+    assert _bag(store)["dismissed_hashes"]
+
+    state = store.load("s")
+    state.plugins["premise"]["questions"] = [
+        {"id": "q1", "target": "stage:1.means", "question": "why this tool, really?"}]
+    store.save(state)
+    _dispose(store, "s", "qenum-s1-1", as_="recorded", question="q1")
+
+    content_hash = premise.dismissal_hash("[stage:1.means] why this tool?")
+    assert premise.dismissed_hash_records(_bag(store).get("dismissed_hashes"), content_hash) == []
+
+    _write_plan(plan_path, [(1, "img-one-EDITED")])
+    d = _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
+    match = next(c for c in _bag(store)["candidates"]
+                 if c["statement"] == "[stage:1.means] why this tool?")
+    assert match["disposition"] == "raised"
+    assert d.data["carried"] == []
+
+
+# --- finding-5 invariants: carry never disturbs what it must not touch ----------
+
+def test_recorded_disposition_never_converted_by_carry(tmp_path):
+    """`_upsert_candidate`'s tier 1 — an existing row at the entry's own id, same
+    statement — must NEVER convert a `recorded` row into a carried dismissal, even
+    when the text+target also matches a dismissed_hashes record: a human already
+    resolved this question by linking it to a real answer, and a stale or
+    coincidental hash match must not undo that."""
+    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
+    doc = load_plan(plan_path)
+    bag = {
+        "candidates": [{
+            "id": "qenum-s1-1", "statement": "[stage:1.means] why this tool?",
+            "disposition": "recorded", "reason": "", "question": "q1", "target": "stage:1.means",
+        }],
+        "dismissed_hashes": {
+            premise.dismissal_hash("[stage:1.means] why this tool?"): [
+                {"reason": "answered in the order", "from_id": "qenum-old", "target": "stage:1.means"},
+            ],
+        },
+        "enumerated": True,
+    }
+    cli._apply_enumeration_result(
+        bag, doc, plan_path, [("stage:1.means", "why this tool?")], True)
+
+    match = next(c for c in bag["candidates"] if c["id"] == "qenum-s1-1")
+    assert match["disposition"] == "recorded"
+    assert match["question"] == "q1"
+
+
+def test_out_of_scope_candidate_is_byte_identical_across_a_narrowed_pass(store, tmp_path):
+    """A candidate whose stage a narrowed pass never re-read is not merely "still
+    present" afterward (as test_out_of_scope_pair_is_listed_not_written_to_candidates
+    checks by target membership) — none of its OWN fields may have moved either.
+    Membership alone would not catch a bug that left the id in place but silently
+    rewrote e.g. its reason or disposition."""
+    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
+    _state(store, plan_path=plan_path)
+    _enumerate(store, "s", _runner("stage:1.means\tstill valid?"))
+    before = dict(next(c for c in _bag(store)["candidates"] if c["id"] == "qenum-s1-1"))
+
+    _write_plan(plan_path, [(1, "img-one"), (2, "img-two-EDITED")])
+    _enumerate(store, "s", _runner("stage:1.means\tstill valid?\nstage:2.result\tand now?"))
+    after = next(c for c in _bag(store)["candidates"] if c["id"] == "qenum-s1-1")
+
+    assert after == before
+
 
 # --- (e) the log carries scope_source / out_of_scope / carried ------------------
 
@@ -281,20 +400,22 @@ def test_enumerate_log_records_scope_source_and_carry_counts(store, tmp_path):
     assert first_log["scope_source"] == "whole_plan"
     assert first_log["out_of_scope"] == 0
     assert first_log["carried"] == 0
+    assert first_log["carried_hint"] == 0
 
     _dispose(store, "s", "qenum-s1-1", reason="answered in the order")
 
-    _write_plan(plan_path, [(1, "img-one"), (2, "img-two-EDITED")])
-    # The hash is computed on the question text alone (the "[target] " prefix is
-    # stripped before hashing), so a dismissed question re-surfacing under a
-    # DIFFERENT target still carries — here "why this tool?" reappears addressed to
-    # stage 2 instead of stage 1, and it still lands dismissed.
+    _write_plan(plan_path, [(1, "img-one-EDITED"), (2, "img-two")])
+    # A SILENT carry requires the SAME target as the original dismissal — "why
+    # this tool?" reappears addressed to stage 1 again, and this pass narrows to
+    # stage 1 (the only stage that moved), so it lands dismissed without a fresh
+    # coordinator ruling. The stage:2 pair is out of this pass's scope.
     _enumerate(store, "s", _runner(
-        "stage:1.means\tstill unaddressed?\nstage:2.result\twhy this tool?"))
+        "stage:1.means\twhy this tool?\nstage:2.result\tstill unaddressed?"))
     second_log = store.load("s").history[-1]
     assert second_log["scope_source"] == "enumeration_baseline"
     assert second_log["out_of_scope"] == 1
     assert second_log["carried"] == 1
+    assert second_log["carried_hint"] == 0
 
 
 def test_fold_log_records_scope_source_and_carry_counts(store, tmp_path, monkeypatch):
@@ -310,18 +431,19 @@ def test_fold_log_records_scope_source_and_carry_counts(store, tmp_path, monkeyp
     _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
     _dispose(store, "s", "qenum-s1-1", reason="answered in the order")
 
-    _write_plan(plan_path, [(1, "img-one"), (2, "img-two-EDITED")])
+    _write_plan(plan_path, [(1, "img-one-EDITED"), (2, "img-two")])
     doc = load_plan(plan_path)
     digest = plugins_premise._plan_content_digest(doc)
     monkeypatch.setattr(
         enumerate_sidecar, "read_discarding_superseded",
         lambda session_id, want_digest: {
-            # "why this tool?" reappears addressed to stage 2 (in scope) rather than
-            # stage 1 (out of scope this pass) — the hash strips the target prefix,
-            # so it still carries the earlier dismissal under its new address.
-            "pairs": [["stage:1.means", "still unaddressed?"],
-                      ["stage:2.result", "why this tool?"]],
-            "runner_ok": True, "stages": [2], "stderr": "",
+            # "why this tool?" reappears addressed to the SAME target (stage 1,
+            # the only stage this pass re-read) — a silent carry requires target
+            # identity, not just text identity; see the cross-target hint test for
+            # why a different target would NOT carry here.
+            "pairs": [["stage:1.means", "why this tool?"],
+                      ["stage:2.result", "still unaddressed?"]],
+            "runner_ok": True, "stages": [1], "stderr": "",
         } if want_digest == digest else None,
     )
 
@@ -335,6 +457,7 @@ def test_fold_log_records_scope_source_and_carry_counts(store, tmp_path, monkeyp
     assert log["scope_source"] == "enumeration_baseline"
     assert log["out_of_scope"] == 1
     assert log["carried"] == 1
+    assert log["carried_hint"] == 0
 
 
 # --- (d) survival across the launch clear and a bag predating the lever --------

@@ -606,17 +606,96 @@ def dismissal_hash(statement: str) -> str:
     """A candidate statement's content identity, for carrying a coordinator's
     dismissal across the id churn a re-enumeration pass produces (a new part/index
     suffix, a fold via a different id than the one the coordinator actually
-    dismissed). Strips the leading `[target] ` address (the id-scheme detail, not
-    the question), casefolds and collapses whitespace, then sha256s the rest.
+    dismissed). Strips the leading `[target] ` address, casefolds and collapses
+    whitespace, then sha256s the rest.
 
     Deliberately TEXT IDENTITY ONLY — never a paraphrase/semantic match. Two
     differently-worded questions about the same control get two hashes and neither
     carries the other's dismissal; that is the safe direction (a coordinator who
     dismissed one wording has not thereby dismissed a different one), matching this
-    repo's standing rule against regex/hash tricks standing in for meaning."""
+    repo's standing rule against regex/hash tricks standing in for meaning.
+
+    The address is stripped for HASHING only — it does not follow that the same
+    text re-addressed to a DIFFERENT target is safe to auto-dismiss. A silent
+    carry (see `dismissed_hash_lookup`) additionally requires the recorded
+    TARGET to match; a same-hash record under any other target — or a legacy,
+    pre-target record whose own target was never captured — surfaces only as a
+    hint (`dismissal_hint_note`), because this hash alone cannot tell "the same
+    question, re-addressed" from "an unrelated stage that happens to provoke
+    identical wording". Binding a dismissal to the plan ELEMENT a question
+    actually concerns, rather than to a target string plus this text hash, is a
+    planned follow-up, not this one."""
     text = _STATEMENT_TARGET_PREFIX_RE.sub("", statement or "", count=1)
     normalized = " ".join(text.casefold().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def dismissed_hash_records(dismissed_hashes: dict | None, content_hash: str) -> list[dict]:
+    """Tolerant reader for `bag['dismissed_hashes'][content_hash]`: normalizes it
+    to a list of `{reason, from_id, target}` records regardless of whether it
+    predates per-target tracking (a bare `{reason, from_id}` dict, its `target`
+    absent — read as unknown) or postdates it (a list of such records, one per
+    target a coordinator has dismissed this exact text against)."""
+    raw = (dismissed_hashes or {}).get(content_hash)
+    if raw is None:
+        return []
+    return raw if isinstance(raw, list) else [raw]
+
+
+def dismissed_hash_lookup(
+    dismissed_hashes: dict | None, content_hash: str, target: str,
+) -> tuple[dict | None, dict | None]:
+    """`(silent_carry, hint)` for one candidate's content hash + target — at most
+    one is non-None. A record whose own `target` exactly matches `target` is the
+    silent carry (the binding rule: same text AND same target address); any other
+    same-hash record, including a legacy target-less one, is a hint only.
+    Deterministic tie-break among several other-target records: the
+    earliest-appended one (list order)."""
+    records = dismissed_hash_records(dismissed_hashes, content_hash)
+    for record in records:
+        if record.get("target") == target:
+            return record, None
+    return (None, records[0]) if records else (None, None)
+
+
+def dismissal_hint_note(hint: dict) -> str:
+    """The `reason` text stamped on a candidate that stays OPEN because its content
+    hash matches an earlier coordinator dismissal recorded under a DIFFERENT
+    target (or an unknown one, from a legacy record) — see `dismissed_hash_lookup`.
+    Only a pointer for the coordinator to weigh; a same-hash match under another
+    target is not proof of a carryable dismissal."""
+    target = hint.get("target") or "an unknown target"
+    return f"similar to dismissed {hint.get('from_id', '')} for {target}: {hint.get('reason', '')}"
+
+
+def record_dismissed_hash(
+    dismissed_hashes: dict, content_hash: str, *, reason: str, from_id: str, target: str,
+) -> None:
+    """Write a genuine coordinator dismissal into `bag['dismissed_hashes']`, in
+    place. A fresh dismissal for the SAME (hash, target) pair supersedes any prior
+    record there — the latest ruling is the one worth carrying."""
+    records = [r for r in dismissed_hash_records(dismissed_hashes, content_hash)
+               if r.get("target") != target]
+    records.append({"reason": reason, "from_id": from_id, "target": target})
+    dismissed_hashes[content_hash] = records
+
+
+def forget_dismissed_hash(dismissed_hashes: dict, content_hash: str, target: str) -> None:
+    """Remove the `(content_hash, target)` record from `bag['dismissed_hashes']`,
+    used when a dismissal is overturned — disposed as something other than
+    'dismissed', or reopened via `question-enumerate --reopen-dismissed` — so it
+    stops silently carrying forward a ruling that no longer holds. A legacy
+    target-less record is dropped outright along with it: it cannot be attributed
+    to one target with any confidence, so keeping it around once ANY dismissal for
+    this hash is overturned serves no one."""
+    if content_hash not in (dismissed_hashes or {}):
+        return
+    remaining = [r for r in dismissed_hash_records(dismissed_hashes, content_hash)
+                 if r.get("target") not in (target, None)]
+    if remaining:
+        dismissed_hashes[content_hash] = remaining
+    else:
+        del dismissed_hashes[content_hash]
 
 
 @dataclass
