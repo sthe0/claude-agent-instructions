@@ -17,9 +17,12 @@ from .state import SessionState
 DEFAULT_ROOT = config_root.agentctl_state_dir()
 
 
-def _safe(session_id: str) -> str:
+def safe_session_id(session_id: str) -> str:
     safe = "".join(c for c in (session_id or "") if c.isalnum() or c in "-_")
     return safe or "nosession"
+
+
+_safe = safe_session_id
 
 
 class StateStore(Protocol):

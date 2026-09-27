@@ -122,7 +122,7 @@ from .state import (
     Subject,
     WeightClass,
 )
-from .store import FileStateStore, StateStore, _safe as _safe_session_id
+from .store import FileStateStore, StateStore, safe_session_id as _safe_session_id
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 GATE_LOG = config_root.agentctl_gate_log()
@@ -5905,7 +5905,7 @@ def evidence_dir_for(session_id: str, stage_index: int) -> Path:
     evidence dir (see spawn-specialist.py's load_or_create_evidence_dir) would
     have been refused at the root every stage's evidence lives under.
 
-    Session id is sanitized with store._safe — the same scheme session state
+    Session id is sanitized with store.safe_session_id — the same scheme session state
     files are keyed by — so an adversarial session id cannot escape the
     evidence tree. Raises EvidenceDirError instead of falling back to another
     root when the resolved path is unusable — see the class docstring."""
@@ -5921,15 +5921,11 @@ def evidence_dir_for(session_id: str, stage_index: int) -> Path:
             root = Path.home() / ".local" / "state" / "agentctl-evidence"
         skip_scratch_check = False
     path = root / _safe_session_id(session_id) / f"stage-{int(stage_index)}"
-    if not skip_scratch_check:
-        norm = os.path.realpath(os.path.normpath(str(path)))
-        for scratch_root in exempt_paths.scratch_roots():
-            if norm == scratch_root or norm.startswith(scratch_root + os.sep):
-                raise EvidenceDirError(
-                    f"evidence directory {path} resolves under OS-temp scratch root "
-                    f"{scratch_root!r} — set ${EVIDENCE_ROOT_ENV} or $XDG_STATE_HOME "
-                    "to a durable location"
-                )
+    if not skip_scratch_check and exempt_paths.under_scratch_root(str(path)):
+        raise EvidenceDirError(
+            f"evidence directory {path} resolves under an OS-temp scratch root — "
+            f"set ${EVIDENCE_ROOT_ENV} or $XDG_STATE_HOME to a durable location"
+        )
     try:
         _grants.validate_add_dir(str(path), "write")
     except _grants.GrantValidationError as exc:
