@@ -238,6 +238,21 @@ def test_g1_edit_fires_on_default_mode_widening(tmp_path):
     assert _g1_edit_decision(tmp_path, old_text, new_text) == "ask"
 
 
+def test_g1_edit_fires_on_auto_to_bypass_permissions_widening(tmp_path):
+    # round-3 should-fix 3: auto and bypassPermissions used to tie at the same
+    # rank, so this transition (skip the ask -> skip the rules themselves)
+    # went unreported.
+    old_text = '{"permissions": {"defaultMode": "auto"}}'
+    new_text = '{"permissions": {"defaultMode": "bypassPermissions"}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "ask"
+
+
+def test_g1_edit_allows_bypass_permissions_to_auto_narrowing(tmp_path):
+    old_text = '{"permissions": {"defaultMode": "bypassPermissions"}}'
+    new_text = '{"permissions": {"defaultMode": "auto"}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "allow"
+
+
 def test_g1_edit_fires_on_default_mode_widening_to_unranked_value(tmp_path):
     old_text = '{"permissions": {"defaultMode": "default"}}'
     new_text = '{"permissions": {"defaultMode": "someFutureMode"}}'

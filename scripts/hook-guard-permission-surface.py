@@ -162,17 +162,20 @@ _OTHER_SECURITY_KEYS = (
 _ENV_SECURITY_KEY_PREFIXES = ("ANTHROPIC_", "CLAUDE_CODE_USE_")
 _ENV_SECURITY_KEY_SUBSTRINGS = ("_BASE_URL", "API_KEY", "_PROXY")
 
-# S2: `permissions.defaultMode` values ranked narrow (0) to wide (3). A
+# S2: `permissions.defaultMode` values ranked narrow (0) to wide (4). A
 # change to a HIGHER rank widens; same-or-lower narrows and is not reported.
 # A mode absent from this table (a future harness addition) is unranked, and
 # any change touching it fires conservatively rather than being silently
-# treated as safe.
+# treated as safe. `bypassPermissions` outranks `auto` (round-3 should-fix
+# 3): `auto` still applies the session's allow/deny rules and only skips the
+# ask, while `bypassPermissions` skips the rules themselves -- tying them at
+# the same rank meant an `auto` -> `bypassPermissions` edit went unreported.
 _DEFAULT_MODE_RANK = {
     "plan": 0,
     "default": 1,
     "acceptEdits": 2,
     "auto": 3,
-    "bypassPermissions": 3,
+    "bypassPermissions": 4,
 }
 
 _SETTINGS_REFERENCE_URL = "https://code.claude.com/docs/en/settings"
