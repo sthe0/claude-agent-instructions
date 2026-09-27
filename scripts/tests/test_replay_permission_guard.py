@@ -363,6 +363,45 @@ def test_write_summary_reports_real_commit_counts_and_group_member_counts(tmp_pa
     assert "| grp-b | G4 | 1 |" in summary
 
 
+# --- round-3 nit 1: Bash grouping keys off the firing segment, not the whole command ---
+
+
+def test_group_for_g2_bash_groups_on_firing_segment_not_noisy_prefix():
+    """`_bash_group_shape` used to run on the WHOLE command, so a
+    `&&`-chained banner before the real `claude` call leaked into the shape
+    -- the review's cited `G2:find:---try resume now---,...` example came
+    from exactly this pattern. Grouping now derives the shape from the
+    firing segment alone (`_firing_segment`), so a noisy prefix collapses to
+    the same group as the clean call."""
+    clean_command = "claude --add-dir /tmp"
+    noisy_command = "echo ---try resume now--- && claude --add-dir /tmp"
+    clean_group = replay._group_for("G2", "Bash", {"command": clean_command}, "")
+    noisy_group = replay._group_for("G2", "Bash", {"command": noisy_command}, "")
+    assert noisy_group == clean_group
+    # before the fix, grouping on the whole command produced a DIFFERENT
+    # (echo-derived) shape -- pin that the old path is genuinely bypassed.
+    assert noisy_group != f"G2:{replay._bash_group_shape(noisy_command)}"
+
+
+def test_group_for_g4_bash_groups_on_firing_segment_not_noisy_prefix():
+    """Same bug, G4 side -- the review's cited `G4:cd:…,-8;,…` example: a
+    `cd`-prefixed segment before the real `agentctl resolve-permission ...
+    --decision granted` call leaked `cd`'s own arguments into the shape."""
+    real_call = "python3 -m agentctl resolve-permission --decision granted --session sess-1"
+    noisy_command = f"cd /tmp && {real_call}"
+    clean_group = replay._group_for("G4", "Bash", {"command": real_call}, "")
+    noisy_group = replay._group_for("G4", "Bash", {"command": noisy_command}, "")
+    assert noisy_group == clean_group
+    assert noisy_group != f"G4:{replay._bash_group_shape(noisy_command)}"
+
+
+def test_firing_segment_returns_none_for_branches_other_than_g2_g4():
+    """G1-bash/G1-state/G3 group on the whole command via `_group_for`'s
+    fallback -- `_firing_segment` must not intercept them."""
+    assert replay._firing_segment("G1-bash", "cat x > /tmp/settings.json") is None
+    assert replay._firing_segment("G3", "crontab -l") is None
+
+
 # --- git-history mode (isolated throwaway repo, never this checkout's own history) ---
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:

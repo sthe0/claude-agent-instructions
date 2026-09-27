@@ -554,21 +554,29 @@ def _flag_value(tokens: list[str], flag: str) -> str | None:
     return vals[-1] if vals else None
 
 
-def _g4_bash(command: str) -> tuple[list[str], str | None, str | None] | None:
+def _g4_bash(command: str) -> tuple[list[str], str | None, str | None, str] | None:
     """round-2 should-fix S3: recurses through `_g2_segments` (the same `sh|
     bash|zsh -c`/`eval` recursion G2 uses) rather than the flat top-level
     `bash_write_targets.segments`, so a resolve-permission call hidden inside
     one shell -c layer still fires. Also returns the granting command's own
     `--session` value, since a real call answers a PENDING request and rarely
     repeats the rule on the command line — the caller resolves the pending
-    request's action from that session id."""
+    request's action from that session id. round-3 nit 1: also returns the
+    matched segment's own text (`" ".join(seg)`, mirroring `_g2_bash`'s return
+    shape) so a caller (the replay tool) can group on the firing segment
+    instead of a noisy multi-command whole line."""
     for seg in _g2_segments(command):
         invokes, verb = widening_targets.agentctl_invocation_verb(seg)
         if not invokes or verb != "resolve-permission":
             continue
         if _flag_value(seg, "--decision") != "granted":
             continue
-        return _flag_values(seg, "--rule"), _flag_value(seg, "--stage"), _flag_value(seg, "--session")
+        return (
+            _flag_values(seg, "--rule"),
+            _flag_value(seg, "--stage"),
+            _flag_value(seg, "--session"),
+            " ".join(seg),
+        )
     return None
 
 
@@ -748,7 +756,7 @@ def decide_detailed(
                 return "ask", "G1-state", _g1_state_message(target)
             g4_hit = _g4_bash(command)
             if g4_hit:
-                rules, stage, session = g4_hit
+                rules, stage, session, _g4_seg_text = g4_hit
                 return "ask", "G4", _g4_message(rules, stage, session, read_file)
             target = _g2_bash(command)
             if target:

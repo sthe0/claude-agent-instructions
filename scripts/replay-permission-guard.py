@@ -83,10 +83,12 @@ id-row overrides, and exits 0.
 
 This module imports `decide_detailed` and `_security_relevant_diff` from the
 guard module — the SAME two functions the shipped hook's own `main()` (for
-the former) and this tool's git-history mode (for the latter) rely on — and
-nothing else: never `main`, never `_log_fire`, never
-`CLAUDE_PERMISSION_GUARD_LOG`. A replay run does not write to that log; the
-only files it writes are under `--out`.
+the former) and this tool's git-history mode (for the latter) rely on — plus
+`_g2_bash`/`_g4_bash` (round-3 nit 1: `_group_for` calls these, via
+`_firing_segment`, to group a G2/G4 Bash fire on its own matched segment
+rather than the raw whole command) — and nothing else: never `main`, never
+`_log_fire`, never `CLAUDE_PERMISSION_GUARD_LOG`. A replay run does not write
+to that log; the only files it writes are under `--out`.
 """
 from __future__ import annotations
 
@@ -204,16 +206,38 @@ def _target_path(tool_name: str, tool_input: dict) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _firing_segment(branch: str, command: str) -> str | None:
+    """round-3 nit 1: the exact segment that actually matched G2/G4 --
+    `_guard._g2_bash`/`_guard._g4_bash` already recurse through `sh|bash|zsh
+    -c`/`eval` wrappers to find the ONE segment that fired, and hand it back
+    as text (`_g4_bash`'s 4th tuple element). Grouping on that segment instead
+    of the raw whole command keeps an unrelated `&&`-chained prefix (an echoed
+    banner, a `cd`) out of the shape `_bash_group_shape` derives -- without
+    this, `echo ---try resume now--- && claude --add-dir /` shlex-split its
+    OWN banner token as if it were a flag. None for every other branch
+    (G1-bash/G1-state/G3), whose caller falls back to the whole command."""
+    if branch == "G2":
+        return _guard._g2_bash(command)
+    if branch == "G4":
+        hit = _guard._g4_bash(command)
+        return hit[3] if hit else None
+    return None
+
+
 def _group_for(branch: str, tool_name: str | None, tool_input: dict, target: str) -> str:
     """The normalized grouping key — deliberately NOT derived from the
     human-readable `detail` message (round-2 should-fix S7): a Bash fire
-    groups on program+flags (`_bash_group_shape`), a G1-CANDIDATE edit/write
-    groups on the live document plus the keys it actually touched
-    (`_touched_keys`), and everything else groups on the normalized target
-    path alone."""
+    groups on program+flags (`_bash_group_shape`), computed from the firing
+    segment alone for G2/G4 (`_firing_segment`, round-3 nit 1) rather than the
+    raw whole command; a G1-CANDIDATE edit/write groups on the live document
+    plus the keys it actually touched (`_touched_keys`), and everything else
+    groups on the normalized target path alone."""
     if tool_name == "Bash":
         command = tool_input.get("command")
-        shape = _bash_group_shape(command) if isinstance(command, str) else "?"
+        if isinstance(command, str):
+            shape = _bash_group_shape(_firing_segment(branch, command) or command)
+        else:
+            shape = "?"
         return f"{branch}:{shape}"
     if branch == "G1-CANDIDATE":
         keys = ",".join(_touched_keys(tool_input))
