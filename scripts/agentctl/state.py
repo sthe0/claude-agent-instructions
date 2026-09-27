@@ -1335,9 +1335,9 @@ class Stage:
     output_artifacts: list[str] = field(default_factory=list)
     # Escape hatch, mirroring criterion.negative_control_waiver's shape: names why an
     # output_artifacts entry legitimately resolves under exempt_paths.scratch_roots()
-    # (submission.py's ephemeral-artifact check refuses ambiguity — both this and a
-    # flagged entry present is as much a violation as neither). None on every plan
-    # authored before this field, which is byte-identical to "no waiver declared".
+    # (submission.py's ephemeral-artifact check accepts a flagged entry once this is
+    # non-empty). None on every plan authored before this field, which is byte-identical
+    # to "no waiver declared".
     ephemeral_artifacts_waiver: str | None = None
     outcome: Outcome = field(default_factory=Outcome)
     # General control-criterion attestation (element #3 of the plan activity ontology).
