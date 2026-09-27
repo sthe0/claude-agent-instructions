@@ -16,6 +16,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from agentctl import cli
 from agentctl import exempt_paths
 from agentctl.dispatch import RunResult
@@ -150,6 +152,19 @@ def test_evidence_dir_command_creates_durable_dir(store, tmp_path, monkeypatch):
     assert p.is_dir()
 
 
+def test_evidence_dir_under_scratch_root_fails_loudly_without_override(tmp_path, monkeypatch):
+    """With $AGENTCTL_EVIDENCE_ROOT unset (the conftest autouse fixture's own
+    override deleted), a $XDG_STATE_HOME that itself resolves under an OS-temp
+    scratch root must be refused outright -- no silent fallback to another
+    root. `tmp_path` is itself under the default scratch-root set (pytest's
+    basetemp lives under /tmp or $TMPDIR), so setting $XDG_STATE_HOME to it
+    exercises the refusal without needing $AGENTCTL_SCRATCH_ROOTS at all."""
+    monkeypatch.delenv("AGENTCTL_EVIDENCE_ROOT", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    with pytest.raises(cli.EvidenceDirError, match="scratch root"):
+        cli.evidence_dir_for("ev-sess", 1)
+
+
 # --- #2: dispatch's Directive carries data.evidence_dir ---------------------
 
 
@@ -163,7 +178,7 @@ def test_dispatch_directive_names_evidence_dir(store, fixtures_dir):
         store=store, runner=runner,
     )
     assert d.ok is True
-    expected = str(cli.evidence_dir_for(sid, 1, state_root=store.root))
+    expected = str(cli.evidence_dir_for(sid, 1))
     assert d.data["evidence_dir"] == expected
 
 
@@ -231,7 +246,7 @@ def test_developer_spawn_can_write_evidence_dir(store, fixtures_dir, tmp_path, m
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
     _to_executing(store, sid, fixtures_dir, plan_path=plan_path)
 
-    expected_evidence_dir = str(cli.evidence_dir_for(sid, 1, state_root=tmp_path / "state"))
+    expected_evidence_dir = str(cli.evidence_dir_for(sid, 1))
 
     rc = MOD.main(_dry_run_argv(sid, "developer", 1, tmp_path / "state", Path(plan_path)))
     assert rc == 0
@@ -256,7 +271,7 @@ def test_non_developer_spawn_gets_no_checkpoint_or_evidence_grant(
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
     _to_executing(store, sid, fixtures_dir, plan_path=plan_path)
 
-    expected_evidence_dir = str(cli.evidence_dir_for(sid, 1, state_root=tmp_path / "state"))
+    expected_evidence_dir = str(cli.evidence_dir_for(sid, 1))
 
     rc = MOD.main(_dry_run_argv(sid, "thinker", 1, tmp_path / "state", Path(plan_path)))
     assert rc == 0
@@ -297,7 +312,7 @@ def test_evidence_dir_grant_keeps_approved_grants_sha256(store, fixtures_dir, tm
     # the pre-lever commit, so this line is what makes the whole test fail
     # there (AttributeError), rather than the digest comparison above, which
     # already holds pre-lever too (grants_sha256 itself is untouched by R10).
-    expected_evidence_dir = str(cli.evidence_dir_for(sid, 1, state_root=tmp_path / "state"))
+    expected_evidence_dir = str(cli.evidence_dir_for(sid, 1))
 
     # Never part of the declared+derived grant set grants_sha256 hashes.
     assert not any(d.path == expected_evidence_dir for d in derived.add_dirs)

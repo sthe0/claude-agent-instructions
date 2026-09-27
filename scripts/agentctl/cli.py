@@ -28,7 +28,7 @@ from pathlib import Path
 import proc_tree
 from lib import argv_text, config_root, kind_baselines, transcript_stops, widening_targets
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, gates, grants as _grants, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grants as _grants, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -461,6 +461,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.knowledge = refined.knowledge
     cur.conditions = refined.conditions
     cur.preconditions = refined.preconditions
+    cur.ephemeral_artifacts_waiver = refined.ephemeral_artifacts_waiver
     for field in fields(Criterion):
         if field.name not in _CRITERION_ENGINE_WRITTEN_FIELDS:
             setattr(cur.criterion, field.name, getattr(refined.criterion, field.name))
@@ -5134,6 +5135,17 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     _misses_before = len(state.planning_misses)
     _settings_paths = widening_targets.enumerate_live_settings(child_cwd, state.repo_root)
     _settings_before = {p: _plan_file_sha256(p) for p in _settings_paths}
+    # Resolved (not created) BEFORE the child spawns — spawn-specialist.py's own
+    # in-process load_or_create_evidence_dir (mirroring load_engine_stage_grants's
+    # cmd_stage_grants call) materializes the directory, via the SAME
+    # evidence_dir_for formula, so the two never disagree. Checked here, ahead of
+    # dispatch_stage, so an unresolvable evidence root refuses the dispatch
+    # outright rather than spawning a child whose own resolution would fail the
+    # same way after real spawn cost was already spent.
+    try:
+        evidence_dir = str(evidence_dir_for(state.session_id, stage.index))
+    except EvidenceDirError as exc:
+        return Directive(False, state.node, "noop", f"dispatch refused: {exc}")
     result = dispatch_stage(
         stage, state.plan_path or "",
         runner=runner,
@@ -5153,11 +5165,6 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         project_settings=_dispatch_project_settings_path(state),
         session_id=state.session_id,
     )
-    # Computed (not created) here — spawn-specialist.py's own in-process
-    # load_or_create_evidence_dir (mirroring load_engine_stage_grants's
-    # cmd_stage_grants call) materializes the directory before the child
-    # spawns, via the SAME evidence_dir_for formula, so the two never disagree.
-    evidence_dir = str(evidence_dir_for(state.session_id, stage.index, state_root=store.root))
     if dry_run:
         # #10: a dry-run is a pure preview — no event log, no state save, no
         # marker routing. The echoed command is the whole result.
@@ -5875,18 +5882,59 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
     )
 
 
-def evidence_dir_for(session_id: str, stage_index: int, *, state_root: Path | None = None) -> Path:
-    """Durable per-stage evidence directory: `<agentctl state root>/evidence/<session>/
-    stage-<N>/` — deliberately UNDER the state root (never under an OS-temp scratch root
-    per exempt_paths.scratch_roots()), so a developer spawn's checkpoint evidence survives
-    the same GC that would sweep a session scratchpad. `state_root` defaults to the same
-    `config_root.agentctl_state_dir()` a bare FileStateStore() resolves to, so a caller
-    that already holds a `store` (itself honoring `--state-root`) gets an evidence root
-    that moves with it under test isolation, without a second override flag. Session id is
-    sanitized with store._safe — the same scheme session state files are keyed by — so an
-    adversarial session id cannot escape the evidence tree."""
-    root = Path(state_root) if state_root is not None else config_root.agentctl_state_dir()
-    return root / "evidence" / _safe_session_id(session_id) / f"stage-{int(stage_index)}"
+EVIDENCE_ROOT_ENV = "AGENTCTL_EVIDENCE_ROOT"
+
+
+class EvidenceDirError(Exception):
+    """Raised when the durable per-stage evidence directory cannot be resolved —
+    it would fall under an OS-temp scratch root (exempt_paths.scratch_roots()), or
+    grants.validate_add_dir refuses it outright. No fallback search: the caller
+    fails loudly rather than silently degrading to a directory nobody granted."""
+
+
+def evidence_dir_for(session_id: str, stage_index: int) -> Path:
+    """Durable per-stage evidence directory: `<evidence root>/<session>/stage-<N>/`.
+
+    `<evidence root>` is $AGENTCTL_EVIDENCE_ROOT when set (a TEST-ONLY override:
+    it skips only the scratch-root refusal below, grants.validate_add_dir still
+    applies to whatever it names), else `$XDG_STATE_HOME/agentctl-evidence` when
+    $XDG_STATE_HOME is set to an absolute path, else `~/.local/state/agentctl-
+    evidence` — deliberately NOT under `config_root.agentctl_state_dir()`
+    (`~/.claude[-agent]/agentctl/state`), which `widening_targets.
+    add_dir_under_protected_root` refuses outright, so a write add_dir onto the
+    evidence dir (see spawn-specialist.py's load_or_create_evidence_dir) would
+    have been refused at the root every stage's evidence lives under.
+
+    Session id is sanitized with store._safe — the same scheme session state
+    files are keyed by — so an adversarial session id cannot escape the
+    evidence tree. Raises EvidenceDirError instead of falling back to another
+    root when the resolved path is unusable — see the class docstring."""
+    override = os.environ.get(EVIDENCE_ROOT_ENV)
+    if override:
+        root = Path(override)
+        skip_scratch_check = True
+    else:
+        xdg = os.environ.get("XDG_STATE_HOME")
+        if xdg and Path(xdg).is_absolute():
+            root = Path(xdg) / "agentctl-evidence"
+        else:
+            root = Path.home() / ".local" / "state" / "agentctl-evidence"
+        skip_scratch_check = False
+    path = root / _safe_session_id(session_id) / f"stage-{int(stage_index)}"
+    if not skip_scratch_check:
+        norm = os.path.realpath(os.path.normpath(str(path)))
+        for scratch_root in exempt_paths.scratch_roots():
+            if norm == scratch_root or norm.startswith(scratch_root + os.sep):
+                raise EvidenceDirError(
+                    f"evidence directory {path} resolves under OS-temp scratch root "
+                    f"{scratch_root!r} — set ${EVIDENCE_ROOT_ENV} or $XDG_STATE_HOME "
+                    "to a durable location"
+                )
+    try:
+        _grants.validate_add_dir(str(path), "write")
+    except _grants.GrantValidationError as exc:
+        raise EvidenceDirError(f"evidence directory {path} refused: {exc}") from exc
+    return path
 
 
 def cmd_evidence_dir(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -5897,7 +5945,10 @@ def cmd_evidence_dir(args, *, store: StateStore, runner: Runner | None = None) -
     --stage — no session-state lookup — since the directory must be creatable (and
     granted to a spawned child) before dispatch necessarily reflects the stage in
     progress."""
-    path = evidence_dir_for(args.session, args.stage, state_root=store.root)
+    try:
+        path = evidence_dir_for(args.session, args.stage)
+    except EvidenceDirError as exc:
+        return Directive(False, "n/a", "noop", str(exc))
     path.mkdir(parents=True, exist_ok=True)
     return Directive(True, "n/a", "evidence_dir", str(path) + "\n", data={"evidence_dir": str(path)})
 
