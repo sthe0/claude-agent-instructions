@@ -178,11 +178,16 @@ def test_p01_write_add_dir_materializes_edit_allow_and_guard_denies(
     run = _dry_run(capsys, _engine_argv(kind, two_stage_plan))
 
     assert run.rc == 0
-    assert run.permission_mode == PINNED_MODE[kind]
+    # A write grant forces acceptEdits for every kind (the stage-6 probe's write add_dir cell).
+    assert run.permission_mode == "acceptEdits"
     assert str(work) in run.add_dirs
     assert f"Edit({_file_arg(str(work))}/**)" in run.allow
     for rule in _write_add_dir_denies(str(work)):
         assert rule in run.deny
+    # Kinds not trusted with unattended writes also get their whole cwd denied,
+    # so acceptEdits widens nothing beyond the declared grant (S1).
+    cwd_deny = f"Edit({_file_arg(os.getcwd())}/**)"
+    assert (cwd_deny in run.deny) == (kind not in ("developer", "tech-writer"))
 
 
 @pytest.mark.parametrize("kind", ALL_KINDS)

@@ -636,12 +636,14 @@ def prompt_exceeds_ceiling(prompt: str, model: str | None = None) -> bool:
 #     read kinds need an explicit `Edit(...)` DENY alongside their `Read`
 #     allow, or the grant is directional in name only.
 #     CORRECTION (stage 6/7, probe-hook-decision-semantics.py's
-#     `add_dir:default_write_add_dir` cell): the fleet's actual defaultMode
-#     is plain `default`, not `acceptEdits` — a write add_dir's Edit(...)
-#     allow rule silently fails to materialize under it. resolve_permission_mode
-#     now forces `acceptEdits` whenever engine_grants carries a mode="write"
-#     add_dir, for every kind, closing this gap directly rather than relying
-#     on the (false) defaultMode assumption above.
+#     `add_dir:default_write_add_dir` cell): that probe run's child had an
+#     effective mode of plain `default`, under which a write add_dir's
+#     Edit(...) allow rule did not let the child write. The probe measured
+#     that one child, not the fleet's settings. resolve_permission_mode
+#     therefore forces `acceptEdits` whenever engine_grants carries a
+#     mode="write" add_dir, and write_grant_cwd_deny_rules denies the cwd for
+#     kinds not trusted with unattended writes, so neither depends on the
+#     inherited defaultMode.
 #
 # `developer` was excluded when the read kinds were first named, on the
 # reasoning that an executor never needs to open the plan: assemble_prompt
