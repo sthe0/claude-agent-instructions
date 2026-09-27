@@ -65,9 +65,12 @@ The four branches:
              directory (`widening_targets.is_agentctl_state_path`) — writing
              there could forge a stage outcome or gate record.
   G2       — a Bash segment (`_g2_segments`, which recurses into any
-             `sh|bash|zsh -c PAYLOAD` invocation among
-             `lib/bash_write_targets.segments`'s own segments, so a wrapped
-             `claude` call hidden inside one shell -c layer is still checked)
+             `sh|bash|zsh -c PAYLOAD` invocation — interpreter possibly
+             hidden behind a wrapper (`timeout 5 bash -c ...`) and `-c`
+             possibly stacked in a short-flag cluster (`-lc`/`-ec`/`-xc`) —
+             or an `eval PAYLOAD...` invocation, among `lib/bash_write_
+             targets.segments`'s own segments, so a wrapped `claude` call
+             hidden inside one shell -c/eval layer is still checked)
              whose leading program, after wrapper-stripping, is `claude`
              (`widening_targets.is_claude_program` — covers a bare/absolute/
              `claude-code`-aliased spelling, a wrapper form, an install-path
@@ -82,12 +85,19 @@ The four branches:
              Bash command invoking `crontab` (`widening_targets.
              is_crontab_target`) — either could make a spawned child install
              something that runs again after this session ends.
-  G4       — a Bash segment invoking `agentctl resolve-permission` (via
+  G4       — a Bash segment, recursed through the same `_g2_segments` shell
+             -c/eval layer as G2, invoking `agentctl resolve-permission` (via
              `widening_targets.agentctl_invocation_verb`) with
-             `--decision granted` (not `--decision denied`, which never
-             fires). The ask message names the `--rule` value(s) and `--stage`
-             of the granting command, since after this guard ships that
-             prompt is the user's one decision on an out-of-scope grant.
+             `--decision granted` (bare or glued `--decision=granted`; not
+             `--decision denied`, which never fires). A real call almost
+             always answers a PENDING request via `--session` rather than
+             repeating `--rule` on the command line, so the ask message names
+             the `--rule` value(s) when given, else the pending request's own
+             action read from agentctl's session state through the injected
+             `read_file` (falling back to naming the session when that state
+             is unavailable) — and the `--stage` of the granting command,
+             since after this guard ships that prompt is the user's one
+             decision on an out-of-scope grant.
 
 Edit, Write, MultiEdit, NotebookEdit and Bash are all inspected. Write
 carries its whole `after` document as `content`, so G1-edit reuses the same
@@ -113,28 +123,57 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import bash_write_targets, git_cwd, permission_surface, widening_targets  # noqa: E402
+from lib import bash_write_targets, config_root, git_cwd, permission_surface, widening_targets  # noqa: E402
 
 # Security-relevant settings keys other than `permissions` itself (handled
 # separately via `permission_surface.widens`, which fires only on a WIDENING
 # change). Confirmed live-reloaded / security-sensitive keys per
 # https://code.claude.com/docs/en/settings: `hooks` and `apiKeyHelper` are
-# named as live-reloaded alongside `permissions`; `env` is an ordinary key
-# that still controls the child's environment; `extraKnownMarketplaces` and
+# named as live-reloaded alongside `permissions`; `extraKnownMarketplaces` and
 # `allowManagedPermissionRulesOnly` are named as security-sensitive keys with
 # managed-settings-override behavior. Any change to one of these fires,
 # regardless of direction — unlike `permissions.allow`/`deny`, none of them
 # has a narrow/widen reading a two-document diff alone can judge.
+#
+# `env` used to be here too, firing on ANY change to that dict — round-2
+# should-fix S2: a calibration run measured 8 of the 9 `G1-keys-calibration`
+# fires were autocompact-window, AFK-timeout or output-length env edits, none
+# of them security-relevant. `env` is handled separately below by
+# `_env_security_relevant_diff`, an allow-list of credential/routing key
+# PATTERNS rather than "any change to any key" — the same over-report-not-
+# under-report posture applied per-key instead of to the whole dict.
 _OTHER_SECURITY_KEYS = (
     "hooks",
-    "env",
     "apiKeyHelper",
     "extraKnownMarketplaces",
     "allowManagedPermissionRulesOnly",
 )
+
+# S2: named env-key patterns that ARE security-relevant -- credential,
+# base-URL, proxy and provider-routing variables. Everything else in `env`
+# (output-length caps, timeouts, the autocompact window, telemetry toggles)
+# is deliberately NOT matched here, unlike the deny-nothing `_OTHER_SECURITY_KEYS`
+# keys above: this dict changes routinely for non-security reasons, so it
+# needs an allow-list of what DOES matter rather than firing on everything.
+_ENV_SECURITY_KEY_PREFIXES = ("ANTHROPIC_", "CLAUDE_CODE_USE_")
+_ENV_SECURITY_KEY_SUBSTRINGS = ("_BASE_URL", "API_KEY", "_PROXY")
+
+# S2: `permissions.defaultMode` values ranked narrow (0) to wide (3). A
+# change to a HIGHER rank widens; same-or-lower narrows and is not reported.
+# A mode absent from this table (a future harness addition) is unranked, and
+# any change touching it fires conservatively rather than being silently
+# treated as safe.
+_DEFAULT_MODE_RANK = {
+    "plan": 0,
+    "default": 1,
+    "acceptEdits": 2,
+    "auto": 3,
+    "bypassPermissions": 3,
+}
 
 _SETTINGS_REFERENCE_URL = "https://code.claude.com/docs/en/settings"
 
@@ -177,6 +216,58 @@ def _apply_edit(old_text: str, tool_input: dict) -> str | None:
     return old_text.replace(old_string, new_string, 1)
 
 
+def _is_security_relevant_env_key(key: str) -> bool:
+    return key.startswith(_ENV_SECURITY_KEY_PREFIXES) or any(
+        s in key for s in _ENV_SECURITY_KEY_SUBSTRINGS
+    )
+
+
+def _env_security_relevant_diff(old_env, new_env) -> bool:
+    """S2: unlike `_OTHER_SECURITY_KEYS`, `env` fires only on a change to a
+    key matching `_is_security_relevant_env_key` -- an allow-list of
+    credential/routing patterns, not "any key changed"."""
+    old_env = old_env if isinstance(old_env, dict) else {}
+    new_env = new_env if isinstance(new_env, dict) else {}
+    keys = set(old_env) | set(new_env)
+    return any(
+        _is_security_relevant_env_key(key) and old_env.get(key) != new_env.get(key)
+        for key in keys
+    )
+
+
+def _default_mode_widens(old_mode, new_mode) -> bool:
+    """S2: `permissions.defaultMode` widens only when it moves to a HIGHER
+    `_DEFAULT_MODE_RANK`; an unranked mode on either side fires
+    conservatively since its rank relative to the other is unknown."""
+    if old_mode == new_mode:
+        return False
+    old_rank = _DEFAULT_MODE_RANK.get(old_mode)
+    new_rank = _DEFAULT_MODE_RANK.get(new_mode)
+    if old_rank is None or new_rank is None:
+        return True
+    return new_rank > old_rank
+
+
+def _bypass_permissions_widens(old_value, new_value) -> bool:
+    """S2: `permissions.disableBypassPermissionsMode` widens on REMOVAL --
+    going from a truthy (disabling) value to a falsy/absent one re-enables
+    `bypassPermissions`. Setting it (the reverse) narrows and is not fired."""
+    return bool(old_value) and not bool(new_value)
+
+
+def _enable_all_mcp_widens(old_value, new_value) -> bool:
+    """S2: `enableAllProjectMcpServers` widens on false/absent -> true."""
+    return bool(new_value) and not bool(old_value)
+
+
+def _enabled_mcp_servers_widens(old_value, new_value) -> bool:
+    """S2: `enabledMcpjsonServers` widens when an entry is ADDED, mirroring
+    `permission_surface.widens`'s own allow-list treatment."""
+    old_list = old_value if isinstance(old_value, list) else []
+    new_list = new_value if isinstance(new_value, list) else []
+    return any(entry not in old_list for entry in new_list)
+
+
 def _security_relevant_diff(old_text: str, new_text: str) -> bool:
     """True iff the parsed old/new JSON documents differ on a security-
     relevant key. Any parse failure, or either side not being a JSON object,
@@ -191,7 +282,25 @@ def _security_relevant_diff(old_text: str, new_text: str) -> bool:
         return False
     if permission_surface.widens(old_doc, new_doc):
         return True
-    return any(old_doc.get(key) != new_doc.get(key) for key in _OTHER_SECURITY_KEYS)
+    if any(old_doc.get(key) != new_doc.get(key) for key in _OTHER_SECURITY_KEYS):
+        return True
+    if _env_security_relevant_diff(old_doc.get("env"), new_doc.get("env")):
+        return True
+    old_perms = old_doc.get("permissions") if isinstance(old_doc.get("permissions"), dict) else {}
+    new_perms = new_doc.get("permissions") if isinstance(new_doc.get("permissions"), dict) else {}
+    if _default_mode_widens(old_perms.get("defaultMode"), new_perms.get("defaultMode")):
+        return True
+    if _bypass_permissions_widens(
+        old_perms.get("disableBypassPermissionsMode"), new_perms.get("disableBypassPermissionsMode")
+    ):
+        return True
+    if _enable_all_mcp_widens(
+        old_doc.get("enableAllProjectMcpServers"), new_doc.get("enableAllProjectMcpServers")
+    ):
+        return True
+    if _enabled_mcp_servers_widens(old_doc.get("enabledMcpjsonServers"), new_doc.get("enabledMcpjsonServers")):
+        return True
+    return False
 
 
 def _bash_write_targets(command: str, cwd: str) -> list[str]:
@@ -311,19 +420,40 @@ def _g1_state_bash(command: str, cwd: str) -> str | None:
 _SHELL_INTERPRETERS = frozenset({"sh", "bash", "zsh"})
 
 
+def _short_flag_cluster_has_c(tok: str) -> bool:
+    """True for a short-flag cluster token (`-c`, `-lc`, `-ec`, `-xc`, ...)
+    that includes `c` — the shell's "read commands from the following operand"
+    flag, matched even when stacked with another short flag (`-l`/`-e`/`-x`)
+    rather than passed bare. `--`-prefixed (long) flags never match."""
+    return tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:]
+
+
 def _shell_c_payloads(seg: list[str]) -> list[str]:
-    """Payload strings from a `sh|bash|zsh -c PAYLOAD` segment (interpreter
-    matched by basename, so `/bin/bash -c ...` is caught the same as `bash -c
-    ...`) — empty when `seg` is not such an invocation."""
-    if not seg or widening_targets.program_name(seg[0]).casefold() not in _SHELL_INTERPRETERS:
+    """Payload strings from a `sh|bash|zsh -c PAYLOAD` invocation, or from an
+    `eval PAYLOAD...` invocation — empty when `seg` is neither.
+
+    round-2 should-fix S4: the previous exact `"-c"` match missed a stacked
+    short-flag cluster (`-lc`, `-ec`, `-xc`) and a shell hidden behind a
+    wrapper (`timeout 5 bash -c ...`, `env X=1 sh -c ...`) — `strip_wrappers`
+    runs first so the interpreter surfaces the same way `is_claude_program`
+    already relies on it to. `eval` is checked BEFORE `strip_wrappers` runs,
+    since `eval` is itself one of `strip_wrappers`'s own known wrapper tokens
+    and would otherwise be consumed and lost rather than recognized here; its
+    operands are rejoined with a space since `eval` itself concatenates them
+    via IFS before running the result."""
+    if seg and widening_targets.program_name(seg[0]).casefold() == "eval":
+        payload_tokens = seg[1:]
+        return [" ".join(payload_tokens)] if payload_tokens else []
+    stripped = widening_targets.strip_wrappers(seg)
+    if not stripped:
         return []
-    try:
-        c_index = seg.index("-c")
-    except ValueError:
+    program = widening_targets.program_name(stripped[0]).casefold()
+    if program not in _SHELL_INTERPRETERS:
         return []
-    if c_index + 1 >= len(seg):
-        return []
-    return [seg[c_index + 1]]
+    for i, tok in enumerate(stripped[1:], start=1):
+        if _short_flag_cluster_has_c(tok):
+            return [stripped[i + 1]] if i + 1 < len(stripped) else []
+    return []
 
 
 def _g2_segments(command: str) -> list[list[str]]:
@@ -403,19 +533,61 @@ def _flag_value(tokens: list[str], flag: str) -> str | None:
     return vals[-1] if vals else None
 
 
-def _g4_bash(command: str) -> tuple[list[str], str | None] | None:
-    for seg in bash_write_targets.segments(command):
+def _g4_bash(command: str) -> tuple[list[str], str | None, str | None] | None:
+    """round-2 should-fix S3: recurses through `_g2_segments` (the same `sh|
+    bash|zsh -c`/`eval` recursion G2 uses) rather than the flat top-level
+    `bash_write_targets.segments`, so a resolve-permission call hidden inside
+    one shell -c layer still fires. Also returns the granting command's own
+    `--session` value, since a real call answers a PENDING request and rarely
+    repeats the rule on the command line — the caller resolves the pending
+    request's action from that session id."""
+    for seg in _g2_segments(command):
         invokes, verb = widening_targets.agentctl_invocation_verb(seg)
         if not invokes or verb != "resolve-permission":
             continue
         if _flag_value(seg, "--decision") != "granted":
             continue
-        return _flag_values(seg, "--rule"), _flag_value(seg, "--stage")
+        return _flag_values(seg, "--rule"), _flag_value(seg, "--stage"), _flag_value(seg, "--session")
+    return None
+
+
+def _g4_pending_action(session: str | None, read_file) -> str | None:
+    """S3: read the granting call's own pending request out of agentctl's
+    session state (current root, then the legacy pre-isolation root) through
+    the injected `read_file` — never a bare filesystem read, matching this
+    guard's own no-I/O-outside-read_file contract. None on a missing
+    session, an unreadable/unparsable file, or no `permission_request` in it;
+    the caller falls back to naming the session instead."""
+    if not session or read_file is None:
+        return None
+    filename = f"{config_root.sanitize_session_id(session)}.json"
+    for state_dir in (config_root.agentctl_state_dir(), config_root.agentctl_legacy_state_dir()):
+        try:
+            text = read_file(str(state_dir / filename))
+        except Exception:
+            continue
+        try:
+            doc = json.loads(text)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        request = doc.get("permission_request")
+        if isinstance(request, dict):
+            action = request.get("action")
+            if isinstance(action, str) and action:
+                return action
     return None
 
 
 def _g1_edit_message(target: str) -> str:
-    keys = "permissions/" + "/".join(_OTHER_SECURITY_KEYS)
+    keys = (
+        "permissions/"
+        + "/".join(_OTHER_SECURITY_KEYS)
+        + "/env(credential|base-url|proxy)/permissions.defaultMode/"
+        "permissions.disableBypassPermissionsMode/enableAllProjectMcpServers/"
+        "enabledMcpjsonServers"
+    )
     return (
         f"Edit widens the live-loaded settings document {target} on a "
         f"security-relevant key ({keys}; {_SETTINGS_REFERENCE_URL}). Route "
@@ -456,13 +628,27 @@ def _g3_message(target: str) -> str:
     )
 
 
-def _g4_message(rules: list[str], stage: str | None) -> str:
-    rule_text = ", ".join(rules) if rules else "(none named)"
+def _g4_message(rules: list[str], stage: str | None, session: str | None, read_file) -> str:
+    """round-2 should-fix S3: a real call answers a pending request via
+    `--session`/`--decision`, not by naming the rule again, so `rules` is
+    almost always empty — the old "(none named)" left the user approving
+    something unnamed. When `--rule` IS given, name it directly; otherwise
+    resolve the pending request's own action via `_g4_pending_action`, and
+    fall back to naming the session when that lookup comes up empty."""
+    if rules:
+        subject = f"grants rule(s) {', '.join(rules)}"
+    else:
+        action = _g4_pending_action(session, read_file)
+        if action:
+            subject = f"grants the pending request: {action}"
+        else:
+            session_text = session if session else "(session unavailable)"
+            subject = f"grants a pending request for session {session_text} (action unavailable)"
     stage_text = stage if stage else "(none named)"
     return (
-        f"`agentctl resolve-permission --decision granted` grants rule(s) "
-        f"{rule_text} for stage {stage_text} outside the plan's own grant "
-        f"channel — this is your decision on an out-of-scope grant."
+        f"`agentctl resolve-permission --decision granted` {subject} for "
+        f"stage {stage_text} outside the plan's own grant channel — this is "
+        f"your decision on an out-of-scope grant."
     )
 
 
@@ -541,8 +727,8 @@ def decide_detailed(
                 return "ask", "G1-state", _g1_state_message(target)
             g4_hit = _g4_bash(command)
             if g4_hit:
-                rules, stage = g4_hit
-                return "ask", "G4", _g4_message(rules, stage)
+                rules, stage, session = g4_hit
+                return "ask", "G4", _g4_message(rules, stage, session, read_file)
             target = _g2_bash(command)
             if target:
                 return "ask", "G2", _g2_message(target)
@@ -567,12 +753,30 @@ def decide(
     return decide_detailed(tool_name, tool_input, cwd, permission_mode, read_file)[0]
 
 
+def _log_target(tool_input: dict) -> str | None:
+    """round-2 should-fix S5: whichever of `command`/`file_path`/`notebook_path`
+    the fired tool call carries -- without it, a logged row that lost its
+    `tool_use_id` (the field is optional in the hook payload) has no way back
+    to the command or file that actually fired."""
+    for key in ("command", "file_path", "notebook_path"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def _log_fire(log_path: str, payload: dict, branch: str, message: str | None) -> None:
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        tool_input = {}
     row = {
+        "ts": datetime.now(timezone.utc).isoformat(),
         "session_id": payload.get("session_id"),
         "transcript_path": payload.get("transcript_path"),
         "tool_use_id": payload.get("tool_use_id"),
         "tool_name": payload.get("tool_name"),
+        "permission_mode": payload.get("permission_mode"),
+        "target": _log_target(tool_input),
         "branch": branch,
         "decision": "ask",
         "message": message,

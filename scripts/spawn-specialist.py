@@ -1008,7 +1008,15 @@ def build_child_settings(
     `repo_root_add_dir_args` already grants that whole root via `--add-dir`
     (see `main`'s call site) — this pairs that grant with the same guard
     DENYs a declared WRITE add_dir gets, so the widened filesystem surface
-    doesn't reach `.claude/`, `settings*.json` or `.git/` unguarded."""
+    doesn't reach `.claude/`, `settings*.json` or `.git/` unguarded.
+
+    `workdir` also feeds `write_grant_cwd_deny_rules` (round-2 should-fix
+    S1): when a `mode="write"` engine grant forces `acceptEdits` on a kind
+    that isn't already trusted with unattended writes, that mode alone
+    would make the whole cwd writable, not just the granted directory --
+    the deny it adds here narrows back to the grant, and runs BEFORE
+    `_check_write_add_dirs_not_shadowed` below so a write add_dir that
+    itself sits under cwd is refused rather than silently shadowed."""
     settings: dict = {
         "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(SPAWN_AUTOCOMPACT_WINDOW_TOKENS)},
         "autoCompactWindow": SPAWN_AUTOCOMPACT_WINDOW_TOKENS,
@@ -1027,6 +1035,7 @@ def build_child_settings(
         plans_allow, plans_deny = plans_permission_rules(kind, plans_directory)
         allow.extend(plans_allow)
         deny.extend(plans_deny)
+    deny.extend(write_grant_cwd_deny_rules(kind, engine_grants, workdir))
     if engine_grants:
         _check_write_add_dirs_not_shadowed(engine_grants, deny)
         engine_allow, engine_deny = stage_grant_rules(engine_grants)
@@ -1191,6 +1200,52 @@ def deregister_child_scope(
         )
 
 
+_ACCEPT_EDITS_TRUSTED_KINDS = ("developer", "tech-writer")
+"""Kinds `resolve_permission_mode` grants `acceptEdits` to unconditionally
+(unattended Read/Grep/Write is their whole point). Every other kind reaching
+`acceptEdits` gets there only because a `mode="write"` engine grant forced
+it — `write_grant_forces_accept_edits`/`write_grant_cwd_deny_rules` both key
+off this same set so the forcing condition and its cwd-wide deny counterweight
+never drift apart."""
+
+
+def write_grant_forces_accept_edits(kind: str, engine_grants: "list[dict] | None") -> bool:
+    """True exactly when a `mode="write"` entry in `engine_grants` is the
+    reason `resolve_permission_mode` returns `acceptEdits` for `kind` --
+    i.e. `kind` is not already trusted (`_ACCEPT_EDITS_TRUSTED_KINDS`) but
+    gets the wide mode anyway because of the grant. Shared with
+    `build_child_settings` (via `write_grant_cwd_deny_rules`) so the mode
+    that got forced and the deny rule narrowing it back down are computed
+    from the same condition."""
+    if kind in _ACCEPT_EDITS_TRUSTED_KINDS:
+        return False
+    return bool(engine_grants) and any(e.get("mode") == "write" for e in engine_grants)
+
+
+def write_grant_cwd_deny_rules(
+    kind: str, engine_grants: "list[dict] | None", cwd: "str | None"
+) -> list[str]:
+    """Edit DENY covering the spawn's entire `cwd` (round-2 should-fix S1):
+    when a `mode="write"` engine grant forces `acceptEdits` for a kind that
+    is not already trusted with unattended writes
+    (`write_grant_forces_accept_edits`), `acceptEdits` alone makes that
+    kind's ENTIRE cwd writable with no allow rule required -- far wider
+    than the one directory the grant actually names. Denying the whole cwd
+    narrows the mode back down to exactly the declared grant.
+
+    This only makes sense when the grant's own write add_dir sits OUTSIDE
+    `cwd` -- a write add_dir under `cwd` would be immediately shadowed by
+    this same deny, so `build_child_settings` applies this deny before
+    `_check_write_add_dirs_not_shadowed` runs, and that check refuses the
+    grant outright rather than silently materializing a no-op."""
+    if not write_grant_forces_accept_edits(kind, engine_grants):
+        return []
+    if cwd is None:
+        return []
+    base = grants.rule_file_arg(str(Path(cwd)).rstrip("/"))
+    return [f"Edit({base}/**)"]
+
+
 def resolve_permission_mode(
     args: argparse.Namespace, engine_grants: "list[dict] | None" = None
 ) -> str:
@@ -1231,13 +1286,25 @@ def resolve_permission_mode(
     old `default`-mode assumption would misread this gap as a `planning_miss`
     rather than the `materialization_defect` it actually was.
 
-    User-supplied `--permission-mode` always wins.
+    User-supplied `--permission-mode` always wins -- but when it does so
+    over a `mode="write"` engine grant, that grant's own allow rule was
+    measured (see above) to silently fail to materialize under `default`,
+    and `plan` mode blocks writes outright, so the caller is warned rather
+    than left to discover a silently-dropped grant later (round-2
+    should-fix S1).
     """
     if args.permission_mode is not None:
+        if engine_grants and any(e.get("mode") == "write" for e in engine_grants):
+            print(
+                f"spawn-specialist: warning: --permission-mode {args.permission_mode!r} "
+                "overrides the acceptEdits a write engine grant would otherwise force -- "
+                "that grant's write access will not materialize under this mode",
+                file=sys.stderr,
+            )
         return args.permission_mode
-    if args.kind in ("developer", "tech-writer"):
+    if args.kind in _ACCEPT_EDITS_TRUSTED_KINDS:
         return "acceptEdits"
-    if engine_grants and any(e.get("mode") == "write" for e in engine_grants):
+    if write_grant_forces_accept_edits(args.kind, engine_grants):
         return "acceptEdits"
     return "default"
 

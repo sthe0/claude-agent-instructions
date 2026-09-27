@@ -51,7 +51,12 @@ def test_g4_fire_row_shape_from_single_fixture_file(tmp_path):
     assert row["branch"] == "G4"
     assert row["source"] == "transcript"
     assert row["day"] == "2026-01-01"
-    assert row["group"] == f"G4:{row['detail']}"
+    # round-2 should-fix S7: group is a single-line program+sorted-flags shape,
+    # not the free-text detail message (which the old format embedded verbatim,
+    # breaking TSV keys whenever `detail` contained a newline).
+    command = "python3 -m agentctl resolve-permission --rule 'Bash(rm:*)' --stage 3 --decision granted"
+    assert row["group"] == f"G4:{replay._bash_group_shape(command)}"
+    assert "\n" not in row["group"]
     assert "g4-fire.jsonl" in row["locator"]
     assert "toolu_g4_1" in row["locator"]
 
@@ -99,6 +104,47 @@ def test_edit_onto_live_settings_is_reported_as_g1_candidate_not_a_guard_fire(tm
     assert rows[0]["branch"] == "G1-CANDIDATE"
     assert rows[0]["source"] == "transcript"
     assert rows[0]["day"] == "2026-01-01"
+
+
+# --- round-2 should-fix S7: _make_row groups on a structured shape, not free text ---
+
+
+def test_touched_keys_extracts_sorted_deduped_key_names_from_edit_fragments():
+    tool_input = {
+        "old_string": '{"allow": [], "deny": []}',
+        "new_string": '{"allow": ["Bash(rm:*)"], "deny": [], "extra": 1}',
+    }
+    assert replay._touched_keys(tool_input) == ["allow", "deny", "extra"]
+
+
+def test_touched_keys_empty_when_fragments_carry_no_recognizable_key():
+    assert replay._touched_keys({"old_string": "x", "new_string": "y"}) == []
+
+
+def test_bash_group_shape_ignores_free_text_argument_values():
+    # Two G2 fires of the same program+flags but a different free-text brief
+    # must collapse to one group -- the review's "G2 has 15 rows in 14 groups"
+    # complaint, because the old group keyed on the whole command string.
+    a = replay._bash_group_shape("claude -p 'do task A' --dangerously-skip-permissions")
+    b = replay._bash_group_shape("claude -p 'do task B' --dangerously-skip-permissions")
+    assert a == b
+
+
+def test_bash_group_shape_has_no_newline_even_for_a_multiline_command():
+    shape = replay._bash_group_shape("crontab -l\n# a heredoc body\nEOF")
+    assert "\n" not in shape
+
+
+def test_group_for_g1_candidate_includes_touched_keys_not_just_the_path():
+    tool_input = {"old_string": '{"allow": []}', "new_string": '{"allow": [], "deny": []}'}
+    group = replay._group_for("G1-CANDIDATE", "Edit", tool_input, "/tmp/.claude-agent/settings.json")
+    assert group.startswith("G1-CANDIDATE:")
+    assert "allow" in group and "deny" in group
+
+
+def test_group_for_g1_candidate_without_touched_keys_still_groups_by_path():
+    group = replay._group_for("G1-CANDIDATE", "Edit", {"old_string": "x", "new_string": "y"}, "/tmp/settings.json")
+    assert group == "G1-CANDIDATE:/tmp/settings.json"
 
 
 def test_until_filters_out_events_after_the_cutoff(tmp_path):
@@ -434,6 +480,26 @@ def test_check_classified_rejects_a_row_with_an_invalid_class(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "aaaa1111" in err
     assert "intended" in err
+
+
+def test_check_classified_rejects_a_key_matching_neither_an_id_nor_a_group(tmp_path, capsys):
+    """round-2 nit: a typo'd key used to be silently accepted as a group row
+    (surfacing only indirectly, as an "uncovered" id, if it happened to leave
+    some real would-fire uncovered) -- it must instead be reported by name."""
+    out_dir = tmp_path / "out"
+    _seed_would_fires(out_dir, [
+        {"id": "aaaa1111", "branch": "G4", "locator": "l1", "detail": "d1", "group": "g1",
+         "source": "transcript", "day": "2026-01-01"},
+    ])
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript_with_classification(transcript, "gg-typo\ttrue-positive\tmistyped group key\n")
+    rc = replay.main([
+        "--out", str(out_dir), "--check-classified",
+        "--classification-from-transcript", str(transcript),
+    ])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "gg-typo" in err
 
 
 def test_check_classified_fails_on_uncovered_ids(tmp_path, capsys):

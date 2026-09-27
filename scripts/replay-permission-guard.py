@@ -78,10 +78,12 @@ way (exit non-zero, ids named). On full coverage, `--check-classified` prints
 the count per class, resolved per would-fire after group expansion and
 id-row overrides, and exits 0.
 
-This module imports `decide_detailed` — the SAME function the shipped hook's
-own `main()` calls — and nothing else from that module: never its `main`,
-never its `_log_fire`, never `CLAUDE_PERMISSION_GUARD_LOG`. A replay run does
-not write to that log; the only files it writes are under `--out`.
+This module imports `decide_detailed` and `_security_relevant_diff` from the
+guard module — the SAME two functions the shipped hook's own `main()` (for
+the former) and this tool's git-history mode (for the latter) rely on — and
+nothing else: never `main`, never `_log_fire`, never
+`CLAUDE_PERMISSION_GUARD_LOG`. A replay run does not write to that log; the
+only files it writes are under `--out`.
 """
 from __future__ import annotations
 
@@ -90,6 +92,7 @@ import hashlib
 import importlib.util
 import json
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -155,15 +158,66 @@ def _normalize_target(target: str) -> str:
     return normalized
 
 
+_TOUCHED_KEY_RE = re.compile(r'"([A-Za-z_][A-Za-z0-9_]*)"\s*:')
+
+
+def _touched_keys(tool_input: dict) -> list[str]:
+    """Sorted, deduped `"key":` names appearing in an Edit's
+    `old_string`/`new_string` or a Write's `content` — a regex scan, not a
+    full JSON parse, since an Edit's old/new fragments are rarely
+    standalone-valid JSON on their own (round-2 should-fix S7: a
+    G1-CANDIDATE group used to carry only the file path, collapsing every
+    edit to the same live settings document into one group regardless of
+    which keys it actually touched)."""
+    text = "".join(str(tool_input.get(field, "")) for field in ("old_string", "new_string", "content"))
+    return sorted(set(_TOUCHED_KEY_RE.findall(text)))
+
+
+def _bash_group_shape(command: str) -> str:
+    """`program:sorted,flags` — a single-line, argument-value-free shape so
+    two Bash fires of the same program and flags (differing only in a
+    free-text argument, e.g. two `claude -p '...'` calls with different
+    briefs) collapse into one group, and a command that itself contains a
+    literal newline (a crontab heredoc) can never leak one into the group
+    key (round-2 should-fix S7)."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    stripped = widening_targets.strip_wrappers(tokens) or tokens
+    program = widening_targets.program_name(stripped[0]).casefold() if stripped else "?"
+    flags = sorted({tok for tok in stripped[1:] if tok.startswith("-")})
+    return f"{program}:{','.join(flags)}"
+
+
+def _group_for(branch: str, tool_name: str | None, tool_input: dict, target: str) -> str:
+    """The normalized grouping key — deliberately NOT derived from the
+    human-readable `detail` message (round-2 should-fix S7): a Bash fire
+    groups on program+flags (`_bash_group_shape`), a G1-CANDIDATE edit/write
+    groups on the live document plus the keys it actually touched
+    (`_touched_keys`), and everything else groups on the normalized target
+    path alone."""
+    if tool_name == "Bash":
+        command = tool_input.get("command")
+        shape = _bash_group_shape(command) if isinstance(command, str) else "?"
+        return f"{branch}:{shape}"
+    if branch == "G1-CANDIDATE":
+        keys = ",".join(_touched_keys(tool_input))
+        suffix = f":{keys}" if keys else ""
+        return f"{branch}:{_normalize_target(target)}{suffix}"
+    return f"{branch}:{_normalize_target(target)}"
+
+
 def _make_row(
-    branch: str, locator: str, detail: str, *, source: str,
+    branch: str, locator: str, detail: str, *, source: str, group: str,
     day: str | None = None, commit: str | None = None,
 ) -> dict:
     """The `id` is a hash of `branch|locator|detail` alone — `source`/`day`/
     `commit` never enter it, so ids stay stable across runs over the same
-    corpus regardless of when the run happened."""
-    group_target = _normalize_target(detail)
-    group = f"{branch}:{group_target}"
+    corpus regardless of when the run happened. `group` is supplied by the
+    caller (`_group_for` for a transcript row) rather than derived here, so
+    the grouping shape can differ by branch/tool without `_make_row` itself
+    knowing about tool_input."""
     stable_id = hashlib.sha256(f"{branch}|{locator}|{detail}".encode("utf-8")).hexdigest()[:16]
     row = {
         "id": stable_id, "branch": branch, "locator": locator, "detail": detail,
@@ -201,6 +255,11 @@ def _transcript_rows(paths: list[Path], until_ts: float | None) -> list[dict]:
             if not isinstance(entry, dict) or entry.get("type") != "assistant":
                 continue
             ts = _entry_timestamp(entry)
+            if until_ts is not None and ts is None:
+                # round-2 nit: an unparseable/absent timestamp used to slip
+                # past every cutoff unconditionally, so the would-fire set
+                # could grow across runs sharing the same fixed --until.
+                continue
             if until_ts is not None and ts is not None and ts > until_ts:
                 continue
             content = entry.get("message", {}).get("content") or []
@@ -224,6 +283,7 @@ def _transcript_rows(paths: list[Path], until_ts: float | None) -> list[dict]:
                     if isinstance(file_path, str) and widening_targets.is_live_settings(file_path):
                         rows.append(_make_row(
                             "G1-CANDIDATE", locator, file_path, source="transcript", day=day,
+                            group=_group_for("G1-CANDIDATE", tool_name, tool_input, file_path),
                         ))
 
                 if tool_name in ("Bash", "Edit"):
@@ -234,8 +294,11 @@ def _transcript_rows(paths: list[Path], until_ts: float | None) -> list[dict]:
                     except Exception:
                         continue
                     if decision == "ask":
+                        branch = branch or "unknown"
+                        target = tool_input.get("file_path", "") if tool_name == "Edit" else ""
                         rows.append(_make_row(
-                            branch or "unknown", locator, message or "", source="transcript", day=day,
+                            branch, locator, message or "", source="transcript", day=day,
+                            group=_group_for(branch, tool_name, tool_input, target),
                         ))
     return rows
 
@@ -283,6 +346,7 @@ def _git_history_rows(repo_root: Path, until_ts: float | None) -> list[dict]:
             if _guard._security_relevant_diff(old_text, new_text):
                 rows.append(_make_row(
                     "G1-keys-calibration", f"{relpath}@{sha}", relpath, source="git", commit=sha,
+                    group=_group_for("G1-keys-calibration", None, {}, relpath),
                 ))
     return rows
 
@@ -409,6 +473,7 @@ def _run_check_classified(args: argparse.Namespace) -> int:
         json.loads(raw) for raw in would_fires_path.read_text(encoding="utf-8").splitlines() if raw.strip()
     ]
     id_set = {wf["id"] for wf in would_fires}
+    group_set = {wf["group"] for wf in would_fires}
 
     if not args.classification_from_transcript:
         print("error: --check-classified requires --classification-from-transcript", file=sys.stderr)
@@ -428,6 +493,7 @@ def _run_check_classified(args: argparse.Namespace) -> int:
     id_rows: dict[str, str] = {}
     group_rows: dict[str, str] = {}
     invalid_rows: list[str] = []
+    unknown_keys: list[str] = []
     for line in data_lines:
         fields = line.split("\t")
         if len(fields) < 2:
@@ -438,13 +504,24 @@ def _run_check_classified(args: argparse.Namespace) -> int:
             continue
         if key in id_set:
             id_rows[key] = cls
-        else:
+        elif key in group_set:
             group_rows[key] = cls
+        else:
+            # round-2 nit: a key matching neither a real id nor a real group
+            # used to be silently accepted as a group row, so a typo only
+            # surfaced indirectly, as an "uncovered" id.
+            unknown_keys.append(key)
 
     if invalid_rows:
         print("classification rows with an unrecognized class value:", file=sys.stderr)
         for line in invalid_rows:
             print(f"  {line}", file=sys.stderr)
+        return 2
+
+    if unknown_keys:
+        print("classification rows whose key matches neither a would-fire id nor a group:", file=sys.stderr)
+        for key in unknown_keys:
+            print(f"  {key}", file=sys.stderr)
         return 2
 
     uncovered: list[str] = []

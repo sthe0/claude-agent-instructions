@@ -24,6 +24,7 @@ import inspect
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -166,6 +167,117 @@ def test_g1_edit_allows_when_base_file_is_unreadable(tmp_path):
     target = tmp_path / ".claude-agent" / "settings.json"
     tool_input = {"file_path": str(target), "old_string": "x", "new_string": "y"}
     assert decide("Edit", tool_input, str(tmp_path), "default", _read_file_map({})) == "allow"
+
+
+# --- G1-edit: `env`/defaultMode/bypassPermissions/MCP keys (round-2 should-fix
+# S2 — `env` used to fire G1-edit on ANY change; a calibration run found 8 of 9
+# fires were autocompact-window/AFK-timeout/output-length env edits, none
+# security-relevant. Now `env` only fires on a named credential/base-url/proxy
+# pattern, and defaultMode/disableBypassPermissionsMode/enableAllProjectMcpServers/
+# enabledMcpjsonServers — previously not covered by `permission_surface.widens`
+# at all — get their own widening checks.) ---
+
+def _g1_edit_decision(tmp_path, old_text, new_text):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    tool_input = {"file_path": str(target), "old_string": old_text, "new_string": new_text}
+    read_file = _read_file_map({str(target): old_text})
+    return decide("Edit", tool_input, str(tmp_path), "default", read_file)
+
+
+def test_g1_edit_allows_autocompact_window_env_change(tmp_path):
+    old_text = '{"env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "150000"}}'
+    new_text = '{"env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "180000"}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "allow"
+
+
+def test_g1_edit_allows_afk_timeout_env_change(tmp_path):
+    old_text = '{"env": {"CLAUDE_AFK_TIMEOUT_MS": "60000"}}'
+    new_text = '{"env": {"CLAUDE_AFK_TIMEOUT_MS": "120000"}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "allow"
+
+
+def test_g1_edit_allows_bash_max_output_length_env_change(tmp_path):
+    old_text = '{"env": {"BASH_MAX_OUTPUT_LENGTH": "30000"}}'
+    new_text = '{"env": {"BASH_MAX_OUTPUT_LENGTH": "60000"}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "allow"
+
+
+def test_g1_edit_fires_on_anthropic_api_key_env_change(tmp_path):
+    old_text = '{"env": {"ANTHROPIC_API_KEY": "old"}}'
+    new_text = '{"env": {"ANTHROPIC_API_KEY": "new"}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "ask"
+
+
+def test_g1_edit_fires_on_anthropic_base_url_env_change(tmp_path):
+    old_text = '{"env": {"ANTHROPIC_BASE_URL": "https://a.example"}}'
+    new_text = '{"env": {"ANTHROPIC_BASE_URL": "https://b.example"}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "ask"
+
+
+def test_g1_edit_fires_on_https_proxy_env_change(tmp_path):
+    old_text = '{"env": {"HTTPS_PROXY": "http://a.example:8080"}}'
+    new_text = '{"env": {"HTTPS_PROXY": "http://evil.example:8080"}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "ask"
+
+
+def test_g1_edit_fires_on_claude_code_use_env_change(tmp_path):
+    old_text = '{"env": {"CLAUDE_CODE_USE_BEDROCK": "0"}}'
+    new_text = '{"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "ask"
+
+
+def test_g1_edit_allows_default_mode_narrowing(tmp_path):
+    old_text = '{"permissions": {"defaultMode": "acceptEdits"}}'
+    new_text = '{"permissions": {"defaultMode": "default"}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "allow"
+
+
+def test_g1_edit_fires_on_default_mode_widening(tmp_path):
+    old_text = '{"permissions": {"defaultMode": "default"}}'
+    new_text = '{"permissions": {"defaultMode": "bypassPermissions"}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "ask"
+
+
+def test_g1_edit_fires_on_default_mode_widening_to_unranked_value(tmp_path):
+    old_text = '{"permissions": {"defaultMode": "default"}}'
+    new_text = '{"permissions": {"defaultMode": "someFutureMode"}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "ask"
+
+
+def test_g1_edit_allows_setting_disable_bypass_permissions_mode(tmp_path):
+    old_text = '{"permissions": {}}'
+    new_text = '{"permissions": {"disableBypassPermissionsMode": "disable"}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "allow"
+
+
+def test_g1_edit_fires_on_removing_disable_bypass_permissions_mode(tmp_path):
+    old_text = '{"permissions": {"disableBypassPermissionsMode": "disable"}}'
+    new_text = '{"permissions": {}}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "ask"
+
+
+def test_g1_edit_fires_on_enable_all_project_mcp_servers_turned_on(tmp_path):
+    old_text = '{"enableAllProjectMcpServers": false}'
+    new_text = '{"enableAllProjectMcpServers": true}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "ask"
+
+
+def test_g1_edit_allows_enable_all_project_mcp_servers_turned_off(tmp_path):
+    old_text = '{"enableAllProjectMcpServers": true}'
+    new_text = '{"enableAllProjectMcpServers": false}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "allow"
+
+
+def test_g1_edit_fires_on_enabled_mcpjson_servers_entry_added(tmp_path):
+    old_text = '{"enabledMcpjsonServers": ["known-server"]}'
+    new_text = '{"enabledMcpjsonServers": ["known-server", "new-server"]}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "ask"
+
+
+def test_g1_edit_allows_enabled_mcpjson_servers_entry_removed(tmp_path):
+    old_text = '{"enabledMcpjsonServers": ["known-server", "old-server"]}'
+    new_text = '{"enabledMcpjsonServers": ["known-server"]}'
+    assert _g1_edit_decision(tmp_path, old_text, new_text) == "allow"
 
 
 # --- G1-write / G1-multiedit / G1-notebook (finding B1: Write, MultiEdit and
@@ -594,6 +706,71 @@ def test_g4_fires_on_venv_interpreter_spelling():
     assert branch == "G4"
 
 
+# --- G4: round-2 should-fix S3 (name the pending request, glued --decision=,
+# recurse through bash -c like G2) and S4 (`_shell_c_payloads` coverage) ---
+
+def test_g4_fires_on_glued_decision_equals_granted():
+    command = "python3 -m agentctl resolve-permission --session abc123 --decision=granted"
+    decision, branch, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert decision == "ask"
+    assert branch == "G4"
+
+
+def test_g4_fires_through_a_bash_c_wrapper():
+    command = "bash -c \"python3 -m agentctl resolve-permission --session s1 --decision granted\""
+    decision, branch, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert decision == "ask"
+    assert branch == "G4"
+
+
+def test_g4_message_names_the_pending_request_action_from_state(tmp_path):
+    session = "sess-42"
+    filename = f"{guard.config_root.sanitize_session_id(session)}.json"
+    state_path = guard.config_root.agentctl_state_dir() / filename
+    state_doc = json.dumps({"permission_request": {"action": "Bash(git push:*)", "stage_index": 2}})
+    read_file = _read_file_map({str(state_path): state_doc})
+    command = f"python3 -m agentctl resolve-permission --session {session} --decision granted"
+    decision, branch, message = decide_detailed("Bash", {"command": command}, "/tmp", "default", read_file)
+    assert decision == "ask"
+    assert branch == "G4"
+    assert "Bash(git push:*)" in message
+
+
+def test_g4_message_falls_back_to_naming_the_session_when_state_is_unreadable():
+    command = "python3 -m agentctl resolve-permission --session sess-99 --decision granted"
+    decision, branch, message = decide_detailed(
+        "Bash", {"command": command}, "/tmp", "default", _read_file_map({}),
+    )
+    assert decision == "ask"
+    assert branch == "G4"
+    assert "sess-99" in message
+
+
+def test_shell_c_payloads_matches_stacked_short_flag_cluster():
+    assert guard._shell_c_payloads(["bash", "-lc", "echo hi"]) == ["echo hi"]
+    assert guard._shell_c_payloads(["bash", "-xc", "echo hi"]) == ["echo hi"]
+
+
+def test_shell_c_payloads_matches_shell_behind_a_timeout_wrapper():
+    assert guard._shell_c_payloads(["timeout", "5", "bash", "-c", "echo hi"]) == ["echo hi"]
+
+
+def test_shell_c_payloads_matches_shell_behind_an_env_wrapper():
+    assert guard._shell_c_payloads(["env", "X=1", "sh", "-c", "echo hi"]) == ["echo hi"]
+
+
+def test_shell_c_payloads_matches_eval():
+    assert guard._shell_c_payloads(["eval", "echo", "hi"]) == ["echo hi"]
+
+
+def test_shell_c_payloads_empty_for_a_non_shell_non_eval_program():
+    assert guard._shell_c_payloads(["python3", "-c", "print(1)"]) == []
+
+
+def test_shell_c_payloads_empty_for_a_long_flag_that_merely_contains_c():
+    assert guard._shell_c_payloads(["bash", "--rcfile", "x"]) == []
+
+
 # --- negative corpus (shapes that must not fire any branch) ---
 
 @pytest.mark.parametrize(
@@ -647,6 +824,68 @@ def test_main_logs_a_fire_with_session_transcript_and_tool_use_id(tmp_path):
     assert row["transcript_path"] == "/fake/transcript.jsonl"
     assert row["tool_use_id"] == "toolu_fixture_1"
     assert row["branch"] == "G4"
+
+
+# --- round-2 should-fix S5: `ts`/`permission_mode`/`target` on a logged row ---
+# without these the per-session-day false-positive measurement the plan
+# requires is lost, and so is the command match when `tool_use_id` is absent.
+
+def test_main_logged_row_carries_timestamp_mode_and_command_target(tmp_path):
+    log_path = tmp_path / "guard.jsonl"
+    payload = {
+        "session_id": "sess-124",
+        "transcript_path": "/fake/transcript.jsonl",
+        "tool_use_id": "toolu_fixture_3",
+        "tool_name": "Bash",
+        "tool_input": {"command": "python3 -m agentctl resolve-permission --rule x --stage 1 --decision granted"},
+        "cwd": str(tmp_path),
+        "permission_mode": "acceptEdits",
+    }
+    before = datetime.now(timezone.utc)
+    result = _run_hook(payload, {"CLAUDE_PERMISSION_GUARD_LOG": str(log_path)})
+    after = datetime.now(timezone.utc)
+    assert result.returncode == 0
+    row = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["permission_mode"] == "acceptEdits"
+    assert row["target"] == payload["tool_input"]["command"]
+    ts = datetime.fromisoformat(row["ts"])
+    assert before <= ts <= after
+
+
+def test_main_logged_row_target_falls_back_to_file_path_for_edit(tmp_path):
+    log_path = tmp_path / "guard.jsonl"
+    target = tmp_path / ".claude-agent" / "settings.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('{"permissions": {"allow": []}}', encoding="utf-8")
+    payload = {
+        "session_id": "sess-125",
+        "transcript_path": "/fake/transcript.jsonl",
+        "tool_use_id": "toolu_fixture_4",
+        "tool_name": "Edit",
+        "tool_input": {
+            "file_path": str(target),
+            "old_string": '{"permissions": {"allow": []}}',
+            "new_string": '{"permissions": {"allow": ["Bash(rm:*)"]}}',
+        },
+        "cwd": str(tmp_path),
+        "permission_mode": "default",
+    }
+    result = _run_hook(payload, {"CLAUDE_PERMISSION_GUARD_LOG": str(log_path)})
+    assert result.returncode == 0
+    row = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["target"] == str(target)
+
+
+def test_log_target_prefers_command_over_file_path():
+    assert guard._log_target({"command": "echo hi", "file_path": "/some/path"}) == "echo hi"
+
+
+def test_log_target_reads_notebook_path():
+    assert guard._log_target({"notebook_path": "/nb.ipynb"}) == "/nb.ipynb"
+
+
+def test_log_target_none_when_no_recognized_key():
+    assert guard._log_target({}) is None
 
 
 def test_main_allow_emits_no_stdout_and_no_log_write(tmp_path):
@@ -781,3 +1020,60 @@ def test_mutation_catalogue_control_goes_red(branch, build_case, mutate, tmp_pat
 
     decision_after, branch_after, _ = decide_detailed(tool_name, tool_input, cwd, "default", read_file)
     assert decision_after == "allow", f"{branch} still fired after neutralizing its predicate: {branch_after}"
+
+
+# --- round-2 should-fix S6: false-positive-direction mutations ---
+# `_MUTATION_CATALOGUE` above only proves each branch's POSITIVE control
+# depends on a real predicate. Nothing proved the negative corpus is a real
+# control rather than a vacuous pass. Each test below takes a case that
+# currently, correctly, returns "allow" and shows a named predicate change
+# would flip it to a false "ask" -- so a negative-control test really does
+# go red if that predicate ever regresses this way.
+
+def test_internal_exception_during_a_benign_bash_command_fails_open_not_closed(monkeypatch):
+    """`decide_detailed`'s outer `except Exception: return "allow"` (module
+    docstring: "any unexpected shape or internal exception allows") is a
+    design choice, not just prose -- if a future edit flipped that fallback
+    to "ask", this test (which forces a real internal failure on an
+    otherwise-benign command) would go red. `_g1_bash` is patched to raise
+    so the exception path is genuinely exercised, not just assumed
+    unreachable."""
+    def _boom(command, cwd):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(guard, "_g1_bash", _boom)
+    decision, branch, _ = decide_detailed("Bash", {"command": "git status"}, "/tmp", "default", None)
+    assert decision == "allow"
+    assert branch is None
+
+
+def test_negative_control_goes_red_when_is_crontab_target_always_true(monkeypatch):
+    command = "git status"
+    decision_before, _, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert decision_before == "allow"
+
+    monkeypatch.setattr(guard.widening_targets, "is_crontab_target", lambda c: True)
+    decision_after, branch_after, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert decision_after == "ask"
+    assert branch_after == "G3"
+
+
+def test_negative_control_goes_red_when_iter_candidate_programs_returns_every_token(monkeypatch):
+    # "claude" appears only as an echoed argument, never as the invoked
+    # program -- currently allow, same shape as the negative corpus's own
+    # "echo-of-flag" case.
+    command = "echo claude --dangerously-skip-permissions"
+    decision_before, _, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert decision_before == "allow"
+
+    def _every_token(tokens):
+        return [
+            (guard.widening_targets.program_name(t).casefold(), [])
+            for t in tokens
+            if not t.startswith("-")
+        ]
+
+    monkeypatch.setattr(guard.widening_targets, "iter_candidate_programs", _every_token)
+    decision_after, branch_after, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert decision_after == "ask"
+    assert branch_after == "G2"
