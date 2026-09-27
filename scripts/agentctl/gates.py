@@ -2134,7 +2134,7 @@ def _renorm_stage_residual(stage) -> tuple:
     `plan.stage_question_key` is most of it, and would have been all of it but for its
     own scope: that key answers whether a disposed Question still targets the same
     bytes, and a Question.target may only name a stage field the plan's author writes
-    as an activity element. Three engine-consumed fields fall outside that and are
+    as an activity element. Four engine-consumed fields fall outside that and are
     spliced on here, because a renormalization is defined by what it does NOT touch:
 
     * `actor.cost_tier` — the dispatch budget label and the effort-divergence estimate's
@@ -2146,6 +2146,11 @@ def _renorm_stage_residual(stage) -> tuple:
       child is authorized to touch. Widening it under the light path would let an
       executor grant himself Bash/Edit/add_dir access the plan's own approval never
       saw, through a channel meant only for re-sequencing operations.
+    * `ephemeral_artifacts_waiver` — the submission-time waiver for a declared
+      `output_artifacts` entry that legitimately resolves under a scratch root. Same
+      footing as `actor.cost_tier`: no Question.target names it, but re-declaring it
+      under the light path would move which `output_artifacts` entries the ephemeral-
+      artifacts check is trusted to skip.
 
     Deliberately outside, and the only things outside: `index` (the key both sides are
     matched ON, so a change there is an added/removed stage, refused above), and the
@@ -2155,12 +2160,13 @@ def _renorm_stage_residual(stage) -> tuple:
 
     Hand-written, like every membership list of this family, and pinned the same way:
     `test_the_stage_residual_exhausts_the_stage_s_field_set` goes red when a field is
-    added to `Stage` and to neither the key nor the three splices above."""
+    added to `Stage` and to neither the key nor the four splices above."""
     return (
         stage_question_key(stage),
         stage.actor.cost_tier,
         tuple(stage.output_artifacts),
         *grants_place(stage),
+        stage.ephemeral_artifacts_waiver,
     )
 
 

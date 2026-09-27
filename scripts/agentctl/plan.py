@@ -2225,6 +2225,13 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
                  _normalize_string(s.criterion.verify_venue_at_final)),)
                if s.criterion.verify_venue_at_final else ()),
              *((("cost_tier", s.actor.cost_tier),) if s.actor.cost_tier else ()),
+             # Same footing as `cost_tier` above — engine-consumed (the ephemeral-
+             # artifacts submission check reads it) but outside `_structural_signature`/
+             # `stage_carry_key`/`stage_question_key` (no Question.target names it), so
+             # without this a waiver-only edit would diff as 'no_change' and be silently
+             # dropped rather than carried by `_apply_refined_stage_fields`.
+             *((("ephemeral_artifacts_waiver", s.ephemeral_artifacts_waiver),)
+               if s.ephemeral_artifacts_waiver else ()),
              # Without this a knowledge-only correction — the exact edit an
              # overcome-difficulty replan makes when the fault addressed знание —
              # diffs to 'no_change' and is silently dropped.
