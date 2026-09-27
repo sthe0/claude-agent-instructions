@@ -120,3 +120,31 @@ def test_an_explicit_permission_mode_still_wins():
     mod = _load_spawn_module()
     args = argparse.Namespace(permission_mode="plan", kind="developer")
     assert mod.resolve_permission_mode(args) == "plan"
+
+
+def test_write_add_dir_grant_forces_accept_edits_reproducing_probe_cell():
+    """Reproduces `probe-hook-decision-semantics.py`'s
+    `add_dir:default_write_add_dir` cell: under plain `default` mode, a write
+    add_dir's own `Edit(//path/**)` allow rule did not materialize real write
+    access (docs/components/settings-and-permissions.md § Hook decision
+    semantics, "D2/x written=False (expected True)"). A non-developer kind
+    carrying a mode="write" add_dir grant must now resolve to `acceptEdits`,
+    under which --add-dir alone already makes the directory writable, rather
+    than silently landing in the broken `default` cell."""
+    mod = _load_spawn_module()
+    args = argparse.Namespace(permission_mode=None, kind="planner")
+    engine_grants = [{"path": "/tmp/some-dir", "mode": "write", "provenance": "declared"}]
+    assert mod.resolve_permission_mode(args, engine_grants) == "acceptEdits"
+
+
+def test_read_only_add_dir_grant_does_not_force_accept_edits():
+    mod = _load_spawn_module()
+    args = argparse.Namespace(permission_mode=None, kind="planner")
+    engine_grants = [{"path": "/tmp/some-dir", "mode": "read", "provenance": "declared"}]
+    assert mod.resolve_permission_mode(args, engine_grants) == "default"
+
+
+def test_no_engine_grants_still_resolves_default_for_non_developer_kinds():
+    mod = _load_spawn_module()
+    args = argparse.Namespace(permission_mode=None, kind="planner")
+    assert mod.resolve_permission_mode(args, None) == "default"

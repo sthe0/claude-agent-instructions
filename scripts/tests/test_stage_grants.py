@@ -1086,6 +1086,7 @@ SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
     "lib/widening_targets.py": "reader",
     "lint-settings-base.py": "mention",
     "migrate-to-isolated.sh": "mention",
+    "probe-hook-decision-semantics.py": "mention",
     "self-diagnose.py": "reader",
     "set-context-cap.sh": "writer",
     "setup-symlinks.sh": "writer",

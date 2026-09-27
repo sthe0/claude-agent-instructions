@@ -635,6 +635,13 @@ def prompt_exceeds_ceiling(prompt: str, model: str | None = None) -> bool:
 #     allow-only payload therefore cannot express "read but not write"; the
 #     read kinds need an explicit `Edit(...)` DENY alongside their `Read`
 #     allow, or the grant is directional in name only.
+#     CORRECTION (stage 6/7, probe-hook-decision-semantics.py's
+#     `add_dir:default_write_add_dir` cell): the fleet's actual defaultMode
+#     is plain `default`, not `acceptEdits` — a write add_dir's Edit(...)
+#     allow rule silently fails to materialize under it. resolve_permission_mode
+#     now forces `acceptEdits` whenever engine_grants carries a mode="write"
+#     add_dir, for every kind, closing this gap directly rather than relying
+#     on the (false) defaultMode assumption above.
 #
 # `developer` was excluded when the read kinds were first named, on the
 # reasoning that an executor never needs to open the plan: assemble_prompt
@@ -1184,7 +1191,9 @@ def deregister_child_scope(
         )
 
 
-def resolve_permission_mode(args: argparse.Namespace) -> str:
+def resolve_permission_mode(
+    args: argparse.Namespace, engine_grants: "list[dict] | None" = None
+) -> str:
     """Pick the permission mode passed to `claude -p`.
 
     Default policy: the developer and tech-writer specializations need
@@ -1209,11 +1218,26 @@ def resolve_permission_mode(args: argparse.Namespace) -> str:
     narrowed at the CLI layer to `default`/`plan` only — the wider modes below
     are resolved here, never accepted as a caller-supplied flag value.
 
+    A `mode="write"` add_dir entry in `engine_grants` also forces `acceptEdits`,
+    for any kind, not only developer/tech-writer. `probe-hook-decision-semantics.py`'s
+    `add_dir:default_write_add_dir` cell measured that a write add_dir's own
+    `Edit(//path/**)` allow rule is NOT honored under plain `default` mode — the
+    write into the granted directory silently failed even though `--add-dir` and
+    the allow rule were both present (docs/components/settings-and-permissions.md
+    § Hook decision semantics). Under `acceptEdits`, `--add-dir` alone already
+    makes a directory writable (finding from the stage-2 probes, still holding),
+    so the same allow/deny rule pair now materializes real write access instead of
+    silently granting nothing — a `grant_covers_call` classification built on the
+    old `default`-mode assumption would misread this gap as a `planning_miss`
+    rather than the `materialization_defect` it actually was.
+
     User-supplied `--permission-mode` always wins.
     """
     if args.permission_mode is not None:
         return args.permission_mode
     if args.kind in ("developer", "tech-writer"):
+        return "acceptEdits"
+    if engine_grants and any(e.get("mode") == "write" for e in engine_grants):
         return "acceptEdits"
     return "default"
 
@@ -1404,7 +1428,7 @@ def main(argv: list[str] | None = None) -> int:
         add_dir_argv.extend(stage_grant_add_dir_args(engine_grants))
     add_dir_paths = _paths_from_add_dir_argv(add_dir_argv)
 
-    permission_mode = resolve_permission_mode(args)
+    permission_mode = resolve_permission_mode(args, engine_grants)
 
     perms = permissions_digest(args.project_permissions)
     try:
