@@ -321,11 +321,15 @@ def test_not_observed_result_all_none_fields():
 # Synthetic coverage of the two not-observed paths the fix-round-2 brief
 # requires: a pane stuck at the trust dialog, and a witness showing the hook
 # never fired -- both must classify not-observed even with no sentinel and
-# no prompt text anywhere in the pane.
+# no prompt text anywhere in the pane. Round-4: `sentinel_ran` and
+# `effective_mode` (the footer text) are now supplied by the caller, not
+# derived from matching a marker string in the pane.
 
 def test_interactive_result_trust_blocked_is_not_observed():
     pane = "Quick safety check: Is this a project you created or one you trust?"
-    r = probe._build_interactive_cell_result("deny", "PERM_PROBE_OK_x", pane, hook_fired=False, trust_blocked=True, timed_out=False)
+    r = probe._build_interactive_cell_result(
+        "deny", pane, footer_text=None, sentinel_ran=False, hook_fired=False, trust_blocked=True, timed_out=False,
+    )
     assert r.effective_mode is None
     assert r.sentinel_ran is None
     assert r.prompt_shown is None
@@ -333,7 +337,9 @@ def test_interactive_result_trust_blocked_is_not_observed():
 
 
 def test_interactive_result_hook_not_fired_is_not_observed_even_with_no_pane_evidence():
-    r = probe._build_interactive_cell_result("ask", "PERM_PROBE_OK_x", "", hook_fired=False, trust_blocked=False, timed_out=False)
+    r = probe._build_interactive_cell_result(
+        "ask", "", footer_text=None, sentinel_ran=False, hook_fired=False, trust_blocked=False, timed_out=False,
+    )
     assert r.effective_mode is None
     assert r.sentinel_ran is None
     assert r.prompt_shown is None
@@ -341,12 +347,67 @@ def test_interactive_result_hook_not_fired_is_not_observed_even_with_no_pane_evi
 
 
 def test_interactive_result_hook_fired_reports_observed_fields():
-    marker = "PERM_PROBE_OK_x"
-    pane = f"some output\n{marker}\ndone"
-    r = probe._build_interactive_cell_result("deny", marker, pane, hook_fired=True, trust_blocked=False, timed_out=False)
-    assert r.effective_mode == "auto"
+    pane = "some output\ndone"
+    r = probe._build_interactive_cell_result(
+        "deny", pane, footer_text="⏸ manual mode on", sentinel_ran=True,
+        hook_fired=True, trust_blocked=False, timed_out=False,
+    )
+    assert r.effective_mode == "⏸ manual mode on"
     assert r.sentinel_ran is True
     assert r.notes.startswith("hook fired")
+
+
+def test_interactive_result_no_footer_is_reported_as_such():
+    r = probe._build_interactive_cell_result(
+        "ask", "some output", footer_text=None, sentinel_ran=False,
+        hook_fired=True, trust_blocked=False, timed_out=False,
+    )
+    assert r.effective_mode is None
+    assert r.notes == "hook fired; no footer captured"
+
+
+# --- parse_interactive_footer (round 4: raw footer text, not hard-coded) --
+
+def test_parse_interactive_footer_manual_mode():
+    pane = "some output\n⏸ manual mode on\n"
+    assert probe.parse_interactive_footer(pane) == "⏸ manual mode on"
+
+
+def test_parse_interactive_footer_auto_mode():
+    pane = "some output\n⏵⏵ auto-accept edits on\n"
+    assert probe.parse_interactive_footer(pane) == "⏵⏵ auto-accept edits on"
+
+
+def test_parse_interactive_footer_none_when_absent():
+    assert probe.parse_interactive_footer("nothing footer-shaped here\ndone") is None
+
+
+def test_parse_interactive_footer_uses_last_matching_line():
+    pane = "⏸ manual mode on\nsome scroll\n⏵⏵ auto-accept edits on\n"
+    assert probe.parse_interactive_footer(pane) == "⏵⏵ auto-accept edits on"
+
+
+# --- build_tmux_new_session_argv (round 4: forward CLAUDE_CONFIG_DIR) ----
+# A tmux session inherits the tmux SERVER's environment, not this process's;
+# without an explicit -e the child loses CLAUDE_CONFIG_DIR and reports
+# "Login expired" -- observed live. Only this one variable is forwarded.
+
+def test_new_session_argv_forwards_claude_config_dir_when_set():
+    argv = probe.build_tmux_new_session_argv("sess", "/tmp/cwd", "inner", {"CLAUDE_CONFIG_DIR": "/x/y"})
+    assert "-e" in argv
+    idx = argv.index("-e")
+    assert argv[idx + 1] == "CLAUDE_CONFIG_DIR=/x/y"
+
+
+def test_new_session_argv_omits_e_when_unset():
+    argv = probe.build_tmux_new_session_argv("sess", "/tmp/cwd", "inner", {})
+    assert "-e" not in argv
+
+
+def test_new_session_argv_forwards_nothing_else():
+    argv = probe.build_tmux_new_session_argv("sess", "/tmp/cwd", "inner", {"CLAUDE_CONFIG_DIR": "/x", "OTHER": "y"})
+    assert "OTHER" not in " ".join(argv)
+    assert argv.count("-e") == 1
 
 
 # --- render_table ---------------------------------------------------------

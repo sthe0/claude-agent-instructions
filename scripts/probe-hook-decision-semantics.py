@@ -404,6 +404,28 @@ def detect_trust_dialog(pane_text: str) -> bool:
     return any(indicator in lowered for indicator in TRUST_DIALOG_INDICATORS)
 
 
+# Substrings observed (or, for the auto/bypass cases, documented) in the
+# TUI's bottom mode-status footer line. Not exhaustive by construction (this
+# script does not control the UI's wording) -- a pane whose footer matches
+# none of these is recorded as effective_mode=None, the conservative (no
+# false positive) reading, same policy as PROMPT_INDICATORS.
+MODE_FOOTER_INDICATORS = ("mode on", "accept edits on", "bypassing permissions")
+
+
+def parse_interactive_footer(pane_text: str) -> str | None:
+    """Return the TUI's mode-status footer line, stripped, KEPT LITERAL (not
+    normalized to a bool) -- observed live: the deny cell's footer read
+    "⏸ manual mode on", meaning the requested `auto` mode was NOT in effect,
+    which a hard-coded "auto" would have hidden. Scans bottom-up for the
+    last non-empty line matching MODE_FOOTER_INDICATORS; returns None if no
+    such line is present (e.g. the ask dialog replaces the footer entirely)."""
+    for line in reversed(pane_text.splitlines()):
+        stripped = line.strip()
+        if stripped and any(ind in stripped.lower() for ind in MODE_FOOTER_INDICATORS):
+            return stripped
+    return None
+
+
 def _dismiss_onboarding(session_name: str) -> str | None:
     """Accept whatever default onboarding dialog (theme picker, login screen)
     is pre-selected by sending Enter, re-checking the pane each time, until
@@ -487,14 +509,35 @@ def build_interactive_inner_cmd(cwd: str, settings: dict) -> str:
     )
 
 
+def build_tmux_new_session_argv(session_name: str, cwd: str, inner_cmd: str, env: dict) -> list[str]:
+    """`tmux new-session` argv, forwarding exactly `CLAUDE_CONFIG_DIR` from
+    `env` (via `-e`) when present, and nothing else -- observed live: a tmux
+    session inherits the tmux SERVER's environment, not this process's, so
+    without an explicit `-e` the child loses `CLAUDE_CONFIG_DIR` and reports
+    "Login expired" instead of running on this fleet's own login chain."""
+    argv = ["tmux", "new-session", "-d", "-s", session_name]
+    value = env.get("CLAUDE_CONFIG_DIR")
+    if value:
+        argv += ["-e", f"CLAUDE_CONFIG_DIR={value}"]
+    argv += ["-x", "220", "-y", "50", inner_cmd]
+    return argv
+
+
 def _build_interactive_cell_result(
-    decision: str, marker: str, pane_text: str, hook_fired: bool, trust_blocked: bool, timed_out: bool,
+    decision: str, pane_text: str, footer_text: str | None, sentinel_ran: bool,
+    hook_fired: bool, trust_blocked: bool, timed_out: bool,
 ) -> CellResult:
     """Pure decision logic for the interactive cell, factored out of
     `run_interactive_cell` so it is unit-testable without tmux/subprocess.
     A cell counts as observed only if the hook actually fired for the
     sentinel call (`hook_fired`, from the witness file) and the session
-    never got stuck at the folder-trust dialog (`trust_blocked`)."""
+    never got stuck at the folder-trust dialog (`trust_blocked`).
+    `sentinel_ran` is supplied by the caller from a FILE the sentinel command
+    itself creates -- never derived from matching the marker text in
+    `pane_text`, which also matches the marker sitting unsubmitted in an
+    `ask` dialog's still-pending prompt box (round-4 bug this replaces).
+    `effective_mode` is the raw, literal footer text (see
+    `parse_interactive_footer`), never a hard-coded "auto"."""
     cell_id = f"interactive:auto:{decision}"
     if trust_blocked:
         notes = (
@@ -505,15 +548,16 @@ def _build_interactive_cell_result(
     if not hook_fired:
         notes = f"not observed: hook never fired (last pane: {_tail_evidence(pane_text)})"
         return _not_observed_result(cell_id, "auto", decision, timed_out, notes)
+    notes = f"hook fired; footer: {footer_text!r}" if footer_text else "hook fired; no footer captured"
     return CellResult(
         cell_id=cell_id,
         requested_mode="auto",
         decision=decision,
-        effective_mode="auto" if pane_text else None,
-        sentinel_ran=sentinel_present(pane_text, marker) if pane_text else None,
+        effective_mode=footer_text,
+        sentinel_ran=sentinel_ran,
         prompt_shown=detect_prompt(pane_text) if pane_text else None,
         timed_out=timed_out,
-        notes="hook fired; captured tmux pane text below ceiling; see live.md for the raw capture" if pane_text else "no pane text captured",
+        notes=notes,
     )
 
 
@@ -531,19 +575,34 @@ def run_interactive_cell(decision: str, tmpdir: Path, raw_dump_dir: Path | None 
     `tmpdir` (a mktemp dir), referenced by absolute path -- a decision hook
     comes only from a scratch `--settings` file this script writes and
     tears down, so no live settings file is read or modified, and the tmux
-    session is created and killed entirely by this script."""
+    session is created and killed entirely by this script.
+
+    Round-4 fixes (see the plan's stage-6 brief): the task prompt is sent as
+    a literal paste (`send-keys -l`) followed by a SEPARATE `Enter` send --
+    one `send-keys <text> "Enter"` call lands the whole thing as a paste
+    with the Enter swallowed, so the prompt never submits. `CLAUDE_CONFIG_DIR`
+    is forwarded into the tmux server via `-e` (a tmux session inherits the
+    tmux SERVER's environment, not this process's -- without it the child
+    reports "Login expired"). The sentinel is a FILE the child's own Bash
+    command creates, not a marker matched in the pane text (which also
+    matches the marker sitting unsubmitted in an `ask` dialog's pending
+    prompt box). The footer (mode status line) is captured once before the
+    prompt is sent -- the `ask` dialog can hide it -- and kept as-is if the
+    post-response capture shows none."""
     marker = _marker("PERM_PROBE_OK")
     witness_path = tmpdir / f"witness_{_marker('w')}.log"
+    sentinel_path = tmpdir / f"sentinel_{marker}"
     hook_path = _decision_hook_script(tmpdir, decision, witness_path)
     settings = _settings_with_hook(hook_path)
     session_name = f"probe-{uuid.uuid4().hex[:10]}"
     inner_cmd = build_interactive_inner_cmd(str(WORKTREE_ROOT), settings)
     pane_text = ""
+    footer_text: str | None = None
     timed_out = False
     trust_blocked = False
     try:
         subprocess.run(
-            ["tmux", "new-session", "-d", "-s", session_name, "-x", "220", "-y", "50", inner_cmd],
+            build_tmux_new_session_argv(session_name, str(WORKTREE_ROOT), inner_cmd, os.environ),
             check=True, timeout=10,
         )
         time.sleep(TMUX_BOOT_WAIT_S)
@@ -551,9 +610,22 @@ def run_interactive_cell(decision: str, tmpdir: Path, raw_dump_dir: Path | None 
         if dismiss_result == "trust_dialog":
             trust_blocked = True
         else:
+            pre_capture = subprocess.run(
+                ["tmux", "capture-pane", "-t", session_name, "-p", "-S", "-200"],
+                timeout=10, capture_output=True, text=True, check=False,
+            )
+            footer_text = parse_interactive_footer(pre_capture.stdout)
+            prompt_text = (
+                f"Use the Bash tool to run exactly this command and nothing else: "
+                f"echo {marker} > {sentinel_path}"
+            )
             subprocess.run(
-                ["tmux", "send-keys", "-t", session_name,
-                 f"Use the Bash tool to run exactly this command and nothing else: echo {marker}", "Enter"],
+                ["tmux", "send-keys", "-t", session_name, "-l", prompt_text],
+                check=True, timeout=10,
+            )
+            time.sleep(2)
+            subprocess.run(
+                ["tmux", "send-keys", "-t", session_name, "Enter"],
                 check=True, timeout=10,
             )
             time.sleep(TMUX_RESPONSE_WAIT_S)
@@ -562,6 +634,8 @@ def run_interactive_cell(decision: str, tmpdir: Path, raw_dump_dir: Path | None 
             check=True, timeout=10, capture_output=True, text=True,
         )
         pane_text = capture.stdout
+        if footer_text is None:
+            footer_text = parse_interactive_footer(pane_text)
     except subprocess.TimeoutExpired:
         timed_out = True
     finally:
@@ -570,7 +644,10 @@ def run_interactive_cell(decision: str, tmpdir: Path, raw_dump_dir: Path | None 
 
     _dump_raw(raw_dump_dir, f"interactive-auto-{decision}", pane_text)
     hook_fired = _hook_fired_for_bash(witness_path)
-    return _build_interactive_cell_result(decision, marker, pane_text, hook_fired, trust_blocked, timed_out)
+    sentinel_ran = sentinel_path.exists()
+    return _build_interactive_cell_result(
+        decision, pane_text, footer_text, sentinel_ran, hook_fired, trust_blocked, timed_out
+    )
 
 
 def run_add_dir_read_cell(tmpdir: Path, raw_dump_dir: Path | None = None) -> CellResult:
