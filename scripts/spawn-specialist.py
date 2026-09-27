@@ -1103,7 +1103,6 @@ def load_or_create_evidence_dir(
     session_id: str,
     stage_index: int,
     kind: str,
-    state_root: "Path | None" = None,
 ) -> "str | None":
     """The stage's durable evidence directory (agentctl.cli.evidence_dir_for),
     created if absent, for a `kind == "developer"` spawn only — mirrors
@@ -1112,20 +1111,20 @@ def load_or_create_evidence_dir(
     grant computation: the directory is spawn-time-only (an --add-dir plus
     a synthetic write grant applied straight to this child's --settings),
     never touching PlanDoc/derive_stage_grants, so it cannot move an
-    already-approved plan's grants_sha256. Returns None for any other
-    kind, or when session/stage-index are not both given."""
+    already-approved plan's grants_sha256. Returns None for any other kind.
+    Raises agentctl.cli.EvidenceDirError when the directory itself is
+    unusable — the caller fails the spawn loudly on that, rather than
+    silently proceeding without evidence. Purely path-derived from
+    session_id/stage_index — no session-state lookup, hence no state_root —
+    since the directory must be creatable before dispatch necessarily
+    reflects the stage in progress."""
     if kind != "developer":
         return None
     from agentctl import cli as agentctl_cli
-    from agentctl.store import FileStateStore
 
-    store = FileStateStore(state_root) if state_root is not None else FileStateStore()
-    directive = agentctl_cli.cmd_evidence_dir(
-        argparse.Namespace(session=session_id, stage=stage_index), store=store
-    )
-    if not directive.ok:
-        return None
-    return directive.data.get("evidence_dir")
+    path = agentctl_cli.evidence_dir_for(session_id, stage_index)
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
 def _project_dir_name(cwd: str) -> str:
@@ -1459,9 +1458,16 @@ def main(argv: list[str] | None = None) -> int:
         engine_grants = load_engine_stage_grants(
             args.session, args.stage_index, args.kind, state_root=args.state_root
         )
-        evidence_dir = load_or_create_evidence_dir(
-            args.session, args.stage_index, args.kind, state_root=args.state_root
-        )
+        from agentctl import cli as agentctl_cli
+
+        try:
+            evidence_dir = load_or_create_evidence_dir(
+                args.session, args.stage_index, args.kind
+            )
+        except agentctl_cli.EvidenceDirError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            log_refused("evidence-dir-refused", {"kind": args.kind, "stage_index": args.stage_index})
+            return 2
 
     add_dir_argv: list[str] = []
     add_dir_argv.extend(plans_add_dir_args(args.kind, plans_directory))
