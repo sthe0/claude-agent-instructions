@@ -998,11 +998,11 @@ def _aggregate_quality(window: list[dict], session_rows: dict[str, dict]) -> dic
 
 
 def _aggregate_renorm(window: list[dict]) -> dict:
-    """R9: re-norming coverage + quality-mean split over a task-quality window.
+    """Re-norming coverage + quality-mean split over a task-quality window.
 
-    A row predating R9 simply lacks `n_normalizations` -- treated as 0 (no
-    normalization recorded) so it still loads and counts toward the window's
-    denominator rather than raising or being silently dropped."""
+    A row predating this field simply lacks `n_normalizations` -- treated as 0
+    (no normalization recorded) so it still loads and counts toward the
+    window's denominator rather than raising or being silently dropped."""
     n_tasks = len(window)
     with_norm = [r for r in window if r.get("n_normalizations", 0) >= 1]
     without_norm = [r for r in window if r.get("n_normalizations", 0) < 1]
