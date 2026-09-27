@@ -259,9 +259,29 @@ def test_a_process_substitution_adds_the_cwd_as_an_extra_candidate(command, expe
     ('grep -n "x >=5" f.txt', []),
     ('python3 -c "x = 5\nif x >=5:\n    pass"', []),
     ("cd /w && python3 - <<'EOF'\nx = 5\nif x >= 3:\n    print('ok')\nEOF", []),
+    # Round-3 finding: a real replay row against the agentctl state dir reported phantom
+    # targets `=` and `=5`, both traced to a `>=` comparison inside a `python3 - <<'EOF'`
+    # heredoc BODY whose `<<` operator is not on the command's first physical line (`cd D`
+    # is). The old `_recognized(..., allow_prior_statements=True)` looked for `<<` only in
+    # `command_line(command)` (the first line), missed it here, and fell back to an
+    # unscoped consumer check that saw `cd` -- not a `CONSUMERS`/`NON_SHELL_CONSUMERS`
+    # member -- and disqualified the whole command. Disqualified means NOT neutralized: the
+    # `>=` inside the still-present body then read as a real `>` redirect.
+    ("cd D\npython3 - <<'EOF'\nif a >= 5:\nEOF", []),
 ])
 def test_a_comparison_operator_in_a_quoted_or_heredoc_body_is_not_a_redirect(command, expected):
     assert command_write_targets(command, CWD) == expected
+
+
+def test_an_unrecognized_prior_statement_on_an_earlier_line_still_lets_a_later_heredoc_body_be_neutralized():
+    # `myunknowncmd` is on its own line before the heredoc-bearing statement -- an
+    # unrecognized WORD, not an unrecognized SHAPE (no `_UNRECOGNIZED` token appears), so it
+    # must not disqualify the later `cat <<'D' > f` statement it precedes. The body itself
+    # carries a `>= 1` comparison: under the old first-line-only `<<` search this statement
+    # was never recognized (the first line "myunknowncmd" is not a `CONSUMERS` member), so
+    # the body was never neutralized and its `>=` read as a second, phantom write target
+    # alongside the real one at `f`.
+    assert command_write_targets("myunknowncmd\ncat <<'D' > f\nx >= 1\nD", CWD) == ["/w/f"]
 
 
 # THE OTHER CONSUMER'S BEHAVIOUR CHANGED TOO, and it has rows of its own for it.

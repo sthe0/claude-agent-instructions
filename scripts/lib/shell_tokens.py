@@ -539,6 +539,28 @@ def _pipeline_consumers_ok(command: str, pos: int, consumers: frozenset[str] = C
     return all(_consumer_ok(part, consumers) for part in pipeline.split("|") if part.strip())
 
 
+def _last_statement_boundary(text: str) -> int:
+    """Rightmost index in `text` of a `;`, `&`, or a bare newline that ends a
+    PRIOR statement -- `-1` when `text` is one statement from its own start.
+
+    A newline is a statement boundary exactly like `;`/`&`, EXCEPT a
+    backslash-newline continuation, which joins two written lines into one
+    logical statement and so is not one: the search skips over it and keeps
+    looking further back for the next real newline."""
+    boundary = max(text.rfind(";"), text.rfind("&"))
+    pos = len(text)
+    while True:
+        idx = text.rfind("\n", 0, pos)
+        if idx == -1:
+            break
+        if idx > 0 and text[idx - 1] == "\\":
+            pos = idx
+            continue
+        boundary = max(boundary, idx)
+        break
+    return boundary
+
+
 def _recognized(
     command: str,
     consumers: frozenset[str] = CONSUMERS,
@@ -552,53 +574,62 @@ def _recognized(
 
     `allow_prior_statements` is for callers that have already dropped clause
     (v) (`neutralize_heredoc_constructs`/`heredoc_construct_spans`): a bare
-    `;`/`&` BEFORE the first heredoc operator ON THE FIRST LINE exists in
-    `_UNRECOGNIZED` only to keep clause (v) able to see a statement boundary
-    in the residue after body REMOVAL. A prior, unrelated statement sharing
-    that line (`cd DIR && python3 - <<'EOF'`) bears on neither clause (v) nor
+    `;`/`&`/newline BEFORE the first heredoc operator, ANYWHERE in the
+    command, exists in `_UNRECOGNIZED` only to keep clause (v) able to see a
+    statement boundary in the residue after body REMOVAL. A prior, unrelated
+    statement sharing that line or an earlier one (`cd DIR && python3 -
+    <<'EOF'`, or `cd DIR\npython3 - <<'EOF'`) bears on neither clause (v) nor
     clause (iv): `_removal_regions`'s own `_pipeline_consumers_ok` re-finds
     the OWNING pipeline for this heredoc occurrence LOCALLY (bounded by the
     nearest `;`/`\n`/`&`), so it locates the same "python3 -" pipeline
-    regardless of what precedes it -- checking the coarser whole-head clause
-    (iv) first-word (which would see "cd", the wrong word entirely) adds
-    nothing. So this branch re-scopes clause (iv) to the OWNING statement --
-    the text from the nearest `;`/`&` before the operator onward -- rather
-    than dropping it outright: this keeps `_recognized` catching an
-    unrecognized/unsafe command on the heredoc's OWN line (a case
-    `_pipeline_consumers_ok` cannot short-circuit for since it runs only
-    inside `_removal_regions`, never as a standalone pre-filter).
+    regardless of what precedes it -- checking the coarser whole-command
+    clause (iv) first-word (which would see "cd", the wrong word entirely)
+    adds nothing. So this branch re-scopes clause (iv) to the OWNING
+    statement -- the text from the nearest `;`/`&`/real-newline before the
+    operator onward -- rather than dropping it outright: this keeps
+    `_recognized` catching an unrecognized/unsafe command on the heredoc's
+    OWN line (a case `_pipeline_consumers_ok` cannot short-circuit for since
+    it runs only inside `_removal_regions`, never as a standalone pre-filter).
 
-    When the first line holds no heredoc operator at all (the construct
-    starts on a LATER physical line, e.g. `myunknowncmd\ncat <<'D'`), there is
-    no same-line "owning statement" to scope to, so this falls back to the
-    unscoped clause (ii)/(iv) check exactly as when `allow_prior_statements`
-    is False -- `_recognized` looks only at the first line by design, and an
-    unrecognized first line stays disqualifying regardless of what a later
-    line does.
+    A backslash-newline continuation is NOT such a boundary -- it joins two
+    written lines into one logical statement, so `_last_statement_boundary`
+    skips past it when looking for the owning statement's start.
 
-    A `;`/`&` AT OR AFTER the first heredoc operator is a different animal --
+    When NO heredoc operator exists anywhere in the command (e.g. an
+    ordinary multi-line command with no `<<` at all), there is no owning
+    statement to scope to, so this falls back to the unscoped clause
+    (ii)/(iv) check over the first line only, exactly as when
+    `allow_prior_statements` is False.
+
+    A `;`/`&` AT OR AFTER the heredoc operator is a different animal --
     `cat <<'EOF' > FILE && bash FILE` -- and stays fully disqualifying even
     here: that is the "body persisted then executed by a later statement"
     shape clause (v) exists to catch, `_pipeline_consumers_ok`'s per-pipeline
     check cannot see a LATER statement at all (by construction, it is scoped
     to the one pipeline owning the operator), and neutralization's own
-    contract (only two named exceptions) forbids silently widening it."""
+    contract (only two named exceptions) forbids silently widening it. The
+    post-operator text checked here (`after`) is itself bounded to the
+    operator's OWN logical line (`command_line`, continuation-aware) rather
+    than the rest of the command -- the heredoc BODY starts on the next line
+    and is data, not grammar, and routinely contains a literal `;`/`&` that
+    must not disqualify the construct on its account."""
     if _DEFINITION.search(command):
         return False
     head = command_line(command)
     if allow_prior_statements:
-        heredoc_pos = head.find("<<")
-        if heredoc_pos == -1:
+        full_pos = command.find("<<")
+        if full_pos == -1:
             if any(token in head for token in _UNRECOGNIZED):
                 return False
             return all(_consumer_ok(part, consumers) for part in head.split("|"))
-        before, after = head[:heredoc_pos], head[heredoc_pos:]
+        before = command[:full_pos]
+        after = command_line(command[full_pos:])
         if any(token in after for token in _UNRECOGNIZED):
             return False
         relaxed = tuple(tok for tok in _UNRECOGNIZED if tok not in ("&", ";"))
         if any(token in before for token in relaxed):
             return False
-        boundary = max(before.rfind(";"), before.rfind("&"))
+        boundary = _last_statement_boundary(before)
         owning = before[boundary + 1 :] + after
         # `if part.strip()`: mirrors `_pipeline_consumers_ok`'s own filter --
         # a leading empty pipeline element (`| cat <<EOF`) is not an
