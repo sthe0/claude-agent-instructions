@@ -49,6 +49,20 @@ Answer which inbound on the0.fun the yandex-cloud tunnel traffic reaches, and wh
 - **Resolution:** re-probed the peer VM's NAT table directly (`ssh the0.fun 'ssh the0@10.10.0.1
   "sudo iptables -t nat -L -n -v"'`), and rewrote the project's topology leaf against live state.
 
+
+### 2026-09-27 — 2026-09-27 — permission-denial cause, named twice, probed neither
+- Where it arose: Same session, the0.fun steal-report call denied by the auto-mode permission classifier
+- Working plan: Surface the steal verdict per the standing auto-surface instruction; on denial, diagnose and record an unblock recipe in project memory.
+
+
+### 2026-09-27 — 2026-09-27 — predicted a package manager's behaviour instead of simulating it
+- Where it arose: Same session, the0.fun disk cleanup: reclaiming the spare 6.8.0-136 kernel
+- Working plan: Hand the user a sudo command block: reboot onto the newer kernel, then apt-get --purge autoremove to reclaim the old one.
+## Common core & variations
+**Common:** A mechanism's behaviour was asserted from its surface rather than probed, and the assertion was carried into an artifact (a memory leaf) as if established.
+
+**Variations:** Here the subject was not an absence but a CAUSE: why a permission denial fired. I claimed first that it was a false positive on the word 'steal', then — after that fell — that it was the ssh-host-runs-bash-script SHAPE. Each claim was refuted by a single cheap probe I had not thought to run: a tail of the same log with the same word on the same host passed untouched, and after reading the script into the transcript the IDENTICAL denied command passed. The real cause was OPACITY — the classifier is context-sensitive and was denying what it could not read, not what the command did. Two wrong mechanism claims in a row, both cheaply refutable, both written into memory before being tested. The user caught it with one question. Re-norming landed as branch (a-prime) in [[acting-without-asking]] section 2.
+
 ## Cost
 Roughly a dozen extra turns of investigation plus one fork spawn, all spent on a conclusion that was
 wrong on the axis that mattered. The material cost is bounded only because the user caught it; the
