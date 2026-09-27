@@ -315,10 +315,10 @@ def _write_plan_snapshot(store: StateStore, state: SessionState, data: bytes, di
 
 def _write_plan_version_snapshot(store: StateStore, state: SessionState, data: bytes, digest: str) -> str | None:
     """Content-address EVERY submitted plan version (submit_plan and every replan
-    kind), not just the approved ones `_write_plan_snapshot` covers — R9's plan-
-    version-content requirement wants every `plan_sha256`/`prev_plan_sha256` logged
-    on a history event to resolve to an actual file on disk, including a rejected
-    or refinement/no_change submission the approved-plan snapshot never touches.
+    kind), not just the approved ones `_write_plan_snapshot` covers — every
+    `plan_sha256`/`prev_plan_sha256` logged on a history event must resolve to an
+    actual file on disk, including a rejected or refinement/no_change submission the
+    approved-plan snapshot never touches.
 
     A distinct filename prefix (`plan-version-` vs `plan-approved-`) so this never
     collides with, or is mistaken for, the approved-plan snapshot machinery above —
@@ -3177,7 +3177,11 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
             "plans are TOML-only — rewrite as TOML with typed stages",
             data={"problems": ["plans are TOML-only; rewrite as TOML with typed stages"]},
         )
-    doc = load_plan(plan_path)
+    # Read plan_path's bytes ONCE and derive doc, the digest stamped below (seam (a))
+    # and the plan-version snapshot below from that same buffer, so a concurrent edit
+    # between separate reads can't desynchronize accepted_plan_digest from the bytes
+    # that were actually parsed and verified.
+    doc, _submitted_plan_bytes, _submitted_plan_digest = load_plan_with_digest(plan_path)
     state.stages = doc.stages
     _sync_venue_from_plan(state, doc)
     state.final_check = doc.meta.final_check
@@ -3227,12 +3231,13 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
 
     # Past the refusal, so these bytes were ACCEPTED — which is the only thing
     # accepted_plan_digest ever records.
-    _stamp_accepted_plan_digest(state, plan_path)
-    # R9: content-address these accepted bytes as a plan version, independent of the
+    state.accepted_plan_digest = _submitted_plan_digest
+    # Content-address these accepted bytes as a plan version, independent of the
     # approved-plan snapshot below (that one is taken only at `approve`) -- so the
     # `submit_plan` history event's plan_sha256 always resolves to a stored file, even
     # for a submission never subsequently approved.
-    _submitted_plan_sha256 = _snapshot_plan_version(store, state, plan_path)
+    _write_plan_version_snapshot(store, state, _submitted_plan_bytes, _submitted_plan_digest)
+    _submitted_plan_sha256 = _submitted_plan_digest
     state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     if resubmitting:
@@ -6662,9 +6667,8 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         ),
         "n_replans": sum(1 for h in state.history if h.get("event") == "replan"),
         "n_difficulty_records": sum(1 for h in state.history if h.get("event") == "declare"),
-        # R9: re-norming counts, derived from history like the two rows above -- no new
-        # mutable state. n_normalizations counts every "normalize" event regardless of
-        # in_diagnosis; the outside-diagnosis variant is the subset explicitly flagged
+        # n_normalizations counts every "normalize" event regardless of in_diagnosis;
+        # the outside-diagnosis variant is the subset explicitly flagged
         # in_diagnosis=False (a DIAGNOSING-closure normalize never sets that key at all,
         # so it is correctly excluded here without needing an in_diagnosis=True mirror).
         "n_normalizations": sum(1 for h in state.history if h.get("event") == "normalize"),
@@ -6889,6 +6893,36 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
     return d
 
 
+def _normalize_record_fields(factor, level, destination) -> tuple[str | None, str | None]:
+    """Validate a normalize record's --factor/--level/--destination the one way every
+    caller shares. Returns (error, cleaned_factor); error is None exactly when the
+    fields are usable."""
+    factor = (factor or "").strip()
+    if not factor:
+        return ("normalize requires a non-empty --factor (the reproducible cause "
+                "being re-normed)"), None
+    if level is not None and level not in NORMALIZATION_LEVELS:
+        return (f"normalize --level must be one of {list(NORMALIZATION_LEVELS)} or "
+                f"omitted (payoff-gated by rediscovery-threshold-min), got {level!r}"), None
+    if destination is not None and destination not in NORMALIZATION_DESTINATIONS:
+        return (f"normalize --destination must be one of "
+                f"{list(NORMALIZATION_DESTINATIONS)} or omitted (the functional "
+                f"place the renorming lands on), got {destination!r}"), None
+    return None, factor
+
+
+def _log_normalize_event(state: SessionState, *, factor, level, destination, in_diagnosis: bool) -> None:
+    """The one `normalize` event shape every caller shares. `in_diagnosis` is present
+    on the event ONLY when False — a DIAGNOSING-closure record never carries the key
+    at all, which is what n_normalizations_outside_diagnosis's `is False` check (not
+    a truthiness check) relies on to exclude it."""
+    if in_diagnosis:
+        state.log("normalize", factor=factor, level=level, destination=destination)
+    else:
+        state.log("normalize", factor=factor, level=level, destination=destination,
+                  in_diagnosis=False)
+
+
 def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Phase 4 (closure): record the renorming act. Mandatory at DIAGNOSING closure —
     a reproducible factor left un-normed re-fails, so replan is blocked (see
@@ -6899,15 +6933,13 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
     generally the record is written down, `--destination` says what is being repaired, and
     every destination is recordable at every level.
 
-    R9: also callable OUTSIDE DIAGNOSING (any node from CLASSIFIED to RESOLUTION) as a
-    plain record-only act -- a normalization worth writing down does not always arrive
-    framed as a difficulty closure. That branch never touches `state.difficulty` or any
-    gate (there is no difficulty record to touch, and normalization_blockers only ever
-    fires already-inside DIAGNOSING), and logs the SAME `normalize` event name with
-    `in_diagnosis=False` so every reader of the DIAGNOSING event still recognizes it. The
-    DIAGNOSING branch below is untouched -- same checks, in the same order, same
-    Directive, same log call -- dispatch happens FIRST, before any of this
-    function's own validation, so a DIAGNOSING call reaches byte-identical code."""
+    Also callable OUTSIDE DIAGNOSING (any node from CLASSIFIED up to, but not
+    including, RESOLVED) as a plain record-only act -- a normalization worth writing
+    down does not always arrive framed as a difficulty closure. That branch never
+    touches `state.difficulty` or any gate, and logs the SAME `normalize` event shape
+    with `in_diagnosis=False` so every reader of the DIAGNOSING event still recognizes
+    it. Dispatch happens FIRST, before any of this function's own validation, so a
+    DIAGNOSING call reaches byte-identical code below."""
     state = _require(store, args.session)
     if state.node != Node.DIAGNOSING.value:
         return _cmd_normalize_outside_diagnosing(args, state, store)
@@ -6919,52 +6951,36 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
         return Directive(False, state.node, "declare",
                          "normalize is out of order: declaration, investigation, and "
                          "critique must come first")
-    factor = (getattr(args, "factor", None) or "").strip()
-    if not factor:
-        return Directive(False, state.node, "normalize",
-                         "normalize requires a non-empty --factor (the reproducible cause "
-                         "being re-normed)")
+    error, factor = _normalize_record_fields(
+        getattr(args, "factor", None), getattr(args, "level", None), getattr(args, "destination", None))
+    if error:
+        return Directive(False, state.node, "normalize", error)
     level = getattr(args, "level", None)
-    if level is not None and level not in NORMALIZATION_LEVELS:
-        return Directive(False, state.node, "normalize",
-                         f"normalize --level must be one of {list(NORMALIZATION_LEVELS)} or "
-                         f"omitted (payoff-gated by rediscovery-threshold-min), got {level!r}")
     destination = getattr(args, "destination", None)
-    if destination is not None and destination not in NORMALIZATION_DESTINATIONS:
-        return Directive(False, state.node, "normalize",
-                         f"normalize --destination must be one of "
-                         f"{list(NORMALIZATION_DESTINATIONS)} or omitted (the functional "
-                         f"place the renorming lands on), got {destination!r}")
     d.normalization = Normalization(factor=factor, level=level, destination=destination)
-    state.log("normalize", factor=factor, level=level, destination=destination)
+    _log_normalize_event(state, factor=factor, level=level, destination=destination, in_diagnosis=True)
     store.save(state)
     return Directive(True, state.node, "replan",
                      "renorming recorded; replan is now unblocked")
 
 
 def _cmd_normalize_outside_diagnosing(args, state: SessionState, store: StateStore) -> Directive:
-    """R9: the record-only sibling of cmd_normalize's DIAGNOSING branch -- runs at any
-    node from CLASSIFIED to RESOLUTION, touches no difficulty state and no gate (there
-    is none to touch outside DIAGNOSING), and logs the same `normalize` event name with
+    """The record-only sibling of cmd_normalize's DIAGNOSING branch -- runs at any
+    node from CLASSIFIED up to, but not including, RESOLVED (a RESOLVED session has
+    no further quality row or scorecard pass for the record to land on), touches no
+    difficulty state and no gate, and logs the same `normalize` event shape with
     `in_diagnosis=False` so a reader scanning history for the event still finds it."""
-    factor = (getattr(args, "factor", None) or "").strip()
-    if not factor:
-        return Directive(False, state.node, "normalize",
-                         "normalize requires a non-empty --factor (the reproducible cause "
-                         "being re-normed)")
+    if state.node == Node.RESOLVED.value:
+        return Directive(False, state.node, "continue",
+                         "normalize outside a difficulty cannot record against a "
+                         "RESOLVED session")
+    error, factor = _normalize_record_fields(
+        getattr(args, "factor", None), getattr(args, "level", None), getattr(args, "destination", None))
+    if error:
+        return Directive(False, state.node, "normalize", error)
     level = getattr(args, "level", None)
-    if level is not None and level not in NORMALIZATION_LEVELS:
-        return Directive(False, state.node, "normalize",
-                         f"normalize --level must be one of {list(NORMALIZATION_LEVELS)} or "
-                         f"omitted (payoff-gated by rediscovery-threshold-min), got {level!r}")
     destination = getattr(args, "destination", None)
-    if destination is not None and destination not in NORMALIZATION_DESTINATIONS:
-        return Directive(False, state.node, "normalize",
-                         f"normalize --destination must be one of "
-                         f"{list(NORMALIZATION_DESTINATIONS)} or omitted (the functional "
-                         f"place the renorming lands on), got {destination!r}")
-    state.log("normalize", factor=factor, level=level, destination=destination,
-              in_diagnosis=False)
+    _log_normalize_event(state, factor=factor, level=level, destination=destination, in_diagnosis=False)
     store.save(state)
     return Directive(True, state.node, "continue",
                      "renorming recorded outside a difficulty cycle")
@@ -7027,7 +7043,12 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
     # honest: each is measured against the bytes that were approved, so a norm edit
     # cannot be walked to in small steps.
     old = _load(old_path, strict=False)
-    new = _load(args.plan)
+    # Read args.plan's bytes ONCE and derive `new`, the digest stamped below and the
+    # snapshot written below from that same buffer -- three separate re-reads of a
+    # file the coordinator can edit concurrently used to leave `accepted_plan_digest`
+    # and the plan-version snapshot each free to bind to different bytes than the
+    # ones `new` was diffed and gated against.
+    new, _new_plan_bytes, _new_plan_digest = load_plan_with_digest(args.plan)
     run = runner if runner is not None else advisor.subprocess_runner
     submission = _submission_problems(new, run, state.weight_class)
     if submission:
@@ -7053,12 +7074,13 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
             changed.append(ns.index)
         cur.means.procedure = ns.means.procedure
     state.plan_path = args.plan
-    _stamp_accepted_plan_digest(state, args.plan)
-    # R9: renormalize is one of the replan kinds every submitted version is
+    state.accepted_plan_digest = _new_plan_digest
+    # renormalize is one of the replan kinds every submitted version is
     # content-addressed for, despite logging a distinct event name (see the class
     # docstring above on why it's `renormalize`, not `replan`).
     _prev_plan_sha256 = _snapshot_plan_version(store, state, old_path)
-    _new_plan_sha256 = _snapshot_plan_version(store, state, args.plan)
+    _write_plan_version_snapshot(store, state, _new_plan_bytes, _new_plan_digest)
+    _new_plan_sha256 = _new_plan_digest
     state.log("renormalize", stages=changed, plan=args.plan,
               prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256)
     store.save(state)
@@ -7095,19 +7117,34 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load, stage_carry_key
 
-    # R9: --normalize-factor lets a replan record a normalize event in the SAME call,
-    # instead of requiring a separate `normalize` invocation first. Widen-don't-fork:
-    # reuses the exact record-only path cmd_normalize's outside-DIAGNOSING branch takes
-    # (same event name, same in_diagnosis derivation from the live node) -- never touches
-    # state.difficulty or any gate, and its absence never refuses this replan. Placed
-    # before every gate below and saved immediately so the record survives even a replan
-    # this call goes on to refuse -- "cheap by construction", not conditioned on success.
+    # --normalize-factor lets a replan record a normalize event in the SAME call,
+    # instead of requiring a separate `normalize` invocation first. Validated here
+    # (cheap, touches no state) so a bad flag refuses before any gate runs below.
+    # Deliberately does NOT mutate state.difficulty.normalization: this command
+    # saves state at several points (the enumeration-bag fold, the stale-
+    # disposition invalidation) that sit ahead of later refusals (the
+    # plan_approval-plugin block, the critique-coverage gate), and a mutation
+    # staged here would ride one of those saves onto disk as an orphan if a
+    # later gate then refused the replan — persisted with no normalize event
+    # ever logged for it, and invisible to a retry once the hint at the bottom
+    # of this function stops asking for the now-apparently-already-set flag.
+    # gates.normalization_blockers instead takes this pending factor as an
+    # explicit argument at its call site below, so the gate is satisfied
+    # without state.difficulty being touched; the record is set together with
+    # the event at the single logging point past every refusal (see below).
     normalize_factor = (getattr(args, "normalize_factor", None) or "").strip()
+    normalize_level = getattr(args, "normalize_level", None)
+    if normalize_factor and getattr(args, "renormalize", False):
+        return Directive(False, state.node, "replan",
+                         "--normalize-factor and --renormalize are incompatible: a "
+                         "renormalization is defined as touching no norm, so it has "
+                         "nothing for --normalize-factor to record")
     if normalize_factor:
-        state.log("normalize", factor=normalize_factor,
-                  level=getattr(args, "normalize_level", None), destination=None,
-                  in_diagnosis=(state.node == Node.DIAGNOSING.value))
-        store.save(state)
+        _nf_error, normalize_factor = _normalize_record_fields(normalize_factor, normalize_level, None)
+        if _nf_error:
+            return Directive(False, state.node, "replan", _nf_error)
+        # An incomplete DIAGNOSING cycle is left to gates.difficulty_blockers below
+        # (same action, "declare") rather than repeated here with a second message.
 
     # precondition: an unacknowledged effort-divergence fire (whether it forced this
     # DIAGNOSING entry itself via the passing-diagnose path, or merely rode along on
@@ -7243,7 +7280,10 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # DIAGNOSING cycle) REQUIRES re-norming the reproducible factor. Mandatory-if-
     # reproducible; the one-off escape is an explicit --normalization-waiver <reason>.
     # [] outside the DIAGNOSING-closure path, so a non-difficulty replan is unaffected.
-    nblock = gates.normalization_blockers(state)
+    # `pending_factor` is this call's OWN still-unmutated --normalize-factor: the gate
+    # judges it directly rather than reading state.difficulty.normalization, which this
+    # command has deliberately not written yet (see the comment above).
+    nblock = gates.normalization_blockers(state, pending_factor=normalize_factor or None)
     if nblock:
         waiver = getattr(args, "normalization_waiver", None)
         if waiver is None:
@@ -7464,12 +7504,11 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # check. Only the NEW side — loaded strictly at seam (b) above — and submit-plan
     # are strict.
     old = _load(old_path, strict=False)
-    # R9: content-address both sides of this replan -- the OLD baseline (read fresh;
+    # Content-address both sides of this replan -- the OLD baseline (read fresh;
     # `old_path` may be a legacy plan_path fallback never snapshotted before) and the
-    # NEW plan, reusing the exact (data, digest) seam (b) already read via
-    # `load_plan_with_digest` rather than re-reading args.plan a second time. Computed
-    # once here, past every refusal above, and used by whichever of the three kind
-    # branches below actually applies.
+    # NEW plan, reusing the (data, digest) seam already read via `load_plan_with_digest`
+    # rather than re-reading args.plan a second time. Computed once here, past every
+    # refusal above, and used by whichever of the three kind branches below applies.
     _prev_plan_sha256 = _snapshot_plan_version(store, state, old_path)
     _write_plan_version_snapshot(store, state, _new_plan_bytes, _new_plan_digest)
     _new_plan_sha256 = _new_plan_digest
@@ -7492,6 +7531,20 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             # difficulty-record completeness precondition checked above.
             state.log("replan_coverage_waived", reason=waiver, blockers=list(cov))
             _log_gate(state, "replan_coverage_waiver", cov, passed=True)
+
+    # Past every refusal above, so this replan is going through -- the single point
+    # where a --normalize-factor passed to this call both sets
+    # state.difficulty.normalization (in DIAGNOSING, mirroring cmd_normalize's own
+    # DIAGNOSING branch) and gets its event logged. Setting the record and logging
+    # the event together here, rather than staging the record earlier, is what keeps
+    # a refused-then-retried call from either double-counting the event or
+    # persisting an orphaned record with no event to match it.
+    if normalize_factor:
+        if state.node == Node.DIAGNOSING.value:
+            state.difficulty.normalization = Normalization(
+                factor=normalize_factor, level=normalize_level, destination=None)
+        _log_normalize_event(state, factor=normalize_factor, level=normalize_level,
+                             destination=None, in_diagnosis=(state.node == Node.DIAGNOSING.value))
 
     kind = diff_plans(old, new)
     # The replan-loop counterpart of cmd_approve's reset: a replan that gets this far has
@@ -7552,10 +7605,21 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # warn-only and cannot influence any decision above it either way. (`run` is bound at
     # the seam above; only this CALL is deferred, which is where the cost is.)
     echo_advice = _submission_advice(new, run, state.weight_class)
-    # R9(d): non-blocking hint naming --normalize-factor when this replan didn't use it
-    # to record one -- advisory only, never a gate (a replan with nothing reproducible
-    # to re-norm is a completely ordinary replan).
-    if not normalize_factor:
+    # Non-blocking hint naming --normalize-factor -- advisory only, never a gate (a
+    # replan with nothing reproducible to re-norm is a completely ordinary replan).
+    # Suppressed when this call itself recorded one (the `not normalize_factor`
+    # check) and when the most recent `normalize`/`replan`/`submit_plan` event in
+    # history is a `normalize` -- covering both a prior separate DIAGNOSING
+    # `normalize` call (the gate's own required path) and a prior `normalize`
+    # OUTSIDE DIAGNOSING (record-only, no gate at all): either way the hint would
+    # otherwise falsely claim "no normalize event recorded" right after one was.
+    _last_normalize_plan_event = next(
+        (h for h in reversed(state.history)
+         if h.get("event") in ("normalize", "replan", "submit_plan")), None)
+    _normalize_recorded_since_last_plan_event = (
+        _last_normalize_plan_event is not None
+        and _last_normalize_plan_event.get("event") == "normalize")
+    if not normalize_factor and not _normalize_recorded_since_last_plan_event:
         echo_advice = echo_advice + [
             "no normalize event recorded for this replan; pass --normalize-factor "
             "<reproducible cause> to record one in the same call"
@@ -9210,7 +9274,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--renegotiation-note", dest="renegotiation_note", default=None,
                     help="what the customer decided and why (refused if empty)")
     sp.add_argument("--normalize-factor", dest="normalize_factor", default=None,
-                    help="R9: record a normalize event in the SAME replan call, without a "
+                    help="record a normalize event in the SAME replan call, without a "
                          "separate `normalize` invocation -- the reproducible cause being "
                          "re-normed. Optional; its absence never refuses the replan (a "
                          "non-blocking hint names the flag when it's missing)")
