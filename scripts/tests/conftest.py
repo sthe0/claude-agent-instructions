@@ -302,6 +302,32 @@ def _isolate_task_accumulator(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_writer_gate_advisories(tmp_path, monkeypatch):
+    """Redirect the published-text gate's fail-open advisory sink to tmp for the
+    suite at large.
+
+    `lib/published_body.record_advisory` appends on every UNRESOLVED resolution,
+    so every test that drives a fall-through case -- the whole fixture table in
+    test_published_body.py, plus each hook-level gate test -- wrote into the live
+    sink. That was invisible while nothing read the file; now that
+    `self-diagnose.scan_writer_gate_advisories` reports it at session start, the
+    suite's own records would be indistinguishable from real unwitnessed
+    publications, and the live sink's last week already is: its UNRESOLVED rows
+    arrive in near-exact daily `shape 1`/`shape None` pairs whose counts track
+    fixture cardinality, not anything a human published.
+
+    Same accommodation as `_isolate_judge_ledger` above, and for its sharper
+    reason: suite lines in a file a future reader counts from are not clutter but
+    wrong data. The scanner resolves the same `advisory_sink()`, so this one
+    setenv isolates writer and reader together; the tests that own the scan pass
+    an explicit `sink=` and do not depend on it."""
+    monkeypatch.setenv(
+        "CLAUDE_PUBLISHED_TEXT_GATE_ADVISORIES",
+        str(tmp_path / "published-text-gate-advisories.jsonl"),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_recursion_depth(monkeypatch):
     """Drop the ambient AGENT_RECURSION_DEPTH for the suite at large.
 

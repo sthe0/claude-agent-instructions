@@ -45,6 +45,18 @@ Read-only, mechanical scans over the agent's OWN functional elements:
   crutch-registry-drift  the count of code sites verify-semantic-gates.py's
                         own condition (a) finds unregistered has risen since
                         the last scan (tracked in a small history file).
+  writer-gate-unresolved
+                        the published-text writer gate failed open on a
+                        publication whose body it could not resolve, within a
+                        recent window. The gate records each such fall-through
+                        to its own advisory sink (published_body.record_advisory)
+                        and then allows -- correctly, since a missing observable
+                        must not wedge a turn -- but nothing read that sink, so
+                        every fail-open was invisible by construction: a route
+                        the gate cannot resolve went on passing unresolved
+                        publications for as long as nobody happened to look.
+                        Surfacing it here is what turns the sink from an audit
+                        trail into a signal.
 
 The DECIDABLE rule is mechanized here; the PERCEPTION (is a flagged candidate
 worth re-norming, and how) stays the model's — this scanner only detects and
@@ -68,6 +80,7 @@ import shlex
 import sys
 import time
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -84,6 +97,11 @@ MEMORY_INDEX_LINE_THRESHOLD = 200
 # overlap at or above this Jaccard similarity are flagged as near-duplicates
 # ("generalize and group" candidates). Tunable via --near-dup-threshold.
 NEAR_DUPLICATE_JACCARD_THRESHOLD = 0.6
+
+# Window for the writer-gate fail-open scan. Seven days is one working week: long
+# enough that a single unresolved publication is still on screen at the next
+# session, short enough that a route fixed last month stops being reported.
+WRITER_GATE_ADVISORY_WINDOW_DAYS = 7
 
 _LINK_RE = re.compile(r"\]\(([^)]+)\)")
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
@@ -629,6 +647,76 @@ def scan_crutch_regressions(
     return out
 
 
+def writer_gate_advisory_sink() -> Path:
+    """The published-text gate's own advisory sink, resolved by the gate's own
+    `advisory_sink()` rather than recomputed here -- so a rename, a relocation,
+    or the test-isolation env override cannot leave this scanner reading a path
+    nothing writes, or the real sink while the writer is redirected elsewhere."""
+    sys.path.insert(0, str(SCRIPT_DIR))
+    from lib import published_body  # noqa: PLC0415 -- lazy: only this scan needs it
+
+    return published_body.advisory_sink()
+
+
+def scan_writer_gate_advisories(
+    sink: "Path | None" = None, window_days: int = WRITER_GATE_ADVISORY_WINDOW_DAYS
+) -> "list[Difficulty]":
+    """Report the published-text writer gate's recent fail-opens.
+
+    Read-only and fail-open itself: an unreadable sink, an unparsable line, or a
+    timestamp in a shape this cannot read is skipped, never raised -- a scanner
+    that crashes on its own diagnostics file is worse than one that reports
+    nothing. Groups by the gate's `shape` field so the finding names WHICH body
+    shape went unresolved, which is the part that tells a reader whether to
+    register a route, widen a resolver, or accept the fall-through."""
+    try:
+        sink = sink if sink is not None else writer_gate_advisory_sink()
+    except Exception:
+        return []
+    try:
+        lines = sink.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+
+    cutoff = time.time() - window_days * 86400
+    by_shape: "dict[str, int]" = {}
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict) or record.get("kind") != "UNRESOLVED":
+            continue
+        stamp = record.get("timestamp")
+        if not isinstance(stamp, str):
+            continue
+        try:
+            when = datetime.fromisoformat(stamp).timestamp()
+        except ValueError:
+            continue
+        if when < cutoff:
+            continue
+        shape = record.get("shape")
+        key = "unknown" if shape is None else str(shape)
+        by_shape[key] = by_shape.get(key, 0) + 1
+
+    if not by_shape:
+        return []
+    total = sum(by_shape.values())
+    breakdown = ", ".join(f"shape {k}×{v}" for k, v in sorted(by_shape.items()))
+    return [
+        Difficulty(
+            "writer-gate-unresolved",
+            str(sink),
+            f"{total} publication(s) in the last {window_days}d whose body the gate "
+            f"could not resolve, so it failed open ({breakdown})",
+        )
+    ]
+
+
 def default_memory_roots() -> "list[Path]":
     roots: "list[Path]" = []
     global_mem = config_root.agent_home() / "memory-global"
@@ -661,8 +749,11 @@ def scan(
     settings_paths: "list[Path] | None" = None,
     scan_hooks: bool = True,
     near_dup_threshold: float = NEAR_DUPLICATE_JACCARD_THRESHOLD,
+    scan_advisories: bool = True,
 ) -> "list[Difficulty]":
     out: "list[Difficulty]" = []
+    if scan_advisories:
+        out.extend(scan_writer_gate_advisories())
     if scan_hooks:
         paths = settings_paths if settings_paths is not None else default_settings_paths()
         out.extend(scan_broken_hooks(paths))
@@ -690,6 +781,7 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument("--settings-path", action="append", default=None, help="repeatable; overrides the default settings.json discovery for the broken-hook-registration scan")
     parser.add_argument("--no-hooks", action="store_true", help="skip the broken-hook-registration scan")
     parser.add_argument("--near-dup-threshold", type=float, default=NEAR_DUPLICATE_JACCARD_THRESHOLD, help="Jaccard threshold for the near-duplicate scan")
+    parser.add_argument("--no-advisories", action="store_true", help="skip the published-text writer-gate fail-open scan")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -704,6 +796,7 @@ def main(argv: "list[str] | None" = None) -> int:
         settings_paths=settings_paths,
         scan_hooks=not args.no_hooks,
         near_dup_threshold=args.near_dup_threshold,
+        scan_advisories=not args.no_advisories,
     )
 
     if args.json:

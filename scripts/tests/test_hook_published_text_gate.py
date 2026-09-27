@@ -467,3 +467,62 @@ def test_not_a_publication_returns_well_under_the_stated_bound(tmp_path):
     assert proc.returncode == 0
     assert not _is_deny(proc)
     assert elapsed <= 2.0, f"NOT_A_PUBLICATION took {elapsed:.2f}s"
+
+
+# --- shape 7: the raw-HTTP route, end to end -------------------------------
+#
+# The module-level tests in test_published_body.py prove `resolve()` reads the
+# right bytes off this route. These four prove the HOOK acts on them: a route
+# that resolves correctly but never reaches a decision is exactly the state the
+# gate was in before shape 7 existed, and no resolver test can tell the two
+# apart.
+
+def test_raw_http_write_unwitnessed_denies(tmp_path):
+    """The end-to-end proof the new route GATES. Before shape 7 this same
+    command reached `_match_seam_bash`, which saw `python3`, returned
+    NOT_A_PUBLICATION, and allowed silently -- so a tracker publication issued
+    through urllib bypassed the writer gate entirely."""
+    write_seam(tmp_path)
+    entry = _by_label("raw-http-write-body-from-single-referenced-text-file")
+    proc = run_hook(bash_payload(entry["command"], transcript("unwitnessed")), tmp_path)
+    assert proc.returncode == 0
+    assert _is_deny(proc), f"raw-HTTP publication was allowed: {proc.stdout!r}"
+    reason = _deny_reason(proc)
+    assert "tech-writer" in reason
+
+
+def test_raw_http_write_witnessed_allows(tmp_path):
+    """The control for the test above: same command, same route, a transcript
+    that DOES carry the writer pass over these exact bytes. Without this, a
+    resolver that returned a constant deny would pass the deny test."""
+    write_seam(tmp_path)
+    entry = _by_label("raw-http-write-body-from-single-referenced-text-file")
+    proc = run_hook(bash_payload(entry["command"], transcript("witnessed")), tmp_path)
+    assert proc.returncode == 0
+    assert not _is_deny(proc), f"witnessed raw-HTTP publication was denied: {proc.stdout!r}"
+
+
+def test_raw_http_ambiguous_body_allows_and_records_an_advisory(tmp_path):
+    """Two candidate text files: the gate cannot tell which is the body, so it
+    fails OPEN -- and the advisory it records is the only trace. This asserts
+    both halves, because a fail-open whose advisory is missing is invisible,
+    which is the difficulty `scan_writer_gate_advisories` exists to remove."""
+    write_seam(tmp_path)
+    entry = _by_label("raw-http-write-two-text-files-is-ambiguous")
+    proc = run_hook(bash_payload(entry["command"], transcript("unwitnessed")), tmp_path)
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+    rows = _advisory_rows(tmp_path)
+    assert [r for r in rows if r["kind"] == published_body.UNRESOLVED and r["shape"] == 7], rows
+
+
+def test_raw_http_read_of_the_same_endpoint_is_not_gated(tmp_path):
+    """The method half of the match carries weight: a GET against the very
+    endpoint the seam declares must not be treated as a publication, or every
+    ticket read would demand a writer pass."""
+    write_seam(tmp_path)
+    entry = _by_label("raw-http-read-of-same-endpoint-is-not-a-publication")
+    proc = run_hook(bash_payload(entry["command"], transcript("unwitnessed")), tmp_path)
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+    assert _advisory_rows(tmp_path) == []
