@@ -8627,6 +8627,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("invariants_to_preserve", ("critique",)),
     ("differences_to_remove", ("critique",)),
     ("factor", ("normalize",)),
+    ("normalize_factor", ("replan",)),
     ("quality_note", ("resolve", "close")),
     ("coverage_waiver", ("replan",)),
     ("normalization_waiver", ("replan",)),
