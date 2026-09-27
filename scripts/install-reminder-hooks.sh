@@ -166,6 +166,15 @@ DESIRED = [
     # own AskUserQuestion (2026-09-14 incident). Reuses hook-guard-destructive-rm.py's
     # own detector. Fail-open on error; never wedges the workflow.
     ("PreToolUse",       "Bash",  "hook-guard-subagent-destructive-action.py", 5),
+    # Hard gate (asks, never denies): a Bash/Edit call that would widen the
+    # live permission surface outside the plan-stage grant channel -- G1 a
+    # write onto live settings/agentctl state, G2 a `claude` re-invocation
+    # carrying a widening flag, G3 a persistent-launch surface, G4 a
+    # self-granted `resolve-permission --decision granted`. Pure in-process
+    # classification (no subprocess/judge), so its timeout matches the other simple
+    # guards above rather than the judge-backed gates below.
+    ("PreToolUse",       "Bash",  "hook-guard-permission-surface.py", 5),
+    ("PreToolUse",       "Edit|Write", "hook-guard-permission-surface.py", 5),
     # Hard gate: deny an Edit/Write or `git commit` in canon (the serving/PRIMARY
     # Core checkout, on ANY branch, plus any machine-local canon-roots entry) —
     # feature work must go in a linked worktree or second mount, so live hooks

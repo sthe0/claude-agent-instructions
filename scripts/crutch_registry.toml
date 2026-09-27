@@ -2421,6 +2421,30 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "11ed7e92e473a1de"
+domain = "code"
+file = "scripts/replay-permission-guard.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "36cd75115d9fbdf9"
+domain = "code"
+file = "scripts/replay-permission-guard.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "3ad4618aa414510e"
+domain = "code"
+file = "scripts/replay-permission-guard.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "75d1d6087872eccb"
 domain = "code"
 file = "scripts/review_open_detect.py"
@@ -5197,6 +5221,30 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "c9c65050f947ee36"
+domain = "code"
+file = "scripts/tests/test_grants_guard_disjoint.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "bddc4a8ee73a2421"
+domain = "code"
+file = "scripts/tests/test_grants_guard_disjoint.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3f8ca32fa4fec74d"
+domain = "code"
+file = "scripts/tests/test_grants_guard_disjoint.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "f4971033f7c7276d"
 domain = "code"
 file = "scripts/tests/test_guard_canon_bash_writes.py"
@@ -5304,6 +5352,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "87d7d78b97c68c1e"
 domain = "code"
 file = "scripts/tests/test_hook_guard_canon_readonly.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "c87b11e67f2ff68a"
+domain = "code"
+file = "scripts/tests/test_hook_guard_permission_surface.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -8981,6 +9037,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "0d498d30f5dcdc93"
+domain = "code"
+file = "scripts/tests/test_replay_permission_guard.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "ed3b47643a10c488"
 domain = "code"
 file = "scripts/tests/test_resolution_reminder_hook.py"
@@ -11277,6 +11341,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "5f368230d8c7990a"
+domain = "code_file_rollup"
+file = "scripts/replay-permission-guard.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "5fb5bc36f11c990b"
 domain = "code_file_rollup"
 file = "scripts/review_open_detect.py"
@@ -11789,6 +11861,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "a1a2202a8f0be61c"
+domain = "code_file_rollup"
+file = "scripts/tests/test_grants_guard_disjoint.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "dd56909e009c8024"
 domain = "code_file_rollup"
 file = "scripts/tests/test_guard_canon_bash_writes.py"
@@ -11816,6 +11896,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "731609f9436619d1"
 domain = "code_file_rollup"
 file = "scripts/tests/test_hook_guard_canon_readonly.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "41d6e9bc40b5f82c"
+domain = "code_file_rollup"
+file = "scripts/tests/test_hook_guard_permission_surface.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -12312,6 +12400,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "e01fb6eb57cc9e8f"
 domain = "code_file_rollup"
 file = "scripts/tests/test_replan_renegotiation.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "22c2ad74b1bdb10d"
+domain = "code_file_rollup"
+file = "scripts/tests/test_replay_permission_guard.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

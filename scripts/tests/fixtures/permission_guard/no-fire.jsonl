@@ -1,0 +1,1 @@
+{"type": "assistant", "uuid": "asst-neutral", "timestamp": "2026-01-01T00:00:00Z", "cwd": "/tmp/fixture", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_neutral", "name": "Read", "input": {"file_path": "/tmp/fixture/notes.txt"}}]}}

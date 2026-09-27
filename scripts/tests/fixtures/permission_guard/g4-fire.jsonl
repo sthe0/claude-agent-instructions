@@ -1,0 +1,1 @@
+{"type": "assistant", "uuid": "asst-g4-1", "timestamp": "2026-01-01T00:00:00Z", "cwd": "/tmp/fixture", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_g4_1", "name": "Bash", "input": {"command": "python3 -m agentctl resolve-permission --rule 'Bash(rm:*)' --stage 3 --decision granted"}}]}}

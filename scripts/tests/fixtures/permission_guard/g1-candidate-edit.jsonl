@@ -1,0 +1,1 @@
+{"type": "assistant", "uuid": "asst-g1c-1", "timestamp": "2026-01-01T00:00:00Z", "cwd": "/tmp/fixture", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_g1c_1", "name": "Edit", "input": {"file_path": "/tmp/fixture/.claude-agent/settings.json", "old_string": "x", "new_string": "y"}}]}}

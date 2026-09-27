@@ -149,6 +149,12 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
      "denies a subagent-issued recursive rm against any target, regardless of "
      "path; absent, a spawned/forked agent can self-authorize a destructive "
      "delete outside the coordination spine, as in the 2026-09-14 incident"),
+    ("hook-guard-permission-surface.py",
+     "asks before a Bash/Edit call widens the live permission surface outside "
+     "the plan-stage grant channel (G1 live-settings/agentctl-state writes, "
+     "G2 a claude re-invocation with a widening flag, G3 a persistent-launch "
+     "surface, G4 a self-granted resolve-permission); absent, a spawned "
+     "child's own call can widen its permissions with no human in the loop"),
 )
 
 # The TIMEOUT axis: how long a registration must be allowed to run.
