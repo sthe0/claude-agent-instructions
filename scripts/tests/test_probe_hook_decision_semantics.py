@@ -176,10 +176,11 @@ def test_detect_denial_false():
 
 @pytest.mark.parametrize("pane_text", [
     "Choose the text style that looks best with your terminal",
-    "Do you trust the files in this folder?",
     " Let's get started.",
     "Paste code here if prompted >",
     "https://claude.com/cai/oauth/authorize?code=true",
+    "Accessing untrusted files may pose security risks",
+    "No, disable external imports",
 ])
 def test_detect_onboarding_true(pane_text):
     assert probe.detect_onboarding(pane_text)
@@ -189,10 +190,35 @@ def test_detect_onboarding_false_on_task_output():
     assert not probe.detect_onboarding("PERM_PROBE_OK_abc123\ndone")
 
 
+# --- detect_trust_dialog (folder-trust "quick safety check" dialog) -------
+# Kept separate from detect_onboarding: `_dismiss_onboarding` sends a blind
+# Enter for an onboarding match, and Enter on this dialog accepts its
+# observed live default, "No, exit" -- so it must be detected and NEVER
+# auto-dismissed.
+
+@pytest.mark.parametrize("pane_text", [
+    "Quick safety check: Is this a project you created or one you trust?",
+    "  > 1. Yes, I trust this folder\n    2. No, exit",
+    "Do you trust the files in this folder?",
+    "Is this a project you created or one you trust?",
+])
+def test_detect_trust_dialog_true(pane_text):
+    assert probe.detect_trust_dialog(pane_text)
+
+
+def test_detect_trust_dialog_false_on_task_output():
+    assert not probe.detect_trust_dialog("PERM_PROBE_OK_abc123\ndone")
+
+
+def test_detect_trust_dialog_false_on_ordinary_onboarding():
+    assert not probe.detect_trust_dialog("Choose the text style that looks best with your terminal")
+
+
 # --- scratch hook / settings builders (file writes only, no subprocess) --
 
 def test_decision_hook_script_writes_executable_ask(tmp_path):
-    path = probe._decision_hook_script(tmp_path, "ask")
+    witness = tmp_path / "witness.log"
+    path = probe._decision_hook_script(tmp_path, "ask", witness)
     assert path.exists()
     assert path.stat().st_mode & 0o111  # executable bit set
     content = path.read_text()
@@ -200,13 +226,21 @@ def test_decision_hook_script_writes_executable_ask(tmp_path):
 
 
 def test_decision_hook_script_writes_executable_deny(tmp_path):
-    path = probe._decision_hook_script(tmp_path, "deny")
+    witness = tmp_path / "witness.log"
+    path = probe._decision_hook_script(tmp_path, "deny", witness)
     content = path.read_text()
     assert "'deny'" in content
 
 
+def test_decision_hook_script_references_witness_path(tmp_path):
+    witness = tmp_path / "witness.log"
+    path = probe._decision_hook_script(tmp_path, "deny", witness)
+    assert str(witness) in path.read_text()
+
+
 def test_settings_with_hook_shape(tmp_path):
-    hook_path = probe._decision_hook_script(tmp_path, "deny")
+    witness = tmp_path / "witness.log"
+    hook_path = probe._decision_hook_script(tmp_path, "deny", witness)
     settings = probe._settings_with_hook(hook_path)
     pretooluse = settings["hooks"]["PreToolUse"]
     assert pretooluse[0]["matcher"] == "Bash"
@@ -215,9 +249,104 @@ def test_settings_with_hook_shape(tmp_path):
 
 
 def test_settings_with_hook_includes_extra_perms(tmp_path):
-    hook_path = probe._decision_hook_script(tmp_path, "ask")
+    witness = tmp_path / "witness.log"
+    hook_path = probe._decision_hook_script(tmp_path, "ask", witness)
     settings = probe._settings_with_hook(hook_path, extra_perms={"deny": ["Edit(//x/**)"]})
     assert settings["permissions"] == {"deny": ["Edit(//x/**)"]}
+
+
+# --- _hook_fired_for_bash (the witness rule) ------------------------------
+# A cell counts as observed only if the witness shows the hook fired for a
+# Bash call -- independent of what decision it returned, and independent of
+# whether the sentinel text ever appears anywhere (a session that never
+# reached a tool-use attempt has no sentinel and no prompt either, and must
+# still be classified not-observed rather than "sentinel_ran=no").
+
+def test_hook_fired_for_bash_false_when_witness_missing(tmp_path):
+    assert not probe._hook_fired_for_bash(tmp_path / "never-written.log")
+
+
+def test_hook_fired_for_bash_false_when_witness_empty(tmp_path):
+    witness = tmp_path / "witness.log"
+    witness.write_text("", encoding="utf-8")
+    assert not probe._hook_fired_for_bash(witness)
+
+
+def test_hook_fired_for_bash_false_when_only_non_bash_entries(tmp_path):
+    witness = tmp_path / "witness.log"
+    witness.write_text(json.dumps({"tool_name": "Read", "decision": "allow"}) + "\n", encoding="utf-8")
+    assert not probe._hook_fired_for_bash(witness)
+
+
+def test_hook_fired_for_bash_true_when_bash_entry_present(tmp_path):
+    witness = tmp_path / "witness.log"
+    witness.write_text(
+        json.dumps({"tool_name": "Read", "decision": "allow"}) + "\n"
+        + json.dumps({"tool_name": "Bash", "decision": "deny"}) + "\n",
+        encoding="utf-8",
+    )
+    assert probe._hook_fired_for_bash(witness)
+
+
+def test_hook_fired_for_bash_skips_unparseable_lines(tmp_path):
+    witness = tmp_path / "witness.log"
+    witness.write_text("not json\n" + json.dumps({"tool_name": "Bash"}) + "\n", encoding="utf-8")
+    assert probe._hook_fired_for_bash(witness)
+
+
+# --- _tail_evidence ---------------------------------------------------------
+
+def test_tail_evidence_empty_text():
+    assert probe._tail_evidence("") == "(empty)"
+
+
+def test_tail_evidence_truncates_and_flattens_newlines():
+    text = "line one\nline two\nline three"
+    result = probe._tail_evidence(text, max_chars=1000)
+    assert "\n" not in result
+    assert "line three" in result
+
+
+# --- _not_observed_result --------------------------------------------------
+
+def test_not_observed_result_all_none_fields():
+    r = probe._not_observed_result("cell:x", "auto", "deny", False, "some reason")
+    assert r.effective_mode is None
+    assert r.sentinel_ran is None
+    assert r.prompt_shown is None
+    assert r.notes == "some reason"
+
+
+# --- _build_interactive_cell_result (pure decision logic) -----------------
+# Synthetic coverage of the two not-observed paths the fix-round-2 brief
+# requires: a pane stuck at the trust dialog, and a witness showing the hook
+# never fired -- both must classify not-observed even with no sentinel and
+# no prompt text anywhere in the pane.
+
+def test_interactive_result_trust_blocked_is_not_observed():
+    pane = "Quick safety check: Is this a project you created or one you trust?"
+    r = probe._build_interactive_cell_result("deny", "PERM_PROBE_OK_x", pane, hook_fired=False, trust_blocked=True, timed_out=False)
+    assert r.effective_mode is None
+    assert r.sentinel_ran is None
+    assert r.prompt_shown is None
+    assert "trust" in r.notes.lower()
+
+
+def test_interactive_result_hook_not_fired_is_not_observed_even_with_no_pane_evidence():
+    r = probe._build_interactive_cell_result("ask", "PERM_PROBE_OK_x", "", hook_fired=False, trust_blocked=False, timed_out=False)
+    assert r.effective_mode is None
+    assert r.sentinel_ran is None
+    assert r.prompt_shown is None
+    assert "hook never fired" in r.notes
+
+
+def test_interactive_result_hook_fired_reports_observed_fields():
+    marker = "PERM_PROBE_OK_x"
+    pane = f"some output\n{marker}\ndone"
+    r = probe._build_interactive_cell_result("deny", marker, pane, hook_fired=True, trust_blocked=False, timed_out=False)
+    assert r.effective_mode == "auto"
+    assert r.sentinel_ran is True
+    assert r.notes.startswith("hook fired")
 
 
 # --- render_table ---------------------------------------------------------

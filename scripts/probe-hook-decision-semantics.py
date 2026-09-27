@@ -82,6 +82,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
+WORKTREE_ROOT = SCRIPTS_DIR.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 def _dump_raw(raw_dump_dir: Path | None, name: str, raw: str) -> None:
@@ -132,11 +133,32 @@ DENIAL_INDICATORS = ("permission denied", "permission to use", "hook blocked", "
 # and dismissed (accepting whatever default is pre-selected) before sending
 # the real task.
 ONBOARDING_INDICATORS = (
-    "choose the text style", "trust the files", "let's get started", "select login method",
+    "choose the text style", "let's get started", "select login method",
     "paste code here", "oauth/authorize",
+    # Observed live only after switching the interactive cwd to WORKTREE_ROOT
+    # (see run_interactive_cell): this repo's own CLAUDE.md carries external
+    # `@`-imports (`~/.claude-agent/config.md`, `~/.claude-agent/memory-global/
+    # MEMORY.md`), which the TUI gates behind a one-time security dialog.
+    # Its pre-selected default, "No, disable external imports", is safe to
+    # accept via Enter -- unlike the folder-trust dialog's default, it does
+    # not exit the session or grant anything; it degrades the child to
+    # running without those imports, which this probe does not depend on.
+    "accessing untrusted files", "external imports",
 )
 ONBOARDING_DISMISS_ATTEMPTS = 4
 ONBOARDING_DISMISS_WAIT_S = 3
+
+# Substrings observed in the folder-trust ("quick safety check") dialog --
+# kept SEPARATE from ONBOARDING_INDICATORS on purpose: `_dismiss_onboarding`
+# sends a blind Enter for the latter, and Enter on this dialog accepts its
+# pre-selected default, which was observed live to be "No, exit" -- exiting
+# the session outright. A cell that hits this dialog must never be
+# auto-dismissed; it is recorded not-observed instead (see item 3 of the
+# stage-6 fix-round-2 brief).
+TRUST_DIALOG_INDICATORS = (
+    "quick safety check", "trust this folder", "trust the files",
+    "is this a project you created",
+)
 
 
 @dataclass
@@ -155,9 +177,13 @@ def _marker(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
-def _decision_hook_script(tmpdir: Path, decision: str) -> Path:
+def _decision_hook_script(tmpdir: Path, decision: str, witness_path: Path) -> Path:
     """Write a scratch PreToolUse hook that unconditionally returns `decision`
-    (ask/deny) for any Bash tool call, and allow for everything else."""
+    (ask/deny) for any Bash tool call, and allow for everything else. Every
+    invocation appends one JSON line to `witness_path` before printing its
+    decision -- the only proof a cell has that the hook actually ran for the
+    sentinel call, as opposed to the child never reaching a tool-use attempt
+    at all (e.g. stuck at a pre-task dialog). See `_hook_fired_for_bash`."""
     path = tmpdir / f"hook-{decision}.py"
     path.write_text(
         "#!/usr/bin/env python3\n"
@@ -168,6 +194,8 @@ def _decision_hook_script(tmpdir: Path, decision: str) -> Path:
         "    payload = {}\n"
         "tool_name = payload.get('tool_name')\n"
         f"decision = {decision!r} if tool_name == 'Bash' else 'allow'\n"
+        f"with open({str(witness_path)!r}, 'a', encoding='utf-8') as _w:\n"
+        "    _w.write(json.dumps({'tool_name': tool_name, 'decision': decision}) + chr(10))\n"
         "print(json.dumps({'hookSpecificOutput': {\n"
         "    'hookEventName': 'PreToolUse',\n"
         "    'permissionDecision': decision,\n"
@@ -177,6 +205,40 @@ def _decision_hook_script(tmpdir: Path, decision: str) -> Path:
     )
     path.chmod(0o755)
     return path
+
+
+def _hook_fired_for_bash(witness_path: Path) -> bool:
+    """True iff the scratch hook's witness file shows at least one invocation
+    for a Bash tool call -- i.e. the child actually reached a Bash tool-use
+    attempt and the hook ran, regardless of what decision it returned."""
+    if not witness_path.exists():
+        return False
+    for line in witness_path.read_text(encoding="utf-8").splitlines():
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if obj.get("tool_name") == "Bash":
+            return True
+    return False
+
+
+def _tail_evidence(text: str, max_chars: int = 200) -> str:
+    """A short, single-line tail of `text` for a not-observed cell's notes --
+    enough to see what the child was actually doing, without dumping a whole
+    transcript/pane capture into the docs table."""
+    text = text.strip()
+    if not text:
+        return "(empty)"
+    return text[-max_chars:].replace("\n", " | ")
+
+
+def _not_observed_result(cell_id: str, requested_mode: str, decision: str, timed_out: bool, notes: str) -> CellResult:
+    return CellResult(
+        cell_id=cell_id, requested_mode=requested_mode, decision=decision,
+        effective_mode=None, sentinel_ran=None, prompt_shown=None,
+        timed_out=timed_out, notes=notes,
+    )
 
 
 def _settings_with_hook(hook_path: Path, extra_perms: dict | None = None) -> dict:
@@ -337,24 +399,40 @@ def detect_onboarding(pane_text: str) -> bool:
     return any(indicator in lowered for indicator in ONBOARDING_INDICATORS)
 
 
-def _dismiss_onboarding(session_name: str) -> None:
-    """Accept whatever default onboarding dialog (theme picker, folder-trust)
+def detect_trust_dialog(pane_text: str) -> bool:
+    lowered = pane_text.lower()
+    return any(indicator in lowered for indicator in TRUST_DIALOG_INDICATORS)
+
+
+def _dismiss_onboarding(session_name: str) -> str | None:
+    """Accept whatever default onboarding dialog (theme picker, login screen)
     is pre-selected by sending Enter, re-checking the pane each time, until
-    none of ONBOARDING_INDICATORS remain or the attempt budget is spent."""
+    none of ONBOARDING_INDICATORS remain or the attempt budget is spent.
+    Returns None on success. Never sends Enter into a folder-trust dialog
+    (its default was observed live to be "No, exit", which would kill the
+    session) -- returns "trust_dialog" immediately instead, without
+    dismissing anything, so the caller can record the cell not-observed.
+    Returns "onboarding_budget_exhausted" if neither resolves within the
+    attempt budget."""
     for _ in range(ONBOARDING_DISMISS_ATTEMPTS):
         capture = subprocess.run(
             ["tmux", "capture-pane", "-t", session_name, "-p", "-S", "-200"],
             timeout=10, capture_output=True, text=True, check=False,
         )
-        if not detect_onboarding(capture.stdout):
-            return
+        pane = capture.stdout
+        if detect_trust_dialog(pane):
+            return "trust_dialog"
+        if not detect_onboarding(pane):
+            return None
         subprocess.run(["tmux", "send-keys", "-t", session_name, "Enter"], timeout=10, check=False)
         time.sleep(ONBOARDING_DISMISS_WAIT_S)
+    return "onboarding_budget_exhausted"
 
 
 def run_headless_cell(mode: str, decision: str, tmpdir: Path, raw_dump_dir: Path | None = None) -> CellResult:
     marker = _marker("PERM_PROBE_OK")
-    hook_path = _decision_hook_script(tmpdir, decision)
+    witness_path = tmpdir / f"witness_{_marker('w')}.log"
+    hook_path = _decision_hook_script(tmpdir, decision, witness_path)
     settings = _settings_with_hook(hook_path)
     kwargs = host_llm.isolated_run_kwargs()
     cmd = [
@@ -371,6 +449,10 @@ def run_headless_cell(mode: str, decision: str, tmpdir: Path, raw_dump_dir: Path
     prompt = f"Use the Bash tool to run exactly this command and nothing else: echo {marker}"
     raw, timed_out = _run_child(cmd, prompt, env=kwargs["env"], cwd=kwargs["cwd"], timeout_s=HEADLESS_TIMEOUT_S)
     _dump_raw(raw_dump_dir, f"headless-{mode}-{decision}", raw)
+    cell_id = f"headless:{mode}:{decision}"
+    if not _hook_fired_for_bash(witness_path):
+        notes = f"not observed: hook never fired (last stream evidence: {_tail_evidence(raw)})"
+        return _not_observed_result(cell_id, mode, decision, timed_out, notes)
     effective_mode = parse_stream_json_effective_mode(raw)
     ran = command_executed(raw, marker)
     denied = permission_denied(raw)
@@ -381,7 +463,7 @@ def run_headless_cell(mode: str, decision: str, tmpdir: Path, raw_dump_dir: Path
         else ""
     )
     return CellResult(
-        cell_id=f"headless:{mode}:{decision}",
+        cell_id=cell_id,
         requested_mode=mode,
         decision=decision,
         effective_mode=effective_mode,
@@ -405,40 +487,76 @@ def build_interactive_inner_cmd(cwd: str, settings: dict) -> str:
     )
 
 
+def _build_interactive_cell_result(
+    decision: str, marker: str, pane_text: str, hook_fired: bool, trust_blocked: bool, timed_out: bool,
+) -> CellResult:
+    """Pure decision logic for the interactive cell, factored out of
+    `run_interactive_cell` so it is unit-testable without tmux/subprocess.
+    A cell counts as observed only if the hook actually fired for the
+    sentinel call (`hook_fired`, from the witness file) and the session
+    never got stuck at the folder-trust dialog (`trust_blocked`)."""
+    cell_id = f"interactive:auto:{decision}"
+    if trust_blocked:
+        notes = (
+            "not observed: hit the folder-trust dialog despite launching in "
+            f"the trusted worktree root; last pane: {_tail_evidence(pane_text)}"
+        )
+        return _not_observed_result(cell_id, "auto", decision, timed_out, notes)
+    if not hook_fired:
+        notes = f"not observed: hook never fired (last pane: {_tail_evidence(pane_text)})"
+        return _not_observed_result(cell_id, "auto", decision, timed_out, notes)
+    return CellResult(
+        cell_id=cell_id,
+        requested_mode="auto",
+        decision=decision,
+        effective_mode="auto" if pane_text else None,
+        sentinel_ran=sentinel_present(pane_text, marker) if pane_text else None,
+        prompt_shown=detect_prompt(pane_text) if pane_text else None,
+        timed_out=timed_out,
+        notes="hook fired; captured tmux pane text below ceiling; see live.md for the raw capture" if pane_text else "no pane text captured",
+    )
+
+
 def run_interactive_cell(decision: str, tmpdir: Path, raw_dump_dir: Path | None = None) -> CellResult:
     """Runs ambient (see module docstring's 'Two isolation choices'): the
     interactive root always runs on this fleet's live settings/login chain,
     not an isolated one, so only the ambient chain can observe what it
-    actually sees. An isolated, freshly-onboarded CLAUDE_CONFIG_DIR was
-    tried first and routes the TUI into a browser-based OAuth login screen
-    that ignores a borrowed CLAUDE_CODE_OAUTH_TOKEN and cannot complete
-    non-interactively (unlike `-p` headless mode) -- switching to ambient
-    removes that gate entirely, since the ambient chain is already logged
-    in. `_dismiss_onboarding` is kept as a defensive backstop in case a
-    trust/theme dialog still appears; a decision hook still comes only from
-    a scratch `--settings` file this script writes and tears down, so no
-    live settings file is read or modified, and the tmux session is created
-    and killed entirely by this script."""
+    actually sees. The tmux pane's cwd is the WORKTREE_ROOT (not a scratch
+    mktemp dir) -- spawns already run there, so it is already trusted and
+    the folder-trust ("quick safety check") dialog is not expected to
+    appear; `_dismiss_onboarding` still checks for it defensively on every
+    poll and, if seen, returns "trust_dialog" without ever sending Enter
+    into it (its default was observed live to be "No, exit", which exits
+    the session). The scratch hook/settings/witness files still live in
+    `tmpdir` (a mktemp dir), referenced by absolute path -- a decision hook
+    comes only from a scratch `--settings` file this script writes and
+    tears down, so no live settings file is read or modified, and the tmux
+    session is created and killed entirely by this script."""
     marker = _marker("PERM_PROBE_OK")
-    hook_path = _decision_hook_script(tmpdir, decision)
+    witness_path = tmpdir / f"witness_{_marker('w')}.log"
+    hook_path = _decision_hook_script(tmpdir, decision, witness_path)
     settings = _settings_with_hook(hook_path)
     session_name = f"probe-{uuid.uuid4().hex[:10]}"
-    inner_cmd = build_interactive_inner_cmd(str(tmpdir), settings)
+    inner_cmd = build_interactive_inner_cmd(str(WORKTREE_ROOT), settings)
     pane_text = ""
     timed_out = False
+    trust_blocked = False
     try:
         subprocess.run(
             ["tmux", "new-session", "-d", "-s", session_name, "-x", "220", "-y", "50", inner_cmd],
             check=True, timeout=10,
         )
         time.sleep(TMUX_BOOT_WAIT_S)
-        _dismiss_onboarding(session_name)
-        subprocess.run(
-            ["tmux", "send-keys", "-t", session_name,
-             f"Use the Bash tool to run exactly this command and nothing else: echo {marker}", "Enter"],
-            check=True, timeout=10,
-        )
-        time.sleep(TMUX_RESPONSE_WAIT_S)
+        dismiss_result = _dismiss_onboarding(session_name)
+        if dismiss_result == "trust_dialog":
+            trust_blocked = True
+        else:
+            subprocess.run(
+                ["tmux", "send-keys", "-t", session_name,
+                 f"Use the Bash tool to run exactly this command and nothing else: echo {marker}", "Enter"],
+                check=True, timeout=10,
+            )
+            time.sleep(TMUX_RESPONSE_WAIT_S)
         capture = subprocess.run(
             ["tmux", "capture-pane", "-t", session_name, "-p", "-S", "-200"],
             check=True, timeout=10, capture_output=True, text=True,
@@ -451,33 +569,8 @@ def run_interactive_cell(decision: str, tmpdir: Path, raw_dump_dir: Path | None 
                         capture_output=True)
 
     _dump_raw(raw_dump_dir, f"interactive-auto-{decision}", pane_text)
-    blocked_on_login = bool(pane_text) and not sentinel_present(pane_text, marker) and detect_onboarding(pane_text)
-    if blocked_on_login:
-        notes = (
-            "not observed: ambient interactive TUI still routed to an "
-            "onboarding/login screen (unexpected on an already-logged-in "
-            "fleet chain); see raw dump if --raw-dump-dir was given"
-        )
-        return CellResult(
-            cell_id=f"interactive:auto:{decision}",
-            requested_mode="auto",
-            decision=decision,
-            effective_mode=None,
-            sentinel_ran=None,
-            prompt_shown=None,
-            timed_out=timed_out,
-            notes=notes,
-        )
-    return CellResult(
-        cell_id=f"interactive:auto:{decision}",
-        requested_mode="auto",
-        decision=decision,
-        effective_mode="auto" if pane_text else None,
-        sentinel_ran=sentinel_present(pane_text, marker) if pane_text else None,
-        prompt_shown=detect_prompt(pane_text) if pane_text else None,
-        timed_out=timed_out,
-        notes="captured tmux pane text below ceiling; see live.md for the raw capture" if pane_text else "no pane text captured",
-    )
+    hook_fired = _hook_fired_for_bash(witness_path)
+    return _build_interactive_cell_result(decision, marker, pane_text, hook_fired, trust_blocked, timed_out)
 
 
 def run_add_dir_read_cell(tmpdir: Path, raw_dump_dir: Path | None = None) -> CellResult:
