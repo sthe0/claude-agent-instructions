@@ -313,6 +313,43 @@ def _write_plan_snapshot(store: StateStore, state: SessionState, data: bytes, di
     return str(snap), digest
 
 
+def _write_plan_version_snapshot(store: StateStore, state: SessionState, data: bytes, digest: str) -> str | None:
+    """Content-address EVERY submitted plan version (submit_plan and every replan
+    kind), not just the approved ones `_write_plan_snapshot` covers — R9's plan-
+    version-content requirement wants every `plan_sha256`/`prev_plan_sha256` logged
+    on a history event to resolve to an actual file on disk, including a rejected
+    or refinement/no_change submission the approved-plan snapshot never touches.
+
+    A distinct filename prefix (`plan-version-` vs `plan-approved-`) so this never
+    collides with, or is mistaken for, the approved-plan snapshot machinery above —
+    that snapshot's own name and readers stay untouched. Content-hash-named so an
+    identical resubmission shares one file. Best-effort like its sibling: None when
+    the store exposes no on-disk path."""
+    path_fn = getattr(store, "path", None)
+    if path_fn is None:
+        return None
+    snap = path_fn(state.session_id).parent / f"plan-version-{digest[:16]}.toml"
+    snap.parent.mkdir(parents=True, exist_ok=True)
+    snap.write_bytes(data)
+    return str(snap)
+
+
+def _snapshot_plan_version(store: StateStore, state: SessionState, plan_path: str) -> str | None:
+    """Read `plan_path`'s current bytes, content-address them via
+    `_write_plan_version_snapshot`, and return the sha256 digest -- the read+write pair
+    `submit_plan` and every `replan` kind call so EVERY submitted plan version (not just
+    approved ones) resolves to an actual file on disk. Best-effort: None on an unreadable
+    file, leaving the caller to log the event without a digest rather than raise out of a
+    command that has already decided to accept/apply these bytes."""
+    try:
+        data = Path(plan_path).read_bytes()
+    except OSError:
+        return None
+    digest = hashlib.sha256(data).hexdigest()
+    _write_plan_version_snapshot(store, state, data, digest)
+    return digest
+
+
 def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str, str] | None:
     """Copy the plan AS APPROVED into the state dir and return (snapshot_path, hash).
 
@@ -3191,6 +3228,11 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # Past the refusal, so these bytes were ACCEPTED — which is the only thing
     # accepted_plan_digest ever records.
     _stamp_accepted_plan_digest(state, plan_path)
+    # R9: content-address these accepted bytes as a plan version, independent of the
+    # approved-plan snapshot below (that one is taken only at `approve`) -- so the
+    # `submit_plan` history event's plan_sha256 always resolves to a stored file, even
+    # for a submission never subsequently approved.
+    _submitted_plan_sha256 = _snapshot_plan_version(store, state, plan_path)
     state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     if resubmitting:
@@ -3222,7 +3264,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
             scope: pr for scope, pr in state.plan_stage_reviews.items() if _still_covers(pr)
         }
     state.plan_submitted_ts = time.time()
-    state.log("submit_plan", plan=plan_path, verified=True, revised=resubmitting)
+    state.log("submit_plan", plan=plan_path, verified=True, revised=resubmitting,
+              plan_sha256=_submitted_plan_sha256)
     bag = state.plugins.get("premise")
     if bag is not None:
         _launch_enumeration(state, bag, doc, plan_path)
@@ -6619,6 +6662,17 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         ),
         "n_replans": sum(1 for h in state.history if h.get("event") == "replan"),
         "n_difficulty_records": sum(1 for h in state.history if h.get("event") == "declare"),
+        # R9: re-norming counts, derived from history like the two rows above -- no new
+        # mutable state. n_normalizations counts every "normalize" event regardless of
+        # in_diagnosis; the outside-diagnosis variant is the subset explicitly flagged
+        # in_diagnosis=False (a DIAGNOSING-closure normalize never sets that key at all,
+        # so it is correctly excluded here without needing an in_diagnosis=True mirror).
+        "n_normalizations": sum(1 for h in state.history if h.get("event") == "normalize"),
+        "n_normalizations_outside_diagnosis": sum(
+            1 for h in state.history
+            if h.get("event") == "normalize" and h.get("in_diagnosis") is False
+        ),
+        "n_renormalize_replans": sum(1 for h in state.history if h.get("event") == "renormalize"),
         "spawn_count": cost_surface.get("spawn_count", 0),
         "total_cost_usd": cost_surface.get("total_cost_usd"),
         "weight_class": state.weight_class,
@@ -6843,8 +6897,20 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
     (note/leaf/principle) is payoff-gated and may be omitted, and so may the DESTINATION —
     the functional place the act lands on. The two are ORTHOGONAL: `--level` says how
     generally the record is written down, `--destination` says what is being repaired, and
-    every destination is recordable at every level."""
+    every destination is recordable at every level.
+
+    R9: also callable OUTSIDE DIAGNOSING (any node from CLASSIFIED to RESOLUTION) as a
+    plain record-only act -- a normalization worth writing down does not always arrive
+    framed as a difficulty closure. That branch never touches `state.difficulty` or any
+    gate (there is no difficulty record to touch, and normalization_blockers only ever
+    fires already-inside DIAGNOSING), and logs the SAME `normalize` event name with
+    `in_diagnosis=False` so every reader of the DIAGNOSING event still recognizes it. The
+    DIAGNOSING branch below is untouched -- same checks, in the same order, same
+    Directive, same log call -- dispatch happens FIRST, before any of this
+    function's own validation, so a DIAGNOSING call reaches byte-identical code."""
     state = _require(store, args.session)
+    if state.node != Node.DIAGNOSING.value:
+        return _cmd_normalize_outside_diagnosing(args, state, store)
     bad = _require_diagnosing(state)
     if bad:
         return bad
@@ -6874,6 +6940,34 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
     store.save(state)
     return Directive(True, state.node, "replan",
                      "renorming recorded; replan is now unblocked")
+
+
+def _cmd_normalize_outside_diagnosing(args, state: SessionState, store: StateStore) -> Directive:
+    """R9: the record-only sibling of cmd_normalize's DIAGNOSING branch -- runs at any
+    node from CLASSIFIED to RESOLUTION, touches no difficulty state and no gate (there
+    is none to touch outside DIAGNOSING), and logs the same `normalize` event name with
+    `in_diagnosis=False` so a reader scanning history for the event still finds it."""
+    factor = (getattr(args, "factor", None) or "").strip()
+    if not factor:
+        return Directive(False, state.node, "normalize",
+                         "normalize requires a non-empty --factor (the reproducible cause "
+                         "being re-normed)")
+    level = getattr(args, "level", None)
+    if level is not None and level not in NORMALIZATION_LEVELS:
+        return Directive(False, state.node, "normalize",
+                         f"normalize --level must be one of {list(NORMALIZATION_LEVELS)} or "
+                         f"omitted (payoff-gated by rediscovery-threshold-min), got {level!r}")
+    destination = getattr(args, "destination", None)
+    if destination is not None and destination not in NORMALIZATION_DESTINATIONS:
+        return Directive(False, state.node, "normalize",
+                         f"normalize --destination must be one of "
+                         f"{list(NORMALIZATION_DESTINATIONS)} or omitted (the functional "
+                         f"place the renorming lands on), got {destination!r}")
+    state.log("normalize", factor=factor, level=level, destination=destination,
+              in_diagnosis=False)
+    store.save(state)
+    return Directive(True, state.node, "continue",
+                     "renorming recorded outside a difficulty cycle")
 
 
 def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -> Directive:
@@ -6960,7 +7054,13 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
         cur.means.procedure = ns.means.procedure
     state.plan_path = args.plan
     _stamp_accepted_plan_digest(state, args.plan)
-    state.log("renormalize", stages=changed, plan=args.plan)
+    # R9: renormalize is one of the replan kinds every submitted version is
+    # content-addressed for, despite logging a distinct event name (see the class
+    # docstring above on why it's `renormalize`, not `replan`).
+    _prev_plan_sha256 = _snapshot_plan_version(store, state, old_path)
+    _new_plan_sha256 = _snapshot_plan_version(store, state, args.plan)
+    state.log("renormalize", stages=changed, plan=args.plan,
+              prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256)
     store.save(state)
     return Directive(
         True, state.node, "continue",
@@ -6994,6 +7094,20 @@ def _replan_cause(state: SessionState, explicit_reason: str | None) -> dict:
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load, stage_carry_key
+
+    # R9: --normalize-factor lets a replan record a normalize event in the SAME call,
+    # instead of requiring a separate `normalize` invocation first. Widen-don't-fork:
+    # reuses the exact record-only path cmd_normalize's outside-DIAGNOSING branch takes
+    # (same event name, same in_diagnosis derivation from the live node) -- never touches
+    # state.difficulty or any gate, and its absence never refuses this replan. Placed
+    # before every gate below and saved immediately so the record survives even a replan
+    # this call goes on to refuse -- "cheap by construction", not conditioned on success.
+    normalize_factor = (getattr(args, "normalize_factor", None) or "").strip()
+    if normalize_factor:
+        state.log("normalize", factor=normalize_factor,
+                  level=getattr(args, "normalize_level", None), destination=None,
+                  in_diagnosis=(state.node == Node.DIAGNOSING.value))
+        store.save(state)
 
     # precondition: an unacknowledged effort-divergence fire (whether it forced this
     # DIAGNOSING entry itself via the passing-diagnose path, or merely rode along on
@@ -7350,6 +7464,15 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # check. Only the NEW side — loaded strictly at seam (b) above — and submit-plan
     # are strict.
     old = _load(old_path, strict=False)
+    # R9: content-address both sides of this replan -- the OLD baseline (read fresh;
+    # `old_path` may be a legacy plan_path fallback never snapshotted before) and the
+    # NEW plan, reusing the exact (data, digest) seam (b) already read via
+    # `load_plan_with_digest` rather than re-reading args.plan a second time. Computed
+    # once here, past every refusal above, and used by whichever of the three kind
+    # branches below actually applies.
+    _prev_plan_sha256 = _snapshot_plan_version(store, state, old_path)
+    _write_plan_version_snapshot(store, state, _new_plan_bytes, _new_plan_digest)
+    _new_plan_sha256 = _new_plan_digest
     # coverage gate: inside the difficulty flow, the corrected plan must CARRY the
     # critique's similarities into conditions/invariants and CHANGE a means/method
     # for the declared differences. Empty split -> [] -> behaves exactly as before.
@@ -7429,6 +7552,14 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # warn-only and cannot influence any decision above it either way. (`run` is bound at
     # the seam above; only this CALL is deferred, which is where the cost is.)
     echo_advice = _submission_advice(new, run, state.weight_class)
+    # R9(d): non-blocking hint naming --normalize-factor when this replan didn't use it
+    # to record one -- advisory only, never a gate (a replan with nothing reproducible
+    # to re-norm is a completely ordinary replan).
+    if not normalize_factor:
+        echo_advice = echo_advice + [
+            "no normalize event recorded for this replan; pass --normalize-factor "
+            "<reproducible cause> to record one in the same call"
+        ]
 
     # if we are exiting the DIAGNOSING cycle (difficulty complete), the failed
     # stage is re-armed and we leave the cycle back to VERIFYING so next_stage can
@@ -7491,7 +7622,9 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                     s.outcome.status = StageStatus.PENDING.value
             state.difficulty = None
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
-            state.log("replan", kind="no_change", exited_diagnosing=True, **replan_cause)
+            state.log("replan", kind="no_change", exited_diagnosing=True,
+                      prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
+                      **replan_cause)
             task_accumulator.add(
                 state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
             )
@@ -7535,7 +7668,9 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         if diagnosing:
             state.difficulty = None
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
-        state.log("replan", kind="refinement", exited_diagnosing=diagnosing, **replan_cause)
+        state.log("replan", kind="refinement", exited_diagnosing=diagnosing,
+                  prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
+                  **replan_cause)
         task_accumulator.add(
             state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
         )
@@ -7601,7 +7736,9 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     state.difficulty = None
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
-    state.log("replan", kind="substantive", **replan_cause)
+    state.log("replan", kind="substantive",
+              prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
+              **replan_cause)
     task_accumulator.add(
         state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
     )
@@ -9072,6 +9209,15 @@ def build_parser() -> argparse.ArgumentParser:
                          "[meta.order].customer_id when the plan declares one")
     sp.add_argument("--renegotiation-note", dest="renegotiation_note", default=None,
                     help="what the customer decided and why (refused if empty)")
+    sp.add_argument("--normalize-factor", dest="normalize_factor", default=None,
+                    help="R9: record a normalize event in the SAME replan call, without a "
+                         "separate `normalize` invocation -- the reproducible cause being "
+                         "re-normed. Optional; its absence never refuses the replan (a "
+                         "non-blocking hint names the flag when it's missing)")
+    sp.add_argument("--normalize-level", dest="normalize_level", default=None,
+                    choices=list(NORMALIZATION_LEVELS),
+                    help="paired with --normalize-factor; recording level (payoff-gated), "
+                         "omit for an in-head note below the leaf threshold")
     sp = add("fire-acknowledge"); sp.add_argument("--session", required=True)
     sp.add_argument("--by", required=True, help="who decided — a name, not a narrative")
     sp.add_argument("--decision", required=True, choices=["continue", "abandon", "revise"],

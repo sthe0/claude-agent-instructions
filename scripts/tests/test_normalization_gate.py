@@ -188,11 +188,21 @@ def test_normalize_out_of_order_refused(store, fixtures_dir):
     assert store.load("v3").difficulty.normalization is None
 
 
-def test_normalize_outside_diagnosing_refused(store, fixtures_dir):
+def test_normalize_outside_diagnosing_records_without_touching_difficulty(store, fixtures_dir):
+    # R9: normalize is now callable outside DIAGNOSING as a plain record-only act —
+    # it succeeds, logs a "normalize" event flagged in_diagnosis=False, and touches
+    # no difficulty state (there is none to touch: state.difficulty stays None).
     cli.cmd_start(ns(session="v4", task="t", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)
-    d = cli.cmd_normalize(ns(session="v4", factor="cause", level="note"), store=store)
-    assert d.ok is False and d.action == "noop"
+    d = cli.cmd_normalize(ns(session="v4", factor="cause", level="note", destination=None),
+                          store=store)
+    assert d.ok is True
+    state = store.load("v4")
+    assert state.difficulty is None
+    events = [h for h in state.history if h.get("event") == "normalize"]
+    assert len(events) == 1
+    assert events[0]["in_diagnosis"] is False
+    assert events[0]["factor"] == "cause"
 
 
 # --- persistence: round-trip + legacy grandfather migration ------------------
