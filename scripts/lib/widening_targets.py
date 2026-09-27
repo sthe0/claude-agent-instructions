@@ -179,6 +179,29 @@ def add_dir_is_or_contains_launch_surface(path: str) -> bool:
 
 _CRONTAB_LIST_ONLY_OPERANDS = ["-l"]
 
+_REDIRECT_OPERATOR = re.compile(r"^\d*(?:>>?|<|>&|<&)\d*-?$")
+
+
+def _without_redirections(operands: list[str]) -> list[str]:
+    """`operands` minus shell redirections, as `segments` leaves them: a
+    fd-number token (`2`) before an operator, the operator (`>`, `>>`, `<`,
+    `>&`), and the target it names. `segments` splits `2>&1` at the `&`,
+    so `crontab -l 2>&1` arrives as operands `-l 2 >`; without this, a
+    list-only call with any redirect read as a write mode (B3 residue)."""
+    kept: list[str] = []
+    i = 0
+    while i < len(operands):
+        tok = operands[i]
+        if tok.isdigit() and i + 1 < len(operands) and _REDIRECT_OPERATOR.match(operands[i + 1]):
+            i += 1
+            continue
+        if _REDIRECT_OPERATOR.match(tok):
+            i += 1 if tok.endswith(("&", "-")) or re.search(r"\d$", tok) else 2
+            continue
+        kept.append(tok)
+        i += 1
+    return kept
+
 
 def is_crontab_target(command: str) -> bool:
     """True iff `command` invokes `crontab` in a mode that can WRITE the
@@ -200,7 +223,7 @@ def is_crontab_target(command: str) -> bool:
         for name, operands in iter_candidate_programs(seg):
             if name != "crontab":
                 continue
-            if operands == _CRONTAB_LIST_ONLY_OPERANDS:
+            if _without_redirections(operands) == _CRONTAB_LIST_ONLY_OPERANDS:
                 continue
             return True
     return False

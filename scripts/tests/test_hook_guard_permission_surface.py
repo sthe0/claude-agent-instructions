@@ -603,8 +603,10 @@ def test_g3_fires_on_crontab_invocation():
         "crontab /tmp/new-crontab",
         "crontab -",
         "crontab -e",
+        "crontab /tmp/new-crontab 2>&1 | tail -1",
+        "crontab -r 2>/dev/null",
     ],
-    ids=["install-file", "stdin", "edit"],
+    ids=["install-file", "stdin", "edit", "install-file-redirected", "remove-redirected"],
 )
 def test_g3_fires_on_crontab_write_modes(command):
     assert decide("Bash", {"command": command}, "/tmp", "default", None) == "ask"
@@ -616,8 +618,11 @@ def test_g3_fires_on_crontab_write_modes(command):
         "crontab -l",
         "which crontab",
         'echo "crontab"',
+        "crontab -l 2>&1 | head -20",
+        "crontab -l 2>/dev/null | grep -n tmux",
+        'systemctl --user list-timers --all 2>&1 | head -25; echo "=== cron:"; crontab -l 2>&1 | head -20',
     ],
-    ids=["list-only", "which", "echoed-word"],
+    ids=["list-only", "which", "echoed-word", "list-2>&1", "list-2>devnull", "list-in-sequence"],
 )
 def test_g3_allows_crontab_list_and_non_program_mentions(command):
     """Round-2 finding B3: the prior bare regex fired on `crontab -l` (a
