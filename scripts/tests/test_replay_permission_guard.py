@@ -106,6 +106,123 @@ def test_edit_onto_live_settings_is_reported_as_g1_candidate_not_a_guard_fire(tm
     assert rows[0]["day"] == "2026-01-01"
 
 
+# --- round-3 blocking finding 2: MultiEdit/NotebookEdit reach decide_detailed
+# too, and Write (already in _PRETOOLUSE_TOOLS but never dispatched to
+# decide_detailed before this fix) now actually gets a would-fire verdict.
+
+
+def _single_tool_use_entry(tool_name: str, tool_input: dict, tool_id: str) -> dict:
+    return {
+        "type": "assistant", "uuid": f"asst-{tool_id}", "timestamp": "2026-01-01T00:00:00Z",
+        "cwd": "/tmp/fixture",
+        "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": tool_id, "name": tool_name, "input": tool_input},
+        ]},
+    }
+
+
+def test_write_onto_agentctl_state_fires_g1_state(tmp_path):
+    """Before this fix, `_PRETOOLUSE_TOOLS` did carry `Write`, but the
+    decide_detailed dispatch below only checked `tool_name in ("Bash",
+    "Edit")` -- a Write onto a live agentctl-state path produced ZERO rows,
+    silently missing the guard's own G1-state branch."""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    state_path = replay._guard.config_root.agentctl_state_dir() / "some-write-target.json"
+    entry = _single_tool_use_entry(
+        "Write", {"file_path": str(state_path), "content": "{}"}, "toolu_w_1",
+    )
+    (corpus / "write-g1-state.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    rc = replay.main(["--out", str(out_dir), "--corpus", str(corpus)])
+    assert rc == 0
+    rows = _read_rows(out_dir)
+    assert len(rows) == 1
+    assert rows[0]["branch"] == "G1-state"
+    assert rows[0]["group"] == f"G1-state:{replay._normalize_target(str(state_path))}"
+
+
+def test_multi_edit_onto_agentctl_state_fires_g1_state(tmp_path):
+    """`MultiEdit` was entirely absent from `_PRETOOLUSE_TOOLS` before this
+    fix -- its tool_use block never even reached the tool_name filter, let
+    alone decide_detailed."""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    state_path = replay._guard.config_root.agentctl_state_dir() / "some-stage.json"
+    entry = _single_tool_use_entry(
+        "MultiEdit",
+        {"file_path": str(state_path), "edits": [{"old_string": "a", "new_string": "b"}]},
+        "toolu_me_1",
+    )
+    (corpus / "multi-edit-g1-state.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    rc = replay.main(["--out", str(out_dir), "--corpus", str(corpus)])
+    assert rc == 0
+    rows = _read_rows(out_dir)
+    assert len(rows) == 1
+    assert rows[0]["branch"] == "G1-state"
+
+
+def test_notebook_edit_onto_agentctl_state_fires_g1_state(tmp_path):
+    """`NotebookEdit` was entirely absent from `_PRETOOLUSE_TOOLS` before
+    this fix. Its target lives under `notebook_path`, not `file_path`."""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    state_path = replay._guard.config_root.agentctl_state_dir() / "some-notebook.ipynb"
+    entry = _single_tool_use_entry(
+        "NotebookEdit", {"notebook_path": str(state_path), "new_source": "print(1)"}, "toolu_ne_1",
+    )
+    (corpus / "notebook-edit-g1-state.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    rc = replay.main(["--out", str(out_dir), "--corpus", str(corpus)])
+    assert rc == 0
+    rows = _read_rows(out_dir)
+    assert len(rows) == 1
+    assert rows[0]["branch"] == "G1-state"
+    assert rows[0]["group"] == f"G1-state:{replay._normalize_target(str(state_path))}"
+
+
+def test_multi_edit_onto_live_settings_is_reported_as_g1_candidate(tmp_path):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    entry = _single_tool_use_entry(
+        "MultiEdit",
+        {
+            "file_path": "/tmp/fixture/.claude-agent/settings.json",
+            "edits": [{"old_string": "x", "new_string": "y"}],
+        },
+        "toolu_mec_1",
+    )
+    (corpus / "multi-edit-g1-candidate.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    rc = replay.main(["--out", str(out_dir), "--corpus", str(corpus)])
+    assert rc == 0
+    rows = _read_rows(out_dir)
+    assert len(rows) == 1
+    assert rows[0]["branch"] == "G1-CANDIDATE"
+
+
+def test_notebook_edit_onto_live_settings_path_is_reported_as_g1_candidate(tmp_path):
+    """The G1-CANDIDATE heuristic is keyed on `notebook_path` for this tool,
+    not `file_path` -- a real notebook never names a settings document, but
+    the predicate is pathname-shaped, not content-shaped, so this still
+    exercises the lookup key the round-3 finding named explicitly."""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    entry = _single_tool_use_entry(
+        "NotebookEdit",
+        {"notebook_path": "/tmp/fixture/.claude-agent/settings.json", "new_source": "1"},
+        "toolu_nec_1",
+    )
+    (corpus / "notebook-edit-g1-candidate.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    rc = replay.main(["--out", str(out_dir), "--corpus", str(corpus)])
+    assert rc == 0
+    rows = _read_rows(out_dir)
+    assert len(rows) == 1
+    assert rows[0]["branch"] == "G1-CANDIDATE"
+
+
 # --- round-2 should-fix S7: _make_row groups on a structured shape, not free text ---
 
 

@@ -9,16 +9,19 @@ prior guard this one replaces (`hook-guard-permission-self-grant.py`) was
 reverted for exactly that gap. This tool answers "what would this
 guard have fired on" two ways without ever installing it live:
 
-  transcript mode — every PreToolUse-eligible tool_use (Bash, Edit, Write) in
-    every transcript under `--corpus` (or, root-only with no `--corpus`, the
-    two live project roots via `lib.config_root.iter_transcripts`), run
-    through `decide_detailed(..., read_file=None)`. `read_file=None` means
-    G1-edit can never actually fire here — there is no live disk to read the
-    base document's "before" text from for a HISTORICAL call — so an Edit or
-    Write onto a live-loaded settings document is reported separately as a
-    **G1 CANDIDATE**: a human-review flag, not a would-fire verdict, since
-    only a person (or the live hook, with real disk access) can tell whether
-    that particular edit actually touched a security-relevant key.
+  transcript mode — every PreToolUse-eligible tool_use (Bash, Edit, Write,
+    MultiEdit, NotebookEdit — every tool `hook-guard-permission-surface.py`
+    is itself wired to receive) in every transcript under `--corpus` (or,
+    root-only with no `--corpus`, the two live project roots via
+    `lib.config_root.iter_transcripts`), run through
+    `decide_detailed(..., read_file=None)`. `read_file=None` means G1-edit
+    (and its MultiEdit counterpart) can never actually fire here — there is
+    no live disk to read the base document's "before" text from for a
+    HISTORICAL call — so an Edit, Write, or MultiEdit onto a live-loaded
+    settings document is reported separately as a **G1 CANDIDATE**: a
+    human-review flag, not a would-fire verdict, since only a person (or the
+    live hook, with real disk access) can tell whether that particular edit
+    actually touched a security-relevant key.
   git-history mode — every commit touching a settings-shaped file
     (`*settings*.json`) anywhere in this checkout, running the guard's own
     `_security_relevant_diff` predicate on the parent/child blob pair via
@@ -108,7 +111,7 @@ _GUARD_SPEC = importlib.util.spec_from_file_location(
 _guard = importlib.util.module_from_spec(_GUARD_SPEC)
 _GUARD_SPEC.loader.exec_module(_guard)
 
-_PRETOOLUSE_TOOLS = frozenset({"Bash", "Edit", "Write"})
+_PRETOOLUSE_TOOLS = frozenset({"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"})
 _CLASSIFICATION_FENCE_RE = re.compile(
     r"```classification\n(.*?)```", re.DOTALL,
 )
@@ -188,6 +191,17 @@ def _bash_group_shape(command: str) -> str:
     program = widening_targets.program_name(stripped[0]).casefold() if stripped else "?"
     flags = sorted({tok for tok in stripped[1:] if tok.startswith("-")})
     return f"{program}:{','.join(flags)}"
+
+
+def _target_path(tool_name: str, tool_input: dict) -> str:
+    """The single file this tool call names, for grouping/candidate-detection
+    purposes -- `NotebookEdit` carries it under `notebook_path`, every other
+    file-shaped tool (`Edit`/`Write`/`MultiEdit`) under `file_path`; `Bash`
+    has no single target and returns `""` (its own group key comes from
+    `_bash_group_shape` instead, via `_group_for`)."""
+    key = "notebook_path" if tool_name == "NotebookEdit" else "file_path"
+    value = tool_input.get(key)
+    return value if isinstance(value, str) else ""
 
 
 def _group_for(branch: str, tool_name: str | None, tool_input: dict, target: str) -> str:
@@ -278,15 +292,15 @@ def _transcript_rows(paths: list[Path], until_ts: float | None) -> list[dict]:
                     continue
                 locator = f"{path}:{line_no}:{block.get('id', '')}"
 
-                if tool_name in ("Edit", "Write"):
-                    file_path = tool_input.get("file_path")
-                    if isinstance(file_path, str) and widening_targets.is_live_settings(file_path):
+                if tool_name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+                    file_path = _target_path(tool_name, tool_input)
+                    if file_path and widening_targets.is_live_settings(file_path):
                         rows.append(_make_row(
                             "G1-CANDIDATE", locator, file_path, source="transcript", day=day,
                             group=_group_for("G1-CANDIDATE", tool_name, tool_input, file_path),
                         ))
 
-                if tool_name in ("Bash", "Edit"):
+                if tool_name in _PRETOOLUSE_TOOLS:
                     try:
                         decision, branch, message = _guard.decide_detailed(
                             tool_name, tool_input, cwd, "default", None,
@@ -295,7 +309,7 @@ def _transcript_rows(paths: list[Path], until_ts: float | None) -> list[dict]:
                         continue
                     if decision == "ask":
                         branch = branch or "unknown"
-                        target = tool_input.get("file_path", "") if tool_name == "Edit" else ""
+                        target = _target_path(tool_name, tool_input)
                         rows.append(_make_row(
                             branch, locator, message or "", source="transcript", day=day,
                             group=_group_for(branch, tool_name, tool_input, target),
