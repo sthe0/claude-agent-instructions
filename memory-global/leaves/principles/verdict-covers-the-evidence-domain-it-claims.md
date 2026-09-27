@@ -1,25 +1,25 @@
 ---
 name: verdict-covers-the-evidence-domain-it-claims
-description: A mechanism that issues a verdict must actually cover the evidence domain its verdict claims — a gate demanding proof whose prover is absent, and a checker enumerating from one source while reading another, are the same fault. Escape hatches must stay reachable, diagnosed, typed and counted.
+description: Anything that issues a verdict — a gate, a checker, or an agent's own investigation — must actually cover the evidence domain its verdict claims, and where it cannot, say so instead of answering. A gate demanding proof whose prover is absent, a checker enumerating from one source while reading another, and a conclusion of "X is not used" drawn from probes that could not have found X are the same fault. Escape hatches must stay reachable, diagnosed, typed and counted.
 type: reference
 schema: principle/v1
-generality: 2
+generality: 3
 domain: development
-induced_from: [ask-user-question-split-turn, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-09-gate-must-execute-what-it-attests, 2026-07-04-spawn-budget-death-forensics-before-respawn]
+induced_from: [ask-user-question-split-turn, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-09-gate-must-execute-what-it-attests, 2026-07-04-spawn-budget-death-forensics-before-respawn, 2026-09-27-negative-finding-amplified-from-bounded-probe]
 created: 2026-08-04
-last_verified: 2026-08-11
+last_verified: 2026-09-27
 ---
 
 # A verdict covers the evidence domain it claims
 
 ## Principle
 
-To make a mechanism's verdict mean what it says, **make it cover the evidence domain the verdict
-claims — and where it cannot, say so instead of answering.** A judging mechanism has three possible
-honest answers, not two: *satisfied*, *not satisfied*, and *I could not look*. Collapsing the third
-into either of the first two is the fault; which of the two it collapses into decides who it hurts.
+To make a verdict mean what it says, **make it cover the evidence domain the verdict claims — and
+where it cannot, say so instead of answering.** Anything that judges has three possible honest
+answers, not two: *satisfied*, *not satisfied*, and *I could not look*. Collapsing the third into
+either of the first two is the fault; which of the two it collapses into decides who it hurts.
 
-This task's two forms of the same fault:
+This holds whether the judge is a piece of machinery or a reasoner. The three forms met so far:
 
 **The gate form — the absent prover.** A fail-closed gate demands proof produced by something else.
 When that producer is not installed in the root the session actually loads from, the gate demands
@@ -41,6 +41,29 @@ so it answers OK *for the wrong reason*: not "I looked and it was fine" but "I d
 green that means *not looked at* is worse than a red, because a red gets investigated. The fix
 belongs in the producing step — stage the artifact before you verify — not in the checker, which is
 behaving exactly as designed.
+
+**The investigator form — the unprobed mechanism.** An agent's own conclusion about the world is a
+verdict over an evidence domain, and it inherits the same three answers. A conclusion of the shape
+*"X is not used / does not exist / is dead"* is only as strong as the probes behind it, and a probe
+selected from a guess about the mechanism cannot rule out a mechanism it was never shaped to see: a
+name-filtered process grep says nothing about a kernel NAT rule. The honest answer there is *I could
+not look*, and collapsing it into *it is not there* is the same fault the machinery forms commit —
+except that here nothing external holds the third answer open, so only the reasoner's own discipline
+does. Three consequences follow, and they are the ones a reasoner actually gets wrong:
+
+1. **Name the mechanism before accepting the absence.** Enumerate what would explain the observed
+   behaviour, then check that the probes run actually cover those candidates. An absence established
+   over an unenumerated domain is not established.
+2. **A positive observation outranks a bounded negative.** A byte counter, a timestamp, live traffic,
+   a user's "I use this daily" are observations; a probe that failed to find something is a statement
+   about the probe. When they conflict, the negative is wrong until its coverage is shown — and
+   explaining the positive away ("residue of an abandoned experiment") to preserve the negative is the
+   characteristic move of this failure, not a resolution of it.
+3. **Never let a bounded negative license an irreversible act.** Shut it down, delete it, it's dead —
+   these need a positively established `ABSENT`, never the absence of a finding.
+
+Delegation makes this form strictly worse, because the parent cannot audit coverage it never sees:
+[[delegatable-work-patterns]] § Negative findings carries the return-contract rule.
 
 **The corollary, which is where this is most often got wrong:** a checker can be
 index-ENUMERATED yet manifest-SATISFIED. Making an artifact **visible** to a checker and
@@ -71,12 +94,24 @@ an unrelated one (a naming scheme applied retroactively to a stable, already-con
 
 ## Generality
 
-Level 2 — a class of tasks: the design of any mechanism that issues a verdict over evidence it does
-not itself produce. It ranges over engine gates whose satisfier is an out-of-process hook, over
-repo verifiers that enumerate one source and read another, and over CI checks that report on a
-subset they never state. It is not claimed at level 3: the statement is about *judging mechanisms*,
-and lifting it to "every mechanism reports its own coverage" would need instances outside that
-class. Finding one is what would promote it.
+Level 3 — a cross-domain invariant over **anything that issues a verdict over evidence it does not
+itself produce**, mechanism or reasoner. It ranges over engine gates whose satisfier is an
+out-of-process hook, repo verifiers that enumerate one source and read another, CI checks reporting
+on a subset they never state, an agent concluding a host is unused from probes that could not have
+found its mechanism, and a sub-agent returning a bare negative whose coverage the parent cannot see.
+
+It stood at level 2 from 2026-08-04 to 2026-09-27, restricted to *judging mechanisms*, and named its
+own promotion condition: an instance outside that class. [[2026-09-27-negative-finding-amplified-from-bounded-probe]]
+is that instance — the judge was an agent's own investigative reasoning, the collapse of *I could not
+look* into *it is not there* was identical, and the repo's three existing statements of the rule
+(`hook_wiring`'s three-valued probe, [[verify-ownership-before-shared-state-delete]], this leaf) all
+failed to reach it precisely because each was scoped to machinery. The promotion is therefore not a
+widening on a hunch but the discharge of a condition this leaf wrote for itself.
+
+What would still be outside it: a mechanism that issues no verdict at all. The claim is not "every
+mechanism reports its own coverage" — a transformer, a renderer, a transport makes no judgement and
+owes no coverage statement. The invariant binds at the moment something asserts a state of the world
+on evidence, and not before.
 
 ## Induced from
 
@@ -97,6 +132,13 @@ class. Finding one is what would promote it.
   author's own memory of who wrote which distinguished "collected" from "asserted". The verdict
   recorded there (the ledger cannot see an abort it was never wired to observe) is the same fault on
   the evidence-domain axis that this principle states.
+- [[2026-09-27-negative-finding-amplified-from-bounded-probe]] — the investigator form, and the
+  instance outside the judging-mechanism class that promoted this leaf from level 2 to level 3. A peer
+  VM was declared a "forgotten rudiment, can be shut down" on the strength of a name-filtered process
+  grep and a policy-routing check, neither of which could have seen the `iptables` NAT table the whole
+  mechanism lived in; a positive counter-signal (2.7GB of tunnel egress) was explained away to keep the
+  conclusion. The host was carrying the user's daily VPN traffic, and only the user's contradiction
+  caught it.
 
 ## Refutation
 
@@ -113,6 +155,14 @@ the common case rather than the exception, the requirement moves off the filenam
 machine-readable provenance field inside the artifact, and the corollary narrows to "an artifact
 declares its producer" — with the filename as merely one place to declare it.
 
+The investigator half — and with it the level-3 claim — is refuted by an investigative domain where
+enumerating candidate mechanisms before accepting an absence is not merely expensive but impossible:
+an open-world question whose mechanism space cannot be bounded even in principle, so that *I could
+not look* is the only answer ever available and the rule degenerates to "never conclude anything
+negative". Should that be the common shape rather than the exception, the statement must narrow back
+to closed-world domains — where the set of mechanisms that could produce an observation is
+enumerable — and level 3 is not earned.
+
 The narrower escape-hatch half carries its own refutation: if escapes turn out to be genuinely rare,
 the typed reason is overhead. The measurement is what refutes that — 3 of the first 5 delivery
 stamps on this machine were overrides — and `scripts/escape-hatch-report.py` is what will show
@@ -128,3 +178,8 @@ whether the ratio falls once the gate names the real cause.
 - `scripts/agentctl/README.md` § Two config roots — the engine-author-facing form of the gate half.
 - `scripts/lib/hook_wiring.py` — the WIRED / ABSENT / UNKNOWN probe, where the third answer is
   first-class by construction.
+- [[verify-ownership-before-shared-state-delete]] — the same rule stated for shared-state deletion
+  ("no live process foothold" ≠ "no owner"; bias the classifier fail-safe to KEEP). One of the three
+  scoped statements that existed before the level-3 promotion and did not reach the investigator form.
+- [[delegatable-work-patterns]] § Negative findings — the return-contract rule that makes *I could not
+  look* expressible across a delegation boundary, where the parent cannot otherwise see coverage.

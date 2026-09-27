@@ -1,9 +1,9 @@
 ---
 name: delegatable-work-patterns
-description: Two recurring work shapes the opus main thread must hand to a CHEAP-model sub-agent instead of doing inline — (A) post-spawn monitoring loops, (B) initial codebase/data exploration before editing — plus the model-tier heuristic for any spawn. Delegation today fires only for "open research question → return digest"; these two shapes are missed because they don't feel like research.
+description: Two recurring work shapes the opus main thread must hand to a CHEAP-model sub-agent instead of doing inline — (A) post-spawn monitoring loops, (B) initial codebase/data exploration before editing — plus the model-tier heuristic for any spawn, and the return-contract rule for a delegated NEGATIVE finding (a sub-agent's "there is no X" without its probe list is UNKNOWN, never ABSENT). Delegation today fires only for "open research question → return digest"; these two shapes are missed because they don't feel like research.
 type: feedback
 created: 2026-06-17
-last_verified: 2026-06-24
+last_verified: 2026-09-27
 ---
 
 **Difficulty:** the main thread runs on the expensive Opus model, yet routinely does high-volume mechanical work **inline** (so the volume stays in opus context and bills opus rates) when it should hand that work to a cheap-model sub-agent that returns only the conclusion. A 48h audit (2026-06-17, 65 sessions) found **~2150 main-thread Read+Bash calls**, the `Agent` tool used in only **~21/65 sessions**, and of 48 sub-agent spawns: **27 opus / 21 haiku / 0 sonnet**, with **44/48 spawned without an explicit `model:`** — but "no explicit model" ≠ "ran opus": the 21 haiku were `Explore`-type spawns that default to haiku on their own, so only **~23/48 actually inherited opus**. In zero cases did the coordinator *deliberately* choose a cheap model — that is the real finding. (`policy-scorecard.py` prints both `no_explicit_model` and the precise `inherit_opus` to keep this distinction; see [[policy-effectiveness-tracking]].)
@@ -25,9 +25,41 @@ The `Agent` tool **inherits the opus parent model unless `model:` is set** — s
 
 **Pin the search root when delegating Pattern B.** When the session cwd is under a network-backed VCS FUSE mount (see [[home-dir-arc-fuse-mounts]]), an `Explore`/search sub-agent that defaults its search to `~`/`$HOME`/cwd-parent fans out across every such mount and is pathologically slow. State the **absolute search root** in the spawn prompt (e.g. "search only under `~/claude-agent-instructions/`") and forbid traversal outside it — do not let the sub-agent infer scope. The `hook-multi-mount-search-guard.py` guard denies the worst case (a root spanning ≥2 arc mounts) for `Bash|Grep|Glob`, but it can't author a tight scope for you.
 
+## Negative findings
+
+**A delegated NEGATIVE finding carries its probe list, or it is `UNKNOWN`.** Delegation's whole point
+is that the tool volume stays in the sub-agent and only the conclusion returns — which means a return
+of the form *"there is no X"* arrives with the one thing needed to weigh it already discarded: what
+the sub-agent actually looked at. A positive finding survives this (an observation is an observation);
+a negative does not, because its strength is exactly the coverage of the probes behind it, and the
+parent cannot see them. So:
+
+- **When the brief asks a sub-agent to establish an absence** ("is X still used?", "does Y exist
+  anywhere?", "is there any caller of Z?"), require the return to state **what was probed** — the
+  concrete commands / paths / tables, not a summary — and to mark any probe it could not run, and why
+  (missing permission, unreadable file, tool absent).
+- **A negative arriving without that list is `UNKNOWN`, not `ABSENT`.** Do not amplify it into a
+  conclusion, and never into an irreversible recommendation (shut it down, delete it, it's dead). Ask
+  the sub-agent for the list, or run the decisive probe yourself.
+- **Before accepting any absence, name the mechanism that would explain the observed behaviour and
+  check *that*.** A name-filtered process grep cannot find a kernel NAT rule; enumerate the candidate
+  mechanisms first, then confirm the probes cover them.
+- **A positive counter-signal outranks a bounded negative** — always. Byte counters, timestamps, live
+  traffic, a user saying "I use this daily" are observations; a probe that did not find something is a
+  statement about the probe. If they conflict, the negative is wrong until its coverage is shown.
+
+*Difficulty removed:* delegation structurally destroys the parent's ability to audit a negative
+finding's coverage, so a bounded sub-agent negative gets amplified into a confident parent conclusion
+with nothing in between — see [[2026-09-27-negative-finding-amplified-from-bounded-probe]] (a fork's
+"no proxy process on that VM" became "forgotten rudiment, can be shut down"; the VM was carrying the
+user's daily VPN traffic through a NAT table neither of us had read). The principle:
+[[verdict-covers-the-evidence-domain-it-claims]]; the mechanized template for a three-valued answer:
+`scripts/lib/hook_wiring.py`.
+
 **Contexts:**
 - 2026-06-17 self-improvement audit (this leaf's origin) — user asked "how often were sonnet/haiku used for subtasks, how often *could* they have been, where should a sub-agent have replaced inline work". Answer above. Fix: CLAUDE.md § Cost discipline + § Recognizing when to delegate updated to mandate explicit model tier and to list patterns A/B as delegate-always.
 - 2026-06-23 — a Pattern-B `Explore` spawn for roadmap grounding was launched with the target files named but the search root left unpinned; with cwd under a VCS FUSE mount it began a broad search across `/home/the0` (5 such mounts). User caught it. Fix: the "pin the search root" rule above + the `hook-multi-mount-search-guard.py` guard + [[home-dir-arc-fuse-mounts]].
+- 2026-09-27 — a reconnaissance fork returned a bare negative ("no proxy process on the peer VM, no policy routing") with no probe list, plus a second wrong negative ("no sudo there" — passwordless sudo was available). The parent amplified it into "forgotten rudiment, can be shut down" about a host carrying the user's daily VPN traffic. User caught it. Fix: the § Negative findings return-contract rule above + [[2026-09-27-negative-finding-amplified-from-bounded-probe]].
 
 **Cost:** an inline exploration/monitoring stretch on opus costs ~5× the same work on sonnet and ~15–20× on haiku, and inflates the parent's retained context (cache read/write on every subsequent turn) — the dominant spend per [[token-economy-plan]]. See also [[log-reading-discipline]], [[large-tool-output-discipline]], [[spawning-specialists]].
 
