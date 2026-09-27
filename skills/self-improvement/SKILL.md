@@ -1,6 +1,6 @@
 ---
 name: self-improvement
-description: TRIGGER when the user gives substantive correction or feedback about agent behavior — corrects/rejects/clarifies your action or conclusion, states a principle ("don't do that", "prefer X", "always Z"), evaluates agent quality, proposes changes to instructions/agents/skills/memory/repo/workflow, or reminds you that this skill should have run (a reminder counts as feedback — invoke in the current turn). Diagnose what went wrong and write concrete edits to ~/claude-agent-instructions/. Also self-initiated: noticing a second hand-rolled repeat of the same complex reusable action with no skill or tool covering it (see propose-skill-on-repeated-workaround.md). SKIP for neutral confirmation ("ok", "thanks", "yes do it") and for pure questions that do not evaluate your actions.
+description: TRIGGER when the user gives substantive correction/feedback about agent behavior — corrects, rejects, or clarifies an action/conclusion, states a principle (e.g. "always Z"), evaluates agent quality, proposes changes to instructions/agents/skills/memory/repo/workflow, or reminds you this skill should have run (a reminder counts as feedback — invoke this turn). Diagnose what went wrong and write concrete edits to ~/claude-agent-instructions/. Also self-initiated on a second hand-rolled repeat of the same complex action with no skill/tool covering it (propose-skill-on-repeated-workaround.md). SKIP for neutral confirmation ("ok", "thanks") or pure non-evaluative questions.
 ---
 
 # Self-improvement
