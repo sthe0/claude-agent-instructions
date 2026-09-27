@@ -20,10 +20,13 @@ against the real `Path.home()`.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 HOOK_SCRIPT = SCRIPTS_DIR / "hook-guard-permission-surface.py"
@@ -42,6 +45,41 @@ def _read_file_map(mapping: dict[str, str]):
             raise FileNotFoundError(path)
         return mapping[path]
     return _read
+
+
+# --- structural invariants ---
+
+def test_denial_arming_module_is_never_imported_by_the_guard():
+    """Pins the historical fix: the reverted guard
+    (hook-guard-permission-self-grant.py, commit b1d5802) used sticky
+    cross-invocation "denial_arming" state and caused false positives; this
+    guard's redesign deliberately imports no such module."""
+    source = HOOK_SCRIPT.read_text(encoding="utf-8")
+    assert "denial_arming" not in source
+    assert not hasattr(guard, "denial_arming")
+
+
+def test_decide_and_decide_detailed_never_touch_the_filesystem():
+    """Structural: neither function performs I/O beyond the injected
+    read_file -- confirmed by reading their own source, which must reference
+    no bare filesystem read/write helper."""
+    for fn in (guard.decide, guard.decide_detailed):
+        src = inspect.getsource(fn)
+        assert "open(" not in src
+        assert "_real_read_file" not in src
+        assert "_log_fire" not in src
+
+
+def test_decide_detailed_fire_does_not_write_the_guard_log(tmp_path, monkeypatch):
+    log_path = tmp_path / "would-be-guard-log.jsonl"
+    monkeypatch.setenv("CLAUDE_PERMISSION_GUARD_LOG", str(log_path))
+    command = (
+        "python3 -m agentctl resolve-permission --rule 'Bash(rm:*)' "
+        "--stage 3 --decision granted"
+    )
+    decision, branch, _ = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", None)
+    assert (decision, branch) == ("ask", "G4")
+    assert not log_path.exists()
 
 
 # --- baseline: an unrelated tool never fires ---
@@ -146,6 +184,16 @@ def test_g1_bash_fires_on_write_into_live_settings_even_though_cat_is_grantable(
     assert "settings.json" in message
 
 
+def test_g1_bash_fires_on_sed_in_place_over_live_settings(tmp_path):
+    command = f"sed -i 's/x/y/' {tmp_path}/.claude-agent/settings.json"
+    decision, branch, message = decide_detailed(
+        "Bash", {"command": command}, str(tmp_path), "default", None,
+    )
+    assert decision == "ask"
+    assert branch == "G1-bash"
+    assert "settings.json" in message
+
+
 def test_g1_bash_allows_a_plain_read_with_no_write_target(tmp_path):
     command = f"cat {tmp_path}/.claude-agent/settings.json"
     assert decide("Bash", {"command": command}, str(tmp_path), "default", None) == "allow"
@@ -204,6 +252,47 @@ def test_g2_fires_through_a_timeout_wrapper_with_add_dir():
 def test_g2_fires_on_install_path_spelling_with_permission_mode(tmp_path):
     command = f"{tmp_path}/.local/share/claude/versions/1.2.3/claude --permission-mode bypassPermissions"
     assert decide("Bash", {"command": command}, str(tmp_path), "default", None) == "ask"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo --user x claude --dangerously-skip-permissions",
+        "env -C /tmp claude --add-dir /",
+        "flock /tmp/l claude --add-dir /",
+        "taskset 1 claude --add-dir /",
+    ],
+    ids=["sudo", "env", "flock", "taskset"],
+)
+def test_g2_fires_through_named_wrapper_shapes(command):
+    assert decide("Bash", {"command": command}, "/tmp", "default", None) == "ask"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "npm exec @anthropic-ai/claude-code -- --settings /tmp/x",
+        "npx @anthropic-ai/claude-code@latest --add-dir /",
+    ],
+    ids=["npm-exec", "npx"],
+)
+def test_g2_fires_on_package_runner_shapes(command):
+    assert decide("Bash", {"command": command}, "/tmp", "default", None) == "ask"
+
+
+def test_g2_fires_on_node_cli_js_install_path_spelling():
+    command = "node /home/u/.local/share/claude/node_modules/@anthropic-ai/claude-code/cli.js --settings /tmp/x"
+    assert decide("Bash", {"command": command}, "/tmp", "default", None) == "ask"
+
+
+def test_g2_fires_on_claude_hidden_inside_a_bash_c_payload():
+    """G2 must recurse into `sh|bash|zsh -c PAYLOAD` -- a spawned child could
+    otherwise dodge identification by wrapping the widening call in one
+    layer of `bash -c '...'`."""
+    command = "bash -c 'claude --add-dir /'"
+    decision, branch, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert decision == "ask"
+    assert branch == "G2"
 
 
 def test_g2_allows_a_plain_claude_help_call():
@@ -271,6 +360,48 @@ def test_g4_allows_a_readonly_agentctl_verb():
     assert decide("Bash", {"command": "python3 -m agentctl status"}, "/tmp", "default", None) == "allow"
 
 
+def test_g4_fires_on_agentctl_cli_absolute_entry_point_spelling(tmp_path):
+    command = (
+        f"python3 {tmp_path}/scripts/agentctl-cli.py resolve-permission --rule 'Bash(rm:*)' "
+        "--stage 3 --decision granted"
+    )
+    decision, branch, _ = decide_detailed("Bash", {"command": command}, str(tmp_path), "default", None)
+    assert decision == "ask"
+    assert branch == "G4"
+
+
+def test_g4_fires_on_venv_interpreter_spelling():
+    command = (
+        "/home/u/.venv/bin/python -m agentctl resolve-permission --rule 'Bash(rm:*)' "
+        "--stage 3 --decision granted"
+    )
+    decision, branch, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert decision == "ask"
+    assert branch == "G4"
+
+
+# --- negative corpus (shapes that must not fire any branch) ---
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git status",
+        "git commit -m 'switch --permission-mode default in the reference doc'",
+        "python3 scripts/verify-all.py --staged",
+        "python3 -c 'pass'",
+        "echo --dangerously-skip-permissions",
+        "grep -rn permission-mode scripts/",
+        "cat <<'EOF'\n{\"permissions\": {\"allow\": [\"Bash(rm:*)\"]}}\nEOF",
+    ],
+    ids=[
+        "git-status", "git-commit-mentioning-flag", "python3-scripts-call",
+        "python3-dash-c-pass", "echo-of-flag", "grep-of-flag", "heredoc-of-settings-json",
+    ],
+)
+def test_negative_corpus_never_fires(tmp_path, command):
+    assert decide("Bash", {"command": command}, str(tmp_path), "default", None) == "allow"
+
+
 # --- main() subprocess: fire logging and always-exit-0 ---
 
 def _run_hook(payload: dict, env_extra: dict) -> subprocess.CompletedProcess:
@@ -327,3 +458,99 @@ def test_main_malformed_stdin_exits_zero_without_crashing():
     )
     assert result.returncode == 0
     assert result.stdout.strip() == ""
+
+
+# --- mutation catalogue: each G-branch's positive test is a genuine control,
+# not an accidental pass -- neutralize the SPECIFIC predicate the branch
+# depends on and confirm the previously-firing scenario now allows. ---
+
+def _g1_edit_widening_case(tmp_path, monkeypatch):
+    del monkeypatch
+    target = tmp_path / ".claude-agent" / "settings.json"
+    old_text = '{"permissions": {"allow": []}}'
+    new_text = '{"permissions": {"allow": ["Bash(rm -rf /:*)"]}}'
+    tool_input = {"file_path": str(target), "old_string": old_text, "new_string": new_text}
+    return "Edit", tool_input, str(tmp_path), _read_file_map({str(target): old_text})
+
+
+def _g1_edit_mutate(monkeypatch):
+    monkeypatch.setattr(guard.widening_targets, "is_live_settings", lambda p: False)
+
+
+def _g1_bash_write_case(tmp_path, monkeypatch):
+    del monkeypatch
+    command = f"cat x > {tmp_path}/.claude-agent/settings.json"
+    return "Bash", {"command": command}, str(tmp_path), None
+
+
+def _g1_bash_mutate(monkeypatch):
+    monkeypatch.setattr(guard.widening_targets, "is_live_settings", lambda p: False)
+
+
+def _g1_state_edit_case(tmp_path, monkeypatch):
+    _isolate_agent_home(monkeypatch, tmp_path)
+    target = tmp_path / "agentctl" / "state" / "sess-1.json"
+    tool_input = {"file_path": str(target), "old_string": "x", "new_string": "y"}
+    return "Edit", tool_input, str(tmp_path), (lambda p: "x")
+
+
+def _g1_state_mutate(monkeypatch):
+    monkeypatch.setattr(guard.widening_targets, "is_agentctl_state_path", lambda p: False)
+
+
+def _g2_case(tmp_path, monkeypatch):
+    del monkeypatch
+    command = "claude --dangerously-skip-permissions -p 'do the thing'"
+    return "Bash", {"command": command}, str(tmp_path), None
+
+
+def _g2_mutate(monkeypatch):
+    monkeypatch.setattr(guard.widening_targets, "is_claude_program", lambda seg: False)
+
+
+def _g3_case(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = tmp_path / "Library" / "LaunchAgents" / "com.example.plist"
+    tool_input = {"file_path": str(target), "old_string": "x", "new_string": "y"}
+    return "Edit", tool_input, str(tmp_path), (lambda p: "x")
+
+
+def _g3_mutate(monkeypatch):
+    monkeypatch.setattr(guard.widening_targets, "is_launch_surface", lambda p: False)
+
+
+def _g4_case(tmp_path, monkeypatch):
+    del monkeypatch
+    command = (
+        "python3 -m agentctl resolve-permission --rule 'Bash(rm:*)' "
+        "--stage 3 --decision granted"
+    )
+    return "Bash", {"command": command}, str(tmp_path), None
+
+
+def _g4_mutate(monkeypatch):
+    monkeypatch.setattr(guard.widening_targets, "agentctl_invocation_verb", lambda seg: (False, None))
+
+
+_MUTATION_CATALOGUE = [
+    ("G1-edit", _g1_edit_widening_case, _g1_edit_mutate),
+    ("G1-bash", _g1_bash_write_case, _g1_bash_mutate),
+    ("G1-state", _g1_state_edit_case, _g1_state_mutate),
+    ("G2", _g2_case, _g2_mutate),
+    ("G3", _g3_case, _g3_mutate),
+    ("G4", _g4_case, _g4_mutate),
+]
+
+
+@pytest.mark.parametrize(
+    "branch, build_case, mutate", _MUTATION_CATALOGUE, ids=[c[0] for c in _MUTATION_CATALOGUE],
+)
+def test_mutation_catalogue_control_goes_red(branch, build_case, mutate, tmp_path, monkeypatch):
+    tool_name, tool_input, cwd, read_file = build_case(tmp_path, monkeypatch)
+    decision_before, branch_before, _ = decide_detailed(tool_name, tool_input, cwd, "default", read_file)
+    assert (decision_before, branch_before) == ("ask", branch)
+
+    mutate(monkeypatch)
+
+    decision_after, branch_after, _ = decide_detailed(tool_name, tool_input, cwd, "default", read_file)
+    assert decision_after == "allow", f"{branch} still fired after neutralizing its predicate: {branch_after}"

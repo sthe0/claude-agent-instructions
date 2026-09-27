@@ -64,8 +64,11 @@ The four branches:
   G1-state — an Edit or Bash write target under agentctl's own state
              directory (`widening_targets.is_agentctl_state_path`) — writing
              there could forge a stage outcome or gate record.
-  G2       — a Bash segment (`lib/bash_write_targets.segments`) whose leading
-             program, after wrapper-stripping, is `claude`
+  G2       — a Bash segment (`_g2_segments`, which recurses into any
+             `sh|bash|zsh -c PAYLOAD` invocation among
+             `lib/bash_write_targets.segments`'s own segments, so a wrapped
+             `claude` call hidden inside one shell -c layer is still checked)
+             whose leading program, after wrapper-stripping, is `claude`
              (`widening_targets.is_claude_program` — covers a bare/absolute/
              `claude-code`-aliased spelling, a wrapper form, an install-path
              spelling, and a package-runner form) carrying a widening flag
@@ -226,8 +229,40 @@ def _g1_state_bash(command: str, cwd: str) -> str | None:
     return None
 
 
-def _g2_bash(command: str) -> str | None:
+_SHELL_INTERPRETERS = frozenset({"sh", "bash", "zsh"})
+
+
+def _shell_c_payloads(seg: list[str]) -> list[str]:
+    """Payload strings from a `sh|bash|zsh -c PAYLOAD` segment (interpreter
+    matched by basename, so `/bin/bash -c ...` is caught the same as `bash -c
+    ...`) — empty when `seg` is not such an invocation."""
+    if not seg or widening_targets.program_name(seg[0]).casefold() not in _SHELL_INTERPRETERS:
+        return []
+    try:
+        c_index = seg.index("-c")
+    except ValueError:
+        return []
+    if c_index + 1 >= len(seg):
+        return []
+    return [seg[c_index + 1]]
+
+
+def _g2_segments(command: str) -> list[list[str]]:
+    """`bash_write_targets.segments(command)`'s segments, recursed into any
+    `sh|bash|zsh -c PAYLOAD` invocation among them so a `claude` call hidden
+    inside a shell -c payload is still checked — a spawned child could
+    otherwise dodge G2 entirely by wrapping its widening call in one layer of
+    `bash -c '...'`."""
+    out: list[list[str]] = []
     for seg in bash_write_targets.segments(command):
+        out.append(seg)
+        for payload in _shell_c_payloads(seg):
+            out.extend(_g2_segments(payload))
+    return out
+
+
+def _g2_bash(command: str) -> str | None:
+    for seg in _g2_segments(command):
         if not widening_targets.is_claude_program(seg):
             continue
         if any(tok in _G2_WIDENING_FLAGS for tok in seg):

@@ -29,24 +29,54 @@ guard have fired on" two ways without ever installing it live:
     template) — a false-positive-rate check on the predicate in isolation,
     not a claim any of these commits would have tripped the live guard.
 
+`--until` cuts off both modes by event time. Given explicitly, it parses as an
+ISO-8601 timestamp. Omitted, it defaults to the tool's own LAUNCH TIME
+(`_launch_timestamp()`, captured once per run) — never "no cutoff" — so a
+replay run is always bounded to "everything up to now" and two runs launched
+minutes apart naturally see a growing, not identical, corpus.
+
 Every finding gets a content-derived, run-stable `id` (a short sha256 of
-`branch|locator|detail`) and a `group` (`branch:normalized_target`, with the
-literal home directory replaced by `~` so the grouping does not depend on
-which machine produced it) — the id is what `--check-classified` cross-checks
-a human classification against.
+`branch|locator|detail` — unaffected by `--until` or by the `source`/`day`/
+`commit` fields below, so ids stay stable across runs over the same corpus)
+and a `group` (`branch:normalized_target`, with the literal home directory
+replaced by `~` so the grouping does not depend on which machine produced
+it) — the id and the group are what `--check-classified` cross-checks a human
+classification against. Each row also carries `source` (`"transcript"` or
+`"git"`) and either `day` (the event's session-day, `YYYY-MM-DD` UTC — a
+transcript-mode row, or `"unknown"` when the source entry carried no
+parseable timestamp) or `commit` (the commit sha — a git-history-mode row).
+
+`summary.md` reports, from these rows: a per-branch-per-session-day count
+table (transcript-sourced rows), a per-commit count table for the
+`G1-keys-calibration` branch (git-sourced rows), and a group list (group id,
+its branch, its member count) — the group list is what a human classifies
+from, since classifying by group is normally cheaper than classifying every
+individual id.
 
 `--check-classified` never re-runs the replay: it reads the `would-fires.jsonl`
 `--out` already contains (from a prior plain invocation), extracts a fenced
-` ```classification ` TSV block (columns `id`, `verdict`, optionally `note`)
-from the LAST assistant message of `--classification-from-transcript`,
-rewrites `<out>/classification.tsv`, and exits non-zero naming any would-fire
-id the TSV does not cover. `verdict` is one of the four values `intended`
-(the fire is correct — e.g. the pinned `cat x > .../settings.json` G1-bash
-case), `false-positive` (the guard should not have fired; feeds back into the
-guard's own test suite as a new negative case), `needs-follow-up` (a G1
-CANDIDATE or a calibration row a human could not resolve from the transcript
-alone), `not-applicable` (a row from a corpus slice outside the current
-review's scope).
+` ```classification ` TSV block (columns `key`, `class`, optionally `reason`)
+from the LAST assistant `message.id` of `--classification-from-transcript`
+(joining the text of every transcript entry sharing that message.id, in
+transcript order — the harness splits one logical assistant turn across
+several JSONL entries), and rewrites `<out>/classification.tsv`. A TSV row's
+`key` is EITHER a would-fire's own `id` OR a `group` id: a group-keyed row
+classifies every member of that group at once, and a row keyed by an
+individual id OVERRIDES its group's row for that one would-fire. `class` must
+be one of exactly four values — `true-positive` (the fire is correct, e.g.
+the pinned `cat x > .../settings.json` G1-bash case), `false-positive:ordinary`
+(the guard should not have fired on ordinary work; feeds back into the
+guard's own negative test suite), `false-positive:settings-routine` (a
+`G1-keys-calibration` row flagging a routine, non-security settings change;
+feeds into narrowing G1's security-key list specifically), `candidate-benign`
+(a `G1-CANDIDATE` or another row a human judged benign but could not fully
+resolve, or one outside the current review's scope). A TSV row naming any
+other class value makes `--check-classified` exit non-zero, naming that row,
+WITHOUT computing coverage. Once every row's class is valid, any would-fire
+neither covered by its own id nor by its group's row is reported the same
+way (exit non-zero, ids named). On full coverage, `--check-classified` prints
+the count per class, resolved per would-fire after group expansion and
+id-row overrides, and exits 0.
 
 This module imports `decide_detailed` — the SAME function the shipped hook's
 own `main()` calls — and nothing else from that module: never its `main`,
@@ -79,15 +109,26 @@ _PRETOOLUSE_TOOLS = frozenset({"Bash", "Edit", "Write"})
 _CLASSIFICATION_FENCE_RE = re.compile(
     r"```classification\n(.*?)```", re.DOTALL,
 )
-_CLASSIFICATION_VERDICTS = frozenset({
-    "intended", "false-positive", "needs-follow-up", "not-applicable",
+_CLASSIFICATION_CLASSES = frozenset({
+    "true-positive", "false-positive:ordinary", "false-positive:settings-routine", "candidate-benign",
 })
 
 
-def _parse_until(value: str | None) -> float | None:
-    if not value:
-        return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+def _launch_timestamp() -> datetime:
+    """The replay run's own launch time — the default `--until` cutoff. A
+    separate function (rather than inlining `datetime.now()`) so a test can
+    monkeypatch it to pin a deterministic default without faking `--until`."""
+    return datetime.now(timezone.utc)
+
+
+def _parse_until(value: str | None) -> float:
+    """Always returns a concrete cutoff: the parsed `--until` value, or —
+    when `--until` is omitted — the launch timestamp. Never `None`; the
+    internal per-mode row-collectors below still accept `None` as "no
+    cutoff" for direct/unit-test use, but the CLI path never passes one."""
+    if value:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    return _launch_timestamp().timestamp()
 
 
 def _entry_timestamp(entry: dict) -> float | None:
@@ -100,6 +141,12 @@ def _entry_timestamp(entry: dict) -> float | None:
         return None
 
 
+def _day_from_ts(ts: float | None) -> str:
+    if ts is None:
+        return "unknown"
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
 def _normalize_target(target: str) -> str:
     normalized = target.replace(str(Path.home()), "~")
     normalized = re.sub(
@@ -108,11 +155,25 @@ def _normalize_target(target: str) -> str:
     return normalized
 
 
-def _make_row(branch: str, locator: str, detail: str) -> dict:
+def _make_row(
+    branch: str, locator: str, detail: str, *, source: str,
+    day: str | None = None, commit: str | None = None,
+) -> dict:
+    """The `id` is a hash of `branch|locator|detail` alone — `source`/`day`/
+    `commit` never enter it, so ids stay stable across runs over the same
+    corpus regardless of when the run happened."""
     group_target = _normalize_target(detail)
     group = f"{branch}:{group_target}"
     stable_id = hashlib.sha256(f"{branch}|{locator}|{detail}".encode("utf-8")).hexdigest()[:16]
-    return {"id": stable_id, "branch": branch, "locator": locator, "detail": detail, "group": group}
+    row = {
+        "id": stable_id, "branch": branch, "locator": locator, "detail": detail,
+        "group": group, "source": source,
+    }
+    if day is not None:
+        row["day"] = day
+    if commit is not None:
+        row["commit"] = commit
+    return row
 
 
 def _iter_transcript_paths(corpus: str | None) -> list[Path]:
@@ -146,6 +207,7 @@ def _transcript_rows(paths: list[Path], until_ts: float | None) -> list[dict]:
             if not isinstance(content, list):
                 continue
             cwd = entry.get("cwd") or ""
+            day = _day_from_ts(ts)
             for block in content:
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
@@ -160,7 +222,9 @@ def _transcript_rows(paths: list[Path], until_ts: float | None) -> list[dict]:
                 if tool_name in ("Edit", "Write"):
                     file_path = tool_input.get("file_path")
                     if isinstance(file_path, str) and widening_targets.is_live_settings(file_path):
-                        rows.append(_make_row("G1-CANDIDATE", locator, file_path))
+                        rows.append(_make_row(
+                            "G1-CANDIDATE", locator, file_path, source="transcript", day=day,
+                        ))
 
                 if tool_name in ("Bash", "Edit"):
                     try:
@@ -170,7 +234,9 @@ def _transcript_rows(paths: list[Path], until_ts: float | None) -> list[dict]:
                     except Exception:
                         continue
                     if decision == "ask":
-                        rows.append(_make_row(branch or "unknown", locator, message or ""))
+                        rows.append(_make_row(
+                            branch or "unknown", locator, message or "", source="transcript", day=day,
+                        ))
     return rows
 
 
@@ -215,29 +281,60 @@ def _git_history_rows(repo_root: Path, until_ts: float | None) -> list[dict]:
             if old_text is None or new_text is None:
                 continue
             if _guard._security_relevant_diff(old_text, new_text):
-                rows.append(_make_row("G1-keys-calibration", f"{relpath}@{sha}", relpath))
+                rows.append(_make_row(
+                    "G1-keys-calibration", f"{relpath}@{sha}", relpath, source="git", commit=sha,
+                ))
     return rows
 
 
-def _write_summary(out_dir: Path, rows: list[dict], until_ts: float | None) -> None:
-    by_branch: dict[str, int] = {}
+def _write_summary(out_dir: Path, rows: list[dict], until_ts: float) -> None:
+    day_counts: dict[tuple[str, str], int] = {}
+    commit_counts: dict[tuple[str, str], int] = {}
+    group_info: dict[str, dict] = {}
     for row in rows:
-        by_branch[row["branch"]] = by_branch.get(row["branch"], 0) + 1
-    cutoff = (
-        datetime.fromtimestamp(until_ts, tz=timezone.utc).isoformat()
-        if until_ts is not None else "(none)"
-    )
+        if row.get("source") == "git":
+            key = (row["branch"], row.get("commit", "?"))
+            commit_counts[key] = commit_counts.get(key, 0) + 1
+        else:
+            key = (row["branch"], row.get("day", "unknown"))
+            day_counts[key] = day_counts.get(key, 0) + 1
+        group = row["group"]
+        info = group_info.setdefault(group, {"branch": row["branch"], "count": 0})
+        info["count"] += 1
+
+    cutoff = datetime.fromtimestamp(until_ts, tz=timezone.utc).isoformat()
     lines = [
         "# Permission-guard replay summary",
         "",
         f"cutoff: {cutoff}",
         f"total would-fires: {len(rows)}",
         "",
-        "| branch | count |",
-        "|---|---|",
+        "## Counts by branch and session-day",
+        "",
+        "| branch | day | count |",
+        "|---|---|---|",
     ]
-    for branch in sorted(by_branch):
-        lines.append(f"| {branch} | {by_branch[branch]} |")
+    for branch, day in sorted(day_counts):
+        lines.append(f"| {branch} | {day} | {day_counts[(branch, day)]} |")
+    lines += [
+        "",
+        "## Counts by branch and commit (G1-keys-calibration)",
+        "",
+        "| branch | commit | count |",
+        "|---|---|---|",
+    ]
+    for branch, commit in sorted(commit_counts):
+        lines.append(f"| {branch} | {commit} | {commit_counts[(branch, commit)]} |")
+    lines += [
+        "",
+        "## Groups",
+        "",
+        "| group | branch | members |",
+        "|---|---|---|",
+    ]
+    for group in sorted(group_info):
+        info = group_info[group]
+        lines.append(f"| {group} | {info['branch']} | {info['count']} |")
     out_dir.joinpath("summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -258,8 +355,15 @@ def _run_replay(args: argparse.Namespace) -> int:
 
 
 def _extract_classification_tsv(transcript_path: Path) -> str | None:
-    last_assistant_text = None
-    for raw in transcript_path.read_text(encoding="utf-8").splitlines():
+    """The LAST assistant `message.id`'s text, joining every transcript entry
+    that shares it (in scan order) — the harness can split one logical
+    assistant turn across several JSONL `type: "assistant"` entries, each
+    contributing its own text block(s); only entries with an `id` AND
+    non-empty text participate, so a trailing tool-only entry never becomes
+    "last" on an empty text technicality."""
+    texts_by_message_id: dict[str, list[str]] = {}
+    last_message_id: str | None = None
+    for raw in transcript_path.read_text(encoding="utf-8", errors="replace").splitlines():
         raw = raw.strip()
         if not raw:
             continue
@@ -269,17 +373,26 @@ def _extract_classification_tsv(transcript_path: Path) -> str | None:
             continue
         if not isinstance(entry, dict) or entry.get("type") != "assistant":
             continue
-        content = entry.get("message", {}).get("content") or []
+        message = entry.get("message") or {}
+        message_id = message.get("id")
+        if not isinstance(message_id, str):
+            continue
+        content = message.get("content") or []
+        if not isinstance(content, list):
+            continue
         text = "".join(
             block.get("text", "")
             for block in content
             if isinstance(block, dict) and block.get("type") == "text"
         )
-        if text.strip():
-            last_assistant_text = text
-    if last_assistant_text is None:
+        if not text.strip():
+            continue
+        texts_by_message_id.setdefault(message_id, []).append(text)
+        last_message_id = message_id
+    if last_message_id is None:
         return None
-    match = _CLASSIFICATION_FENCE_RE.search(last_assistant_text)
+    full_text = "".join(texts_by_message_id[last_message_id])
+    match = _CLASSIFICATION_FENCE_RE.search(full_text)
     if not match:
         return None
     return match.group(1).strip("\n")
@@ -292,11 +405,10 @@ def _run_check_classified(args: argparse.Namespace) -> int:
         print(f"error: {would_fires_path} does not exist — run a plain replay first", file=sys.stderr)
         return 2
 
-    all_ids = []
-    for raw in would_fires_path.read_text(encoding="utf-8").splitlines():
-        raw = raw.strip()
-        if raw:
-            all_ids.append(json.loads(raw)["id"])
+    would_fires = [
+        json.loads(raw) for raw in would_fires_path.read_text(encoding="utf-8").splitlines() if raw.strip()
+    ]
+    id_set = {wf["id"] for wf in would_fires}
 
     if not args.classification_from_transcript:
         print("error: --check-classified requires --classification-from-transcript", file=sys.stderr)
@@ -306,27 +418,55 @@ def _run_check_classified(args: argparse.Namespace) -> int:
         print("error: no ```classification fenced TSV block found in the transcript's last assistant message", file=sys.stderr)
         return 2
 
-    classified_ids: set[str] = set()
     tsv_lines = [ln for ln in tsv_text.splitlines() if ln.strip()]
-    for line in tsv_lines[1:] if tsv_lines and tsv_lines[0].startswith("id\t") else tsv_lines:
+    data_lines = tsv_lines[1:] if tsv_lines and tsv_lines[0].startswith("key\t") else tsv_lines
+
+    out_dir.joinpath("classification.tsv").write_text(
+        "key\tclass\treason\n" + "\n".join(data_lines) + "\n", encoding="utf-8",
+    )
+
+    id_rows: dict[str, str] = {}
+    group_rows: dict[str, str] = {}
+    invalid_rows: list[str] = []
+    for line in data_lines:
         fields = line.split("\t")
         if len(fields) < 2:
             continue
-        row_id, verdict = fields[0].strip(), fields[1].strip()
-        if verdict not in _CLASSIFICATION_VERDICTS:
+        key, cls = fields[0].strip(), fields[1].strip()
+        if cls not in _CLASSIFICATION_CLASSES:
+            invalid_rows.append(line)
             continue
-        classified_ids.add(row_id)
+        if key in id_set:
+            id_rows[key] = cls
+        else:
+            group_rows[key] = cls
 
-    out_dir.joinpath("classification.tsv").write_text(
-        "id\tverdict\tnote\n" + "\n".join(tsv_lines) + "\n", encoding="utf-8",
-    )
+    if invalid_rows:
+        print("classification rows with an unrecognized class value:", file=sys.stderr)
+        for line in invalid_rows:
+            print(f"  {line}", file=sys.stderr)
+        return 2
 
-    uncovered = [i for i in all_ids if i not in classified_ids]
+    uncovered: list[str] = []
+    counts: dict[str, int] = {}
+    for wf in would_fires:
+        if wf["id"] in id_rows:
+            cls = id_rows[wf["id"]]
+        elif wf["group"] in group_rows:
+            cls = group_rows[wf["group"]]
+        else:
+            uncovered.append(wf["id"])
+            continue
+        counts[cls] = counts.get(cls, 0) + 1
+
     if uncovered:
         print("uncovered would-fire ids:", file=sys.stderr)
         for i in uncovered:
             print(f"  {i}", file=sys.stderr)
         return 1
+
+    for cls in sorted(counts):
+        print(f"{cls}: {counts[cls]}")
     return 0
 
 
