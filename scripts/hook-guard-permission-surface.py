@@ -39,31 +39,44 @@ concrete call that fires — `Bash(cat:*)` is accepted by `validate_rule` while
 `cat x > $CLAUDE_AGENT_HOME/settings.json` fires G1-bash — that is an intended
 fire, not a gap, pinned by a dedicated test.
 
-The four branches:
+The branches — G1 (three sub-forms: G1-edit, G1-bash, G1-state), G2, G3, G4:
 
-  G1-edit  — an Edit onto a LIVE-LOADED settings document
+  G1-edit  — an Edit, Write or MultiEdit onto a LIVE-LOADED settings document
              (`widening_targets.is_live_settings`, never a repo template such
              as this repo's own `settings/base.json`) whose diff touches a
-             security-relevant key: `permissions.allow`/`permissions.deny` via
-             `lib/permission_surface.widens` (fires only on an actual WIDENING
-             — a narrowing edit removing an allow rule or adding a deny rule
-             does not fire, since narrowing needs no human gate), or any of
-             `hooks`, `env`, `apiKeyHelper`, `extraKnownMarketplaces`,
-             `allowManagedPermissionRulesOnly` (fires on ANY change to one of
-             these — none of them has a narrow/widen direction a two-document
+             security-relevant key. `permissions.allow`/`permissions.deny` via
+             `lib/permission_surface.widens`, `permissions.defaultMode` moving
+             to a higher `_DEFAULT_MODE_RANK`, and
+             `permissions.disableBypassPermissionsMode` on removal each fire
+             only on an actual WIDENING — the corresponding narrowing edit
+             does not fire, since narrowing needs no human gate; likewise
+             `enableAllProjectMcpServers` false/absent -> true and
+             `enabledMcpjsonServers` gaining an entry. `env` fires only on a
+             change to a credential/routing-pattern KEY (`ANTHROPIC_*`,
+             `CLAUDE_CODE_USE_*`, or containing `_BASE_URL`/`API_KEY`/
+             `_PROXY`) — an allow-list, not "any key changed": round-2
+             should-fix S2 found 8 of the 9 `G1-keys-calibration` fires were
+             ordinary env edits (autocompact window, AFK timeout, output-
+             length cap), none of them security-relevant. Any of `hooks`,
+             `apiKeyHelper`, `extraKnownMarketplaces`,
+             `allowManagedPermissionRulesOnly` fires on ANY change instead —
+             none of these four has a narrow/widen direction a two-document
              diff alone can judge; https://code.claude.com/docs/en/settings
              documents `permissions`, `hooks` and `apiKeyHelper` as live-
-             reloaded keys and lists the rest as security-sensitive). An
-             unreadable base file, an Edit whose `old_string` does not match
-             the base file, or either side failing to parse as JSON => allow.
+             reloaded keys and lists the rest as security-sensitive. An
+             unreadable base file, an edit that cannot be reproduced against
+             it (Edit/Write's `old_string` absent or not found, MultiEdit's
+             `edits` array failing to apply), or either side failing to parse
+             as a JSON object => allow.
   G1-bash  — a Bash write target (`lib/bash_write_targets.command_write_
              targets`) that is a live-loaded settings document. No diff check:
              a shell write into a live settings document has no readable
              "before" the way an Edit's `old_string` does, so any such write
              fires.
-  G1-state — an Edit or Bash write target under agentctl's own state
-             directory (`widening_targets.is_agentctl_state_path`) — writing
-             there could forge a stage outcome or gate record.
+  G1-state — an Edit, Write, MultiEdit, NotebookEdit or Bash write target
+             under agentctl's own state directory
+             (`widening_targets.is_agentctl_state_path`) — writing there could
+             forge a stage outcome or gate record.
   G2       — a Bash segment (`_g2_segments`, which recurses into any
              `sh|bash|zsh -c PAYLOAD` invocation — interpreter possibly
              hidden behind a wrapper (`timeout 5 bash -c ...`) and `-c`
@@ -74,17 +87,22 @@ The four branches:
              whose leading program, after wrapper-stripping, is `claude`
              (`widening_targets.is_claude_program` — covers a bare/absolute/
              `claude-code`-aliased spelling, a wrapper form, an install-path
-             spelling, and a package-runner form) carrying a widening flag
-             (`--dangerously-skip-permissions`, `--permission-mode`,
-             `--add-dir`, `--settings`, `--mcp-config`). A raw ad-hoc `claude`
-             invocation naming one of these flags bypasses the plan-stage
-             grant channel regardless of the flag's value, which is why the
-             value itself is never inspected.
-  G3       — an Edit or Bash write target under a persistent-launch-
-             registration surface (`widening_targets.is_launch_surface`), or a
-             Bash command invoking `crontab` (`widening_targets.
-             is_crontab_target`) — either could make a spawned child install
-             something that runs again after this session ends.
+             spelling, and a package-runner form) carrying a widening flag:
+             `--dangerously-skip-permissions`,
+             `--allow-dangerously-skip-permissions`, `--permission-mode`,
+             `--add-dir`, `--settings`, `--mcp-config`, `--allowedTools`,
+             `--allowed-tools`. A raw ad-hoc `claude` invocation naming one of
+             these flags bypasses the plan-stage grant channel regardless of
+             the flag's value, which is why the value itself is never
+             inspected — except for `--permission-mode`, whose `default`/
+             `plan` values NARROW rather than widen and so are exempt
+             (`_G2_PERMISSION_MODE_EXEMPT_VALUES`).
+  G3       — an Edit, Write, MultiEdit or NotebookEdit onto, or a Bash write
+             target under, a persistent-launch-registration surface
+             (`widening_targets.is_launch_surface`), or a Bash command
+             invoking `crontab` (`widening_targets.is_crontab_target`) —
+             either could make a spawned child install something that runs
+             again after this session ends.
   G4       — a Bash segment, recursed through the same `_g2_segments` shell
              -c/eval layer as G2, invoking `agentctl resolve-permission` (via
              `widening_targets.agentctl_invocation_verb`) with
