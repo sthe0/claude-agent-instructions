@@ -396,24 +396,17 @@ def _no_real_keychain_lookup_by_default(monkeypatch):
 def _evidence_root_isolated_by_default(tmp_path_factory, monkeypatch):
     """Default $AGENTCTL_EVIDENCE_ROOT (agentctl.cli.evidence_dir_for's
     test-only override) to a fresh directory for the suite at large, so no
-    test ever creates or resolves under the REAL default evidence root
-    (`$XDG_STATE_HOME/agentctl-evidence` or `~/.local/state/agentctl-
-    evidence`) just by calling `cmd_evidence_dir`/`cmd_dispatch`/a developer
-    spawn without itself asking for evidence-dir behaviour.
+    test ever creates or resolves under the REAL default evidence root just
+    by calling `cmd_evidence_dir`/`cmd_dispatch`/a developer spawn without
+    itself asking for evidence-dir behaviour.
 
-    `tmp_path_factory.mktemp` (session-scoped factory, fresh subdirectory per
-    call) rather than a given test's own `tmp_path` fixture: a test that
-    overrides `plans_dir()`/`--state-root` onto its own `tmp_path` (see
-    test_convergence_r10_durable_evidence.py's `test_developer_spawn_can_
-    write_evidence_dir`) also carries an Edit(//<tmp_path>/**) baseline deny
-    for that same tree, which would shadow a write grant synthesized for an
-    evidence dir nested underneath it. A `tmp_path_factory` directory is a
-    sibling of every test's own `tmp_path`, so it is never shadowed.
+    `tmp_path_factory.mktemp` rather than a given test's own `tmp_path`: it
+    is a sibling of every test's own `tmp_path`, so no Edit(//<tmp_path>/**)
+    baseline deny for that tree shadows a write grant synthesized for an
+    evidence dir nested underneath it.
 
-    Deliberately does NOT touch $AGENTCTL_SCRATCH_ROOTS: the scratch-root
-    refusal this override exists to route AROUND (see evidence_dir_for's own
-    docstring) is exercised by its own test with the override unset, and
-    widening that env var here would mask it."""
+    Deliberately does NOT touch $AGENTCTL_SCRATCH_ROOTS, which its own test
+    exercises with this override unset."""
     root = tmp_path_factory.mktemp("evidence-root")
     monkeypatch.setenv("AGENTCTL_EVIDENCE_ROOT", str(root))
 

@@ -5135,17 +5135,17 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     _misses_before = len(state.planning_misses)
     _settings_paths = widening_targets.enumerate_live_settings(child_cwd, state.repo_root)
     _settings_before = {p: _plan_file_sha256(p) for p in _settings_paths}
-    # Resolved (not created) BEFORE the child spawns — spawn-specialist.py's own
-    # in-process load_or_create_evidence_dir (mirroring load_engine_stage_grants's
-    # cmd_stage_grants call) materializes the directory, via the SAME
-    # evidence_dir_for formula, so the two never disagree. Checked here, ahead of
-    # dispatch_stage, so an unresolvable evidence root refuses the dispatch
-    # outright rather than spawning a child whose own resolution would fail the
-    # same way after real spawn cost was already spent.
+    # Resolved (not created) BEFORE the child spawns, so an unresolvable evidence
+    # root refuses the dispatch before real spawn cost is spent. Only a
+    # spawn:developer stage actually writes checkpoint evidence, so only that
+    # kind is refused on failure; other kinds report the path best-effort and
+    # proceed without it.
     try:
         evidence_dir = str(evidence_dir_for(state.session_id, stage.index))
     except EvidenceDirError as exc:
-        return Directive(False, state.node, "noop", f"dispatch refused: {exc}")
+        if stage.spawn_kind() == "developer":
+            return Directive(False, state.node, "noop", f"dispatch refused: {exc}")
+        evidence_dir = None
     result = dispatch_stage(
         stage, state.plan_path or "",
         runner=runner,
