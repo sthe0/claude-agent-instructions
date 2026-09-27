@@ -51,6 +51,7 @@ from .plan import (
     check_venue_warnings,
     grants_sha256,
     load_plan,
+    load_plan_with_digest,
     plan_has_any_grants,
     plan_meta_digest,
     plan_meta_element_key,
@@ -295,6 +296,23 @@ def _record_bypass(state: SessionState, bypass: JudgeBypass) -> None:
     state.judge_bypassed.append(bypass)
 
 
+def _write_plan_snapshot(store: StateStore, state: SessionState, data: bytes, digest: str) -> tuple[str, str] | None:
+    """Write an ALREADY-READ plan buffer to the session's snapshot dir and return
+    (snapshot_path, hash) -- the write-only half of `_snapshot_approved_plan`,
+    factored out so a caller that already holds `(data, digest)` from a single
+    read (`load_plan_with_digest`) never has to re-read the file just to take its
+    approved-plan snapshot. Content-hash-named so identical plans share one file.
+
+    Best-effort like its caller: None when the store exposes no on-disk path."""
+    path_fn = getattr(store, "path", None)
+    if path_fn is None:
+        return None
+    snap = path_fn(state.session_id).parent / f"plan-approved-{digest[:16]}.toml"
+    snap.parent.mkdir(parents=True, exist_ok=True)
+    snap.write_bytes(data)
+    return str(snap), digest
+
+
 def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str, str] | None:
     """Copy the plan AS APPROVED into the state dir and return (snapshot_path, hash).
 
@@ -305,24 +323,23 @@ def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str
 
     Best-effort: returns None (leaving cmd_replan to fall back to plan_path, the
     prior behaviour) when there is no plan, the store exposes no on-disk path, or
-    the plan file is unreadable. Content-hash-named so identical plans share one
-    file; the per-session snapshot_path recorded on the state is the source of
-    truth for which snapshot to diff against."""
+    the plan file is unreadable. Reads state.plan_path itself -- callers that
+    already hold the bytes from a single upstream read (`load_plan_with_digest`)
+    should call `_write_plan_snapshot` directly instead, to avoid a second read of
+    a file that could have changed between the two."""
     if not state.plan_path:
         return None
     src = Path(state.plan_path)
-    path_fn = getattr(store, "path", None)
-    if path_fn is None or not src.exists():
+    if not src.exists():
         return None
     data = src.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
-    snap = path_fn(state.session_id).parent / f"plan-approved-{digest[:16]}.toml"
-    snap.parent.mkdir(parents=True, exist_ok=True)
-    snap.write_bytes(data)
-    return str(snap), digest
+    return _write_plan_snapshot(store, state, data, digest)
 
 
-def _refresh_approved_grant_snapshot(state: SessionState, store: StateStore, doc) -> None:
+def _refresh_approved_grant_snapshot(
+    state: SessionState, store: StateStore, doc, data: bytes, digest: str,
+) -> None:
     """Re-snapshot the just-applied plan bytes and rebind `approved_grants_sha256` to
     them, mirroring `cmd_approve`'s own snapshot+hash binding (see its "Bind the
     approved grant set" comment) -- called from the `no_change` and `refinement`
@@ -332,9 +349,24 @@ def _refresh_approved_grant_snapshot(state: SessionState, store: StateStore, doc
     `plan_snapshot_hash`/`approved_grants_sha256` pointed at the PRIOR approval's
     bytes, so `_stage_grant_entries` either hash-mismatches on a corrected snapshot
     that no longer matches the stale stamped hash, or silently keeps re-deriving
-    grants from plan content the session no longer runs. `doc` is the freshly-loaded
-    plan (`new` in `cmd_replan`) that `state.plan_path` now points at."""
-    snap = _snapshot_approved_plan(store, state)
+    grants from plan content the session no longer runs.
+
+    `doc`, `data` and `digest` are the ONE read `cmd_replan` took of `args.plan`
+    (`load_plan_with_digest`) -- passed through rather than re-read here, so this
+    function can never bind a snapshot to bytes different from the ones `doc` was
+    parsed from or `state.accepted_plan_digest` was stamped from. Belt and braces:
+    refuses to rebind (raising, rather than silently keeping the stale snapshot)
+    when `digest` does not match `state.accepted_plan_digest` -- the caller must
+    always stamp that field from this SAME buffer first (both `cmd_replan`
+    branches do, immediately before calling this)."""
+    if digest != state.accepted_plan_digest:
+        raise ValueError(
+            "refusing to rebind the approved-grant snapshot: the plan bytes' "
+            f"digest {digest!r} does not match state.accepted_plan_digest "
+            f"{state.accepted_plan_digest!r} -- stamp accepted_plan_digest from "
+            "this same buffer before refreshing the snapshot"
+        )
+    snap = _write_plan_snapshot(store, state, data, digest)
     if snap:
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
     state.approved_grants_sha256 = grants_sha256(doc)
@@ -4481,10 +4513,18 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # Folded AFTER seam (c)'s refusal above, so a plan that fails submission validation
     # is never folded into and never persisted: the fold's store.save would otherwise
     # write a premise bag for bytes this command is about to reject.
+    # Read plan_path's bytes ONCE and derive `_approved_doc`, the digest stamped
+    # below (seam (c)) and the snapshot written near the end of this function from
+    # that SAME buffer -- three separate reads of the same file (`load_plan`, then
+    # `_stamp_accepted_plan_digest`'s own read, then `_snapshot_approved_plan`'s own
+    # read) used to leave a window for a concurrent edit to desynchronize the
+    # digest, the snapshot and the doc this approval actually validated.
     _approved_doc = None
+    _approved_data: bytes | None = None
+    _approved_digest: str | None = None
     if state.plan_path:
         try:
-            _approved_doc = load_plan(state.plan_path)
+            _approved_doc, _approved_data, _approved_digest = load_plan_with_digest(state.plan_path)
         except (OSError, PlanError):
             _approved_doc = None
         if _approved_doc is not None and _fold_enumeration_sidecar(
@@ -4523,7 +4563,15 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # the plan_approval gate. The refresh helper that owns the seam cannot stamp it: it runs
     # before the gate by contract, so a blocked approve would leave the session carrying a
     # digest for bytes it did not approve.
-    _stamp_accepted_plan_digest(state, state.plan_path)
+    if _approved_digest is not None:
+        # From the SAME buffer _approved_doc was parsed from, not a fresh re-read
+        # of state.plan_path (the former `_stamp_accepted_plan_digest(state,
+        # state.plan_path)`).
+        state.accepted_plan_digest = _approved_digest
+    else:
+        # The single-buffer read above failed (OSError/PlanError) -- fall back to
+        # the legacy best-effort re-read rather than leaving the digest stale.
+        _stamp_accepted_plan_digest(state, state.plan_path)
     effort.arm(state)  # opens the effort-divergence window — see effort.py's ARMED-ONLY
     # Fold this session's review-round counts into the cross-session task accumulator
     # (item B) BEFORE the reset-to-0 below — approval is the reset point, so this is
@@ -4563,7 +4611,15 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # plan_review_rounds resets at, immediately above.
     state.plan_review_passes = {}
     state.node = transition(state.node, "approve")
-    snap = _snapshot_approved_plan(store, state)
+    # Write from the SAME buffer already read above when available, so the
+    # snapshot can never describe bytes other than the ones `_approved_doc` was
+    # parsed from and `accepted_plan_digest` was just stamped from; only a session
+    # whose single-buffer read failed falls back to `_snapshot_approved_plan`'s
+    # own best-effort re-read.
+    if _approved_data is not None and _approved_digest is not None:
+        snap = _write_plan_snapshot(store, state, _approved_data, _approved_digest)
+    else:
+        snap = _snapshot_approved_plan(store, state)
     if snap:
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
     state.log("approve", by=args.by)
@@ -5003,24 +5059,27 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     # below: a spawned developer is untrusted to touch settings*.json, so any
     # difference after the child returns is itself the signal, independent of
     # whatever marker the child reports.
-    # Refuse to dispatch outright when the stage DECLARES grants but its
-    # approved-plan snapshot can no longer be read cleanly (missing file, tampered
-    # bytes, an unloadable snapshot, or a stale approved_grants_sha256) -- spawning
-    # anyway would silently launch the child under whatever `_effective_stage_grants`
-    # degrades to (declared entries alone, or nothing at all) rather than the
-    # coverage this stage was actually approved with. A stage that declares no
-    # grants has nothing to silently lose, so a read error there is not fatal here
-    # (`cmd_stage_grants` still surfaces it for inspection).
+    # Refuse to dispatch outright when the stage has grants to lose -- DECLARED
+    # (`stage.grants`) or DERIVED (`_stage_would_derive_grants`, trust-independent
+    # so a derived-hash mismatch is caught too, not just a missing/unloadable
+    # snapshot) -- but its approved-plan snapshot can no longer be read cleanly.
+    # Spawning anyway would silently launch the child under whatever
+    # `_effective_stage_grants` degrades to (declared entries alone, or nothing at
+    # all) rather than the coverage this stage was actually approved with. A
+    # stage with nothing to lose either way has a read error that is not fatal
+    # here (`cmd_stage_grants` still surfaces it for inspection).
     _grant_read_error = _stage_grant_entries(state, stage.index)[3]
     _stage_declares_grants = bool(getattr(stage, "grants", None)) and not stage.grants.is_empty()
-    if _grant_read_error and _stage_declares_grants:
+    if _grant_read_error and (
+        _stage_declares_grants or _stage_would_derive_grants(state, stage.index)
+    ):
         return Directive(
             False, state.node, "noop",
-            f"dispatch refused: stage {stage.index} declares grants but they could not "
-            f"be read from the approved-plan snapshot ({_grant_read_error}) -- spawning "
-            "now would silently drop the declared coverage instead of materializing "
-            "it; a fresh `approve` re-snapshots the plan and rebinds "
-            "approved_grants_sha256",
+            f"dispatch refused: stage {stage.index} has grants to lose (declared "
+            "and/or derived) but they could not be read from the approved-plan "
+            f"snapshot ({_grant_read_error}) -- spawning now would silently drop "
+            "that coverage instead of materializing it; a fresh `approve` "
+            "re-snapshots the plan and rebinds approved_grants_sha256",
         )
     coverage = _effective_stage_grants(state, stage.index)
     _defects_before = len(state.materialization_defects)
@@ -5376,13 +5435,13 @@ def _rule_line_to_call(rule: str) -> tuple[str, dict] | None:
 
 def _stage_grant_entries(
     state: SessionState, stage_index: int,
-) -> tuple[list[dict], list[dict], list[dict], str | None]:
+) -> tuple[list[dict], list[dict], list[dict], str | None, str | None]:
     """Read one stage's declared + derived grant entries from the hash-verified plan
     snapshot -- the shared read behind both `cmd_stage_grants`'s report and
     `_effective_stage_grants`'s merged coverage object, so the two never drift on
     when a grant becomes trustworthy (snapshot presence, `approved_grants_sha256`
     re-hash gate over the live derivation code). Returns
-    (declared_entries, derived_entries, dropped, error).
+    (declared_entries, derived_entries, dropped, error, note).
 
     `error` is None on a clean read; otherwise a short string naming what failed,
     meant for a caller to surface VERBATIM rather than translate into a silently
@@ -5391,6 +5450,9 @@ def _stage_grant_entries(
     return statement below reports at most one failure and stops there, so one
     unreadable stage/snapshot can never masquerade as "no grants" for a caller
     that then proceeds to dispatch a child under an emptied-out coverage set.
+
+    `note` is None on every path except the legacy one below: it is advisory, never
+    a refusal condition, and never changes which entries are returned.
 
     A session that never took a snapshot at all -- a plan approved before the
     snapshot mechanism existed, or no plan approved yet -- is deliberately NOT an
@@ -5402,65 +5464,76 @@ def _stage_grant_entries(
     snap_path = state.plan_snapshot_path
     snap_hash = state.plan_snapshot_hash
     if not snap_path:
-        return declared_entries, derived_entries, dropped, None
+        return declared_entries, derived_entries, dropped, None, None
     if not Path(snap_path).exists():
         return declared_entries, derived_entries, dropped, (
             f"approved-plan snapshot is missing on disk: {snap_path!r}"
-        )
+        ), None
     if not snap_hash or hashlib.sha256(Path(snap_path).read_bytes()).hexdigest() != snap_hash:
         return declared_entries, derived_entries, dropped, (
             f"approved-plan snapshot hash mismatch at {snap_path!r}: the file on "
             "disk no longer matches the bytes this session approved"
-        )
+        ), None
     try:
         snap_doc = load_plan(snap_path)
     except (OSError, PlanError) as exc:
         return declared_entries, derived_entries, dropped, (
             f"cannot load approved-plan snapshot {snap_path!r}: {exc}"
-        )
+        ), None
     snap_stage = next((s for s in snap_doc.stages if s.index == stage_index), None)
     if snap_stage is None:
         return declared_entries, derived_entries, dropped, (
             f"stage {stage_index} not found in approved-plan snapshot {snap_path!r}"
-        )
+        ), None
     declared = snap_stage.grants if getattr(snap_stage, "grants", None) \
         else _grants.StageGrants()
     declared_entries = [r.to_dict() for r in declared.allow] + \
         [a.to_dict() for a in declared.add_dirs]
     if not state.approved_grants_sha256:
-        return declared_entries, derived_entries, dropped, None
+        # Legacy session (approved before grant hashing existed): derived grants
+        # stay withheld exactly as before -- there is no hash to trust them
+        # against -- but this is advisory, not an error, so it rides a `note`
+        # instead of `error` and never touches the returned entries.
+        return declared_entries, derived_entries, dropped, None, (
+            "derived grants unverified: session approved before grant hashing"
+        )
     if grants_sha256(snap_doc) != state.approved_grants_sha256:
         return declared_entries, derived_entries, dropped, (
             "derived-grants hash mismatch: the live grant derivation no longer "
             "reproduces approved_grants_sha256 (the materialization layer changed "
             "since this plan was approved) -- derived grants withheld"
-        )
+        ), None
     venue = _venue_for(snap_doc)
     derived, dropped = _grants.derive_stage_grants(snap_stage, venue=venue)
     derived_entries = [r.to_dict() for r in derived.allow] + \
         [a.to_dict() for a in derived.add_dirs]
-    return declared_entries, derived_entries, dropped, None
+    return declared_entries, derived_entries, dropped, None, None
 
 
-def _stage_grant_venue(state: SessionState) -> str | None:
-    """Best-effort venue (`delivery_worktree` or `repo_root`) of the session's
-    approved-plan snapshot, for `_effective_stage_grants` to expand a spawn kind's
-    baseline with the child's own workdir-absolute script spellings
-    (`kind_baselines.baseline_for_workdir`) -- the same venue `_stage_grant_entries`
-    already resolves internally to derive DR-E rules, exposed here since COVERAGE
-    (unlike materialization) needs it independently of whether declared/derived
-    grants themselves were readable this call. Returns None on any read/parse
-    failure or a session with no snapshot at all -- the caller then falls back to
-    the canon-absolute-only baseline (`baseline_for_workdir`'s own no-op path for
-    a falsy workdir), never widening coverage on a guess."""
+def _stage_would_derive_grants(state: SessionState, stage_index: int) -> bool:
+    """Best-effort, TRUST-INDEPENDENT probe for whether `stage_index`'s
+    approved-plan snapshot would derive any non-empty grant set -- used only to
+    decide whether a `_stage_grant_entries` read error is safe to dispatch
+    through (nothing to lose) or must refuse (something to lose). Deliberately
+    ignores `approved_grants_sha256`: the whole point is to answer "does this
+    stage have derived grants" even when the trust check that would normally
+    gate them is exactly what failed (a derived-grants hash mismatch). Returns
+    False on any failure to load the snapshot/stage -- a caller reaching for
+    this helper already has its own read error and a declared-grants check to
+    fall back on, so this never needs to fail closed on its own."""
     snap_path = state.plan_snapshot_path
     if not snap_path or not Path(snap_path).exists():
-        return None
+        return False
     try:
         snap_doc = load_plan(snap_path)
     except (OSError, PlanError):
-        return None
-    return _venue_for(snap_doc)
+        return False
+    snap_stage = next((s for s in snap_doc.stages if s.index == stage_index), None)
+    if snap_stage is None:
+        return False
+    venue = _venue_for(snap_doc)
+    derived, _dropped = _grants.derive_stage_grants(snap_stage, venue=venue)
+    return not derived.is_empty()
 
 
 def _refresh_runtime_grant_titles(state: SessionState, stage_index: int, new_title: str) -> None:
@@ -5535,7 +5608,7 @@ def _effective_stage_grants(state: SessionState, stage_index: int) -> _grants.St
     unchanged, so an error here degrades to the same partial-entries reading the
     error-carrying return already yields (declared/derived withheld precisely on
     the failure paths that produce one)."""
-    declared_entries, derived_entries, _dropped, _error = _stage_grant_entries(state, stage_index)
+    declared_entries, derived_entries, _dropped, _error, _note = _stage_grant_entries(state, stage_index)
     runtime_entries = [
         e for e in state.runtime_grants.get(str(stage_index), [])
         if not e.get("consumed")
@@ -5549,7 +5622,16 @@ def _effective_stage_grants(state: SessionState, stage_index: int) -> _grants.St
             add_dirs.append(_grants.AddDirGrant.from_dict(e))
     stage = state.stage(stage_index)
     if stage.is_spawn():
-        allow.extend(_kind_baseline_rule_grants(stage.spawn_kind(), workdir=_stage_grant_venue(state)))
+        # The SAME venue `cmd_dispatch` passes as the child's actual cwd
+        # (`child_cwd = state.resolve_check_venue(CheckVenue.DELIVERY.value)`)
+        # -- not a second, independently-reloaded reading of the approved-plan
+        # snapshot (the deleted `_stage_grant_venue`), which could drift from
+        # the child's real cwd whenever the snapshot's own `meta` lacked both
+        # `delivery_worktree` and `repo_root` (falling back to `"."`, resolved
+        # against the ENGINE's cwd rather than the child's) or had merely
+        # drifted from the state fields `_sync_venue_from_plan` keeps current.
+        venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+        allow.extend(_kind_baseline_rule_grants(stage.spawn_kind(), workdir=venue))
     return _grants.StageGrants(allow=allow, add_dirs=add_dirs)
 
 
@@ -5755,7 +5837,7 @@ def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -
     except KeyError:
         return Directive(False, state.node, "noop", f"no stage with index {stage_index}")
 
-    declared_entries, derived_entries, dropped, error = _stage_grant_entries(state, stage_index)
+    declared_entries, derived_entries, dropped, error, note = _stage_grant_entries(state, stage_index)
     runtime_entries = [
         e for e in state.runtime_grants.get(str(stage_index), [])
         if not e.get("consumed")
@@ -5773,6 +5855,7 @@ def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -
         "grants": all_entries,
         "dropped": dropped,
         "error": error,
+        "note": note,
     }
     if getattr(args, "json", False):
         text = json.dumps(data, indent=2, sort_keys=True)
@@ -5791,6 +5874,8 @@ def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -
             lines.append("  (no grants)")
         if error:
             lines.append(f"  ERROR: {error}")
+        if note:
+            lines.append(f"  NOTE: {note}")
         text = "\n".join(lines) + "\n"
     # A read error is reported, never swallowed into a quiet "no grants" -- ok stays
     # True (this is a report command, not a gate) but the error rides d.data/text so
@@ -7122,7 +7207,11 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # than below the refusals because this seam's own judged refusal needs it; binding a
     # callable spends nothing, and the judge is reached only on a prefilter hit.
     run = runner if runner is not None else advisor.subprocess_runner
-    new = _load(args.plan)
+    # Read args.plan's bytes ONCE and derive `new`, the digest stamped below (seam c)
+    # and the snapshot _refresh_approved_grant_snapshot writes from this SAME buffer —
+    # `_load(args.plan)` used to be a separate read from the digest stamp and the
+    # snapshot write, leaving a window for a concurrent edit to desynchronize them.
+    new, _new_plan_bytes, _new_plan_digest = load_plan_with_digest(args.plan)
     submission = _submission_problems(new, run, state.weight_class)
     if submission:
         return Directive(False, state.node, "fix_plan",
@@ -7325,7 +7414,11 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # digest stamped up there can be persisted for a plan the pblock or coverage gate
     # then rejects — whenever that save runs at all. Placement, not the absence of an intervening save, is what carries the
     # invariant — and the leak would be a silently wrong digest, not a crash.
-    _stamp_accepted_plan_digest(state, args.plan)
+    # Stamped from the SAME buffer `new` was parsed from (seam (b) above), not a
+    # fresh re-read of args.plan (the former `_stamp_accepted_plan_digest(state,
+    # args.plan)`) — so this digest can never name bytes different from the ones
+    # `new` was diffed and gated against.
+    state.accepted_plan_digest = _new_plan_digest
 
     # Seam (b)'s advice channel, attached to whichever of this command's several success
     # Directives is returned — an echo never changes which one that is. Computed HERE, on
@@ -7391,7 +7484,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         # diff kind doesn't cover (prose/verify only, per the diff), so the approved
         # snapshot and approved_grants_sha256 must track `new` every time, not only
         # the first time a session ever takes a snapshot.
-        _refresh_approved_grant_snapshot(state, store, new)
+        _refresh_approved_grant_snapshot(state, store, new, _new_plan_bytes, _new_plan_digest)
         if diagnosing:
             for s in state.stages:
                 if s.outcome.status == StageStatus.FAILED.value:
@@ -7436,7 +7529,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         # _grants_grew before this branch is ever reached -- the snapshot bytes and
         # approved_grants_sha256 must track `new`, not the plan this session most
         # recently APPROVED via a full `approve` call.
-        _refresh_approved_grant_snapshot(state, store, new)
+        _refresh_approved_grant_snapshot(state, store, new, _new_plan_bytes, _new_plan_digest)
         _sync_venue_from_plan(state, new)
         state.final_check = new.meta.final_check
         if diagnosing:

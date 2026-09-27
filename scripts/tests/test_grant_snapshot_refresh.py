@@ -163,6 +163,38 @@ def test_refinement_replan_refreshes_snapshot_and_approved_grants_hash(store, fi
     assert state.approved_grants_sha256 == old_grants_hash
 
 
+def test_refresh_approved_grant_snapshot_refuses_when_digest_mismatches_accepted(
+    store, fixtures_dir,
+):
+    """Belt and braces (should-fix item 1): `_refresh_approved_grant_snapshot`
+    must refuse to rebind -- raising, not silently keeping the stale snapshot --
+    when the digest of the bytes it is asked to snapshot does not match
+    `state.accepted_plan_digest`. `cmd_replan` itself always stamps that field
+    from the SAME buffer it passes here, so this only fires when something
+    upstream broke that invariant; exercised directly since going through
+    `cmd_replan` can never itself produce a mismatch by construction."""
+    sid = "refresh-digest-mismatch"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _to_executing(store, sid, fixtures_dir, plan_path=plan)
+
+    state = store.load(sid)
+    old_snapshot_path = state.plan_snapshot_path
+    old_snapshot_hash = state.plan_snapshot_hash
+    old_grants_hash = state.approved_grants_sha256
+    state.accepted_plan_digest = "0" * 64  # deliberately wrong
+
+    doc, data, digest = cli.load_plan_with_digest(plan)
+    assert digest != state.accepted_plan_digest
+
+    with pytest.raises(ValueError, match="accepted_plan_digest"):
+        cli._refresh_approved_grant_snapshot(state, store, doc, data, digest)
+
+    # no rebind happened: snapshot path/hash and the grant hash are untouched
+    assert state.plan_snapshot_path == old_snapshot_path
+    assert state.plan_snapshot_hash == old_snapshot_hash
+    assert state.approved_grants_sha256 == old_grants_hash
+
+
 # --- (2) _stage_grant_entries reports read failures loudly, not as empty grants ---
 
 
@@ -172,7 +204,7 @@ def test_stage_grant_entries_reports_missing_snapshot_file(store, fixtures_dir):
     state = store.load(sid)
     Path(state.plan_snapshot_path).unlink()
 
-    declared, derived, dropped, error = cli._stage_grant_entries(state, 1)
+    declared, derived, dropped, error, _note = cli._stage_grant_entries(state, 1)
     assert declared == [] and derived == [] and dropped == []
     assert error and "missing on disk" in error
 
@@ -189,7 +221,7 @@ def test_stage_grant_entries_reports_unloadable_snapshot(store, fixtures_dir):
     state.plan_snapshot_hash = hashlib.sha256(garbage).hexdigest()
     store.save(state)
 
-    declared, derived, dropped, error = cli._stage_grant_entries(state, 1)
+    declared, derived, dropped, error, _note = cli._stage_grant_entries(state, 1)
     assert declared == [] and derived == [] and dropped == []
     assert error and "cannot load" in error
 
@@ -206,7 +238,7 @@ def test_stage_grant_entries_read_failure_is_isolated_per_call(store, fixtures_d
     good_hash = state.plan_snapshot_hash
     Path(good_path).unlink()
 
-    _decl1, _der1, _drop1, error1 = cli._stage_grant_entries(state, 1)
+    _decl1, _der1, _drop1, error1, _note1 = cli._stage_grant_entries(state, 1)
     assert error1 and "missing on disk" in error1
 
     # restore the snapshot exactly as it was; a fresh read must be clean again --
@@ -215,7 +247,7 @@ def test_stage_grant_entries_read_failure_is_isolated_per_call(store, fixtures_d
     assert state.plan_snapshot_hash == good_hash
     Path(good_path).write_bytes(Path(fixtures_dir / "plan_two_stage.toml").read_bytes())
 
-    _decl2, _der2, _drop2, error2 = cli._stage_grant_entries(state, 1)
+    _decl2, _der2, _drop2, error2, _note2 = cli._stage_grant_entries(state, 1)
     assert error2 is None
 
 
@@ -276,6 +308,37 @@ def test_dispatch_proceeds_when_stage_declares_no_grants_despite_unreadable_snap
         store=store, runner=_runner,
     )
     assert directive.marker == "COMPLETED"
+
+
+def test_dispatch_refuses_when_derived_only_stage_has_hash_mismatch(store, fixtures_dir):
+    """Should-fix item 3: a stage that declares NO grants at all (`plan_two_stage
+    .toml`'s stage 1: no `[stage.grants]`) but whose plan content still derives a
+    non-empty set (a DR-O rule for its `mod.py` output_artifact) must still block
+    dispatch when `_stage_grant_entries` reports a derived-grants hash mismatch.
+    Before this fix, the refusal check looked only at `_stage_declares_grants`,
+    so a derived-only stage's read error let dispatch through silently, spawning
+    the child without the coverage it was actually approved with."""
+    sid = "dispatch-refuses-derived-only-hash-mismatch"
+    _to_executing(store, sid, fixtures_dir)
+    state = store.load(sid)
+    stage1 = state.stage(1)
+    _declares = bool(getattr(stage1, "grants", None)) and not stage1.grants.is_empty()
+    assert not _declares  # the fixture premise: nothing DECLARED to lose
+    assert cli._stage_would_derive_grants(state, 1)  # but something DERIVED
+    state.approved_grants_sha256 = "0" * 64  # forces the derived-grants hash mismatch
+    store.save(state)
+
+    def _runner(argv, cwd=None):
+        raise AssertionError(
+            "dispatch_stage must not be invoked when derived grants can't be trusted"
+        )
+
+    directive = cli.cmd_dispatch(
+        ns(session=sid, budget="medium", complexity="medium", dry_run=False),
+        store=store, runner=_runner,
+    )
+    assert directive.ok is False
+    assert "derived-grants hash mismatch" in directive.detail
 
 
 # --- (4) markdown-decorated `Rule:` line parsing ---
@@ -461,12 +524,11 @@ def test_dispatch_denied_workdir_absolute_baseline_call_classifies_as_materializ
     )
     _to_executing(store, sid, fixtures_dir, plan_path=plan_path)
     state = store.load(sid)
-    # `_stage_grant_venue` must resolve to the same venue dispatch itself passes
-    # as the child's cwd (`state.resolve_check_venue(CheckVenue.DELIVERY.value)`)
-    # -- otherwise coverage would expand for a workdir the child never actually
-    # runs in.
-    assert cli._stage_grant_venue(state) == state.resolve_check_venue(CheckVenue.DELIVERY.value)
-    assert cli._stage_grant_venue(state) == repo_root
+    # `_effective_stage_grants` expands the baseline with
+    # `state.resolve_check_venue(CheckVenue.DELIVERY.value)` -- the same venue
+    # dispatch itself passes as the child's cwd -- so coverage can never expand
+    # for a workdir the child does not actually run in.
+    assert state.resolve_check_venue(CheckVenue.DELIVERY.value) == repo_root
 
     denied_command = f"python3 {repo_root}/scripts/verify-agentctl.py"
 
@@ -500,10 +562,10 @@ def test_dispatch_passes_runner_a_cwd_equal_to_the_venue_coverage_expands_with(
     so `build_child_settings`'s workdir naturally equals whatever `cwd` dispatch
     passed the runner. This pins that the `cwd` `cmd_dispatch` threads through
     (`child_cwd = state.resolve_check_venue(CheckVenue.DELIVERY.value)`) is the
-    SAME venue `_stage_grant_venue` (and therefore `_effective_stage_grants`'s
-    baseline expansion) resolves -- the two must never drift on which workdir
-    spelling a baseline actually covers vs. which one the child actually runs
-    under."""
+    SAME venue `_effective_stage_grants`'s baseline expansion resolves
+    (`state.resolve_check_venue(CheckVenue.DELIVERY.value)`) -- the two must
+    never drift on which workdir spelling a baseline actually covers vs. which
+    one the child actually runs under."""
     sid = "dispatch-cwd-matches-venue"
     repo_root = str(tmp_path / "cwd-venue-worktree")
     plan_path = _write_plan_with_repo_root(
@@ -511,7 +573,7 @@ def test_dispatch_passes_runner_a_cwd_equal_to_the_venue_coverage_expands_with(
     )
     _to_executing(store, sid, fixtures_dir, plan_path=plan_path)
     state = store.load(sid)
-    expected_venue = cli._stage_grant_venue(state)
+    expected_venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
     assert expected_venue == repo_root
 
     seen = {}

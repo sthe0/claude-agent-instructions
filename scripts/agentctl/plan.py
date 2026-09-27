@@ -1488,6 +1488,31 @@ def load_plan(
     return parse_plan(data, strict=strict, strict_executor=strict_executor)
 
 
+def load_plan_with_digest(
+    path: str | Path, *, strict: bool = True, strict_executor: bool | None = None,
+) -> tuple[PlanDoc, bytes, str]:
+    """Read the plan file's bytes exactly once and derive the parsed doc, the raw
+    bytes and their sha256 digest all from that single buffer.
+
+    `load_plan` re-reads the file for every caller, so a command that needs the
+    doc AND a digest AND a snapshot of the same bytes (cmd_approve, cmd_replan)
+    previously read the file up to three separate times. Between any two of those
+    reads a concurrent edit (another session, an editor save) can slip in, binding
+    a digest or a snapshot to bytes that were never the ones parsed and diffed.
+    Reading once and deriving everything from that buffer removes the window."""
+    p = Path(path)
+    if not p.exists():
+        raise PlanError(f"plan file not found: {p}")
+    data = p.read_bytes()
+    try:
+        raw = tomllib.loads(data.decode("utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        raise PlanError(f"malformed TOML in plan file {p}: {exc}") from exc
+    doc = parse_plan(raw, strict=strict, strict_executor=strict_executor)
+    digest = hashlib.sha256(data).hexdigest()
+    return doc, data, digest
+
+
 def order_scope(meta) -> tuple:
     """The SCOPE-bearing half of the order, as a contribution to a change-decision key:
     a one-element tuple holding the requirement ids and the coverage map's keys, or the
