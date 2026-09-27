@@ -291,6 +291,8 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
         lines.append(f"- **Prior observation:** {s.criterion.observation}")
     if s.output_artifacts:
         lines.append(f"- **Output artifacts:** {', '.join(s.output_artifacts)}")
+    if s.ephemeral_artifacts_waiver:
+        lines.append(f"- **Ephemeral artifacts waived:** {s.ephemeral_artifacts_waiver}")
     if s.depends_on:
         lines.append("- **Depends on** (direct dependencies only; see their own stage for detail):")
         for dep_index in sorted(s.depends_on):

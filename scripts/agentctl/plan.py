@@ -1406,6 +1406,14 @@ def parse_plan(
             if str(s.get("negative_control_waiver") or "").strip()
             else None
         )
+        # Same permissive treatment as negative_control_waiver above: the requirement
+        # (an output_artifacts entry under exempt_paths.scratch_roots() needs either no
+        # such entry or this waiver) lives at the submission seam, not here.
+        ephemeral_artifacts_waiver = (
+            str(s["ephemeral_artifacts_waiver"]).strip()
+            if str(s.get("ephemeral_artifacts_waiver") or "").strip()
+            else None
+        )
         stages.append(
             Stage(
                 index=index,
@@ -1457,6 +1465,7 @@ def parse_plan(
                 knowledge=str(s["knowledge"]) if s.get("knowledge") else None,
                 supplies=_build_supplies(s, index),
                 output_artifacts=[str(p) for p in s.get("output_artifacts", [])],
+                ephemeral_artifacts_waiver=ephemeral_artifacts_waiver,
                 outcome=Outcome(status=StageStatus.PENDING.value),
                 grants=_parse_stage_grants(s.get("grants"), stage_ctx, strict=strict),
             )

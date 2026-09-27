@@ -122,7 +122,7 @@ from .state import (
     Subject,
     WeightClass,
 )
-from .store import FileStateStore, StateStore
+from .store import FileStateStore, StateStore, _safe as _safe_session_id
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 GATE_LOG = config_root.agentctl_gate_log()
@@ -5153,13 +5153,21 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         project_settings=_dispatch_project_settings_path(state),
         session_id=state.session_id,
     )
+    # Computed (not created) here — spawn-specialist.py's own in-process
+    # load_or_create_evidence_dir (mirroring load_engine_stage_grants's
+    # cmd_stage_grants call) materializes the directory before the child
+    # spawns, via the SAME evidence_dir_for formula, so the two never disagree.
+    evidence_dir = str(evidence_dir_for(state.session_id, stage.index, state_root=store.root))
     if dry_run:
         # #10: a dry-run is a pure preview — no event log, no state save, no
         # marker routing. The echoed command is the whole result.
         return Directive(
             True, state.node, "preview",
             f"stage {stage.index} dry-run preview (no state change)",
-            data={"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr},
+            data={
+                "returncode": result.returncode, "stdout": result.stdout,
+                "stderr": result.stderr, "evidence_dir": evidence_dir,
+            },
         )
     state.log("dispatch", stage=stage.index, kind=stage.spawn_kind(), returncode=result.returncode)
     if result.returncode != 0 and _is_recursion_refusal(result):
@@ -5181,7 +5189,10 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     # non-zero with a valid escalation marker. spawn-specialist.py has already parsed
     # and (if needed) MALFORMED-wrapped the marker onto stdout.
     marker, body = parse_marker(result.stdout)
-    base = {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+    base = {
+        "returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr,
+        "evidence_dir": evidence_dir,
+    }
 
     # Post-launch half of the settings_drift check: re-hash the SAME paths
     # enumerated before dispatch_stage ran. A spawned child is never granted
@@ -5862,6 +5873,33 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
         data={"action": req.action, "decision": args.decision, "continuation": cont,
               "runtime_grants_added": new_entries},
     )
+
+
+def evidence_dir_for(session_id: str, stage_index: int, *, state_root: Path | None = None) -> Path:
+    """Durable per-stage evidence directory: `<agentctl state root>/evidence/<session>/
+    stage-<N>/` — deliberately UNDER the state root (never under an OS-temp scratch root
+    per exempt_paths.scratch_roots()), so a developer spawn's checkpoint evidence survives
+    the same GC that would sweep a session scratchpad. `state_root` defaults to the same
+    `config_root.agentctl_state_dir()` a bare FileStateStore() resolves to, so a caller
+    that already holds a `store` (itself honoring `--state-root`) gets an evidence root
+    that moves with it under test isolation, without a second override flag. Session id is
+    sanitized with store._safe — the same scheme session state files are keyed by — so an
+    adversarial session id cannot escape the evidence tree."""
+    root = Path(state_root) if state_root is not None else config_root.agentctl_state_dir()
+    return root / "evidence" / _safe_session_id(session_id) / f"stage-{int(stage_index)}"
+
+
+def cmd_evidence_dir(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Create (idempotently) and report the durable per-stage evidence directory (see
+    evidence_dir_for) where a developer spawn commits checkpoint evidence as it goes —
+    see spawn-specialist.py's '## Checkpoints' prompt section and the write grant
+    load_or_create_evidence_dir arranges for it. Purely path-derived from --session/
+    --stage — no session-state lookup — since the directory must be creatable (and
+    granted to a spawned child) before dispatch necessarily reflects the stage in
+    progress."""
+    path = evidence_dir_for(args.session, args.stage, state_root=store.root)
+    path.mkdir(parents=True, exist_ok=True)
+    return Directive(True, "n/a", "evidence_dir", str(path) + "\n", data={"evidence_dir": str(path)})
 
 
 def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -8525,6 +8563,7 @@ COMMANDS = {
     "dispatch": cmd_dispatch,
     "resolve-permission": cmd_resolve_permission,
     "stage-grants": cmd_stage_grants,
+    "evidence-dir": cmd_evidence_dir,
     "grant-stats": cmd_grant_stats,
     "record-result": cmd_record_result,
     "declare": cmd_declare,
@@ -8587,7 +8626,7 @@ _SESSION_COMMANDS = (
     "plan-render", "plan-grants", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "risk-accept",
     "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
-    "next-stage", "dispatch", "resolve-permission", "stage-grants", "grant-stats",
+    "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
     "record-result", "declare",
     "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
     "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status",
@@ -9169,6 +9208,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--stage", type=int, default=None,
                     help="stage index to report (defaults to the session's active stage)")
     sp.add_argument("--json", action="store_true")
+    sp = add("evidence-dir"); sp.add_argument("--session", required=True)
+    sp.add_argument("--stage", type=int, required=True,
+                    help="stage index the evidence directory is scoped to")
     sp = add("grant-stats"); sp.add_argument("--session", required=True)
     sp.add_argument("--json", action="store_true")
     sp = add("record-result"); sp.add_argument("--session", required=True)
