@@ -13,7 +13,7 @@ import pathlib
 
 import pytest
 
-from lib.transcript_stops import STOP_KINDS, parse_bash_tool_uses
+from lib.transcript_stops import STOP_KINDS, parse_bash_tool_uses, parse_tool_uses
 
 _FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "transcript_stops"
 
@@ -98,3 +98,15 @@ def test_edge_cases_skip_non_bash_and_dangling_calls_and_join_block_list_content
 def test_a_missing_transcript_file_raises_like_any_other_missing_path():
     with pytest.raises(FileNotFoundError):
         parse_bash_tool_uses(_FIXTURES / "does-not-exist.jsonl")
+
+
+def test_notebook_edit_reads_notebook_path_not_file_path():
+    """`parse_tool_uses` must read `tool_input["notebook_path"]` for a
+    NotebookEdit call, not `file_path` -- the harness's actual field for this
+    tool is `notebook_path`; reading `file_path` (the field every other
+    tracked file tool uses) silently returned "" for every NotebookEdit call
+    before this fix."""
+    [use] = parse_tool_uses(_FIXTURES / "notebook-edit.jsonl")
+    assert use.tool_name == "NotebookEdit"
+    assert use.file_path == "/repo/notebooks/scratch.ipynb"
+    assert use.stop_kind == "ran"

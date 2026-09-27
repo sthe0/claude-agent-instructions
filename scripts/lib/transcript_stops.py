@@ -197,6 +197,13 @@ def parse_tool_uses(path: str | Path) -> list[ToolUse]:
                     if tool_name == "Bash":
                         command = tool_input.get("command", "")
                         file_path = None
+                    elif tool_name == "NotebookEdit":
+                        # The harness's actual field for this tool is
+                        # `notebook_path`, not `file_path` -- reading
+                        # `file_path` here silently returned "" for every
+                        # NotebookEdit call.
+                        command = None
+                        file_path = tool_input.get("notebook_path", "")
                     else:
                         command = None
                         file_path = tool_input.get("file_path", "")

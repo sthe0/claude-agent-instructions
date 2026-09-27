@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_fixture_notebook_1", "name": "NotebookEdit", "input": {"notebook_path": "/repo/notebooks/scratch.ipynb", "new_source": "print('ok')"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_fixture_notebook_1", "content": "Applied 1 edit to notebook", "is_error": false}]}}
