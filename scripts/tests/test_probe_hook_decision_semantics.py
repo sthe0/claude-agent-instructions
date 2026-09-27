@@ -7,6 +7,7 @@ only), and the markdown table renderer.
 """
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,6 +20,15 @@ _SPEC = importlib.util.spec_from_file_location(
 probe = importlib.util.module_from_spec(_SPEC)
 sys.modules["probe_hook_decision_semantics"] = probe
 _SPEC.loader.exec_module(probe)
+
+
+def _sentinel_present(text: str, marker: str) -> bool:
+    """Anti-example kept only to document `command_executed`'s bug fix: a
+    plain substring check also matches a marker sitting in a DENIED call's
+    `tool_use.input.command`, which never produced a `tool_result`. Not part
+    of the probe module -- `command_executed` is the real, denial-aware
+    check it replaced."""
+    return marker in text
 
 
 # --- find_key -----------------------------------------------------------
@@ -120,7 +130,7 @@ def test_command_executed_false_when_only_in_tool_use_input():
     marker = "PERM_PROBE_OK_def"
     raw = "\n".join([_tool_use_line(marker), _result_line([{"tool_name": "Bash"}])])
     assert not probe.command_executed(raw, marker)
-    assert probe.sentinel_present(raw, marker)  # documents the old, buggy behaviour
+    assert _sentinel_present(raw, marker)  # documents the old, buggy behaviour
 
 
 def test_command_executed_false_on_error_tool_result_containing_marker():
@@ -143,14 +153,14 @@ def test_permission_denied_false_on_empty_input():
     assert not probe.permission_denied("")
 
 
-# --- sentinel_present / detect_prompt / detect_denial --------------------
+# --- _sentinel_present (anti-example) / detect_prompt / detect_denial ---
 
 def test_sentinel_present_true():
-    assert probe.sentinel_present("output: PERM_PROBE_OK_abc123 done", "PERM_PROBE_OK_abc123")
+    assert _sentinel_present("output: PERM_PROBE_OK_abc123 done", "PERM_PROBE_OK_abc123")
 
 
 def test_sentinel_present_false():
-    assert not probe.sentinel_present("nothing here", "PERM_PROBE_OK_abc123")
+    assert not _sentinel_present("nothing here", "PERM_PROBE_OK_abc123")
 
 
 @pytest.mark.parametrize("pane_text", [
@@ -355,6 +365,27 @@ def test_interactive_result_hook_fired_reports_observed_fields():
     assert r.effective_mode == "⏸ manual mode on"
     assert r.sentinel_ran is True
     assert r.notes.startswith("hook fired")
+
+
+def test_run_interactive_cell_survives_called_process_error(tmp_path, monkeypatch):
+    # Round-5 fix: a tmux command that exits non-zero under `check=True` (a
+    # transient tmux/server hiccup, distinct from a timeout) must not crash
+    # main() -- the cell degrades to not-observed instead, naming the
+    # failing command, while the other 11 cells still run.
+    failing_argv = ["tmux", "new-session", "-d", "-s", "probe-x"]
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[:2] == ["tmux", "new-session"]:
+            raise subprocess.CalledProcessError(1, failing_argv)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    result = probe.run_interactive_cell("deny", tmp_path)
+    assert result.effective_mode is None
+    assert result.sentinel_ran is None
+    assert result.prompt_shown is None
+    assert "tmux command failed" in result.notes
+    assert "new-session" in result.notes
 
 
 def test_interactive_result_no_footer_is_reported_as_such():

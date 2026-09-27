@@ -108,7 +108,6 @@ CHILD_BUDGET_USD = "0.15"
 HEADLESS_TIMEOUT_S = 45
 TMUX_BOOT_WAIT_S = 6
 TMUX_RESPONSE_WAIT_S = 18
-TMUX_TIMEOUT_S = 60
 
 # Substrings observed in an interactive permission dialog. Not exhaustive by
 # construction (the UI text is not a contract this script controls) — a
@@ -322,10 +321,6 @@ def parse_stream_json_effective_mode(raw_stdout: str) -> str | None:
     return None
 
 
-def sentinel_present(text: str, marker: str) -> bool:
-    return marker in text
-
-
 def parse_tool_results(raw_stdout: str) -> list[dict]:
     """Extract every `tool_result` content block (`{'content': str|Any,
     'is_error': bool}`) from a stream-json transcript. A denied Bash call's
@@ -354,9 +349,10 @@ def parse_tool_results(raw_stdout: str) -> list[dict]:
 
 def command_executed(raw_stdout: str, marker: str) -> bool:
     """True iff `marker` appears in a non-error `tool_result` -- i.e. Bash
-    actually ran and echoed it back. NOT `sentinel_present(raw_stdout, ...)`:
-    that also matches a DENIED call, because the marker sits verbatim in the
-    assistant's proposed `tool_use.input.command` regardless of outcome."""
+    actually ran and echoed it back. NOT a plain substring check of
+    `raw_stdout` for `marker`: that also matches a DENIED call, because the
+    marker sits verbatim in the assistant's proposed `tool_use.input.command`
+    regardless of outcome."""
     for result in parse_tool_results(raw_stdout):
         content = result["content"]
         text = content if isinstance(content, str) else json.dumps(content)
@@ -600,6 +596,7 @@ def run_interactive_cell(decision: str, tmpdir: Path, raw_dump_dir: Path | None 
     footer_text: str | None = None
     timed_out = False
     trust_blocked = False
+    tmux_failure: str | None = None
     try:
         subprocess.run(
             build_tmux_new_session_argv(session_name, str(WORKTREE_ROOT), inner_cmd, os.environ),
@@ -638,9 +635,16 @@ def run_interactive_cell(decision: str, tmpdir: Path, raw_dump_dir: Path | None 
             footer_text = parse_interactive_footer(pane_text)
     except subprocess.TimeoutExpired:
         timed_out = True
+    except subprocess.CalledProcessError as exc:
+        tmux_failure = f"tmux command failed: {shlex.join(exc.cmd)} (exit {exc.returncode})"
     finally:
         subprocess.run(["tmux", "kill-session", "-t", session_name], timeout=10, check=False,
                         capture_output=True)
+
+    if tmux_failure is not None:
+        return _not_observed_result(
+            f"interactive:auto:{decision}", "auto", decision, timed_out, f"not observed: {tmux_failure}"
+        )
 
     _dump_raw(raw_dump_dir, f"interactive-auto-{decision}", pane_text)
     hook_fired = _hook_fired_for_bash(witness_path)
@@ -655,23 +659,25 @@ def run_add_dir_read_cell(tmpdir: Path, raw_dump_dir: Path | None = None) -> Cel
     must be refused. Isolated (own scratch hooks/settings only) since we care
     about our own deny rule, not fleet guard interference."""
     d = Path(tempfile.mkdtemp(prefix="probe-readdir-"))
-    target = d / "probe-write-test.txt"
-    kwargs = host_llm.isolated_run_kwargs()
-    settings = {"permissions": {"deny": [f"Edit(//{d}/**)"]}}
-    cmd = [
-        "claude", "-p",
-        "--output-format", "stream-json", "--verbose",
-        "--max-budget-usd", CHILD_BUDGET_USD,
-        "--model", CHILD_MODEL, "--effort", CHILD_EFFORT,
-        "--permission-mode", "acceptEdits",
-        "--add-dir", str(d),
-        "--settings", json.dumps(settings),
-    ]
-    prompt = f"Use the Write tool to create the file {target} with the exact content OK. Do nothing else."
-    raw, timed_out = _run_child(cmd, prompt, env=kwargs["env"], cwd=kwargs["cwd"], timeout_s=HEADLESS_TIMEOUT_S)
-    _dump_raw(raw_dump_dir, "add_dir-accept_edits_read_add_dir", raw)
-    wrote = target.exists()
-    shutil.rmtree(d, ignore_errors=True)
+    try:
+        target = d / "probe-write-test.txt"
+        kwargs = host_llm.isolated_run_kwargs()
+        settings = {"permissions": {"deny": [f"Edit(//{d}/**)"]}}
+        cmd = [
+            "claude", "-p",
+            "--output-format", "stream-json", "--verbose",
+            "--max-budget-usd", CHILD_BUDGET_USD,
+            "--model", CHILD_MODEL, "--effort", CHILD_EFFORT,
+            "--permission-mode", "acceptEdits",
+            "--add-dir", str(d),
+            "--settings", json.dumps(settings),
+        ]
+        prompt = f"Use the Write tool to create the file {target} with the exact content OK. Do nothing else."
+        raw, timed_out = _run_child(cmd, prompt, env=kwargs["env"], cwd=kwargs["cwd"], timeout_s=HEADLESS_TIMEOUT_S)
+        _dump_raw(raw_dump_dir, "add_dir-accept_edits_read_add_dir", raw)
+        wrote = target.exists()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
     return CellResult(
         cell_id="add_dir:accept_edits_read_add_dir",
         requested_mode="acceptEdits",
@@ -690,41 +696,42 @@ def run_add_dir_write_cell(raw_dump_dir: Path | None = None) -> CellResult:
     Edit(//D2/**/settings*.json) deny: write to D2/x must succeed, write to
     D2/settings.json must be refused. Two child runs, one cell."""
     d2 = Path(tempfile.mkdtemp(prefix="probe-writedir-"))
-    settings = {
-        "permissions": {
-            "allow": [f"Edit(//{d2}/**)"],
-            "deny": [f"Edit(//{d2}/**/settings*.json)"],
+    try:
+        settings = {
+            "permissions": {
+                "allow": [f"Edit(//{d2}/**)"],
+                "deny": [f"Edit(//{d2}/**/settings*.json)"],
+            }
         }
-    }
-    common = [
-        "claude", "-p",
-        "--output-format", "stream-json", "--verbose",
-        "--max-budget-usd", CHILD_BUDGET_USD,
-        "--model", CHILD_MODEL, "--effort", CHILD_EFFORT,
-        "--add-dir", str(d2),
-        "--settings", json.dumps(settings),
-    ]
-    # AMBIENT env deliberately (os.environ, unmodified) -- see module docstring.
-    ambient_env = dict(os.environ)
-    ambient_cwd = str(d2)
+        common = [
+            "claude", "-p",
+            "--output-format", "stream-json", "--verbose",
+            "--max-budget-usd", CHILD_BUDGET_USD,
+            "--model", CHILD_MODEL, "--effort", CHILD_EFFORT,
+            "--add-dir", str(d2),
+            "--settings", json.dumps(settings),
+        ]
+        # AMBIENT env deliberately (os.environ, unmodified) -- see module docstring.
+        ambient_env = dict(os.environ)
+        ambient_cwd = str(d2)
 
-    ok_target = d2 / "x"
-    raw_ok, timed_out_ok = _run_child(
-        common, f"Use the Write tool to create the file {ok_target} with the exact content OK. Do nothing else.",
-        env=ambient_env, cwd=ambient_cwd, timeout_s=HEADLESS_TIMEOUT_S,
-    )
-    _dump_raw(raw_dump_dir, "add_dir-default_write_add_dir-ok", raw_ok)
-    ok_written = ok_target.exists()
+        ok_target = d2 / "x"
+        raw_ok, timed_out_ok = _run_child(
+            common, f"Use the Write tool to create the file {ok_target} with the exact content OK. Do nothing else.",
+            env=ambient_env, cwd=ambient_cwd, timeout_s=HEADLESS_TIMEOUT_S,
+        )
+        _dump_raw(raw_dump_dir, "add_dir-default_write_add_dir-ok", raw_ok)
+        ok_written = ok_target.exists()
 
-    blocked_target = d2 / "settings.json"
-    raw_blocked, timed_out_blocked = _run_child(
-        common, f"Use the Write tool to create the file {blocked_target} with the exact content {{}}. Do nothing else.",
-        env=ambient_env, cwd=ambient_cwd, timeout_s=HEADLESS_TIMEOUT_S,
-    )
-    _dump_raw(raw_dump_dir, "add_dir-default_write_add_dir-blocked", raw_blocked)
-    blocked_written = blocked_target.exists()
-
-    shutil.rmtree(d2, ignore_errors=True)
+        blocked_target = d2 / "settings.json"
+        raw_blocked, timed_out_blocked = _run_child(
+            common, f"Use the Write tool to create the file {blocked_target} with the exact content {{}}. Do nothing else.",
+            env=ambient_env, cwd=ambient_cwd, timeout_s=HEADLESS_TIMEOUT_S,
+        )
+        _dump_raw(raw_dump_dir, "add_dir-default_write_add_dir-blocked", raw_blocked)
+        blocked_written = blocked_target.exists()
+    finally:
+        shutil.rmtree(d2, ignore_errors=True)
     notes = (
         f"D2/x written={ok_written} (expected True); "
         f"D2/settings.json written={blocked_written} (expected False)"
