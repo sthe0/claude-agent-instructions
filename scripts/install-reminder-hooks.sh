@@ -174,7 +174,7 @@ DESIRED = [
     # classification (no subprocess/judge), so its timeout matches the other simple
     # guards above rather than the judge-backed gates below.
     ("PreToolUse",       "Bash",  "hook-guard-permission-surface.py", 5),
-    ("PreToolUse",       "Edit|Write", "hook-guard-permission-surface.py", 5),
+    ("PreToolUse",       "Edit|Write|MultiEdit|NotebookEdit", "hook-guard-permission-surface.py", 5),
     # Hard gate: deny an Edit/Write or `git commit` in canon (the serving/PRIMARY
     # Core checkout, on ANY branch, plus any machine-local canon-roots entry) —
     # feature work must go in a linked worktree or second mount, so live hooks

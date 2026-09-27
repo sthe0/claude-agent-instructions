@@ -89,9 +89,12 @@ The four branches:
              of the granting command, since after this guard ships that
              prompt is the user's one decision on an out-of-scope grant.
 
-Only Edit and Bash are inspected — a raw Write onto one of these targets is a
-NAMED RESIDUAL, not a gap the plan's own test procedure calls for closing
-here.
+Edit, Write, MultiEdit, NotebookEdit and Bash are all inspected. Write
+carries its whole `after` document as `content`, so G1-edit reuses the same
+security-relevant-diff check with no old_string/new_string reconstruction.
+MultiEdit's `edits` array is applied in order to reconstruct the after-text.
+NotebookEdit is checked by `notebook_path` alone (G1-state, G3) — a notebook
+is not a settings document, so G1-edit does not apply to it.
 
 Every fire is logged, but ONLY inside `main()` — `decide()` itself performs no
 I/O beyond the injected `read_file` and writes nothing. The fire log path is
@@ -136,15 +139,23 @@ _OTHER_SECURITY_KEYS = (
 _SETTINGS_REFERENCE_URL = "https://code.claude.com/docs/en/settings"
 
 # G2: a `claude` invocation carrying one of these bypasses the plan-stage
-# grant channel regardless of its value, so the value itself is never
-# inspected.
+# grant channel. Matched on both the bare `flag` and glued `flag=value`
+# forms (`_flag_present` below). Every flag here except `--permission-mode`
+# fires on presence alone, regardless of value — `--permission-mode` is the
+# one exception, since `default`/`plan` NARROW permissions rather than widen
+# them (`_G2_PERMISSION_MODE_EXEMPT_VALUES`).
 _G2_WIDENING_FLAGS = frozenset({
     "--dangerously-skip-permissions",
+    "--allow-dangerously-skip-permissions",
     "--permission-mode",
     "--add-dir",
     "--settings",
     "--mcp-config",
+    "--allowedTools",
+    "--allowed-tools",
 })
+
+_G2_PERMISSION_MODE_EXEMPT_VALUES = frozenset({"default", "plan"})
 
 
 def _real_read_file(path: str) -> str:
@@ -215,10 +226,78 @@ def _g1_bash(command: str, cwd: str) -> str | None:
     return None
 
 
+def _g1_write(tool_input: dict, read_file) -> str | None:
+    """Same G1-edit predicate as `_g1_edit`, for a Write tool_use — Write
+    already supplies the whole `after` text directly as `content`, so no
+    old_string/new_string reconstruction is needed."""
+    file_path = tool_input.get("file_path")
+    if not isinstance(file_path, str) or not file_path:
+        return None
+    if not widening_targets.is_live_settings(file_path):
+        return None
+    new_text = tool_input.get("content")
+    if not isinstance(new_text, str):
+        return None
+    try:
+        old_text = read_file(file_path)
+    except Exception:
+        return None
+    if not isinstance(old_text, str):
+        return None
+    if _security_relevant_diff(old_text, new_text):
+        return file_path
+    return None
+
+
+def _apply_multi_edit(old_text: str, edits: list) -> str | None:
+    text = old_text
+    for edit in edits:
+        if not isinstance(edit, dict):
+            return None
+        applied = _apply_edit(text, edit)
+        if applied is None:
+            return None
+        text = applied
+    return text
+
+
+def _g1_multi_edit(tool_input: dict, read_file) -> str | None:
+    """Same G1-edit predicate, for a MultiEdit tool_use — its `edits` array
+    is applied in order to reconstruct the after-text `_apply_edit` would
+    otherwise produce from a single old_string/new_string pair."""
+    file_path = tool_input.get("file_path")
+    if not isinstance(file_path, str) or not file_path:
+        return None
+    if not widening_targets.is_live_settings(file_path):
+        return None
+    edits = tool_input.get("edits")
+    if not isinstance(edits, list) or not edits:
+        return None
+    try:
+        old_text = read_file(file_path)
+    except Exception:
+        return None
+    if not isinstance(old_text, str):
+        return None
+    new_text = _apply_multi_edit(old_text, edits)
+    if new_text is None:
+        return None
+    if _security_relevant_diff(old_text, new_text):
+        return file_path
+    return None
+
+
 def _g1_state_edit(tool_input: dict) -> str | None:
     file_path = tool_input.get("file_path")
     if isinstance(file_path, str) and widening_targets.is_agentctl_state_path(file_path):
         return file_path
+    return None
+
+
+def _g1_state_notebook(tool_input: dict) -> str | None:
+    notebook_path = tool_input.get("notebook_path")
+    if isinstance(notebook_path, str) and widening_targets.is_agentctl_state_path(notebook_path):
+        return notebook_path
     return None
 
 
@@ -261,11 +340,24 @@ def _g2_segments(command: str) -> list[list[str]]:
     return out
 
 
+def _flag_present(seg: list[str], flag: str) -> bool:
+    """True iff `flag` appears in `seg` in either its bare or glued
+    `flag=value` form."""
+    prefix = flag + "="
+    return any(tok == flag or tok.startswith(prefix) for tok in seg)
+
+
 def _g2_bash(command: str) -> str | None:
     for seg in _g2_segments(command):
         if not widening_targets.is_claude_program(seg):
             continue
-        if any(tok in _G2_WIDENING_FLAGS for tok in seg):
+        for flag in _G2_WIDENING_FLAGS:
+            if not _flag_present(seg, flag):
+                continue
+            if flag == "--permission-mode":
+                value = _flag_value(seg, "--permission-mode")
+                if value in _G2_PERMISSION_MODE_EXEMPT_VALUES:
+                    continue
             return " ".join(seg)
     return None
 
@@ -274,6 +366,13 @@ def _g3_edit(tool_input: dict) -> str | None:
     file_path = tool_input.get("file_path")
     if isinstance(file_path, str) and widening_targets.is_launch_surface(file_path):
         return file_path
+    return None
+
+
+def _g3_notebook(tool_input: dict) -> str | None:
+    notebook_path = tool_input.get("notebook_path")
+    if isinstance(notebook_path, str) and widening_targets.is_launch_surface(notebook_path):
+        return notebook_path
     return None
 
 
@@ -287,7 +386,16 @@ def _g3_bash(command: str, cwd: str) -> str | None:
 
 
 def _flag_values(tokens: list[str], flag: str) -> list[str]:
-    return [tokens[i + 1] for i in range(len(tokens) - 1) if tokens[i] == flag]
+    """Every value passed for `flag`, in either its bare `flag value` (two
+    separate tokens) or glued `flag=value` form."""
+    prefix = flag + "="
+    out: list[str] = []
+    for i, tok in enumerate(tokens):
+        if tok == flag and i + 1 < len(tokens):
+            out.append(tokens[i + 1])
+        elif tok.startswith(prefix):
+            out.append(tok[len(prefix):])
+    return out
 
 
 def _flag_value(tokens: list[str], flag: str) -> str | None:
@@ -384,6 +492,39 @@ def decide_detailed(
             if target:
                 return "ask", "G1-state", _g1_state_message(target)
             target = _g3_edit(tool_input)
+            if target:
+                return "ask", "G3", _g3_message(target)
+            return "allow", None, None
+
+        if tool_name == "Write":
+            target = _g1_write(tool_input, read_file)
+            if target:
+                return "ask", "G1-edit", _g1_edit_message(target)
+            target = _g1_state_edit(tool_input)
+            if target:
+                return "ask", "G1-state", _g1_state_message(target)
+            target = _g3_edit(tool_input)
+            if target:
+                return "ask", "G3", _g3_message(target)
+            return "allow", None, None
+
+        if tool_name == "MultiEdit":
+            target = _g1_multi_edit(tool_input, read_file)
+            if target:
+                return "ask", "G1-edit", _g1_edit_message(target)
+            target = _g1_state_edit(tool_input)
+            if target:
+                return "ask", "G1-state", _g1_state_message(target)
+            target = _g3_edit(tool_input)
+            if target:
+                return "ask", "G3", _g3_message(target)
+            return "allow", None, None
+
+        if tool_name == "NotebookEdit":
+            target = _g1_state_notebook(tool_input)
+            if target:
+                return "ask", "G1-state", _g1_state_message(target)
+            target = _g3_notebook(tool_input)
             if target:
                 return "ask", "G3", _g3_message(target)
             return "allow", None, None

@@ -21,7 +21,7 @@ import os
 import re
 from pathlib import Path, PurePosixPath
 
-from . import config_root
+from . import bash_write_targets, config_root
 
 # --- settings documents -----------------------------------------------------
 
@@ -177,13 +177,33 @@ def add_dir_is_or_contains_launch_surface(path: str) -> bool:
     return False
 
 
+_CRONTAB_LIST_ONLY_OPERANDS = ["-l"]
+
+
 def is_crontab_target(command: str) -> bool:
-    """True iff `command` invokes `crontab` — the third launch surface,
-    named by program rather than by path (crontab has no file target a
-    plan-authored rule could point at)."""
+    """True iff `command` invokes `crontab` in a mode that can WRITE the
+    crontab (edit / install-from-file / install-from-stdin / remove) — the
+    third launch surface, named by program rather than by path (crontab has
+    no file target a plan-authored rule could point at).
+
+    `crontab -l` (list) is read-only and must never fire (round-2 finding
+    B3): the prior bare-regex match fired on `crontab -l` the same as on
+    `crontab -e`, since it only checked for the word "crontab" bounded by a
+    separator, never the mode that follows it. Determined per-segment via
+    `iter_candidate_programs` (the same wrapper/wrong-candidate handling
+    every other program check in this module uses) so `crontab` must be the
+    actual PROGRAM of a segment — not merely a word appearing in the
+    command, e.g. inside `which crontab` or a quoted `echo "crontab"`."""
     if not isinstance(command, str):
         return False
-    return re.search(r"(^|[/\s])crontab(\s|$)", command) is not None
+    for seg in bash_write_targets.segments(command):
+        for name, operands in iter_candidate_programs(seg):
+            if name != "crontab":
+                continue
+            if operands == _CRONTAB_LIST_ONLY_OPERANDS:
+                continue
+            return True
+    return False
 
 
 _PROTECTED_ROOTS_ENV_RELATIVE = ("~",)
@@ -320,11 +340,21 @@ _WRAPPER_VALUE_FLAGS: dict[str, frozenset[str]] = {
 }
 
 
+_BARE_ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
 def strip_wrappers(tokens: list[str]) -> list[str]:
     """Drop a leading run of wrapper tokens (`env FOO=bar`, `npx`, `exec`,
     `nohup`, `timeout 30`, `command`, `sudo -u x`, `nice -n 5`, `pnpm dlx`,
-    ...) so the real program name surfaces. `env` consumes any leading
-    `KEY=VALUE` assignments and a `-i`/`-u NAME` flag form; `timeout`
+    ...) so the real program name surfaces. A leading run of BARE
+    `KEY=VALUE` tokens (no `env` keyword — ordinary shell syntax, e.g.
+    `ANTHROPIC_BASE_URL=https://x claude ...`) is stripped first: without
+    this, `iter_candidate_programs`'s "nothing stripped" branch trusts
+    `stripped[0]` alone, and that token is the assignment itself, not the
+    program — hiding the real invocation from every consumer of this
+    function (`is_claude_program`, `agentctl_invocation_verb`, ...), not
+    only the one that happened to notice (finding B2). `env` consumes any
+    leading `KEY=VALUE` assignments and a `-i`/`-u NAME` flag form; `timeout`
     consumes its duration operand; a two-token package-runner form
     (`_TWO_TOKEN_WRAPPER_VERBS`, e.g. `pnpm dlx`/`pnpm exec`/`yarn dlx`)
     consumes both tokens; every other wrapper in `_WRAPPER_TOKENS` consumes
@@ -338,6 +368,8 @@ def strip_wrappers(tokens: list[str]) -> list[str]:
     `sudo -u root`."""
     i = 0
     n = len(tokens)
+    while i < n and _BARE_ENV_ASSIGNMENT_RE.match(tokens[i]):
+        i += 1
     while i < n:
         tok = tokens[i]
         tok_cf = tok.casefold()

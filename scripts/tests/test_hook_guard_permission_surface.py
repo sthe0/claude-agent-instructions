@@ -168,6 +168,106 @@ def test_g1_edit_allows_when_base_file_is_unreadable(tmp_path):
     assert decide("Edit", tool_input, str(tmp_path), "default", _read_file_map({})) == "allow"
 
 
+# --- G1-write / G1-multiedit / G1-notebook (finding B1: Write, MultiEdit and
+# NotebookEdit reach the same G1-edit/G1-state/G3 surfaces as Edit — the
+# guard was wired to `Edit|Write|MultiEdit|NotebookEdit` but `decide_detailed`
+# used to inspect only Edit and Bash, letting the other three through) ---
+
+def test_g1_write_fires_on_permissions_widening(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    old_text = '{"permissions": {"allow": []}}'
+    new_text = '{"permissions": {"allow": ["Bash(rm -rf /:*)"]}}'
+    tool_input = {"file_path": str(target), "content": new_text}
+    decision, branch, message = decide_detailed(
+        "Write", tool_input, str(tmp_path), "default", _read_file_map({str(target): old_text}),
+    )
+    assert decision == "ask"
+    assert branch == "G1-edit"
+    assert str(target) in message
+
+
+def test_g1_write_allows_on_narrowing(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    old_text = '{"permissions": {"allow": ["Bash(echo:*)", "Bash(ls:*)"]}}'
+    new_text = '{"permissions": {"allow": ["Bash(echo:*)"]}}'
+    tool_input = {"file_path": str(target), "content": new_text}
+    read_file = _read_file_map({str(target): old_text})
+    assert decide("Write", tool_input, str(tmp_path), "default", read_file) == "allow"
+
+
+def test_g1_write_allows_when_base_file_is_unreadable(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    tool_input = {"file_path": str(target), "content": '{"permissions": {"allow": ["Bash(rm:*)"]}}'}
+    assert decide("Write", tool_input, str(tmp_path), "default", _read_file_map({})) == "allow"
+
+
+def test_g1_multi_edit_fires_on_permissions_widening(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    old_text = '{"permissions": {"allow": []}}'
+    tool_input = {
+        "file_path": str(target),
+        "edits": [{"old_string": '"allow": []', "new_string": '"allow": ["Bash(rm -rf /:*)"]'}],
+    }
+    decision, branch, message = decide_detailed(
+        "MultiEdit", tool_input, str(tmp_path), "default", _read_file_map({str(target): old_text}),
+    )
+    assert decision == "ask"
+    assert branch == "G1-edit"
+    assert str(target) in message
+
+
+def test_g1_multi_edit_allows_on_narrowing(tmp_path):
+    target = tmp_path / ".claude-agent" / "settings.json"
+    old_text = '{"permissions": {"allow": ["Bash(echo:*)", "Bash(ls:*)"]}}'
+    tool_input = {
+        "file_path": str(target),
+        "edits": [{"old_string": ', "Bash(ls:*)"', "new_string": ""}],
+    }
+    read_file = _read_file_map({str(target): old_text})
+    assert decide("MultiEdit", tool_input, str(tmp_path), "default", read_file) == "allow"
+
+
+def test_g1_state_fires_on_write_under_agentctl_dir(tmp_path, monkeypatch):
+    _isolate_agent_home(monkeypatch, tmp_path)
+    target = tmp_path / "agentctl" / "state" / "sess-1.json"
+    tool_input = {"file_path": str(target), "content": "{}"}
+    decision, branch, _ = decide_detailed("Write", tool_input, str(tmp_path), "default", lambda p: "x")
+    assert decision == "ask"
+    assert branch == "G1-state"
+
+
+def test_g1_state_fires_on_multi_edit_under_agentctl_dir(tmp_path, monkeypatch):
+    _isolate_agent_home(monkeypatch, tmp_path)
+    target = tmp_path / "agentctl" / "state" / "sess-1.json"
+    tool_input = {"file_path": str(target), "edits": [{"old_string": "x", "new_string": "y"}]}
+    decision, branch, _ = decide_detailed("MultiEdit", tool_input, str(tmp_path), "default", lambda p: "x")
+    assert decision == "ask"
+    assert branch == "G1-state"
+
+
+def test_g1_state_fires_on_notebook_edit_under_agentctl_dir(tmp_path, monkeypatch):
+    _isolate_agent_home(monkeypatch, tmp_path)
+    target = tmp_path / "agentctl" / "state" / "notebook.ipynb"
+    tool_input = {"notebook_path": str(target), "new_source": "print(1)"}
+    decision, branch, _ = decide_detailed("NotebookEdit", tool_input, str(tmp_path), "default", None)
+    assert decision == "ask"
+    assert branch == "G1-state"
+
+
+def test_g1_write_allows_write_outside_all_g1_surfaces(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = tmp_path / "Documents" / "notes.txt"
+    tool_input = {"file_path": str(target), "content": "hello"}
+    assert decide("Write", tool_input, str(tmp_path), "default", lambda p: "") == "allow"
+
+
+def test_g1_state_allows_notebook_edit_outside_agentctl_dir(tmp_path, monkeypatch):
+    _isolate_agent_home(monkeypatch, tmp_path)
+    target = tmp_path / "notebooks" / "scratch.ipynb"
+    tool_input = {"notebook_path": str(target)}
+    assert decide("NotebookEdit", tool_input, str(tmp_path), "default", None) == "allow"
+
+
 # --- G1-bash ---
 
 def test_g1_bash_fires_on_write_into_live_settings_even_though_cat_is_grantable(tmp_path):
@@ -311,6 +411,64 @@ def test_g2_allows_claude_flags_elided_inside_a_quoted_spawn_specialist_argument
     assert decide("Bash", {"command": command}, "/tmp", "default", None) == "allow"
 
 
+def test_g2_fires_on_allow_dangerously_skip_permissions_flag():
+    """Round-2 finding B2: `--allow-dangerously-skip-permissions` widens
+    exactly like `--dangerously-skip-permissions` and must fire on its own,
+    not only when the older spelling is present."""
+    command = "claude --allow-dangerously-skip-permissions -p 'do the thing'"
+    decision, branch, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert decision == "ask"
+    assert branch == "G2"
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["--allowedTools", "--allowed-tools"],
+    ids=["camel", "kebab"],
+)
+def test_g2_fires_on_allowed_tools_flag_spellings(flag):
+    """Round-2 finding B2: both the camelCase and kebab-case spellings of the
+    allowed-tools flag widen the permission surface and must fire."""
+    command = f"claude {flag} Bash"
+    assert decide("Bash", {"command": command}, "/tmp", "default", None) == "ask"
+
+
+@pytest.mark.parametrize("value", ["default", "plan"], ids=["default", "plan"])
+def test_g2_allows_permission_mode_default_and_plan(value):
+    """Round-2 finding B2: `--permission-mode default|plan` NARROWS
+    permissions relative to the fleet's own default mode, unlike every other
+    value (e.g. `bypassPermissions`, `acceptEdits`) — it must not fire."""
+    command = f"claude --permission-mode {value}"
+    assert decide("Bash", {"command": command}, "/tmp", "default", None) == "allow"
+
+
+def test_g2_fires_on_glued_flag_equals_value_form():
+    """Round-2 finding B2: a widening flag glued to its value with `=`
+    (`--add-dir=/`) must be recognized the same as the separate-token form
+    (`--add-dir /`) — the prior bare-token-equality check missed it."""
+    command = "claude --add-dir=/"
+    assert decide("Bash", {"command": command}, "/tmp", "default", None) == "ask"
+
+
+def test_g2_allows_glued_permission_mode_equals_default():
+    """The glued `=` form of the `--permission-mode` exemption must also be
+    recognized — `--permission-mode=default` narrows exactly like the
+    separate-token spelling and must not fire."""
+    command = "claude --permission-mode=default"
+    assert decide("Bash", {"command": command}, "/tmp", "default", None) == "allow"
+
+
+def test_g2_fires_through_a_leading_bare_env_assignment():
+    """Round-2 finding B2: a bare `KEY=VALUE` prefix with no `env` keyword
+    (ordinary shell syntax) previously defeated `is_claude_program` —
+    `strip_wrappers` trusted the first token as the program name, and that
+    token was the assignment itself, hiding the real `claude` invocation."""
+    command = "ANTHROPIC_BASE_URL=https://x claude --add-dir /"
+    decision, branch, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert decision == "ask"
+    assert branch == "G2"
+
+
 # --- G3 ---
 
 def test_g3_fires_on_edit_under_launch_agents(tmp_path, monkeypatch):
@@ -327,11 +485,67 @@ def test_g3_fires_on_crontab_invocation():
     assert decide("Bash", {"command": command}, "/tmp", "default", None) == "ask"
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "crontab /tmp/new-crontab",
+        "crontab -",
+        "crontab -e",
+    ],
+    ids=["install-file", "stdin", "edit"],
+)
+def test_g3_fires_on_crontab_write_modes(command):
+    assert decide("Bash", {"command": command}, "/tmp", "default", None) == "ask"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "crontab -l",
+        "which crontab",
+        'echo "crontab"',
+    ],
+    ids=["list-only", "which", "echoed-word"],
+)
+def test_g3_allows_crontab_list_and_non_program_mentions(command):
+    """Round-2 finding B3: the prior bare regex fired on `crontab -l` (a
+    read-only list) the same as on a real write, and on the mere word
+    "crontab" appearing anywhere in the command."""
+    assert decide("Bash", {"command": command}, "/tmp", "default", None) == "allow"
+
+
 def test_g3_allows_a_write_outside_any_launch_surface(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     target = tmp_path / "Documents" / "notes.txt"
     tool_input = {"file_path": str(target), "old_string": "x", "new_string": "y"}
     assert decide("Edit", tool_input, str(tmp_path), "default", lambda p: "x") == "allow"
+
+
+def test_g3_fires_on_write_under_launch_agents(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = tmp_path / "Library" / "LaunchAgents" / "com.example.plist"
+    tool_input = {"file_path": str(target), "content": "<plist/>"}
+    decision, branch, _ = decide_detailed("Write", tool_input, str(tmp_path), "default", None)
+    assert decision == "ask"
+    assert branch == "G3"
+
+
+def test_g3_fires_on_multi_edit_under_launch_agents(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = tmp_path / "Library" / "LaunchAgents" / "com.example.plist"
+    tool_input = {"file_path": str(target), "edits": [{"old_string": "x", "new_string": "y"}]}
+    decision, branch, _ = decide_detailed("MultiEdit", tool_input, str(tmp_path), "default", lambda p: "x")
+    assert decision == "ask"
+    assert branch == "G3"
+
+
+def test_g3_fires_on_notebook_edit_under_launch_agents(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = tmp_path / "Library" / "LaunchAgents" / "notebook.ipynb"
+    tool_input = {"notebook_path": str(target)}
+    decision, branch, _ = decide_detailed("NotebookEdit", tool_input, str(tmp_path), "default", None)
+    assert decision == "ask"
+    assert branch == "G3"
 
 
 # --- G4 ---
@@ -477,6 +691,18 @@ def _g1_edit_mutate(monkeypatch):
     monkeypatch.setattr(guard.widening_targets, "is_live_settings", lambda p: False)
 
 
+def _g1_write_widening_case(tmp_path, monkeypatch):
+    """Round-2 finding B1: the plan requires Write to reach G1-edit exactly
+    like Edit -- add it to the catalogue so this control is itself proven a
+    genuine control, not an accidental pass."""
+    del monkeypatch
+    target = tmp_path / ".claude-agent" / "settings.json"
+    old_text = '{"permissions": {"allow": []}}'
+    new_text = '{"permissions": {"allow": ["Bash(rm -rf /:*)"]}}'
+    tool_input = {"file_path": str(target), "content": new_text}
+    return "Write", tool_input, str(tmp_path), _read_file_map({str(target): old_text})
+
+
 def _g1_bash_write_case(tmp_path, monkeypatch):
     del monkeypatch
     command = f"cat x > {tmp_path}/.claude-agent/settings.json"
@@ -534,6 +760,7 @@ def _g4_mutate(monkeypatch):
 
 _MUTATION_CATALOGUE = [
     ("G1-edit", _g1_edit_widening_case, _g1_edit_mutate),
+    ("G1-edit", _g1_write_widening_case, _g1_edit_mutate),
     ("G1-bash", _g1_bash_write_case, _g1_bash_mutate),
     ("G1-state", _g1_state_edit_case, _g1_state_mutate),
     ("G2", _g2_case, _g2_mutate),

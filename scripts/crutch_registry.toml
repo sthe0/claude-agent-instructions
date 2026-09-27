@@ -1989,14 +1989,6 @@ disposition = "keep"
 ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
 
 [[entry]]
-id = "3a20ad8c181f7e02"
-domain = "code"
-file = "scripts/lib/widening_targets.py"
-class = "structural"
-disposition = "keep"
-ground = "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — matching a known TERM's occurrence, not classifying what a sentence means."
-
-[[entry]]
 id = "24e6b6bb62715e4a"
 domain = "code"
 file = "scripts/lib/widening_targets.py"
