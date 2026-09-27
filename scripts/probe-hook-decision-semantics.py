@@ -22,16 +22,25 @@ observed is recorded as such, never guessed.
 
 Two isolation choices, made deliberately, not by omission:
   - The 8-cell {default, acceptEdits, auto, bypassPermissions} x {ask, deny}
-    headless matrix and the 2 interactive cells run inside
-    `lib.host_llm.isolated_run_kwargs()` (CLAUDE_CONFIG_DIR pointed at a
-    fresh empty home, borrowed auth) so the result documents the CLI's own
-    behaviour, not this fleet's `settings/base.json` overlay (which pins
-    `defaultMode: auto` and wires this fleet's own hooks). This is the
-    "Hook decision semantics" table in
+    headless matrix runs inside `lib.host_llm.isolated_run_kwargs()`
+    (CLAUDE_CONFIG_DIR pointed at a fresh empty home, borrowed auth) so the
+    result documents the CLI's own behaviour, not this fleet's
+    `settings/base.json` overlay (which pins `defaultMode: auto` and wires
+    this fleet's own hooks). This is the "Hook decision semantics" table in
     docs/components/settings-and-permissions.md.
-  - The two `--add-dir` cells run in the AMBIENT environment on purpose:
-    cell 11 (`accept_edits_read_add_dir`) checks that a scratch `Edit` deny
-    holds under an explicit `--permission-mode acceptEdits`, and cell 12
+  - The 2 interactive cells and the 2 `--add-dir` cells run in the AMBIENT
+    environment on purpose, for two separate reasons. The interactive
+    cells stand for the interactive root, which always runs on this
+    fleet's live settings chain (not an isolated one) -- an isolated,
+    freshly-onboarded `CLAUDE_CONFIG_DIR` was tried first and routes the
+    TUI into a browser-based OAuth login screen that cannot complete
+    non-interactively, so only the ambient chain can observe what the
+    interactive root actually sees; a live `deny`/`ask` decision still
+    comes only from a scratch `--settings` file this script writes and
+    tears down, so no live settings file is read or modified. The
+    `--add-dir` cells run ambient for their own reason: cell 11
+    (`accept_edits_read_add_dir`) checks that a scratch `Edit` deny holds
+    under an explicit `--permission-mode acceptEdits`, and cell 12
     (`default_write_add_dir`) specifically measures what a spawned
     non-developer kind (no explicit `--permission-mode`, so it inherits
     whatever this fleet's own settings chain resolves to) can and cannot
@@ -75,15 +84,16 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-RAW_DUMP_DIR = Path("/home/the0/.claude-agent/plans/evidence/spawn-permission-grant-model/probe-raw")
-
-
-def _dump_raw(name: str, raw: str) -> None:
+def _dump_raw(raw_dump_dir: Path | None, name: str, raw: str) -> None:
     """Persist a child's raw stdout as evidence for the recorded cell -- so a
     surprising decision (e.g. a `deny` cell whose sentinel still ran) can be
-    read back from the actual transcript, not re-inferred."""
-    RAW_DUMP_DIR.mkdir(parents=True, exist_ok=True)
-    (RAW_DUMP_DIR / f"{name}.raw.txt").write_text(raw, encoding="utf-8")
+    read back from the actual transcript, not re-inferred. Off by default
+    (`raw_dump_dir is None`): no machine-specific path is baked into
+    committed code; pass `--raw-dump-dir DIR` to opt in."""
+    if raw_dump_dir is None:
+        return
+    raw_dump_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dump_dir / f"{name}.raw.txt").write_text(raw, encoding="utf-8")
 
 import proc_tree  # noqa: E402  (launch_supervised / kill_tree — process-group teardown)
 from lib import host_llm  # noqa: E402  (isolated_run_kwargs — CLAUDE_CONFIG_DIR sandbox)
@@ -342,7 +352,7 @@ def _dismiss_onboarding(session_name: str) -> None:
         time.sleep(ONBOARDING_DISMISS_WAIT_S)
 
 
-def run_headless_cell(mode: str, decision: str, tmpdir: Path) -> CellResult:
+def run_headless_cell(mode: str, decision: str, tmpdir: Path, raw_dump_dir: Path | None = None) -> CellResult:
     marker = _marker("PERM_PROBE_OK")
     hook_path = _decision_hook_script(tmpdir, decision)
     settings = _settings_with_hook(hook_path)
@@ -360,7 +370,7 @@ def run_headless_cell(mode: str, decision: str, tmpdir: Path) -> CellResult:
         cmd += ["--permission-mode", mode]
     prompt = f"Use the Bash tool to run exactly this command and nothing else: echo {marker}"
     raw, timed_out = _run_child(cmd, prompt, env=kwargs["env"], cwd=kwargs["cwd"], timeout_s=HEADLESS_TIMEOUT_S)
-    _dump_raw(f"headless-{mode}-{decision}", raw)
+    _dump_raw(raw_dump_dir, f"headless-{mode}-{decision}", raw)
     effective_mode = parse_stream_json_effective_mode(raw)
     ran = command_executed(raw, marker)
     denied = permission_denied(raw)
@@ -382,38 +392,38 @@ def run_headless_cell(mode: str, decision: str, tmpdir: Path) -> CellResult:
     )
 
 
-def run_interactive_cell(decision: str, tmpdir: Path) -> CellResult:
-    """Measured limitation: a fresh, isolated CLAUDE_CONFIG_DIR routes the
-    interactive TUI through onboarding into a login-method picker that, even
-    with a borrowed CLAUDE_CODE_OAUTH_TOKEN forwarded into the child's env,
-    offers only a browser-based OAuth authorize URL + paste-code prompt --
-    unlike `-p` headless mode, which accepts the same env var directly. That
-    flow cannot complete non-interactively. Three fixes were tried live and
-    ruled out: forwarding CLAUDE_CODE_OAUTH_TOKEN into the tmux inner-command
-    env (present, confirmed via the child's own env dump, made no
-    difference), dismissing the theme-picker/login-method screens by sending
-    Enter (reaches the OAuth screen, doesn't skip it), and priming the same
-    sandbox slot with a prior headless `-p` call so its onboarding gate-fetch
-    would already be done (confirmed live not to change the outcome -- `-p`
-    apparently doesn't persist whatever completion state the interactive
-    login gate checks). Per this probe's own tolerance for unobservable
-    cells, this is recorded as not-observed with this reason rather than
-    inferred or forced."""
-    marker = _marker("PERM_PROBE_OK")
-    hook_path = _decision_hook_script(tmpdir, decision)
-    settings = _settings_with_hook(hook_path)
-    kwargs = host_llm.isolated_run_kwargs()
-    session_name = f"probe-{uuid.uuid4().hex[:10]}"
-    _FORWARDED_ENV_KEYS = ("CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN")
-    env_prefix = " ".join(
-        f"{k}={shlex.quote(v)}" for k, v in kwargs["env"].items()
-        if k in _FORWARDED_ENV_KEYS or k.startswith("ANTHROPIC_")
-    )
-    inner_cmd = (
-        f"cd {shlex.quote(kwargs['cwd'])} && {env_prefix} "
+def build_interactive_inner_cmd(cwd: str, settings: dict) -> str:
+    """The exact shell command line launched inside the tmux pane: ambient
+    environment (no CLAUDE_CONFIG_DIR override, no isolated-home forwarding)
+    so the session runs on this fleet's own live settings/login chain, the
+    same chain the interactive root always runs on -- only a scratch
+    `--settings` file supplies the decision hook."""
+    return (
+        f"cd {shlex.quote(cwd)} && "
         f"claude --permission-mode auto --model {CHILD_MODEL} --effort {CHILD_EFFORT} "
         f"--settings {shlex.quote(json.dumps(settings))}"
     )
+
+
+def run_interactive_cell(decision: str, tmpdir: Path, raw_dump_dir: Path | None = None) -> CellResult:
+    """Runs ambient (see module docstring's 'Two isolation choices'): the
+    interactive root always runs on this fleet's live settings/login chain,
+    not an isolated one, so only the ambient chain can observe what it
+    actually sees. An isolated, freshly-onboarded CLAUDE_CONFIG_DIR was
+    tried first and routes the TUI into a browser-based OAuth login screen
+    that ignores a borrowed CLAUDE_CODE_OAUTH_TOKEN and cannot complete
+    non-interactively (unlike `-p` headless mode) -- switching to ambient
+    removes that gate entirely, since the ambient chain is already logged
+    in. `_dismiss_onboarding` is kept as a defensive backstop in case a
+    trust/theme dialog still appears; a decision hook still comes only from
+    a scratch `--settings` file this script writes and tears down, so no
+    live settings file is read or modified, and the tmux session is created
+    and killed entirely by this script."""
+    marker = _marker("PERM_PROBE_OK")
+    hook_path = _decision_hook_script(tmpdir, decision)
+    settings = _settings_with_hook(hook_path)
+    session_name = f"probe-{uuid.uuid4().hex[:10]}"
+    inner_cmd = build_interactive_inner_cmd(str(tmpdir), settings)
     pane_text = ""
     timed_out = False
     try:
@@ -440,14 +450,13 @@ def run_interactive_cell(decision: str, tmpdir: Path) -> CellResult:
         subprocess.run(["tmux", "kill-session", "-t", session_name], timeout=10, check=False,
                         capture_output=True)
 
-    _dump_raw(f"interactive-auto-{decision}", pane_text)
+    _dump_raw(raw_dump_dir, f"interactive-auto-{decision}", pane_text)
     blocked_on_login = bool(pane_text) and not sentinel_present(pane_text, marker) and detect_onboarding(pane_text)
     if blocked_on_login:
         notes = (
-            "not observed: isolated sandbox's interactive TUI routed to a "
-            "browser-based OAuth login screen that ignores the borrowed "
-            "CLAUDE_CODE_OAUTH_TOKEN and cannot complete non-interactively "
-            "(unlike -p headless mode); see probe-raw dump"
+            "not observed: ambient interactive TUI still routed to an "
+            "onboarding/login screen (unexpected on an already-logged-in "
+            "fleet chain); see raw dump if --raw-dump-dir was given"
         )
         return CellResult(
             cell_id=f"interactive:auto:{decision}",
@@ -471,7 +480,7 @@ def run_interactive_cell(decision: str, tmpdir: Path) -> CellResult:
     )
 
 
-def run_add_dir_read_cell(tmpdir: Path) -> CellResult:
+def run_add_dir_read_cell(tmpdir: Path, raw_dump_dir: Path | None = None) -> CellResult:
     """acceptEdits + --add-dir D + Edit(//D/**) deny: attempted write into D
     must be refused. Isolated (own scratch hooks/settings only) since we care
     about our own deny rule, not fleet guard interference."""
@@ -490,7 +499,7 @@ def run_add_dir_read_cell(tmpdir: Path) -> CellResult:
     ]
     prompt = f"Use the Write tool to create the file {target} with the exact content OK. Do nothing else."
     raw, timed_out = _run_child(cmd, prompt, env=kwargs["env"], cwd=kwargs["cwd"], timeout_s=HEADLESS_TIMEOUT_S)
-    _dump_raw("add_dir-accept_edits_read_add_dir", raw)
+    _dump_raw(raw_dump_dir, "add_dir-accept_edits_read_add_dir", raw)
     wrote = target.exists()
     shutil.rmtree(d, ignore_errors=True)
     return CellResult(
@@ -505,7 +514,7 @@ def run_add_dir_read_cell(tmpdir: Path) -> CellResult:
     )
 
 
-def run_add_dir_write_cell() -> CellResult:
+def run_add_dir_write_cell(raw_dump_dir: Path | None = None) -> CellResult:
     """default mode (no --permission-mode; ambient/fleet chain applies on
     purpose -- see module docstring) + --add-dir D2 + Edit(//D2/**) allow +
     Edit(//D2/**/settings*.json) deny: write to D2/x must succeed, write to
@@ -534,7 +543,7 @@ def run_add_dir_write_cell() -> CellResult:
         common, f"Use the Write tool to create the file {ok_target} with the exact content OK. Do nothing else.",
         env=ambient_env, cwd=ambient_cwd, timeout_s=HEADLESS_TIMEOUT_S,
     )
-    _dump_raw("add_dir-default_write_add_dir-ok", raw_ok)
+    _dump_raw(raw_dump_dir, "add_dir-default_write_add_dir-ok", raw_ok)
     ok_written = ok_target.exists()
 
     blocked_target = d2 / "settings.json"
@@ -542,7 +551,7 @@ def run_add_dir_write_cell() -> CellResult:
         common, f"Use the Write tool to create the file {blocked_target} with the exact content {{}}. Do nothing else.",
         env=ambient_env, cwd=ambient_cwd, timeout_s=HEADLESS_TIMEOUT_S,
     )
-    _dump_raw("add_dir-default_write_add_dir-blocked", raw_blocked)
+    _dump_raw(raw_dump_dir, "add_dir-default_write_add_dir-blocked", raw_blocked)
     blocked_written = blocked_target.exists()
 
     shutil.rmtree(d2, ignore_errors=True)
@@ -587,6 +596,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--only", choices=("headless", "interactive", "add_dir"), default=None,
                    help="run only one group of cells; default: all groups (12 cells)")
     p.add_argument("--dry-run", action="store_true", help="print planned cells/commands; spawn nothing")
+    p.add_argument("--raw-dump-dir", default=None,
+                   help="optional dir to write each child's raw stdout/pane text for debugging "
+                        "a surprising cell; default: no dump written")
     return p
 
 
@@ -608,6 +620,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {cell_id}")
         return 0
 
+    raw_dump_dir = Path(args.raw_dump_dir) if args.raw_dump_dir else None
+
     results: list[CellResult] = []
     with tempfile.TemporaryDirectory(prefix="probe-hooks-") as tmpdir_str:
         tmpdir = Path(tmpdir_str)
@@ -615,16 +629,16 @@ def main(argv: list[str] | None = None) -> int:
             for mode in HEADLESS_MODES:
                 for decision in DECISIONS:
                     print(f"running headless:{mode}:{decision} ...", file=sys.stderr)
-                    results.append(run_headless_cell(mode, decision, tmpdir))
+                    results.append(run_headless_cell(mode, decision, tmpdir, raw_dump_dir))
         if args.only in (None, "interactive"):
             for decision in DECISIONS:
                 print(f"running interactive:auto:{decision} ...", file=sys.stderr)
-                results.append(run_interactive_cell(decision, tmpdir))
+                results.append(run_interactive_cell(decision, tmpdir, raw_dump_dir))
         if args.only in (None, "add_dir"):
             print("running add_dir:accept_edits_read_add_dir ...", file=sys.stderr)
-            results.append(run_add_dir_read_cell(tmpdir))
+            results.append(run_add_dir_read_cell(tmpdir, raw_dump_dir))
             print("running add_dir:default_write_add_dir ...", file=sys.stderr)
-            results.append(run_add_dir_write_cell())
+            results.append(run_add_dir_write_cell(raw_dump_dir))
 
     print(render_table(results))
     return 0

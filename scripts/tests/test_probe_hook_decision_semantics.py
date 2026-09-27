@@ -255,6 +255,48 @@ def test_render_table_bool_formatting_is_yes_no_not_true_false():
     assert "no" in table
 
 
+# --- build_interactive_inner_cmd (ambient interactive command shape) -----
+
+def test_interactive_inner_cmd_has_no_claude_config_dir():
+    # The interactive cells run ambient on purpose (see module docstring) --
+    # no CLAUDE_CONFIG_DIR override should ever appear in the inner command.
+    cmd = probe.build_interactive_inner_cmd("/tmp/some-cwd", {"hooks": {}})
+    assert "CLAUDE_CONFIG_DIR" not in cmd
+
+
+def test_interactive_inner_cmd_includes_settings_flag():
+    settings = {"hooks": {"PreToolUse": []}}
+    cmd = probe.build_interactive_inner_cmd("/tmp/some-cwd", settings)
+    assert "--settings" in cmd
+
+
+def test_interactive_inner_cmd_cds_into_given_dir():
+    cmd = probe.build_interactive_inner_cmd("/tmp/some-cwd", {})
+    assert "cd /tmp/some-cwd" in cmd
+
+
+def test_interactive_inner_cmd_uses_auto_mode():
+    cmd = probe.build_interactive_inner_cmd("/tmp/some-cwd", {})
+    assert "--permission-mode auto" in cmd
+
+
+# --- _dump_raw (--raw-dump-dir default-off) -------------------------------
+
+def test_dump_raw_writes_nothing_when_dir_is_none(tmp_path, monkeypatch):
+    # default (no --raw-dump-dir): must not touch the filesystem at all.
+    monkeypatch.chdir(tmp_path)
+    probe._dump_raw(None, "some-cell", "raw output")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_dump_raw_writes_file_when_dir_given(tmp_path):
+    dump_dir = tmp_path / "dump"
+    probe._dump_raw(dump_dir, "some-cell", "raw output")
+    written = dump_dir / "some-cell.raw.txt"
+    assert written.exists()
+    assert written.read_text(encoding="utf-8") == "raw output"
+
+
 # --- _plan ------------------------------------------------------------
 
 def test_plan_has_twelve_cells():
