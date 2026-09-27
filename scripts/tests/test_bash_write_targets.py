@@ -243,6 +243,27 @@ def test_a_process_substitution_adds_the_cwd_as_an_extra_candidate(command, expe
     assert command_write_targets(command, CWD) == expected
 
 
+# --- comparison-operator text inside a quoted/heredoc argument is not a redirect ----
+
+@pytest.mark.parametrize("command, expected", [
+    # Round-2 finding B4: a real replay row against the agentctl state dir reported a
+    # write target of the bare string `=`, traced to a `>=` comparison inside the BODY
+    # of a `python3 - <<'EOF'` heredoc. `python3` is a `NON_SHELL_CONSUMERS` member, so
+    # `neutralize_heredoc_constructs` blanks the body before tokenizing -- this pins that
+    # the blanking actually removes the `>=` rather than leaving it for the redirect scan.
+    ("python3 - <<'EOF'\nx = 5\nif x >= 3:\n    print('ok')\nEOF", []),
+    # The second real row reported target `=5`, traced to `>=5` inside a QUOTED argument
+    # (no heredoc at all) -- e.g. a `grep`/`python3 -c` pattern string. A quoted argument
+    # is one shlex token; it must never be re-split into bash's own `>` operator plus a
+    # trailing `=5` operand.
+    ('grep -n "x >=5" f.txt', []),
+    ('python3 -c "x = 5\nif x >=5:\n    pass"', []),
+    ("cd /w && python3 - <<'EOF'\nx = 5\nif x >= 3:\n    print('ok')\nEOF", []),
+])
+def test_a_comparison_operator_in_a_quoted_or_heredoc_body_is_not_a_redirect(command, expected):
+    assert command_write_targets(command, CWD) == expected
+
+
 # THE OTHER CONSUMER'S BEHAVIOUR CHANGED TOO, and it has rows of its own for it.
 # `hook-guard-canon-readonly.py` shares this lexer, so the expansion makes it STRICTER: a
 # `cp evil.md ~/canon-mirror/doc.md` aimed at a registered canon root was measured ALLOW

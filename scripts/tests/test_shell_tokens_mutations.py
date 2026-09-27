@@ -78,7 +78,7 @@ GUARD_HOOK_PATH = SCRIPTS_DIR / "hook-guard-canon-readonly.py"
 # suite silently going stale against a moved target -- the escape hatch a
 # bare `git diff --quiet <rev>` check does not have.
 MODULE_CONTRACT_SHA256 = {
-    SHELL_TOKENS_PATH: "65d9e6d724d053a2edb18c165dffdce4557f8b485d0e0ab839c4437eb1bfee87",
+    SHELL_TOKENS_PATH: "3a24e8f114780e6be9c10f5b46bf75dec542f4da476122988a06b0cb76d26fcc",
     BASH_WRITE_TARGETS_PATH: "4252b497fdfa961d67d168970c06b78dfc03e7dc2f5a4c78fde2d282b1f92378",
     GUARD_HOOK_PATH: "dec99146110846fa5c599755b445610ff80d0f52ad17c65b77af3105c7c45a74",
 }
@@ -479,7 +479,10 @@ MUTATION_CATALOGUE = (
     {
         "name": "M-D",
         "description": (
-            "Bypass `_recognized`'s own final consumer-allowlist check -- "
+            "Bypass `_recognized`'s own final consumer-allowlist check for a "
+            "heredoc that starts on a LATER physical line (no same-line "
+            "owning statement to scope to, so this is the plain whole-head "
+            "check, unchanged from `allow_prior_statements=False`) -- "
             "distinct from `_pipeline_consumers_ok`'s pipeline-local check "
             "inside `_removal_regions` itself, since `_recognized` looks only "
             "at the command's FIRST line. `_recognized` is called only by the "
@@ -488,8 +491,11 @@ MUTATION_CATALOGUE = (
             "bodies`, because clause (v) (real, unpatched by M-D) would "
             "otherwise mask the flip on the strip path."
         ),
-        "old_line": '    return all(_consumer_ok(part, consumers) for part in head.split("|"))',
-        "new_line": "    return True  # MUTATION M-D: bypass _recognized's own consumer check",
+        "old_line": (
+            '            return all(_consumer_ok(part, consumers) for part '
+            'in head.split("|"))'
+        ),
+        "new_line": "            return True  # MUTATION M-D: bypass _recognized's own consumer check",
         "observe": "neutralize_heredoc_constructs",
         "consumers": None,
         "witness": "myunknowncmd\ncat <<'D'\nbody\nD",

@@ -653,9 +653,18 @@ def test_body_removal_never_turns_a_real_write_from_deny_into_allow(canon):
     # and there is no honest slack to grant: it is pinned exactly. `bash_reached`
     # additionally depends on what the local shell and coreutils really do, so it
     # carries a floor a little under the measured value (37).
-    assert exercised == 93, (
+    # Round-2 B4 fix: `_recognized(..., allow_prior_statements=True)` no longer
+    # disqualifies on a `;`/`&` BEFORE the first heredoc operator (a prior,
+    # unrelated statement does not bear on whether THIS heredoc's own body is
+    # safe -- `_pipeline_consumers_ok` re-checks the owning pipeline locally
+    # regardless). That newly recognizes "redirect before heredoc" and "empty
+    # leading pipeline element", moving this pin from 93 to 95; both were
+    # re-run through the regression loop above with zero entries in
+    # `regressions`, so the two additions are widenings of RECOGNITION, not of
+    # what the guard denies.
+    assert exercised == 95, (
         f"{exercised} of {len(CASES)} constructions were acted on by "
-        "neutralize_heredoc_constructs, expected exactly 93: this count cannot "
+        "neutralize_heredoc_constructs, expected exactly 95: this count cannot "
         "move without a change to the recognition rule or the table"
     )
     assert bash_reached >= 30, (
