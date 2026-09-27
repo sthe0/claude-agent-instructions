@@ -13,13 +13,11 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import os
 from pathlib import Path
 
 import pytest
 
 from agentctl import cli
-from agentctl import exempt_paths
 from agentctl.dispatch import RunResult
 from agentctl.plan import load_plan, parse_plan
 from agentctl.submission import submission_violations
@@ -127,29 +125,77 @@ def _plan_data(*, output_artifacts=None, ephemeral_artifacts_waiver=None, verify
 
 
 def test_evidence_dir_command_creates_durable_dir(store, tmp_path, monkeypatch):
-    # Replace the default scratch-root set (which otherwise includes /tmp,
-    # under which pytest's own tmp_path -- and hence store.root -- lives) with
-    # an unrelated directory, so the evidence dir's containment under
-    # store.root is judged against the SAME scratch-root notion production
-    # code uses, without tmp_path itself tripping the check by accident.
+    """Exercises the real (non-override) resolution order end to end: with
+    $AGENTCTL_EVIDENCE_ROOT unset, an absolute $XDG_STATE_HOME names the
+    root, and the scratch-root refusal is checked against the actual
+    resolved path -- not skipped. $AGENTCTL_SCRATCH_ROOTS is repointed at an
+    unrelated, non-existent directory so the real default roots (which
+    otherwise include /tmp, under which tmp_path itself lives) do not
+    accidentally flag the resolved path."""
+    monkeypatch.delenv("AGENTCTL_EVIDENCE_ROOT", raising=False)
+    xdg = tmp_path / "xdg"
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg))
     monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "sneaky-scratch-only"))
 
     directive = cli.cmd_evidence_dir(ns(session="ev-sess", stage=1), store=store)
     assert directive.ok
     path = directive.data["evidence_dir"]
-    p = Path(path)
-    assert p.is_dir()
-
-    norm = os.path.realpath(os.path.normpath(path))
-    roots = exempt_paths.scratch_roots()
-    assert not any(norm == r or norm.startswith(r + os.sep) for r in roots), (norm, roots)
+    assert path == str(xdg / "agentctl-evidence" / "ev-sess" / "stage-1")
+    assert Path(path).is_dir()
 
     # Idempotent: a second call returns the same path and does not fail on an
     # already-existing directory.
     directive2 = cli.cmd_evidence_dir(ns(session="ev-sess", stage=1), store=store)
     assert directive2.ok
     assert directive2.data["evidence_dir"] == path
-    assert p.is_dir()
+    assert Path(path).is_dir()
+
+
+def test_evidence_dir_relative_or_unset_xdg_falls_back_to_home(tmp_path, monkeypatch):
+    """A relative (or absent) $XDG_STATE_HOME is not a usable root -- the
+    resolution falls back to ~/.local/state/agentctl-evidence, exercised here
+    with $HOME monkeypatched to an isolated directory so the real home is
+    never touched."""
+    monkeypatch.delenv("AGENTCTL_EVIDENCE_ROOT", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "sneaky-scratch-only"))
+
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    path_unset = cli.evidence_dir_for("ev-sess", 1)
+    assert path_unset == home / ".local" / "state" / "agentctl-evidence" / "ev-sess" / "stage-1"
+
+    monkeypatch.setenv("XDG_STATE_HOME", "relative/not/absolute")
+    path_relative = cli.evidence_dir_for("ev-sess", 1)
+    assert path_relative == path_unset
+
+
+def test_evidence_dir_validate_add_dir_refusal_raises(monkeypatch):
+    """A root that resolves outside every scratch root but that
+    grants.validate_add_dir itself refuses (here: the protected agentctl
+    state directory — see evidence_dir_for's own docstring) raises
+    EvidenceDirError rather than silently falling back."""
+    from lib import config_root
+
+    monkeypatch.setenv("AGENTCTL_EVIDENCE_ROOT", str(config_root.agentctl_state_dir()))
+    with pytest.raises(cli.EvidenceDirError, match="refused"):
+        cli.evidence_dir_for("ev-sess", 1)
+
+
+def test_evidence_dir_cli_exits_nonzero_on_refusal(tmp_path, monkeypatch, capsys):
+    """The `evidence-dir` CLI command surfaces a refusal as a failed
+    Directive, and `cli.main` maps a not-ok Directive to exit code 1."""
+    from lib import config_root
+
+    monkeypatch.setenv("AGENTCTL_EVIDENCE_ROOT", str(config_root.agentctl_state_dir()))
+    rc = cli.main([
+        "--state-root", str(tmp_path / "state"),
+        "evidence-dir", "--session", "ev-sess", "--stage", "1",
+    ])
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
 
 
 def test_evidence_dir_under_scratch_root_fails_loudly_without_override(tmp_path, monkeypatch):
@@ -263,6 +309,30 @@ def test_developer_spawn_can_write_evidence_dir(store, fixtures_dir, tmp_path, m
         assert f'"{rule}"' in cmd_section, (rule, cmd_section)
 
 
+def test_developer_spawn_fails_loudly_on_evidence_dir_refusal(
+    store, fixtures_dir, tmp_path, monkeypatch, capsys,
+):
+    """A refused evidence directory (here: $AGENTCTL_EVIDENCE_ROOT pointed at
+    the protected agentctl state directory, which grants.validate_add_dir
+    refuses) must fail the spawn outright, on stderr, naming the real cause —
+    never the generic 'no --session/--stage-index' text, which would be
+    false here."""
+    from lib import config_root
+
+    monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path / "plansdir")
+    monkeypatch.setenv("AGENTCTL_EVIDENCE_ROOT", str(config_root.agentctl_state_dir()))
+    sid = "r10-spawn-evidence-refused"
+    plan_path = str(fixtures_dir / "plan_two_stage.toml")
+    _to_executing(store, sid, fixtures_dir, plan_path=plan_path)
+
+    rc = MOD.main(_dry_run_argv(sid, "developer", 1, tmp_path / "state", Path(plan_path)))
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "refused" in captured.err
+    assert "no --session/--stage-index" not in captured.err
+    assert "=== command (not executed) ===" not in captured.out
+
+
 def test_non_developer_spawn_gets_no_checkpoint_or_evidence_grant(
     store, fixtures_dir, tmp_path, monkeypatch, capsys,
 ):
@@ -320,7 +390,16 @@ def test_evidence_dir_grant_keeps_approved_grants_sha256(store, fixtures_dir, tm
     rc = MOD.main(_dry_run_argv(sid, "developer", 1, tmp_path / "state", Path(plan_path)))
     assert rc == 0
 
-    # Still the same digest after a real spawn resolved and printed the
-    # evidence-dir add-dir/write grant -- the spawn-time mechanism never
-    # touches the PlanDoc grants_sha256 is computed from.
+    # The engine-side check: cmd_stage_grants re-derives the stage's grants
+    # from the approved-plan snapshot and compares the result's hash against
+    # state.approved_grants_sha256 (see its own docstring), reporting a
+    # mismatch via data["error"] rather than raising. A real spawn resolving
+    # and printing the evidence-dir add-dir/write grant must not have moved
+    # that binding -- the spawn-time mechanism never touches the PlanDoc
+    # grants_sha256 is computed from, so this re-derivation must still agree.
+    report = cli.cmd_stage_grants(ns(session=sid, stage=1, json=True), store=store)
+    assert report.ok
+    report_data = json.loads(report.detail)
+    assert report_data["error"] is None
+    assert any(e.get("path") == expected_evidence_dir for e in report_data["grants"]) is False
     assert grants_sha256(doc) == GOLDEN_GRANTS_SHA256
