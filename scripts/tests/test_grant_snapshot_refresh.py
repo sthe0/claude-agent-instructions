@@ -264,6 +264,83 @@ def test_cmd_stage_grants_surfaces_derived_hash_mismatch_error(store, fixtures_d
     assert "ERROR:" in directive.detail
 
 
+def test_stage_grant_entries_legacy_session_reports_advisory_note_not_error(
+    store, fixtures_dir, tmp_path,
+):
+    """Item 4 (should-fix): a session approved before grant hashing existed
+    (`approved_grants_sha256` unset) is NOT an error path -- `_stage_grant_
+    entries` must return `error=None` with a `note` naming it advisory
+    ("unverified"), and the DECLARED entries (computed unconditionally, before
+    the hash-unset branch) must be byte-identical to the same session's
+    declared entries read with the hash set. `cmd_stage_grants`'s rendered
+    text must surface that note, not swallow it."""
+    sid = "legacy-session-advisory-note"
+    plan_path = _write_grants_plan(
+        fixtures_dir, tmp_path, "[stage.grants]\nallow = [\"Bash(git status:*)\"]\n",
+        "plan_two_stage_legacy_note_declared_grants.toml",
+    )
+    _to_executing(store, sid, fixtures_dir, plan_path=plan_path)
+    state = store.load(sid)
+    assert state.approved_grants_sha256  # approve-time hashing set it
+
+    declared_hashed, _derived_hashed, _dropped_hashed, error_hashed, note_hashed = \
+        cli._stage_grant_entries(state, 1)
+    assert error_hashed is None
+    assert note_hashed is None
+
+    state.approved_grants_sha256 = None
+    store.save(state)
+    state = store.load(sid)
+
+    declared_legacy, _derived_legacy, _dropped_legacy, error_legacy, note_legacy = \
+        cli._stage_grant_entries(state, 1)
+    assert error_legacy is None
+    assert note_legacy and "unverified" in note_legacy
+    assert declared_legacy == declared_hashed
+
+    directive = cli.cmd_stage_grants(ns(session=sid, stage=1, json=False), store=store)
+    assert directive.data["note"] == note_legacy
+    assert "NOTE:" in directive.detail
+    assert "unverified" in directive.detail
+
+
+def test_effective_stage_grants_venue_decoupled_from_snapshot_meta(
+    store, fixtures_dir, tmp_path,
+):
+    """Item 2 (should-fix): `_effective_stage_grants` must resolve the
+    workdir-absolute baseline expansion venue via `state.resolve_check_venue
+    (CheckVenue.DELIVERY.value)` -- the SAME live state field `cmd_dispatch`
+    passes as the child's actual cwd -- never by reloading the approved-plan
+    SNAPSHOT's own `[meta]` and deriving a venue from that. The base fixture
+    `plan_two_stage.toml` declares neither `repo_root` nor `delivery_worktree`,
+    so a snapshot-meta read would resolve to `"."` (the canon checkout) and
+    never expand for a venue the snapshot itself has no idea about; setting
+    `state.delivery_worktree` directly (exactly what a LATER-approved plan's
+    `_sync_venue_from_plan` would have done) must still show up in the
+    baseline expansion, because coverage is read off the live state field, not
+    off the frozen snapshot bytes.
+
+    Regression pin: reverting `_effective_stage_grants`'s venue line
+    (line ~5153) to `_venue_for(load_plan(state.plan_snapshot_path))` instead
+    of `state.resolve_check_venue(CheckVenue.DELIVERY.value)` makes this test
+    fail, since the reloaded snapshot's `[meta]` still declares no venue at
+    all -- confirmed by hand at authoring time, not re-checked by CI."""
+    sid = "effective-grants-venue-from-state-not-snapshot"
+    _to_executing(store, sid, fixtures_dir)
+    state = store.load(sid)
+    assert state.repo_root is None and state.delivery_worktree is None  # fixture premise
+
+    venue = str(tmp_path / "state-only-delivery-venue")
+    state.delivery_worktree = venue
+    store.save(state)
+    state = store.load(sid)
+    assert state.resolve_check_venue(CheckVenue.DELIVERY.value) == venue
+
+    coverage = cli._effective_stage_grants(state, 1)
+    workdir_prefix = f"Bash(python3 {venue}/scripts/"
+    assert any(g.rule.startswith(workdir_prefix) for g in coverage.allow)
+
+
 # --- (3) cmd_dispatch refuses to spawn a grant-declaring stage it cannot read ---
 
 
