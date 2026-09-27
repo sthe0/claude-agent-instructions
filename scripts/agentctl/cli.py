@@ -322,6 +322,24 @@ def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str
     return str(snap), digest
 
 
+def _refresh_approved_grant_snapshot(state: SessionState, store: StateStore, doc) -> None:
+    """Re-snapshot the just-applied plan bytes and rebind `approved_grants_sha256` to
+    them, mirroring `cmd_approve`'s own snapshot+hash binding (see its "Bind the
+    approved grant set" comment) -- called from the `no_change` and `refinement`
+    branches of `cmd_replan`, which apply corrected bytes to an ALREADY-APPROVED
+    session in place, without requiring a fresh `approve`. Without this, those two
+    branches update `state.plan_path` but leave `plan_snapshot_path`/
+    `plan_snapshot_hash`/`approved_grants_sha256` pointed at the PRIOR approval's
+    bytes, so `_stage_grant_entries` either hash-mismatches on a corrected snapshot
+    that no longer matches the stale stamped hash, or silently keeps re-deriving
+    grants from plan content the session no longer runs. `doc` is the freshly-loaded
+    plan (`new` in `cmd_replan`) that `state.plan_path` now points at."""
+    snap = _snapshot_approved_plan(store, state)
+    if snap:
+        state.plan_snapshot_path, state.plan_snapshot_hash = snap
+    state.approved_grants_sha256 = grants_sha256(doc)
+
+
 def _replan_baseline_path(state: SessionState) -> str | None:
     """The comparison baseline every replan-family diff is taken against: the
     approved-plan snapshot when one exists on disk, else state.plan_path (the
@@ -4985,6 +5003,25 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     # below: a spawned developer is untrusted to touch settings*.json, so any
     # difference after the child returns is itself the signal, independent of
     # whatever marker the child reports.
+    # Refuse to dispatch outright when the stage DECLARES grants but its
+    # approved-plan snapshot can no longer be read cleanly (missing file, tampered
+    # bytes, an unloadable snapshot, or a stale approved_grants_sha256) -- spawning
+    # anyway would silently launch the child under whatever `_effective_stage_grants`
+    # degrades to (declared entries alone, or nothing at all) rather than the
+    # coverage this stage was actually approved with. A stage that declares no
+    # grants has nothing to silently lose, so a read error there is not fatal here
+    # (`cmd_stage_grants` still surfaces it for inspection).
+    _grant_read_error = _stage_grant_entries(state, stage.index)[3]
+    _stage_declares_grants = bool(getattr(stage, "grants", None)) and not stage.grants.is_empty()
+    if _grant_read_error and _stage_declares_grants:
+        return Directive(
+            False, state.node, "noop",
+            f"dispatch refused: stage {stage.index} declares grants but they could not "
+            f"be read from the approved-plan snapshot ({_grant_read_error}) -- spawning "
+            "now would silently drop the declared coverage instead of materializing "
+            "it; a fresh `approve` re-snapshots the plan and rebinds "
+            "approved_grants_sha256",
+        )
     coverage = _effective_stage_grants(state, stage.index)
     _defects_before = len(state.materialization_defects)
     _misses_before = len(state.planning_misses)
@@ -5127,6 +5164,18 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         # to a new row matching that SAME (tool_name, tool_input) pair; only
         # absent a `Rule:` line (nothing to disambiguate against) fall back to
         # the old any-new-row signal.
+        # Finding S9 (stage 9 live run, 2026-09-27): the self-reported `Rule:` line
+        # can simply be WRONG -- the specialist misnames the command it actually ran
+        # (e.g. reports the covered repo-relative spelling while the transcript shows
+        # an uncovered worktree-absolute one it actually invoked). Trusting
+        # `self_covered` whenever it agrees, without first checking whether the
+        # transcript ALREADY classified this same call as an uncovered miss, let a
+        # wrong self-report override the transcript's own record of what was denied.
+        # The transcript is ground truth when it has an opinion at all: check BOTH
+        # transcript outcomes (covered -> materialization_defects, uncovered ->
+        # planning_misses[source="transcript"]) and let a transcript-sourced row —
+        # of either kind — win over the self-report; the self-report drives
+        # classification only when the transcript recorded nothing for this call.
         if call is not None:
             expected_text = call[1].get("command") or call[1].get("file_path")
             expected_digest = _digest(expected_text) if expected_text is not None else None
@@ -5134,10 +5183,20 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                 row.get("tool_name") == call[0] and row.get("tool_input_digest") == expected_digest
                 for row in state.materialization_defects[_defects_before:]
             )
+            transcript_uncovered = any(
+                row.get("source") == "transcript"
+                and row.get("tool_name") == call[0]
+                and row.get("tool_input_digest") == expected_digest
+                for row in state.planning_misses[_misses_before:]
+            )
         else:
             transcript_covered = len(state.materialization_defects) > _defects_before
+            transcript_uncovered = any(
+                row.get("source") == "transcript"
+                for row in state.planning_misses[_misses_before:]
+            )
         self_covered = call is not None and _grants.grant_covers_call(coverage, call[0], call[1])
-        if transcript_covered or self_covered:
+        if transcript_covered or (not transcript_uncovered and self_covered):
             if not transcript_covered:
                 state.materialization_defects.append({
                     "stage_index": stage.index, "action": action,
@@ -5271,18 +5330,31 @@ def _parse_transcript_path(stderr: str) -> str | None:
     return None
 
 
+_RULE_LINE_RE = re.compile(r"^[-*]?\s*\*{0,2}Rule:\*{0,2}\s*(.*)$")
+
+
 def _parse_rule_line(body: str) -> str | None:
     """The optional trailing `Rule: <rule>` line a specialist's PERMISSION-REQUEST
     body may carry -- the self-reported fallback `cmd_dispatch` classifies a denial
     against when the transcript-based classification above found nothing (the
     child exited before spawn-specialist.py's announcer thread resolved a path,
-    or discovery timed out). Returns the rule string verbatim, or None if no
-    such line is present."""
+    or discovery timed out). Tolerates the markdown decoration a specialist's own
+    reply commonly wraps the line in -- a leading `-`/`*` list bullet and `**bold**`
+    around the `Rule:` label -- so `- **Rule:** `Bash(...)`` parses the same as a
+    bare `Rule: Bash(...)` line; an inline-code span around the value is also
+    unwrapped. Still refuses a line where "Rule:" is not the line's own label (mid-
+    sentence text is never mistaken for the marker). Returns the rule string, or
+    None if no such line is present."""
     for line in reversed(body.splitlines()):
         line = line.strip()
-        if line.startswith("Rule:"):
-            rule = line[len("Rule:"):].strip()
-            return rule or None
+        m = _RULE_LINE_RE.match(line)
+        if not m:
+            continue
+        rule = m.group(1).strip()
+        if len(rule) >= 2 and rule.startswith("`") and rule.endswith("`"):
+            rule = rule[1:-1].strip()
+        if rule:
+            return rule
     return None
 
 
@@ -5302,38 +5374,93 @@ def _rule_line_to_call(rule: str) -> tuple[str, dict] | None:
     return None
 
 
-def _stage_grant_entries(state: SessionState, stage_index: int) -> tuple[list[dict], list[dict], list[dict]]:
+def _stage_grant_entries(
+    state: SessionState, stage_index: int,
+) -> tuple[list[dict], list[dict], list[dict], str | None]:
     """Read one stage's declared + derived grant entries from the hash-verified plan
     snapshot -- the shared read behind both `cmd_stage_grants`'s report and
     `_effective_stage_grants`'s merged coverage object, so the two never drift on
     when a grant becomes trustworthy (snapshot presence, `approved_grants_sha256`
     re-hash gate over the live derivation code). Returns
-    (declared_entries, derived_entries, dropped)."""
+    (declared_entries, derived_entries, dropped, error).
+
+    `error` is None on a clean read; otherwise a short string naming what failed,
+    meant for a caller to surface VERBATIM rather than translate into a silently
+    empty grant set -- a plan that declared a grant nobody can currently read is a
+    materialization gap, not the same thing as a plan that declared none. Each
+    return statement below reports at most one failure and stops there, so one
+    unreadable stage/snapshot can never masquerade as "no grants" for a caller
+    that then proceeds to dispatch a child under an emptied-out coverage set.
+
+    A session that never took a snapshot at all -- a plan approved before the
+    snapshot mechanism existed, or no plan approved yet -- is deliberately NOT an
+    error: it carries no grants, the same fail-open reading `grants_approval_
+    blockers` already gives the identical condition at approve time."""
     declared_entries: list[dict] = []
     derived_entries: list[dict] = []
     dropped: list[dict] = []
     snap_path = state.plan_snapshot_path
     snap_hash = state.plan_snapshot_hash
-    if snap_path and snap_hash and Path(snap_path).exists():
-        if hashlib.sha256(Path(snap_path).read_bytes()).hexdigest() == snap_hash:
-            try:
-                snap_doc = load_plan(snap_path)
-            except (OSError, PlanError):
-                snap_doc = None
-            if snap_doc is not None:
-                snap_stage = next((s for s in snap_doc.stages if s.index == stage_index), None)
-                if snap_stage is not None:
-                    declared = snap_stage.grants if getattr(snap_stage, "grants", None) \
-                        else _grants.StageGrants()
-                    declared_entries = [r.to_dict() for r in declared.allow] + \
-                        [a.to_dict() for a in declared.add_dirs]
-                    if state.approved_grants_sha256 and \
-                            grants_sha256(snap_doc) == state.approved_grants_sha256:
-                        venue = _venue_for(snap_doc)
-                        derived, dropped = _grants.derive_stage_grants(snap_stage, venue=venue)
-                        derived_entries = [r.to_dict() for r in derived.allow] + \
-                            [a.to_dict() for a in derived.add_dirs]
-    return declared_entries, derived_entries, dropped
+    if not snap_path:
+        return declared_entries, derived_entries, dropped, None
+    if not Path(snap_path).exists():
+        return declared_entries, derived_entries, dropped, (
+            f"approved-plan snapshot is missing on disk: {snap_path!r}"
+        )
+    if not snap_hash or hashlib.sha256(Path(snap_path).read_bytes()).hexdigest() != snap_hash:
+        return declared_entries, derived_entries, dropped, (
+            f"approved-plan snapshot hash mismatch at {snap_path!r}: the file on "
+            "disk no longer matches the bytes this session approved"
+        )
+    try:
+        snap_doc = load_plan(snap_path)
+    except (OSError, PlanError) as exc:
+        return declared_entries, derived_entries, dropped, (
+            f"cannot load approved-plan snapshot {snap_path!r}: {exc}"
+        )
+    snap_stage = next((s for s in snap_doc.stages if s.index == stage_index), None)
+    if snap_stage is None:
+        return declared_entries, derived_entries, dropped, (
+            f"stage {stage_index} not found in approved-plan snapshot {snap_path!r}"
+        )
+    declared = snap_stage.grants if getattr(snap_stage, "grants", None) \
+        else _grants.StageGrants()
+    declared_entries = [r.to_dict() for r in declared.allow] + \
+        [a.to_dict() for a in declared.add_dirs]
+    if not state.approved_grants_sha256:
+        return declared_entries, derived_entries, dropped, None
+    if grants_sha256(snap_doc) != state.approved_grants_sha256:
+        return declared_entries, derived_entries, dropped, (
+            "derived-grants hash mismatch: the live grant derivation no longer "
+            "reproduces approved_grants_sha256 (the materialization layer changed "
+            "since this plan was approved) -- derived grants withheld"
+        )
+    venue = _venue_for(snap_doc)
+    derived, dropped = _grants.derive_stage_grants(snap_stage, venue=venue)
+    derived_entries = [r.to_dict() for r in derived.allow] + \
+        [a.to_dict() for a in derived.add_dirs]
+    return declared_entries, derived_entries, dropped, None
+
+
+def _stage_grant_venue(state: SessionState) -> str | None:
+    """Best-effort venue (`delivery_worktree` or `repo_root`) of the session's
+    approved-plan snapshot, for `_effective_stage_grants` to expand a spawn kind's
+    baseline with the child's own workdir-absolute script spellings
+    (`kind_baselines.baseline_for_workdir`) -- the same venue `_stage_grant_entries`
+    already resolves internally to derive DR-E rules, exposed here since COVERAGE
+    (unlike materialization) needs it independently of whether declared/derived
+    grants themselves were readable this call. Returns None on any read/parse
+    failure or a session with no snapshot at all -- the caller then falls back to
+    the canon-absolute-only baseline (`baseline_for_workdir`'s own no-op path for
+    a falsy workdir), never widening coverage on a guess."""
+    snap_path = state.plan_snapshot_path
+    if not snap_path or not Path(snap_path).exists():
+        return None
+    try:
+        snap_doc = load_plan(snap_path)
+    except (OSError, PlanError):
+        return None
+    return _venue_for(snap_doc)
 
 
 def _refresh_runtime_grant_titles(state: SessionState, stage_index: int, new_title: str) -> None:
@@ -5376,15 +5503,18 @@ def _rekey_runtime_grants(state: SessionState, doc) -> None:
     state.runtime_grants = rekeyed
 
 
-def _kind_baseline_rule_grants(kind: str) -> list[_grants.RuleGrant]:
+def _kind_baseline_rule_grants(kind: str, workdir: str | None = None) -> list[_grants.RuleGrant]:
     """The fleet-wide baseline Bash rules `kind_baselines.KIND_BASELINES`
     injects for `kind` (falling back to its own `"default"` baseline),
     each wrapped as a `RuleGrant` with provenance `"baseline"` -- finding
     S3: a call covered only by this baseline (never by a
     declared/derived/runtime grant) must classify as a materialization
     defect, not a planning miss, since the child's actual settings
-    genuinely carry it."""
-    baseline = kind_baselines.KIND_BASELINES.get(kind, kind_baselines.KIND_BASELINES["default"])
+    genuinely carry it. `workdir`, when given, is expanded through
+    `kind_baselines.baseline_for_workdir` -- the same workdir-absolute script-rule
+    spelling `spawn-specialist.py` materializes into the child's `--settings`
+    (finding S9), so coverage here never lags what the child actually receives."""
+    baseline = kind_baselines.baseline_for_workdir(kind, workdir)
     return [_grants.RuleGrant(rule=r, provenance="baseline") for r in baseline]
 
 
@@ -5396,8 +5526,16 @@ def _effective_stage_grants(state: SessionState, stage_index: int) -> _grants.St
     shapes `cmd_stage_grants` already reports separately by provenance. The
     kind baseline is unioned in for a `spawn:*` stage only -- an in-thread
     stage never spawns a child, so no baseline settings ever materialize for
-    it (finding S3)."""
-    declared_entries, derived_entries, _dropped = _stage_grant_entries(state, stage_index)
+    it (finding S3).
+
+    Silent on a `_stage_grant_entries` read error -- callers that need to REFUSE
+    on one (`cmd_dispatch`) check `_stage_grant_entries` themselves before calling
+    this; this function's own signature and existing callers (`cmd_dispatch`'s
+    coverage object, `test_pra_review_catalogue.py`'s direct call) stay
+    unchanged, so an error here degrades to the same partial-entries reading the
+    error-carrying return already yields (declared/derived withheld precisely on
+    the failure paths that produce one)."""
+    declared_entries, derived_entries, _dropped, _error = _stage_grant_entries(state, stage_index)
     runtime_entries = [
         e for e in state.runtime_grants.get(str(stage_index), [])
         if not e.get("consumed")
@@ -5411,7 +5549,7 @@ def _effective_stage_grants(state: SessionState, stage_index: int) -> _grants.St
             add_dirs.append(_grants.AddDirGrant.from_dict(e))
     stage = state.stage(stage_index)
     if stage.is_spawn():
-        allow.extend(_kind_baseline_rule_grants(stage.spawn_kind()))
+        allow.extend(_kind_baseline_rule_grants(stage.spawn_kind(), workdir=_stage_grant_venue(state)))
     return _grants.StageGrants(allow=allow, add_dirs=add_dirs)
 
 
@@ -5617,7 +5755,7 @@ def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -
     except KeyError:
         return Directive(False, state.node, "noop", f"no stage with index {stage_index}")
 
-    declared_entries, derived_entries, dropped = _stage_grant_entries(state, stage_index)
+    declared_entries, derived_entries, dropped, error = _stage_grant_entries(state, stage_index)
     runtime_entries = [
         e for e in state.runtime_grants.get(str(stage_index), [])
         if not e.get("consumed")
@@ -5634,6 +5772,7 @@ def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -
         "executor": stage.actor.executor,
         "grants": all_entries,
         "dropped": dropped,
+        "error": error,
     }
     if getattr(args, "json", False):
         text = json.dumps(data, indent=2, sort_keys=True)
@@ -5650,7 +5789,12 @@ def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -
             lines.append(f"  {label}: {rendered}")
         if not all_entries:
             lines.append("  (no grants)")
+        if error:
+            lines.append(f"  ERROR: {error}")
         text = "\n".join(lines) + "\n"
+    # A read error is reported, never swallowed into a quiet "no grants" -- ok stays
+    # True (this is a report command, not a gate) but the error rides d.data/text so
+    # a caller cannot mistake an unreadable snapshot for a plan that grants nothing.
     return Directive(True, state.node, "inspect", text, data=data)
 
 
@@ -7242,12 +7386,12 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         # the next replan's baseline) reads a different path — and accepted_plan_digest,
         # stamped on `args.plan`, would name bytes plan_path does not point at.
         state.plan_path = args.plan
-        # Backfill a snapshot for a legacy (pre-snapshot) session so the NEXT replan
-        # diffs against real approved bytes instead of self-diffing plan_path.
-        if not (state.plan_snapshot_path and Path(state.plan_snapshot_path).exists()):
-            snap = _snapshot_approved_plan(store, state)
-            if snap:
-                state.plan_snapshot_path, state.plan_snapshot_hash = snap
+        # Unconditional refresh (not just a legacy backfill when no snapshot exists at
+        # all): a no_change replan can still carry corrected bytes for stages this
+        # diff kind doesn't cover (prose/verify only, per the diff), so the approved
+        # snapshot and approved_grants_sha256 must track `new` every time, not only
+        # the first time a session ever takes a snapshot.
+        _refresh_approved_grant_snapshot(state, store, new)
         if diagnosing:
             for s in state.stages:
                 if s.outcome.status == StageStatus.FAILED.value:
@@ -7286,6 +7430,13 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             if cur.outcome.status == StageStatus.FAILED.value:
                 cur.outcome.status = StageStatus.PENDING.value
         state.plan_path = args.plan
+        # Same unconditional refresh as the no_change branch above: a refinement
+        # touches stage prose/means/verify, which can shift a stage's DERIVED grants
+        # even though grants_sha256 growth is already checked by diff_plans/
+        # _grants_grew before this branch is ever reached -- the snapshot bytes and
+        # approved_grants_sha256 must track `new`, not the plan this session most
+        # recently APPROVED via a full `approve` call.
+        _refresh_approved_grant_snapshot(state, store, new)
         _sync_venue_from_plan(state, new)
         state.final_check = new.meta.final_check
         if diagnosing:

@@ -224,6 +224,48 @@ KIND_BASELINES: dict[str, list[str]] = {
 }
 
 
+def baseline_for_workdir(kind: str, workdir: "str | None") -> list[str]:
+    """One kind's baseline (`KIND_BASELINES`), expanded with a THIRD script-rule
+    spelling: the child's own workdir-absolute form
+    (`Bash(python3 <workdir>/scripts/<name>:*)`), alongside the existing
+    canon-absolute (built from `SCRIPTS_DIR`) and repo-relative
+    (`python3 scripts/<name>`) spellings `_abs_and_relative_script_rules` already
+    emits into the table. A spawned child's cwd is normally a WORKTREE, not the
+    canon checkout `SCRIPTS_DIR` points at, and the harness matches a Bash rule
+    against the literal command string -- so a baseline script call the child
+    spells with its own worktree-absolute path
+    (`python3 <worktree>/scripts/verify-agentctl.py`) matched neither existing
+    spelling and was refused (finding S9, stage 9 live run 2026-09-27: a
+    self-reported `Rule:` naming the covered relative spelling masked that the
+    transcript's actual denied call was this uncovered one).
+
+    ONE shared function: `spawn-specialist.py`'s `build_child_settings` calls this
+    to MATERIALIZE the extra rule into the child's `--settings`, and
+    `agentctl/cli.py`'s `_effective_stage_grants` calls this (with the stage's
+    resolved venue as `workdir`) to decide COVERAGE for classifying a denial --
+    so the two never drift on which workdir spellings a baseline actually covers.
+
+    Returns the unmodified baseline (a fresh list, still safe to mutate) when
+    `workdir` is falsy or its `scripts/` subdirectory already equals
+    `SCRIPTS_DIR` (the canon-absolute spelling already covers that case -- no
+    duplicate rule). `KIND_BASELINES` itself and `kind_baseline_sha256` are
+    unchanged by this function; it is a spawn-time expansion layered on top of
+    the static table, never an edit to it."""
+    baseline = KIND_BASELINES.get(kind, KIND_BASELINES["default"])
+    if not workdir:
+        return list(baseline)
+    workdir_scripts = Path(workdir).resolve() / "scripts"
+    if workdir_scripts == SCRIPTS_DIR:
+        return list(baseline)
+    canon_prefix = f"Bash(python3 {SCRIPTS_DIR}/"
+    extra: list[str] = []
+    for rule in baseline:
+        if rule.startswith(canon_prefix):
+            suffix = rule[len(canon_prefix):]  # "<name>:*)" tail, verbatim
+            extra.append(f"Bash(python3 {workdir_scripts}/{suffix}")
+    return list(baseline) + extra
+
+
 def kind_baseline_sha256(kind: str) -> str:
     """Stable sha256 hex digest of one kind's baseline rule list (falling
     back to the `"default"` baseline for an unknown kind), same

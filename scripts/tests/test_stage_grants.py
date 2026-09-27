@@ -674,10 +674,11 @@ def test_stage_grant_entries_empty_when_snapshot_bytes_dont_match_stamped_hash(s
     with open(state.plan_snapshot_path, "a", encoding="utf-8") as f:
         f.write("\n# tampered\n")
 
-    declared, derived, dropped = cli._stage_grant_entries(state, 1)
+    declared, derived, dropped, error = cli._stage_grant_entries(state, 1)
     assert declared == []
     assert derived == []
     assert dropped == []
+    assert error and "hash" in error.lower()
 
 
 def test_stage_grant_entries_derived_empty_when_approved_grants_sha256_stale(store, fixtures_dir):
@@ -691,8 +692,9 @@ def test_stage_grant_entries_derived_empty_when_approved_grants_sha256_stale(sto
     assert state.approved_grants_sha256
     state.approved_grants_sha256 = "0" * 64
 
-    _declared, derived, _dropped = cli._stage_grant_entries(state, 1)
+    _declared, derived, _dropped, error = cli._stage_grant_entries(state, 1)
     assert derived == []
+    assert error and "approved_grants_sha256" in error
 
 
 def test_cmd_resolve_permission_scope_stage_records_runtime_rule_grant(store, fixtures_dir):

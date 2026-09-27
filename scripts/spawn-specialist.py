@@ -47,6 +47,7 @@ from lib.kind_baselines import (  # re-exported below so `MOD.KIND_BASELINES` et
     PLANNER_LIST_DENIED_RULE,
     PLANNER_PLAN_GRANTS_RULE,
     SCRIPTS_DIR,
+    baseline_for_workdir,
 )
 from lib.planner_plan_check import (  # single shared home for return-marker + plan checks
     MARKER_RE,
@@ -1007,7 +1008,7 @@ def build_child_settings(
     }
     allow: list[str] = []
     deny: list[str] = []
-    baseline = KIND_BASELINES.get(kind, KIND_BASELINES["default"])
+    baseline = baseline_for_workdir(kind, workdir)
     for rule in baseline:
         grants.validate_rule(rule)
     allow.extend(baseline)
