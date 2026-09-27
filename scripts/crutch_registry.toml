@@ -3517,6 +3517,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "3851bd41385e97cd"
+domain = "code"
+file = "scripts/tests/test_convergence_r10_durable_evidence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "363aca847a7957e7"
 domain = "code"
 file = "scripts/tests/test_convergence_r10_durable_evidence.py"
