@@ -52,6 +52,18 @@ def test_g4_fire_row_shape_from_single_fixture_file(tmp_path):
     assert "toolu_g4_1" in row["locator"]
 
 
+def test_invalid_utf8_in_a_transcript_does_not_abort_the_replay(tmp_path):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "g4-fire.jsonl").write_bytes(
+        b'{"broken": "\xd1"}\n' + (FIXTURES / "g4-fire.jsonl").read_bytes(),
+    )
+    out_dir = tmp_path / "out"
+    rc = replay.main(["--out", str(out_dir), "--corpus", str(corpus)])
+    assert rc == 0
+    assert [r["branch"] for r in _read_rows(out_dir)] == ["G4"]
+
+
 def test_no_fire_fixture_produces_zero_rows(tmp_path):
     corpus = tmp_path / "corpus"
     corpus.mkdir()

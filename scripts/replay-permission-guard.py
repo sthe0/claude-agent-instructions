@@ -125,7 +125,8 @@ def _transcript_rows(paths: list[Path], until_ts: float | None) -> list[dict]:
     rows: list[dict] = []
     for path in paths:
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            # A harness transcript can carry a multi-byte character cut mid-sequence.
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
         for line_no, raw in enumerate(lines, start=1):
