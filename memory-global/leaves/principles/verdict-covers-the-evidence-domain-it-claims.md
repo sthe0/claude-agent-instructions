@@ -1,6 +1,6 @@
 ---
 name: verdict-covers-the-evidence-domain-it-claims
-description: Anything that issues a verdict — a gate, a checker, or an agent's own investigation — must actually cover the evidence domain its verdict claims, and where it cannot, say so instead of answering. A gate demanding proof whose prover is absent, a checker enumerating from one source while reading another, and a conclusion of "X is not used" drawn from probes that could not have found X are the same fault. Escape hatches must stay reachable, diagnosed, typed and counted.
+description: Anything that issues a verdict — a gate, a checker, or an agent's own investigation — must actually cover the evidence domain its verdict claims, and where it cannot, say so instead of answering. A gate demanding proof whose prover is absent, a checker enumerating from one source while reading another, and and an agent's claim about a mechanism it never ran — its absence, its cause, or its next move — are the same fault; where the mechanism ships a dry run, not spending it before the claim is the whole failure. Escape hatches must stay reachable, diagnosed, typed and counted.
 type: reference
 schema: principle/v1
 generality: 3
@@ -43,17 +43,27 @@ belongs in the producing step — stage the artifact before you verify — not i
 behaving exactly as designed.
 
 **The investigator form — the unprobed mechanism.** An agent's own conclusion about the world is a
-verdict over an evidence domain, and it inherits the same three answers. A conclusion of the shape
-*"X is not used / does not exist / is dead"* is only as strong as the probes behind it, and a probe
-selected from a guess about the mechanism cannot rule out a mechanism it was never shaped to see: a
-name-filtered process grep says nothing about a kernel NAT rule. The honest answer there is *I could
+verdict over an evidence domain, and it inherits the same three answers. **The claim need not be a
+negative.** *"X is not used"*, *"the denial fired because of Y"* and *"this command will reclaim
+270 MB"* are one act — a statement about a mechanism's behaviour issued without running the
+mechanism — and each is only as strong as the probes behind it. A probe selected from a guess about
+the mechanism cannot rule out a mechanism it was never shaped to see: a name-filtered process grep
+says nothing about a kernel NAT rule, and a reading of what a command *means* says nothing about
+what it *does*. The honest answer there is *I could
 not look*, and collapsing it into *it is not there* is the same fault the machinery forms commit —
 except that here nothing external holds the third answer open, so only the reasoner's own discipline
 does. Three consequences follow, and they are the ones a reasoner actually gets wrong:
 
-1. **Name the mechanism before accepting the absence.** Enumerate what would explain the observed
-   behaviour, then check that the probes run actually cover those candidates. An absence established
-   over an unenumerated domain is not established.
+1. **Name the mechanism before asserting anything about it — its absence, its cause, or its next
+   move.** Enumerate what would explain the observed behaviour, then check that the probes run
+   actually cover those candidates. An absence established over an unenumerated domain is not
+   established, and neither is a cause nor a prediction. **Where the mechanism ships its own dry run,
+   the barrier is zero and there is no excuse:** `-s` / `--dry-run` / `--simulate`, reading the script
+   that is about to execute, re-attempting a denied call once its target is legible. Each is
+   side-effect-free and therefore *already* pre-authorized (`CLAUDE.md` § Acting without asking,
+   carve-out 1), so asking the mechanism costs a second and guessing at it costs a wrong artifact.
+   Reaching for the dry run only after the claim has failed is the characteristic shape of this
+   consequence being got wrong.
 2. **A positive observation outranks a bounded negative.** A byte counter, a timestamp, live traffic,
    a user's "I use this daily" are observations; a probe that failed to find something is a statement
    about the probe. When they conflict, the negative is wrong until its coverage is shown — and
@@ -138,7 +148,11 @@ on evidence, and not before.
   grep and a policy-routing check, neither of which could have seen the `iptables` NAT table the whole
   mechanism lived in; a positive counter-signal (2.7GB of tunnel egress) was explained away to keep the
   conclusion. The host was carrying the user's daily VPN traffic, and only the user's contradiction
-  caught it.
+  caught it. Its two further contexts, recorded the same day, are what widened consequence 1 beyond
+  absence: a permission denial whose CAUSE was named twice and probed neither (the real cause was
+  opacity, and one `cat` of the script refuted both guesses), and a package manager's future
+  BEHAVIOUR promised to the user while `apt-get -s` sat unused — the dry run was reached for only
+  after the promise had failed.
 
 ## Refutation
 
