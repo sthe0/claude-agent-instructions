@@ -74,6 +74,10 @@ _UNCLAIMED_STAGE_LEAVES = {
                              "against, not the observation that later satisfied it",
     "output_artifacts": "the paths a stage promises to produce. An answer about the "
                         "result rests on `subject.result`, which does claim its element",
+    "ephemeral_artifacts_waiver": "the submission-time waiver for a declared "
+                                  "output_artifacts entry under a scratch root. Same "
+                                  "footing as actor.cost_tier above — covered instead by "
+                                  "gates._renorm_stage_residual and diff_plans' prose",
     "control": "the FIELD is written by `record-result --control` after the fact, never "
                "authored in the plan. The vocabulary NAME `control` is separate and is "
                "mapped, to the whole stage",
