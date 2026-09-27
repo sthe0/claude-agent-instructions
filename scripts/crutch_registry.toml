@@ -22177,6 +22177,14 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
+id = "570bd845ccd0cbcc"
+domain = "prose"
+file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
 id = "602769bfd8dc3d5d"
 domain = "prose"
 file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
@@ -22241,7 +22249,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "683e98402886a21e"
+id = "988d9d31280f674a"
 domain = "prose"
 file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
 class = "perception"
