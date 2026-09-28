@@ -907,7 +907,14 @@ def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
     The suppressed DENY is never passed through `grants.validate_rule`
     either way (deny rules are outside its scope by design;
     `grants.validate_grants` itself iterates only `allow` and `add_dirs`),
-    so the same glob shape that would refuse an allow rule is fine here."""
+    so the same glob shape that would refuse an allow rule is fine here.
+
+    A read/write pair whose bases are NESTED rather than identical — either
+    one strictly under the other — raises `GrantShadowError` once every
+    entry has validated (see `_refuse_nested_read_write_bases`): a parent
+    read deny shadows a child write allow, and a child read deny punches a
+    hole in a parent write allow, and neither precedence has a safe silent
+    answer."""
     write_bases: set[str] = set()
     for entry in entries:
         if entry.get("rule") is not None:
@@ -921,6 +928,7 @@ def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
 
     allow: list[str] = []
     deny: list[str] = []
+    add_dir_bases: list[tuple[str, str]] = []
     for entry in entries:
         rule = entry.get("rule")
         if rule is not None:
@@ -933,6 +941,7 @@ def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
             continue
         grants.validate_add_dir(path, mode)
         base = grants.rule_file_arg(path.rstrip("/"))
+        add_dir_bases.append((base, mode))
         if mode == "read":
             if base in write_bases:
                 continue
@@ -947,6 +956,7 @@ def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
                     f"Edit({base}/**/.git)",
                 ]
             )
+    _refuse_nested_read_write_bases(add_dir_bases)
     return allow, deny
 
 
@@ -1006,6 +1016,29 @@ def _deny_rule_directory_prefix(deny_rule: str) -> "str | None":
     if not tool_arg.startswith("//") or not tool_arg.endswith("/**"):
         return None
     return grants.rule_file_path(tool_arg[: -len("/**")])
+
+
+def _is_strictly_under(child_base: str, parent_base: str) -> bool:
+    """Path-segment containment on two `grants.rule_file_arg`-encoded bases:
+    `//a/b` is under `//a`, `//a2` is not."""
+    return child_base.startswith(parent_base.rstrip("/") + "/")
+
+
+def _refuse_nested_read_write_bases(add_dir_bases: list[tuple[str, str]]) -> None:
+    """Raise `GrantShadowError` for any read add_dir and write add_dir, from
+    one `stage_grant_rules` call, whose `(base, mode)` bases nest in either
+    direction. Identical bases are `stage_grant_rules`' own suppression
+    case, not a nesting."""
+    for base, mode in add_dir_bases:
+        for other_base, other_mode in add_dir_bases:
+            if {mode, other_mode} != {"read", "write"}:
+                continue
+            if _is_strictly_under(other_base, base):
+                raise GrantShadowError(
+                    f"{other_mode} add_dir {grants.rule_file_path(other_base)!r} is nested "
+                    f"under {mode} add_dir {grants.rule_file_path(base)!r} — the read-derived "
+                    f"Edit deny and the write Edit allow would overlap; refused"
+                )
 
 
 def _check_write_add_dirs_not_shadowed(entries: list[dict], existing_deny: list[str]) -> None:

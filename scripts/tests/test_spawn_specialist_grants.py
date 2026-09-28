@@ -382,3 +382,55 @@ def test_gc8_trailing_slash_normalization():
     assert allow_t == allow_p
     assert deny_t == deny_p
     assert "Edit(//tmp/gcbase/**)" not in deny_t
+
+
+# A read/write pair on NESTED bases has no safe silent resolution -- a parent
+# read deny shadows a child write allow, a child read deny punches a hole in
+# a parent write allow -- so it is refused with GrantShadowError in either
+# direction (gc9, gc10). Nesting is by path segment, not string prefix: a
+# sibling sharing a name prefix is an unrelated directory (gc11; mutations
+# M7, M8).
+
+
+def test_gc9_nested_read_parent_write_child_refused():
+    entries = [
+        {"path": "/tmp/gcbase", "mode": "read"},
+        {"path": "/tmp/gcbase/sub", "mode": "write"},
+    ]
+    with pytest.raises(MOD.GrantShadowError) as excinfo:
+        MOD.stage_grant_rules(entries)
+    assert "/tmp/gcbase/sub" in str(excinfo.value)
+    assert "'/tmp/gcbase'" in str(excinfo.value)
+
+
+def test_gc10_nested_read_child_write_parent_refused():
+    # This is what fails if the nesting check only looks for a write under a
+    # read, the one direction `_check_write_add_dirs_not_shadowed` covers
+    # (mutation M9).
+    entries = [
+        {"path": "/tmp/gcbase/sub", "mode": "read"},
+        {"path": "/tmp/gcbase", "mode": "write"},
+    ]
+    with pytest.raises(MOD.GrantShadowError) as excinfo:
+        MOD.stage_grant_rules(entries)
+    assert "/tmp/gcbase/sub" in str(excinfo.value)
+    assert "'/tmp/gcbase'" in str(excinfo.value)
+
+
+def test_gc11_prefix_sibling_is_not_nested():
+    read_sibling = [
+        {"path": "/tmp/gcbase2", "mode": "read"},
+        {"path": "/tmp/gcbase", "mode": "write"},
+    ]
+    allow, deny = MOD.stage_grant_rules(read_sibling)
+    assert "Edit(//tmp/gcbase/**)" in allow
+    assert "Edit(//tmp/gcbase2/**)" in deny
+    assert "Edit(//tmp/gcbase/**)" not in deny
+
+    write_sibling = [
+        {"path": "/tmp/gcbase", "mode": "read"},
+        {"path": "/tmp/gcbase2", "mode": "write"},
+    ]
+    allow, deny = MOD.stage_grant_rules(write_sibling)
+    assert "Edit(//tmp/gcbase2/**)" in allow
+    assert "Edit(//tmp/gcbase/**)" in deny
