@@ -147,6 +147,11 @@ samples/judge-latency/README.md:199:c7dd5198  # 52s = the approved turn-end budg
 samples/judge-latency/README.md:207:af842d45  # 52s again, in the sentence that names it the APPROVED height rather than a derived one
 samples/judge-latency/README.md:241:e7a33457  # max 71.96 belongs to lean-sample.json, a SUPPORTING sample excluded from every row — cited to show the lean prompt's worse tail
 samples/judge-latency/README.md:242:ba28e247  # historical: the original 5s registration the haiku baseline made look survivable
+samples/judge-latency/README.md:244:f5e195d2  # field_inputs.TIMEOUT_S, the uncensored per-call ceiling the R8a field sample ran under (user-approved 300 s measurement ceiling)
+samples/judge-latency/README.md:277:729aaa5f  # measured max and next value of feedback_signal in field-inputs-sample.json (R8a), quoted as an outlier candidate
+samples/judge-latency/README.md:279:31351d41  # measured duration of the 97 289-char feedback_signal row in field-inputs-sample.json (R8a), the size control for the 183.1 s candidate
+samples/judge-latency/README.md:280:73708860  # measured deferring_disposition tail in field-inputs-sample.json (R8a), quoted as outlier candidates
+samples/judge-latency/README.md:286:7c8cb905  # _ASK_JUDGE_BUDGET_S in force at measurement time and the count of field-inputs-sample.json deferring rows above it (R8a)
 
 # live-run-evidence.md — the stage-4 write-up. Every number here is either one of
 # the three recorded live runs or a statistic the checker recomputes from the

@@ -1,0 +1,695 @@
+{
+  "feedback_signal": {
+    "target": 32,
+    "available": 774,
+    "n": 32,
+    "rows": [
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 41405,
+        "duration": 37.76275779027492,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 118576,
+        "duration": 20.246071917004883,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 60281,
+        "duration": 11.804076397791505,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 34934,
+        "duration": 27.970957035198808,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 1150,
+        "duration": 13.211044984869659,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 5289,
+        "duration": 5.364629917778075,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 31578,
+        "duration": 11.812675848603249,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 22372,
+        "duration": 9.481423288583755,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 17260,
+        "duration": 7.891697860322893,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 7119,
+        "duration": 5.898406907916069,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 43085,
+        "duration": 6.990643247030675,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 3121,
+        "duration": 5.675117261707783,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 32033,
+        "duration": 9.324608467519283,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 35456,
+        "duration": 5.277577955275774,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 97289,
+        "duration": 5.527794783934951,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 1150,
+        "duration": 6.133909114636481,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 97301,
+        "duration": 183.1355803227052,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 30881,
+        "duration": 5.539864232763648,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 42211,
+        "duration": 6.133280481211841,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 8622,
+        "duration": 10.939833408221602,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 22969,
+        "duration": 35.075328912585974,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 4574,
+        "duration": 12.5510090617463,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 4230,
+        "duration": 5.468482747673988,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 37382,
+        "duration": 14.352425755932927,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 22661,
+        "duration": 8.87590709142387,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 38412,
+        "duration": 14.689755409955978,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 29738,
+        "duration": 25.46842927671969,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 17982,
+        "duration": 9.492402572184801,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 15890,
+        "duration": 33.41865676827729,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 9845,
+        "duration": 13.297944193705916,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 10342,
+        "duration": 4.876181811094284,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "feedback_signal",
+        "prompt_chars": 33975,
+        "duration": 6.6871849074959755,
+        "timed_out": false,
+        "verdict": false
+      }
+    ]
+  },
+  "binary_ask": {
+    "target": 32,
+    "available": 101,
+    "n": 32,
+    "rows": [
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 2153,
+        "duration": 3.048141023144126,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1214,
+        "duration": 4.958589095622301,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 2901,
+        "duration": 7.503035418689251,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1266,
+        "duration": 5.220406234264374,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 3344,
+        "duration": 5.416853251866996,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1407,
+        "duration": 3.560037085786462,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1046,
+        "duration": 6.5691919550299644,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1702,
+        "duration": 3.9694413552060723,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 2030,
+        "duration": 4.107198727317154,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1307,
+        "duration": 23.209327002055943,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 4126,
+        "duration": 3.81489120144397,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1060,
+        "duration": 5.221594262868166,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 2070,
+        "duration": 6.260174221359193,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1027,
+        "duration": 7.300729489885271,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1369,
+        "duration": 5.441551414318383,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1097,
+        "duration": 4.591678292490542,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 3468,
+        "duration": 3.6180841671302915,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 2123,
+        "duration": 6.788100672885776,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 2613,
+        "duration": 5.290763825178146,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 6455,
+        "duration": 12.13883245922625,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 2361,
+        "duration": 6.537639237940311,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1229,
+        "duration": 20.040550764650106,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1175,
+        "duration": 3.2068812493234873,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1131,
+        "duration": 4.193973038345575,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 3056,
+        "duration": 5.43273940961808,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1618,
+        "duration": 3.013064108788967,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1041,
+        "duration": 5.209432694129646,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 2207,
+        "duration": 10.711589834652841,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 2036,
+        "duration": 4.788575465790927,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1272,
+        "duration": 4.165471631102264,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 2588,
+        "duration": 5.2428883370012045,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "binary_ask",
+        "prompt_chars": 1127,
+        "duration": 4.566389229148626,
+        "timed_out": false,
+        "verdict": false
+      }
+    ]
+  },
+  "deferring_disposition": {
+    "target": 32,
+    "available": 1065,
+    "n": 32,
+    "rows": [
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1482,
+        "duration": 100.74526904150844,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 2202,
+        "duration": 7.2150721829384565,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1429,
+        "duration": 8.183571480214596,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1488,
+        "duration": 32.0112797645852,
+        "timed_out": false,
+        "verdict": true
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1471,
+        "duration": 5.237108074128628,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1374,
+        "duration": 11.251173753291368,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 2403,
+        "duration": 56.78415146935731,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 2164,
+        "duration": 4.802207377739251,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1858,
+        "duration": 7.765085520222783,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1395,
+        "duration": 4.433156942017376,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 2416,
+        "duration": 26.68471992574632,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1455,
+        "duration": 62.85018763691187,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1742,
+        "duration": 46.006489027291536,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 2323,
+        "duration": 11.283273054286838,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1352,
+        "duration": 4.40538149420172,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1496,
+        "duration": 13.763855018652976,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1291,
+        "duration": 28.927763462997973,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 2029,
+        "duration": 8.930689005181193,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1756,
+        "duration": 21.26608904916793,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1357,
+        "duration": 3.930432182736695,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1693,
+        "duration": 9.27917521353811,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1624,
+        "duration": 13.861497346311808,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1714,
+        "duration": 72.97034757118672,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 2042,
+        "duration": 8.075542403385043,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1585,
+        "duration": 6.574383897706866,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1712,
+        "duration": 10.832614773884416,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1755,
+        "duration": 7.3350101271644235,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1338,
+        "duration": 4.418712650425732,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1392,
+        "duration": 8.964006115682423,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1445,
+        "duration": 5.542790153063834,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1521,
+        "duration": 8.2531524784863,
+        "timed_out": false,
+        "verdict": false
+      },
+      {
+        "judge": "deferring_disposition",
+        "prompt_chars": 1507,
+        "duration": 24.898609437979758,
+        "timed_out": false,
+        "verdict": false
+      }
+    ]
+  }
+}

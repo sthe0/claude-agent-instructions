@@ -235,6 +235,57 @@ unavailability, never on a judge answering wrong, so this is a note for
 whoever authors the next fixture batch, not a defect in this stage's
 measurement.
 
+## field-inputs-sample.json
+
+Real field latency of the three turn-level judges, measured on genuine
+prefilter-passing inputs drawn from this machine's own transcripts of the last
+30 days (every earlier sample here uses hand-written texts). The input builders
+are the hooks' own, imported by name (see `field_inputs.py`'s docstring); each
+call runs alone under an uncensored 300 s ceiling, with the judge ledger
+redirected so the live ledger is untouched. Only metadata is committed:
+`{judge, prompt_chars, duration, timed_out, verdict}` per row.
+
+Command used (detached, ~25 min, 96 real calls):
+
+```
+python3 samples/judge-latency/field_inputs.py <stage evidence dir>/field-inputs-scratch
+```
+
+Achieved: **32 of 32** for every judge — no shortfall; **0** calls timed out.
+Durations in seconds; p90 = `sorted[round(0.9·(n−1))]`.
+
+| Judge | available | n | min | median | p90 | max | timed out | prompt_chars |
+|---|---|---|---|---|---|---|---|---|
+| feedback_signal | 774 | 32 | 4.9 | 9.5 | 33.4 | 183.1 | 0 | 1150–118576 |
+| binary_ask | 101 | 32 | 3.0 | 5.2 | 10.7 | 23.2 | 0 | 1027–6455 |
+| deferring_disposition | 1065 | 32 | 3.9 | 9.3 | 56.8 | 100.7 | 0 | 1291–2416 |
+
+Sorted durations:
+
+- feedback_signal: 4.9, 5.3, 5.4, 5.5, 5.5, 5.5, 5.7, 5.9, 6.1, 6.1, 6.7, 7.0,
+  7.9, 8.9, 9.3, 9.5, 9.5, 10.9, 11.8, 11.8, 12.6, 13.2, 13.3, 14.4, 14.7, 20.2,
+  25.5, 28.0, 33.4, 35.1, 37.8, 183.1
+- binary_ask: 3.0, 3.0, 3.2, 3.6, 3.6, 3.8, 4.0, 4.1, 4.2, 4.2, 4.6, 4.6, 4.8,
+  5.0, 5.2, 5.2, 5.2, 5.2, 5.3, 5.4, 5.4, 5.4, 6.3, 6.5, 6.6, 6.8, 7.3, 7.5,
+  10.7, 12.1, 20.0, 23.2
+- deferring_disposition: 3.9, 4.4, 4.4, 4.4, 4.8, 5.2, 5.5, 6.6, 7.2, 7.3, 7.8,
+  8.1, 8.2, 8.3, 8.9, 9.0, 9.3, 10.8, 11.3, 11.3, 13.8, 13.9, 21.3, 24.9, 26.7,
+  28.9, 32.0, 46.0, 56.8, 62.9, 73.0, 100.7
+
+Outlier candidates:
+
+- feedback_signal 183.1 s — a single jump (next is 37.8 s). Prompt size does
+  not explain it: that call's prompt was 97 301 chars, while a 97 289-char
+  prompt took 5.5 s.
+- deferring_disposition 62.9 / 73.0 / 100.7 s — a smooth tail, not a jump, on
+  small, near-uniform prompts (at most 2 416 chars): model-side latency, not
+  input size.
+- binary_ask — none.
+
+Against the budgets in force when measured, the deferring-disposition gate's
+45 s would have cut 5 of 32 calls (~16 %). Which candidates count as outliers
+and where the caps move to is the cap decision's call, recorded separately.
+
 ## Supporting samples (not part of the four rows)
 
 - `lean-sample.json` — lean vs standard prompt A/B; shows the lean prompt is not
