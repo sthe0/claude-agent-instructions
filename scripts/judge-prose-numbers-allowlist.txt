@@ -34,30 +34,33 @@
 # sentence changes without a human re-reading the reason attached to it.
 
 # --- scripts/lib/judge_latency.py ---------------------------------------------
-scripts/lib/judge_latency.py:202:c2bd6e19  # 5.88-11.42s = approval-sample.json's range, the first (now superseded) regime in the approval_ask row's provenance
-scripts/lib/judge_latency.py:204:89d91532  # 14.12-19.14s = approval2-sample.json's range, the second regime observed after production timeouts against the first sample's ceiling
-scripts/lib/judge_latency.py:210:6c63598b  # K=1 = HOOK_CALL_SEQUENCE["hook-plan-delivery-gate.py"]; why only p90_s/max_s, not the bimodal median, ever reach a constant
-scripts/lib/judge_latency.py:112:c34d8894  # 27.03s = one of the two live-ledger kills that exceeded outage_escalation's old 25.96s max, cited as the operational trigger for re-sampling it via drift-sample.json
-scripts/lib/judge_latency.py:116:9313d23d  # 10.89/19.16/25.96 = outage_escalation's pre-merge median/p90/max, quoted alongside the merged values to show how far drift-sample.json moved the row
-scripts/lib/judge_latency.py:122:e681349e  # 55 = ceil(53.42) + 1, last_resort_ceiling_s()'s output for the merged outage_escalation row, recorded as arithmetic performed, not a ceiling anyone has adopted
-scripts/lib/judge_latency.py:146:4d562c1f  # 11.86/13.34/14.05 = feedback_signal's pre-merge median/p90/max, quoted alongside the merged values to show how far drift-sample.json moved the row
-scripts/lib/judge_latency.py:179:ee1570b4  # 7.46/11.06/11.52 -> 15.755/18.57/19.20 = binary_ask's pre- and post-merge median/p90/max, quoted to show the distribution roughly doubled
+scripts/lib/judge_latency.py:236:c2bd6e19  # 5.88-11.42s = approval-sample.json's range, the first (now superseded) regime in the approval_ask row's provenance
+scripts/lib/judge_latency.py:238:89d91532  # 14.12-19.14s = approval2-sample.json's range, the second regime observed after production timeouts against the first sample's ceiling
+scripts/lib/judge_latency.py:244:6c63598b  # K=1 = HOOK_CALL_SEQUENCE["hook-plan-delivery-gate.py"]; why only p90_s/max_s, not the bimodal median, ever reach a constant
+scripts/lib/judge_latency.py:123:c34d8894  # 27.03s = one of the two live-ledger kills that exceeded outage_escalation's old 25.96s max, cited as the operational trigger for re-sampling it via drift-sample.json
+scripts/lib/judge_latency.py:127:9313d23d  # 10.89/19.16/25.96 = outage_escalation's pre-merge median/p90/max, quoted alongside the merged values to show how far drift-sample.json moved the row
+scripts/lib/judge_latency.py:133:e681349e  # 55 = ceil(53.42) + 1, last_resort_ceiling_s()'s output for the merged outage_escalation row, recorded as arithmetic performed, not a ceiling anyone has adopted
+scripts/lib/judge_latency.py:157:4d562c1f  # 11.86/13.34/14.05 = feedback_signal's pre-merge median/p90/max, quoted alongside the merged values to show how far drift-sample.json moved the row
+scripts/lib/judge_latency.py:202:ee1570b4  # 7.46/11.06/11.52 -> 15.755/18.57/19.20 = binary_ask's pre- and post-merge median/p90/max, quoted to show the distribution roughly doubled
+scripts/lib/judge_latency.py:104:adf11455  # 32 = field-inputs-sample.json's row count per judge; n=18 = deferring_disposition's prior synthetic-only n, both merged per the 2026-09-28 cap decision with zero exclusions
+scripts/lib/judge_latency.py:106:5ad7a804  # 100.75s/39.99 = deferring_disposition's merged max vs the prior synthetic-only max, the tail move the field merge produced
+scripts/lib/judge_latency.py:165:62a84494  # 183.14s = feedback_signal's merged max, one field call's outlier kept standing per the cap decision's zero-exclusion rule
+scripts/lib/judge_latency.py:167:89b7137e  # 5.5s = a similar-sized field prompt's duration, cited in README's field-inputs section to show prompt size doesn't explain the 183.14s outlier
+scripts/lib/judge_latency.py:210:0e117013  # 5.93->3.01 / 15.75->8.145 = binary_ask's min/median before vs after the field merge
+scripts/lib/judge_latency.py:213:803cde96  # 23.21s = binary_ask's merged max, one field call's outlier above the synthetic series' own max
 
 # --- scripts/hook-turn-end-gate.py -------------------------------------------
 scripts/hook-turn-end-gate.py:102:711b9358  # historical: the 5s registration and advisor's 8s default this hook used to run under — the defect record, not a current number
-scripts/hook-turn-end-gate.py:128:6f86619f  # 34.78s = the single outlier observation in silent_closure's latency sample (samples/judge-latency/silent-closure-sample.json), a genuine model call kept standing rather than trimmed, same discipline as the outage_escalation row's own single-observation max
+scripts/hook-turn-end-gate.py:128:85411ac9  # 34.78s = the single outlier observation in silent_closure's latency sample (samples/judge-latency/silent-closure-sample.json), a genuine model call kept standing rather than trimmed, same discipline as the outage_escalation row's own single-observation max
 
 # --- scripts/hook-deferring-disposition-gate.py ------------------------------
-scripts/hook-deferring-disposition-gate.py:72:d731ace3  # quotes the superseded n=4 note ("11.6-13.5s") verbatim, as the evidence base the old budget rested on
-scripts/hook-deferring-disposition-gate.py:73:0c2d6f02  # historical: the pre-change 20s budget and the ceiling it borrowed from a neighbour
-scripts/hook-deferring-disposition-gate.py:74:25e48252  # median 17.43 = judge_latency.MEASURED["deferring_disposition"].median_s over n=18
-scripts/hook-deferring-disposition-gate.py:75:0c8ffd5b  # p90 37.58 / max 39.99 = the same row's p90_s and max_s; the comparison against 20s is what makes the old budget a defect
-scripts/hook-deferring-disposition-gate.py:80:00a58931  # 41s = judge_latency.call_ceiling_s("deferring_disposition") = ceil(39.99) + 1
-scripts/hook-deferring-disposition-gate.py:87:4dca2024  # ~130s is a REJECTED alternative (a full-tail ceiling ahead of an interactive menu), deliberately not a constant anywhere
-scripts/hook-deferring-disposition-gate.py:90:a6174bee  # 45s = the approved whole-invocation budget; 0 of 18 runs exceeded it, stated with the rule-of-three bound rather than as "never"
-scripts/hook-deferring-disposition-gate.py:98:1cacd663  # floor 38 = judge_latency.call_floor_s("deferring_disposition") = ceil(p90 37.58) over n=18
-scripts/hook-deferring-disposition-gate.py:99:70c2fdb9  # 10.29s = the row's min_s — the fastest run, which is what makes a call started at the floor reachable
-scripts/hook-deferring-disposition-gate.py:199:deb2103a  # "under 7s" = budget 45 - floor 38, the remainder that still clears the floor for a second call
+scripts/hook-deferring-disposition-gate.py:80:ee896197  # 13.47/39.99/100.75 = deferring_disposition's merged median/p90/max (n=50, lib/judge_latency.py), quoted to show the fixed 300s budget has headroom over the merged row
+scripts/hook-deferring-disposition-gate.py:93:702a3030  # n=50 = deferring_disposition's merged sample size, the population `ceil(p90)` is computed over for the new floor
+scripts/hook-deferring-disposition-gate.py:94:56ffa815  # 3.93s = deferring_disposition's merged min_s, the fastest observed run the new 40s floor must leave reachable
+scripts/hook-deferring-disposition-gate.py:194:8c725888  # 260s = budget 300 - floor 40, the remainder that still clears the floor for a second call under the 2026-09-28 cap decision's new budget
+scripts/hook-deferring-disposition-gate.py:195:0fe028b9  # 100.75s/n=50 = deferring_disposition's merged max/sample size, quoted to show every measured run finishes well inside the new 260s second-call threshold
+scripts/hook-deferring-disposition-gate.py:196:c46a5c44  # 300s = the whole-gate budget from the 2026-09-28 cap decision, contrasted with the pre-merge budget it replaced
+scripts/hook-deferring-disposition-gate.py:198:853afdd1  # 45s = the pre-merge whole-gate budget this comment used to describe, under which a second call was effectively unreachable
 
 # --- scripts/hook-escalation-diagnosis-gate.py -------------------------------
 scripts/hook-escalation-diagnosis-gate.py:61:7cdcb640  # 65s registration = the 60s outage budget + interpreter-start headroom; both sides pinned by lib/hook_wiring.TIMEOUT_REQUIREMENTS
@@ -79,17 +82,17 @@ scripts/hook-resolution-reminder.py:167:6a09c8e3  # 3.88s = the row's min_s, the
 # --- scripts/agentctl/advisor.py ---------------------------------------------
 scripts/agentctl/advisor.py:55:d1b37b8e  # 15-170s = the observed latency range of the ENUMERATION calibration (advisor-calibration.jsonl); 600s = the measurement cap it was collected under (measure-advisor-latency.py MEASURE_CAP), quoted to show no row was truncated by the bound being measured. Both are a different call shape from every judge_latency row — sonnet on a whole plan, not haiku on one question; see docs/operations/detached-enumeration-design.md § Why 480 s is not a row in judge_latency.py. The shipped 480 is DERIVED from this dataset, not a property of it, and its terms are pinned separately at :43
 scripts/agentctl/advisor.py:61:96329eb1  # 103.213s = the min elapsed_s at the largest sampled size in advisor-calibration.jsonl, a term of the 480 derivation; an enumeration measurement, not a judge one
-scripts/agentctl/advisor.py:163:025a1c6b  # 20s = _ADVISOR_TIMEOUT_S, the ADVISORY timeout the judge_* callers keep; explicitly out of this calibration's scope (successor to the sentence formerly pinned at :147)
-scripts/agentctl/advisor.py:168:46d10ddd  # same 20s advisory bound, named as what a runner-baked ceiling would make the two enumeration call sites read as
-scripts/agentctl/advisor.py:192:c2963687  # same 20s advisory bound, quoted as the truncation defect (F3b) it documents, not as a ceiling in force here
-scripts/agentctl/advisor.py:439:3fd45617  # historical: the 8s runner default a judge inherited when it named no timeout
-scripts/agentctl/advisor.py:440:c1545f72  # 5.93s / 10.29s = the min_s of the binary_ask and deferring_disposition rows — what makes an 8s default a kill, not a cap
-scripts/agentctl/advisor.py:808:0844f6e5  # historical: the 8s neighbour default this signature used to carry
-scripts/agentctl/advisor.py:809:d539ad2f  # quotes the superseded n=4 note ("13.9 +/- 2.4 s, min 12.1, max 17.5") verbatim as the basis of the old 30s
-scripts/agentctl/advisor.py:810:1d9f44a3  # same superseded note; "missed the tail by more than 20 s" = max 39.99 - 17.5
-scripts/agentctl/advisor.py:811:011dc63b  # median 17.43 / p90 37.58 / max 39.99 over n=18 = judge_latency.MEASURED["deferring_disposition"]
-scripts/agentctl/advisor.py:815:c43835c3  # 53.42s = outage_escalation's re-sampled max, the value last_resort_ceiling_s() computes over (currently the family-wide slowest row, so it — not deferring_disposition's own tail — sets the shared last-resort ceiling)
-scripts/agentctl/advisor.py:662:fe253a10  # n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row -- this judge has never been measured, so _PUBLISHED_ATTACHMENT_TIMEOUT_S falls back to the family LAST_RESORT_CEILING_S(41) instead of a per-judge p90
+scripts/agentctl/advisor.py:170:025a1c6b  # 20s = _ADVISOR_TIMEOUT_S, the ADVISORY timeout the judge_* callers keep; explicitly out of this calibration's scope (successor to the sentence formerly pinned at :147)
+scripts/agentctl/advisor.py:175:46d10ddd  # same 20s advisory bound, named as what a runner-baked ceiling would make the two enumeration call sites read as
+scripts/agentctl/advisor.py:199:c2963687  # same 20s advisory bound, quoted as the truncation defect (F3b) it documents, not as a ceiling in force here
+scripts/agentctl/advisor.py:474:3fd45617  # historical: the 8s runner default a judge inherited when it named no timeout
+scripts/agentctl/advisor.py:475:c1545f72  # 5.93s / 10.29s = the min_s of the binary_ask and deferring_disposition rows — what makes an 8s default a kill, not a cap
+scripts/agentctl/advisor.py:848:0844f6e5  # historical: the 8s neighbour default this signature used to carry
+scripts/agentctl/advisor.py:849:d539ad2f  # quotes the superseded n=4 note ("13.9 +/- 2.4 s, min 12.1, max 17.5") verbatim as the basis of the old 30s
+scripts/agentctl/advisor.py:850:1d9f44a3  # same superseded note; "missed the tail by more than 20 s" = max 39.99 - 17.5
+scripts/agentctl/advisor.py:851:011dc63b  # median 17.43 / p90 37.58 / max 39.99 over n=18 = judge_latency.MEASURED["deferring_disposition"]
+scripts/agentctl/advisor.py:855:c43835c3  # 53.42s = outage_escalation's re-sampled max, the value last_resort_ceiling_s() computes over (currently the family-wide slowest row, so it — not deferring_disposition's own tail — sets the shared last-resort ceiling)
+scripts/agentctl/advisor.py:702:fe253a10  # n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row -- this judge has never been measured, so _PUBLISHED_ATTACHMENT_TIMEOUT_S falls back to the family LAST_RESORT_CEILING_S(41) instead of a per-judge p90
 
 # --- scripts/install-reminder-hooks.sh ---------------------------------------
 scripts/install-reminder-hooks.sh:80:486f9f77  # 8 s = hook-effort-divergence-watch.py's own CHECK_TIMEOUT_S, the declared subprocess bound the 10 s registration must not pre-empt; a chosen constant, not a measurement — this hook runs no judge, it drives the read-only `agentctl effort-check`
@@ -98,25 +101,34 @@ scripts/install-reminder-hooks.sh:109:94d47d98  # 19.14s = approval2-sample.json
 scripts/install-reminder-hooks.sh:111:4d3f1fb8  # 21s = judge_latency.call_ceiling_s("approval_ask") = ceil(max 19.14) + 1 over the merged n=64 population
 scripts/install-reminder-hooks.sh:112:9e47f121  # 30s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own new whole-invocation budget this registration is sized off
 scripts/install-reminder-hooks.sh:121:8575c0c4  # 55s/n=48 = judge_latency.call_ceiling_s("outage_escalation") over the re-sampled row, the value this 65s registration is sized above
-scripts/install-reminder-hooks.sh:130:2d2694e5  # quotes the superseded n=4 note ("11.6-13.5s") against the current deferring row (median 17.43, p90 37.58)
-scripts/install-reminder-hooks.sh:175:610ce774  # n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row, the reason this 60s registration has no per-judge floor to size a tighter budget against and instead uses LAST_RESORT_CEILING_S + SIZE_HEADROOM_S, re-checked live rather than pinned here
+scripts/install-reminder-hooks.sh:132:b9999acd  # n=50 = deferring_disposition's merged sample size, cited as a pointer to the hook's own comment for the full merge rationale rather than restating it here
+scripts/install-reminder-hooks.sh:181:610ce774  # n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row, the reason this 60s registration has no per-judge floor to size a tighter budget against and instead uses LAST_RESORT_CEILING_S + SIZE_HEADROOM_S, re-checked live rather than pinned here
 
 # --- scripts/lib/hook_wiring.py ----------------------------------------------
-scripts/lib/hook_wiring.py:153:171f9b60  # historical: a 5s registration, the wiring defect this axis exists to catch
-scripts/lib/hook_wiring.py:154:29507b25  # 5.9-40.0s = the family-wide measured span (binary_ask min_s 5.93 to deferring max_s 39.99) in lib/judge_latency.py
-scripts/lib/hook_wiring.py:166:876c1934  # 60s = the approved whole-invocation budget of hook-escalation-diagnosis-gate.py, raised to clear outage_escalation's re-sampled ceiling (ceil(53.42)+1=55s) with head-room
-scripts/lib/hook_wiring.py:168:b6c91e80  # 45s = the approved whole-invocation budget of hook-deferring-disposition-gate.py
-scripts/lib/hook_wiring.py:171:22a33825  # 105s = the approved whole-invocation budget of hook-turn-end-gate.py, the four-judge hook, sized worst-case-safe per lib/judge_latency.required_budget_s after silent_closure was added alongside binary_ask/feedback_signal/outage_escalation
-scripts/lib/hook_wiring.py:207:13ce4bee  # K = 1 is the declared call count of the two single-judge hooks; at K=1 judge_latency.required_budget_s has no preceding call to pay for
-scripts/lib/hook_wiring.py:173:7c67ab7c  # 30s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own whole-invocation judge budget, mirroring the sibling rows above (supersedes the 13s tie removed once the equality assertion was dropped)
-scripts/lib/hook_wiring.py:631:56471431  # historical: the 5s registration used as the example of a slow-judge hook the report must surface
-scripts/lib/hook_wiring.py:175:7174ba0b  # 22s = hook-resolution-reminder.py's own _LANDING_DISCIPLINE_JUDGE_BUDGET_S, mirroring the sibling single-judge rows above
-scripts/lib/hook_wiring.py:180:1ff7efac  # n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row; 60s = hook-published-text-writer-gate.py's own _PUBLISHED_TEXT_JUDGE_BUDGET_S, at or above LAST_RESORT_CEILING_S + SIZE_HEADROOM_S since this judge has no measured p90 to size against
+scripts/lib/hook_wiring.py:157:171f9b60  # historical: a 5s registration, the wiring defect this axis exists to catch
+scripts/lib/hook_wiring.py:158:29507b25  # 5.9-40.0s = the family-wide measured span (binary_ask min_s 5.93 to deferring max_s 39.99) in lib/judge_latency.py
+scripts/lib/hook_wiring.py:170:876c1934  # 60s = the approved whole-invocation budget of hook-escalation-diagnosis-gate.py, raised to clear outage_escalation's re-sampled ceiling (ceil(53.42)+1=55s) with head-room
+scripts/lib/hook_wiring.py:172:b6df62df  # 300s = hook-deferring-disposition-gate.py's approved whole-invocation budget, the 2026-09-28 cap decision's fixed worst-case wait, sized on the first fired menu
+scripts/lib/hook_wiring.py:176:baf6e2a2  # 300s = hook-turn-end-gate.py's approved whole-invocation budget for up to four judges, the same 2026-09-28 cap decision
+scripts/lib/hook_wiring.py:214:13ce4bee  # K = 1 is the declared call count of the two single-judge hooks; at K=1 judge_latency.required_budget_s has no preceding call to pay for
+scripts/lib/hook_wiring.py:180:7c67ab7c  # 30s = _APPROVAL_ASK_JUDGE_BUDGET_S, the hook's own whole-invocation judge budget, mirroring the sibling rows above (supersedes the 13s tie removed once the equality assertion was dropped)
+scripts/lib/hook_wiring.py:638:56471431  # historical: the 5s registration used as the example of a slow-judge hook the report must surface
+scripts/lib/hook_wiring.py:182:7174ba0b  # 22s = hook-resolution-reminder.py's own _LANDING_DISCIPLINE_JUDGE_BUDGET_S, mirroring the sibling single-judge rows above
+scripts/lib/hook_wiring.py:187:7c548f6a  # n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row; 190s = hook-published-text-writer-gate.py's own _PUBLISHED_TEXT_JUDGE_BUDGET_S, at or above LAST_RESORT_CEILING_S + SIZE_HEADROOM_S since this judge has no measured p90 to size against
 
 # --- samples/judge-latency/README.md -----------------------------------------
 samples/judge-latency/README.md:13:eecb96d2  # K = 1 as declared in lib/hook_wiring.TIMEOUT_REQUIREMENT_CALLS; the identity budget == per-call ceiling is what the single-call test asserts
 samples/judge-latency/README.md:43:a008f585  # provenance and n of the deferring row, mirroring judge_latency.MEASURED's provenance pairs (10 + 8 = 18)
 samples/judge-latency/README.md:44:553d4d62  # provenance and n of the merged outage row after drift-sample.json (10 + 6 + 16 + 16 = 48), mirroring judge_latency.MEASURED's provenance pairs
+samples/judge-latency/README.md:297:aacc6926  # 183.1s/62.9-100.7s = feedback_signal's and deferring_disposition's field-merge outlier calls, cited as the "outliers: none excluded" decision's concrete evidence
+samples/judge-latency/README.md:301:1d7f66cb  # 300s = the fixed whole-gate ceiling the 2026-09-28 cap decision set directly, not derived from the merged distribution
+samples/judge-latency/README.md:305:da3b5be1  # 183.1s/100.7s = feedback_signal's and deferring_disposition's merged maxima, quoted to show 300s is deliberate headroom over both
+samples/judge-latency/README.md:306:ae1d7616  # 300s = the same fixed whole-gate ceiling, contrasted against the two merged maxima just quoted
+samples/judge-latency/README.md:307:acc15db9  # 300s = the turn-end gate's whole-invocation budget that feedback_signal's own per-call cap (212s, next line) is the remainder of
+samples/judge-latency/README.md:308:8c63d5e6  # 212s/25s = feedback_signal's and binary_ask's per-call caps inside the turn-end gate's 300s budget
+samples/judge-latency/README.md:309:9a22478c  # 36s/26s/1s = silent_closure's cap, outage_escalation's floor (both unchanged by this merge) and the head-room term of the 300s arithmetic
+samples/judge-latency/README.md:310:59e4e938  # 25s = binary_ask's per-call cap, its merged row's own call_ceiling_s
+samples/judge-latency/README.md:312:40c98e48  # 300s = the deferring-disposition gate's single-call budget, restated as also being that call's own ceiling
 samples/judge-latency/README.md:45:177f452e  # provenance and n of the merged feedback row after drift-sample.json (10 + 16 + 16 + 16 = 58), mirroring judge_latency.MEASURED's provenance pairs
 samples/judge-latency/README.md:46:e5350b1d  # provenance and n of the merged binary_ask row after drift-sample.json (16 + 16 + 16 = 48), mirroring judge_latency.MEASURED's provenance pairs
 samples/judge-latency/README.md:47:c4f7ab96  # provenance and n of the approval_ask row after the regime-shift merge: both arms of both samples (16+16+16+16 = 64), mirroring judge_latency.MEASURED's provenance pairs
@@ -145,8 +157,8 @@ samples/judge-latency/README.md:192:c82c37ab  # 51.53/92.21 = the pre-drift and 
 samples/judge-latency/README.md:198:6ac71398  # 53.42s = outage_escalation's single new max observation, restated to explain why it dominates the merged maxima sum in the table above
 samples/judge-latency/README.md:199:c7dd5198  # 52s = the approved turn-end budget this feasibility table is evaluated against, restated in the concluding sentence
 samples/judge-latency/README.md:207:af842d45  # 52s again, in the sentence that names it the APPROVED height rather than a derived one
-samples/judge-latency/README.md:241:e7a33457  # max 71.96 belongs to lean-sample.json, a SUPPORTING sample excluded from every row — cited to show the lean prompt's worse tail
-samples/judge-latency/README.md:242:ba28e247  # historical: the original 5s registration the haiku baseline made look survivable
+samples/judge-latency/README.md:328:e7a33457  # max 71.96 belongs to lean-sample.json, a SUPPORTING sample excluded from every row — cited to show the lean prompt's worse tail
+samples/judge-latency/README.md:329:ba28e247  # historical: the original 5s registration the haiku baseline made look survivable
 samples/judge-latency/README.md:244:f5e195d2  # field_inputs.TIMEOUT_S, the uncensored per-call ceiling the R8a field sample ran under (user-approved 300 s measurement ceiling)
 samples/judge-latency/README.md:277:729aaa5f  # measured max and next value of feedback_signal in field-inputs-sample.json (R8a), quoted as an outlier candidate
 samples/judge-latency/README.md:279:31351d41  # measured duration of the 97 289-char feedback_signal row in field-inputs-sample.json (R8a), the size control for the 183.1 s candidate
@@ -164,4 +176,4 @@ live-run-evidence.md:96:5f4f6e6d  # 45s = _ASK_JUDGE_BUDGET_S in hook-deferring-
 live-run-evidence.md:97:0de45831  # 39.99 = max of the sampled deferring pool; 43.09 = the live run that exceeded it — the pair IS the claim that a sample max is not a bound
 live-run-evidence.md:98:ab2a9d29  # 5s = 45 - 39.99 rounded, the headroom the ceiling holds over the observed maximum; called thin because the live run consumed most of it
 live-run-evidence.md:109:f45cde0c  # 29.94/32.23/37.58/37.82 = the four standard estimators on the n=18 deferring sample; quoted to justify pinning nearest-rank, which is what lib/judge_latency.p90 implements
-live-run-evidence.md:169:e17da07e  # 71.96 = defer_yes max in lean-sample.json, the rejected lean prompt's tail; a SUPPORTING sample that feeds no row
+live-run-evidence.md:170:e17da07e  # 71.96 = defer_yes max in lean-sample.json, the rejected lean prompt's tail; a SUPPORTING sample that feeds no row
