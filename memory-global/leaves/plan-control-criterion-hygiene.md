@@ -1,10 +1,10 @@
 ---
 name: plan-control-criterion-hygiene
-description: Fourteen plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world (both whole-plan merge/rollout and stage-to-stage cleanup transitions); sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start; bind a hand-copied mirror of a live-computed value to an import-and-compare test, not a frozen literal, because a merge race with unrelated trunk work can drift the mirror while the merge itself stays textually clean; never freeze an exact identifier (a test/function node id) for an artifact that does not exist yet at authoring time — reconcile it against what the implementing stage actually names, before verify-final runs it for real; never bind a criterion to whole-file identity of a file the stage does not exclusively own — scope the check to the one artifact the stage is actually responsible for, because verify-final re-runs the check after other legitimate, unrelated activity has touched the shared file; never bind a criterion to "the single most recent commit" (`git log -1`) touching a path — check the artifact's own current tracked/clean state directly, because a later, unrelated, legitimate commit (e.g. a DIAGNOSING-cycle repair for a different stage) becomes the new tip and silently falsifies a positional proxy that was never about the artifact at all; `stat` every literal file path a criterion names (grep target, output_artifact, material_ref) against the live repo tree before submit_plan — review checks the plan's internal logic but treats a quoted path as a given fact rather than a claim, so a flat-file/package layout the plan never matched (or a rename between authoring and execution) survives every review round untouched; and never anchor a criterion's freshness/identity proof to mutable local scratch state (a local docker tag, a temp file, a local build cache) when a durable evidence record of the original run already exists — ordinary later, unrelated work on the same machine or in the same session can silently overwrite the scratch resource without ever touching the delivered artifact.
+description: Fifteen plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world (both whole-plan merge/rollout and stage-to-stage cleanup transitions); sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start; bind a hand-copied mirror of a live-computed value to an import-and-compare test, not a frozen literal, because a merge race with unrelated trunk work can drift the mirror while the merge itself stays textually clean; never freeze an exact identifier (a test/function node id) for an artifact that does not exist yet at authoring time — reconcile it against what the implementing stage actually names, before verify-final runs it for real; never bind a criterion to whole-file identity of a file the stage does not exclusively own — scope the check to the one artifact the stage is actually responsible for, because verify-final re-runs the check after other legitimate, unrelated activity has touched the shared file; never bind a criterion to "the single most recent commit" (`git log -1`) touching a path — check the artifact's own current tracked/clean state directly, because a later, unrelated, legitimate commit (e.g. a DIAGNOSING-cycle repair for a different stage) becomes the new tip and silently falsifies a positional proxy that was never about the artifact at all; `stat` every literal file path a criterion names (grep target, output_artifact, material_ref) against the live repo tree before submit_plan — review checks the plan's internal logic but treats a quoted path as a given fact rather than a claim, so a flat-file/package layout the plan never matched (or a rename between authoring and execution) survives every review round untouched; and never anchor a criterion's freshness/identity proof to mutable local scratch state (a local docker tag, a temp file, a local build cache) when a durable evidence record of the original run already exists — ordinary later, unrelated work on the same machine or in the same session can silently overwrite the scratch resource without ever touching the delivered artifact; and never author a criterion as a bare match on a GENERIC diagnostic string (`Traceback`, `WARNING`, `error`) without first enumerating that string's benign, by-design producers inside the specific subject under test — grep the subject's own source for the emitter and either anchor/attribute around it or pick a different observable, because a program that logs a caught exception on purpose makes "never prints a traceback" a property it never had.
 type: feedback
 schema: leaf/v1
 created: 2026-08-31
-last_verified: 2026-09-18
+last_verified: 2026-09-28
 ---
 
 # Plan control-criterion hygiene
@@ -569,6 +569,60 @@ overwrite.
 > already on disk: required fields present and non-degenerate, the run id
 > embedded in the output-table name, the reported score numeric and
 > non-zero — no local container-runtime state consulted at all.
+
+### 15. A criterion never matches a generic diagnostic string without enumerating that string's benign producers inside the subject
+
+Norm 11 governs a criterion scoped too widely over a shared **file**; norm 6
+over a stale **shape**. This is the same over-reach applied to a **string**: a
+check written as "the program must never print `Traceback`" (or `WARNING`, or
+`error`, or a stack-frame marker). Such a string is a *generic diagnostic*
+emitted by the language runtime or a library, not a defect signature of the
+subject under test — and a subject is free to have a sanctioned producer of
+it. A `try/except … log … continue` that deliberately swallows a per-item
+failure prints a full traceback on purpose, every run, by design. The
+criterion then asserts a property the subject never had and cannot acquire
+without changing behaviour the stage was never asked to change.
+
+The failure is silent at every review round for norm 13's reason: the string
+reads as a defect marker, not as a claim about the subject's own logging. And
+it is worse than a plain false-RED, because the natural repair is to "fix the
+tracebacks" — i.e. to widen the stage into unrelated, pre-existing breakage
+the order never covered.
+
+The fix is one grep at authoring time: search the subject's **own source** for
+every site that can emit the string (`grep -rn 'except' / 'logger.exception' /
+'traceback.print_exc'`), then either
+
+- **anchor** it so only the unwanted shape matches (`^(ERROR|CRITICAL):`
+  rather than a bare `error`), or
+- **attribute** it — assert the count of the generic string equals the count
+  of its known benign producer's own marker line, so the check goes red only
+  when a *new*, unattributed source appears, or
+- pick a different observable entirely.
+
+**Corollary — the negative control must stay satisfiable.** Once the criterion
+is an attribution equality rather than an absolute, a single-probe negative
+control may be unable to go RED at all while the benign producers are present.
+Widen it to a disjunction of probes (a deliberately broken dependency **or**
+the zero-count case) and demonstrate RED against a mutated *world*, not a
+mutated check.
+
+> **Observed.** A plan to strip `claude-code` from a Telegram bot's Docker
+> image gave stage 4 the conjunct
+> `! docker logs --tail 200 <c> 2>&1 | grep -q Traceback`. The image was
+> correct — 810 MB → 177.7 MiB, `claude_agent_sdk` gone, 26/26 tests green in
+> a throwaway `python:3.12-slim` — yet the stage recorded FAILED, because the
+> bot's `pricing.refresh_prices` catches each provider's fetch failure in a
+> by-design `except … continue` and logs the traceback before continuing; both
+> vendor pricing pages had independently started answering 301/302 and `httpx`
+> does not follow redirects by default. Two tracebacks per refresh, entirely
+> pre-existing and outside the order. The repair replaced the absolute with
+> `test $(logs | grep -c '^Traceback') -eq $(logs | grep -c '^price refresh
+> failed for provider=')` plus an anchored `^(ERROR|CRITICAL):` check, and had
+> to widen the negative control to two OR'd probes for exactly the corollary's
+> reason. Cost: a full `declare → investigate → critique → normalize → replan`
+> cycle, a re-review and a re-approval, on a stage whose deliverable was
+> green the whole time.
 
 ## See also
 
