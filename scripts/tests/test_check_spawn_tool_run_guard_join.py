@@ -1,4 +1,4 @@
-"""Issue #268: `check_outcome`'s `--expect-guard-block` branch must join a
+"""`check_outcome`'s `--expect-guard-block` branch must join a
 guard-log fire to the resolved Bash call by id, not by a bare substring search
 over the log's raw text — a substring match credits ANY row whose free-text
 happens to contain the command, even one logged for a DIFFERENT call that
@@ -78,10 +78,11 @@ def _guard_row(*, tool_use_id: str | None, session_id: str | None, target: str) 
 
 
 def test_join_credits_only_id_matched_fire(tmp_path):
-    """Two rows share the SAME command substring; only the row carrying the
-    resolved call's own tool_use_id must credit the block. A bare substring
-    match would credit either row indiscriminately -- this pins that it
-    doesn't."""
+    """Two rows exist; only the row carrying the resolved call's own
+    tool_use_id must credit the block. Neither row's `target` contains the
+    command string at all, so this can only pass via the id join -- a bare
+    substring match (against `target`, or against the log's raw text) would
+    have nothing to match and would fail closed instead."""
     command = "cat foo.txt > out.json"
     transcript = _hook_block_transcript(
         tmp_path, tool_use_id="toolu_target", command=command, session_id="sess-A",
@@ -91,10 +92,10 @@ def test_join_credits_only_id_matched_fire(tmp_path):
     guard_log = tmp_path / "guard.jsonl"
     guard_log.write_text(
         "\n".join([
-            # A DIFFERENT call, same command substring, wrong tool_use_id.
-            _guard_row(tool_use_id="toolu_other", session_id="sess-A", target=command),
+            # A DIFFERENT call, wrong tool_use_id.
+            _guard_row(tool_use_id="toolu_other", session_id="sess-A", target="target-for-toolu_other"),
             # The actual fire for the resolved call.
-            _guard_row(tool_use_id="toolu_target", session_id="sess-A", target=command),
+            _guard_row(tool_use_id="toolu_target", session_id="sess-A", target="target-for-toolu_target"),
         ]) + "\n",
         encoding="utf-8",
     )
@@ -154,7 +155,8 @@ def test_join_respects_session_id_when_both_sides_carry_one(tmp_path):
 def test_join_by_tool_use_id_alone_when_session_id_missing_on_guard_row(tmp_path):
     """The guard-log row omits session_id entirely (an older log format) --
     the join must still succeed by tool_use_id alone rather than refusing for
-    want of a session_id to compare."""
+    want of a session_id to compare. `target` again does not contain the
+    command, so only the id join can make this pass."""
     command = "cat foo.txt > out.json"
     transcript = _hook_block_transcript(
         tmp_path, tool_use_id="toolu_target", command=command, session_id="sess-A",
@@ -163,7 +165,7 @@ def test_join_by_tool_use_id_alone_when_session_id_missing_on_guard_row(tmp_path
 
     guard_log = tmp_path / "guard.jsonl"
     guard_log.write_text(
-        _guard_row(tool_use_id="toolu_target", session_id=None, target=command) + "\n",
+        _guard_row(tool_use_id="toolu_target", session_id=None, target="target-for-toolu_target") + "\n",
         encoding="utf-8",
     )
 
@@ -176,7 +178,7 @@ def test_join_by_tool_use_id_alone_when_session_id_missing_on_guard_row(tmp_path
 def test_substring_fallback_still_applies_when_no_row_carries_tool_use_id(tmp_path):
     """A guard log whose rows are plain text (or JSON with no tool_use_id
     field anywhere) has nothing to join on -- the historical substring match
-    against the raw text is the fallback, unchanged from before #268."""
+    against the raw text is the fallback, unchanged from the id-join addition."""
     command = "cat foo.txt > out.json"
     transcript = _hook_block_transcript(
         tmp_path, tool_use_id="toolu_target", command=command, session_id="sess-A",
@@ -207,3 +209,69 @@ def test_substring_fallback_still_fails_when_command_absent(tmp_path):
     )
     assert err is not None
     assert "does not record the blocked command" in err
+
+
+def test_join_falls_back_to_tool_use_id_alone_when_transcript_carries_no_session_id(tmp_path):
+    """The transcript's own line carries no `sessionId` field at all (an
+    older transcript format) -- `_transcript_session_id` returns None for it,
+    and the join must still succeed by tool_use_id alone rather than refusing
+    for want of a session_id to compare on the transcript side."""
+    command = "cat foo.txt > out.json"
+    tool_use_id = "toolu_target"
+    transcript = tmp_path / "transcript-nosession.jsonl"
+    assistant_line = {
+        "type": "assistant",
+        "message": {"content": [
+            {"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": command}},
+        ]},
+    }
+    user_line = {
+        "type": "user",
+        "toolDenialKind": "permission-rule",
+        "message": {"content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "content": "PreToolUse:Bash hook error: blocked by guard",
+                "is_error": True,
+            },
+        ]},
+    }
+    transcript.write_text(json.dumps(assistant_line) + "\n" + json.dumps(user_line) + "\n", encoding="utf-8")
+    [target] = transcript_stops.parse_bash_tool_uses(transcript)
+
+    guard_log = tmp_path / "guard.jsonl"
+    guard_log.write_text(
+        _guard_row(tool_use_id=tool_use_id, session_id="sess-A", target="target-for-toolu_target") + "\n",
+        encoding="utf-8",
+    )
+
+    err = check_spawn_tool_run.check_outcome(
+        target, _args(expect_guard_block=True, guard_log=guard_log, transcript=transcript),
+    )
+    assert err is None
+
+
+def test_mixed_log_fails_closed_ignoring_pre_id_substring_rows(tmp_path):
+    """A guard log mixing an old-style row (no tool_use_id, matched only by a
+    command substring) with a row carrying tool_use_id for a DIFFERENT call
+    must not fall back to the substring row once ANY row in
+    the log carries a tool_use_id -- the id-required path is strict and
+    fail-closed, not a soft preference that still consults the substring rows
+    when the id join comes up empty."""
+    command = "cat foo.txt > out.json"
+    transcript = _hook_block_transcript(
+        tmp_path, tool_use_id="toolu_target", command=command, session_id="sess-A",
+    )
+    [target] = transcript_stops.parse_bash_tool_uses(transcript)
+
+    guard_log = tmp_path / "guard.jsonl"
+    old_style_row = json.dumps({"decision": "deny", "branch": "G1-bash", "target": command})
+    new_style_row = _guard_row(tool_use_id="toolu_other", session_id="sess-A", target="target-for-toolu_other")
+    guard_log.write_text(old_style_row + "\n" + new_style_row + "\n", encoding="utf-8")
+
+    err = check_spawn_tool_run.check_outcome(
+        target, _args(expect_guard_block=True, guard_log=guard_log, transcript=transcript),
+    )
+    assert err is not None
+    assert "does not record a fire for tool_use_id" in err

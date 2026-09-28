@@ -33,8 +33,8 @@ Two independent modes:
   own refusal, distinct from a permission-rule denial — see transcript_stops.py's
   module docstring for how the two are told apart) AND PATH's own record credits
   the SAME call — proving THIS specific command appears in THIS specific guard's
-  own record, not just that some hook fired somewhere. Issue #268: when PATH's
-  rows are JSON and at least one carries a `tool_use_id` field, the join is by
+  own record, not just that some hook fired somewhere. When PATH's rows are
+  JSON and at least one carries a `tool_use_id` field, the join is by
   id — (session_id, tool_use_id) when both the row and the transcript supply a
   session_id, by tool_use_id alone when either is missing — rather than a bare
   substring search, which credits any row whose free-text message happens to
