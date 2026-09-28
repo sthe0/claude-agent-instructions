@@ -130,10 +130,10 @@ except BaseException as exc:
 #
 # 300 itself is a fixed whole-gate worst-case wait, not a derived minimum: the
 # 2026-09-28 cap decision (samples/judge-latency/field-cap-decision.json) set
-# it directly ("потолок 300с... 5 минут не страшно изредка подождать") after
+# it directly (a 300 s ceiling; an occasional 5-minute wait is acceptable) after
 # merging field-inputs-sample.json's 32 real calls per judge into
 # feedback_signal, binary_ask and deferring_disposition's rows with zero
-# outliers excluded ("Ничего не исключать"). feedback_signal's cap (212) is
+# outliers excluded (exclude nothing). feedback_signal's cap (212) is
 # the remainder of 300 after the other four terms; binary_ask's cap (25) is
 # its merged row's own `call_ceiling_s`.
 _TURN_JUDGE_BUDGET_S = 300

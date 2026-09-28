@@ -43,7 +43,7 @@ def test_cap_decision_file_recorded():
     for judge in ("feedback_signal", "binary_ask", "deferring_disposition"):
         block = decision["judges"][judge]
         assert block["excluded_outliers"] == [], (
-            f"{judge}: the decision was 'ничего не исключать' -- no field row "
+            f"{judge}: the decision was 'exclude nothing' -- no field row "
             "may be dropped as an outlier"
         )
         assert "field-inputs-sample.json" in block["merged_provenance"]

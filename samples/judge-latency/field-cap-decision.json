@@ -1,12 +1,17 @@
 {
   "date": "2026-09-28",
   "decided_by": "user",
-  "reason": "Гичава (outliers): \"Ничего не исключать\" -> option A for all three judges, zero field rows excluded. Гичава (caps): \"Давай сделаем потолок 300с, с гарантированным запасом, и 5 минут не страшно изредка подождать\", clarified as a WHOLE-GATE 300s worst-case wait for each of the turn-end and deferring-disposition gates.",
+  "reason": "User decision via two clicked answers (paraphrased): (1) outliers -- exclude nothing, so option A for all three judges with zero field rows excluded; (2) caps -- a 300 s ceiling with guaranteed head-room, an occasional 5-minute wait being acceptable, clarified as a WHOLE-GATE 300 s worst-case wait for each of the turn-end and deferring-disposition gates.",
   "judges": {
     "feedback_signal": {
       "option": "A",
       "excluded_outliers": [],
-      "merged_provenance": ["latency-sample.json", "topup2-sample.json", "drift-sample.json", "field-inputs-sample.json"],
+      "merged_provenance": [
+        "latency-sample.json",
+        "topup2-sample.json",
+        "drift-sample.json",
+        "field-inputs-sample.json"
+      ],
       "merged_n": 90,
       "merged_min_s": 4.876181811094284,
       "merged_median_s": 12.86,
@@ -19,7 +24,11 @@
     "binary_ask": {
       "option": "A",
       "excluded_outliers": [],
-      "merged_provenance": ["topup2-sample.json", "drift-sample.json", "field-inputs-sample.json"],
+      "merged_provenance": [
+        "topup2-sample.json",
+        "drift-sample.json",
+        "field-inputs-sample.json"
+      ],
       "merged_n": 80,
       "merged_min_s": 3.013064108788967,
       "merged_median_s": 8.145,
@@ -32,7 +41,11 @@
     "deferring_disposition": {
       "option": "A",
       "excluded_outliers": [],
-      "merged_provenance": ["latency-sample.json", "ab-sample.json", "field-inputs-sample.json"],
+      "merged_provenance": [
+        "latency-sample.json",
+        "ab-sample.json",
+        "field-inputs-sample.json"
+      ],
       "merged_n": 50,
       "merged_min_s": 3.930432182736695,
       "merged_median_s": 13.466927509326489,

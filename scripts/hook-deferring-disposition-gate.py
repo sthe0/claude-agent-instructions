@@ -74,9 +74,9 @@ except BaseException as exc:
 #
 # 300 is a fixed whole-gate worst-case wait, not a derived minimum: the
 # 2026-09-28 cap decision (samples/judge-latency/field-cap-decision.json) set
-# it directly ("потолок 300с... 5 минут не страшно изредка подождать"), after
+# it directly (a 300 s ceiling; an occasional 5-minute wait is acceptable), after
 # merging field-inputs-sample.json's 32 real field calls into this judge's row
-# with zero outliers excluded ("Ничего не исключать"). The merged distribution
+# with zero outliers excluded (exclude nothing). The merged distribution
 # (n=50, lib/judge_latency.py) is median 13.47, p90 39.99, max 100.75 — its own
 # `call_ceiling_s` (`ceil(max) + 1` = 102) sits well inside 300, so the fixed
 # budget was chosen for headroom against future drift, not because the merged

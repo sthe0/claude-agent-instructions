@@ -177,3 +177,5 @@ live-run-evidence.md:97:0de45831  # 39.99 = max of the sampled deferring pool; 4
 live-run-evidence.md:98:ab2a9d29  # 5s = 45 - 39.99 rounded, the headroom the ceiling holds over the observed maximum; called thin because the live run consumed most of it
 live-run-evidence.md:109:f45cde0c  # 29.94/32.23/37.58/37.82 = the four standard estimators on the n=18 deferring sample; quoted to justify pinning nearest-rank, which is what lib/judge_latency.p90 implements
 live-run-evidence.md:170:e17da07e  # 71.96 = defer_yes max in lean-sample.json, the rejected lean prompt's tail; a SUPPORTING sample that feeds no row
+scripts/hook-turn-end-gate.py:133:0e47cfbc  # paraphrase of the 2026-09-28 user cap decision (300 s whole-gate wait), recorded in field-cap-decision.json
+scripts/hook-deferring-disposition-gate.py:77:54c965fc  # paraphrase of the 2026-09-28 user cap decision (300 s whole-gate wait), recorded in field-cap-decision.json
