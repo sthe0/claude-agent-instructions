@@ -1,10 +1,10 @@
 ---
 name: verify-artifacts-before-presenting-to-user
-description: Personally re-verify concrete claims in a plan/essence/report BEFORE presenting it to the user for approval — not after, and not on trust in a chain of prior subagent review reports alone. User flagged this as an engine-mechanization proposal, not just a prose reminder, and pointed at a shared verification-code module as the shape.
+description: Personally re-verify concrete claims — including a retrospective "did X already happen" status claim, not only a plan/essence/report about to be presented — against the live engine state BEFORE telling the user, not after and not on memory/reasoning alone. User flagged this as an engine-mechanization proposal, not just a prose reminder, and pointed at a shared verification-code module as the shape.
 type: feedback
 schema: leaf/v1
 created: 2026-09-04
-last_verified: 2026-09-04
+last_verified: 2026-09-28
 ---
 
 ## Difficulty
@@ -20,6 +20,8 @@ Before any gate that presents an artifact to the user as ready (plan essence, a 
 This is its own **separate, substantive engine-code task** (routes through `planner` + full plan-approval per the self-improvement skill's own "substantive instruction change" carve-out) — **not** done inline in this leaf, and not bundled into whatever task surfaced the lapse, per the user's standing "каждую задачу отдельным планом" instruction. Pick it up as its own plan when there's room: read `scripts/agentctl/cli.py`'s `present-plan`/`approve`/`confirm-delivery` commands and `state.py`'s presentation-receipt shape first, survey every existing site that already does an ad hoc "check a claim against the live artifact" pass (plan-review, stage-review, resolution `verify-final`) to find the right shared shape, then design what a minimal "coordinator attests: I personally re-checked claim X against file Y at time T" recorded artifact would look like, gated the same way `StageReview`/`plan_review` already are, and backed by that one shared verification helper rather than N duplicated ones.
 
 **How to apply (until the engine change lands):** at any point where you are about to run `agentctl present-plan`, write a "done"/"resolved" report, or otherwise hand the user an artifact whose credibility rests on a specific prior claim (a fix landed, a count is correct, a file was changed) — run the cheapest possible independent check of that specific claim yourself, in the same turn, before the presenting call. If the check was already run by a subagent minutes/rounds ago against the exact same file digest, a fresh `sha256sum` match plus re-running just the reviewer's own headline grep/assert is enough; it does not need to be a full re-review.
+
+**Second confirmed instance (2026-09-28, an internal project's PR-followup ticket) — on a *retrospective status claim*, not a prospective artifact.** The user asked why the developer's work on a `spawn:developer` stage wasn't controlled by a code reviewer. I answered "the plan never declared a code-reviewer stage" — true on its face (code-reviewer is a non-stage-actor gate, not a plan TOML stage; see [[determinize-required-specialist-dispatch]]) — without first reading the session's live `code_reviews` record (`agentctl status`, no `--session`, resolves against the harness id). That record already held a `pass` verdict from an actual code-reviewer review of that stage, recorded before `gates.code_review_blockers` allowed the stage into PASSED. My answer, read at face value, implied no review had happened; the live record said otherwise. Same lapse as the original incident — answering a concrete, checkable claim from reasoning/memory instead of the live source — just applied to "did X already happen in this session" rather than "is this plan/report ready to show". **Scope of this leaf's Guidance now explicitly covers both:** before asserting to the user what already happened in an engine session (a review ran, a gate passed, a stage completed a certain way), check the live state (`agentctl status` / the session's recorded reviews, not the plan's stage list alone) — the plan's declared stages and the engine's actual gate history are different sources, and a claim checkable against the second must not be answered from the first alone.
 
 ## See also
 
