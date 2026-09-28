@@ -140,6 +140,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -449,6 +450,7 @@ def _short_flag_cluster_has_c(tok: str) -> bool:
     return tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:]
 
 
+_PLUS_OPTION = re.compile(r"\+[A-Za-z]+")
 _SHELL_OPTIONS_WITH_ARGUMENT = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
 
 
@@ -479,7 +481,7 @@ def _shell_c_payloads(seg: list[str]) -> list[str]:
         tok = stripped[i]
         if tok == "--":
             break
-        if not tok.startswith(("-", "+")):
+        if not (tok.startswith("-") or _PLUS_OPTION.fullmatch(tok)):
             # round-3 nit 3: a shell parses its own flags only up to the
             # first operand -- `bash script.sh -c x` runs a SCRIPT, and that
             # script's own `-c x` are ITS arguments, not `bash`'s.

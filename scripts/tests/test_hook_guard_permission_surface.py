@@ -851,6 +851,10 @@ def test_g4_fires_through_a_bash_c_wrapper_after_shell_options(prefix):
     assert (decision, branch) == ("ask", "G4")
 
 
+def test_shell_c_payloads_stop_at_a_plus_prefixed_script_operand():
+    assert guard._shell_c_payloads(["bash", "+weird.sh", "-c", "x"]) == []
+
+
 def test_shell_c_payloads_stop_at_double_dash():
     assert guard._shell_c_payloads(["bash", "--", "s", "-c", "x"]) == []
 

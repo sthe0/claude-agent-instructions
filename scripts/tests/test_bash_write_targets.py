@@ -322,6 +322,9 @@ def test_a_heredoc_written_script_run_by_a_later_bash_statement_keeps_its_write_
         "cd D\ncat $[1<<2 ]\necho x > /s/settings.json\n2",
         # A quoted decoy `<<` must not decide which prefix gets checked.
         "cd D\ncat \"<<\"\ncat $((1<<2 ))\necho x > /s/settings.json\n2",
+        # Round-4: a harmless `<<<` first must not become the anchor for the check.
+        "cat <<<x\ncat $[1<<2 ]\necho x > /s/settings.json\n2",
+        "cat <<<x\ncat \"<<\"\ncat $((1<<2 ))\necho x > /s/settings.json\n2",
     ],
 )
 def test_an_arithmetic_shift_after_a_prior_line_does_not_hide_a_real_redirect(command):

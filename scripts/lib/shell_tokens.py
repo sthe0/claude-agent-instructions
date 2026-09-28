@@ -587,9 +587,11 @@ def _recognized(
     adds nothing. So this branch re-scopes clause (iv) to the OWNING
     statement -- the text from the nearest `;`/`&`/real-newline before the
     operator onward -- rather than dropping it outright. Since the operator
-    position is taken from `_removal_regions`, this owning-statement check
-    sees the same window `_pipeline_consumers_ok` already checked there, so it
-    is intentionally redundant: kept as a local, fail-closed restatement of
+    position is taken from `_removal_regions` (its last operator), this
+    owning-statement check sees the same window `_pipeline_consumers_ok`
+    already checked for that operator, and every earlier here-string sits in
+    the `before` prefix the relaxed token check covers, so it is
+    intentionally redundant: kept as a local, fail-closed restatement of
     clause (iv), not as a check that catches anything the walk misses.
 
     A backslash-newline continuation is NOT such a boundary -- it joins two
@@ -620,11 +622,15 @@ def _recognized(
     if allow_prior_statements:
         # The operator position comes from the same quote- and comment-aware
         # walk that later blanks the body; a plain `str.find` could land on a
-        # decoy `<<` (inside quotes) and check the wrong prefix.
+        # decoy `<<` (inside quotes) and check the wrong prefix. The walk keeps
+        # going past `<<<` here-strings and stops at the first `<<`, so anchor
+        # on the LAST operator region (every body region collapses to "\n"):
+        # anchoring on the first would leave a later `<<` unchecked.
         regions = _removal_regions(command, consumers)
         if regions is None:
             return False
-        full_pos = regions[0][0] if regions else -1
+        operators = [start for start, _end, collapse in regions if collapse != "\n"]
+        full_pos = operators[-1] if operators else -1
         if full_pos == -1:
             if any(token in head for token in _UNRECOGNIZED):
                 return False
