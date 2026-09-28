@@ -246,6 +246,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         conditions="CONDITIONS_V",
         supplies=[Supply(on=7, element="ELEMENT_V", artifact="ARTIFACT_V")],
         output_artifacts=["OUTPUT_ARTIFACT_V"],
+        ephemeral_artifacts_waiver="EPHEMERAL_ARTIFACTS_WAIVER_V",
         control="CONTROL_V",
         grants=StageGrants(
             allow=[RuleGrant(rule="GRANTS_RULE_V", provenance="declared")],
@@ -273,7 +274,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         "VERIFY_VENUE_V", "VERIFY_VENUE_AT_FINAL_V", "NEGATIVE_CONTROL_V", "STATEMENT_V", "SOURCE_V",
         "DERIVATION_V", "CONFIDENCE_V", "REFUTATION_V", "CONDITIONS_V",
         "MATERIAL_REF_V", "KNOWLEDGE_V", "KNOWLEDGE_REF_V", "PROCEDURE_V", "PRECONDITIONS_V",
-        "OUTPUT_ARTIFACT_V", "CONTROL_V", "on stage 7", "ELEMENT_V", "ARTIFACT_V",
+        "OUTPUT_ARTIFACT_V", "EPHEMERAL_ARTIFACTS_WAIVER_V", "CONTROL_V", "on stage 7", "ELEMENT_V", "ARTIFACT_V",
         "GRANTS_RULE_V", "GRANTS_ADDDIR_V",
         "TASK_ID_V", "GOAL_V", "OVERALL_DONE_CRITERION_V", "OVERALL_CRITERION_TYPE_V",
         "WEIGHT_CLASS_V", "EXTERNAL_RESEARCH_V", "REPO_ROOT_V", "DELIVERY_WORKTREE_V",
@@ -297,6 +298,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (Stage, "index"), (Stage, "title"), (Stage, "subject"), (Stage, "means"),
         (Stage, "actor"), (Stage, "criterion"), (Stage, "principle"),
         (Stage, "conditions"), (Stage, "supplies"), (Stage, "output_artifacts"),
+        (Stage, "ephemeral_artifacts_waiver"),
         (Stage, "outcome"),  # excluded: engine execution history
         (Stage, "control"), (Stage, "knowledge"), (Stage, "preconditions"),
         (Stage, "grants"),

@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import re
 
+from . import exempt_paths
 from .conditions import judge_restatement, restatement_prefilter
 from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
@@ -754,6 +755,32 @@ def _negative_control_violations(stage) -> list[str]:
     ]
 
 
+def _ephemeral_artifacts_violations(stage) -> list[str]:
+    """A declared output_artifacts entry that resolves under an OS-temp scratch root
+    (exempt_paths.scratch_roots()) claims durability the path does not have: a green
+    verify_command today says nothing about whether the artifact still exists at the
+    stage's own review, or the plan's resolution gate, once /tmp (or $TMPDIR) has been
+    swept. Checked against output_artifacts entries ONLY, via exempt_paths.
+    under_scratch_root (never a substring test) — a verify_command that happens to
+    mention /tmp (a test's own tmp fixture, a throwaway diff) is unaffected; that text is
+    not inspected here.
+
+    ephemeral_artifacts_waiver names why a flagged entry is legitimate (e.g. a stage whose
+    only observable IS an ephemeral run, with no committed artifact) — beside, not instead
+    of, negative_control_waiver."""
+    flagged = [a for a in stage.output_artifacts if exempt_paths.under_scratch_root(a)]
+    if not flagged:
+        return []
+    if str(stage.ephemeral_artifacts_waiver or "").strip():
+        return []
+    return [
+        f"stage {stage.index} ({stage.title!r}) declares output_artifacts under an OS-temp "
+        f"scratch root ({', '.join(flagged)}) — a green verify_command today says nothing "
+        f"about whether the artifact still exists once /tmp (or $TMPDIR) is swept; move it "
+        f"under a durable path or declare ephemeral_artifacts_waiver = \"<reason>\""
+    ]
+
+
 def submission_violations(
     doc,
     *,
@@ -814,6 +841,7 @@ def submission_violations(
             )
         out.extend(_edge_violations(stage))
         out.extend(_negative_control_violations(stage))
+        out.extend(_ephemeral_artifacts_violations(stage))
         restatement = _conditions_restatement(stage, judge_runner, judge_enabled)
         if restatement:
             out.append(restatement)

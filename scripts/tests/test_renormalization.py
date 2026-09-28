@@ -648,6 +648,11 @@ _STAGE_RESIDUAL_COVERAGE = {
     "output_artifacts": "the residual's own splice — outside stage_question_key because "
                         "no Question.target names it, inside here because re-declaring "
                         "what a stage produces moves which green a check can reach",
+    "ephemeral_artifacts_waiver": "the residual's own splice — outside stage_question_key "
+                                  "because no Question.target names it, inside here "
+                                  "because re-declaring it moves which output_artifacts "
+                                  "entries the ephemeral-artifacts check is trusted to "
+                                  "skip, same footing as actor.cost_tier above",
     "outcome.status": "outside: the mutable execution RECORD, not the definition — a "
                       "plan doc loaded from TOML carries its defaults, and leaving the "
                       "live copy alone is what this whole path is for",

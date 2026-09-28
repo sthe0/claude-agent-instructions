@@ -997,6 +997,29 @@ def _aggregate_quality(window: list[dict], session_rows: dict[str, dict]) -> dic
     }
 
 
+def _aggregate_renorm(window: list[dict]) -> dict:
+    """Re-norming coverage + quality-mean split over a task-quality window.
+
+    A row predating this field simply lacks `n_normalizations` -- treated as 0
+    (no normalization recorded) so it still loads and counts toward the
+    window's denominator rather than raising or being silently dropped."""
+    n_tasks = len(window)
+    with_norm = [r for r in window if r.get("n_normalizations", 0) >= 1]
+    without_norm = [r for r in window if r.get("n_normalizations", 0) < 1]
+
+    def _quality_mean(rs: list[dict]) -> float | None:
+        vals = [r.get("quality") for r in rs if isinstance(r.get("quality"), (int, float))]
+        return round(sum(vals) / len(vals), 2) if vals else None
+
+    return {
+        "n_tasks": n_tasks,
+        "n_with_normalize": len(with_norm),
+        "coverage": (len(with_norm) / n_tasks) if n_tasks else 0.0,
+        "quality_mean_with": _quality_mean(with_norm),
+        "quality_mean_without": _quality_mean(without_norm),
+    }
+
+
 def _arrow(cur: float, prev: float, higher_is_worse: bool = True) -> str:
     if prev == 0 and cur == 0:
         return "→ (0)"
@@ -1405,7 +1428,8 @@ def scorecard(rows: dict[str, dict], days: int, project: str | None,
     prev = _aggregate(_window_rows(rows, prev_lo, cur_lo), prev_lo, cur_lo)
     spend_baseline = _spend_rate_baseline(rows, now, days)
     qrows = load_quality_ledger()
-    cur_q = _aggregate_quality(_quality_window_rows(qrows, cur_lo, now), rows)
+    cur_quality_rows = _quality_window_rows(qrows, cur_lo, now)
+    cur_q = _aggregate_quality(cur_quality_rows, rows)
     prev_q = _aggregate_quality(_quality_window_rows(qrows, prev_lo, cur_lo), rows)
 
     L = [f"# Policy scorecard — last {days}d"
@@ -1508,6 +1532,23 @@ def scorecard(rows: dict[str, dict], days: int, project: str | None,
                      f"interrupts **{cur_q['avg_interrupts']}**")
         else:
             L.append("- no task row joined to a session ledger row this window.")
+    L.append("")
+    L.append("## Re-norming")
+    if not qrows:
+        L.append(f"- no task-quality rows found ({TASK_QUALITY_LEDGER}) — "
+                 "resolve a task with `agentctl resolve --quality` to start the series.")
+    else:
+        renorm = _aggregate_renorm(cur_quality_rows)
+        if renorm["n_tasks"] == 0:
+            L.append("- no task-quality rows in this window.")
+        else:
+            L.append(f"- Coverage (≥1 normalize event): **{renorm['coverage']:.0%}**  "
+                     f"({renorm['n_with_normalize']}/{renorm['n_tasks']})")
+            with_q = renorm["quality_mean_with"]
+            without_q = renorm["quality_mean_without"]
+            L.append(f"- Quality mean with normalization: "
+                     f"**{with_q if with_q is not None else '—'}**  ·  "
+                     f"without: **{without_q if without_q is not None else '—'}**")
     L.append("")
     L.append("## Gates (agentctl)")
     L.extend(_gates_lines(days, now))

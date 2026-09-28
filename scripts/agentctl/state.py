@@ -1333,6 +1333,12 @@ class Stage:
     # Paths this stage produces (green-reachability targets for verify-command lint).
     # Optional and tolerant: a plan omitting it loads unchanged.
     output_artifacts: list[str] = field(default_factory=list)
+    # Escape hatch, mirroring criterion.negative_control_waiver's shape: names why an
+    # output_artifacts entry legitimately resolves under exempt_paths.scratch_roots()
+    # (submission.py's ephemeral-artifact check accepts a flagged entry once this is
+    # non-empty). None on every plan authored before this field, which is byte-identical
+    # to "no waiver declared".
+    ephemeral_artifacts_waiver: str | None = None
     outcome: Outcome = field(default_factory=Outcome)
     # General control-criterion attestation (element #3 of the plan activity ontology).
     # Optional on any stage; required non-empty for spawn:developer when recording passed,
@@ -1391,6 +1397,7 @@ class Stage:
                 knowledge=d.get("knowledge"),
                 supplies=[Supply(**s) for s in d.get("supplies", [])],
                 output_artifacts=list(d.get("output_artifacts", [])),
+                ephemeral_artifacts_waiver=d.get("ephemeral_artifacts_waiver"),
                 outcome=Outcome(**d["outcome"]) if d.get("outcome") else Outcome(),
                 control=d.get("control"),
                 grants=StageGrants.from_dict(d.get("grants")),
@@ -1424,6 +1431,7 @@ class Stage:
             knowledge=d.get("knowledge"),
             supplies=[Supply(on=int(x)) for x in d.get("depends_on", [])],
             output_artifacts=list(d.get("output_artifacts", [])),
+            ephemeral_artifacts_waiver=d.get("ephemeral_artifacts_waiver"),
             outcome=Outcome(
                 status=d.get("status", StageStatus.PENDING.value),
                 actual=d.get("actual"),

@@ -1406,6 +1406,14 @@ def parse_plan(
             if str(s.get("negative_control_waiver") or "").strip()
             else None
         )
+        # Same permissive treatment as negative_control_waiver above: the requirement
+        # (an output_artifacts entry under exempt_paths.scratch_roots() needs either no
+        # such entry or this waiver) lives at the submission seam, not here.
+        ephemeral_artifacts_waiver = (
+            str(s["ephemeral_artifacts_waiver"]).strip()
+            if str(s.get("ephemeral_artifacts_waiver") or "").strip()
+            else None
+        )
         stages.append(
             Stage(
                 index=index,
@@ -1457,6 +1465,7 @@ def parse_plan(
                 knowledge=str(s["knowledge"]) if s.get("knowledge") else None,
                 supplies=_build_supplies(s, index),
                 output_artifacts=[str(p) for p in s.get("output_artifacts", [])],
+                ephemeral_artifacts_waiver=ephemeral_artifacts_waiver,
                 outcome=Outcome(status=StageStatus.PENDING.value),
                 grants=_parse_stage_grants(s.get("grants"), stage_ctx, strict=strict),
             )
@@ -2216,6 +2225,13 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
                  _normalize_string(s.criterion.verify_venue_at_final)),)
                if s.criterion.verify_venue_at_final else ()),
              *((("cost_tier", s.actor.cost_tier),) if s.actor.cost_tier else ()),
+             # Same footing as `cost_tier` above — engine-consumed (the ephemeral-
+             # artifacts submission check reads it) but outside `_structural_signature`/
+             # `stage_carry_key`/`stage_question_key` (no Question.target names it), so
+             # without this a waiver-only edit would diff as 'no_change' and be silently
+             # dropped rather than carried by `_apply_refined_stage_fields`.
+             *((("ephemeral_artifacts_waiver", s.ephemeral_artifacts_waiver),)
+               if s.ephemeral_artifacts_waiver else ()),
              # Without this a knowledge-only correction — the exact edit an
              # overcome-difficulty replan makes when the fault addressed знание —
              # diffs to 'no_change' and is silently dropped.

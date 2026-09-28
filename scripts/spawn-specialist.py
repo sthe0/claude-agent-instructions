@@ -195,6 +195,7 @@ def assemble_prompt(
     permission_mode: "str | None" = None,
     add_dir_paths: "list[str] | None" = None,
     stage_grant_entries: "list[dict] | None" = None,
+    evidence_dir: "str | None" = None,
 ) -> str:
     plan = argv_text.read_required_file(args.plan, "--plan")
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
@@ -292,6 +293,24 @@ def assemble_prompt(
             "shell expansion (classified as simple_expansion), and no `python3 -c` "
             "(requires approval). Reference paths as absolute arguments inside your "
             "working directory rather than `cd`-ing first.",
+            "",
+        ]
+        sections += [
+            "## Checkpoints",
+            "",
+            "Commit each checkpoint as soon as its own control goes green — don't "
+            "batch unrelated checkpoints into one commit. Push the personal/ticket "
+            "branch after each commit (pre-authorized; never a shared/trunk branch). "
+            "Keep evidence (test output, command logs, intermediate artifacts) in the "
+            "durable evidence directory below, not under `/tmp` or another OS-temp "
+            "scratch root — a scratch root can be swept before anyone reviews it.",
+            "",
+            (
+                f"Evidence directory for this stage: `{evidence_dir}`"
+                if evidence_dir
+                else "Evidence directory: none provided for this spawn (no --session/"
+                "--stage-index) — keep evidence under your working directory instead."
+            ),
             "",
         ]
     sections += [
@@ -977,6 +996,7 @@ def build_child_settings(
     project_settings_file: "Path | None" = None,
     engine_grants: "list[dict] | None" = None,
     workdir: "str | None" = None,
+    evidence_dir: "str | None" = None,
 ) -> dict:
     """Child `--settings` payload: the auto-compaction window pin for every kind
     (both forms, mirroring settings/base.json — the env key wins in the client's
@@ -1043,6 +1063,12 @@ def build_child_settings(
         engine_allow, engine_deny = stage_grant_rules(engine_grants)
         allow.extend(engine_allow)
         deny.extend(engine_deny)
+    if evidence_dir:
+        ev_entries = [{"path": evidence_dir, "mode": "write"}]
+        _check_write_add_dirs_not_shadowed(ev_entries, deny)
+        ev_allow, ev_deny = stage_grant_rules(ev_entries)
+        allow.extend(ev_allow)
+        deny.extend(ev_deny)
     if workdir is not None:
         deny.extend(repo_root_deny_rules(kind, workdir))
     permissions: dict = {}
@@ -1089,6 +1115,34 @@ def load_engine_stage_grants(
     if directive.data.get("executor") != f"spawn:{kind}":
         return None
     return directive.data.get("grants", [])
+
+
+def load_or_create_evidence_dir(
+    session_id: str,
+    stage_index: int,
+    kind: str,
+) -> "str | None":
+    """The stage's durable evidence directory (agentctl.cli.evidence_dir_for),
+    created if absent, for a `kind == "developer"` spawn only — mirrors
+    load_engine_stage_grants's in-process-import pattern and its
+    kind-gating, but is deliberately NOT folded into that function's own
+    grant computation: the directory is spawn-time-only (an --add-dir plus
+    a synthetic write grant applied straight to this child's --settings),
+    never touching PlanDoc/derive_stage_grants, so it cannot move an
+    already-approved plan's grants_sha256. Returns None for any other kind.
+    Raises agentctl.cli.EvidenceDirError when the directory itself is
+    unusable — the caller fails the spawn loudly on that, rather than
+    silently proceeding without evidence. Purely path-derived from
+    session_id/stage_index — no session-state lookup, hence no state_root —
+    since the directory must be creatable before dispatch necessarily
+    reflects the stage in progress."""
+    if kind != "developer":
+        return None
+    from agentctl import cli as agentctl_cli
+
+    path = agentctl_cli.evidence_dir_for(session_id, stage_index)
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
 def _project_dir_name(cwd: str) -> str:
@@ -1485,16 +1539,36 @@ def main(argv: list[str] | None = None) -> int:
     # inside load_engine_stage_grants) -- a mismatch or unknown session falls
     # back to kind-baseline-only settings rather than failing the spawn.
     engine_grants: "list[dict] | None" = None
+    # evidence_dir stays None for the same conditions as engine_grants, plus a
+    # kind gate applied inside load_or_create_evidence_dir itself: only a
+    # kind=="developer" spawn gets an evidence directory. It is never folded
+    # into engine_grants -- see load_or_create_evidence_dir and
+    # build_child_settings's evidence_dir parameter -- so it cannot move an
+    # already-approved plan's grants_sha256 (computed purely from the
+    # PlanDoc's own declared/derived grants).
+    evidence_dir: "str | None" = None
     if args.session is not None and args.stage_index is not None:
         engine_grants = load_engine_stage_grants(
             args.session, args.stage_index, args.kind, state_root=args.state_root
         )
+        from agentctl import cli as agentctl_cli
+
+        try:
+            evidence_dir = load_or_create_evidence_dir(
+                args.session, args.stage_index, args.kind
+            )
+        except agentctl_cli.EvidenceDirError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            log_refused("evidence-dir-refused", {"kind": args.kind, "stage_index": args.stage_index})
+            return 2
 
     add_dir_argv: list[str] = []
     add_dir_argv.extend(plans_add_dir_args(args.kind, plans_directory))
     add_dir_argv.extend(repo_root_add_dir_args(args.kind, workdir))
     if engine_grants:
         add_dir_argv.extend(stage_grant_add_dir_args(engine_grants))
+    if evidence_dir:
+        add_dir_argv.extend(stage_grant_add_dir_args([{"path": evidence_dir, "mode": "write"}]))
     add_dir_paths = _paths_from_add_dir_argv(add_dir_argv)
 
     permission_mode = resolve_permission_mode(args, engine_grants)
@@ -1509,6 +1583,7 @@ def main(argv: list[str] | None = None) -> int:
             permission_mode=permission_mode,
             add_dir_paths=add_dir_paths,
             stage_grant_entries=engine_grants,
+            evidence_dir=evidence_dir,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1545,7 +1620,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         child_settings = build_child_settings(
-            args.kind, plans_directory, args.project_settings, engine_grants, workdir=workdir
+            args.kind,
+            plans_directory,
+            args.project_settings,
+            engine_grants,
+            workdir=workdir,
+            evidence_dir=evidence_dir,
         )
     except GrantShadowError as exc:
         print(f"error: {exc}", file=sys.stderr)

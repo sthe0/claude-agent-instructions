@@ -124,28 +124,34 @@ def scratch_roots() -> "tuple[str, ...]":
     return tuple(roots)
 
 
-def is_ledger_noise(path: str) -> bool:
-    """True if `path` is not worth recording in the durable edit ledger: ONLY
-    ephemeral OS-temp scratch (root containment over scratch_roots()), never a
-    substring test. This answers a different question from is_engine_exempt:
-    that predicate decides what the engine GATE permits (memory is exempt from
-    the gate by design); this one decides what the durable attribution LEDGER
-    observes. Memory is exactly the file class the ledger most needs to
-    attribute, so it is NOT ledger noise even though it is gate-exempt — the two
-    predicates must stay independent, or the ledger silently inherits the gate's
-    permission answer for a question the gate was never asked.
-
-    The session scratchpad (a per-session working area that is not an OS-temp
-    path and is not gate-exempt either) is deliberately NOT scratch here and
-    stays ledgered.
-
-    Path containment, not substring matching, mirrors
-    hook-orphan-worktree-sweep.py's is_temp_root(): "<root>-evil/x.py" must not
-    match root "<root>", and a path need not literally contain a trailing slash
-    to be recognized as being at a root.
+def under_scratch_root(path: str) -> bool:
+    """True if `path` resolves under one of scratch_roots(), by root containment
+    (never a substring test): "<root>-evil/x.py" must not match root "<root>", and a
+    path need not literally contain a trailing slash to be recognized as being at a
+    root — mirrors hook-orphan-worktree-sweep.py's is_temp_root(). The one place that
+    decides "is this path OS-temp scratch"; is_ledger_noise and the engine's
+    ephemeral-output-artifact and evidence-directory checks all answer their own
+    questions by calling this rather than re-deriving the containment test.
     """
     p = os.path.realpath(os.path.normpath(path or ""))
     for root in scratch_roots():
         if p == root or p.startswith(root + os.sep):
             return True
     return False
+
+
+def is_ledger_noise(path: str) -> bool:
+    """True if `path` is not worth recording in the durable edit ledger: ONLY
+    ephemeral OS-temp scratch (under_scratch_root()). This answers a different
+    question from is_engine_exempt: that predicate decides what the engine GATE
+    permits (memory is exempt from the gate by design); this one decides what the
+    durable attribution LEDGER observes. Memory is exactly the file class the ledger
+    most needs to attribute, so it is NOT ledger noise even though it is gate-exempt
+    — the two predicates must stay independent, or the ledger silently inherits the
+    gate's permission answer for a question the gate was never asked.
+
+    The session scratchpad (a per-session working area that is not an OS-temp
+    path and is not gate-exempt either) is deliberately NOT scratch here and
+    stays ledgered.
+    """
+    return under_scratch_root(path)

@@ -306,7 +306,7 @@ def difficulty_blockers(state: SessionState) -> list[str]:
     return []
 
 
-def normalization_blockers(state: SessionState) -> list[str]:
+def normalization_blockers(state: SessionState, *, pending_factor: str | None = None) -> list[str]:
     """Precondition guardian for `replan` at DIAGNOSING closure: a difficulty is a
     norm-failure, and because activity is constituted by reproduction, closing one
     REQUIRES re-norming the reproducible factor it exposed (перенормирование). Like
@@ -318,12 +318,20 @@ def normalization_blockers(state: SessionState) -> list[str]:
     gate never double-reports it). Once the cycle is complete, a Normalization record
     (a non-empty factor) is required; its absence blocks unless cmd_replan's explicit
     --normalization-waiver escape is taken (a one-off, non-reproducible factor). The
-    LEVEL (note/leaf/principle) is payoff-gated cognition the gate never inspects."""
+    LEVEL (note/leaf/principle) is payoff-gated cognition the gate never inspects.
+
+    `pending_factor` lets `cmd_replan`'s own `--normalize-factor` satisfy this gate
+    WITHOUT the caller having mutated `state.difficulty.normalization` first: that
+    record is set only once this replan is past every refusal (see cmd_replan's
+    single logging point), so a factor still pending at gate time must be judged on
+    the argument, not on state this command deliberately hasn't written yet."""
     if state.node != Node.DIAGNOSING.value:
         return []
     d = state.difficulty
     if d is None or not d.complete():
         return []  # difficulty_blockers owns the incomplete-cycle case
+    if pending_factor and pending_factor.strip():
+        return []
     n = d.normalization
     if n is None or not (n.factor or "").strip():
         return ["difficulty closure requires re-norming — run: normalize (record the "
@@ -2126,7 +2134,7 @@ def _renorm_stage_residual(stage) -> tuple:
     `plan.stage_question_key` is most of it, and would have been all of it but for its
     own scope: that key answers whether a disposed Question still targets the same
     bytes, and a Question.target may only name a stage field the plan's author writes
-    as an activity element. Three engine-consumed fields fall outside that and are
+    as an activity element. Four engine-consumed fields fall outside that and are
     spliced on here, because a renormalization is defined by what it does NOT touch:
 
     * `actor.cost_tier` — the dispatch budget label and the effort-divergence estimate's
@@ -2138,6 +2146,11 @@ def _renorm_stage_residual(stage) -> tuple:
       child is authorized to touch. Widening it under the light path would let an
       executor grant himself Bash/Edit/add_dir access the plan's own approval never
       saw, through a channel meant only for re-sequencing operations.
+    * `ephemeral_artifacts_waiver` — the submission-time waiver for a declared
+      `output_artifacts` entry that legitimately resolves under a scratch root. Same
+      footing as `actor.cost_tier`: no Question.target names it, but re-declaring it
+      under the light path would move which `output_artifacts` entries the ephemeral-
+      artifacts check is trusted to skip.
 
     Deliberately outside, and the only things outside: `index` (the key both sides are
     matched ON, so a change there is an added/removed stage, refused above), and the
@@ -2147,12 +2160,13 @@ def _renorm_stage_residual(stage) -> tuple:
 
     Hand-written, like every membership list of this family, and pinned the same way:
     `test_the_stage_residual_exhausts_the_stage_s_field_set` goes red when a field is
-    added to `Stage` and to neither the key nor the three splices above."""
+    added to `Stage` and to neither the key nor the four splices above."""
     return (
         stage_question_key(stage),
         stage.actor.cost_tier,
         tuple(stage.output_artifacts),
         *grants_place(stage),
+        stage.ephemeral_artifacts_waiver,
     )
 
 
