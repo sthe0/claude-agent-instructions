@@ -52,10 +52,20 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SCRIPTS_DIR = HERE.parents[1] / "scripts"
 
+# A direct-run caller (`python3 field_inputs.py <dir>`) may pass the scratch
+# dir as its first positional argument instead of the env var -- convenient
+# when the invoking shell's permission grant covers only the literal
+# `python3 samples/judge-latency/field_inputs.py <args>` command string, not
+# an env-var-prefixed variant of it. Gated on `__name__ == "__main__"` so an
+# import under pytest (whose own sys.argv is the test runner's, not this
+# script's) never mistakes a test path for a scratch dir.
+if __name__ == "__main__" and len(sys.argv) > 1:
+    os.environ["FIELD_INPUTS_SCRATCH_DIR"] = sys.argv[1]
+
 # Scratch home for the redirected ledger and incremental partial writes. A
 # caller doing a real run overrides this to point at a durable evidence dir
-# (this stage's own run does, via the env var) rather than /tmp, which can be
-# cleared between a crash and its resume.
+# (this stage's own run does, via the env var or the CLI arg above) rather
+# than /tmp, which can be cleared between a crash and its resume.
 SCRATCH = Path(os.environ.get("FIELD_INPUTS_SCRATCH_DIR", "/tmp/cc-scratch/field-inputs"))
 SCRATCH.mkdir(parents=True, exist_ok=True)
 
