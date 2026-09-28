@@ -195,8 +195,21 @@ def test_replay_still_reports_the_fire_when_run_at_a_spawned_depth(tmp_path, mon
     _spec.loader.exec_module(replay)
 
     monkeypatch.setenv("AGENT_RECURSION_DEPTH", "1")
-    decision, branch, _message = replay._guard.decide_detailed(
-        _FIRING_TOOL_NAME, _firing_tool_input(tmp_path), str(tmp_path), "default", None,
-    )
-    assert decision == "ask"
-    assert branch == "G1-state"
+    state_path = replay._guard.config_root.agentctl_state_dir() / "some-write-target.json"
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    entry = {
+        "type": "assistant", "uuid": "asst-toolu_d1", "timestamp": "2026-01-01T00:00:00Z",
+        "cwd": str(tmp_path),
+        "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_d1", "name": "Write",
+             "input": {"file_path": str(state_path), "content": "{}"}},
+        ]},
+    }
+    (corpus / "depth-one.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    assert replay.main(["--out", str(out_dir), "--corpus", str(corpus)]) == 0
+    rows = [json.loads(line) for f in sorted(out_dir.rglob("*.jsonl"))
+            for line in f.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(rows) == 1
+    assert rows[0]["branch"] == "G1-state"
