@@ -393,13 +393,14 @@ delivery_note = ""
 
 [[rule]]
 id = "never-agent-own-permission-surface"
-tier = 0
+tier = 1
 locator_heading = "### Acting without asking"
 locator_phrase = "never the agent's own permission surface"
-kernel_reason = "NOT-NOTICING"
-delivery_kind = ""
+kernel_reason = ""
+delivery_kind = "structured_hook"
 delivery_marker = ""
-delivery_note = ""
+delivery_note = "hook-guard-permission-surface.py (PreToolUse Bash + Edit|Write|MultiEdit|NotebookEdit): G1 live settings / agentctl state writes, G2 widening claude launches, G3 launch-surface writes, G4 resolve-permission --decision granted; the engine's grant validator (grants.validate_rule) refuses the same targets at plan time."
+uninstrumented_reason = "The guard's ask/deny is a structured PreToolUse decision with no bracket tag; its fires go to ~/.local/log/claude-permission-guard.jsonl, not to the transcript as a countable marker, and the allow path logs nothing."
 
 [[rule]]
 id = "unknown-tool-lookup-budget"
