@@ -31,12 +31,18 @@ Two independent modes:
   and "ran"). --expect-guard-block --guard-log PATH is the narrower claim: the
   resolved match's stop_kind is specifically "hook-block" (a PreToolUse hook's
   own refusal, distinct from a permission-rule denial — see transcript_stops.py's
-  module docstring for how the two are told apart) AND PATH's own text contains
-  the blocked command — proving THIS specific command appears in THIS specific
-  guard's own record, not just that some hook fired somewhere. --guard-log's
-  exact writer is deliberately unspecified here (a later plan stage's guard
-  supplies it): this script only requires PATH to exist and contain the command
-  text, so it works against whatever log format that guard eventually writes.
+  module docstring for how the two are told apart) AND PATH's own record credits
+  the SAME call — proving THIS specific command appears in THIS specific guard's
+  own record, not just that some hook fired somewhere. Issue #268: when PATH's
+  rows are JSON and at least one carries a `tool_use_id` field, the join is by
+  id — (session_id, tool_use_id) when both the row and the transcript supply a
+  session_id, by tool_use_id alone when either is missing — rather than a bare
+  substring search, which credits any row whose free-text message happens to
+  contain the command string even when it was logged for a DIFFERENT call (two
+  Bash tool_uses can share a command substring). The historical substring match
+  against PATH's raw text is kept as a fallback for a guard-log format that
+  never records tool_use_id at all (a plain-text log, or one predating that
+  field) — the only signal such a log carries.
 
   --list-denied mode: print every denied Bash call (stop_kind in DENIAL_KINDS)
   instead of asserting on one. Either --transcript PATH directly, or --kind K
@@ -134,6 +140,74 @@ def resolve_target(
     return pool[0], None
 
 
+def _transcript_session_id(transcript: Path, line_no: int) -> str | None:
+    """The real harness's own `sessionId` field (camelCase — the transcript
+    JSONL's own convention, distinct from the hook-payload/guard-log
+    `session_id` snake_case field), read from the transcript line at
+    `line_no` — every line in one transcript carries the same session id, so
+    reading it off the target's own tool_use line is exact and needs no
+    separate lookup pass. Missing/corrupt line or field -> None (the caller
+    then joins by tool_use_id alone, per the module docstring's --guard-log
+    join order)."""
+    try:
+        with transcript.open(encoding="utf-8") as fh:
+            for current_line_no, raw in enumerate(fh, start=1):
+                if current_line_no != line_no:
+                    continue
+                raw = raw.strip()
+                if not raw:
+                    return None
+                try:
+                    entry = json.loads(raw)
+                except json.JSONDecodeError:
+                    return None
+                if not isinstance(entry, dict):
+                    return None
+                session_id = entry.get("sessionId")
+                return session_id if isinstance(session_id, str) else None
+    except OSError:
+        return None
+    return None
+
+
+def _guard_log_rows(guard_log: Path) -> list[dict]:
+    """Every line of `guard_log` that parses as a JSON object. A guard log
+    written by hook-guard-permission-surface.py's `_log_fire` is one JSON
+    object per line; a historical plain-text guard log (or any line that does
+    not parse) simply contributes no rows here — the caller detects that case
+    (no row anywhere carries `tool_use_id`) and falls back to substring
+    matching against the raw text instead."""
+    rows: list[dict] = []
+    text = guard_log.read_text(encoding="utf-8", errors="replace")
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _guard_log_credits(rows: list[dict], tool_use_id: str, transcript_session_id: str | None) -> bool:
+    """True iff some row credits `tool_use_id` — joined by (session_id,
+    tool_use_id) when both the row and the transcript supply a session_id (a
+    mismatch there means a DIFFERENT session's call, even if the tool_use_id
+    string happened to coincide), by tool_use_id alone when either side is
+    missing a session_id."""
+    for row in rows:
+        if row.get("tool_use_id") != tool_use_id:
+            continue
+        row_session_id = row.get("session_id")
+        if row_session_id and transcript_session_id and row_session_id != transcript_session_id:
+            continue
+        return True
+    return False
+
+
 def check_outcome(target: transcript_stops.BashToolUse, args: argparse.Namespace) -> str | None:
     """None if the resolved `target` satisfies the requested --expect-* claim
     (or no claim was requested); otherwise the failure reason."""
@@ -153,6 +227,22 @@ def check_outcome(target: transcript_stops.BashToolUse, args: argparse.Namespace
         guard_log = args.guard_log
         if not guard_log.exists():
             return f"--guard-log {guard_log} does not exist"
+
+        rows = _guard_log_rows(guard_log)
+        if any(row.get("tool_use_id") for row in rows):
+            transcript_session_id = _transcript_session_id(args.transcript, target.line_no)
+            if _guard_log_credits(rows, target.tool_use_id, transcript_session_id):
+                return None
+            return (
+                f"--guard-log {guard_log} does not record a fire for "
+                f"tool_use_id={target.tool_use_id!r} (line {target.line_no})"
+            )
+
+        # Fallback: a bare substring search against the raw guard-log text.
+        # Only reached when NO row in the log carries a tool_use_id at all —
+        # a plain-text guard log, or a JSON log predating that field — since
+        # that is the one case an id-based join has nothing to join on, and
+        # the command substring is the only signal such a log carries.
         text = guard_log.read_text(encoding="utf-8", errors="replace")
         if target.command not in text:
             return (
