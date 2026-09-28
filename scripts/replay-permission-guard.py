@@ -210,7 +210,7 @@ def _firing_segment(branch: str, command: str) -> str | None:
     """round-3 nit 1: the exact segment that actually matched G2/G4 --
     `_guard._g2_bash`/`_guard._g4_bash` already recurse through `sh|bash|zsh
     -c`/`eval` wrappers to find the ONE segment that fired, and hand it back
-    as text (`_g4_bash`'s 4th tuple element). Grouping on that segment instead
+    as text (`_g4_bash`'s last tuple element). Grouping on that segment instead
     of the raw whole command keeps an unrelated `&&`-chained prefix (an echoed
     banner, a `cd`) out of the shape `_bash_group_shape` derives -- without
     this, `echo ---try resume now--- && claude --add-dir /` shlex-split its

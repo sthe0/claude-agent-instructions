@@ -472,6 +472,14 @@ def _shell_c_payloads(seg: list[str]) -> list[str]:
     if program not in _SHELL_INTERPRETERS:
         return []
     for i, tok in enumerate(stripped[1:], start=1):
+        if not tok.startswith("-"):
+            # round-3 nit 3: a shell parses its own flags only up to the
+            # first non-option token -- `bash script.sh -c x` runs a SCRIPT
+            # (positional operand `script.sh`), and that script's own `-c x`
+            # are ITS arguments, not `bash`'s. Scanning past this point used
+            # to misread a script's own `-c` argument as the shell's payload
+            # flag, feeding a false payload string into the G2 recursion.
+            break
         if _short_flag_cluster_has_c(tok):
             return [stripped[i + 1]] if i + 1 < len(stripped) else []
     return []

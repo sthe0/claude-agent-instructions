@@ -822,6 +822,15 @@ def test_shell_c_payloads_empty_for_a_long_flag_that_merely_contains_c():
     assert guard._shell_c_payloads(["bash", "--rcfile", "x"]) == []
 
 
+def test_shell_c_payloads_empty_when_dash_c_is_the_scripts_own_argument():
+    # round-3 nit 3: `bash script.sh -c x` runs the SCRIPT `script.sh` --
+    # the `-c x` that follows is an argument to `script.sh`, not a flag to
+    # `bash` itself (a shell only reads its own flags before the first
+    # positional operand). Scanning past `script.sh` used to misread its
+    # `-c` as bash's own payload flag.
+    assert guard._shell_c_payloads(["bash", "script.sh", "-c", "x"]) == []
+
+
 # --- negative corpus (shapes that must not fire any branch) ---
 
 @pytest.mark.parametrize(
