@@ -200,13 +200,17 @@ CODE_PARTITIONS = [
         "content.",
     ),
     (
-        "scripts/lib/** (incl. term_ruleset.py)",
+        "scripts/lib/** (incl. term_ruleset.py, published_body.py)",
         lambda f: f.startswith("scripts/lib/"),
         "structural",
         "keep",
+        "Fixed-vocabulary or syntactic matching, never sentence meaning: "
         "term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier "
-        "denylist (a fixed-vocabulary lookup, the same shape as a secret scanner) — "
-        "matching a known TERM's occurrence, not classifying what a sentence means.",
+        "denylist (the same shape as a secret scanner), matching a known TERM's "
+        "occurrence; published_body.py matches command tokens, flag names, and "
+        "path syntax to locate a published body, and an over-match there can only "
+        "add a witness requirement or an advisory, never turn a real publication "
+        "into an allow.",
     ),
     (
         "scripts/crutch-inventory.py (self)",

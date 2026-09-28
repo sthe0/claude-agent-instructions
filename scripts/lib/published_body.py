@@ -9,26 +9,35 @@ and never the MEANING of any text, which is what keeps it outside the
 regex-not-for-semantic-classification prohibition and is what lets a caller
 drive a hard deny off its answer.
 
-A publication is recognized in two ways: a Bash command whose segment invokes
+A publication is recognized in three ways: a Bash command whose segment invokes
 a Core `gh` verb (`gh issue comment`, `gh pr comment`, `gh issue create`
 unconditionally; `gh issue edit` / `gh pr edit` / `gh pr create` only when a
-`--body*` flag is present), or a Bash command / tool name matching a
+`--body*` flag is present); a Bash command / tool name matching a
 machine-local seam entry (`config_root.publication_tools_file()`) for a
-deployment-specific verb or a genuine `mcp__*` tool name. The seam is data,
-Core's `gh` shapes are mechanism -- on a machine that declares no seam, the
-Core shapes alone still apply.
+deployment-specific verb or a genuine `mcp__*` tool name; or a raw HTTP write
+(`curl`, a `python3` + urllib heredoc, any client) whose command carries a
+write method AND a seam-declared `http_write_endpoint`. That third way exists
+because a raw HTTP write has no publishing verb to match at all -- the command
+invokes an interpreter -- so every publication reaching a ticket API without
+going through a registered CLI used to resolve NOT_A_PUBLICATION and pass the
+gate silently, with not even an advisory to show it had happened. The seam is
+data, Core's `gh` shapes and the matching itself are mechanism -- on a machine
+that declares no seam, the Core shapes alone still apply.
 
 Body resolution returns a typed `Resolution`, never a bare string, because
 "the body could not be determined" is a distinct, first-class outcome
 (`UNRESOLVED`) from "here are the bytes" (`TEXT`) -- collapsing the two would
 let an unmodelled command masquerade as an empty, trivially-matching body.
-Six shapes are recognized (file-valued flag, inline literal, heredoc nested in
+Seven shapes are recognized (file-valued flag, inline literal, heredoc nested in
 a command substitution, a same-command shell-variable assignment, an
-attachment operand, and an inline path read sharing the assignment shape's
-reader) -- everything else is UNRESOLVED, never a fallback scan of the raw
-command string: the gate's predicate is a property of the BODY's provenance,
-and the command string is not the body, so matching it would answer a
-different question.
+attachment operand, an inline path read sharing the assignment shape's
+reader, and -- on the raw-HTTP route only -- the single text-file path the
+command references) -- everything else is UNRESOLVED, never a fallback scan of
+the raw command string for body TEXT: the gate's predicate is a property of the
+BODY's provenance, and the command string is not the body, so matching it for
+the body would answer a different question. Shape 7 is not that fallback: it
+reads a file the command names, and it applies only where no flag can carry the
+body, only when exactly one such path exists, and only as a route-scoped opt-in.
 """
 from __future__ import annotations
 
@@ -63,8 +72,8 @@ class Resolution:
 _CORE_GH_NO_BODY_REQUIRED = (("issue", "comment"), ("pr", "comment"), ("issue", "create"))
 _CORE_GH_BODY_REQUIRED = (("issue", "edit"), ("pr", "edit"), ("pr", "create"))
 
-_FILE_FLAG_NAMES = ("--body-file", "-F")
-_VALUE_FLAG_NAMES = ("--body", "--text")
+_FILE_FLAG_NAMES = ("--body-file", "-F", "--description-file")
+_VALUE_FLAG_NAMES = ("--body", "--text", "--description")
 
 _INLINE_CAT_RE = re.compile(r"^cat\s+(.+)$", re.DOTALL)
 _INLINE_READ_RE = re.compile(r"^<\s*(.+)$", re.DOTALL)
@@ -77,7 +86,50 @@ _INLINE_READ_RE = re.compile(r"^<\s*(.+)$", re.DOTALL)
 # advisory line, not a wrong allow/deny.
 _GH_VERB_FALLBACK_RE = re.compile(r"(?:^|[\s;&|])gh\s+(?:issue|pr)\s+(?:comment|create|edit)\b")
 
+# Shape 7's trigger half: a raw HTTP write (curl, `python3` + urllib, any client
+# at all) to an endpoint the machine-local seam declares a publication route.
+# The method token is matched against the raw command string on purpose -- the
+# request verb can live anywhere a client puts it (`-X POST`, `method='PATCH'`,
+# `method="PUT"`), and no token position is common to all of them. Matching the
+# raw string here is the same trade `_GH_VERB_FALLBACK_RE` already makes: an
+# over-match can only make this module MORE conservative (a witness requirement
+# or an advisory), never turn a real publication into an allow.
+_HTTP_WRITE_METHOD_RE = re.compile(r"""(?:^|[\s"'(=,])(?:POST|PATCH|PUT)(?:$|[\s"')=,])""")
+
+# Shape 7's body half: a path literal naming a text file. A raw HTTP write has
+# no flag to read the body off, so the only structural handle is the path the
+# command hands its client -- and a command that posts prose composed in a file
+# names that file somewhere. Restricted to text-body suffixes so the sibling
+# paths such a command also carries (a token file, a config, a socket) cannot
+# be mistaken for the body, and resolved ONLY when exactly one candidate
+# survives: two text files mean the module cannot tell which one is published,
+# which is UNRESOLVED, not a guess.
+_TEXT_BODY_SUFFIXES = (".md", ".markdown", ".txt")
+# A path-shaped run of non-delimiter characters carrying at least one `/`, so a
+# bare word in prose cannot match. Absolute, `~/`, `./` and plain cwd-relative
+# forms all qualify -- `_read_target_bytes` already joins a relative path
+# against the call's cwd, which is exactly what the shell would have done.
+_PATH_LITERAL_RE = re.compile(r"""(?:^|[\s"'(=,])([^\s"'()=,;|]*/[^\s"'()=,;|]+)""")
+
 ADVISORY_SINK_NAME = "published-text-gate-advisories.jsonl"
+
+# Env override for the advisory sink, in the same shape as AGENTCTL_JUDGE_LEDGER
+# and CLAUDE_SELF_DIAGNOSE_STORE, and for exactly their reason. Until this
+# existed the suite's own `resolve()` calls appended to the REAL machine sink:
+# harmless while nothing read that file, and wrong the moment something did --
+# the live sink's last week was dominated by paired fixture records, which a
+# reader would have taken for hundreds of genuine unwitnessed publications. The
+# writer and the reader both resolve the path through `advisory_sink()`, so
+# neutralizing one neutralizes both.
+ADVISORY_SINK_ENV = "CLAUDE_PUBLISHED_TEXT_GATE_ADVISORIES"
+
+
+def advisory_sink() -> "Path":
+    """Where fail-open advisories are appended, and read back from."""
+    override = os.environ.get(ADVISORY_SINK_ENV)
+    if override:
+        return Path(override)
+    return config_root.hook_state_dir("published-text-gate") / ADVISORY_SINK_NAME
 
 
 def _strip_quotes(path: str) -> str:
@@ -181,9 +233,36 @@ def _attachment_path(tokens: list[str]) -> str | None:
     return positionals[-1] if positionals else None
 
 
+def _resolve_referenced_text_file(command: str, cwd: str) -> tuple[str | None, int | None]:
+    """Shape 7: the bytes of the ONE text-file path `command` references, or
+    `None` when it references none or several. Used only by the raw-HTTP route
+    (`_Match.allow_referenced_file`), never as a global fallback: on a route
+    that already has a body flag, a stray path mention is not the body, and
+    reading it would answer a different question."""
+    seen: list[str] = []
+    for match in _PATH_LITERAL_RE.finditer(command):
+        raw = match.group(1)
+        if "://" in raw:
+            continue  # a URL, not a path the shell could read
+        # `@path` is curl's own read-the-body-from-a-file convention (`-d @f.md`,
+        # `--data-binary @f.md`), so on THIS route it is the likeliest real form
+        # of all -- and the one a live probe caught falling through: with the `@`
+        # left on, the path exists and the read still fails. The shape-1 resolver
+        # already strips it at `_flag_value_target`; shape 7 owes the same.
+        raw = raw[1:] if raw.startswith("@") else raw
+        if not raw.lower().endswith(_TEXT_BODY_SUFFIXES):
+            continue
+        if raw not in seen:
+            seen.append(raw)
+    if len(seen) != 1:
+        return None, 7
+    return _read_target_bytes(os.path.expanduser(seen[0]), cwd), 7
+
+
 @dataclass(frozen=True)
 class _Match:
     is_attachment: bool
+    allow_referenced_file: bool = False
 
 
 def _match_gh(tokens: list[str]) -> _Match | None:
@@ -240,6 +319,29 @@ def _match_seam_bash(tokens: list[str] | None, seam) -> _Match | None:
     return None
 
 
+def _match_seam_http_endpoint(command: str, seam) -> _Match | None:
+    """Match a raw HTTP write to a seam-declared publication endpoint -- the
+    route no verb match can reach, because there is no verb: a `curl` or a
+    `python3` heredoc posting to a tracker's issue API invokes an interpreter,
+    not a publishing tool, so `_match_seam_bash` sees `curl`/`python3` and says
+    NOT_A_PUBLICATION. The endpoint itself is the only stable handle, and it is
+    deployment-specific, so it lives in the seam as DATA (`{"name": "<host and
+    path prefix>", "kind": "http_write_endpoint"}`) while the matching stays
+    here as mechanism -- the same split the verb seam already uses."""
+    if not _HTTP_WRITE_METHOD_RE.search(command):
+        return None
+    for entry in seam or []:
+        if not isinstance(entry, dict) or entry.get("kind") != "http_write_endpoint":
+            continue
+        name = entry.get("name")
+        if name and name in command:
+            return _Match(
+                is_attachment=entry.get("body_shape") == "attachment",
+                allow_referenced_file=True,
+            )
+    return None
+
+
 def _match_seam_mcp_tool(tool_name: str, seam) -> _Match | None:
     for entry in seam or []:
         if not isinstance(entry, dict) or entry.get("kind") != "mcp_tool":
@@ -263,6 +365,8 @@ def _match_bash_command(command: str, seam) -> tuple[_Match | None, list[str] | 
     match = _match_gh(tokens) if tokens else None
     if match is None:
         match = _match_seam_bash(tokens, seam)
+    if match is None:
+        match = _match_seam_http_endpoint(command, seam)
     return match, tokens
 
 
@@ -325,6 +429,8 @@ def resolve(tool_name: str, tool_input, cwd: str, seam=None) -> Resolution:
         return Resolution(kind=ATTACHMENT, path=abs_path, shape=5)
 
     text, shape = _resolve_text_body(command, tokens or [], cwd)
+    if not text and match.allow_referenced_file:
+        text, shape = _resolve_referenced_text_file(command, cwd)
     if not text:
         record_advisory(UNRESOLVED, shape, command)
         return Resolution(kind=UNRESOLVED, shape=shape)
@@ -359,7 +465,7 @@ def record_advisory(kind: str, shape: int | None, command: str) -> None:
     diagnostics must still allow rather than wedge the turn. Records a
     sha256 of the command rather than the command itself."""
     try:
-        sink = config_root.hook_state_dir("published-text-gate") / ADVISORY_SINK_NAME
+        sink = advisory_sink()
         sink.parent.mkdir(parents=True, exist_ok=True)
         record = {
             "kind": kind,

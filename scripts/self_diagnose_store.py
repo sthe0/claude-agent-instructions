@@ -112,6 +112,14 @@ ADVISORY_KINDS = frozenset(
         "no-root-index",
         "crutch-defer-overdue",
         "crutch-registry-drift",
+        # ADVISORY on purpose, and it is the one kind where that placement needs
+        # saying out loud: a `writer-gate-unresolved` row reports publications
+        # that ALREADY went out unwitnessed. The fall-through cannot be undone,
+        # so blocking the current turn boundary would charge an unrelated turn
+        # for a past fail-open while doing nothing about it. The remediation is
+        # a route registration or a resolver widening — a self-improvement task
+        # that runs on its own spine, not a turn-end obligation.
+        "writer-gate-unresolved",
         KIND_BACKLOG_ITEM,
         KIND_TELEMETRY_PATTERN,
     }
@@ -153,6 +161,7 @@ REMEDIATION = {
     "telemetry-pattern": "see the pattern's recommended_next_step (self-improvement | planner | file-difficulty) in the improvement-scan report",
     "crutch-defer-overdue": "re-run scripts/gen_crutch_registry.py and re-disposition the entry (keep it deferred with an updated ground, or remediate it)",
     "crutch-registry-drift": "run scripts/verify-semantic-gates.py to see the newly-unregistered sites, then re-run scripts/gen_crutch_registry.py to classify and register them",
+    "writer-gate-unresolved": "read the sink's `shape` breakdown: a route the seam does not declare goes into ~/.claude-agent/publication-tools.local; a declared route whose body shape lib/published_body.py cannot read needs a new shape resolver there",
 }
 
 # --- producers --------------------------------------------------------------

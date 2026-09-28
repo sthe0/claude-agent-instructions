@@ -68,5 +68,45 @@
     "label": "non-publication-bash-command",
     "command": "git status --short",
     "expect_kind": "NOT_A_PUBLICATION"
+  },
+  {
+    "label": "raw-http-write-body-from-single-referenced-text-file",
+    "command": "python3 - <<'PY'\nimport urllib.request, pathlib\nbody = pathlib.Path('scripts/tests/fixtures/published-text/reader-facing.md').read_text()\ntoken = pathlib.Path('/home/x/.tracker-token').read_text().strip()\nreq = urllib.request.Request('https://st-api.example-tracker.test/v2/issues/ABC-1', data=b'{}', method='PATCH')\nurllib.request.urlopen(req)\nPY",
+    "seam": "fixture",
+    "expect_kind": "TEXT",
+    "expect_shape": 7
+  },
+  {
+    "label": "raw-http-write-two-text-files-is-ambiguous",
+    "command": "python3 - <<'PY'\nimport urllib.request\nopen('scripts/tests/fixtures/published-text/reader-facing.md')\nopen('scripts/tests/fixtures/published-text/polished.md')\nurllib.request.Request('https://st-api.example-tracker.test/v2/issues/ABC-1', method='POST')\nPY",
+    "seam": "fixture",
+    "expect_kind": "UNRESOLVED",
+    "expect_shape": 7
+  },
+  {
+    "label": "raw-http-read-of-same-endpoint-is-not-a-publication",
+    "command": "curl -sS -H 'Authorization: OAuth t' https://st-api.example-tracker.test/v2/issues/ABC-1",
+    "seam": "fixture",
+    "expect_kind": "NOT_A_PUBLICATION"
+  },
+  {
+    "label": "raw-http-write-to-unregistered-endpoint-is-not-a-publication",
+    "command": "curl -sS -X POST https://metrics.example.test/v1/points --data-binary @scripts/tests/fixtures/published-text/reader-facing.md",
+    "seam": "fixture",
+    "expect_kind": "NOT_A_PUBLICATION"
+  },
+  {
+    "label": "seam-create-verb-description-flag",
+    "command": "tracker-cli.sh create --queue ABC --summary 'x' --description-file scripts/tests/fixtures/published-text/reader-facing.md",
+    "seam": "fixture",
+    "expect_kind": "TEXT",
+    "expect_shape": 1
+  },
+  {
+    "label": "seam-create-verb-inline-description",
+    "command": "tracker-cli.sh create --queue ABC --summary 'x' --description 'inline body text'",
+    "seam": "fixture",
+    "expect_kind": "TEXT",
+    "expect_shape": 2
   }
 ]

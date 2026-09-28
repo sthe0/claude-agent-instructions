@@ -13,6 +13,7 @@ import json
 import sys
 import time
 import types
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -675,3 +676,82 @@ def test_scan_wires_crutch_regressions_into_repo_root_scan(tmp_path, monkeypatch
     monkeypatch.setattr(sd, "CRUTCH_REGISTRY_HISTORY_PATH", tmp_path / "hist.json")
     findings = sd.scan([], tmp_path, settings_paths=[], scan_hooks=False)
     assert any(f.kind == "crutch-defer-overdue" for f in findings)
+
+
+# ── scan_writer_gate_advisories ─────────────────────────────────────────────
+#
+# The published-text gate records each fail-open to a JSONL sink and then
+# allows. Nothing read that sink, so a route the gate could not resolve went on
+# passing unresolved publications invisibly. These tests pin the scan that turns
+# the sink into a signal, and pin its fail-open behaviour: a scanner that raises
+# on its own diagnostics file is worse than one that reports nothing.
+
+def _advisory(kind="UNRESOLVED", shape=7, age_days=0.0):
+    when = datetime.now(timezone.utc) - timedelta(days=age_days)
+    return json.dumps({
+        "kind": kind,
+        "shape": shape,
+        "command_sha256": "0" * 64,
+        "timestamp": when.isoformat(),
+    })
+
+
+def test_writer_gate_advisory_in_window_is_flagged(tmp_path):
+    sink = tmp_path / "advisories.jsonl"
+    sink.write_text(_advisory() + "\n" + _advisory(shape=4) + "\n", encoding="utf-8")
+    findings = sd.scan_writer_gate_advisories(sink=sink)
+    assert len(findings) == 1
+    assert findings[0].kind == "writer-gate-unresolved"
+    assert findings[0].path == str(sink)
+    assert "2 publication(s)" in findings[0].detail
+    assert "shape 4×1" in findings[0].detail
+    assert "shape 7×1" in findings[0].detail
+
+
+def test_writer_gate_advisory_outside_window_is_not_flagged(tmp_path):
+    sink = tmp_path / "advisories.jsonl"
+    sink.write_text(_advisory(age_days=30) + "\n", encoding="utf-8")
+    assert sd.scan_writer_gate_advisories(sink=sink, window_days=7) == []
+
+
+def test_writer_gate_only_unresolved_kind_counts(tmp_path):
+    """Control: the sink also carries the attachment-judge's fail-open records.
+    Those are a different condition and must not inflate this count."""
+    sink = tmp_path / "advisories.jsonl"
+    sink.write_text(_advisory(kind="ATTACHMENT_JUDGE_FAIL_OPEN") + "\n", encoding="utf-8")
+    assert sd.scan_writer_gate_advisories(sink=sink) == []
+
+
+def test_writer_gate_missing_sink_is_clean(tmp_path):
+    assert sd.scan_writer_gate_advisories(sink=tmp_path / "nope.jsonl") == []
+
+
+def test_writer_gate_unparsable_lines_are_skipped_not_raised(tmp_path):
+    sink = tmp_path / "advisories.jsonl"
+    sink.write_text(
+        "not json at all\n"
+        + json.dumps({"kind": "UNRESOLVED", "timestamp": "not-a-timestamp"}) + "\n"
+        + json.dumps({"kind": "UNRESOLVED"}) + "\n"
+        + "\n"
+        + _advisory() + "\n",
+        encoding="utf-8",
+    )
+    findings = sd.scan_writer_gate_advisories(sink=sink)
+    assert len(findings) == 1
+    assert "1 publication(s)" in findings[0].detail
+
+
+def test_writer_gate_null_shape_reports_unknown(tmp_path):
+    sink = tmp_path / "advisories.jsonl"
+    sink.write_text(_advisory(shape=None) + "\n", encoding="utf-8")
+    findings = sd.scan_writer_gate_advisories(sink=sink)
+    assert "shape unknown×1" in findings[0].detail
+
+
+def test_scan_can_skip_the_advisory_scan(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(sd, "scan_writer_gate_advisories", lambda: called.append(True) or [])
+    sd.scan([], None, scan_hooks=False, scan_advisories=False)
+    assert called == []
+    sd.scan([], None, scan_hooks=False, scan_advisories=True)
+    assert called == [True]

@@ -17,7 +17,7 @@ last_verified: 2026-09-27
 An investigative conclusion of the form 'X is not used / does not exist' was issued over an evidence domain that structurally could not contain X: the probes run were (a) a name-filtered grep for proxy processes on the peer host and (b) a policy-routing check on the near host, while the real mechanism was an iptables DNAT relay on the peer. The negative was then amplified into an actionable recommendation ('forgotten rudiment, can be shut down') that, if followed, would have broken the user's live VPN. Compounding: a positive counter-signal already in hand (2.7GB of tunnel egress) was rationalised as 'residue of an abandoned experiment' instead of being treated as decisive against the negative. Delegation amplified this: the fork returned a confident negative with no statement of what it had probed, and CLAUDE.md's cost discipline deliberately keeps the tool volume inside the subagent, so the parent had no way to audit the negative's coverage.
 
 ## Order & criterion
-Answer which inbound on the0.fun the yandex-cloud tunnel traffic reaches, and whether the wg-tunnel / yandex VM are still in use.
+Answer which inbound on the0.fun the cloud tunnel traffic reaches, and whether the wg-tunnel / cloud VM are still in use.
 
 **Acceptance check:** acceptance-review: the user recognises the described topology as the one they actually operate (they hold the working client links).
 
@@ -48,6 +48,20 @@ Answer which inbound on the0.fun the yandex-cloud tunnel traffic reaches, and wh
   operational knowledge — *not* by any check of mine.
 - **Resolution:** re-probed the peer VM's NAT table directly (`ssh the0.fun 'ssh the0@10.10.0.1
   "sudo iptables -t nat -L -n -v"'`), and rewrote the project's topology leaf against live state.
+
+
+### 2026-09-27 — 2026-09-27 — permission-denial cause, named twice, probed neither
+- Where it arose: Same session, the0.fun steal-report call denied by the auto-mode permission classifier
+- Working plan: Surface the steal verdict per the standing auto-surface instruction; on denial, diagnose and record an unblock recipe in project memory.
+
+
+### 2026-09-27 — 2026-09-27 — predicted a package manager's behaviour instead of simulating it
+- Where it arose: Same session, the0.fun disk cleanup: reclaiming the spare 6.8.0-136 kernel
+- Working plan: Hand the user a sudo command block: reboot onto the newer kernel, then apt-get --purge autoremove to reclaim the old one.
+## Common core & variations
+**Common:** A mechanism's behaviour was asserted from its surface rather than probed, and the assertion was carried into an artifact (a memory leaf) as if established.
+
+**Variations:** Here the subject was not an absence but a CAUSE: why a permission denial fired. I claimed first that it was a false positive on the word 'steal', then — after that fell — that it was the ssh-host-runs-bash-script SHAPE. Each claim was refuted by a single cheap probe I had not thought to run: a tail of the same log with the same word on the same host passed untouched, and after reading the script into the transcript the IDENTICAL denied command passed. The real cause was OPACITY — the classifier is context-sensitive and was denying what it could not read, not what the command did. Two wrong mechanism claims in a row, both cheaply refutable, both written into memory before being tested. The user caught it with one question. Re-norming landed as branch (a-prime) in [[acting-without-asking]] section 2.
 
 ## Cost
 Roughly a dozen extra turns of investigation plus one fork spawn, all spent on a conclusion that was
