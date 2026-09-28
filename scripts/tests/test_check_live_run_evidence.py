@@ -52,8 +52,8 @@ def test_missing_artifact_fails_rather_than_passing_vacuously(tmp_path):
 
 MUTATIONS = [
     pytest.param(
-        lambda t: t.replace("| 18 | 10.29 | 17.43 | 37.58 |", "| 18 | 10.29 | 17.43 | 22.00 |"),
-        "recomputes to 37.58",
+        lambda t: t.replace("| 50 | 3.93 | 13.47 | 39.99 |", "| 50 | 3.93 | 13.47 | 22.00 |"),
+        "recomputes to 39.99",
         id="p90-inflated",
     ),
     pytest.param(
@@ -64,19 +64,19 @@ MUTATIONS = [
         id="model-tag-swapped",
     ),
     pytest.param(
-        lambda t: t.replace("| 0 | 0.0000 | 0.1667 |", "| 0 | 0.0000 | — |"),
+        lambda t: t.replace("| 0 | 0.0000 | 0.0600 |", "| 0 | 0.0000 | — |"),
         "without a 95% upper bound",
         id="bound-erased-zero-rule",
     ),
     pytest.param(
-        lambda t: t.replace("| 45 | 0 | 0.0000 | 0.1667 |", "| 90 | 0 | 0.0000 | 0.1667 |"),
+        lambda t: t.replace("| 300 | 0 | 0.0000 | 0.0600 |", "| 90 | 0 | 0.0000 | 0.0600 |"),
         "ceiling claimed",
         id="ceiling-not-from-code",
     ),
     pytest.param(
         lambda t: t.replace(
             "`topup2-sample.json:binary_ask + drift-sample.json:binary_ask + "
-            "drift-sample.json:not_binary_ask` | 48 |",
+            "drift-sample.json:not_binary_ask + field-inputs-sample.json:binary_ask` | 80 |",
             "`ab-sample.json:outage_std` | 6 |",
         ),
         "below the required minimum",

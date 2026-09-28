@@ -113,10 +113,10 @@ a detail: four standard estimators on the n=18 deferring sample give 29.94 /
 
 | Hook | Judge | Model | Sources | n | min | median | p90 | max | Ceiling | ≥ ceiling | Fail-open share | 95% upper bound |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `hook-deferring-disposition-gate.py` | `deferring_disposition` | `haiku` | `latency-sample.json:defer + ab-sample.json:defer_std` | 18 | 10.29 | 17.43 | 37.58 | 39.99 | 45 | 0 | 0.0000 | 0.1667 |
+| `hook-deferring-disposition-gate.py` | `deferring_disposition` | `haiku` | `latency-sample.json:defer + ab-sample.json:defer_std + field-inputs-sample.json:deferring_disposition` | 50 | 3.93 | 13.47 | 39.99 | 100.75 | 300 | 0 | 0.0000 | 0.0600 |
 | `hook-escalation-diagnosis-gate.py` | `outage_escalation` | `haiku` | `latency-sample.json:outage + ab-sample.json:outage_std + drift-sample.json:outage + drift-sample.json:not_outage` | 48 | 7.19 | 18.58 | 25.96 | 53.42 | 60 | 0 | 0.0000 | 0.0625 |
-| `hook-turn-end-gate.py` | `feedback_signal` | `haiku` | `latency-sample.json:feedback + topup2-sample.json:feedback + drift-sample.json:feedback + drift-sample.json:not_feedback` | 58 | 10.73 | 13.30 | 17.54 | 19.59 | 21 | 0 | 0.0000 | 0.0517 |
-| `hook-turn-end-gate.py` | `binary_ask` | `haiku` | `topup2-sample.json:binary_ask + drift-sample.json:binary_ask + drift-sample.json:not_binary_ask` | 48 | 5.93 | 15.75 | 18.57 | 19.20 | 21 | 0 | 0.0000 | 0.0625 |
+| `hook-turn-end-gate.py` | `feedback_signal` | `haiku` | `latency-sample.json:feedback + topup2-sample.json:feedback + drift-sample.json:feedback + drift-sample.json:not_feedback + field-inputs-sample.json:feedback_signal` | 90 | 4.88 | 12.86 | 17.92 | 183.14 | 212 | 0 | 0.0000 | 0.0333 |
+| `hook-turn-end-gate.py` | `binary_ask` | `haiku` | `topup2-sample.json:binary_ask + drift-sample.json:binary_ask + drift-sample.json:not_binary_ask + field-inputs-sample.json:binary_ask` | 80 | 3.01 | 8.14 | 18.34 | 23.21 | 25 | 0 | 0.0000 | 0.0375 |
 | `hook-turn-end-gate.py` | `silent_closure` | `haiku` | `silent-closure-sample.json:signal + silent-closure-sample.json:not_signal` | 16 | 3.30 | 4.40 | 6.66 | 34.78 | 36 | 0 | 0.0000 | 0.1875 |
 | `hook-turn-end-gate.py` | `outage_escalation` | `haiku` | `latency-sample.json:outage + ab-sample.json:outage_std + drift-sample.json:outage + drift-sample.json:not_outage` | 48 | 7.19 | 18.58 | 25.96 | 53.42 | 55 | 0 | 0.0000 | 0.0625 |
 | `hook-plan-delivery-gate.py` | `approval_ask` | `haiku` | `approval-sample.json:approval + approval-sample.json:not_approval + approval2-sample.json:approval + approval2-sample.json:not_approval` | 64 | 5.88 | 12.77 | 17.29 | 19.14 | 30 | 0 | 0.0000 | 0.0469 |

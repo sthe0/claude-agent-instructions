@@ -156,7 +156,11 @@ def _latencies(pairs: list[tuple[str, str]], fails: list[str], where: str) -> li
         if series not in data:
             fails.append(f"{where}: {fname} has no series {series!r}")
             return []
-        xs.extend(float(r["latency_s"]) for r in data[series])
+        entry = data[series]
+        if isinstance(entry, dict) and "rows" in entry:
+            xs.extend(float(r["duration"]) for r in entry["rows"])
+        else:
+            xs.extend(float(r["latency_s"]) for r in entry)
     return xs
 
 
