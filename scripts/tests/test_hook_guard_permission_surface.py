@@ -831,6 +831,29 @@ def test_shell_c_payloads_empty_when_dash_c_is_the_scripts_own_argument():
     assert guard._shell_c_payloads(["bash", "script.sh", "-c", "x"]) == []
 
 
+
+# Round-3 review blocking 2: stopping at the first non-`-` token also stopped at
+# an option's own argument (`-o pipefail`) and at `+`-options, silencing G2/G4.
+_SHELL_OPTION_PREFIXES = ["-o pipefail", "+o posix", "-O extglob", "+x", "--rcfile F", "--init-file F", "-e -o pipefail"]
+
+
+@pytest.mark.parametrize("prefix", _SHELL_OPTION_PREFIXES)
+def test_g2_fires_through_a_bash_c_wrapper_after_shell_options(prefix):
+    command = f"bash {prefix} -c 'claude --dangerously-skip-permissions -p x'"
+    decision, branch, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert (decision, branch) == ("ask", "G2")
+
+
+@pytest.mark.parametrize("prefix", _SHELL_OPTION_PREFIXES)
+def test_g4_fires_through_a_bash_c_wrapper_after_shell_options(prefix):
+    command = f"bash {prefix} -c 'python3 -m agentctl resolve-permission --session s1 --decision granted'"
+    decision, branch, _ = decide_detailed("Bash", {"command": command}, "/tmp", "default", None)
+    assert (decision, branch) == ("ask", "G4")
+
+
+def test_shell_c_payloads_stop_at_double_dash():
+    assert guard._shell_c_payloads(["bash", "--", "s", "-c", "x"]) == []
+
 # --- negative corpus (shapes that must not fire any branch) ---
 
 @pytest.mark.parametrize(

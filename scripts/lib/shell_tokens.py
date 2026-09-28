@@ -154,7 +154,7 @@ _COMMENT_START_AFTER = frozenset(" \t\n;&|()")
 _UNRECOGNIZED = (
     ">(", "<(",
     "$(", "`",
-    "$((", "((", "[[",
+    "$((", "$[", "((", "[[",
     "\\\n",
     "{", "}",
     "&",
@@ -586,10 +586,11 @@ def _recognized(
     clause (iv) first-word (which would see "cd", the wrong word entirely)
     adds nothing. So this branch re-scopes clause (iv) to the OWNING
     statement -- the text from the nearest `;`/`&`/real-newline before the
-    operator onward -- rather than dropping it outright: this keeps
-    `_recognized` catching an unrecognized/unsafe command on the heredoc's
-    OWN line (a case `_pipeline_consumers_ok` cannot short-circuit for since
-    it runs only inside `_removal_regions`, never as a standalone pre-filter).
+    operator onward -- rather than dropping it outright. Since the operator
+    position is taken from `_removal_regions`, this owning-statement check
+    sees the same window `_pipeline_consumers_ok` already checked there, so it
+    is intentionally redundant: kept as a local, fail-closed restatement of
+    clause (iv), not as a check that catches anything the walk misses.
 
     A backslash-newline continuation is NOT such a boundary -- it joins two
     written lines into one logical statement, so `_last_statement_boundary`
@@ -617,7 +618,13 @@ def _recognized(
         return False
     head = command_line(command)
     if allow_prior_statements:
-        full_pos = command.find("<<")
+        # The operator position comes from the same quote- and comment-aware
+        # walk that later blanks the body; a plain `str.find` could land on a
+        # decoy `<<` (inside quotes) and check the wrong prefix.
+        regions = _removal_regions(command, consumers)
+        if regions is None:
+            return False
+        full_pos = regions[0][0] if regions else -1
         if full_pos == -1:
             if any(token in head for token in _UNRECOGNIZED):
                 return False

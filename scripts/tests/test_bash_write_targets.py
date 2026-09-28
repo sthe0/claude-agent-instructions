@@ -313,3 +313,17 @@ def test_the_real_replayed_later_line_heredoc_commands_have_no_write_target(row_
 def test_a_heredoc_written_script_run_by_a_later_bash_statement_keeps_its_write_target():
     # Same result before and after the round-3 whole-command `<<` search.
     assert command_write_targets("cat <<'EOF' > f\nx\nEOF\nbash f", CWD) == ["/w/f"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # `$[...]` is one arithmetic word in bash; its `<<` is a shift, not a heredoc.
+        "cd D\ncat $[1<<2 ]\necho x > /s/settings.json\n2",
+        # A quoted decoy `<<` must not decide which prefix gets checked.
+        "cd D\ncat \"<<\"\ncat $((1<<2 ))\necho x > /s/settings.json\n2",
+    ],
+)
+def test_an_arithmetic_shift_after_a_prior_line_does_not_hide_a_real_redirect(command):
+    # Round-3 review blocking 1: both returned no target after 55148c3.
+    assert command_write_targets(command, CWD) == ["/s/settings.json"]

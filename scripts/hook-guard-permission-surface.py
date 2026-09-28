@@ -449,6 +449,9 @@ def _short_flag_cluster_has_c(tok: str) -> bool:
     return tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:]
 
 
+_SHELL_OPTIONS_WITH_ARGUMENT = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+
+
 def _shell_c_payloads(seg: list[str]) -> list[str]:
     """Payload strings from a `sh|bash|zsh -c PAYLOAD` invocation, or from an
     `eval PAYLOAD...` invocation — empty when `seg` is neither.
@@ -471,17 +474,21 @@ def _shell_c_payloads(seg: list[str]) -> list[str]:
     program = widening_targets.program_name(stripped[0]).casefold()
     if program not in _SHELL_INTERPRETERS:
         return []
-    for i, tok in enumerate(stripped[1:], start=1):
-        if not tok.startswith("-"):
-            # round-3 nit 3: a shell parses its own flags only up to the
-            # first non-option token -- `bash script.sh -c x` runs a SCRIPT
-            # (positional operand `script.sh`), and that script's own `-c x`
-            # are ITS arguments, not `bash`'s. Scanning past this point used
-            # to misread a script's own `-c` argument as the shell's payload
-            # flag, feeding a false payload string into the G2 recursion.
+    i = 1
+    while i < len(stripped):
+        tok = stripped[i]
+        if tok == "--":
             break
-        if _short_flag_cluster_has_c(tok):
+        if not tok.startswith(("-", "+")):
+            # round-3 nit 3: a shell parses its own flags only up to the
+            # first operand -- `bash script.sh -c x` runs a SCRIPT, and that
+            # script's own `-c x` are ITS arguments, not `bash`'s.
+            break
+        if tok.startswith("-") and _short_flag_cluster_has_c(tok):
             return [stripped[i + 1]] if i + 1 < len(stripped) else []
+        # `-o pipefail`, `+O extglob`, `--rcfile F`: the option's own argument
+        # is not an operand, so skip it rather than stop on it.
+        i += 2 if tok in _SHELL_OPTIONS_WITH_ARGUMENT else 1
     return []
 
 
