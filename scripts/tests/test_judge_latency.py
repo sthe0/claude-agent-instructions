@@ -54,11 +54,21 @@ _RESOLUTION_REMINDER = _load_hook("hook-resolution-reminder.py")
 
 def _samples(row: judge_latency.Row) -> "list[float]":
     """Every latency the row claims to summarise, read back out of the committed
-    raw samples rather than out of the row."""
+    raw samples rather than out of the row.
+
+    Two on-disk shapes: the older `{series: [{"latency_s": ...}, ...]}` sample
+    files, and `field-inputs-sample.json`'s `{judge: {"rows": [{"duration":
+    ...}, ...]}}` (samples/judge-latency/field_inputs.py's own committed
+    output, whose row schema is pinned by
+    test_convergence_r8_judge_field_latency.py and not renameable here)."""
     observations: list[float] = []
     for filename, series in row.provenance:
         data = json.loads((judge_latency.SAMPLES_DIR / filename).read_text(encoding="utf-8"))
-        observations.extend(float(entry["latency_s"]) for entry in data[series])
+        entry = data[series]
+        if isinstance(entry, dict) and "rows" in entry:
+            observations.extend(float(r["duration"]) for r in entry["rows"])
+        else:
+            observations.extend(float(e["latency_s"]) for e in entry)
     return observations
 
 
@@ -104,9 +114,13 @@ def test_every_row_re_derives_from_the_samples_it_cites(judge):
 def test_the_p90_estimator_is_nearest_rank_not_the_truncating_variant():
     """`sorted[ceil(0.9n)-1]` vs `sorted[int(0.9n)-1]`: the two agree whenever
     0.9n is integral, so a sample where they DISAGREE is what pins the choice.
-    The deferring row is such a sample (37.58 vs 29.94), and it is the row whose
-    p90 sets the largest floor in the repo."""
-    observations = _samples(judge_latency.row("deferring_disposition"))
+    The outage_escalation row is such a sample (25.96 vs 25.83, n=48). The
+    deferring_disposition row used to anchor this test until the 2026-09-28
+    field-latency merge (field-cap-decision.json) brought its n to 50, an
+    exact multiple of 10 like the other two merged judges (feedback_signal
+    n=90, binary_ask n=80) -- 0.9*n is now integral for all three, so none of
+    them discriminates any more."""
+    observations = _samples(judge_latency.row("outage_escalation"))
     ordered = sorted(observations)
     n = len(ordered)
     nearest_rank = ordered[math.ceil(0.9 * n) - 1]

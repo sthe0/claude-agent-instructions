@@ -108,7 +108,7 @@ JUDGE_REVIEWER = "judge:haiku"
 # run this model has been seen to make on ANY judge prompt. Its row in that
 # module is UNMEASURED, so this default is the only number available to it; the
 # test-suite asserts the literal still equals what that rule computes.
-_ACCEPTANCE_JUDGE_TIMEOUT_S = 55
+_ACCEPTANCE_JUDGE_TIMEOUT_S = 185
 def _prompt_argv(runtime_host: str, complexity: str) -> list[str]:
     """Launch argv for a judge/enumerate call, WITHOUT the prompt.
 
@@ -478,7 +478,7 @@ _BINARY_ASK_TRAILING_DECORATION = "*_`~)]}>\"'»”’ \t\r\n"
 # this model has made on ANY judge prompt. A caller inside a hook budget passes
 # its own, narrower, per-judge ceiling and never reaches this number; the
 # test-suite asserts the literal still equals what that rule computes.
-_BINARY_ASK_TIMEOUT_S = 55
+_BINARY_ASK_TIMEOUT_S = 185
 
 _BINARY_ASK_PROMPT = (
     "You are given the FINAL message of an AI assistant's turn, written in any "
@@ -701,7 +701,7 @@ def judge_binary_ask(
 # has no measured latency row of its own (lib/judge_latency.py's MEASURED
 # table carries "published_attachment" as n=0/UNMEASURED_NOTE), so the family
 # ceiling is the only number available to it.
-_PUBLISHED_ATTACHMENT_TIMEOUT_S = 55
+_PUBLISHED_ATTACHMENT_TIMEOUT_S = 185
 
 _PUBLISHED_ATTACHMENT_JUDGE_PROMPT = (
     "You are given the NAME and a leading CONTENT EXCERPT of a file about to be "
@@ -855,7 +855,7 @@ _SILENT_CLOSURE_JUDGE_PROMPT = (
 # max of 53.42 s, not this judge's own tail). The two constants stay SEPARATE
 # names because each judge's in-hook ceiling is derived per row, and a shared
 # name here would invite a caller to reuse whichever it imported first.
-_DEFERRING_DISPOSITION_TIMEOUT_S = 55
+_DEFERRING_DISPOSITION_TIMEOUT_S = 185
 
 _DEFERRING_DISPOSITION_JUDGE_PROMPT = (
     "You are given the question and every option of a menu an AI assistant is "
@@ -1019,7 +1019,7 @@ def judge_outage_escalation(
 # to lib.judge_latency.LAST_RESORT_CEILING_S by
 # test_the_last_resort_ceiling_is_the_family_maximum_plus_one, same as every
 # other last-resort default on this module.
-_SILENT_CLOSURE_TIMEOUT_S = 55
+_SILENT_CLOSURE_TIMEOUT_S = 185
 
 
 def judge_silent_closure(
@@ -1166,7 +1166,7 @@ def judge_deferring_disposition(
 # _DEFERRING_DISPOSITION_TIMEOUT_S — outside a hook budget the ceiling covers
 # the whole model family, not one prompt. Named distinctly from those two
 # (rather than reusing either) for the same reason _DEFERRING_DISPOSITION_
-# TIMEOUT_S is not shared with _BINARY_ASK_TIMEOUT_S even though both are 55
+# TIMEOUT_S is not shared with _BINARY_ASK_TIMEOUT_S even though both are 185
 # today: each judge's in-hook ceiling is derived per its own measured row, and
 # a shared name here would invite a caller to reuse whichever it imported
 # first. Deliberately NOT named `_LANDING_DISCIPLINE_TIMEOUT_S` — that name is
@@ -1174,7 +1174,7 @@ def judge_deferring_disposition(
 # (derived from judge_latency.call_ceiling_s('landing_discipline') with
 # headroom, a different number from this family-wide last resort), so the two
 # constants in the two files never collide or get mistaken for each other.
-_LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S = 55
+_LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S = 185
 
 _LANDING_DISCIPLINE_JUDGE_PROMPT = (
     "You are given the question and every option of an AskUserQuestion menu an "
@@ -1268,7 +1268,7 @@ def judge_landing_discipline_ask(
 # _ACCEPTANCE_JUDGE_TIMEOUT_S: this judge runs inside `agentctl question-raise`,
 # outside every hook, so no harness budget narrows it and none of the per-row
 # in-hook ceilings apply. Its own latency row is UNMEASURED and says so.
-_QUESTION_MATERIALITY_TIMEOUT_S = 55
+_QUESTION_MATERIALITY_TIMEOUT_S = 185
 
 _QUESTION_MATERIALITY_PROMPT = (
     "A plan carries CONTROLS -- the checks that decide whether its stages passed. "
@@ -1363,7 +1363,7 @@ def judge_question_materiality(
         judge_ledger.set_current_judge(None)
 
 
-_APPROVAL_ASK_TIMEOUT_S = 55
+_APPROVAL_ASK_TIMEOUT_S = 185
 
 _APPROVAL_ASK_PROMPT = (
     "You are given every user-facing string of an AskUserQuestion an AI coding "

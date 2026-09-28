@@ -201,38 +201,41 @@ def test_multi_question_ask_denied_when_only_the_second_menu_is_defective(monkey
 
 # --- ask-wide judge budget (_ASK_JUDGE_BUDGET_S) ------------------------------
 #
-# Over n=18 this judge runs at median 17.43s, p90 37.58s, max 39.99s
-# (lib/judge_latency.py), so a multi-question ask judging every fired menu would
-# run several times past any timeout that may sit in front of an interactive
-# menu. decide() instead opens ONE _ASK_JUDGE_BUDGET_S=45 deadline for the whole
-# call and gives each judge call whatever remains, refusing (fail-open) once too
-# little remains for a call to plausibly finish (_ASK_JUDGE_MIN_CALL_S=38, this
-# judge's ceil(p90)). These tests inject a fake monotonic clock so no test here
-# waits on a real timer.
+# Over the merged n=50 sample this judge runs at median 13.47s, p90 39.99s, max
+# 100.75s (lib/judge_latency.py). decide() opens ONE _ASK_JUDGE_BUDGET_S=300
+# deadline for the whole call and gives each judge call whatever remains,
+# refusing (fail-open) once too little remains for a call to plausibly finish
+# (_ASK_JUDGE_MIN_CALL_S=40, this judge's ceil(p90)). 300 is a fixed whole-gate
+# worst-case wait (the 2026-09-28 cap decision,
+# samples/judge-latency/field-cap-decision.json), not derived from this
+# distribution, so it clears the merged sample's own max with wide headroom.
+# These tests inject a fake monotonic clock so no test here waits on a real
+# timer.
 
 def test_budget_exhausted_after_first_menu_skips_second_judge_call(monkeypatch):
     """The declared K=1 limit, pinned rather than left as a hope: a second fired
-    menu is reached only if the first call returned with the 38s floor still left,
-    i.e. in under 7s — faster than the 10.29s fastest run ever measured. So a
-    multi-menu ask is judged on its first fired menu and allowed on the rest, and
-    the hook's whole budget is also its per-call ceiling."""
+    menu is reached only if the first call returned with the 40s floor still left,
+    i.e. in under 260s — well above the 100.75s slowest run ever measured, so in
+    practice this branch is essentially always reached. So a multi-menu ask is
+    judged on its first fired menu and allowed on the rest, and the hook's whole
+    budget is also its per-call ceiling."""
     payload = {
         "tool_name": "AskUserQuestion",
         "tool_input": {"questions": [DEFECTIVE, DEFECTIVE]},
     }
     calls: list = []
-    # deadline calc -> 0.0 (deadline=45.0); Q1 remaining calc -> 0.0 (remaining
-    # 45.0, judged); Q2 remaining calc -> 10.0 (remaining 35.0 < the 38 floor).
-    monkeypatch.setattr(_mod, "time", _FakeTime([0.0, 0.0, 10.0]))
+    # deadline calc -> 0.0 (deadline=300.0); Q1 remaining calc -> 0.0 (remaining
+    # 300.0, judged); Q2 remaining calc -> 265.0 (remaining 35.0 < the 40 floor).
+    monkeypatch.setattr(_mod, "time", _FakeTime([0.0, 0.0, 265.0]))
     assert _mod.decide(payload, runner=_runner("NO", calls)) is None
     assert len(calls) == 1, "budget exhaustion must stop judging before the second menu"
 
 
 def test_remaining_below_the_floor_never_calls_the_judge(monkeypatch):
     calls: list = []
-    # deadline calc -> 0.0 (deadline=45.0); Q1 remaining calc -> 10.0 (remaining
-    # 35.0 < the 38 floor) -- exhausted before even the first call.
-    monkeypatch.setattr(_mod, "time", _FakeTime([0.0, 10.0]))
+    # deadline calc -> 0.0 (deadline=300.0); Q1 remaining calc -> 265.0 (remaining
+    # 35.0 < the 40 floor) -- exhausted before even the first call.
+    monkeypatch.setattr(_mod, "time", _FakeTime([0.0, 265.0]))
     assert _mod.decide(_payload(DEFECTIVE), runner=_runner("YES", calls)) is None
     assert calls == [], "a budget already below the floor must not spend it on a doomed call"
 
@@ -246,10 +249,10 @@ def test_call_timeout_is_the_remaining_budget_and_stays_under_the_per_call_ceili
 
         return RunResult(0, "NO", "")
 
-    # deadline calc -> 0.0 (deadline=45.0); Q1 remaining calc -> 5.0 (remaining 40.0).
+    # deadline calc -> 0.0 (deadline=300.0); Q1 remaining calc -> 5.0 (remaining 295.0).
     monkeypatch.setattr(_mod, "time", _FakeTime([0.0, 5.0]))
     _mod.decide(_payload(DEFECTIVE), runner=run)
-    assert seen.get("timeout") == 40.0
+    assert seen.get("timeout") == 295.0
     assert _mod._ASK_JUDGE_MIN_CALL_S <= seen["timeout"] <= _mod._ASK_JUDGE_BUDGET_S
     # Drawn from this hook's own budget, not inherited from advisor's last-resort
     # default -- which is sized for a caller with no timeout above it at all and

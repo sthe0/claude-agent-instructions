@@ -125,12 +125,12 @@ DESIRED = [
     # Hard gate: deny an AskUserQuestion whose EVERY option defers or refuses work
     # the agent holds the rights and the diagnosis to do now (ticket / backlog /
     # "leave as is"), with no branch that does it and no stated reason it cannot.
-    # 50 = hook-deferring-disposition-gate.py's own _ASK_JUDGE_BUDGET_S=45 plus
-    # interpreter-start headroom. The superseded 25 came from a four-run note
-    # ("11.6-13.5s"); over n=18 this judge's median is 17.43s and its p90 37.58s
-    # (lib/judge_latency.py), so the harness cap was binding below the hook's own
-    # decide() deadline and killing the call before any verdict came back.
-    ("PreToolUse",       "AskUserQuestion", "hook-deferring-disposition-gate.py", 50),
+    # 305 = hook-deferring-disposition-gate.py's own _ASK_JUDGE_BUDGET_S=300 plus
+    # interpreter-start headroom. 300 is a fixed whole-gate worst-case wait per
+    # the 2026-09-28 cap decision (samples/judge-latency/field-cap-decision.json),
+    # not a value derived from this judge's own distribution — see that hook's
+    # own comment for the merged n=50 stats and the drift-monitoring command.
+    ("PreToolUse",       "AskUserQuestion", "hook-deferring-disposition-gate.py", 305),
     # Hard gate: deny an AskUserQuestion, raised while the resolution gate is
     # open, whose menu proposes a PR/merge-review delivery path in a repo where
     # this machine holds direct push rights (direct_push_no_pr_hint's condition
@@ -185,14 +185,14 @@ DESIRED = [
     # create, issue edit, or a machine-local seam verb) whose text body has no
     # tech-writer witness bound to it in the transcript -- see
     # scripts/hook-published-text-writer-gate.py's module docstring.
-    # 60 = this hook's own _PUBLISHED_TEXT_JUDGE_BUDGET_S, at or above
+    # 190 = this hook's own _PUBLISHED_TEXT_JUDGE_BUDGET_S, at or above
     # judge_latency.LAST_RESORT_CEILING_S + SIZE_HEADROOM_S since the
     # published_attachment judge is UNMEASURED (n=0) and has no per-judge
     # floor to size a tighter budget against. That ceiling is a running max
     # over measured rows and can grow, so this margin is re-checked live by
     # test_each_hooks_budget_covers_the_calls_it_declares rather than pinned
     # to a specific ceiling value here.
-    ("PreToolUse",       "Bash",  "hook-published-text-writer-gate.py", 60),
+    ("PreToolUse",       "Bash",  "hook-published-text-writer-gate.py", 190),
     ("PostToolUse",      "Write", "hook-self-critique-reminder.py",  5),
     # Nudge when an AskUserQuestion answer is free text rather than an offered
     # option label: a correction delivered this way bypasses the
@@ -253,15 +253,16 @@ DESIRED = [
     # engaged this turn). Loop-guarded (stop_hook_active + a durable per-message
     # marker under state/turn-gate/) and blockers from every guardian aggregate
     # into one block, so the worst case is exactly one extra model turn.
-    # 110 = the hook's own _TURN_JUDGE_BUDGET_S=105 plus interpreter-start
+    # 305 = the hook's own _TURN_JUDGE_BUDGET_S=300 plus interpreter-start
     # headroom. It runs up to FOUR judges in one invocation, so its
     # whole-invocation budget is larger than the single-judge gates'; at 5
-    # every one of them was killed, and the superseded 74 no longer covered
-    # the worst-case-safe posture once silent_closure was added:
-    # ceil(feedback's ceiling) + ceil(binary_ask's ceiling) +
-    # ceil(silent_closure's ceiling) + outage's floor + head-room =
-    # 21 + 21 + 36 + 26 + 1 = 105 (lib/judge_latency.py).
-    ("Stop",             None,    "hook-turn-end-gate.py",   110),
+    # every one of them was killed, and the superseded 105 no longer applies
+    # since the 2026-09-28 cap decision fixed 300 as a whole-gate worst-case
+    # wait (samples/judge-latency/field-cap-decision.json) rather than sizing
+    # the budget off ceil(feedback's ceiling) + ceil(binary_ask's ceiling) +
+    # ceil(silent_closure's ceiling) + outage's floor + head-room, which now
+    # equals 212 + 25 + 36 + 26 + 1 = 300 (lib/judge_latency.py).
+    ("Stop",             None,    "hook-turn-end-gate.py",   305),
     # Advisory (not a gate): nudge when a launched run/graph URL appeared in
     # this session's tool output but was never surfaced to the user in a chat
     # message — the structural guard for CLAUDE.md long-running-jobs /

@@ -119,15 +119,24 @@ except BaseException as exc:
 # `stage="budget"`, and indistinguishable from a healthy verdict in every
 # timeout statistic). Concretely: ceil(feedback's ceiling) + ceil(binary_ask's
 # ceiling) + ceil(silent_closure's ceiling) + outage's floor + head-room =
-# 21 + 21 + 36 + 26 + 1 = 105, which leaves exactly outage's own floor uneaten
-# in the worst case (105 - 21 - 21 - 36 = 27 >= 26). It is deliberately NOT the
-# sum of the four per-call ceilings (21 + 21 + 36 + 55 = 133 before head-room):
+# 212 + 25 + 36 + 26 + 1 = 300, which leaves exactly outage's own floor uneaten
+# in the worst case (300 - 212 - 25 - 36 = 27 >= 26). It is deliberately NOT the
+# sum of the four per-call ceilings (212 + 25 + 36 + 55 = 328 before head-room):
 # a budget covering four simultaneous worst cases including the outage tail
-# would hold the turn boundary for well over two minutes to buy a co-occurrence
-# never observed. silent_closure's own ceiling (36) is driven by a single
-# outlier observation in its latency sample (34.78s, a genuine model call, not
-# a fabricated fail-open) — see lib/judge_latency.py's row comment.
-_TURN_JUDGE_BUDGET_S = 105
+# would hold the turn boundary even longer to buy a co-occurrence never
+# observed. silent_closure's own ceiling (36) is driven by a single outlier
+# observation in its latency sample (34.78s, a genuine model call, not a
+# fabricated fail-open) — see lib/judge_latency.py's row comment.
+#
+# 300 itself is a fixed whole-gate worst-case wait, not a derived minimum: the
+# 2026-09-28 cap decision (samples/judge-latency/field-cap-decision.json) set
+# it directly ("потолок 300с... 5 минут не страшно изредка подождать") after
+# merging field-inputs-sample.json's 32 real calls per judge into
+# feedback_signal, binary_ask and deferring_disposition's rows with zero
+# outliers excluded ("Ничего не исключать"). feedback_signal's cap (212) is
+# the remainder of 300 after the other four terms; binary_ask's cap (25) is
+# its merged row's own `call_ceiling_s`.
+_TURN_JUDGE_BUDGET_S = 300
 
 # Per-judge ceiling and floor, one pair per call site. They are NOT one shared
 # pair: these four judges answer different prompts and their measured latencies
@@ -140,9 +149,9 @@ _TURN_JUDGE_BUDGET_S = 105
 # ca7c7e0 established for hook-plan-delivery-gate.py rather than sitting at
 # equality: a constant pinned by equality to a computed ceiling has no
 # head-room at all against a population already observed to move twice.
-_TURN_FEEDBACK_CALL_CAP_S = 21
+_TURN_FEEDBACK_CALL_CAP_S = 212
 _TURN_FEEDBACK_MIN_CALL_S = 18
-_TURN_BINARY_ASK_CALL_CAP_S = 21
+_TURN_BINARY_ASK_CALL_CAP_S = 25
 _TURN_BINARY_ASK_MIN_CALL_S = 19
 _TURN_SILENT_CLOSURE_CALL_CAP_S = 36
 _TURN_SILENT_CLOSURE_MIN_CALL_S = 7

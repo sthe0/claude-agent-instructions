@@ -99,9 +99,20 @@ MEASURED: "dict[str, dict[str, Row]]" = {
     advisor._JUDGE_MODEL: {
         "deferring_disposition": Row(
             judge="deferring_disposition",
-            n=18, min_s=10.29, median_s=17.43, p90_s=37.58, max_s=39.99,
+            # Merged 2026-09-28 with field-inputs-sample.json's 32 real-field
+            # calls per the cap decision (field-cap-decision.json): the user
+            # chose to exclude no outliers, so all 32 join the prior n=18
+            # synthetic series. The field calls run far slower on the tail (up
+            # to 100.75s against the synthetic series' 39.99 max) because they
+            # hit real, non-uniform model-side latency rather than hand-written
+            # prompts; both the p90 (37.58 -> 39.99) and the max (39.99 ->
+            # 100.75) move. See samples/judge-latency/README.md's field-inputs
+            # section for the sorted durations and outlier discussion.
+            n=50, min_s=3.930432182736695, median_s=13.466927509326489,
+            p90_s=39.99, max_s=100.74526904150844,
             provenance=(("latency-sample.json", "defer"),
-                        ("ab-sample.json", "defer_std")),
+                        ("ab-sample.json", "defer_std"),
+                        ("field-inputs-sample.json", "deferring_disposition")),
         ),
         "outage_escalation": Row(
             judge="outage_escalation",
@@ -147,11 +158,23 @@ MEASURED: "dict[str, dict[str, Row]]" = {
             # median moves modestly (+1.45, the old regime being half the
             # population) but p90 and max move materially (+4.20 and +5.54) —
             # the tail is where the regime change shows.
-            n=58, min_s=10.73, median_s=13.30, p90_s=17.54, max_s=19.59,
+            #
+            # Merged again 2026-09-28 with field-inputs-sample.json's 32 real
+            # field calls per the cap decision (field-cap-decision.json): no
+            # outliers excluded. min drops (10.73 -> 4.876, a short real prompt
+            # answered fast) and the max jumps to 183.14s on one field call
+            # whose prompt size does NOT explain it (see README: a
+            # similar-sized prompt took 5.5s) — kept standing, not trimmed,
+            # same discipline as outage_escalation's single-observation max
+            # above. p90 barely moves (17.54 -> 17.92) since the synthetic
+            # series already carried a comparable tail.
+            n=90, min_s=4.876181811094284, median_s=12.86, p90_s=17.92,
+            max_s=183.1355803227052,
             provenance=(("latency-sample.json", "feedback"),
                         ("topup2-sample.json", "feedback"),
                         ("drift-sample.json", "feedback"),
-                        ("drift-sample.json", "not_feedback")),
+                        ("drift-sample.json", "not_feedback"),
+                        ("field-inputs-sample.json", "feedback_signal")),
         ),
         "silent_closure": Row(
             judge="silent_closure",
@@ -180,10 +203,21 @@ MEASURED: "dict[str, dict[str, Row]]" = {
             # 19.20, i.e. the whole distribution roughly doubled), which is why
             # the live ledger showed this judge killed on 69 of 76 calls at the
             # ceiling of 13 that the old series alone computed.
-            n=48, min_s=5.93, median_s=15.75, p90_s=18.57, max_s=19.20,
+            #
+            # Merged again 2026-09-28 with field-inputs-sample.json's 32 real
+            # field calls per the cap decision (field-cap-decision.json): no
+            # outliers excluded. Real field prompts run faster overall (min
+            # drops 5.93 -> 3.01, median 15.75 -> 8.145 — the synthetic
+            # topup2/drift series ran the LEAN invocation path exclusively,
+            # while the field draw includes ordinary fast turns), but the tail
+            # moves the other way: one field call reached 23.21s, above the
+            # synthetic series' own max, so both p90 and max grow.
+            n=80, min_s=3.013064108788967, median_s=8.145, p90_s=18.34,
+            max_s=23.209327002055943,
             provenance=(("topup2-sample.json", "binary_ask"),
                         ("drift-sample.json", "binary_ask"),
-                        ("drift-sample.json", "not_binary_ask")),
+                        ("drift-sample.json", "not_binary_ask"),
+                        ("field-inputs-sample.json", "binary_ask")),
         ),
         "landing_discipline": Row(
             judge="landing_discipline",

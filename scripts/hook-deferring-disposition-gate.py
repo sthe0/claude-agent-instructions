@@ -68,37 +68,32 @@ except BaseException as exc:
     raise
 
 # Whole-ask budget for the judge, and the ceiling handed to the one call it
-# funds. Two superseded numbers are worth naming, because both were set from the
-# same four-sample note ("a live judge call takes 11.6-13.5s"): the budget was
-# 20s and the ceiling was borrowed from advisor._DEFERRING_DISPOSITION_TIMEOUT_S.
-# The real distribution over n=18 (lib/judge_latency.py) is median 17.43, p90
-# 37.58, max 39.99 — so 20s was BELOW this judge's own p90 and the gate was
-# failing open on most asks it fired on, silently.
+# funds. This hook makes exactly ONE judged call per invocation, so the budget
+# is also that call's ceiling — see decide() for why the second fired menu is
+# not judged.
 #
-# The height is a judgement (how long a gate may hold an interactive menu); what
-# is machine-checked against lib/judge_latency.py is that it clears this judge's
-# per-call ceiling `ceil(max) + 1` = 41s, so the budget can never be what
-# truncates the call. This hook makes exactly ONE judged call per invocation, so
-# this number is also that call's ceiling — see decide() for why the second fired
-# menu is not judged.
-#
-# Cost of this design, named rather than hidden. (1) A multi-question ask is
-# judged on its FIRST fired menu only; the alternative (full multi-question
-# recall) needs a ~130s ceiling ahead of an interactive menu, which is not an
-# acceptable UX trade. (2) Even a single-menu ask is dropped on the tail: the
-# budget covers this judge's p90, not its maximum, and every drop fails OPEN.
-# No run in the n=18 sample exceeded 45s, which by the rule of three bounds the
-# exceedance rate at roughly 3/18 (~17%) with 95% confidence — NOT at zero, and
-# the plan's own final check refuses a claim that reads it as zero.
-_ASK_JUDGE_BUDGET_S = 45
+# 300 is a fixed whole-gate worst-case wait, not a derived minimum: the
+# 2026-09-28 cap decision (samples/judge-latency/field-cap-decision.json) set
+# it directly ("потолок 300с... 5 минут не страшно изредка подождать"), after
+# merging field-inputs-sample.json's 32 real field calls into this judge's row
+# with zero outliers excluded ("Ничего не исключать"). The merged distribution
+# (n=50, lib/judge_latency.py) is median 13.47, p90 39.99, max 100.75 — its own
+# `call_ceiling_s` (`ceil(max) + 1` = 102) sits well inside 300, so the fixed
+# budget was chosen for headroom against future drift, not because the merged
+# row required it. Drift is watched, not re-derived here: a non-zero or rising
+# timeout/skip rate for this judge in the execution ledger
+# (`python3 scripts/judge-usage-report.py --check-drift --since 30d`) is the
+# signal to revisit this cap, per field-cap-decision.json's own
+# `drift_monitoring` block.
+_ASK_JUDGE_BUDGET_S = 300
 
 # Below this remaining budget a judge call cannot plausibly finish and would only
 # spend the wait on a guaranteed timeout; stop judging and fail open instead,
 # exactly like every other unreachable-judge path in this hook. This is
-# lib/judge_latency.py's floor rule, `ceil(p90)` over n=18 — comfortably above
-# the fastest run observed (10.29s), which is what makes a call started with
-# exactly the floor left reachable rather than doomed.
-_ASK_JUDGE_MIN_CALL_S = 38
+# lib/judge_latency.py's floor rule, `ceil(p90)` over the merged n=50 sample —
+# comfortably above the fastest run observed (3.93s), which is what makes a
+# call started with exactly the floor left reachable rather than doomed.
+_ASK_JUDGE_MIN_CALL_S = 40
 
 # Upper bound on a question stem embedded in the deny reason (_truncate_stem)
 # — long enough to identify the offending menu, short enough not to reproduce
@@ -194,11 +189,14 @@ def decide(payload: dict, *, runner: Callable | None = None) -> dict | None:
     (_ASK_JUDGE_MIN_CALL_S), judging stops and the ask is allowed — fail-open,
     same posture as every other unreachable-judge path.
 
-    That floor is what makes the loop single-call in practice, and the limit is
-    declared rather than discovered: a second fired menu is reached only if the
-    first call returned with _ASK_JUDGE_MIN_CALL_S still left, i.e. in under 7s —
-    faster than the fastest run ever measured for this judge. So a multi-menu ask
-    is judged on its first fired menu and allowed on the rest.
+    That floor bounds the loop, not the call count: a second fired menu is
+    reached whenever the first call returned with _ASK_JUDGE_MIN_CALL_S still
+    left, i.e. in under 260s (budget 300 - floor 40) — comfortably above every
+    run ever measured for this judge (max 100.75s, n=50, lib/judge_latency.py).
+    So under the 2026-09-28 cap decision's 300s budget a multi-menu ask is
+    ordinarily judged on more than its first fired menu, unlike the pre-merge
+    45s budget this comment used to describe, where a second call was
+    effectively unreachable.
 
     ``runner`` is injected straight into advisor.judge_deferring_disposition
     (None -> that judge fails open to False, never denies).

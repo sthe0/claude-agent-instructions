@@ -174,20 +174,23 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
 TIMEOUT_REQUIREMENTS: "tuple[tuple[str, int, str], ...]" = (
     ("hook-escalation-diagnosis-gate.py", 60,
      "one outage-escalation judge under a 60s whole-invocation budget"),
-    ("hook-deferring-disposition-gate.py", 45,
-     "one deferring-disposition judge, on the first fired menu, under a 45s "
-     "whole-invocation budget"),
-    ("hook-turn-end-gate.py", 105,
-     "up to four judges in one invocation under a 105s whole-invocation budget"),
+    ("hook-deferring-disposition-gate.py", 300,
+     "one deferring-disposition judge, on the first fired menu, under a 300s "
+     "whole-invocation budget (fixed worst-case wait per the 2026-09-28 cap "
+     "decision, samples/judge-latency/field-cap-decision.json)"),
+    ("hook-turn-end-gate.py", 300,
+     "up to four judges in one invocation under a 300s whole-invocation budget "
+     "(per the 2026-09-28 cap decision, samples/judge-latency/"
+     "field-cap-decision.json)"),
     ("hook-plan-delivery-gate.py", 30,
      "one approval-ask judge under a 30s whole-invocation budget"),
     ("hook-resolution-reminder.py", 22,
      "one landing-discipline judge under a 22s whole-invocation budget — "
      "binds BOTH this hook's registrations (PreToolUse/AskUserQuestion and "
      "UserPromptSubmit), since this table is keyed by bare basename"),
-    ("hook-published-text-writer-gate.py", 60,
+    ("hook-published-text-writer-gate.py", 190,
      "one published_attachment judge, UNMEASURED (lib/judge_latency.py "
-     "MEASURED row n=0), under a 60s whole-invocation budget — at or above "
+     "MEASURED row n=0), under a 190s whole-invocation budget — at or above "
      "LAST_RESORT_CEILING_S + SIZE_HEADROOM_S since no per-judge floor exists "
      "to size against"),
 )

@@ -1330,13 +1330,14 @@ def test_budget_drops_the_tail_and_records_the_skip(
     this change exists to remove."""
     clock = _FakeClock()
     _pin_budget_clock(monkeypatch, clock)
-    # 40s per call: two of them leave 25s of the 105s budget (silent_closure's
+    # 140s per call: two of them leave 20s of the 300s budget (silent_closure's
     # prefilter is silent on this fixture and costs no clock time — see
     # test_a_judge_whose_prefilter_is_silent_costs_no_budget), under the outage
     # judge's own 26s floor (lib/judge_latency.py, ceil(p90) over the re-sampled
-    # row) — while still leaving the SECOND call startable, so what this pins is
-    # a tail drop and not a budget that dies on its first judge.
-    runner = _recording_runner(elapsed=40.0, clock=clock)
+    # row) — while still leaving the SECOND call startable (160s remains after
+    # the first, well above binary_ask's 19s floor), so what this pins is a
+    # tail drop and not a budget that dies on its first judge.
+    runner = _recording_runner(elapsed=140.0, clock=clock)
 
     ctx = _mod.build_context(
         {"transcript_path": str(_all_three_prefilters(tmp_path))}, runner=runner
@@ -1352,7 +1353,7 @@ def test_a_dropped_judge_fails_open(tmp_path, isolated_state, monkeypatch):
     these judges feeds a Stop-gate BLOCKER, so an unrun judge must not block."""
     clock = _FakeClock()
     _pin_budget_clock(monkeypatch, clock)
-    runner = _recording_runner(text="YES", elapsed=40.0, clock=clock)
+    runner = _recording_runner(text="YES", elapsed=140.0, clock=clock)
 
     ctx = _mod.build_context(
         {"transcript_path": str(_all_three_prefilters(tmp_path))}, runner=runner
@@ -1457,12 +1458,12 @@ def test_main_opens_the_budget_before_stdin_json_parsing(
     real_json_load = json.load
 
     def slow_json_load(fp, *a, **kw):
-        # 85s of stdin-JSON-parsing cost, spent BEFORE main() ever reaches
+        # 280s of stdin-JSON-parsing cost, spent BEFORE main() ever reaches
         # build_context. Chosen so the remainder (20s) falls INSIDE the first
         # judge's [floor, cap] band: a smaller cost would leave more than the
-        # 21s cap and the first timeout would read 21 either way, making the test
-        # blind to the very mutation it exists for.
-        clock.now += 85.0
+        # 212s cap and the first timeout would read 212 either way, making the
+        # test blind to the very mutation it exists for.
+        clock.now += 280.0
         return real_json_load(fp, *a, **kw)
 
     monkeypatch.setattr(json, "load", slow_json_load)
@@ -1479,12 +1480,12 @@ def test_main_opens_the_budget_before_stdin_json_parsing(
     assert runner.calls, "expected the feedback_signal judge to be called"
     first_name, first_timeout = runner.calls[0]
     assert first_name == "feedback_signal"
-    # 105s whole-invocation budget - 85s already spent in json.load == 20s left,
-    # below the feedback judge's 21s per-call cap -- the deadline must already
+    # 300s whole-invocation budget - 280s already spent in json.load == 20s left,
+    # below the feedback judge's 212s per-call cap -- the deadline must already
     # reflect that cost.
     assert first_timeout == 20.0, (
         f"first judge got timeout={first_timeout}s, expected 20.0s "
-        f"({_mod._TURN_JUDGE_BUDGET_S}s budget minus the 85s spent in json.load "
+        f"({_mod._TURN_JUDGE_BUDGET_S}s budget minus the 280s spent in json.load "
         "before build_context was ever entered) -- main() is not opening the "
         "budget before stdin parsing"
     )

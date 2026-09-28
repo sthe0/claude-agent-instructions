@@ -1,7 +1,7 @@
 {
   "hook": "hook-published-text-writer-gate.py",
-  "desired_registration_row": ["PreToolUse", "Bash", "hook-published-text-writer-gate.py", 60],
-  "desired_registration_source": "scripts/install-reminder-hooks.sh:180",
+  "desired_registration_row": ["PreToolUse", "Bash", "hook-published-text-writer-gate.py", 190],
+  "desired_registration_source": "scripts/install-reminder-hooks.sh:186",
   "channel_probe": [
     {
       "channel": "a",
@@ -33,7 +33,7 @@
       "session_id": "8932c664-b595-4de9-82aa-348459f76813",
       "live_transcript_path": "$CLAUDE_CONFIG_DIR/projects/-home-the0-claude-agent-instructions-published-text-gate--ptg-scratch-gate-deny/8932c664-b595-4de9-82aa-348459f76813.jsonl -- unverified provenance only, this session's sandbox cannot read the config root's projects/ tree; the claim rests on the committed extract below, not on this path existing",
       "settings_file": "_ptg_scratch/gate_deny/settings.json (scratch, not committed)",
-      "matcher": ["PreToolUse", "Bash", "hook-published-text-writer-gate.py", 60],
+      "matcher": ["PreToolUse", "Bash", "hook-published-text-writer-gate.py", 190],
       "seam": {"file": "publication-tools.local", "entries": [{"name": "stub-publish.sh", "kind": "bash_verb"}]},
       "command": "/home/the0/claude-agent-instructions-published-text-gate/_ptg_scratch/gate_deny/work/stub-publish.sh --body-file /home/the0/claude-agent-instructions-published-text-gate/_ptg_scratch/gate_deny/work/body.txt .",
       "child_task": "publish a body it did not compose (no tech-writer skill/agent invoked)",
@@ -52,7 +52,7 @@
       "session_id": "4d4c5344-da01-456b-972a-29577f814273",
       "live_transcript_path": "$CLAUDE_CONFIG_DIR/projects/-home-the0-claude-agent-instructions-published-text-gate--ptg-scratch-gate-allow/4d4c5344-da01-456b-972a-29577f814273.jsonl -- unverified provenance only, this session's sandbox cannot read the config root's projects/ tree; the claim rests on the committed extract below, not on this path existing",
       "settings_file": "_ptg_scratch/gate_allow/settings.json (scratch, not committed)",
-      "matcher": ["PreToolUse", "Bash", "hook-published-text-writer-gate.py", 60],
+      "matcher": ["PreToolUse", "Bash", "hook-published-text-writer-gate.py", 190],
       "seam": {"file": "publication-tools.local", "entries": [{"name": "stub-publish.sh", "kind": "bash_verb"}]},
       "permission_grants": ["Skill", "Write", "Bash"],
       "permission_grants_detail": [

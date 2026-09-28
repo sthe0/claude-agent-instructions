@@ -1,0 +1,60 @@
+{
+  "date": "2026-09-28",
+  "decided_by": "user",
+  "reason": "Гичава (outliers): \"Ничего не исключать\" -> option A for all three judges, zero field rows excluded. Гичава (caps): \"Давай сделаем потолок 300с, с гарантированным запасом, и 5 минут не страшно изредка подождать\", clarified as a WHOLE-GATE 300s worst-case wait for each of the turn-end and deferring-disposition gates.",
+  "judges": {
+    "feedback_signal": {
+      "option": "A",
+      "excluded_outliers": [],
+      "merged_provenance": ["latency-sample.json", "topup2-sample.json", "drift-sample.json", "field-inputs-sample.json"],
+      "merged_n": 90,
+      "merged_min_s": 4.876181811094284,
+      "merged_median_s": 12.86,
+      "merged_p90_s": 17.92,
+      "merged_max_s": 183.1355803227052,
+      "resulting_floor_s": 18,
+      "resulting_cap_s": 212,
+      "cap_source": "remainder of the fixed 300s turn-end whole-invocation budget after binary_ask's cap (25), silent_closure's cap (36), outage_escalation's floor (26) and 1s head-room: 300 - 25 - 36 - 26 - 1 = 212"
+    },
+    "binary_ask": {
+      "option": "A",
+      "excluded_outliers": [],
+      "merged_provenance": ["topup2-sample.json", "drift-sample.json", "field-inputs-sample.json"],
+      "merged_n": 80,
+      "merged_min_s": 3.013064108788967,
+      "merged_median_s": 8.145,
+      "merged_p90_s": 18.34,
+      "merged_max_s": 23.209327002055943,
+      "resulting_floor_s": 19,
+      "resulting_cap_s": 25,
+      "cap_source": "call_ceiling_s of the merged row: ceil(max) + 1 = ceil(23.209327002055943) + 1 = 25"
+    },
+    "deferring_disposition": {
+      "option": "A",
+      "excluded_outliers": [],
+      "merged_provenance": ["latency-sample.json", "ab-sample.json", "field-inputs-sample.json"],
+      "merged_n": 50,
+      "merged_min_s": 3.930432182736695,
+      "merged_median_s": 13.466927509326489,
+      "merged_p90_s": 39.99,
+      "merged_max_s": 100.74526904150844,
+      "resulting_floor_s": 40,
+      "resulting_cap_s": 300,
+      "cap_source": "single-call hook; the whole-invocation budget IS this judge's ceiling, fixed at 300s per the user's decision (well above call_ceiling_s = ceil(100.74526904150844) + 1 = 102)"
+    }
+  },
+  "gate_budgets": {
+    "hook-turn-end-gate.py": {
+      "_TURN_JUDGE_BUDGET_S": 300,
+      "note": "feedback_cap(212) + binary_ask_cap(25) + silent_closure_cap(36, unchanged) + outage_escalation_floor(26, unchanged) + head-room(1) = 300"
+    },
+    "hook-deferring-disposition-gate.py": {
+      "_ASK_JUDGE_BUDGET_S": 300
+    }
+  },
+  "drift_monitoring": {
+    "signal": "the judge execution ledger already records every timeout (per-call timed_out) and every budget skip (stage=\"budget\"); no new logging was added for this decision.",
+    "command": "python3 scripts/judge-usage-report.py --check-drift --since 30d",
+    "trigger": "a non-zero or rising timeout/budget-skip rate for feedback_signal, binary_ask or deferring_disposition is the signal to revisit these caps."
+  }
+}

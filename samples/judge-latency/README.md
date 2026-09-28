@@ -286,6 +286,42 @@ Against the budgets in force when measured, the deferring-disposition gate's
 45 s would have cut 5 of 32 calls (~16 %). Which candidates count as outliers
 and where the caps move to is the cap decision's call, recorded separately.
 
+### Cap decision
+
+Decided 2026-09-28, recorded machine-readably in
+[`field-cap-decision.json`](field-cap-decision.json). Two decisions, both
+made directly by the user rather than derived from the sample:
+
+1. **Outliers: none excluded.** Every one of the 32 field rows above merges
+   into the MEASURED row for its judge (`lib/judge_latency.py`) — including
+   feedback_signal's 183.1 s call and deferring_disposition's 62.9-100.7 s
+   tail. This raises `n`, `median_s`, `p90_s` and `max_s` for all three
+   judges; see each row's own comment in `lib/judge_latency.py` for the exact
+   before/after numbers.
+2. **Whole-gate budgets: a fixed 300 s ceiling**, not a value derived from the
+   merged distribution, for both judge-calling gates that were still sized
+   off a per-judge computation: `hook-turn-end-gate.py`'s
+   `_TURN_JUDGE_BUDGET_S` and `hook-deferring-disposition-gate.py`'s
+   `_ASK_JUDGE_BUDGET_S`. Both merged distributions' own maxima (183.1 s,
+   100.7 s) sit well inside 300 s, so this is deliberate headroom, not a tight
+   fit. Inside the turn-end gate's 300 s, feedback_signal's own per-call cap
+   (212 s) is the remainder after binary_ask's cap (25 s), silent_closure's
+   cap (36 s, unchanged), outage_escalation's floor (26 s, unchanged) and 1 s
+   of head-room; binary_ask's cap (25 s) is its merged row's own
+   `call_ceiling_s`. The deferring-disposition gate makes one call per
+   invocation, so its 300 s budget is also that call's ceiling.
+
+**Drift monitoring.** No new logging was added for this decision — the judge
+execution ledger already records every timeout and every budget skip, and
+
+```
+python3 scripts/judge-usage-report.py --check-drift --since 30d
+```
+
+already surfaces a rising rate. A non-zero or rising timeout/skip rate for
+feedback_signal, binary_ask or deferring_disposition in that report is the
+signal to revisit these caps.
+
 ## Supporting samples (not part of the four rows)
 
 - `lean-sample.json` — lean vs standard prompt A/B; shows the lean prompt is not
