@@ -33,6 +33,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from agentctl import grants  # the sole validator every materialized rule/add_dir passes through
@@ -891,72 +892,64 @@ def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
     own such paths, never an arbitrary declared add_dir).
 
     A `read` add_dir pairs with a synthesized Edit DENY only, mirroring
-    `plans_permission_rules`' own directional-pair pattern — UNLESS some
-    other entry in the same list is a `write` add_dir on the same base
-    directory (compared post-normalization, via `grants.rule_file_arg` on
-    the rstripped path, exactly as the emitting loop below normalizes it):
-    in that case the read-derived deny is suppressed for that base. Without
-    this, a read/write pair on one directory (e.g. a derived-read add_dir
-    from DR-R colliding with a runtime write grant on the same path) emits
-    the identical `Edit(<base>/**)` string into both `allow` and `deny`; the
-    Claude client resolves a rule present in both lists as DENY, silently
-    voiding the write grant with no diagnostic. Mode precedence is per base,
-    not global: a read-only base (no accompanying write entry) keeps its
-    deny exactly as before, and a colliding base's write ALLOW plus its four
-    guard denies are emitted unconditionally regardless of the suppression.
-    The suppressed DENY is never passed through `grants.validate_rule`
-    either way (deny rules are outside its scope by design;
-    `grants.validate_grants` itself iterates only `allow` and `add_dirs`),
-    so the same glob shape that would refuse an allow rule is fine here.
+    `plans_permission_rules`' own directional-pair pattern. A read deny
+    that overlaps a write allow from the same list must not be emitted: the
+    Claude client resolves a rule present in both lists as DENY, with no
+    diagnostic, so it would silently void a write grant the plan's owner
+    issued. Each add_dir is therefore canonicalized once into a
+    `(base, mode)` pair — `_canonical_add_dir_base`, which refuses a base
+    it cannot compare — and each read is decided by COVERAGE against the
+    list's write entries (`_read_add_dir_needs_deny`):
 
-    A read/write pair whose bases are NESTED rather than identical — either
-    one strictly under the other — raises `GrantShadowError` once every
-    entry has validated (see `_refuse_nested_read_write_bases`): a parent
-    read deny shadows a child write allow, and a child read deny punches a
-    hole in a parent write allow, and neither precedence has a safe silent
-    answer."""
-    write_bases: set[str] = set()
-    for entry in entries:
-        if entry.get("rule") is not None:
-            continue
-        path = entry.get("path")
-        mode = entry.get("mode")
-        if path is None or mode is None:
-            continue
-        if mode == "write":
-            write_bases.add(grants.rule_file_arg(path.rstrip("/")))
+    - a read whose base is, or is under, some write's base is covered: the
+      write allow already spans it and the read grant only puts the
+      directory in the child's workspace, so it emits no deny;
+    - an uncovered read whose base contains some write's base raises
+      `GrantShadowError`: its deny would punch a hole in the middle of that
+      write allow, and neither grant subsumes the other;
+    - any other read emits its deny, exactly as a lone read does.
 
-    allow: list[str] = []
-    deny: list[str] = []
-    add_dir_bases: list[tuple[str, str]] = []
+    Containment is by path segment (`/a2` is not under `/a`), and nesting
+    between two reads or between two writes is never a conflict — each
+    keeps its own rule. A write's ALLOW plus its four guard denies are
+    emitted unconditionally, whatever reads share the list, and
+    `GrantShadowError` is raised only once every entry has validated. The
+    read DENY is never passed through `grants.validate_rule` (deny rules
+    are outside its scope by design; `grants.validate_grants` itself
+    iterates only `allow` and `add_dirs`), so the same glob shape that
+    would refuse an allow rule is fine here."""
+    validated: list[str | _AddDir] = []
     for entry in entries:
         rule = entry.get("rule")
         if rule is not None:
             grants.validate_rule(rule)
-            allow.append(rule)
+            validated.append(rule)
             continue
         path = entry.get("path")
         mode = entry.get("mode")
         if path is None or mode is None:
             continue
         grants.validate_add_dir(path, mode)
-        base = grants.rule_file_arg(path.rstrip("/"))
-        add_dir_bases.append((base, mode))
-        if mode == "read":
-            if base in write_bases:
-                continue
-            deny.append(f"Edit({base}/**)")
-        elif mode == "write":
-            allow.append(f"Edit({base}/**)")
+        validated.append(_AddDir(_canonical_add_dir_base(path), mode, entry.get("provenance", "unknown")))
+    add_dirs = [item for item in validated if isinstance(item, _AddDir)]
+
+    allow: list[str] = []
+    deny: list[str] = []
+    for item in validated:
+        if not isinstance(item, _AddDir):
+            allow.append(item)
+        elif item.mode == "write":
+            allow.append(f"Edit({item.base}/**)")
             deny.extend(
                 [
-                    f"Edit({base}/**/.claude/**)",
-                    f"Edit({base}/**/settings*.json)",
-                    f"Edit({base}/**/.git/**)",
-                    f"Edit({base}/**/.git)",
+                    f"Edit({item.base}/**/.claude/**)",
+                    f"Edit({item.base}/**/settings*.json)",
+                    f"Edit({item.base}/**/.git/**)",
+                    f"Edit({item.base}/**/.git)",
                 ]
             )
-    _refuse_nested_read_write_bases(add_dir_bases)
+        elif _read_add_dir_needs_deny(item, add_dirs):
+            deny.append(f"Edit({item.base}/**)")
     return allow, deny
 
 
@@ -997,11 +990,15 @@ def stage_grant_provenance_lines(entries: list[dict]) -> list[str]:
 
 
 class GrantShadowError(ValueError):
-    """A write add_dir grant lands inside a directory another source (the
+    """A write add_dir grant would lie under an Edit deny that voids it,
+    from either of two places. Across sources: another source (the
     plans-dir deny, a target project's own deny) has already denied Edit
-    onto — the two grants only meet inside `build_child_settings`, since
-    each source validates independently and neither knows about the
-    other's rules."""
+    onto a directory the write lands in — the two grants only meet inside
+    `build_child_settings`, since each source validates independently and
+    neither knows about the other's rules (`_check_write_add_dirs_not_shadowed`).
+    Within one `stage_grant_rules` entry list: a read add_dir's base
+    strictly contains the write's and no write covers the read
+    (`_read_add_dir_needs_deny`)."""
 
 
 def _deny_rule_directory_prefix(deny_rule: str) -> "str | None":
@@ -1024,21 +1021,45 @@ def _is_strictly_under(child_base: str, parent_base: str) -> bool:
     return child_base.startswith(parent_base.rstrip("/") + "/")
 
 
-def _refuse_nested_read_write_bases(add_dir_bases: list[tuple[str, str]]) -> None:
-    """Raise `GrantShadowError` for any read add_dir and write add_dir, from
-    one `stage_grant_rules` call, whose `(base, mode)` bases nest in either
-    direction. Identical bases are `stage_grant_rules`' own suppression
-    case, not a nesting."""
-    for base, mode in add_dir_bases:
-        for other_base, other_mode in add_dir_bases:
-            if {mode, other_mode} != {"read", "write"}:
-                continue
-            if _is_strictly_under(other_base, base):
-                raise GrantShadowError(
-                    f"{other_mode} add_dir {grants.rule_file_path(other_base)!r} is nested "
-                    f"under {mode} add_dir {grants.rule_file_path(base)!r} — the read-derived "
-                    f"Edit deny and the write Edit allow would overlap; refused"
-                )
+class _AddDir(NamedTuple):
+    base: str
+    mode: str
+    provenance: str
+
+
+def _canonical_add_dir_base(path: str) -> str:
+    """`path` as a `grants.rule_file_arg` base, with `.` segments and
+    repeated or trailing slashes collapsed by `Path` — the normalization
+    `_check_write_add_dirs_not_shadowed` also compares with. A `..` segment
+    is refused rather than collapsed: lexical collapse names a different
+    directory once any segment is a symlink, and this module never resolves
+    the filesystem, so such a base cannot be compared with another."""
+    normalized = Path(path)
+    if ".." in normalized.parts:
+        raise grants.GrantValidationError(
+            f"add_dir {path!r} has a '..' segment, so its base cannot be compared "
+            f"with other add_dir bases without resolving the filesystem — refused"
+        )
+    return grants.rule_file_arg(str(normalized))
+
+
+def _read_add_dir_needs_deny(read: _AddDir, add_dirs: list[_AddDir]) -> bool:
+    """Whether `read` still needs its own Edit deny beside the write entries
+    of `add_dirs` — the coverage rule `stage_grant_rules` documents: False
+    when a write covers it, `GrantShadowError` when it strictly contains a
+    write instead, True otherwise."""
+    writes = [d for d in add_dirs if d.mode == "write"]
+    if any(read.base == w.base or _is_strictly_under(read.base, w.base) for w in writes):
+        return False
+    for write in writes:
+        if _is_strictly_under(write.base, read.base):
+            raise GrantShadowError(
+                f"write add_dir {grants.rule_file_path(write.base)!r} "
+                f"(provenance {write.provenance}) is nested under read add_dir "
+                f"{grants.rule_file_path(read.base)!r} (provenance {read.provenance}) — "
+                f"the read's Edit deny would shadow part of the write's Edit allow; refused"
+            )
+    return True
 
 
 def _check_write_add_dirs_not_shadowed(entries: list[dict], existing_deny: list[str]) -> None:

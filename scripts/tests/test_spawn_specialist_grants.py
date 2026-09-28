@@ -257,10 +257,10 @@ def test_build_child_settings_invalid_engine_rule_raises():
 # on the SAME base directory used to both materialize the byte-identical
 # `Edit(<base>/**)` string -- one into `allow`, one into `deny` -- and the
 # Claude client resolves that collision as DENY, silently voiding the write
-# grant. `stage_grant_rules` now suppresses the read-derived deny per base
-# when a write entry shares it; these cases pin that fix's exact boundary,
-# case for case against the stage's own done_criterion enumeration (gc1-gc8)
-# and mutation catalogue (S0, M1-M6).
+# grant. `stage_grant_rules` now decides each read by coverage: a read on a
+# base some write already covers emits no deny. gc1-gc8 pin the same-base
+# case; scripts/tests/gc_mutation_control.py checks that each case goes red
+# under the weakening it exists to catch.
 
 
 def test_gc1_no_string_in_both_lists():
@@ -296,7 +296,7 @@ def test_gc3_write_guard_denies_survive():
 def test_gc4_read_only_base_still_denies():
     # CONTROL: no write entry anywhere in the call -- this is what fails if
     # the fix drops read-derived denies outright instead of resolving them
-    # per base (mutation M1).
+    # per base.
     entries = [{"path": "/tmp/gcbase", "mode": "read"}]
     _allow, deny = MOD.stage_grant_rules(entries)
     assert "Edit(//tmp/gcbase/**)" in deny
@@ -319,13 +319,27 @@ def test_gc5_order_independence():
 
 def test_gc6_per_base_scope():
     # This is what fails if the fix suppresses read denies globally whenever
-    # any write entry is present anywhere in the call (mutation M2).
+    # any write entry is present anywhere in the call.
     entries = [
         {"path": "/tmp/gcbase", "mode": "write"},
         {"path": "/tmp/other", "mode": "read"},
     ]
     _allow, deny = MOD.stage_grant_rules(entries)
     assert "Edit(//tmp/other/**)" in deny
+
+
+def _stage_with_output_artifact(artifact: str) -> Stage:
+    return Stage(
+        index=1,
+        title="probe",
+        subject=Subject(material="m", result="r", material_refs=[], knowledge_refs=[]),
+        means=Means(means="Edit", method="apply"),
+        actor=Actor(executor="spawn:developer"),
+        criterion=Criterion(
+            criterion_type="measurable", done_criterion="d", verify_command=None
+        ),
+        output_artifacts=[artifact],
+    )
 
 
 def test_gc7_real_producer_via_derive_stage_grants(tmp_path):
@@ -339,18 +353,7 @@ def test_gc7_real_producer_via_derive_stage_grants(tmp_path):
     outside_dir = tmp_path / "outside"
     outside_dir.mkdir()
     artifact = str(outside_dir / "report.md")
-    stage = Stage(
-        index=1,
-        title="probe",
-        subject=Subject(material="m", result="r", material_refs=[], knowledge_refs=[]),
-        means=Means(means="Edit", method="apply"),
-        actor=Actor(executor="spawn:developer"),
-        criterion=Criterion(
-            criterion_type="measurable", done_criterion="d", verify_command=None
-        ),
-        output_artifacts=[artifact],
-    )
-    derived, dropped = derive_stage_grants(stage, venue="/repo")
+    derived, dropped = derive_stage_grants(_stage_with_output_artifact(artifact), venue="/repo")
     assert not dropped
     assert [d.mode for d in derived.add_dirs] == ["read"]
     assert derived.add_dirs[0].path == str(outside_dir)
@@ -367,8 +370,8 @@ def test_gc7_real_producer_via_derive_stage_grants(tmp_path):
 
 
 def test_gc8_trailing_slash_normalization():
-    # This is what fails if the write-base pre-pass and the emitting loop
-    # normalize a base differently (mutation M6).
+    # This is what fails if a base is compared before its trailing slash is
+    # normalized away.
     trailing_pair = [
         {"path": "/tmp/gcbase/", "mode": "write"},
         {"path": "/tmp/gcbase", "mode": "read"},
@@ -384,12 +387,12 @@ def test_gc8_trailing_slash_normalization():
     assert "Edit(//tmp/gcbase/**)" not in deny_t
 
 
-# A read/write pair on NESTED bases has no safe silent resolution -- a parent
-# read deny shadows a child write allow, a child read deny punches a hole in
-# a parent write allow -- so it is refused with GrantShadowError in either
-# direction (gc9, gc10). Nesting is by path segment, not string prefix: a
-# sibling sharing a name prefix is an unrelated directory (gc11; mutations
-# M7, M8).
+# On NESTED bases the two directions differ. A read under a write is covered:
+# the write allow already spans it, so the read emits no deny (gc10). A read
+# over a write, covered by no write, would punch its deny into the middle of
+# the write allow with nothing subsuming either, so it is refused with
+# GrantShadowError (gc9). Nesting is by path segment, not string prefix: a
+# sibling sharing a name prefix is an unrelated directory (gc11).
 
 
 def test_gc9_nested_read_parent_write_child_refused():
@@ -403,18 +406,16 @@ def test_gc9_nested_read_parent_write_child_refused():
     assert "'/tmp/gcbase'" in str(excinfo.value)
 
 
-def test_gc10_nested_read_child_write_parent_refused():
-    # This is what fails if the nesting check only looks for a write under a
-    # read, the one direction `_check_write_add_dirs_not_shadowed` covers
-    # (mutation M9).
+def test_gc10_read_child_is_covered_by_write_parent():
+    # This is what fails if coverage matches only an identical base and not
+    # a read strictly under the write.
     entries = [
         {"path": "/tmp/gcbase/sub", "mode": "read"},
         {"path": "/tmp/gcbase", "mode": "write"},
     ]
-    with pytest.raises(MOD.GrantShadowError) as excinfo:
-        MOD.stage_grant_rules(entries)
-    assert "/tmp/gcbase/sub" in str(excinfo.value)
-    assert "'/tmp/gcbase'" in str(excinfo.value)
+    allow, deny = MOD.stage_grant_rules(entries)
+    assert "Edit(//tmp/gcbase/**)" in allow
+    assert "Edit(//tmp/gcbase/sub/**)" not in deny
 
 
 def test_gc11_prefix_sibling_is_not_nested():
@@ -434,3 +435,124 @@ def test_gc11_prefix_sibling_is_not_nested():
     allow, deny = MOD.stage_grant_rules(write_sibling)
     assert "Edit(//tmp/gcbase2/**)" in allow
     assert "Edit(//tmp/gcbase/**)" in deny
+
+
+# Bases are compared only after canonicalization, so every spelling of one
+# directory collides the way its plain spelling does (gc12, gc13). A `..`
+# segment cannot be canonicalized without resolving the filesystem -- it
+# names a different directory once a segment is a symlink -- so a base
+# carrying one is refused rather than emitted (gc14).
+
+
+def _shadow_refusal(entries):
+    with pytest.raises(MOD.GrantShadowError) as excinfo:
+        MOD.stage_grant_rules(entries)
+    return str(excinfo.value)
+
+
+def test_gc12_dot_segment_spelling_refused_like_plain():
+    plain = _shadow_refusal(
+        [{"path": "/tmp/gcp", "mode": "read"}, {"path": "/tmp/gcp/sub", "mode": "write"}]
+    )
+    read_dotted = [{"path": "/tmp/./gcp", "mode": "read"}, {"path": "/tmp/gcp/sub", "mode": "write"}]
+    write_dotted = [{"path": "/tmp/gcp", "mode": "read"}, {"path": "/tmp/./gcp/sub", "mode": "write"}]
+    assert _shadow_refusal(read_dotted) == plain
+    assert _shadow_refusal(write_dotted) == plain
+
+
+def test_gc13_double_slash_spelling_refused_like_plain():
+    plain = _shadow_refusal(
+        [{"path": "/tmp/gcp", "mode": "read"}, {"path": "/tmp/gcp/sub", "mode": "write"}]
+    )
+    read_doubled = [{"path": "/tmp//gcp", "mode": "read"}, {"path": "/tmp/gcp/sub", "mode": "write"}]
+    write_doubled = [{"path": "/tmp/gcp", "mode": "read"}, {"path": "/tmp//gcp/sub", "mode": "write"}]
+    assert _shadow_refusal(read_doubled) == plain
+    assert _shadow_refusal(write_doubled) == plain
+
+
+def test_gc14_dotdot_segment_refused_as_invalid():
+    # Uncanonicalized, `/tmp/x/../gcp` compares unequal to `/tmp/gcp` and its
+    # deny would silently shadow the write under it.
+    with pytest.raises(GrantValidationError):
+        MOD.stage_grant_rules(
+            [{"path": "/tmp/x/../gcp", "mode": "read"}, {"path": "/tmp/gcp/sub", "mode": "write"}]
+        )
+    with pytest.raises(GrantValidationError):
+        MOD.stage_grant_rules([{"path": "/tmp/x/../gcp", "mode": "read"}])
+    with pytest.raises(GrantValidationError):
+        MOD.stage_grant_rules([{"path": "/tmp/x/../gcp", "mode": "write"}])
+
+
+def test_gc15_derived_read_under_runtime_write_is_covered(tmp_path):
+    # A stage granted write on its output directory declares an artifact in a
+    # subdirectory of it; rule DR-R derives a read add_dir on that
+    # subdirectory, and the stage must still be able to write its own output.
+    out_dir = tmp_path / "out"
+    reports_dir = out_dir / "reports"
+    reports_dir.mkdir(parents=True)
+    derived, dropped = derive_stage_grants(
+        _stage_with_output_artifact(str(reports_dir / "report.md")), venue="/repo"
+    )
+    assert not dropped
+    assert [(d.path, d.mode) for d in derived.add_dirs] == [(str(reports_dir), "read")]
+
+    runtime_entries = [{"path": str(out_dir), "mode": "write", "provenance": "runtime"}]
+    entries = [d.to_dict() for d in derived.add_dirs] + runtime_entries
+
+    allow, deny = MOD.stage_grant_rules(entries)
+    assert f"Edit({GRANTS.rule_file_arg(str(out_dir))}/**)" in allow
+    assert f"Edit({GRANTS.rule_file_arg(str(reports_dir))}/**)" not in deny
+
+
+def test_gc16_covered_read_is_no_conflict_with_a_write_under_it():
+    # The write on /tmp/p covers the read on /tmp/p, so the read derives no
+    # deny, and a deny that is never emitted cannot overlap the write on
+    # /tmp/p/out -- this is what fails if the read-over-write refusal is
+    # checked before coverage.
+    entries = [
+        {"path": "/tmp/p", "mode": "write"},
+        {"path": "/tmp/p/out", "mode": "write"},
+        {"path": "/tmp/p", "mode": "read"},
+    ]
+    allow, deny = MOD.stage_grant_rules(entries)
+    assert allow == ["Edit(//tmp/p/**)", "Edit(//tmp/p/out/**)"]
+    assert "Edit(//tmp/p/**)" not in deny
+
+
+# Nesting between two grants of the SAME mode is never a conflict: two denies
+# or two allows cannot void each other. Rule DR-R derives nested reads
+# routinely, so a refusal here would break real plans.
+
+
+def test_gc17_nested_reads_each_keep_their_deny():
+    allow, deny = MOD.stage_grant_rules(
+        [{"path": "/x/a", "mode": "read"}, {"path": "/x/a/b", "mode": "read"}]
+    )
+    assert allow == []
+    assert deny == ["Edit(//x/a/**)", "Edit(//x/a/b/**)"]
+
+
+def test_gc18_nested_writes_each_keep_their_allow_and_guards():
+    allow, deny = MOD.stage_grant_rules(
+        [{"path": "/x/a", "mode": "write"}, {"path": "/x/a/b", "mode": "write"}]
+    )
+    assert allow == ["Edit(//x/a/**)", "Edit(//x/a/b/**)"]
+    for base in ("//x/a", "//x/a/b"):
+        assert f"Edit({base}/**/.claude/**)" in deny
+        assert f"Edit({base}/**/settings*.json)" in deny
+        assert f"Edit({base}/**/.git/**)" in deny
+        assert f"Edit({base}/**/.git)" in deny
+
+
+def test_gc19_refusal_names_both_provenances():
+    # A DR-R read names a directory that appears nowhere in the plan, only as
+    # the dirname of some ref, so the path alone does not lead the author to
+    # the entry to change; its provenance does.
+    message = _shadow_refusal(
+        [
+            {"path": "/tmp/gcbase", "mode": "read", "provenance": "derived:DR-R"},
+            {"path": "/tmp/gcbase/sub", "mode": "write", "provenance": "runtime"},
+        ]
+    )
+    assert "derived:DR-R" in message
+    assert "runtime" in message

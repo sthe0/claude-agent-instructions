@@ -1,16 +1,18 @@
-"""Mutation-catalogue negative control for the read/write add_dir base
-collision fix in `stage_grant_rules` (spawn-permission-grant-model stage 2).
+"""Mutation-catalogue negative control for the read/write add_dir coverage
+rule in `stage_grant_rules` (spawn-permission-grant-model stage 2).
 
-Builds TEN known-bad subjects -- S0 (the module exactly as it stood just
-before the fix, recovered from this checkout's own git history) and the
-nine named wrong-fixes M1-M9 of the plan's mutation catalogue, each an
-exact textual substitution applied to a scratch copy of the FIXED module
--- runs the gc1..gc11 cases from test_spawn_specialist_grants.py against
-each, and requires every subject to turn RED exactly the cases the
-catalogue lists beside it while leaving at least one case OUTSIDE that set
-GREEN. The FIXED row runs the unmutated module and requires EVERY case
-GREEN, so a regression in the fix itself cannot hide behind a mutant whose
-required cases it happens to redden.
+Builds SEVENTEEN known-bad subjects -- S0 (the module exactly as it stood
+just before the first collision fix, recovered from this checkout's own git
+history) and the sixteen named wrong-fixes M1-M16 of the mutation
+catalogue, each an exact textual substitution applied to a scratch copy of
+the FIXED module -- runs the gc1..gc19 cases from
+test_spawn_specialist_grants.py against each, and requires every subject to
+turn RED every case the catalogue lists beside it while leaving at least one
+case OUTSIDE that set GREEN. The FIXED row runs the unmutated module and
+requires EVERY case GREEN, so a regression in the fix itself cannot hide
+behind a mutant whose required cases it happens to redden. Each row also
+prints the full set of cases the subject actually reddened, so a listed set
+that has drifted from the observed one is visible.
 
 REDDENED has exactly one meaning: the case was collected exactly once and
 FAILED in its call phase. A case collected zero or two-or-more times, or
@@ -21,7 +23,7 @@ greens nothing, and is correctly read as broken rather than as vindicated.
 
 Exit code is NATURAL: zero iff every subject satisfies its row of the
 catalogue AND the union of every subject's listed cases is exactly
-gc1..gc11 AND this script's own scratch work left scripts/ exactly as it
+gc1..gc19 AND this script's own scratch work left scripts/ exactly as it
 found it. The plan's negative_control field supplies the `!` inversion;
 this script's own exit code is never inverted here.
 """
@@ -34,7 +36,7 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 SCRIPT_PATH = Path(__file__).resolve()
 SCRIPTS_DIR = SCRIPT_PATH.parent.parent
@@ -42,9 +44,9 @@ ROOT = SCRIPTS_DIR.parent
 MODULE_RELPATH = "scripts/spawn-specialist.py"
 FIXED_MODULE = ROOT / MODULE_RELPATH
 TEST_FILE = SCRIPTS_DIR / "tests" / "test_spawn_specialist_grants.py"
-FIX_MARKER = "write_bases: set[str] = set()"
+FIX_MARKER = "Claude client resolves a rule present in both lists as DENY"
 
-ALL_CASES = {f"gc{n}" for n in range(1, 12)}
+ALL_CASES = {f"gc{n}" for n in range(1, 20)}
 
 CASE_FUNCS = {
     "gc1": "test_gc1_no_string_in_both_lists",
@@ -56,13 +58,21 @@ CASE_FUNCS = {
     "gc7": "test_gc7_real_producer_via_derive_stage_grants",
     "gc8": "test_gc8_trailing_slash_normalization",
     "gc9": "test_gc9_nested_read_parent_write_child_refused",
-    "gc10": "test_gc10_nested_read_child_write_parent_refused",
+    "gc10": "test_gc10_read_child_is_covered_by_write_parent",
     "gc11": "test_gc11_prefix_sibling_is_not_nested",
+    "gc12": "test_gc12_dot_segment_spelling_refused_like_plain",
+    "gc13": "test_gc13_double_slash_spelling_refused_like_plain",
+    "gc14": "test_gc14_dotdot_segment_refused_as_invalid",
+    "gc15": "test_gc15_derived_read_under_runtime_write_is_covered",
+    "gc16": "test_gc16_covered_read_is_no_conflict_with_a_write_under_it",
+    "gc17": "test_gc17_nested_reads_each_keep_their_deny",
+    "gc18": "test_gc18_nested_writes_each_keep_their_allow_and_guards",
+    "gc19": "test_gc19_refusal_names_both_provenances",
 }
 
 
 class AnchorError(RuntimeError):
-    """An M1-M6 substitution's anchor was not found exactly once."""
+    """A mutant's substitution anchor was not found exactly once."""
 
 
 def _substitute(source: str, anchor: str, replacement: str, label: str) -> str:
@@ -79,11 +89,15 @@ def _git(*args: str) -> str:
     return result.stdout
 
 
-def _s0_source() -> str:
+def _s0_source(fixed_source: str) -> str:
     """The module at the parent of the oldest commit that introduced
-    FIX_MARKER into it. A clone whose history does not reach that parent
-    (shallow, or the marker never landed) fails the control rather than
-    reviewing some other revision as S0."""
+    FIX_MARKER into it. FIX_MARKER must be a literal the fixed module
+    carries and that parent lacks: a fixed module that has lost it, or a
+    clone whose history does not reach that parent (shallow, or the marker
+    never landed), fails the control rather than reviewing some other
+    revision as S0."""
+    if FIX_MARKER not in fixed_source:
+        raise RuntimeError(f"{MODULE_RELPATH} no longer contains {FIX_MARKER!r}; re-point FIX_MARKER")
     introducing = _git("log", "--reverse", "--format=%H", "-S", FIX_MARKER, "--", MODULE_RELPATH).split()
     if not introducing:
         raise RuntimeError(f"no commit in this checkout's history introduces {FIX_MARKER!r} into {MODULE_RELPATH}")
@@ -104,137 +118,86 @@ def _git_status() -> str:
 # --- mutation catalogue: each is an exact textual substitution on the -----
 # --- FIXED module's own source, anchored to the literal current text.  ---
 
-_PREPASS_BLOCK = '''    write_bases: set[str] = set()
-    for entry in entries:
-        if entry.get("rule") is not None:
-            continue
-        path = entry.get("path")
-        mode = entry.get("mode")
-        if path is None or mode is None:
-            continue
-        if mode == "write":
-            write_bases.add(grants.rule_file_arg(path.rstrip("/")))
-
-    allow: list[str] = []
-    deny: list[str] = []
+_READ_BRANCH = '''        elif _read_add_dir_needs_deny(item, add_dirs):
 '''
 
-_PREPASS_MODE_LINE = '''        if mode == "write":
-            write_bases.add(grants.rule_file_arg(path.rstrip("/")))
+_READ_DENY_BRANCH = _READ_BRANCH + '''            deny.append(f"Edit({item.base}/**)")
 '''
 
-_READ_BLOCK = '''        if mode == "read":
-            if base in write_bases:
-                continue
-            deny.append(f"Edit({base}/**)")
+_WRITE_ALLOW_LINE = '''            allow.append(f"Edit({item.base}/**)")
 '''
 
-_READ_WRITE_BLOCK = '''        if mode == "read":
-            if base in write_bases:
-                continue
-            deny.append(f"Edit({base}/**)")
-        elif mode == "write":
-            allow.append(f"Edit({base}/**)")
-            deny.extend(
-'''
-
-_WRITE_BLOCK_FULL = '''        elif mode == "write":
-            allow.append(f"Edit({base}/**)")
-            deny.extend(
+_WRITE_GUARD_DENIES = '''            deny.extend(
                 [
-                    f"Edit({base}/**/.claude/**)",
-                    f"Edit({base}/**/settings*.json)",
-                    f"Edit({base}/**/.git/**)",
-                    f"Edit({base}/**/.git)",
+                    f"Edit({item.base}/**/.claude/**)",
+                    f"Edit({item.base}/**/settings*.json)",
+                    f"Edit({item.base}/**/.git/**)",
+                    f"Edit({item.base}/**/.git)",
                 ]
             )
 '''
 
-_WRITE_ALLOW_LINE = '''        elif mode == "write":
-            allow.append(f"Edit({base}/**)")
+_COVERAGE_TEST = '''    if any(read.base == w.base or _is_strictly_under(read.base, w.base) for w in writes):
+'''
+
+_CANONICAL_RETURN = '''    return grants.rule_file_arg(str(normalized))
+'''
+
+_REFUSAL_TAIL = '''                f"the read's Edit deny would shadow part of the write's Edit allow; refused"
+            )
+    return True
 '''
 
 
 def _mutant_m1(source: str) -> str:
     """Never emit a read-derived deny at all."""
-    return _substitute(source, _READ_BLOCK, '        if mode == "read":\n            pass\n', "M1")
+    return _substitute(source, _READ_DENY_BRANCH, _READ_BRANCH + "            pass\n", "M1")
 
 
 def _mutant_m2(source: str) -> str:
-    """Suppress read denies whenever ANY write entry is present anywhere."""
-    anchor = '''        if mode == "read":
-            if base in write_bases:
-                continue
-'''
-    replacement = '''        if mode == "read":
-            if write_bases:
-                continue
-'''
-    return _substitute(source, anchor, replacement, "M2")
+    """Treat every read as covered whenever ANY write entry is present."""
+    return _substitute(source, _COVERAGE_TEST, "    if writes:\n", "M2")
 
 
 def _mutant_m3(source: str) -> str:
-    """Decide each entry from the entries seen so far (no separate pre-pass)."""
-    step1 = _substitute(
-        source, _PREPASS_BLOCK,
-        '    write_bases: set[str] = set()\n    allow: list[str] = []\n    deny: list[str] = []\n',
-        "M3 (pre-pass removal)",
+    """Decide each read from the add_dirs seen before it, not the whole list."""
+    return _substitute(
+        source, _READ_BRANCH,
+        "        elif _read_add_dir_needs_deny(item, add_dirs[: add_dirs.index(item)]):\n",
+        "M3",
     )
-    step2 = _substitute(
-        step1, _WRITE_ALLOW_LINE,
-        '        elif mode == "write":\n            write_bases.add(base)\n            allow.append(f"Edit({base}/**)")\n',
-        "M3 (write-branch population)",
-    )
-    return step2
 
 
 def _mutant_m4(source: str) -> str:
-    """Resolve the collision by dropping the write ALLOW instead of the read DENY."""
+    """Resolve a same-base collision by dropping the write ALLOW instead of the read DENY."""
     step1 = _substitute(
-        source, _PREPASS_MODE_LINE,
-        '        if mode == "read":\n            write_bases.add(grants.rule_file_arg(path.rstrip("/")))\n',
-        "M4 (pre-pass mode flip)",
+        source, _WRITE_ALLOW_LINE,
+        '            if not any(d.mode == "read" and d.base == item.base for d in add_dirs):\n'
+        '                allow.append(f"Edit({item.base}/**)")\n',
+        "M4 (write allow withheld)",
     )
-    step2 = _substitute(
-        step1, _READ_WRITE_BLOCK,
-        '''        if mode == "read":
-            deny.append(f"Edit({base}/**)")
-        elif mode == "write":
-            if base not in write_bases:
-                allow.append(f"Edit({base}/**)")
-            deny.extend(
-''',
-        "M4 (branch swap)",
-    )
-    return step2
+    return _substitute(step1, _READ_BRANCH, "        else:\n", "M4 (read always denies)")
 
 
 def _mutant_m5(source: str) -> str:
-    """Suppress EVERY deny whose base carries a write entry, guard denies included."""
-    return _substitute(source, _WRITE_BLOCK_FULL, _WRITE_ALLOW_LINE, "M5")
+    """Emit a write's ALLOW without its four guard denies."""
+    return _substitute(source, _WRITE_GUARD_DENIES, "", "M5")
 
 
 def _mutant_m6(source: str) -> str:
-    """The write-base pre-pass omits the rstrip('/') the emitting loop applies."""
-    return _substitute(
-        source, _PREPASS_MODE_LINE,
-        '        if mode == "write":\n            write_bases.add(grants.rule_file_arg(path))\n',
-        "M6",
-    )
+    """Compare bases in their raw spelling, uncanonicalized."""
+    return _substitute(source, _CANONICAL_RETURN, "    return grants.rule_file_arg(path)\n", "M6")
 
 
 def _mutant_m7(source: str) -> str:
-    """Same-base suppression matches by string prefix instead of exact base."""
+    """Coverage matches by string prefix instead of path segment."""
     return _substitute(
-        source,
-        '            if base in write_bases:\n',
-        '            if any(w.startswith(base) for w in write_bases):\n',
-        "M7",
+        source, _COVERAGE_TEST, "    if any(read.base.startswith(w.base) for w in writes):\n", "M7"
     )
 
 
 def _mutant_m8(source: str) -> str:
-    """The nesting check matches by string prefix instead of path segment."""
+    """Containment matches by string prefix instead of path segment."""
     return _substitute(
         source,
         '    return child_base.startswith(parent_base.rstrip("/") + "/")\n',
@@ -244,12 +207,68 @@ def _mutant_m8(source: str) -> str:
 
 
 def _mutant_m9(source: str) -> str:
-    """The nesting check only catches a write under a read, not a read under a write."""
+    """Coverage matches only an identical base, not a read under the write."""
+    return _substitute(
+        source, _COVERAGE_TEST, "    if any(read.base == w.base for w in writes):\n", "M9"
+    )
+
+
+def _mutant_m10(source: str) -> str:
+    """Canonicalize a base with a '..' segment instead of refusing it."""
+    return _substitute(source, '    if ".." in normalized.parts:\n', "    if False:\n", "M10")
+
+
+def _mutant_m11(source: str) -> str:
+    """Keep coverage but drop the refusal of an uncovered read over a write."""
+    return _substitute(
+        source, "        if _is_strictly_under(write.base, read.base):\n", "        if False:\n", "M11"
+    )
+
+
+def _mutant_m12(source: str) -> str:
+    """The containment refusal checks every add_dir, not only writes."""
+    return _substitute(source, "    for write in writes:\n", "    for write in add_dirs:\n", "M12")
+
+
+def _mutant_m13(source: str) -> str:
+    """Check the containment refusal before coverage instead of after it."""
+    step1 = _substitute(source, _COVERAGE_TEST + "        return False\n", "", "M13 (coverage removed)")
+    return _substitute(
+        step1, _REFUSAL_TAIL,
+        _REFUSAL_TAIL.replace(
+            "    return True\n",
+            "    return not any(read.base == w.base or _is_strictly_under(read.base, w.base) for w in writes)\n",
+        ),
+        "M13 (coverage after refusal)",
+    )
+
+
+def _mutant_m14(source: str) -> str:
+    """Normalize only a trailing slash, as the pre-coverage code did."""
+    return _substitute(source, _CANONICAL_RETURN, '    return grants.rule_file_arg(path.rstrip("/"))\n', "M14")
+
+
+def _mutant_m15(source: str) -> str:
+    """Name the two paths in the refusal but not their provenance."""
     return _substitute(
         source,
-        '            if _is_strictly_under(other_base, base):\n',
-        '            if mode == "read" and _is_strictly_under(other_base, base):\n',
-        "M9",
+        '                f"(provenance {write.provenance}) is nested under read add_dir "\n'
+        '                f"{grants.rule_file_path(read.base)!r} (provenance {read.provenance}) — "\n',
+        '                f"is nested under read add_dir "\n'
+        '                f"{grants.rule_file_path(read.base)!r} — "\n',
+        "M15",
+    )
+
+
+def _mutant_m16(source: str) -> str:
+    """Refuse a write nested in another write as if it were a conflict."""
+    return _substitute(
+        source,
+        '        elif item.mode == "write":\n',
+        '        elif item.mode == "write":\n'
+        '            if any(d.mode == "write" and _is_strictly_under(item.base, d.base) for d in add_dirs):\n'
+        '                raise GrantShadowError(f"write add_dir {item.base} is nested under another write")\n',
+        "M16",
     )
 
 
@@ -261,17 +280,28 @@ def _unmutated(source: str) -> str:
 # means every case must be GREEN, not merely one outside the set.
 SUBJECTS: list[tuple[str, Optional[Callable[[str], str]], set[str]]] = [
     ("FIXED", _unmutated, set()),
-    ("S0", None, {"gc1", "gc7", "gc9", "gc10"}),
-    ("M1", _mutant_m1, {"gc4"}),
-    ("M2", _mutant_m2, {"gc6"}),
-    ("M3", _mutant_m3, {"gc1", "gc5", "gc7"}),
-    ("M4", _mutant_m4, {"gc2", "gc7"}),
-    ("M5", _mutant_m5, {"gc3"}),
-    ("M6", _mutant_m6, {"gc8"}),
+    ("S0", None, {"gc1", "gc7", "gc8", "gc9", "gc10", "gc12", "gc13", "gc14", "gc15", "gc16", "gc19"}),
+    ("M1", _mutant_m1, {"gc4", "gc6", "gc11", "gc17"}),
+    ("M2", _mutant_m2, {"gc6", "gc9", "gc11", "gc12", "gc13", "gc19"}),
+    ("M3", _mutant_m3, {"gc1", "gc5", "gc7", "gc8", "gc9", "gc10", "gc12", "gc13", "gc15", "gc19"}),
+    ("M4", _mutant_m4, {"gc2", "gc7", "gc8", "gc9", "gc10", "gc12", "gc13", "gc15", "gc16", "gc19"}),
+    ("M5", _mutant_m5, {"gc3", "gc18"}),
+    ("M6", _mutant_m6, {"gc8", "gc12", "gc13"}),
     ("M7", _mutant_m7, {"gc11"}),
     ("M8", _mutant_m8, {"gc11"}),
-    ("M9", _mutant_m9, {"gc10"}),
+    ("M9", _mutant_m9, {"gc10", "gc15"}),
+    ("M10", _mutant_m10, {"gc14"}),
+    ("M11", _mutant_m11, {"gc9", "gc12", "gc13", "gc19"}),
+    ("M12", _mutant_m12, {"gc17"}),
+    ("M13", _mutant_m13, {"gc16"}),
+    ("M14", _mutant_m14, {"gc12", "gc13"}),
+    ("M15", _mutant_m15, {"gc19"}),
+    ("M16", _mutant_m16, {"gc16", "gc18"}),
 ]
+
+
+def _ordered(cases: Iterable[str]) -> list[str]:
+    return sorted(cases, key=lambda case_id: int(case_id[len("gc"):]))
 
 
 def _run_subject(name: str, module_source: str, scratch_root: Path) -> dict[str, tuple[int, Optional[str]]]:
@@ -340,7 +370,7 @@ def main() -> int:
     scratch_root = Path(tempfile.mkdtemp(prefix="gc-mutation-control-"))
     try:
         fixed_source = FIXED_MODULE.read_text()
-        s0_source = _s0_source()
+        s0_source = _s0_source(fixed_source)
 
         for name, builder, required in SUBJECTS:
             union |= required
@@ -356,9 +386,9 @@ def main() -> int:
 
             outcomes = _run_subject(name, source, scratch_root)
 
-            missing_red = [c for c in sorted(required) if not _reddened(outcomes[c])]
+            missing_red = [c for c in _ordered(required) if not _reddened(outcomes[c])]
             outside = ALL_CASES - required
-            not_green = sorted(c for c in outside if not _greened(outcomes[c]))
+            not_green = _ordered(c for c in outside if not _greened(outcomes[c]))
             if required:
                 outside_ok = len(not_green) < len(outside)
             else:
@@ -368,19 +398,20 @@ def main() -> int:
             ok = ok and subject_ok
 
             detail = ", ".join(
-                f"{c}={outcomes[c][1] or 'not-collected'}(x{outcomes[c][0]})" for c in sorted(required)
+                f"{c}={outcomes[c][1] or 'not-collected'}(x{outcomes[c][0]})" for c in _ordered(required)
             )
+            reddened = _ordered(c for c in ALL_CASES if _reddened(outcomes[c]))
             status_word = "OK" if subject_ok else "FAIL"
             extra = ""
             if missing_red:
                 extra += f" missing_red={missing_red}"
             if not outside_ok:
                 extra += f" not_green={not_green}" if not required else " no_green_outside_listed_set"
-            lines.append(f"{name} [{status_word}]: required={sorted(required)} ({detail}){extra}")
+            lines.append(f"{name} [{status_word}]: required={_ordered(required)} ({detail}) red={reddened}{extra}")
 
         if union != ALL_CASES:
             ok = False
-            lines.append(f"CATALOGUE [FAIL]: union of listed cases {sorted(union)} != {sorted(ALL_CASES)}")
+            lines.append(f"CATALOGUE [FAIL]: union of listed cases {_ordered(union)} != {_ordered(ALL_CASES)}")
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)
 

@@ -2741,6 +2741,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "0e115af1361505c6"
+domain = "code"
+file = "scripts/spawn-specialist.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "cfc3ed3133af00ea"
 domain = "code"
 file = "scripts/spawn-specialist.py"
@@ -2798,6 +2806,14 @@ ground = "Regexes found are markdown/frontmatter/command-syntax parsing (heading
 
 [[entry]]
 id = "99356a6749c2451e"
+domain = "code"
+file = "scripts/spawn-specialist.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "9720f7f5f6cc8f3b"
 domain = "code"
 file = "scripts/spawn-specialist.py"
 class = "structural"
@@ -9918,6 +9934,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "db1ad89c2c8e5311"
+domain = "code"
+file = "scripts/tests/test_spawn_specialist_grants.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "79c531fed8613c2b"
 domain = "code"
 file = "scripts/tests/test_spawn_specialist_grants.py"
 class = "not-a-gate"
@@ -21874,6 +21898,22 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "3e6a8328d5557f61"
+domain = "prose"
+file = "memory-global/leaves/plan-control-criterion-hygiene.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "ed3caa81cb4db185"
+domain = "prose"
+file = "memory-global/leaves/plan-control-criterion-hygiene.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "1b2827764dc9d136"
 domain = "prose"
 file = "memory-global/leaves/plan-control-criterion-hygiene.md"
 class = "perception"
