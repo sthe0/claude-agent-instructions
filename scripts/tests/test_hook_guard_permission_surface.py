@@ -766,6 +766,37 @@ def test_g4_message_falls_back_to_naming_the_session_when_state_is_unreadable():
     assert "sess-99" in message
 
 
+# --- G4: round-3 nit 2 (name the real --scope, not the nonexistent --stage) ---
+
+def test_g4_message_includes_the_real_scope_value():
+    """`resolve-permission` has no `--stage` argument at all -- a real call
+    names `--scope` (`once`/`project`/`global`/`stage`). Before this fix, the
+    message named only `--stage` (always absent on a real call), reading
+    "stage (none named)" on every single real G4 fire."""
+    command = "python3 -m agentctl resolve-permission --session sess-1 --decision granted --scope project"
+    decision, branch, message = decide_detailed(
+        "Bash", {"command": command}, "/tmp", "default", _read_file_map({}),
+    )
+    assert decision == "ask"
+    assert branch == "G4"
+    assert "scope project" in message
+
+
+def test_g4_message_defaults_scope_to_once_and_drops_stage_clause_when_absent():
+    """No `--scope` on the command means the CLI itself defaults to `once` --
+    the message should say so, not fall silent; and with no `--stage` flag
+    (the real, common shape) the old unconditional "stage (none named)"
+    clause must be gone entirely, not merely reworded."""
+    command = "python3 -m agentctl resolve-permission --session sess-1 --decision granted"
+    decision, branch, message = decide_detailed(
+        "Bash", {"command": command}, "/tmp", "default", _read_file_map({}),
+    )
+    assert decision == "ask"
+    assert branch == "G4"
+    assert "scope once" in message
+    assert "none named" not in message
+
+
 def test_shell_c_payloads_matches_stacked_short_flag_cluster():
     assert guard._shell_c_payloads(["bash", "-lc", "echo hi"]) == ["echo hi"]
     assert guard._shell_c_payloads(["bash", "-xc", "echo hi"]) == ["echo hi"]

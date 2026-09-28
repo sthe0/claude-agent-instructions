@@ -554,7 +554,7 @@ def _flag_value(tokens: list[str], flag: str) -> str | None:
     return vals[-1] if vals else None
 
 
-def _g4_bash(command: str) -> tuple[list[str], str | None, str | None, str] | None:
+def _g4_bash(command: str) -> tuple[list[str], str | None, str | None, str | None, str] | None:
     """round-2 should-fix S3: recurses through `_g2_segments` (the same `sh|
     bash|zsh -c`/`eval` recursion G2 uses) rather than the flat top-level
     `bash_write_targets.segments`, so a resolve-permission call hidden inside
@@ -564,7 +564,10 @@ def _g4_bash(command: str) -> tuple[list[str], str | None, str | None, str] | No
     request's action from that session id. round-3 nit 1: also returns the
     matched segment's own text (`" ".join(seg)`, mirroring `_g2_bash`'s return
     shape) so a caller (the replay tool) can group on the firing segment
-    instead of a noisy multi-command whole line."""
+    instead of a noisy multi-command whole line. round-3 nit 2: also returns
+    the real `--scope` value (`once`/`project`/`global`/`stage` per the CLI's
+    own choices — NOT `--stage`, which `resolve-permission` does not even
+    accept as an argument; a real call names its scope, not a stage index)."""
     for seg in _g2_segments(command):
         invokes, verb = widening_targets.agentctl_invocation_verb(seg)
         if not invokes or verb != "resolve-permission":
@@ -575,6 +578,7 @@ def _g4_bash(command: str) -> tuple[list[str], str | None, str | None, str] | No
             _flag_values(seg, "--rule"),
             _flag_value(seg, "--stage"),
             _flag_value(seg, "--session"),
+            _flag_value(seg, "--scope"),
             " ".join(seg),
         )
     return None
@@ -657,13 +661,22 @@ def _g3_message(target: str) -> str:
     )
 
 
-def _g4_message(rules: list[str], stage: str | None, session: str | None, read_file) -> str:
+def _g4_message(
+    rules: list[str], stage: str | None, session: str | None, scope: str | None, read_file,
+) -> str:
     """round-2 should-fix S3: a real call answers a pending request via
     `--session`/`--decision`, not by naming the rule again, so `rules` is
     almost always empty — the old "(none named)" left the user approving
     something unnamed. When `--rule` IS given, name it directly; otherwise
     resolve the pending request's own action via `_g4_pending_action`, and
-    fall back to naming the session when that lookup comes up empty."""
+    fall back to naming the session when that lookup comes up empty.
+
+    round-3 nit 2: a real call names its `--scope` (defaulting to `once`
+    when omitted, matching the CLI's own default), never `--stage` — that
+    flag does not exist on `resolve-permission` at all, so `stage` is always
+    None for every real fire and is now folded into the message only when a
+    (synthetic/test) command actually supplies one, instead of the old
+    unconditional "stage (none named)" noise every real message carried."""
     if rules:
         subject = f"grants rule(s) {', '.join(rules)}"
     else:
@@ -673,11 +686,12 @@ def _g4_message(rules: list[str], stage: str | None, session: str | None, read_f
         else:
             session_text = session if session else "(session unavailable)"
             subject = f"grants a pending request for session {session_text} (action unavailable)"
-    stage_text = stage if stage else "(none named)"
+    scope_text = scope if scope else "once"
+    stage_clause = f", stage {stage}" if stage else ""
     return (
-        f"`agentctl resolve-permission --decision granted` {subject} for "
-        f"stage {stage_text} outside the plan's own grant channel — this is "
-        f"your decision on an out-of-scope grant."
+        f"`agentctl resolve-permission --decision granted` {subject} at "
+        f"scope {scope_text}{stage_clause} outside the plan's own grant "
+        f"channel — this is your decision on an out-of-scope grant."
     )
 
 
@@ -756,8 +770,8 @@ def decide_detailed(
                 return "ask", "G1-state", _g1_state_message(target)
             g4_hit = _g4_bash(command)
             if g4_hit:
-                rules, stage, session, _g4_seg_text = g4_hit
-                return "ask", "G4", _g4_message(rules, stage, session, read_file)
+                rules, stage, session, scope, _g4_seg_text = g4_hit
+                return "ask", "G4", _g4_message(rules, stage, session, scope, read_file)
             target = _g2_bash(command)
             if target:
                 return "ask", "G2", _g2_message(target)

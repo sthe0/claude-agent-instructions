@@ -220,7 +220,7 @@ def _firing_segment(branch: str, command: str) -> str | None:
         return _guard._g2_bash(command)
     if branch == "G4":
         hit = _guard._g4_bash(command)
-        return hit[3] if hit else None
+        return hit[-1] if hit else None
     return None
 
 
