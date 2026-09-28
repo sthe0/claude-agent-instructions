@@ -580,25 +580,27 @@ def _classify(result) -> tuple[bool, str, bool, bool | None]:
 
 
 def _record_result(
-    name: str, result, *, timeout, remaining, ceiling, duration
+    name: str, result, *, timeout, remaining, ceiling, duration, prompt_chars=None
 ) -> tuple[bool, str]:
     verdict, reason, malformed, timed_out = _classify(result)
     judge_ledger.decided(
         name, stage="call", verdict=verdict, reason=reason,
         timed_out=timed_out, malformed=malformed, runner_legacy=timed_out is None,
         remaining=remaining, threshold=timeout, ceiling=ceiling, duration=duration,
+        prompt_chars=prompt_chars,
     )
     return verdict, reason
 
 
 def _record_raised(
-    name: str, *, timeout, remaining, ceiling, duration
+    name: str, *, timeout, remaining, ceiling, duration, prompt_chars=None
 ) -> tuple[bool, str]:
     reason = "judge raised (fail-open)"
     judge_ledger.decided(
         name, stage="call", verdict=False, reason=reason,
         timed_out=None, malformed=False,
         remaining=remaining, threshold=timeout, ceiling=ceiling, duration=duration,
+        prompt_chars=prompt_chars,
     )
     return False, reason
 
@@ -671,17 +673,20 @@ def judge_binary_ask(
         )
     judge_ledger.set_current_judge("binary_ask")
     start = time.monotonic()
+    prompt = None
     try:
         prompt = _BINARY_ASK_PROMPT.format(text=final_text)
         result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
         return _record_result(
             "binary_ask", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
+            prompt_chars=len(prompt),
         )
     except Exception:
         return _record_raised(
             "binary_ask", duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
+            prompt_chars=len(prompt) if isinstance(prompt, str) else None,
         )
     finally:
         judge_ledger.set_current_judge(None)
@@ -925,17 +930,20 @@ def judge_feedback_signal(
         )
     judge_ledger.set_current_judge("feedback_signal")
     start = time.monotonic()
+    prompt = None
     try:
         prompt = _FEEDBACK_JUDGE_PROMPT.format(text=user_text)
         result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
         return _record_result(
             "feedback_signal", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
+            prompt_chars=len(prompt),
         )
     except Exception:
         return _record_raised(
             "feedback_signal", duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
+            prompt_chars=len(prompt) if isinstance(prompt, str) else None,
         )
     finally:
         judge_ledger.set_current_judge(None)
@@ -1133,17 +1141,20 @@ def judge_deferring_disposition(
         )
     judge_ledger.set_current_judge("deferring_disposition")
     start = time.monotonic()
+    prompt = None
     try:
         prompt = _DEFERRING_DISPOSITION_JUDGE_PROMPT.format(text=ask_text)
         result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
         return _record_result(
             "deferring_disposition", result, duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
+            prompt_chars=len(prompt),
         )
     except Exception:
         return _record_raised(
             "deferring_disposition", duration=time.monotonic() - start,
             timeout=timeout, remaining=remaining, ceiling=ceiling,
+            prompt_chars=len(prompt) if isinstance(prompt, str) else None,
         )
     finally:
         judge_ledger.set_current_judge(None)
@@ -1541,18 +1552,27 @@ def subprocess_runner(
             argv, input=stdin, capture_output=True, text=True, timeout=timeout, **run_kwargs,
         )
         duration = time.monotonic() - start
-        judge_ledger.call(judge_name, timed_out=False, duration=duration, returncode=proc.returncode)
+        judge_ledger.call(
+            judge_name, timed_out=False, duration=duration, returncode=proc.returncode,
+            prompt_chars=len(stdin),
+        )
         stderr = proc.stderr
         if proc.returncode != 0 and not _child_was_authenticated(run_kwargs):
             stderr = f"{_CREDENTIAL_STDERR_PREFIX}\n{stderr}"
         return RunResult(proc.returncode, proc.stdout, stderr, timed_out=False)
     except subprocess.TimeoutExpired:
         duration = time.monotonic() - start
-        judge_ledger.call(judge_name, timed_out=True, duration=duration, returncode=None)
+        judge_ledger.call(
+            judge_name, timed_out=True, duration=duration, returncode=None,
+            prompt_chars=len(stdin),
+        )
         return RunResult(1, "", f"{_TIMEOUT_STDERR_PREFIX} {timeout}s", timed_out=True)
     except Exception as exc:
         duration = time.monotonic() - start
-        judge_ledger.call(judge_name, timed_out=False, duration=duration, returncode=None, raised=repr(exc))
+        judge_ledger.call(
+            judge_name, timed_out=False, duration=duration, returncode=None, raised=repr(exc),
+            prompt_chars=len(stdin),
+        )
         raise
 
 

@@ -309,6 +309,7 @@ def decided(
     threshold=None,
     ceiling=None,
     duration=None,
+    prompt_chars: "int | None" = None,
 ) -> None:
     """One judge decision point's terminal outcome.
 
@@ -345,7 +346,9 @@ def decided(
     requires on every call decision: the budget remainder at entry, the
     active per-call threshold, and the ceiling passed to the call (or to the
     budget check that denied one). ``duration`` is the call's wall-clock
-    length in seconds, set only when ``stage == "call"``."""
+    length in seconds, set only when ``stage == "call"``. ``prompt_chars`` is
+    the length of the stdin prompt sent to the judge model on this decision's
+    ``call`` (None when no prompt was ever built, e.g. ``stage == "budget"``)."""
     _write(
         "decided",
         judge=judge,
@@ -359,6 +362,7 @@ def decided(
         threshold=threshold,
         ceiling=ceiling,
         duration=duration,
+        prompt_chars=prompt_chars,
     )
 
 
@@ -370,13 +374,24 @@ def started(judge: str) -> None:
     _write("started", judge=judge)
 
 
-def call(judge: str, *, timed_out: bool, duration: float, returncode, raised: str | None = None) -> None:
+def call(
+    judge: str,
+    *,
+    timed_out: bool,
+    duration: float,
+    returncode,
+    raised: str | None = None,
+    prompt_chars: "int | None" = None,
+) -> None:
     """Mechanical fact about one subprocess_runner call, written from inside
     subprocess_runner itself (the true source of truth for duration and
     timed_out) rather than reconstructed by the judge function that invoked
     it. ``raised`` carries the exception's repr when subprocess_runner's own
     try/except caught something other than TimeoutExpired (outcome 7b) —
-    None on every other path."""
+    None on every other path. ``prompt_chars`` is ``len(stdin)`` of the prompt
+    subprocess_runner sent this judge — always known here since
+    subprocess_runner is the sole call site, unlike ``decided`` where a
+    budget/killswitch/no_text/no_runner stage never built a prompt at all."""
     _write(
         "call",
         judge=judge,
@@ -384,6 +399,7 @@ def call(judge: str, *, timed_out: bool, duration: float, returncode, raised: st
         duration=duration,
         returncode=returncode,
         raised=raised,
+        prompt_chars=prompt_chars,
     )
 
 
