@@ -9,7 +9,7 @@ tier: 1
 refs: [memory-global/leaves/capability-before-offload.md, memory-global/leaves/regex-not-for-semantic-classification.md, memory-global/leaves/experience/2026-07-09-landed-not-deployed-checkout-parked-on-feature-branch.md]
 plan_file: /home/the0/.claude-agent/plans/gc-criterion-and-defer-gate.toml
 created: 2026-08-05
-last_verified: 2026-08-11
+last_verified: 2026-09-28
 ---
 
 # A menu in which no option does the work, and the timeout layer that made its gate inert
@@ -63,6 +63,16 @@ Two independent deliveries, one approved plan (6 stages):
 **The engine routed the session into diagnosis on its own.** After the third replan the effort-divergence trigger fired on the `replans` scale (absolute, threshold 3) even though the stage had *passed* — a passing result whose cost overran the plan's own estimate is still a signal that the norm missed something. It asked nothing and framed the difficulty itself; the resulting cycle is what produced the re-norming above.
 
 **Mechanical traps paid here:** `hook-plan-delivery-gate.py` resolves state by the **live harness** session id, so an engine session id that differs from it means the gate never stamps the delivery and `approve` reports a stale proof — cleared with `confirm-delivery --escape-reason hook_not_fired` after re-verifying delivery by the hook's own criterion by hand; `record-result --code-ref X` compares `_digest(X)` against a stored digest, so the original ref string is unrecoverable from the state file and passing the stored digest itself reads as stale — omit the flag and say so in `--control`; `record-result` takes no `--stage`; the coverage gate matches similarities as **normalized substrings** of a stage's `conditions`/`invariants`, so critique text must be quoted verbatim from the plan it will be checked against.
+
+
+### 2026-09-28 — R8: merge field latency into MEASURED, 300 s gate budgets
+- Where it arose: claude-agent-instructions main 6832985 (convergence levers R8+R9+R10, rated 4/5)
+- Working plan: Measure field judge latency, fold it into MEASURED caps without excluding outliers, set 300 s per-gate budgets, rely on judge ledger + judge-usage-report.py --check-drift for timeout logging.
+
+## Common core & variations
+**Common:** Timeout ceilings derived from measured field latency, not guessed; gate-level budget is the binding layer.
+
+**Variations:** Unexcluded outlier raised the advisor LAST_RESORT default 55->185 s and published-text budget 60->190 s (cascade kept by user). Lessons: prose-number allowlist (verify-judge-prose-numbers) sits outside stage artifacts - budget for it; acceptance judge wants concrete observations, not summaries; an upstream derivation change needs a no_change replan rebind; a brief saying 'verbatim' leaks user quotes into the public repo - paraphrase; a spawned developer has no push grant - root pushes the personal branch.
 
 ## Cost
 **2026-08-10 context:** $27.88 of list-price telemetry over 2 spawns and 1 attributed stage (4115 s of engine time), plus an unmeasured main-session share across several context windows; 1 delivery landed on trunk, 9 stages, 3 replans (one engine-initiated), full suite 3981 passed / 3 skipped, `verify-all` 20/20, user-confirmed quality 3/5.
