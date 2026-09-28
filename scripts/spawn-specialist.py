@@ -888,13 +888,37 @@ def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
     `.git`) under the same prefix, since `--add-dir` alone would otherwise
     hand the child raw filesystem write into those without the kind's own
     baseline denies (which only ever cover this repo's and the plans dir's
-    own such paths, never an arbitrary declared add_dir). A `read` add_dir
-    DOES pair with a synthesized Edit DENY only, mirroring
-    `plans_permission_rules`' own directional-pair pattern — but that DENY
-    is never passed through `grants.validate_rule` (deny rules are outside
-    its scope by design; `grants.validate_grants` itself iterates only
-    `allow` and `add_dirs`), so the same glob shape that would refuse an
-    allow rule is fine here."""
+    own such paths, never an arbitrary declared add_dir).
+
+    A `read` add_dir pairs with a synthesized Edit DENY only, mirroring
+    `plans_permission_rules`' own directional-pair pattern — UNLESS some
+    other entry in the same list is a `write` add_dir on the same base
+    directory (compared post-normalization, via `grants.rule_file_arg` on
+    the rstripped path, exactly as the emitting loop below normalizes it):
+    in that case the read-derived deny is suppressed for that base. Without
+    this, a read/write pair on one directory (e.g. a derived-read add_dir
+    from DR-R colliding with a runtime write grant on the same path) emits
+    the identical `Edit(<base>/**)` string into both `allow` and `deny`; the
+    Claude client resolves a rule present in both lists as DENY, silently
+    voiding the write grant with no diagnostic. Mode precedence is per base,
+    not global: a read-only base (no accompanying write entry) keeps its
+    deny exactly as before, and a colliding base's write ALLOW plus its four
+    guard denies are emitted unconditionally regardless of the suppression.
+    The suppressed DENY is never passed through `grants.validate_rule`
+    either way (deny rules are outside its scope by design;
+    `grants.validate_grants` itself iterates only `allow` and `add_dirs`),
+    so the same glob shape that would refuse an allow rule is fine here."""
+    write_bases: set[str] = set()
+    for entry in entries:
+        if entry.get("rule") is not None:
+            continue
+        path = entry.get("path")
+        mode = entry.get("mode")
+        if path is None or mode is None:
+            continue
+        if mode == "write":
+            write_bases.add(grants.rule_file_arg(path.rstrip("/")))
+
     allow: list[str] = []
     deny: list[str] = []
     for entry in entries:
@@ -910,6 +934,8 @@ def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
         grants.validate_add_dir(path, mode)
         base = grants.rule_file_arg(path.rstrip("/"))
         if mode == "read":
+            if base in write_bases:
+                continue
             deny.append(f"Edit({base}/**)")
         elif mode == "write":
             allow.append(f"Edit({base}/**)")

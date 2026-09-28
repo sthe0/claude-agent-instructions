@@ -30,6 +30,8 @@ import pytest
 
 from agentctl import grants as GRANTS
 from agentctl.grants import GrantValidationError
+from agentctl.grants import derive_stage_grants
+from agentctl.state import Actor, Criterion, Means, Stage, Subject
 from test_stage_grants import _to_executing, _write_declared_grants_plan, ns
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
@@ -247,3 +249,136 @@ def test_build_child_settings_invalid_engine_rule_raises():
     engine_grants = [{"rule": "Bash(python3:*)", "provenance": "declared"}]
     with pytest.raises(GrantValidationError):
         MOD.build_child_settings("thinker", engine_grants=engine_grants)
+
+
+# --- (F) stage_grant_rules: read/write add_dir collision on the same base --
+#
+# A `read` add_dir (e.g. DR-R) and a `write` add_dir (e.g. a runtime grant)
+# on the SAME base directory used to both materialize the byte-identical
+# `Edit(<base>/**)` string -- one into `allow`, one into `deny` -- and the
+# Claude client resolves that collision as DENY, silently voiding the write
+# grant. `stage_grant_rules` now suppresses the read-derived deny per base
+# when a write entry shares it; these cases pin that fix's exact boundary,
+# case for case against the stage's own done_criterion enumeration (gc1-gc8)
+# and mutation catalogue (S0, M1-M6).
+
+
+def test_gc1_no_string_in_both_lists():
+    entries = [
+        {"path": "/tmp/gcbase", "mode": "read"},
+        {"path": "/tmp/gcbase", "mode": "write"},
+    ]
+    allow, deny = MOD.stage_grant_rules(entries)
+    assert not (set(allow) & set(deny))
+
+
+def test_gc2_write_allow_survives():
+    entries = [
+        {"path": "/tmp/gcbase", "mode": "read"},
+        {"path": "/tmp/gcbase", "mode": "write"},
+    ]
+    allow, _deny = MOD.stage_grant_rules(entries)
+    assert "Edit(//tmp/gcbase/**)" in allow
+
+
+def test_gc3_write_guard_denies_survive():
+    entries = [
+        {"path": "/tmp/gcbase", "mode": "read"},
+        {"path": "/tmp/gcbase", "mode": "write"},
+    ]
+    _allow, deny = MOD.stage_grant_rules(entries)
+    assert "Edit(//tmp/gcbase/**/.claude/**)" in deny
+    assert "Edit(//tmp/gcbase/**/settings*.json)" in deny
+    assert "Edit(//tmp/gcbase/**/.git/**)" in deny
+    assert "Edit(//tmp/gcbase/**/.git)" in deny
+
+
+def test_gc4_read_only_base_still_denies():
+    # CONTROL: no write entry anywhere in the call -- this is what fails if
+    # the fix drops read-derived denies outright instead of resolving them
+    # per base (mutation M1).
+    entries = [{"path": "/tmp/gcbase", "mode": "read"}]
+    _allow, deny = MOD.stage_grant_rules(entries)
+    assert "Edit(//tmp/gcbase/**)" in deny
+
+
+def test_gc5_order_independence():
+    write_then_read = [
+        {"path": "/tmp/gcbase", "mode": "write"},
+        {"path": "/tmp/gcbase", "mode": "read"},
+    ]
+    read_then_write = [
+        {"path": "/tmp/gcbase", "mode": "read"},
+        {"path": "/tmp/gcbase", "mode": "write"},
+    ]
+    allow_wr, deny_wr = MOD.stage_grant_rules(write_then_read)
+    allow_rw, deny_rw = MOD.stage_grant_rules(read_then_write)
+    assert set(allow_wr) == set(allow_rw)
+    assert set(deny_wr) == set(deny_rw)
+
+
+def test_gc6_per_base_scope():
+    # This is what fails if the fix suppresses read denies globally whenever
+    # any write entry is present anywhere in the call (mutation M2).
+    entries = [
+        {"path": "/tmp/gcbase", "mode": "write"},
+        {"path": "/tmp/other", "mode": "read"},
+    ]
+    _allow, deny = MOD.stage_grant_rules(entries)
+    assert "Edit(//tmp/other/**)" in deny
+
+
+def test_gc7_real_producer_via_derive_stage_grants(tmp_path):
+    # The read entry is obtained from the REAL producer -- rule DR-R, via
+    # `grants.derive_stage_grants` on a stage whose output_artifacts are
+    # ABSOLUTE paths under a directory this case creates from pytest's own
+    # tmp_path fixture -- not hand-built, so the case still proves something
+    # if DR-R's own emission changes. tmp_path rather than a literal path:
+    # this file is committed to a public repo and the machine-specific path
+    # the real collision was found on is no part of what the case proves.
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    artifact = str(outside_dir / "report.md")
+    stage = Stage(
+        index=1,
+        title="probe",
+        subject=Subject(material="m", result="r", material_refs=[], knowledge_refs=[]),
+        means=Means(means="Edit", method="apply"),
+        actor=Actor(executor="spawn:developer"),
+        criterion=Criterion(
+            criterion_type="measurable", done_criterion="d", verify_command=None
+        ),
+        output_artifacts=[artifact],
+    )
+    derived, dropped = derive_stage_grants(stage, venue="/repo")
+    assert not dropped
+    assert [d.mode for d in derived.add_dirs] == ["read"]
+    assert derived.add_dirs[0].path == str(outside_dir)
+
+    # Concatenated in the order `_stage_grants` uses: declared, then
+    # derived, then runtime -- there is no declared entry here.
+    runtime_entries = [{"path": str(outside_dir), "mode": "write", "provenance": "runtime"}]
+    entries = [d.to_dict() for d in derived.add_dirs] + runtime_entries
+
+    allow, deny = MOD.stage_grant_rules(entries)
+    base = GRANTS.rule_file_arg(str(outside_dir))
+    assert f"Edit({base}/**)" in allow
+    assert f"Edit({base}/**)" not in deny
+
+
+def test_gc8_trailing_slash_normalization():
+    # This is what fails if the write-base pre-pass and the emitting loop
+    # normalize a base differently (mutation M6).
+    trailing_pair = [
+        {"path": "/tmp/gcbase/", "mode": "write"},
+        {"path": "/tmp/gcbase", "mode": "read"},
+    ]
+    gc1_pair = [
+        {"path": "/tmp/gcbase", "mode": "read"},
+        {"path": "/tmp/gcbase", "mode": "write"},
+    ]
+    allow_t, deny_t = MOD.stage_grant_rules(trailing_pair)
+    allow_p, deny_p = MOD.stage_grant_rules(gc1_pair)
+    assert allow_t == allow_p
+    assert deny_t == deny_p
+    assert "Edit(//tmp/gcbase/**)" not in deny_t
