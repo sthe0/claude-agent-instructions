@@ -24,6 +24,7 @@ rather than `in` checks.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -295,3 +296,20 @@ def test_an_unrecognized_prior_statement_on_an_earlier_line_still_lets_a_later_h
 # exactly that: MEASURED, removing `expanduser` from `_abs` fails the deny row alone --
 # 1 failed, 35 passed out of that suite's 36 -- and the ALLOW control legitimately survives
 # the mutation because it asserts ALLOW either way.
+
+
+_REAL_LATER_LINE_HEREDOCS = json.loads(
+    (Path(__file__).parent / "fixtures" / "bash_write_targets" / "later_line_heredoc_real.json").read_text()
+)
+
+
+@pytest.mark.parametrize("row_id", sorted(_REAL_LATER_LINE_HEREDOCS))
+def test_the_real_replayed_later_line_heredoc_commands_have_no_write_target(row_id):
+    # The two replay rows (by would-fire id) that reported the phantom `=` / `=5` targets,
+    # copied verbatim apart from machine paths and the session uuid.
+    assert command_write_targets(_REAL_LATER_LINE_HEREDOCS[row_id], CWD) == []
+
+
+def test_a_heredoc_written_script_run_by_a_later_bash_statement_keeps_its_write_target():
+    # Same result before and after the round-3 whole-command `<<` search.
+    assert command_write_targets("cat <<'EOF' > f\nx\nEOF\nbash f", CWD) == ["/w/f"]

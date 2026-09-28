@@ -662,9 +662,16 @@ def test_body_removal_never_turns_a_real_write_from_deny_into_allow(canon):
     # re-run through the regression loop above with zero entries in
     # `regressions`, so the two additions are widenings of RECOGNITION, not of
     # what the guard denies.
-    assert exercised == 95, (
+    # Round-3 blocking-1: a heredoc on a LATER line now gets the same
+    # owning-statement check as one on the first line, so a `&`/`&&` after the
+    # operator on that line disqualifies it ("amp after non-first-line
+    # heredoc", "and-and after non-first line"), as it already did for "amp on
+    # first line". Those two are no longer neutralized, moving the pin from 95
+    # to 93. Recognizing less keeps more of the command visible to the guard,
+    # so this narrows recognition and cannot widen what the guard allows.
+    assert exercised == 93, (
         f"{exercised} of {len(CASES)} constructions were acted on by "
-        "neutralize_heredoc_constructs, expected exactly 95: this count cannot "
+        "neutralize_heredoc_constructs, expected exactly 93: this count cannot "
         "move without a change to the recognition rule or the table"
     )
     assert bash_reached >= 30, (

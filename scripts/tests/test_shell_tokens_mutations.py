@@ -479,26 +479,23 @@ MUTATION_CATALOGUE = (
     {
         "name": "M-D",
         "description": (
-            "Bypass `_recognized`'s own final consumer-allowlist check for a "
-            "heredoc that starts on a LATER physical line (no same-line "
-            "owning statement to scope to, so this is the plain whole-head "
-            "check, unchanged from `allow_prior_statements=False`) -- "
-            "distinct from `_pipeline_consumers_ok`'s pipeline-local check "
-            "inside `_removal_regions` itself, since `_recognized` looks only "
-            "at the command's FIRST line. `_recognized` is called only by the "
-            "wrapper functions, never by `_removal_regions`. Observed via "
-            "`neutralize_heredoc_constructs` rather than `strip_heredoc_"
-            "bodies`, because clause (v) (real, unpatched by M-D) would "
-            "otherwise mask the flip on the strip path."
+            "Drop `_recognized`'s relaxed check on the PRIOR statements before "
+            "the first heredoc operator (`allow_prior_statements` branch). "
+            "Prior statements may be ordinary `;`/`&`/newline-separated "
+            "commands, but a command substitution or process substitution "
+            "among them still disqualifies the construct. Round-3 blocking-1 "
+            "made a later-line heredoc reach this branch, so the old M-D line "
+            "(the no-heredoc fallback) became unobservable through "
+            "`neutralize_heredoc_constructs`: with no `<<` there is nothing to "
+            "neutralize. Observed via `neutralize_heredoc_constructs` rather "
+            "than `strip_heredoc_bodies`, because clause (v) (real, unpatched "
+            "by M-D) would otherwise mask the flip on the strip path."
         ),
-        "old_line": (
-            '            return all(_consumer_ok(part, consumers) for part '
-            'in head.split("|"))'
-        ),
-        "new_line": "            return True  # MUTATION M-D: bypass _recognized's own consumer check",
+        "old_line": "        if any(token in before for token in relaxed):",
+        "new_line": "        if False:  # MUTATION M-D: skip the prior-statement check",
         "observe": "neutralize_heredoc_constructs",
         "consumers": None,
-        "witness": "myunknowncmd\ncat <<'D'\nbody\nD",
+        "witness": "x=$(id)\ncat <<'D'\nbody\nD",
         "named_control": "D1a's ACTED_FLOOR_UNKNOWN == 0 / test_widened_consumer_body_introduces_no_new_spurious_deny",
     },
 )
