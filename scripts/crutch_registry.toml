@@ -5405,6 +5405,30 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "1fdc7b21aac03e01"
+domain = "code"
+file = "scripts/tests/test_grant_stats_cwd_drift.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "4080a68c07a09bdc"
+domain = "code"
+file = "scripts/tests/test_grant_stats_cwd_drift.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "373d66661d36b29c"
+domain = "code"
+file = "scripts/tests/test_grant_stats_cwd_drift.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "c9c65050f947ee36"
 domain = "code"
 file = "scripts/tests/test_grants_guard_disjoint.py"
@@ -12232,6 +12256,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "83a55431a4bcb45d"
 domain = "code_file_rollup"
 file = "scripts/tests/test_grant_snapshot_refresh.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "1b58fd766ee6d93a"
+domain = "code_file_rollup"
+file = "scripts/tests/test_grant_stats_cwd_drift.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

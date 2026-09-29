@@ -5731,23 +5731,127 @@ def _consume_once_grants(state: SessionState, stage_index: int) -> None:
             entry["consumed"] = True
 
 
+def _split_words_with_spans(text: str) -> list[tuple[str, int, int]] | None:
+    """Split a single, separator-free command statement into its whitespace-
+    delimited words. Each entry is `(unquoted_value, start, end)`, where
+    `(start, end)` is the word's span in the ORIGINAL text, quotes and
+    backslash-escapes included -- so a caller can rewrite only the words it
+    actually changes and leave every other word's original spelling
+    (quoting, escaping) byte-identical. `None` on unbalanced quoting."""
+    n = len(text)
+    i = 0
+    words: list[tuple[str, int, int]] = []
+    while i < n:
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n:
+            break
+        start = i
+        buf: list[str] = []
+        while i < n and not text[i].isspace():
+            c = text[i]
+            if c in "'\"":
+                quote = c
+                i += 1
+                while i < n and text[i] != quote:
+                    if quote == '"' and text[i] == "\\" and i + 1 < n and text[i + 1] in ('"', "\\", "$", "`"):
+                        buf.append(text[i + 1])
+                        i += 2
+                        continue
+                    buf.append(text[i])
+                    i += 1
+                if i >= n:
+                    return None
+                i += 1
+                continue
+            if c == "\\" and i + 1 < n:
+                buf.append(text[i + 1])
+                i += 2
+                continue
+            buf.append(c)
+            i += 1
+        words.append(("".join(buf), start, i))
+    return words
+
+
+def _rebase_bash_command_to_venue(command: str, drifted_cwd: str, venue: str) -> str | None:
+    """Rewrite `command` as if it had been run from `venue` instead of
+    `drifted_cwd`: for each RELATIVE word that names a path actually existing
+    under `drifted_cwd`, replace just that word's span with that same path's
+    spelling relative to `venue`. Every other word -- verbs, flags, bare
+    arguments, and any word that is already an absolute path -- is left
+    byte-identical, quoting and escaping included. Returns None when:
+    `command` is not a single top-level statement (a compound command's
+    OTHER segment may be a genuine miss that this function has no way to
+    check -- see finding 1, round 4); it doesn't tokenize (unbalanced
+    quoting); or rebasing changed nothing (a no-op rewrite is never worth
+    re-checking against `coverage`).
+
+    An absolute word is skipped on purpose (finding 2, round 4): rewriting
+    `<venue>/scripts/x` to `scripts/x` would call a command covered under its
+    RELATIVE spelling even though the child actually typed the absolute one,
+    and `_segment_covered`'s own docstring says the two spellings are not
+    equivalent -- that would name the cwd as the cause when the real cause is
+    the absolute spelling, which a venue-launched child would still have hit.
+
+    Text rewrite, not path resolution, by design: `grants.grant_covers_call`
+    matches Bash rules against the LITERAL command string (round 3, see
+    `_segment_covered`), so the only way to ask "would this be covered from
+    the venue" is to produce the literal text a venue-launched child would
+    actually have typed, then run it through that same matcher. Editing
+    spans in place (rather than `shlex.split` + `shlex.join`, the prior
+    approach) is what keeps an unchanged word's original quoting intact --
+    `shlex.join` re-quotes by its own minimal-quoting heuristic, which drops
+    a literal quote a derived grant still expects (finding 3, round 4)."""
+    if _grants.top_level_segment_count(command) != 1:
+        return None
+    words = _split_words_with_spans(command)
+    if not words:
+        return None
+    real_drifted = os.path.realpath(drifted_cwd)
+    real_venue = os.path.realpath(venue)
+    edits: list[tuple[int, int, str]] = []
+    for word, start, end in words:
+        if os.path.isabs(word):
+            continue
+        candidate = os.path.realpath(os.path.join(real_drifted, word))
+        if not os.path.exists(candidate):
+            continue
+        rel = os.path.relpath(candidate, real_venue)
+        if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+            continue
+        edits.append((start, end, shlex.quote(rel)))
+    if not edits:
+        return None
+    rebased = command
+    for start, end, replacement in sorted(edits, key=lambda e: e[0], reverse=True):
+        rebased = rebased[:start] + replacement + rebased[end:]
+    return rebased
+
+
 def _classify_transcript_denials(
     state: SessionState, stage: Stage, coverage: _grants.StageGrants, transcript_path: str | None,
 ) -> None:
     """After a dispatched child returns, classify every permission-denial stop its
     transcript recorded against the stage's PRE-LAUNCH coverage set: covered ->
     `materialization_defects` (the grant existed; --settings/--add-dir
-    materialization failed to carry it), uncovered -> `planning_misses` (a genuine
-    miss the child correctly worked around without asking). A stop already present
-    in either ledger by `tool_use_id` is never re-appended, so a later
-    PERMISSION-REQUEST self-report for the SAME call doesn't double-count it.
+    materialization failed to carry it), uncovered -> either `cwd_drift` (a Bash
+    call denied only because the child ran it from a subdirectory of the stage
+    venue -- rebasing the command's path-like tokens back to the venue would make
+    it coverable under the SAME matcher) or `planning_misses` (a genuine miss
+    the child correctly worked around without asking). A stop already present in
+    any of the three ledgers by `tool_use_id` is never re-appended, so a later
+    PERMISSION-REQUEST self-report for the SAME call doesn't double-count it --
+    and a rescan of the same transcript never reclassifies a `cwd_drift` row.
     No resolvable transcript (no `transcript_path`, or the file is absent -- the
     common case until stage 2 wires `transcript_path` onto the cost-log ledger) is a
     no-op; the `Rule:`-line self-reported fallback is `cmd_dispatch`'s job instead."""
     if not transcript_path or not Path(transcript_path).exists():
         return
     known_ids = {m.get("tool_use_id") for m in state.materialization_defects} | \
-        {m.get("tool_use_id") for m in state.planning_misses}
+        {m.get("tool_use_id") for m in state.planning_misses} | \
+        {m.get("tool_use_id") for m in state.cwd_drift}
+    venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
     for use in transcript_stops.parse_tool_uses(transcript_path):
         if use.stop_kind != "permission-denial" or use.tool_use_id in known_ids:
             continue
@@ -5772,8 +5876,14 @@ def _classify_transcript_denials(
         }
         if _grants.grant_covers_call(coverage, use.tool_name, call_input):
             state.materialization_defects.append({**row_base, "evidence": "transcript"})
-        else:
-            state.planning_misses.append({**row_base, "asked_user": False, "source": "transcript"})
+            continue
+        if use.tool_name == "Bash" and use.cwd and venue and \
+                os.path.realpath(use.cwd) != os.path.realpath(venue):
+            rebased = _rebase_bash_command_to_venue(use.command, use.cwd, venue)
+            if rebased and _grants.grant_covers_call(coverage, "Bash", {"command": rebased}):
+                state.cwd_drift.append({**row_base, "cwd": use.cwd, "rebased_command": rebased})
+                continue
+        state.planning_misses.append({**row_base, "asked_user": False, "source": "transcript"})
 
 
 def _diagnose_materialization_defect(
@@ -6037,10 +6147,13 @@ def cmd_grant_stats(args, *, store: StateStore, runner: Runner | None = None) ->
     planning_misses (denials NOT covered by a stage's effective grant set --
     correctly asked the user), materialization_defects (denials the effective
     grant set DID cover, but the child's own --settings/--add-dir materialization
-    failed to carry -- routes the stage to FAILED/DIAGNOSING, never a re-ask), and
+    failed to carry -- routes the stage to FAILED/DIAGNOSING, never a re-ask),
     settings_drift (a stage's live settings document changed underneath the
-    spawn). A pure read of state.planning_misses/materialization_defects/
-    settings_drift -- see state.py's schema-36 field block for each row's shape."""
+    spawn), and cwd_drift (a Bash denial that's only uncovered because the child
+    ran it from a subdirectory of the stage venue -- rebasing it back to the
+    venue would be covered). A pure read of state.planning_misses/
+    materialization_defects/settings_drift/cwd_drift -- see state.py's schema-39
+    field block for each row's shape."""
     state = _require(store, args.session)
     asked = sum(1 for m in state.planning_misses if m.get("asked_user"))
     unasked = len(state.planning_misses) - asked
@@ -6048,6 +6161,7 @@ def cmd_grant_stats(args, *, store: StateStore, runner: Runner | None = None) ->
         "planning_misses": state.planning_misses,
         "materialization_defects": state.materialization_defects,
         "settings_drift": state.settings_drift,
+        "cwd_drift": state.cwd_drift,
         "planning_miss_counts": {"asked": asked, "unasked": unasked},
     }
     if getattr(args, "json", False):
@@ -6057,6 +6171,7 @@ def cmd_grant_stats(args, *, store: StateStore, runner: Runner | None = None) ->
             f"planning_misses: {len(state.planning_misses)} (asked={asked}, unasked={unasked})\n"
             f"materialization_defects: {len(state.materialization_defects)}\n"
             f"settings_drift: {len(state.settings_drift)}\n"
+            f"cwd_drift: {len(state.cwd_drift)}\n"
         )
     return Directive(True, state.node, "inspect", text, data=data)
 
