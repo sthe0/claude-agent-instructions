@@ -5421,6 +5421,52 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                 state, store, stage, action=action,
                 evidence="transcript" if transcript_covered else "self-reported",
             )
+        # REQ5 (dispatch half): a Rule:-line request may resolve to a resource
+        # already approved for this order, or already covered by the stage's
+        # own effective grants under different-but-equivalent text -- self_grant
+        # instead of parking on the user. An optional advisory `Resource:` line
+        # is NEVER trusted to DECIDE this by itself -- self_grant is decided
+        # ONLY from the engine's own resolution of the `Rule:` line; a
+        # disagreeing `Resource:` line routes to the user with a reason naming
+        # BOTH, rather than silently preferring either.
+        resource_line = _parse_resource_line(result.stdout)
+        reported_resource = _parse_resource_spec(resource_line) if resource_line else None
+        self_grant_resources: list = []
+        self_grant_reason: str | None = None
+        if rule_line is not None:
+            self_grant_resources, self_grant_reason = _self_grant_resources_for_rule(
+                state, coverage, rule_line
+            )
+        resource_disagreement = None
+        if (
+            reported_resource is not None
+            and self_grant_resources
+            and not any(reported_resource == r for r in self_grant_resources)
+        ):
+            resource_disagreement = (
+                f"specialist-reported Resource: {resource_line!r} disagrees with the "
+                f"engine's own resolution of Rule: {rule_line!r} to "
+                f"{[plan_resources._resource_to_dict(r) for r in self_grant_resources]!r} "
+                "-- asking the user rather than trusting either alone"
+            )
+        if self_grant_resources and resource_disagreement is None:
+            state.log(
+                "permission_self_grant", stage=stage.index, action=action, rule=rule_line,
+                resources=[plan_resources._resource_to_dict(r) for r in self_grant_resources],
+            )
+            store.save(state)
+            return Directive(
+                True, state.node, "self_grant",
+                f"stage {stage.index} permission request for {rule_line!r} resolves to "
+                "resource(s) already approved for this order or already covered by the "
+                "stage's own effective grants -- self-grant (`resolve-permission --by "
+                f"agent --scope stage --rule {rule_line!r}`) and re-dispatch, no user ask needed",
+                marker="PERMISSION-REQUEST",
+                data={
+                    **base, "action": action, "rule": rule_line,
+                    "resources": [plan_resources._resource_to_dict(r) for r in self_grant_resources],
+                },
+            )
         state.permission_request = PermissionRequest(
             action=action, stage_index=stage.index, raw=body
         )
@@ -5468,6 +5514,11 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             })
         state.log("permission_request", stage=stage.index, action=action)
         store.save(state)
+        _ask_data = {**base, "action": action, "options": ["once", "stage", "project", "global", "deny"]}
+        if rule_line is not None:
+            _ask_data["reason_class"] = self_grant_reason
+        if resource_disagreement is not None:
+            _ask_data["resource_disagreement"] = resource_disagreement
         return Directive(
             True, state.node, "ask_user_permission",
             f"stage {stage.index} requests permission: {action}",
@@ -5475,7 +5526,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             # Finding S8: "stage" was materializable via --scope stage but
             # missing from this options list, so the root never saw it as an
             # offered choice.
-            data={**base, "action": action, "options": ["once", "stage", "project", "global", "deny"]},
+            data=_ask_data,
         )
     if marker == CHILD_INFRA_FAILURE:
         # A transient condition about the RUN, never a judgement about the
@@ -5585,6 +5636,102 @@ def _rule_line_to_call(rule: str) -> tuple[str, dict] | None:
     if tool in ("Edit", "Write", "Read", "NotebookEdit"):
         return tool, {"file_path": _grants.rule_file_path(arg)}
     return None
+
+
+_RESOURCE_LINE_RE = re.compile(r"^[-*]?\s*\*{0,2}Resource:\*{0,2}\s*(.*)$")
+_RESOURCE_SPEC_RE = re.compile(r"^(file|vcs_ref|specialist|service|dataset)\((.*)\)$")
+
+
+def _parse_resource_line(body: str) -> str | None:
+    """The optional trailing `Resource: <kind>(<args>)` line a specialist's
+    PERMISSION-REQUEST body may carry -- ADVISORY ONLY (REQ5 dispatch half):
+    it names what the specialist BELIEVES it needs, never what decides
+    self_grant on its own. Mirrors `_parse_rule_line`'s markdown-tolerance
+    (bullet/bold decoration, an inline-code-wrapped value) exactly, since a
+    specialist that decorates one line commonly decorates both."""
+    for line in reversed(body.splitlines()):
+        line = line.strip()
+        m = _RESOURCE_LINE_RE.match(line)
+        if not m:
+            continue
+        spec = m.group(1).strip()
+        if len(spec) >= 2 and spec.startswith("`") and spec.endswith("`"):
+            spec = spec[1:-1].strip()
+        if spec:
+            return spec
+    return None
+
+
+def _parse_resource_spec(text: str):
+    """Parse a `kind(arg, arg, ...)` resource spec into the matching
+    `resources.Resource` subclass, or `None` if it does not parse -- a
+    parse failure is never fatal (the line is advisory), it just means
+    there is nothing to cross-check the engine's own resolution against."""
+    m = _RESOURCE_SPEC_RE.match(text.strip())
+    if not m:
+        return None
+    kind, raw_args = m.group(1), m.group(2)
+    args = [a.strip() for a in raw_args.split(",")] if raw_args.strip() else []
+    try:
+        if kind == "file" and len(args) == 2:
+            return _resources.FileResource(args[0], args[1])
+        if kind == "vcs_ref" and len(args) == 3:
+            return _resources.VcsRefResource(args[0], args[1], args[2])
+        if kind == "specialist" and len(args) == 1:
+            return _resources.SpecialistResource(args[0])
+        if kind == "service" and len(args) == 1:
+            return _resources.ServiceResource(args[0])
+        if kind == "dataset" and len(args) == 1:
+            return _resources.DatasetResource(args[0])
+    except ValueError:
+        return None
+    return None
+
+
+def _self_grant_resources_for_rule(
+    state: "SessionState", coverage: "_grants.StageGrants", rule_line: str
+) -> tuple[list, str | None]:
+    """Resolve a PERMISSION-REQUEST's self-reported `Rule:` line to the
+    resource(s) it names, then check those resources against the UNION of
+    (a) this order's customer-approved resources (`order_approvals`'s
+    ledger, keyed by `plan.order_digest` -- the SAME resolution
+    `cmd_resolve_permission --by agent` uses, REQ5) and (b) the stage's own
+    EFFECTIVE (declared + derived) grants, each independently re-resolved to
+    resources rather than compared by rule TEXT -- a declared grant spelled
+    differently from the requested rule (e.g. a push rule naming a
+    different source ref for the same target) still counts, catching a case
+    the old string/rule-based `grants.grant_covers_call` would miss.
+
+    Returns `(resources, None)` when every resolved resource is covered
+    (dispatch may self_grant), or `([], reason_class)` otherwise --
+    `reason_class` names why, so a wildcard-tail rule and an out-of-scope
+    resource are both distinguishable in the returned Directive's data."""
+    if not state.plan_path:
+        return [], "no-plan"
+    try:
+        doc = load_plan(state.plan_path)
+    except (OSError, PlanError):
+        return [], "unloadable-plan"
+    venue = _venue_for(doc)
+    res = plan_resources.resolve_rule_grant(rule_line, venue)
+    if res.status != "resolved" or not res.resources:
+        return [], (res.reason_class or "unresolved")
+    protected = _resources.protected_permission_surfaces(
+        repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
+        ledger_dir=str(order_approvals._root(None)),
+    )
+    approved: list = list(order_approvals.approved_resources(order_digest(doc)))
+    for rule_grant in coverage.allow:
+        eff = plan_resources.resolve_rule_grant(rule_grant.rule, venue)
+        if eff.status == "resolved":
+            approved.extend(eff.resources)
+    for add_dir in coverage.add_dirs:
+        eff = plan_resources.resolve_add_dir_grant(add_dir.path, add_dir.mode)
+        approved.extend(eff.resources)
+    for requested in res.resources:
+        if not any(_covers_resource(appr, requested, protected) for appr in approved):
+            return [], "not-approved"
+    return res.resources, None
 
 
 def _stage_grant_entries(
