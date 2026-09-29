@@ -108,6 +108,45 @@ def test_sed_embedded_write_or_exec_command_is_unresolved(tmp_path):
     assert letter_e_in_text.resources == []
 
 
+def test_sed_closed_world_flag_and_block_parsing(tmp_path):
+    """Finding #3, all 6 named cases from the review's root-cause finding:
+    `-i` no longer short-circuits the w/W/e check (`-i` now goes through
+    the SAME script parsing as every other invocation); an `s///e` exec
+    flag counts as exec, not merely a non-`w` no-op; a `{...}` block is
+    unresolved (its body is not recursively parsed, so it cannot be proven
+    free of a nested w/W/e); and a bundled short flag (`-ne`) or a GNU
+    long-option ABBREVIATION (`--expr=`, `--fil=`) is refused as outside
+    the closed set rather than silently skipped."""
+    tc = _tool_contracts_module()
+
+    target = tmp_path / "f.txt"
+    target.write_text("hi")
+
+    unresolved_cmds = [
+        f"sed -i '1e echo hi' {target}",
+        f"sed -e 's/.*/id/e' {target}",
+        f"sed '1{{e id;}}' {target}",
+        f"sed -ne '1e id' {target}",
+        f"sed --expr=1e {target}",
+        f"sed --fil=script.sed {target}",
+    ]
+    for cmd in unresolved_cmds:
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class in ("contract-unresolved", "adhoc-undeclared"), cmd
+
+    # Regression: ordinary flags in the reviewed closed set still resolve,
+    # -i included -- this fix must not make -i itself unresolved, only stop
+    # -i from bypassing the script check.
+    for cmd in (
+        f"sed -n -e p {target}",
+        f"sed -i -e p {target}",
+        f"sed -E -e p {target}",
+    ):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "resolved", cmd
+
+
 def test_find_exec_and_awk_are_unresolved(tmp_path):
     tc = _tool_contracts_module()
 
@@ -167,6 +206,92 @@ def test_git_venue_flags_require_matching_venue(tmp_path):
     same_dir = tc.resolve_command(f"git -C {tmp_path} push origin main", str(tmp_path))
     assert same_dir.status == "resolved"
     assert same_dir.resources == [resources.VcsRefResource("origin", "main", "push")]
+
+
+def test_git_global_flags_outside_closed_set_are_unresolved(tmp_path):
+    """Finding #1, root cause: only -C/--git-dir/--work-tree (already
+    tested in test_git_venue_flags_require_matching_venue) and --no-pager
+    are in the reviewed closed set of git GLOBAL flags. Every other global
+    flag -- including ones a real `git` would happily accept -- is
+    unresolved rather than silently skipped, since each can change WHICH
+    resource a subsequent subcommand actually touches (`-c`/`--config-env`
+    can rewrite the push destination via `url.insteadOf`; `--exec-path`
+    points at a different git subprogram directory; `--namespace` targets
+    a different ref namespace)."""
+    tc = _tool_contracts_module()
+
+    for cmd in (
+        "git -c core.pager=cat status",
+        "git --config-env=core.pager=cat status",
+        "git --exec-path=/tmp status",
+        "git --exec-path status",
+        "git --namespace=foo status",
+        "git --namespace foo status",
+        "git --bogus-flag status",
+    ):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+        assert "outside the reviewed closed set (C1)" in (res.reason or ""), (cmd, res.reason)
+
+
+def test_git_repeated_venue_flag_is_unresolved(tmp_path):
+    """Finding #1: a repeated -C/--git-dir/--work-tree is refused rather
+    than letting the second occurrence silently retarget git past the
+    value the first occurrence was checked against."""
+    tc = _tool_contracts_module()
+
+    other = tmp_path / "other"
+    other.mkdir()
+    for cmd in (
+        f"git -C {tmp_path} -C {other} status",
+        f"git --git-dir={tmp_path} --git-dir={other} status",
+        f"git --work-tree={tmp_path} --work-tree={other} status",
+    ):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+        assert "repeated" in (res.reason or ""), (cmd, res.reason)
+
+
+def test_git_push_follow_tags_and_set_upstream_are_unresolved(tmp_path):
+    """Finding #5: --follow-tags (pushes extra tag refs this table does not
+    review) and -u/--set-upstream (writes local .git/config, a file this
+    table does not resolve) are deliberately excluded from the allowed
+    push-flag set -- each is unresolved rather than silently treated as a
+    no-op push flag."""
+    tc = _tool_contracts_module()
+
+    for cmd in (
+        "git push --follow-tags origin main",
+        "git push -u origin main",
+        "git push --set-upstream origin main",
+    ):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+
+def test_env_assignment_prefix_unresolved(tmp_path):
+    """Finding #2, the shared root-cause primitive: a leading environment-
+    variable assignment -- bare (`NAME=value cmd`) or via the `env`
+    wrapper (`env NAME=value cmd`) -- is unresolved unless NAME is in the
+    (today empty) reviewed-benign allowlist, since an injected variable
+    can change a program's behavior in ways this table's own contract
+    never reviewed."""
+    tc = _tool_contracts_module()
+
+    for cmd in (
+        "GIT_SSH_COMMAND=evil git push origin main",
+        "GIT_DIR=/tmp/other git status",
+        "PYTHONPATH=/tmp/evil python3 -m pytest -q",
+        "env GIT_SSH_COMMAND=evil git push origin main",
+        "env PYTHONPATH=/tmp/evil python3 -m pytest -q",
+    ):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+        assert "environment assignment" in (res.reason or ""), (cmd, res.reason)
 
 
 def test_rg_pre_and_date_set_are_unresolved(tmp_path):
@@ -306,24 +431,90 @@ def test_force_and_delete_push_not_covered_by_push(tmp_path):
     assert plain.status == "resolved"
     assert plain.resources == [resources.VcsRefResource("origin", "main", "push")]
 
-    refusals = [
+    # (cmd, substring the reason text must name -- review round 2, finding
+    # #6: the reason must name WHICH C5 rule fired, not just "unresolved").
+    force_or_delete_refusals = [
         "git push --force origin main",
         "git push -f origin main",
         "git push --force-with-lease origin main",
+        "git push --force-with-lease=deadbeef origin main",
         "git push --delete origin main",
+        # Flag-AFTER-the-remote form (finding #6): the force/delete check
+        # must not assume the flag precedes the positional operands.
+        "git push origin --delete main",
+        "git push -d origin main",
         "git push origin :main",
+        # Empty destination refspec (`HEAD:`) deletes the remote ref just
+        # like a bare `:branch` -- same C5 refusal (finding #6).
+        "git push origin HEAD:",
+    ]
+    zero_refspec_refusals = [
         "git push",
         "git push origin",
     ]
-    for cmd in refusals:
+    for cmd in force_or_delete_refusals:
         res = tc.resolve_command(cmd, str(tmp_path))
         assert res.status == "unresolved", cmd
         assert res.reason_class == "contract-unresolved", cmd
+        assert "force-or-delete-push" in (res.reason or ""), (cmd, res.reason)
+    for cmd in zero_refspec_refusals:
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+        assert "no explicit refspec" in (res.reason or ""), (cmd, res.reason)
+
+    for cmd in force_or_delete_refusals + zero_refspec_refusals:
+        res = tc.resolve_command(cmd, str(tmp_path))
         # An agent self-grant must never treat any of these as covered by a
         # plain-push approval on the same ref.
         approved_plain_push = resources.VcsRefResource("origin", "main", "push")
         for r in res.resources:
             assert not approved_plain_push.covers(r)
+
+
+def test_contract_resolver_closed_world_mutation(tmp_path):
+    """Generic mutation-style discriminating test (review round 2's central
+    ask): the closed-world property must hold as a PROPERTY of the shared
+    primitives, not as a set of hand-written per-finding cases -- so this
+    test takes commands this file already knows resolve cleanly and
+    mutates each under the three classes the review named (an unreviewed
+    env-assignment prefix, an unrecognized git global flag, a duplicated
+    venue-retargeting flag), asserting every mutation flips the outcome to
+    unresolved. A future contract entry sharing the same open-world gap
+    would fail this test even if nobody wrote a case naming it by hand."""
+    tc = _tool_contracts_module()
+
+    baseline_resolved_commands = [
+        "ls -la",
+        "git status",
+        "git push origin main",
+        "pytest -q scripts/tests/test_foo.py",
+    ]
+
+    # Mutation 1 (finding #2, root cause): an unreviewed env-assignment
+    # prefix must unresolve EVERY baseline command, not only git/sed.
+    for cmd in baseline_resolved_commands:
+        baseline = tc.resolve_command(cmd, str(tmp_path))
+        assert baseline.status == "resolved", cmd
+
+        mutated = tc.resolve_command(f"UNREVIEWED_VAR=x {cmd}", str(tmp_path))
+        assert mutated.status == "unresolved", cmd
+        assert mutated.reason_class == "contract-unresolved", cmd
+
+    # Mutation 2 (finding #1): an unrecognized git global flag must
+    # unresolve a command that resolves cleanly without it.
+    unknown_global_flag = tc.resolve_command("git --namespace=x status", str(tmp_path))
+    assert unknown_global_flag.status == "unresolved"
+    assert unknown_global_flag.reason_class == "contract-unresolved"
+
+    # Mutation 3 (finding #1): a DUPLICATED venue-retargeting flag must
+    # unresolve rather than let the second occurrence silently win.
+    other = tmp_path / "other"
+    other.mkdir()
+    duplicated_venue_flag = tc.resolve_command(f"git -C {tmp_path} -C {other} status", str(tmp_path))
+    assert duplicated_venue_flag.status == "unresolved"
+    assert duplicated_venue_flag.reason_class == "contract-unresolved"
+    assert "repeated" in (duplicated_venue_flag.reason or "")
 
 
 def test_land_op_never_produced_by_this_resolver(tmp_path):

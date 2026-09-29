@@ -366,7 +366,9 @@ _WRAPPER_VALUE_FLAGS: dict[str, frozenset[str]] = {
 _BARE_ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
-def strip_wrappers(tokens: list[str]) -> list[str]:
+def strip_wrappers(
+    tokens: list[str], *, assignment_names: list[str] | None = None
+) -> list[str]:
     """Drop a leading run of wrapper tokens (`env FOO=bar`, `npx`, `exec`,
     `nohup`, `timeout 30`, `command`, `sudo -u x`, `nice -n 5`, `pnpm dlx`,
     ...) so the real program name surfaces. A leading run of BARE
@@ -388,10 +390,21 @@ def strip_wrappers(tokens: list[str]) -> list[str]:
     `tok` first (finding S2-adjacent, round 6): on a case-insensitive
     filesystem (macOS default) a differently-cased spelling resolves to the
     same real binary, so `Sudo -u root` must be recognized exactly like
-    `sudo -u root`."""
+    `sudo -u root`.
+
+    When `assignment_names` is passed, every environment-variable NAME this
+    call strips away (a leading bare `KEY=VALUE`, or one passed to an `env`
+    wrapper) is appended to it — a single source of truth for "what env did
+    this command inject" so a caller deciding whether an injected variable
+    is safe reads the SAME parse this function already performs, rather
+    than a second, independently-drifting regex (review round 2, root
+    cause: the resolver silently discarded these tokens with no record for
+    any caller to inspect)."""
     i = 0
     n = len(tokens)
     while i < n and _BARE_ENV_ASSIGNMENT_RE.match(tokens[i]):
+        if assignment_names is not None:
+            assignment_names.append(tokens[i].split("=", 1)[0])
         i += 1
     while i < n:
         tok = tokens[i]
@@ -401,6 +414,8 @@ def strip_wrappers(tokens: list[str]) -> list[str]:
             while i < n and ("=" in tokens[i] or tokens[i].startswith("-")):
                 if tokens[i].startswith("-u") and tokens[i] == "-u":
                     i += 1  # consume the flag's separate NAME operand too
+                elif assignment_names is not None and "=" in tokens[i] and not tokens[i].startswith("-"):
+                    assignment_names.append(tokens[i].split("=", 1)[0])
                 i += 1
             continue
         if tok_cf == "timeout":

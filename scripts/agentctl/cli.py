@@ -5434,9 +5434,15 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         self_grant_resources: list = []
         self_grant_reason: str | None = None
         if rule_line is not None:
-            self_grant_resources, self_grant_reason = _self_grant_resources_for_rule(
-                state, coverage, rule_line
-            )
+            try:
+                _grants.validate_rule(rule_line)
+            except _grants.GrantValidationError as exc:
+                self_grant_reason = f"refused rule grant: {exc}"
+            else:
+                self_grant_coverage = _effective_stage_grants_for_self_grant(state, stage.index)
+                self_grant_resources, self_grant_reason = _self_grant_resources_for_rule(
+                    state, self_grant_coverage, rule_line
+                )
         resource_disagreement = None
         if (
             reported_resource is not None
@@ -5945,6 +5951,51 @@ def _effective_stage_grants(state: SessionState, stage_index: int) -> _grants.St
     return _grants.StageGrants(allow=allow, add_dirs=add_dirs)
 
 
+def _effective_stage_grants_for_self_grant(state: SessionState, stage_index: int) -> _grants.StageGrants:
+    """The NARROWER grant set an agent self-grant (`resolve-permission --by
+    agent`, either call site) may draw on -- declared + derived +
+    kind-baseline grants exactly as `_effective_stage_grants` computes them,
+    but excluding two runtime-grant shapes `_effective_stage_grants` itself
+    correctly counts for ORDINARY coverage/denial classification (finding
+    #4, root cause: both self-grant call sites reused that broader function
+    unmodified):
+
+    - `scope: "once"` runtime grants -- a single-launch bypass the user
+      granted to get ONE re-launch past a denial, not a standing approval a
+      self-grant should be able to lean on for a DIFFERENT rule later.
+    - runtime grants the AGENT itself materialized (`granted_by ==
+      AGENT_ACTOR`, recorded at materialization time in
+      `cmd_resolve_permission`) -- counting these would let a self-grant
+      bootstrap an ever-widening loop of self-approvals with no user
+      decision anywhere in the chain.
+
+    A runtime entry with no `granted_by` at all (materialized before this
+    field existed, or via a path this function does not know about) is
+    treated as NOT agent-granted -- fail-toward-inclusion here mirrors
+    `_effective_stage_grants`'s own bias for ordinary coverage; the
+    scope-"once" exclusion above already blocks the one shape this project
+    actually reviewed as attacker-reachable (REQ5's test scenario)."""
+    declared_entries, derived_entries, _dropped, _error, _note = _stage_grant_entries(state, stage_index)
+    runtime_entries = [
+        e for e in state.runtime_grants.get(str(stage_index), [])
+        if not e.get("consumed")
+        and e.get("scope") != "once"
+        and (e.get("granted_by") or "").strip().casefold() != AGENT_ACTOR
+    ]
+    allow: list[_grants.RuleGrant] = []
+    add_dirs: list[_grants.AddDirGrant] = []
+    for e in declared_entries + derived_entries + runtime_entries:
+        if "rule" in e:
+            allow.append(_grants.RuleGrant.from_dict(e))
+        elif "path" in e and "mode" in e:
+            add_dirs.append(_grants.AddDirGrant.from_dict(e))
+    stage = state.stage(stage_index)
+    if stage.is_spawn():
+        venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+        allow.extend(_kind_baseline_rule_grants(stage.spawn_kind(), workdir=venue))
+    return _grants.StageGrants(allow=allow, add_dirs=add_dirs)
+
+
 def _consume_once_grants(state: SessionState, stage_index: int) -> None:
     """Mark every `scope: "once"` runtime grant on this stage as consumed after
     a dispatch that used it. A once-scoped grant exists to get a single denied
@@ -6229,7 +6280,7 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
         self_approved = list(order_approvals.approved_resources(order_digest(self_doc)))
         self_active_stage = state.active_stage()
         if self_active_stage is not None:
-            self_coverage = _effective_stage_grants(state, self_active_stage.index)
+            self_coverage = _effective_stage_grants_for_self_grant(state, self_active_stage.index)
             for rule_grant in self_coverage.allow:
                 eff = plan_resources.resolve_rule_grant(rule_grant.rule, self_venue)
                 if eff.status == "resolved":
@@ -6294,7 +6345,7 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
                 return Directive(False, state.node, "noop", f"refused rule grant: {exc}")
             new_entries.append({
                 "rule": rule, "provenance": "runtime", "consumed": False,
-                "stage_title": stage.title, "scope": scope,
+                "stage_title": stage.title, "scope": scope, "granted_by": by,
             })
         for spec in (getattr(args, "add_dirs", None) or []):
             parsed = _parse_add_dir_spec(spec)
@@ -6308,7 +6359,7 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
                 return Directive(False, state.node, "noop", f"refused add_dir grant: {exc}")
             new_entries.append({
                 "path": path, "mode": mode, "provenance": "runtime", "consumed": False,
-                "stage_title": stage.title, "scope": scope,
+                "stage_title": stage.title, "scope": scope, "granted_by": by,
             })
     if args.decision == "granted":
         cont = continuations.permission_granted(req.action, scope)

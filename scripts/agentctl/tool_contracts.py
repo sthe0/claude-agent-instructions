@@ -165,14 +165,30 @@ def _has_nested_execution(stripped_text: str) -> bool:
     return False
 
 
-def _real_program(seg: list[str]) -> tuple[str, list[str]] | None:
+def _real_program(
+    seg: list[str], *, assignment_names: list[str] | None = None
+) -> tuple[str, list[str]] | None:
     """`(casefolded_basename, operand_tokens)` of the real (wrapper-stripped)
     program a segment invokes, or `None` for an empty/assignment-only
-    segment."""
-    stripped = widening_targets.strip_wrappers(seg)
+    segment. When `assignment_names` is passed, every environment-variable
+    NAME stripped away to reach that program (a leading bare `KEY=VALUE`, or
+    one passed to an `env` wrapper) is appended to it -- see
+    `widening_targets.strip_wrappers`."""
+    stripped = widening_targets.strip_wrappers(seg, assignment_names=assignment_names)
     if not stripped:
         return None
     return widening_targets.program_name(stripped[0]).casefold(), stripped[1:]
+
+
+#: Environment-variable NAMEs a leading assignment prefix (`NAME=value ...`,
+#: or `env NAME=value ...`) may set without collapsing the whole command to
+#: unresolved (root-cause fix, review round 2): closed-world by construction
+#: -- an env assignment can change ANY program's behavior in ways this
+#: module cannot see (a different config file, a different PATH, an
+#: injected interpreter flag via a `*_OPTS`-style variable), so the default
+#: is refusal, and a name is added here only after a specific reviewed case
+#: needs it. Empty today: no case has been reviewed yet.
+_REVIEWED_BENIGN_ENV_ASSIGNMENTS: frozenset[str] = frozenset()
 
 
 def _hash_file(path: str) -> str:
@@ -272,26 +288,36 @@ _GIT_READONLY_SUBCOMMANDS = frozenset(
     {"status", "log", "diff", "show", "rev-parse", "ls-files", "blame"}
 )
 
-#: Global `git` options that consume a following value token, so the
-#: subcommand-finding scan below does not mistake a flag's value for the
-#: subcommand itself (`git -C /some/dir push ...`). `-c` (a config
-#: override, e.g. `-c user.name=x`) takes a value too but is intentionally
-#: NOT in the venue-equality set below — only `-C`/`--git-dir`/`--work-tree`
-#: pick which repository git operates on.
-_GIT_GLOBAL_VALUE_FLAGS = frozenset({"-C", "-c", "--git-dir", "--work-tree"})
-
-#: Global flags whose VALUE must equal the venue (checked in `_resolve_git`)
-#: — the subset of `_GIT_GLOBAL_VALUE_FLAGS` that redirects git at a
-#: different repository/working tree than the one the plan approved.
+#: Global `git` options whose VALUE must equal the venue (checked in
+#: `_resolve_git`) — the only value-taking global flags this table
+#: resolves at all. Each is refused if it appears more than once (finding
+#: #1, C1): a second occurrence could retarget git at a different
+#: repository AFTER the first value was checked against the venue.
 _GIT_VENUE_FLAGS = ("-C", "--git-dir", "--work-tree")
+_GIT_VENUE_VALUE_FLAGS = frozenset(_GIT_VENUE_FLAGS)
+
+#: Closed allowlist of git GLOBAL flags that carry no config/executable/
+#: namespace-changing semantics — boolean, no value (finding #1, root
+#: cause). Any OTHER global flag before the subcommand — `-c`/`--config-env`
+#: (arbitrary config override, e.g. `url.insteadOf` rewriting the push
+#: destination), `--exec-path` (a different git subprogram directory),
+#: `--namespace` (a different ref namespace), or any flag this table has
+#: not reviewed — is unresolved, never silently skipped: each can change
+#: WHICH resource a subsequent `push` actually touches.
+_GIT_SAFE_GLOBAL_BOOLEAN_FLAGS = frozenset({"--no-pager"})
 
 #: Closed allowlist of `git push` flags that carry no force/delete/mirror
 #: semantics — any push flag NOT in this set is unresolved (finding #2).
+#: `--follow-tags` (pushes annotated tags reachable from the pushed refs —
+#: an extra ref this table did not review) and `-u`/`--set-upstream` (writes
+#: the local `.git/config`, a file this table does not resolve) are
+#: deliberately excluded (finding #5): both are unresolved rather than
+#: silently treated as a no-op push flag.
 _GIT_PUSH_ALLOWED_FLAGS = frozenset(
     {
         "-v", "--verbose", "-q", "--quiet", "-n", "--dry-run",
-        "-u", "--set-upstream", "--porcelain", "--progress", "--no-progress",
-        "--atomic", "--follow-tags", "--thin", "--no-thin",
+        "--porcelain", "--progress", "--no-progress",
+        "--atomic", "--thin", "--no-thin",
     }
 )
 
@@ -303,33 +329,49 @@ _GIT_PUSH_FORCE_EQUIV_FLAGS = frozenset(
 )
 
 
-def _find_git_subcommand(operands: list[str]) -> tuple[str | None, list[str], dict[str, str]]:
-    """`(subcommand, remaining_operands, global_flag_values)` — the third
-    element records the literal value of each `-C`/`--git-dir`/`--work-tree`
-    global flag seen before the subcommand, so `_resolve_git` can check each
-    against the venue."""
+def _find_git_subcommand(
+    operands: list[str],
+) -> tuple[str | None, list[str], dict[str, str], str | None]:
+    """`(subcommand, remaining_operands, global_flag_values, unresolved_reason)`.
+    `global_flag_values` records the literal value of each `-C`/`--git-dir`/
+    `--work-tree` global flag seen before the subcommand, so `_resolve_git`
+    can check each against the venue. `unresolved_reason` is `None` unless
+    the global-flag grammar itself falls outside the closed set this table
+    resolves (finding #1, root cause): a global flag that is neither a
+    venue flag nor in `_GIT_SAFE_GLOBAL_BOOLEAN_FLAGS` is refused, never
+    silently skipped, and a repeated venue flag is refused rather than
+    letting a later occurrence retarget git past the checked value."""
     i = 0
     n = len(operands)
     global_values: dict[str, str] = {}
     while i < n and operands[i].startswith("-"):
         tok = operands[i]
-        if "=" in tok and tok.split("=", 1)[0] in _GIT_GLOBAL_VALUE_FLAGS:
-            key, val = tok.split("=", 1)
-            global_values[key] = val
+        key = tok.split("=", 1)[0]
+        if key in _GIT_VENUE_VALUE_FLAGS:
+            if key in global_values:
+                return None, [], {}, f"git global flag {key!r} repeated: refusing a second retarget"
+            if "=" in tok:
+                global_values[key] = tok.split("=", 1)[1]
+                i += 1
+            else:
+                if i + 1 >= n:
+                    return None, [], {}, f"git global flag {key!r} is missing its value"
+                global_values[key] = operands[i + 1]
+                i += 2
+            continue
+        if tok in _GIT_SAFE_GLOBAL_BOOLEAN_FLAGS:
             i += 1
-        elif tok in _GIT_GLOBAL_VALUE_FLAGS:
-            if i + 1 < n:
-                global_values[tok] = operands[i + 1]
-            i += 2
-        else:
-            i += 1
+            continue
+        return None, [], {}, f"git global flag {tok!r} is outside the reviewed closed set (C1)"
     if i >= n:
-        return None, [], global_values
-    return operands[i], operands[i + 1 :], global_values
+        return None, [], global_values, None
+    return operands[i], operands[i + 1 :], global_values, None
 
 
 def _resolve_git(operands: list[str], venue_real: str) -> Resolution:
-    subcommand, rest, global_values = _find_git_subcommand(operands)
+    subcommand, rest, global_values, unresolved_reason = _find_git_subcommand(operands)
+    if unresolved_reason is not None:
+        return Resolution("unresolved", reason_class="contract-unresolved", reason=unresolved_reason)
     if subcommand is None:
         return Resolution("unresolved", reason_class="contract-unresolved", reason="bare `git` with no subcommand")
 
@@ -492,8 +534,31 @@ _SED_ADDR_PREFIX_RE = re.compile(rf"^\s*{_SED_ADDR}(?:\s*,\s*{_SED_ADDR})?\s*!?\
 #: Commands that neither write to an arbitrary path nor execute a command --
 #: enumerated so the fail-closed default below only applies to a command
 #: letter this function does not actually recognize, not to every ordinary
-#: sed command that happens to not be `w`/`W`/`e`.
-_SED_SAFE_COMMANDS = frozenset("pdnNgGhHxlqQ=btT:{}#yzFDPrR")
+#: sed command that happens to not be `w`/`W`/`e`. Deliberately excludes
+#: `{`/`}` (finding #3): a `{...}` block's BODY can itself contain a `w`/
+#: `W`/`e` command, and this function does not recursively parse block
+#: contents, so a segment opening with `{` falls through to the catch-all
+#: `True` below rather than being silently treated as safe.
+_SED_SAFE_COMMANDS = frozenset("pdnNgGhHxlqQ=btT:#yzFDPrR")
+
+#: Closed allowlist of sed flags this resolver recognizes as behavior-
+#: neutral for the w/W/e determination -- boolean, no value (finding #3,
+#: root cause). Any OTHER flag -- including a GNU long-option ABBREVIATION
+#: of `--expression`/`--file` (e.g. `--expr=...`/`--fil=...`, which getopt
+#: would accept but this table deliberately does not recognize) or a
+#: bundled short-option form (`-ne` for `-n -e`) -- is refused rather than
+#: silently skipped: an unrecognized flag could itself smuggle a script
+#: value this resolver never inspects.
+_SED_SAFE_BOOLEAN_FLAGS = frozenset(
+    {
+        "-n", "--quiet", "--silent",
+        "-E", "-r", "--regexp-extended",
+        "-s", "--separate",
+        "-u", "--unbuffered",
+        "-z", "--null-data",
+        "--posix", "--sandbox",
+    }
+)
 
 
 def _sed_segment_writes_or_execs(segment: str) -> bool:
@@ -522,7 +587,10 @@ def _sed_segment_writes_or_execs(segment: str) -> bool:
             # mid-command) -- not provably free of a `w` flag.
             return True
         flags = re.split(r"[\s;]", parts[2], maxsplit=1)[0]
-        return "w" in flags
+        # `e` on a substitute (`s/.../.../e`) executes the resulting line
+        # as a shell command -- an exec effect exactly like a bare `e`
+        # command, not merely a write (finding #3, C3).
+        return "w" in flags or "e" in flags
     if rest[0] in _SED_SAFE_COMMANDS:
         return False
     return True
@@ -539,20 +607,27 @@ def _sed_script_writes_or_execs(combined: str) -> bool:
 
 
 def _resolve_sed(operands: list[str], venue_real: str) -> Resolution:
-    """`-i`/`--in-place` writes are already captured by
-    `bash_write_targets.segment_write_target` (unconditionally, regardless
-    of this resolver's verdict — see `resolve_command`), so this resolver
-    only has to decide the case the write-target lexer cannot see: a `w`/
-    `W` (write) or `e` (execute) command embedded IN the script itself,
-    which writes/executes regardless of `-i`. Fail-closed (per the root's
-    constraint): unresolved unless the script is PROVABLY free of `w`/`W`/
+    """A `w`/`W` (write) or `e` (execute) command — or an `s///e` exec
+    flag — embedded IN the script writes/executes regardless of `-i`
+    (finding #3, root cause): the PRIOR version of this resolver
+    short-circuited to `"resolved"` for ANY `-i` invocation without ever
+    checking the script, which is exactly the closed-world gap the
+    review's root-cause finding names. This resolver therefore ALWAYS
+    parses and checks the script, `-i` or not; `-i`/`--in-place`'s own
+    file-rewrite effect is captured separately and unconditionally by
+    `bash_write_targets.segment_write_target` (see `resolve_command`).
+    Fail-closed: unresolved unless the script is PROVABLY free of `w`/`W`/
     `e` — and a `-f`/`--file` script (read from a file this resolver does
-    not inspect) can never be proven free, so it is always unresolved."""
-    # Reuses bash_write_targets' own in-place detection rather than a second
-    # copy of the same flag grammar, which could silently drift from it.
-    if bash_write_targets._sed_in_place(operands):
-        return Resolution("resolved", resources=[])
+    not inspect) can never be proven free, so it is always unresolved.
 
+    Flag parsing is closed-world too: only the exact forms `-e`/
+    `--expression`, `-f`/`--file` (each with an optional `=value`), `-i`/
+    `-i<suffix>`, `--in-place`/`--in-place=<suffix>`, and the boolean
+    flags in `_SED_SAFE_BOOLEAN_FLAGS` are recognized — a GNU long-option
+    ABBREVIATION (`--expr=`, `--fil=`) or a bundled short form (`-ne` for
+    `-n -e`) is a flag-shaped token this table does not recognize, and is
+    refused rather than silently skipped, since either could smuggle a
+    script value this resolver never inspects."""
     scripts: list[str] = []
     positionals: list[str] = []
     used_script_file = False
@@ -580,9 +655,23 @@ def _resolve_sed(operands: list[str], venue_real: str) -> Resolution:
                 scripts.append(operands[i + 1])
             i += 2
             continue
-        if tok.startswith("-"):
+        if tok == "--in-place" or tok.startswith("--in-place="):
             i += 1
             continue
+        if tok.startswith("-i") and not tok.startswith("--"):
+            # `-i`/`-i<suffix>` — GNU sed attaches an optional suffix
+            # directly with no separator, so this token IS the whole flag.
+            i += 1
+            continue
+        if tok in _SED_SAFE_BOOLEAN_FLAGS:
+            i += 1
+            continue
+        if tok.startswith("-"):
+            return Resolution(
+                "unresolved",
+                reason_class="contract-unresolved",
+                reason=f"sed flag {tok!r} is outside the reviewed closed set (C3)",
+            )
         positionals.append(tok)
         i += 1
 
@@ -719,10 +808,26 @@ def resolve_command(
     all_resources: list[resources.Resource] = []
     for seg in segments:
         write_candidates = bash_write_targets.segment_write_target(seg, venue_real)
-        real = _real_program(seg)
+        assignment_names: list[str] = []
+        real = _real_program(seg, assignment_names=assignment_names)
+        unreviewed = [n for n in assignment_names if n not in _REVIEWED_BENIGN_ENV_ASSIGNMENTS]
         if real is None:
-            # Assignment-only segment (e.g. `FOO=bar`): no program, no effect.
+            # Assignment-only segment (e.g. `FOO=bar`): no program, no
+            # effect -- but the assignment itself is still injected into the
+            # rest of the shell's environment for later segments, so it is
+            # subject to the same closed-world check as one prefixing a
+            # program invocation.
+            if unreviewed:
+                return _unresolved_with_identity(
+                    text, venue_real, "contract-unresolved",
+                    f"unreviewed environment assignment(s) {unreviewed!r}: not provably behavior-neutral",
+                )
             continue
+        if unreviewed:
+            return _unresolved_with_identity(
+                text, venue_real, "contract-unresolved",
+                f"unreviewed environment assignment(s) {unreviewed!r} injected before {real[0]!r}: not provably behavior-neutral",
+            )
         prog, operands = real
 
         entry = table.get(prog)

@@ -857,6 +857,70 @@ def test_agent_self_grant_unresolved_rule_refused(store, fixtures_dir, tmp_path)
     assert state.permission_request is not None
 
 
+def test_agent_self_grant_excludes_once_scope_runtime_grant(store, fixtures_dir, tmp_path):
+    """Finding #4 (review round 2, root cause): both self-grant call sites
+    used to reuse `_effective_stage_grants` unmodified for their own
+    self_approved coverage set -- the SAME function `cmd_dispatch` uses for
+    ordinary denial/coverage classification, which correctly counts a
+    `scope: "once"` runtime grant (a single-launch bypass) as coverage. A
+    once-scope grant a HUMAN made for one specific re-launch must not let a
+    LATER agent self-grant (`--scope stage`) lean on it as a standing
+    approval for the same resource -- `_effective_stage_grants_for_self_grant`
+    excludes it. No order-approvals ledger entry exists for this resource
+    either, so the only way the self-grant could succeed is via the
+    once-scope entry leaking into its coverage set."""
+    from argparse import Namespace
+
+    cli = _cli_module()
+    state_mod = _state_module()
+    plan_mod = _plan_module()
+
+    plan_path = _order_plan_path(tmp_path, customer_id="acme")
+    target = tmp_path / "once_scope_target.txt"
+    target.write_text("hi", encoding="utf-8")
+
+    sid = "self-grant-once-scope-excluded"
+    _park_permission_request(cli, store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.plan_path = str(plan_path)
+    active_index = state.active_stage().index
+    store.save(state)
+
+    # A human grants the resource, but only for ONE re-launch (--scope once).
+    d_user = cli.cmd_resolve_permission(
+        Namespace(session=sid, decision="granted", scope="once", by="alice",
+                  rules=[f"Edit(//{target})"], add_dirs=None),
+        store=store,
+    )
+    assert d_user.ok, d_user.detail
+    state = store.load(sid)
+    assert state.permission_request is None
+    runtime_entries = state.runtime_grants.get(str(active_index), [])
+    assert any(e.get("scope") == "once" for e in runtime_entries)
+
+    # A fresh PERMISSION-REQUEST for the SAME resource is parked (e.g. a
+    # later stage step needing the same edit again) -- constructed directly
+    # rather than via a second `cmd_dispatch`, since dispatch's OWN (broader)
+    # coverage check would short-circuit on the once-scope entry before ever
+    # reaching self-grant classification; this test targets
+    # `cmd_resolve_permission`'s self-grant coverage set specifically.
+    state = store.load(sid)
+    state.permission_request = state_mod.PermissionRequest(
+        action="PERMISSION-REQUEST: edit the file again\n", stage_index=active_index,
+    )
+    store.save(state)
+
+    d_agent = cli.cmd_resolve_permission(
+        Namespace(session=sid, decision="granted", scope="stage", by=state_mod.AGENT_ACTOR,
+                  rules=[f"Edit(//{target})"], add_dirs=None),
+        store=store,
+    )
+    assert not d_agent.ok
+    assert d_agent.data.get("reason_class") == "not-approved"
+    state = store.load(sid)
+    assert state.permission_request is not None
+
+
 def test_agent_path_audit_records_env_overrides(store, fixtures_dir, tmp_path, monkeypatch):
     """The two env overrides that steer which ledger/contract-table a
     self-grant resolves against are recorded on the history entry
