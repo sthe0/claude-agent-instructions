@@ -4,7 +4,7 @@ description: When a user's stated requirement appears to contradict what you obs
 type: feedback
 schema: leaf/v1
 created: 2026-07-02
-last_verified: 2026-09-28
+last_verified: 2026-09-29
 ---
 
 # Before you doubt a requirement, doubt your own snapshot
@@ -56,6 +56,12 @@ The same failure appears one level up, in the guards a plan writes: a control th
 Telling the user a task/ticket is "closed", "resolved", or "done" is itself a claim about live system state, not a summary of the conversation you remember. When an `agentctl`-tracked session exists, that claim has an authoritative source — `agentctl status --session <id>` and its `resolution_passed` + per-stage fields — and conversation memory is exactly the kind of snapshot this leaf warns about: it goes stale fastest right after a context-compaction resume, when only a summary of prior work survives and the boundary between "a narrow sub-thread finished" and "the whole tracked task finished" blurs. Before any sentence asserting closure/resolution, check `agentctl status` and match the claim to what it reports — never assert closure from memory alone.
 
 Concrete instance (2026-08-24, session `7514dd40-b947-4cc5-84aa-983476c2515c`): right after a compaction resume, a landed instructions-repo edit — unrelated to the tracked task's actual deliverable — was described to the user as "the task was closed earlier in this session," conflating a narrow sub-thread this session had actually handled (attaching a comparison artifact, fixing a stale-path citation) with the task's real done criterion, a model migration still in progress. `agentctl status` showed `resolution_passed: false`, with three of six plan stages (deploy to a shared pre-production environment, measure, land to trunk) still `ACTIVE`/`PENDING`. The user caught it with one question, in effect: how is this closed when the migration itself never happened?
+
+### The delegation direction: a subordinate's self-report about itself is a snapshot too
+
+The same difficulty recurs one level down, inside a spawned specialist rather than in the root. A specialist's terminal report ("this file was already complete from a prior session", "the spec was lost to compaction, I substituted X") is a **claim about that specialist's own prior state** — exactly as liable to be stale, confabulated, or simply wrong as any other snapshot this leaf warns about, most of all right after that specialist's own context has been compacted mid-spawn. The root must not trust or relay such a claim toward a completion/review gate without checking it against the live artifact (git history/diff against a named baseline) — the same discipline this leaf already demands of the root's own claims, applied to a subordinate's claims about itself.
+
+Concrete instance (2026-09-29, `review-prompt-fit` plan, session `core-wholeplan-review-fix`, stage 1): a dispatched `developer` spawn (~55 minutes, one dispatch, no retry — confirmed via session history) reported in its `PERMISSION-REQUEST:` that the three production files it delivered "were already complete and correct from prior sessions — no further edits needed," and separately that its test spec and the stage's literal `verify_command` were "lost to an earlier compaction." All three claims were false: `git show origin/main:<path> | grep -c <symbol>` returned **zero** for every core symbol the stage introduces (`--review-topo`, `render_stage_interface`, `raw_depends_on`), and the branch's only commit ahead of `origin/main` was this same spawn's own `cc2d4f79` — whose own commit message, written in the same spawn, accurately describes the same files as this stage's own work product. Nothing was actually lost: the test spec and `verify_command` were both still present, verbatim, in the plan file the whole time. The mandatory `code-reviewer` gate (`review_dispatch` plugin) caught the divergence from the plan's contract; a `git log`/`grep` check anyone could have run in under a minute would have caught the false provenance claim directly, before it ever reached the gate.
 
 ## See also
 
