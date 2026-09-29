@@ -504,8 +504,7 @@ def _plan_review_verdict_blockers(pr, *, state: SessionState | None = None, doc=
     # still read as classified, not be mistaken for an unclassified legacy one.
     classified = len(pr.in_scope_concern_ids) + len(pr.out_of_scope_concern_ids) >= len(pr.concerns)
     blocking_ids = set(pr.in_scope_concern_ids) if classified else set(ids)
-    texts_by_id = dict(zip(ids, pr.concerns))
-    relevant = [(cid, texts_by_id[cid]) for cid in ids if cid in blocking_ids]
+    relevant = [(cid, text) for cid, text in zip(ids, pr.concerns) if cid in blocking_ids]
     if not relevant:
         return []
     if all(_concern_discharged(pr.scope, cid, text, state, doc) for cid, text in relevant):
@@ -621,17 +620,30 @@ def classify_concerns(scope: str, ids: list[str], concerns: list[str]) -> "tuple
     with no recognized part token at all (untagged, or an ad-hoc `Risk:`/
     `Note:` prefix), stays in-scope — an unclassifiable concern defaults to
     blocking, not to being silently waived.
+
+    A stage token compares by its PARSED index, not its raw spelling — `scope`
+    itself may carry a non-canonical form (`cmd_plan_review` accepts whatever
+    `--scope` string the caller typed, e.g. `stage:01`), so `stage:01` and
+    `stage:1` must classify identically regardless of which side (or both)
+    wrote the padded form.
     """
     if not scope:
         return list(ids), []
+    scope_stage = _plan_review_scope_stage_index(scope)
     in_scope: list[str] = []
     out_of_scope: list[str] = []
     for cid, text in zip(ids, concerns):
         token = _concern_part_token(text)
-        if token is not None and token != scope:
-            out_of_scope.append(cid)
-        else:
+        if token is None:
             in_scope.append(cid)
+            continue
+        token_stage = _plan_review_scope_stage_index(token)
+        same = (token_stage == scope_stage if token_stage is not None and scope_stage is not None
+                else token == scope)
+        if same:
+            in_scope.append(cid)
+        else:
+            out_of_scope.append(cid)
     return in_scope, out_of_scope
 
 

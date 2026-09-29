@@ -116,6 +116,19 @@ def test_classify_concerns_stage_scope_partitions_by_leading_token(concern, expe
         assert in_scope == [] and out_of_scope == ["c1"]
 
 
+@pytest.mark.parametrize("scope,concern_token", [
+    ("stage:01", "stage:1"),
+    ("stage:1", "stage:01"),
+])
+def test_classify_concerns_stage_token_padding_reciprocal(scope, concern_token):
+    """A zero-padded stage token (`stage:01`) and its bare form (`stage:1`) name
+    the SAME stage index, in either direction — `classify_concerns` must compare
+    the parsed index, not the raw token string, or a reviewer's own padding
+    choice would silently reclassify its concern as out-of-scope."""
+    in_scope, out_of_scope = gates.classify_concerns(scope, ["c1"], [f"{concern_token}: about my own stage"])
+    assert in_scope == ["c1"] and out_of_scope == []
+
+
 # --- 2. PlanReview schema: default-empty + legacy load ---------------------
 
 def test_planreview_new_fields_default_empty():
