@@ -29,7 +29,7 @@ from agentctl import cli, gates, plugins
 from agentctl import plugins_review_dispatch as prd
 from agentctl.directive import Directive
 from agentctl.plan import load_plan, plan_meta_digest, plan_stage_digests
-from agentctl.render import _parse_stage_arg, cmd_plan_render
+from agentctl.render import cmd_plan_render
 from agentctl.state import Node, PlanReview, SessionState
 
 
@@ -334,18 +334,26 @@ def test_post_approval_replan_refusal_carries_delta(store, fixtures_dir, tmp_pat
 # --- 6. plan-render --stage accepts a single int or a CSV list -------------
 
 def test_parse_stage_arg_accepts_bare_int():
+    from agentctl.render import _parse_stage_arg
+
     assert _parse_stage_arg(3) == [3]
 
 
 def test_parse_stage_arg_accepts_single_str():
+    from agentctl.render import _parse_stage_arg
+
     assert _parse_stage_arg("3") == [3]
 
 
 def test_parse_stage_arg_accepts_csv_str():
+    from agentctl.render import _parse_stage_arg
+
     assert _parse_stage_arg("3,1") == [1, 3]
 
 
 def test_parse_stage_arg_none_stays_none():
+    from agentctl.render import _parse_stage_arg
+
     assert _parse_stage_arg(None) is None
 
 
