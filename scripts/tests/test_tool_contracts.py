@@ -46,7 +46,7 @@ def test_contract_table_rejects_duplicate_program_name(tmp_path):
 
     dup = tmp_path / "dup.toml"
     dup.write_text(
-        '[[program]]\nname = "ls"\neffect = "none"\n\n'
+        '[[program]]\nname = "ls"\neffect = "none"\nsafe_flags = ["*"]\n\n'
         '[[program]]\nname = "ls"\neffect = "unresolved"\nreason = "x"\n'
     )
     with pytest.raises(ValueError, match="duplicate"):
@@ -232,7 +232,7 @@ def test_git_global_flags_outside_closed_set_are_unresolved(tmp_path):
         res = tc.resolve_command(cmd, str(tmp_path))
         assert res.status == "unresolved", cmd
         assert res.reason_class == "contract-unresolved", cmd
-        assert "outside the reviewed closed set (C1)" in (res.reason or ""), (cmd, res.reason)
+        assert "outside the reviewed closed set" in (res.reason or ""), (cmd, res.reason)
 
 
 def test_git_repeated_venue_flag_is_unresolved(tmp_path):
@@ -419,70 +419,20 @@ def test_sibling_helper_edit_changes_unresolved_script_identity(tmp_path):
         outer.rmdir()
 
 
-def test_force_and_delete_push_not_covered_by_push(tmp_path):
-    """git push variants that are NOT a plain literal-refspec push: force,
-    delete, and — per the root's explicit continuation constraint #1 — a
-    ZERO-refspec push (`git push` / `git push origin` with no refspec),
-    whose real target ref depends on git config, not on the command line."""
+def test_contract_resolver_closed_world_mutation(tmp_path):
+    """Mutation-style discriminating test for the closed-world property.
+    Two of the six mutation groups below are generated FROM THE LOADED
+    CONTRACT TABLE itself (every `effect="none"` entry's own `safe_flags`,
+    every wrapper name `_strip_closed_wrappers` actually recognizes) rather
+    than hand-picked per-finding examples, so a future table entry sharing
+    the same open-world gap fails this test even if nobody wrote a case
+    naming it by hand. The remaining groups (env-assignment prefix, git
+    global-flag grammar, and the always-refused wrapper-token set) have no
+    table-side enumeration to drive from -- each is its own closed set by
+    construction (see `_strip_closed_wrappers`'s docstring) -- so those stay
+    literal, matching what the resolver's own source declares reviewed."""
     tc = _tool_contracts_module()
     resources = _resources_module()
-
-    plain = tc.resolve_command("git push origin main", str(tmp_path))
-    assert plain.status == "resolved"
-    assert plain.resources == [resources.VcsRefResource("origin", "main", "push")]
-
-    # (cmd, substring the reason text must name -- review round 2, finding
-    # #6: the reason must name WHICH C5 rule fired, not just "unresolved").
-    force_or_delete_refusals = [
-        "git push --force origin main",
-        "git push -f origin main",
-        "git push --force-with-lease origin main",
-        "git push --force-with-lease=deadbeef origin main",
-        "git push --delete origin main",
-        # Flag-AFTER-the-remote form (finding #6): the force/delete check
-        # must not assume the flag precedes the positional operands.
-        "git push origin --delete main",
-        "git push -d origin main",
-        "git push origin :main",
-        # Empty destination refspec (`HEAD:`) deletes the remote ref just
-        # like a bare `:branch` -- same C5 refusal (finding #6).
-        "git push origin HEAD:",
-    ]
-    zero_refspec_refusals = [
-        "git push",
-        "git push origin",
-    ]
-    for cmd in force_or_delete_refusals:
-        res = tc.resolve_command(cmd, str(tmp_path))
-        assert res.status == "unresolved", cmd
-        assert res.reason_class == "contract-unresolved", cmd
-        assert "force-or-delete-push" in (res.reason or ""), (cmd, res.reason)
-    for cmd in zero_refspec_refusals:
-        res = tc.resolve_command(cmd, str(tmp_path))
-        assert res.status == "unresolved", cmd
-        assert res.reason_class == "contract-unresolved", cmd
-        assert "no explicit refspec" in (res.reason or ""), (cmd, res.reason)
-
-    for cmd in force_or_delete_refusals + zero_refspec_refusals:
-        res = tc.resolve_command(cmd, str(tmp_path))
-        # An agent self-grant must never treat any of these as covered by a
-        # plain-push approval on the same ref.
-        approved_plain_push = resources.VcsRefResource("origin", "main", "push")
-        for r in res.resources:
-            assert not approved_plain_push.covers(r)
-
-
-def test_contract_resolver_closed_world_mutation(tmp_path):
-    """Generic mutation-style discriminating test (review round 2's central
-    ask): the closed-world property must hold as a PROPERTY of the shared
-    primitives, not as a set of hand-written per-finding cases -- so this
-    test takes commands this file already knows resolve cleanly and
-    mutates each under the three classes the review named (an unreviewed
-    env-assignment prefix, an unrecognized git global flag, a duplicated
-    venue-retargeting flag), asserting every mutation flips the outcome to
-    unresolved. A future contract entry sharing the same open-world gap
-    would fail this test even if nobody wrote a case naming it by hand."""
-    tc = _tool_contracts_module()
 
     baseline_resolved_commands = [
         "ls -la",
@@ -515,6 +465,68 @@ def test_contract_resolver_closed_world_mutation(tmp_path):
     assert duplicated_venue_flag.status == "unresolved"
     assert duplicated_venue_flag.reason_class == "contract-unresolved"
     assert "repeated" in (duplicated_venue_flag.reason or "")
+
+    # Mutation 4 (N3, table-driven): an unrecognized flag on a bare
+    # invocation of every `effect="none"` table entry must unresolve --
+    # UNLESS that entry declares `safe_flags=["*"]`, the reviewed assertion
+    # that no flag of that program writes anywhere, in which case the same
+    # arbitrary flag is a POSITIVE control and must still resolve.
+    table = tc.load_contract_table()
+    unreviewed_flag = "--definitely-unreviewed-flag"
+    for name, entry in table.items():
+        if entry.effect != "none":
+            continue
+        if name == "env":
+            # `env` is dispatched through `_strip_closed_wrappers` BEFORE
+            # its own table entry is ever consulted -- any flag on it is
+            # refused there (covered by mutation 5 below), so its
+            # `safe_flags=["*"]` entry is a documented defensive backstop
+            # this generic loop cannot reach and must not assert against.
+            continue
+        cmd = f"{name} {unreviewed_flag}"
+        res = tc.resolve_command(cmd, str(tmp_path))
+        if entry.safe_flags is not None and "*" in entry.safe_flags:
+            assert res.status == "resolved", cmd
+        else:
+            assert res.status == "unresolved", cmd
+            assert res.reason_class == "contract-unresolved", cmd
+            assert "safe-flag" in (res.reason or ""), (cmd, res.reason)
+
+    # Mutation 5 (N2, table-driven): every wrapper name `_strip_closed_
+    # wrappers` recognizes (nice/timeout/nohup/env) must unresolve when
+    # given a flag outside its own reviewed grammar, rather than silently
+    # stepping past it.
+    unreviewed_wrapper_flag_cmds = [
+        f"nice {unreviewed_flag} ls -la",
+        f"timeout {unreviewed_flag} 5 ls -la",
+        f"nohup {unreviewed_flag} ls -la",
+        f"env {unreviewed_flag} ls -la",
+    ]
+    for cmd in unreviewed_wrapper_flag_cmds:
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+    # Mutation 6 (N2): a wrapper token outside the reviewed set (eval,
+    # xargs, time, sudo, doas, flock -- none of which has a table entry of
+    # its own) prefixed onto an otherwise-resolvable command must never
+    # resolve; it falls through to the ordinary unknown-program refusal.
+    for wrapper in ("eval", "xargs", "time", "sudo", "doas", "flock"):
+        cmd = f"{wrapper} ls -la"
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "unknown-program", cmd
+
+    # Mutation 7 (N1, non-destination operand coverage): every SOURCE
+    # operand of a `mv`, not only its destination, must surface as its own
+    # resolved write resource -- the piece the destination-only shared
+    # write-target computation misses.
+    src = tmp_path / "src.txt"
+    src.write_text("x")
+    dest = tmp_path / "dest.txt"
+    mv_res = tc.resolve_command(f"mv {src} {dest}", str(tmp_path))
+    assert mv_res.status == "resolved"
+    assert resources.FileResource(str(src), "write") in mv_res.resources
 
 
 def test_land_op_never_produced_by_this_resolver(tmp_path):
@@ -561,3 +573,158 @@ def test_contract_table_and_ledger_never_covered_via_resolver(tmp_path):
     protected = resources.protected_permission_surfaces(repo_root=str(venue))
     approved_whole_venue = resources.FileResource(str(venue), "write")
     assert not approved_whole_venue.covers(res.resources[0], protected=protected)
+
+
+# ---------------------------------------------------------------------------
+# N1/N2/N3 dedicated per-case examples (round-3 review should-fix (d))
+# ---------------------------------------------------------------------------
+
+
+def test_mv_resolves_source_and_target_dir_and_refuses_unknown_flag(tmp_path):
+    tc = _tool_contracts_module()
+    resources = _resources_module()
+
+    src = tmp_path / "src.txt"
+    src.write_text("x")
+    dest = tmp_path / "dest.txt"
+    plain = tc.resolve_command(f"mv {src} {dest}", str(tmp_path))
+    assert plain.status == "resolved"
+    assert resources.FileResource(str(src), "write") in plain.resources
+    assert resources.FileResource(str(dest), "write") in plain.resources
+
+    other_src = tmp_path / "a.txt"
+    other_src.write_text("x")
+    dest_dir = tmp_path / "dir"
+    dest_dir.mkdir()
+    via_target_dir = tc.resolve_command(f"mv -t {dest_dir} {other_src}", str(tmp_path))
+    assert via_target_dir.status == "resolved"
+    assert resources.FileResource(str(other_src), "write") in via_target_dir.resources
+
+    backup_flag = tc.resolve_command(f"mv -b {src} {dest}", str(tmp_path))
+    assert backup_flag.status == "unresolved"
+    assert backup_flag.reason_class == "contract-unresolved"
+
+
+def test_patch_is_always_unresolved(tmp_path):
+    tc = _tool_contracts_module()
+
+    for cmd in ("patch < diff.patch", "patch -p1 -i diff.patch", "patch -o out.txt file.txt diff.patch"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+        assert "patch" in (res.reason or "").lower(), cmd
+
+
+def test_install_directory_mode_and_unknown_flag(tmp_path):
+    tc = _tool_contracts_module()
+    resources = _resources_module()
+
+    newdir = tmp_path / "newdir"
+    dir_mode = tc.resolve_command(f"install -d {newdir}", str(tmp_path))
+    assert dir_mode.status == "resolved"
+    assert resources.FileResource(str(newdir), "write") in dir_mode.resources
+
+    src = tmp_path / "src.txt"
+    src.write_text("x")
+    dest = tmp_path / "dest.txt"
+    plain = tc.resolve_command(f"install {src} {dest}", str(tmp_path))
+    assert plain.status == "resolved"
+
+    unknown_flag = tc.resolve_command(f"install -Z context {src} {dest}", str(tmp_path))
+    assert unknown_flag.status == "unresolved"
+    assert unknown_flag.reason_class == "contract-unresolved"
+
+
+def test_cp_parents_is_unresolved(tmp_path):
+    tc = _tool_contracts_module()
+
+    src_dir = tmp_path / "a" / "b"
+    src_dir.mkdir(parents=True)
+    src = src_dir / "f.txt"
+    src.write_text("x")
+    dest_dir = tmp_path / "out"
+    dest_dir.mkdir()
+
+    res = tc.resolve_command(f"cp --parents {src} {dest_dir}", str(tmp_path))
+    assert res.status == "unresolved"
+    assert res.reason_class == "contract-unresolved"
+    assert "parents" in (res.reason or "")
+
+
+def test_named_always_refused_wrapper_examples_are_unresolved(tmp_path):
+    """N2, the exact examples named in the review finding: eval, xargs -a,
+    time -o, sudo --chdir, and flock -c are never recognized as strippable
+    wrappers -- each falls through to the ordinary unknown-program
+    refusal, on the exact invocation shapes the finding named."""
+    tc = _tool_contracts_module()
+
+    for cmd in (
+        "eval 'echo hi > out.txt'",
+        "xargs -a list.txt rm",
+        "time -o out.txt sleep 1",
+        "sudo --chdir=/tmp tee out.txt",
+        "flock -c 'echo hi > out.txt' lockfile",
+    ):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "unknown-program", cmd
+
+
+def test_env_chdir_is_unresolved(tmp_path):
+    """N2: unlike the tokens above, `env` DOES have closed-wrapper handling
+    (a leading run of bare assignments) -- but ANY flag on it, --chdir
+    included, is refused explicitly rather than silently stepped past."""
+    tc = _tool_contracts_module()
+
+    res = tc.resolve_command("env --chdir=/tmp tee out.txt", str(tmp_path))
+    assert res.status == "unresolved"
+    assert res.reason_class == "contract-unresolved"
+    assert "env flag" in (res.reason or "")
+
+
+def test_nice_wrapped_write_resolves_on_stripped_segment(tmp_path):
+    tc = _tool_contracts_module()
+    resources = _resources_module()
+
+    dest = tmp_path / "out.txt"
+    res = tc.resolve_command(f"nice tee {dest}", str(tmp_path))
+    assert res.status == "resolved"
+    assert resources.FileResource(str(dest), "write") in res.resources
+
+
+def test_nohup_wraps_and_contributes_nohup_out(tmp_path):
+    tc = _tool_contracts_module()
+    resources = _resources_module()
+
+    res = tc.resolve_command("nohup ls -la", str(tmp_path))
+    assert res.status == "resolved"
+    assert resources.FileResource(str(tmp_path / "nohup.out"), "write") in res.resources
+
+
+def test_none_effect_named_examples_outside_safe_flags_are_unresolved(tmp_path):
+    """N3, the exact examples named in the review finding: `tree -o`,
+    `less -o`, and `file -C` each has a write-capable flag deliberately
+    excluded from its reviewed safe_flags allowlist."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("tree -o out.txt", "less -o out.txt f.txt", "file -C f.txt"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+        assert "safe-flag" in (res.reason or ""), cmd
+
+
+def test_sed_bsd_ambiguous_empty_suffix_is_unresolved(tmp_path):
+    """N4 (prior segment's fix): `sed -i ''` is ambiguous between GNU sed
+    (an empty in-place suffix) and BSD/macOS sed (a mandatory, here-empty,
+    suffix argument before the script) -- unresolved rather than guessing
+    which reading applies, since guessing wrong risks missing an embedded
+    w/W/e command hiding in whichever token is actually the script."""
+    tc = _tool_contracts_module()
+
+    target = tmp_path / "f.txt"
+    target.write_text("hi")
+    res = tc.resolve_command(f"sed -i '' 's/a/b/' {target}", str(tmp_path))
+    assert res.status == "unresolved"
+    assert res.reason_class == "contract-unresolved"
+    assert "ambiguous" in (res.reason or "")

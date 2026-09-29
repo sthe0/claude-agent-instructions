@@ -29,67 +29,80 @@
 [[program]]
 name = "ls"
 effect = "none"
-source = "GNU coreutils ls(1): lists directory entries; no write."
+safe_flags = ["*"]
+source = "GNU coreutils ls(1): lists directory entries; no write. safe_flags=[\"*\"]: no flag in ls(1) writes anywhere."
 
 [[program]]
 name = "cat"
 effect = "none"
-source = "POSIX cat(1): concatenates and prints files; no write."
+safe_flags = ["*"]
+source = "POSIX cat(1): concatenates and prints files; no write. safe_flags=[\"*\"]: no flag in cat(1) writes anywhere."
 
 [[program]]
 name = "head"
 effect = "none"
-source = "GNU coreutils head(1): prints the first part of files; no write."
+safe_flags = ["*"]
+source = "GNU coreutils head(1): prints the first part of files; no write. safe_flags=[\"*\"]: no flag in head(1) writes anywhere."
 
 [[program]]
 name = "tail"
 effect = "none"
-source = "GNU coreutils tail(1): prints the last part of files; no write."
+safe_flags = ["*"]
+source = "GNU coreutils tail(1): prints the last part of files; no write. safe_flags=[\"*\"]: no flag in tail(1) writes anywhere."
 
 [[program]]
 name = "less"
 effect = "none"
-source = "less(1): a pager; no write."
+safe_flags = ["-N", "-S", "-X", "-F", "-R", "-r", "-i", "-I", "-M", "-m", "-c", "-e", "-P"]
+source = "less(1): a pager; no write absent -o/-O/--log-file (excluded from safe_flags -- each writes the input to a log file)."
 
 [[program]]
 name = "more"
 effect = "none"
-source = "more(1): a pager; no write."
+safe_flags = ["-N", "-S", "-X", "-F", "-R", "-r", "-i", "-I", "-M", "-m", "-c", "-e", "-P"]
+source = "more(1): a pager; no write absent -o/-O/--log-file (excluded from safe_flags, same as less)."
 
 [[program]]
 name = "wc"
 effect = "none"
-source = "GNU coreutils wc(1): counts lines/words/bytes; no write."
+safe_flags = ["*"]
+source = "GNU coreutils wc(1): counts lines/words/bytes; no write. safe_flags=[\"*\"]: no flag in wc(1) writes anywhere."
 
 [[program]]
 name = "stat"
 effect = "none"
-source = "GNU coreutils stat(1): displays file status; no write."
+safe_flags = ["*"]
+source = "GNU coreutils stat(1): displays file status; no write. safe_flags=[\"*\"]: no flag in stat(1) writes anywhere."
 
 [[program]]
 name = "file"
 effect = "none"
-source = "file(1): determines file type; no write."
+safe_flags = ["-b", "-i", "-L", "-z", "-k", "-N", "-s", "-h", "-r", "-n", "-0"]
+source = "file(1): determines file type; no write absent -C/--compile (excluded from safe_flags -- writes a compiled magic file)."
 
 [[program]]
 name = "tree"
 effect = "none"
-source = "tree(1): lists directory contents as a tree; no write."
+safe_flags = ["-a", "-d", "-f", "-i", "-L", "-P", "-I", "--dirsfirst", "-h", "-s", "-p", "-u", "-g", "-D", "-F", "--noreport", "-C", "-n", "-A"]
+source = "tree(1): lists directory contents as a tree; no write absent -o (excluded from safe_flags -- writes output to a file)."
 
 [[program]]
 name = "du"
 effect = "none"
-source = "GNU coreutils du(1): estimates file space usage; no write."
+safe_flags = ["*"]
+source = "GNU coreutils du(1): estimates file space usage; no write. safe_flags=[\"*\"]: no flag in du(1) writes anywhere."
 
 [[program]]
 name = "df"
 effect = "none"
-source = "GNU coreutils df(1): reports filesystem disk usage; no write."
+safe_flags = ["*"]
+source = "GNU coreutils df(1): reports filesystem disk usage; no write. safe_flags=[\"*\"]: no flag in df(1) writes anywhere."
 
 [[program]]
 name = "grep"
 effect = "none"
-source = "GNU grep(1): prints matching lines; no write (absent -l/--include write flags -- grep has none)."
+safe_flags = ["*"]
+source = "GNU grep(1): prints matching lines; no write (absent -l/--include write flags -- grep has none). safe_flags=[\"*\"]: no flag in grep(1) writes anywhere."
 
 [[program]]
 name = "rg"
@@ -99,37 +112,44 @@ source = "ripgrep --help: no write flag exists, but --pre runs an arbitrary prep
 [[program]]
 name = "printf"
 effect = "none"
-source = "POSIX printf(1): writes to stdout only; a `>` redirect is the shell's effect, resolved separately."
+safe_flags = ["*"]
+source = "POSIX printf(1): writes to stdout only; a `>` redirect is the shell's effect, resolved separately. safe_flags=[\"*\"]: no flag in printf(1) writes anywhere on its own."
 
 [[program]]
 name = "echo"
 effect = "none"
-source = "POSIX echo(1): writes to stdout only; a `>` redirect is the shell's effect, resolved separately."
+safe_flags = ["*"]
+source = "POSIX echo(1): writes to stdout only; a `>` redirect is the shell's effect, resolved separately. safe_flags=[\"*\"]: no flag in echo(1) writes anywhere on its own."
 
 [[program]]
 name = "jq"
 effect = "none"
-source = "jq(1): a JSON filter writing to stdout only (no -o); a `>` redirect is the shell's effect."
+safe_flags = ["*"]
+source = "jq(1): a JSON filter writing to stdout only (no -o); a `>` redirect is the shell's effect. safe_flags=[\"*\"]: no flag in jq(1) writes anywhere on its own."
 
 [[program]]
 name = "realpath"
 effect = "none"
-source = "GNU coreutils realpath(1): prints a resolved path; no write."
+safe_flags = ["*"]
+source = "GNU coreutils realpath(1): prints a resolved path; no write. safe_flags=[\"*\"]: no flag in realpath(1) writes anywhere."
 
 [[program]]
 name = "readlink"
 effect = "none"
-source = "GNU coreutils readlink(1): prints a symlink target; no write."
+safe_flags = ["*"]
+source = "GNU coreutils readlink(1): prints a symlink target; no write. safe_flags=[\"*\"]: no flag in readlink(1) writes anywhere."
 
 [[program]]
 name = "which"
 effect = "none"
-source = "which(1): locates a program in PATH; no write."
+safe_flags = ["*"]
+source = "which(1): locates a program in PATH; no write. safe_flags=[\"*\"]: no flag in which(1) writes anywhere."
 
 [[program]]
 name = "whoami"
 effect = "none"
-source = "GNU coreutils whoami(1): prints the effective user; no write."
+safe_flags = ["*"]
+source = "GNU coreutils whoami(1): prints the effective user; no write. safe_flags=[\"*\"]: no flag in whoami(1) writes anywhere."
 
 [[program]]
 name = "date"
@@ -139,27 +159,32 @@ source = "GNU coreutils date(1): prints the date and has no file-write flag, but
 [[program]]
 name = "pwd"
 effect = "none"
-source = "POSIX pwd(1): prints the working directory; no write."
+safe_flags = ["*"]
+source = "POSIX pwd(1): prints the working directory; no write. safe_flags=[\"*\"]: no flag in pwd(1) writes anywhere."
 
 [[program]]
 name = "env"
 effect = "none"
-source = "POSIX env(1) run bare (no command operand): prints the environment; no write. A command operand makes `env` a wrapper, stripped before program identification ever sees it."
+safe_flags = ["*"]
+source = "POSIX env(1) run bare (no command operand): prints the environment; no write. A command operand makes `env` a wrapper, stripped before program identification ever sees it. safe_flags=[\"*\"]: defensive backstop only -- `_strip_closed_wrappers` already refuses any flag on env's wrapper form before this generic check would see one, and the bare no-args form never has a `-`-prefixed operand."
 
 [[program]]
 name = "printenv"
 effect = "none"
-source = "GNU coreutils printenv(1): prints environment variables; no write."
+safe_flags = ["*"]
+source = "GNU coreutils printenv(1): prints environment variables; no write. safe_flags=[\"*\"]: no flag in printenv(1) writes anywhere."
 
 [[program]]
 name = "shasum"
 effect = "none"
-source = "Perl shasum(1): prints a digest to stdout only; no write absent -o (not offered by this program)."
+safe_flags = ["*"]
+source = "Perl shasum(1): prints a digest to stdout only; no write absent -o (not offered by this program). safe_flags=[\"*\"]: no flag in shasum(1) writes anywhere."
 
 [[program]]
 name = "sha256sum"
 effect = "none"
-source = "GNU coreutils sha256sum(1): prints a digest to stdout only; no write flag exists."
+safe_flags = ["*"]
+source = "GNU coreutils sha256sum(1): prints a digest to stdout only; no write flag exists. safe_flags=[\"*\"]: no flag in sha256sum(1) writes anywhere."
 
 # --- read-only git subcommands (dispatched via the "resolver" entry below,
 # listed here only for the loader's one-entry-per-program review) ----------
@@ -178,23 +203,24 @@ source = "POSIX tee(1): writes each non-flag operand as a file; resolved by lib/
 
 [[program]]
 name = "cp"
-effect = "writes-operands"
-source = "POSIX cp(1): writes its destination operand; resolved by lib/bash_write_targets.segment_write_target (directory destinations expanded to per-source targets)."
+effect = "resolver"
+source = "POSIX cp(1): writes its destination operand; the ordinary case (directory destinations expanded to per-source targets) is resolved by lib/bash_write_targets.segment_write_target, still consulted unconditionally by resolve_command -- _resolve_cp only refuses --parents, whose actual write path (each source's own directory structure preserved under the destination) that shared computation does not model."
 
 [[program]]
 name = "mv"
-effect = "writes-operands"
-source = "POSIX mv(1): writes its destination operand; resolved by lib/bash_write_targets.segment_write_target."
+effect = "resolver"
+source = "POSIX mv(1): writes its destination operand (resolved by lib/bash_write_targets.segment_write_target, as for cp) AND removes its source operand(s), which that shared computation does not model -- _resolve_mv adds each source as its own write resource under a closed flag grammar."
 
 [[program]]
 name = "install"
-effect = "writes-operands"
-source = "GNU coreutils install(1): writes its destination operand; resolved by lib/bash_write_targets.segment_write_target."
+effect = "resolver"
+source = "GNU coreutils install(1): writes its destination operand in the ordinary case (resolved by lib/bash_write_targets.segment_write_target, as for cp); -d/--directory mode instead creates EVERY positional as its own directory, a shape that shared computation does not model -- _resolve_install computes dir-mode's targets itself under a closed flag grammar."
 
 [[program]]
 name = "patch"
-effect = "writes-operands"
-source = "POSIX patch(1): writes files named inside the patch body, not the command line; lib/bash_write_targets reports the cwd it is applied in (the only honest target derivable from the command line alone)."
+effect = "unresolved"
+reason = "patch's actual write target is named inside the patch body/headers (or derived from -p's strip count against those headers), not decidable from the command line alone; a positional FILE operand or any of -o/-d/-r/-b/-B changes or adds to that target in ways this table does not attempt to resolve."
+source = "POSIX patch(1): writes the file(s) named by the patch body it is given."
 
 # --- always unresolved (effect not decidable from the command line) --------
 

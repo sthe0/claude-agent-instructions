@@ -1175,34 +1175,60 @@ def test_covers_and_identity_compare_realpath(tmp_path):
     assert approved_via_link == resources.FileResource(str(real_dir), "write")
 
 
-_C5_REFUSED_PUSH_COMMANDS = [
-    "git push --force origin main",
-    "git push -f origin main",
-    "git push --force-with-lease origin main",
-    "git push --force-if-includes origin main",
-    "git push --mirror origin main",
-    "git push --prune origin main",
-    "git push --all origin main",
-    "git push --tags origin main",
-    "git push --delete origin main",
-    "git push origin +HEAD:main",
-    "git push origin :main",
-    "git push origin",
+#: (id, command, reason-substring): every force/delete/mirror/prune/all/tags-
+#: equivalent push, every `+`/`:`/empty-destination refspec form (leading,
+#: trailing, or flag-after-the-remote), and a zero-refspec push (with or
+#: without a remote operand at all) resolves `unresolved`. Each force-or-
+#: delete-equivalent variant is refused by the SAME C5 rule in
+#: `_resolve_git` and therefore shares one reason substring; the two
+#: zero-refspec variants share the other.
+_C5_REFUSED_PUSH_CASES = [
+    ("force", "git push --force origin main", "force-or-delete-push"),
+    ("dash-f", "git push -f origin main", "force-or-delete-push"),
+    ("force-with-lease", "git push --force-with-lease origin main", "force-or-delete-push"),
+    ("force-with-lease-value", "git push --force-with-lease=deadbeef origin main", "force-or-delete-push"),
+    ("force-if-includes", "git push --force-if-includes origin main", "force-or-delete-push"),
+    ("mirror", "git push --mirror origin main", "force-or-delete-push"),
+    ("prune", "git push --prune origin main", "force-or-delete-push"),
+    ("all", "git push --all origin main", "force-or-delete-push"),
+    ("tags", "git push --tags origin main", "force-or-delete-push"),
+    ("delete", "git push --delete origin main", "force-or-delete-push"),
+    ("dash-d-delete", "git push -d origin main", "force-or-delete-push"),
+    ("delete-after-remote", "git push origin --delete main", "force-or-delete-push"),
+    ("plus-refspec", "git push origin +HEAD:main", "force-or-delete-push"),
+    ("colon-refspec", "git push origin :main", "force-or-delete-push"),
+    ("empty-dest-refspec", "git push origin HEAD:", "force-or-delete-push"),
+    ("zero-refspec", "git push origin", "no explicit refspec"),
+    ("bare-push", "git push", "no explicit refspec"),
 ]
-_C5_REFUSED_PUSH_IDS = [
-    "force", "dash-f", "force-with-lease", "force-if-includes", "mirror",
-    "prune", "all", "tags", "delete", "plus-refspec", "colon-refspec",
-    "zero-refspec",
-]
+_C5_REFUSED_PUSH_IDS = [case[0] for case in _C5_REFUSED_PUSH_CASES]
+_C5_REFUSED_PUSH_COMMANDS = [case[1] for case in _C5_REFUSED_PUSH_CASES]
 
 
-@pytest.mark.parametrize("cmd", _C5_REFUSED_PUSH_COMMANDS, ids=_C5_REFUSED_PUSH_IDS)
-def test_force_and_delete_push_not_covered_by_push(tmp_path, cmd):
+def test_plain_push_resolves_to_single_vcs_ref_resource(tmp_path):
+    """Positive control for the C5 refusal cluster below: an ordinary
+    literal-refspec push (no force/delete/mirror/prune/all/tags flag, no
+    +/:/empty-destination refspec, no zero-refspec form) resolves cleanly to
+    exactly the one `VcsRefResource` it names -- proving the refusals in
+    `test_force_and_delete_push_not_covered_by_push` are specific to the C5
+    shapes, not to `git push` at large."""
+    tc = _tool_contracts_module()
+    resources = _resources_module()
+
+    plain = tc.resolve_command("git push origin main", str(tmp_path))
+    assert plain.status == "resolved"
+    assert plain.resources == [resources.VcsRefResource("origin", "main", "push")]
+
+
+@pytest.mark.parametrize(
+    "cmd,reason_substring", [(case[1], case[2]) for case in _C5_REFUSED_PUSH_CASES], ids=_C5_REFUSED_PUSH_IDS
+)
+def test_force_and_delete_push_not_covered_by_push(tmp_path, cmd, reason_substring):
     """C5: every force/delete/mirror/prune/all/tags-equivalent push, every
     +-prefixed or :-prefixed or empty-destination refspec, and a
-    zero-refspec push resolves `unresolved` -- never to an empty-but-
-    "covered" resource set -- so none of them can ever be mistaken for a
-    plain push to the same remote/branch a ledger approved."""
+    zero-refspec push resolves `unresolved` with an EMPTY resource list --
+    never a "covered" resource set -- so none of them can ever be mistaken
+    for a plain push to the same remote/branch a ledger approved."""
     tc = _tool_contracts_module()
     venue = tmp_path / "venue"
     venue.mkdir()
@@ -1210,6 +1236,8 @@ def test_force_and_delete_push_not_covered_by_push(tmp_path, cmd):
     r = tc.resolve_command(cmd, str(venue))
     assert r.status == "unresolved", cmd
     assert r.reason_class == "contract-unresolved", (cmd, r.reason_class)
+    assert reason_substring in (r.reason or ""), (cmd, r.reason)
+    assert r.resources == [], cmd
 
 
 def test_force_and_delete_push_refused_via_resolve_permission_self_grant(store, fixtures_dir, tmp_path):

@@ -174,6 +174,27 @@ def _abs(candidate: str, eff_cwd: str) -> str:
     return candidate if os.path.isabs(candidate) else os.path.join(eff_cwd, candidate)
 
 
+def redirect_targets(seg: list[str], eff_cwd: str) -> list[str]:
+    """Output-redirect candidates anywhere in `seg` — `> f`, `>> f`, glued
+    `>f`/`>>f` — as absolute paths resolved against `eff_cwd`. This is the
+    shell's OWN effect, orthogonal to which verb the segment invokes, so a
+    caller that supplies its own verb-specific resolution (rather than this
+    module's `_COPY_VERBS`/`patch`/`sed`/`tee` dispatch below) can still pick
+    up a layered redirect via this function alone, without re-deriving the
+    redirect grammar. Extracted from `segment_write_target` (part (a) below,
+    unchanged) rather than duplicated."""
+    candidates: list[str] = []
+    for i, tok in enumerate(seg):
+        redirect_tgt: str | None = None
+        if tok in (">", ">>"):
+            redirect_tgt = seg[i + 1] if i + 1 < len(seg) else None
+        elif tok.startswith(">") and tok.strip(">"):
+            redirect_tgt = tok.lstrip(">")
+        if redirect_tgt:
+            candidates.append(_abs(redirect_tgt, eff_cwd))
+    return candidates
+
+
 def segment_write_target(seg: list[str], eff_cwd: str) -> list[str]:
     """Every write-target candidate of a single command segment, as absolute
     paths resolved against `eff_cwd`, in the order a caller should prefer them:
@@ -190,17 +211,8 @@ def segment_write_target(seg: list[str], eff_cwd: str) -> list[str]:
     if not seg:
         return []
 
-    candidates: list[str] = []
-
     # (a) output redirection anywhere in the segment: `> f`, `>> f`, glued `>f`/`>>f`.
-    for i, tok in enumerate(seg):
-        redirect_tgt: str | None = None
-        if tok in (">", ">>"):
-            redirect_tgt = seg[i + 1] if i + 1 < len(seg) else None
-        elif tok.startswith(">") and tok.strip(">"):
-            redirect_tgt = tok.lstrip(">")
-        if redirect_tgt:
-            candidates.append(_abs(redirect_tgt, eff_cwd))
+    candidates: list[str] = redirect_targets(seg, eff_cwd)
 
     # (b) verb-based writers.
     verb = os.path.basename(seg[0]) if seg[0] else ""
