@@ -352,10 +352,15 @@ def _essence_coverage_blocker(missing: list[str]) -> str:
     )
 
 
-def premise_blockers(state, bag) -> list[str]:
+def premise_blockers(state, bag, *, include_essence_coverage: bool = True) -> list[str]:
     """The full plan_approval-gate blocker set for a premise bag, so the read-only
     `question-check` command (stage 4) and the gate never diverge (the
     plugins_ledger.ledger_blockers precedent).
+
+    `include_essence_coverage` defaults True, preserving `approve`'s own
+    unfiltered gating exactly. `present-plan --kind essence` is the one caller
+    that passes False: half (5) below compares the essence receipt against
+    itself, which is circular before that receipt has been stamped.
 
     1. per-question closure (premise.validate_questions), keyed against the
        CURRENT plan's per-stage keys — loaded fresh from `state.plan_path` rather
@@ -450,7 +455,7 @@ def premise_blockers(state, bag) -> list[str]:
                                premise.ENUMERATION_RUNNER_FAILURE_REASONS):
             blockers.append(_runner_failed_blocker(bag))
 
-    if doc is not None and gates.plan_presentation_active(state):
+    if include_essence_coverage and doc is not None and gates.plan_presentation_active(state):
         receipt = gates._plan_presentation_for(state, PLAN_PRESENTATION_KIND_ESSENCE)
         # Silent when NO essence receipt exists, and when the one that exists
         # presents another plan: both are already gates.plan_presentation_blockers'
