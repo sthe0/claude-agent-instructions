@@ -51,52 +51,10 @@ safe_flags = ["*"]
 source = "GNU coreutils tail(1): prints the last part of files; no write. safe_flags=[\"*\"]: no flag in tail(1) writes anywhere."
 
 [[program]]
-name = "less"
-effect = "none"
-safe_flags = ["-N", "-S", "-X", "-F", "-R", "-r", "-i", "-I", "-M", "-m", "-c", "-e", "-P"]
-source = "less(1): a pager; no write absent -o/-O/--log-file (excluded from safe_flags -- each writes the input to a log file)."
-
-[[program]]
-name = "more"
-effect = "none"
-safe_flags = ["-N", "-S", "-X", "-F", "-R", "-r", "-i", "-I", "-M", "-m", "-c", "-e", "-P"]
-source = "more(1): a pager; no write absent -o/-O/--log-file (excluded from safe_flags, same as less)."
-
-[[program]]
 name = "wc"
 effect = "none"
 safe_flags = ["*"]
 source = "GNU coreutils wc(1): counts lines/words/bytes; no write. safe_flags=[\"*\"]: no flag in wc(1) writes anywhere."
-
-[[program]]
-name = "stat"
-effect = "none"
-safe_flags = ["*"]
-source = "GNU coreutils stat(1): displays file status; no write. safe_flags=[\"*\"]: no flag in stat(1) writes anywhere."
-
-[[program]]
-name = "file"
-effect = "none"
-safe_flags = ["-b", "-i", "-L", "-z", "-k", "-N", "-s", "-h", "-r", "-n", "-0"]
-source = "file(1): determines file type; no write absent -C/--compile (excluded from safe_flags -- writes a compiled magic file)."
-
-[[program]]
-name = "tree"
-effect = "none"
-safe_flags = ["-a", "-d", "-f", "-i", "-L", "-P", "-I", "--dirsfirst", "-h", "-s", "-p", "-u", "-g", "-D", "-F", "--noreport", "-C", "-n", "-A"]
-source = "tree(1): lists directory contents as a tree; no write absent -o (excluded from safe_flags -- writes output to a file)."
-
-[[program]]
-name = "du"
-effect = "none"
-safe_flags = ["*"]
-source = "GNU coreutils du(1): estimates file space usage; no write. safe_flags=[\"*\"]: no flag in du(1) writes anywhere."
-
-[[program]]
-name = "df"
-effect = "none"
-safe_flags = ["*"]
-source = "GNU coreutils df(1): reports filesystem disk usage; no write. safe_flags=[\"*\"]: no flag in df(1) writes anywhere."
 
 [[program]]
 name = "grep"
@@ -106,115 +64,50 @@ source = "GNU grep(1): prints matching lines; no write (absent -l/--include writ
 
 [[program]]
 name = "rg"
-effect = "resolver"
-source = "ripgrep --help: no write flag exists, but --pre runs an arbitrary preprocessor command on every searched file -- resolved by _resolve_rg, which is unresolved iff --pre/--pre= is present."
-
-[[program]]
-name = "printf"
 effect = "none"
-safe_flags = ["*"]
-source = "POSIX printf(1): writes to stdout only; a `>` redirect is the shell's effect, resolved separately. safe_flags=[\"*\"]: no flag in printf(1) writes anywhere on its own."
-
-[[program]]
-name = "echo"
-effect = "none"
-safe_flags = ["*"]
-source = "POSIX echo(1): writes to stdout only; a `>` redirect is the shell's effect, resolved separately. safe_flags=[\"*\"]: no flag in echo(1) writes anywhere on its own."
-
-[[program]]
-name = "jq"
-effect = "none"
-safe_flags = ["*"]
-source = "jq(1): a JSON filter writing to stdout only (no -o); a `>` redirect is the shell's effect. safe_flags=[\"*\"]: no flag in jq(1) writes anywhere on its own."
-
-[[program]]
-name = "realpath"
-effect = "none"
-safe_flags = ["*"]
-source = "GNU coreutils realpath(1): prints a resolved path; no write. safe_flags=[\"*\"]: no flag in realpath(1) writes anywhere."
-
-[[program]]
-name = "readlink"
-effect = "none"
-safe_flags = ["*"]
-source = "GNU coreutils readlink(1): prints a symlink target; no write. safe_flags=[\"*\"]: no flag in readlink(1) writes anywhere."
-
-[[program]]
-name = "which"
-effect = "none"
-safe_flags = ["*"]
-source = "which(1): locates a program in PATH; no write. safe_flags=[\"*\"]: no flag in which(1) writes anywhere."
-
-[[program]]
-name = "whoami"
-effect = "none"
-safe_flags = ["*"]
-source = "GNU coreutils whoami(1): prints the effective user; no write. safe_flags=[\"*\"]: no flag in whoami(1) writes anywhere."
-
-[[program]]
-name = "date"
-effect = "resolver"
-source = "GNU coreutils date(1): prints the date and has no file-write flag, but -s/--set changes SYSTEM clock state -- resolved by _resolve_date, which is unresolved iff -s/--set is present."
-
-[[program]]
-name = "pwd"
-effect = "none"
-safe_flags = ["*"]
-source = "POSIX pwd(1): prints the working directory; no write. safe_flags=[\"*\"]: no flag in pwd(1) writes anywhere."
-
-[[program]]
-name = "env"
-effect = "none"
-safe_flags = ["*"]
-source = "POSIX env(1) run bare (no command operand): prints the environment; no write. A command operand makes `env` a wrapper, stripped before program identification ever sees it. safe_flags=[\"*\"]: defensive backstop only -- `_strip_closed_wrappers` already refuses any flag on env's wrapper form before this generic check would see one, and the bare no-args form never has a `-`-prefixed operand."
-
-[[program]]
-name = "printenv"
-effect = "none"
-safe_flags = ["*"]
-source = "GNU coreutils printenv(1): prints environment variables; no write. safe_flags=[\"*\"]: no flag in printenv(1) writes anywhere."
-
-[[program]]
-name = "shasum"
-effect = "none"
-safe_flags = ["*"]
-source = "Perl shasum(1): prints a digest to stdout only; no write absent -o (not offered by this program). safe_flags=[\"*\"]: no flag in shasum(1) writes anywhere."
-
-[[program]]
-name = "sha256sum"
-effect = "none"
-safe_flags = ["*"]
-source = "GNU coreutils sha256sum(1): prints a digest to stdout only; no write flag exists. safe_flags=[\"*\"]: no flag in sha256sum(1) writes anywhere."
+safe_flags = ["-n", "--line-number", "-N", "--no-line-number", "-i", "--ignore-case", "-s", "--case-sensitive", "-S", "--smart-case", "-v", "--invert-match", "-w", "--word-regexp", "-x", "--line-regexp", "-c", "--count", "--count-matches", "-l", "--files-with-matches", "--files-without-match", "-o", "--only-matching", "-A", "-B", "-C", "--context", "--after-context", "--before-context", "-e", "--regexp", "-f", "--file", "-F", "--fixed-strings", "-g", "--glob", "--iglob", "-t", "--type", "-T", "--type-not", "--hidden", "--no-ignore", "-u", "--unrestricted", "-m", "--max-count", "-q", "--quiet", "-a", "--text", "-H", "--with-filename", "-I", "--no-filename", "--color", "--heading", "--no-heading", "-p", "--pretty"]
+source = "ripgrep --help: every flag in this list is read-only per its own doc; --pre/--pre-glob (runs an arbitrary preprocessor command per file) and --replace/-r (rewrites matched text, only meaningful combined with a write flag ripgrep does not have on its own but still excluded on principle) are deliberately absent."
 
 # --- read-only git subcommands (dispatched via the "resolver" entry below,
 # listed here only for the loader's one-entry-per-program review) ----------
+
+[[program]]
+name = "date"
+effect = "unresolved"
+reason = "date is outside the reviewed read-only program table, and -s/--set changes SYSTEM clock state, which this table does not review at any flag grammar."
+source = "GNU coreutils date(1): -s/--set changes system clock state; otherwise prints the date."
 
 # --- write-target verbs resolved via lib/bash_write_targets -----------------
 
 [[program]]
 name = "sed"
-effect = "resolver"
-source = "GNU sed(1): -i/--in-place rewrites its file operand(s) in place, resolved by lib/bash_write_targets.segment_write_target (already reviewed for the canon-readonly guard); absent -i, sed writes stdout only UNLESS its own script contains an embedded w/W/e command (each of which writes/executes regardless of -i) -- resolved by _resolve_sed, which is unresolved whenever a w/W/e command cannot be proven absent from the script text."
+effect = "unresolved"
+reason = "sed's write target depends on -i's presence and its own script text (an embedded w/W/e command writes or executes regardless of -i); neither is decidable from a closed per-flag grammar alone, so every sed invocation is unresolved."
+source = "GNU sed(1): -i/--in-place rewrites its file operand(s) in place; absent -i, an embedded w/W/e command can still write or execute."
 
 [[program]]
 name = "tee"
-effect = "writes-operands"
-source = "POSIX tee(1): writes each non-flag operand as a file; resolved by lib/bash_write_targets.segment_write_target."
+effect = "unresolved"
+reason = "tee writes each non-flag operand as a file; a target named by an arbitrary operand is outside the reviewed closed command grammar."
+source = "POSIX tee(1): writes each non-flag operand as a file."
 
 [[program]]
 name = "cp"
-effect = "resolver"
-source = "POSIX cp(1): writes its destination operand; the ordinary case (directory destinations expanded to per-source targets) is resolved by lib/bash_write_targets.segment_write_target, still consulted unconditionally by resolve_command -- _resolve_cp only refuses --parents, whose actual write path (each source's own directory structure preserved under the destination) that shared computation does not model."
+effect = "unresolved"
+reason = "cp's destination -- and, under --parents, the source directory structure it preserves under that destination -- is outside the reviewed closed command grammar."
+source = "POSIX cp(1): writes its destination operand."
 
 [[program]]
 name = "mv"
-effect = "resolver"
-source = "POSIX mv(1): writes its destination operand (resolved by lib/bash_write_targets.segment_write_target, as for cp) AND removes its source operand(s), which that shared computation does not model -- _resolve_mv adds each source as its own write resource under a closed flag grammar."
+effect = "unresolved"
+reason = "mv writes its destination operand and removes its source operand(s); neither is in the reviewed closed command grammar."
+source = "POSIX mv(1): writes its destination operand and removes its source operand(s)."
 
 [[program]]
 name = "install"
-effect = "resolver"
-source = "GNU coreutils install(1): writes its destination operand in the ordinary case (resolved by lib/bash_write_targets.segment_write_target, as for cp); -d/--directory mode instead creates EVERY positional as its own directory, a shape that shared computation does not model -- _resolve_install computes dir-mode's targets itself under a closed flag grammar."
+effect = "unresolved"
+reason = "install writes its destination operand in the ordinary case, or creates every positional as a directory under -d/--directory; neither is in the reviewed closed command grammar."
+source = "GNU coreutils install(1): writes its destination operand, or creates directories under -d/--directory."
 
 [[program]]
 name = "patch"
@@ -276,18 +169,20 @@ source = "POSIX kill(1): sends a signal to a process."
 
 [[program]]
 name = "awk"
-effect = "resolver"
-source = "POSIX awk(1): `print > \"file\"` inside an awk program can write anywhere the script names, decided by data the command line does not show -- always unresolved (matches grants.py's _UNCONDITIONALLY_REFUSED_PROGRAMS bias)."
+effect = "unresolved"
+reason = "`print > \"file\"` inside an awk program can write anywhere the script names, decided by data the command line does not show."
+source = "POSIX awk(1): `print > \"file\"` inside an awk program can write anywhere the script names."
 
 [[program]]
 name = "find"
-effect = "resolver"
-source = "POSIX find(1): -exec/-execdir/-ok/-okdir run an arbitrary command per matched file -- unresolved; absent those flags find itself never writes."
+effect = "unresolved"
+reason = "-exec/-execdir/-ok/-okdir run an arbitrary command per matched file, and a plain listing invocation is outside the reviewed read-only program table."
+source = "POSIX find(1): -exec/-execdir/-ok/-okdir run an arbitrary command per matched file."
 
 [[program]]
 name = "git"
 effect = "resolver"
-source = "git-push(1) / git(1): a read-only subcommand (log, status, diff, show, rev-parse, ls-files, blame) with no --output= target resolves to no effect -- branch/remote/config are excluded from this set since each can write (create/delete a branch or remote, change repo config); `push` with a literal remote and literal, non-force, non-delete refspec(s), from an allowed flag set, with -C/--git-dir/--work-tree (if given) equal to the venue, resolves to a vcs_ref push resource per refspec destination; a force/delete/mirror-equivalent form, a `+`-prefixed refspec, a zero-refspec push, any flag outside the allowed set, or any other subcommand is unresolved."
+source = "git-push(1) / git(1): a read-only subcommand (log, status, diff, show, rev-parse, ls-files, blame) with no --output= target resolves to no effect; `branch` resolves to no effect under its own closed boolean-flag set (any value-taking flag or positional branch name is unresolved, since each names a create/rename/delete or filters differently than plain listing) -- remote/config are excluded entirely since each can write (create/delete a remote, change repo config); `push` with a literal remote and literal, non-force, non-delete refspec(s), from an allowed flag set, with -C/--git-dir/--work-tree (if given) equal to the venue, resolves to a vcs_ref push resource per refspec destination; a force/delete/mirror-equivalent form, a `+`-prefixed refspec, a zero-refspec push, any flag outside the allowed set, or any other subcommand is unresolved."
 
 [[program]]
 name = "pytest"

@@ -39,10 +39,12 @@ _VALID_EFFECTS = frozenset({"none", "writes-operands", "unresolved", "resolver"}
 
 #: Non-literal-path marker characters: a token containing any of these names
 #: a target that depends on data this module cannot see (glob expansion, an
-#: unexpanded variable) rather than a concrete path — always collapses
-#: resolution/identity to unresolved/opaque, the same bias documented on
-#: `resources.Resource.covers`.
-_NON_LITERAL_MARKERS = "$*?["
+#: unexpanded variable, command substitution) rather than a concrete path —
+#: always collapses resolution/identity to unresolved/opaque, the same bias
+#: documented on `resources.Resource.covers`. A leading `~` (home-directory
+#: expansion) is checked separately in `_is_non_literal` below, since it only
+#: names a variable target at the START of a token, not wherever it appears.
+_NON_LITERAL_MARKERS = "$*?[`{"
 
 #: Interpreters whose first non-flag operand is "the script" for identity
 #: purposes. Mirrors `agentctl/grants.py`'s `_INTERPRETERS`; kept as a
@@ -167,7 +169,7 @@ def _abs_join(token: str, base: str) -> str:
 
 
 def _is_non_literal(token: str) -> bool:
-    return any(ch in token for ch in _NON_LITERAL_MARKERS)
+    return any(ch in token for ch in _NON_LITERAL_MARKERS) or token.startswith("~")
 
 
 def _has_nested_execution(stripped_text: str) -> bool:
@@ -206,179 +208,123 @@ def _real_program(
     return widening_targets.program_name(stripped[0]).casefold(), stripped[1:]
 
 
-#: Environment-variable NAMEs a leading assignment prefix (`NAME=value ...`,
-#: or `env NAME=value ...`) may set without collapsing the whole command to
-#: unresolved: closed-world by construction -- an env assignment can change
-#: ANY program's behavior in ways this module cannot see (a different
-#: config file, a different PATH, an injected interpreter flag via a
-#: `*_OPTS`-style variable), so the default is refusal, and a name is added
-#: here only after a specific reviewed case needs it. Empty today: no case
-#: has been reviewed yet.
-_REVIEWED_BENIGN_ENV_ASSIGNMENTS: frozenset[str] = frozenset()
-
+#: A leading `NAME=value` assignment (no dash) disqualifies a segment
+#: outright (item (a) of the closed command grammar) -- an env assignment
+#: can change ANY program's behavior in ways this module cannot see (a
+#: different config file, a different PATH, an injected interpreter flag via
+#: a `*_OPTS`-style variable), so there is no "reviewed benign" exception:
+#: every occurrence, on every segment, is unconditionally unresolved.
 _BARE_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
+#: Wrapper programs never in the reviewed closed set (item (a)): each can
+#: change what actually runs, or how, in ways the segment's own program
+#: token does not show -- `env`/`nice`/`timeout`/`nohup` used to get a
+#: closed-world stripping pass of their own; that pass is gone, and a
+#: wrapper token is now refused outright, wherever it leads a segment.
+_FORBIDDEN_WRAPPER_TOKENS = frozenset(
+    {
+        "env", "nice", "timeout", "nohup", "eval", "xargs", "sudo",
+        "time", "flock", "command", "exec", "builtin",
+    }
+)
 
-def _leading_bare_assignments(seg: list[str]) -> tuple[list[str], list[str]]:
-    """Consume a leading run of bare `NAME=value` tokens (no dash) from
-    `seg`, returning `(remaining_tokens, assignment_names)` -- mirrors the
-    prefix `widening_targets.strip_wrappers` also strips, kept as an
-    independent, minimal local re-implementation here since the closed-
-    world wrapper walk below (`_strip_closed_wrappers`) must not reuse that
-    module's permissive wrapper handling for the rest of the token
-    stream."""
-    names: list[str] = []
-    i = 0
-    while i < len(seg) and _BARE_ASSIGNMENT_RE.match(seg[i]):
-        names.append(seg[i].split("=", 1)[0])
-        i += 1
-    return seg[i:], names
-
-
-#: Value-taking flag reviewed as safe for `nice`; the legacy bare `-N`
-#: adjustment shorthand (`nice -10 cmd`) is indistinguishable from an
-#: unreviewed flag without a much larger grammar, so it is refused rather
-#: than guessed.
-_NICE_VALUE_FLAGS = frozenset({"-n", "--adjustment"})
-
-#: Flags reviewed as safe for `timeout`; `-k`/`--kill-after` and
-#: `-s`/`--signal` take a value, the rest are boolean.
-_TIMEOUT_VALUE_FLAGS = frozenset({"-k", "--kill-after", "-s", "--signal"})
-_TIMEOUT_BOOLEAN_FLAGS = frozenset({"--preserve-status", "--foreground", "-v", "--verbose"})
+#: The one reviewed exception to item (a)'s redirect-operator prohibition:
+#: `2>&1` (stderr merged into stdout), as its own whitespace-delimited unit.
+#: Not a single lexer token -- `shell_tokens.separator_exact_split` has no
+#: two-character `>&` operator, so this splits into four ordinary tokens
+#: (`2`, `>`, `&`, `1`); recognizing it is therefore a text-level check, run
+#: before tokenization, rather than a token-equality check after it.
+_STANDALONE_REDIRECT_TO_STDOUT = re.compile(r"(?:(?<=\s)|^)2>&1(?:(?=\s)|$)")
 
 
-def _strip_closed_wrappers(
-    seg: list[str], venue_real: str
-) -> tuple[list[str], list[resources.Resource]] | Resolution:
-    """Closed-world wrapper stripping for EFFECT resolution.
-
-    Unlike `widening_targets.strip_wrappers` (permissive -- its only job is
-    locating the real program name for identity, see `_real_program`), this
-    walk only steps past a wrapper token when its own effect on THIS
-    invocation has been reviewed and is provably neutral. It steps past
-    `nice`/`timeout`/`nohup`/`env` one at a time, each with its own closed
-    flag grammar; anything else -- an unrecognized wrapper token, an
-    unreviewed flag on a reviewed one -- stops the walk WITHOUT consuming
-    the token, so the unrecognized token itself becomes the dispatched
-    program name and refuses via "no tool_contracts.toml entry" (none of
-    these four wrapper names has a table entry of its own, except `env` run
-    bare, which is deliberately still reviewed below). `eval`, `xargs`,
-    `time`, `sudo`, `doas`, `flock`, and every other wrapper token this
-    function does not name therefore ALWAYS falls through to that same
-    unknown-program refusal -- there is no safe subset for them."""
-    head = list(seg)
-    extra: list[resources.Resource] = []
-    while head:
-        name = widening_targets.program_name(head[0]).casefold()
-        rest = head[1:]
-
-        if name == "nice":
-            i = 0
-            while i < len(rest) and rest[i].startswith("-") and rest[i] != "-":
-                tok = rest[i]
-                key = tok.split("=", 1)[0]
-                if key in _NICE_VALUE_FLAGS:
-                    i += 1 if "=" in tok else 2
-                    continue
-                return Resolution(
-                    "unresolved", reason_class="contract-unresolved",
-                    reason=f"nice flag {tok!r} is outside the reviewed closed set",
-                )
-            head = rest[i:]
-            continue
-
-        if name == "timeout":
-            i = 0
-            while i < len(rest) and rest[i].startswith("-") and rest[i] != "-":
-                tok = rest[i]
-                key = tok.split("=", 1)[0]
-                if key in _TIMEOUT_VALUE_FLAGS:
-                    i += 1 if "=" in tok else 2
-                    continue
-                if tok in _TIMEOUT_BOOLEAN_FLAGS:
-                    i += 1
-                    continue
-                return Resolution(
-                    "unresolved", reason_class="contract-unresolved",
-                    reason=f"timeout flag {tok!r} is outside the reviewed closed set",
-                )
-            if i >= len(rest):
-                return Resolution(
-                    "unresolved", reason_class="contract-unresolved",
-                    reason="timeout with no DURATION/command operand",
-                )
-            head = rest[i + 1 :]  # rest[i] is DURATION, consumed unexamined
-            continue
-
-        if name == "nohup":
-            if rest and rest[0].startswith("-") and rest[0] != "-":
-                return Resolution(
-                    "unresolved", reason_class="contract-unresolved",
-                    reason=f"nohup flag {rest[0]!r} is outside the reviewed closed set",
-                )
-            if not rest:
-                return Resolution(
-                    "unresolved", reason_class="contract-unresolved",
-                    reason="nohup with no command operand",
-                )
-            extra.append(resources.FileResource(os.path.join(venue_real, "nohup.out"), "write"))
-            head = rest
-            continue
-
-        if name == "env":
-            stripped_rest, names = _leading_bare_assignments(rest)
-            unreviewed = [n for n in names if n not in _REVIEWED_BENIGN_ENV_ASSIGNMENTS]
-            if unreviewed:
-                return Resolution(
-                    "unresolved", reason_class="contract-unresolved",
-                    reason=f"unreviewed environment assignment(s) {unreviewed!r} passed to env: not provably behavior-neutral",
-                )
-            if stripped_rest and stripped_rest[0].startswith("-") and stripped_rest[0] != "-":
-                return Resolution(
-                    "unresolved", reason_class="contract-unresolved",
-                    reason=f"env flag {stripped_rest[0]!r} is outside the reviewed closed set -- env with any option flag is always unresolved",
-                )
-            if not stripped_rest:
-                # A bare `env` (or `env NAME=value ...` with nothing left to
-                # run) is not a wrapper at all here -- it IS the program;
-                # fall through to its own contract-table entry.
-                break
-            head = stripped_rest
-            continue
-
-        break
-
-    return head, extra
+def _strip_standalone_stderr_merge(text: str) -> str:
+    """Substitutes the one reviewed redirect exception (`2>&1`) away with a
+    space wherever it appears as its own whitespace-delimited unit. Every
+    tokenization pass over a shape-clean command line -- inside
+    `_check_command_shape` and again in `resolve_command`'s own segment
+    split -- must run on this substituted text, not the raw one: the raw
+    text's `2>&1` splits into the bare tokens `2`, `>`, `&`, `1`, and `&`
+    alone is the never-allowed background operator, so tokenizing the raw
+    text would refuse the very case this exception exists to allow."""
+    return _STANDALONE_REDIRECT_TO_STDOUT.sub(" ", text)
 
 
-def _resolve_effect_head(
-    seg: list[str], venue_real: str
-) -> tuple[list[str], list[resources.Resource]] | None | Resolution:
-    """The closed-world equivalent of `_real_program`, used ONLY for effect
-    resolution (never for identity, which keeps using the permissive
-    `_real_program`/`widening_targets.strip_wrappers` unchanged -- identity
-    capture is not a security-relevant gating decision). Strips a leading
-    bare `NAME=value` assignment run, then a closed-world wrapper prefix
-    (`_strip_closed_wrappers`); returns `None` for an empty/assignment-only
-    segment, a `Resolution` to refuse the whole command, or the dispatched
-    `(stripped_head_tokens, extra_resources)`."""
-    rest, names = _leading_bare_assignments(seg)
-    unreviewed = [n for n in names if n not in _REVIEWED_BENIGN_ENV_ASSIGNMENTS]
-    if unreviewed:
-        return Resolution(
-            "unresolved", reason_class="contract-unresolved",
-            reason=f"unreviewed environment assignment(s) {unreviewed!r}: not provably behavior-neutral",
+def _check_command_shape(stripped_text: str) -> tuple[str, str] | None:
+    """Item (a) of the closed command grammar: the one positive shape a
+    command line must have before ANY per-segment/per-program dispatch
+    runs. Returns `None` when the shape is clean, or `(reason_class,
+    reason)` to refuse the WHOLE command -- a command that is mostly clean
+    and 10% opaque is not 90% approvable, the same bias `resolve_command`'s
+    own docstring already states for a single undecidable segment.
+
+    Runs on the text BEFORE segment splitting, deliberately: several of its
+    conditions (a stray `&`/`||`/`|&`, a redirection operator) are exactly
+    the characters `bash_write_targets.split_segments`'s own separator set
+    would otherwise fold into an ordinary segment boundary, or a per-program
+    resolver would otherwise trip over piecemeal, one segment at a time."""
+    # Redirects: checked on the raw text, ahead of tokenization, since the
+    # one reviewed exception (`2>&1`) does not survive tokenization as a
+    # single unit (see `_STANDALONE_REDIRECT_TO_STDOUT`'s docstring) and
+    # every OTHER redirect form (`>`, `>>`, `>|`, `<`, `<<`, `<<<`, `&>`,
+    # `>&`, a fd-numbered form, process substitution) contains a `<` or `>`
+    # character -- so removing the one allowed exception first and then
+    # checking for either character catches every forbidden form at once.
+    # `residual` (exception substituted away) is also what gets tokenized
+    # below: the untouched text would still split `2>&1` into the bare
+    # tokens `2`, `>`, `&`, `1`, and `&` alone is the never-allowed
+    # background operator -- so tokenizing the original text would refuse
+    # the one case this exception exists to allow.
+    residual = _strip_standalone_stderr_merge(stripped_text)
+    if "<" in residual or ">" in residual:
+        return (
+            "contract-unresolved",
+            "a redirection operator is present outside the one reviewed exception, the standalone token `2>&1`",
         )
-    if not rest:
-        return None
 
-    strip_result = _strip_closed_wrappers(rest, venue_real)
-    if isinstance(strip_result, Resolution):
-        return strip_result
-    head, extra = strip_result
-    if not head:
-        return None
-    return head, extra
+    try:
+        tokens = shell_tokens.separator_exact_split(residual)
+    except Exception:
+        return "residual-syntax", "command line failed to tokenize"
+
+    segments: list[list[str]] = [[]]
+    for tok in tokens:
+        if tok in ("&&", ";", "|"):
+            segments.append([])
+            continue
+        if tok in ("||", "|&", "&"):
+            return "contract-unresolved", f"the {tok!r} operator is never in the reviewed closed set"
+        if tok in ("(", ")"):
+            return "residual-syntax", "a subshell is never in the reviewed closed set"
+        segments[-1].append(tok)
+
+    for seg in segments:
+        if not seg:
+            return "contract-unresolved", "a command segment is empty -- a leading, trailing, or doubled separator"
+        first = seg[0]
+        # Assignment is checked ahead of path-qualification: an assignment's
+        # VALUE half routinely contains a `/` (`GIT_DIR=/tmp/other`), and
+        # that value is not the program token this path-qualification check
+        # means to catch -- checking `/` first would misreport an
+        # assignment as a path-qualified program.
+        if _BARE_ASSIGNMENT_RE.match(first):
+            return (
+                "contract-unresolved",
+                f"leading environment assignment {first!r} is never in the reviewed closed set",
+            )
+        if "/" in first:
+            return (
+                "contract-unresolved",
+                f"program token {first!r} is path-qualified, never in the reviewed closed set",
+            )
+        if widening_targets.program_name(first).casefold() in _FORBIDDEN_WRAPPER_TOKENS:
+            return (
+                "contract-unresolved",
+                f"wrapper token {first!r} is never in the reviewed closed set",
+            )
+        for tok in seg:
+            if _is_non_literal(tok):
+                return "residual-syntax", f"token {tok!r} is non-literal"
+    return None
 
 
 def _hash_file(path: str) -> str:
@@ -518,6 +464,22 @@ _GIT_PUSH_FORCE_EQUIV_FLAGS = frozenset(
     {"-f", "--force", "--force-if-includes", "--mirror", "--prune", "--all", "--tags"}
 )
 
+#: Closed allowlist of `git branch` flags reviewed as read-only -- boolean
+#: only, deliberately: a value-taking flag (`--contains`, `--points-at`,
+#: `--format`, `--sort`, ...) is excluded rather than given its own value-
+#: skip rule, since the simple per-token closed-set check below would
+#: otherwise misread that flag's OWN value as an unrecognized flag. This
+#: same exclusion also rejects every positional branch-name argument
+#: (create/rename/delete all take one), which is the correct, safe
+#: outcome: any git-branch invocation not covered here is unresolved.
+_GIT_BRANCH_SAFE_FLAGS = frozenset(
+    {
+        "-l", "--list", "-a", "--all", "-r", "--remotes",
+        "-v", "-vv", "--verbose", "--show-current",
+        "--color", "--no-color",
+    }
+)
+
 
 def _find_git_subcommand(
     operands: list[str],
@@ -585,6 +547,18 @@ def _resolve_git(operands: list[str], venue_real: str) -> Resolution:
                 reason=f"git {subcommand} --output writes to a file, not resolved by this table",
             )
         return Resolution("resolved", resources=[])
+
+    if subcommand == "branch":
+        for tok in rest:
+            key = tok.split("=", 1)[0]
+            if key not in _GIT_BRANCH_SAFE_FLAGS:
+                return Resolution(
+                    "unresolved",
+                    reason_class="contract-unresolved",
+                    reason=f"git branch flag or argument {tok!r} is outside the reviewed closed set",
+                )
+        return Resolution("resolved", resources=[])
+
     if subcommand != "push":
         return Resolution(
             "unresolved",
@@ -662,426 +636,74 @@ def _resolve_git(operands: list[str], venue_real: str) -> Resolution:
     return Resolution("resolved", resources=push_resources)
 
 
-_FIND_EXEC_FLAGS = frozenset(
-    {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
-)
+#: pytest's closed flag grammar (item (c)): `-k` is the only value-taking
+#: flag reviewed here -- `-p` and `--tb=` each get their own dedicated
+#: check below since their acceptable VALUES are themselves a closed set,
+#: not merely "any value".
+_PYTEST_VALUE_FLAGS = frozenset({"-k"})
+_PYTEST_BOOLEAN_FLAGS = frozenset({"-q", "-x", "-v", "-s"})
+_PYTEST_ALLOWED_TB_VALUES = frozenset({"short", "line", "no"})
 
 
-def _resolve_find(operands: list[str]) -> Resolution:
-    if any(tok in _FIND_EXEC_FLAGS for tok in operands):
-        return Resolution(
-            "unresolved",
-            reason_class="contract-unresolved",
-            reason="find -exec/-execdir/-ok/-okdir runs an arbitrary command per matched file, and -delete/-fprint*/-fls write, per matched file",
-        )
-    return Resolution("resolved", resources=[])
-
-
-def _resolve_awk(operands: list[str]) -> Resolution:
-    return Resolution(
-        "unresolved",
-        reason_class="contract-unresolved",
-        reason="an awk program's own `print > \"file\"` can write anywhere the script names",
-    )
-
-
-def _resolve_pytest(venue_real: str) -> Resolution:
-    return Resolution("resolved", resources=[resources.FileResource(venue_real, "write")])
-
-
-def _resolve_rg(operands: list[str]) -> Resolution:
-    if any(tok == "--pre" or tok.startswith("--pre=") for tok in operands):
-        return Resolution(
-            "unresolved",
-            reason_class="contract-unresolved",
-            reason="rg --pre runs an arbitrary preprocessor command on every searched file",
-        )
-    return Resolution("resolved", resources=[])
-
-
-def _resolve_date(operands: list[str]) -> Resolution:
-    if any(tok in ("-s", "--set") or tok.startswith("--set=") for tok in operands):
-        return Resolution(
-            "unresolved",
-            reason_class="contract-unresolved",
-            reason="date -s/--set changes the system clock, not a resource this table types",
-        )
-    return Resolution("resolved", resources=[])
-
-
-#: `sed` options that take the script text as their VALUE (`-e`/
-#: `--expression`) or point at a script FILE (`-f`/`--file`) rather than
-#: giving the script inline.
-_SED_INLINE_SCRIPT_OPTS = frozenset({"-e", "--expression"})
-_SED_SCRIPT_FILE_OPTS = frozenset({"-f", "--file"})
-
-#: One sed address (a line number, `$`, or a `/regex/`) -- what a `w`/`W`/`e`
-#: detector has to look PAST before it can see the actual command letter, or
-#: an address like `3w` would be misread as the command `3`.
-_SED_ADDR = r"(?:\d+|\$|/(?:\\.|[^/\\])*/)"
-_SED_ADDR_PREFIX_RE = re.compile(rf"^\s*{_SED_ADDR}(?:\s*,\s*{_SED_ADDR})?\s*!?\s*")
-
-#: Commands that neither write to an arbitrary path nor execute a command --
-#: enumerated so the fail-closed default below only applies to a command
-#: letter this function does not actually recognize, not to every ordinary
-#: sed command that happens to not be `w`/`W`/`e`. Deliberately excludes
-#: `{`/`}`: a `{...}` block's BODY can itself contain a `w`/`W`/`e` command,
-#: and this function does not recursively parse block contents, so a
-#: segment opening with `{` falls through to the catch-all `True` below
-#: rather than being silently treated as safe.
-_SED_SAFE_COMMANDS = frozenset("pdnNgGhHxlqQ=btT:#yzFDPrR")
-
-#: Closed allowlist of sed flags this resolver recognizes as behavior-
-#: neutral for the w/W/e determination -- boolean, no value. Any OTHER
-#: flag -- including a GNU long-option ABBREVIATION of `--expression`/
-#: `--file` (e.g. `--expr=...`/`--fil=...`, which getopt would accept but
-#: this table deliberately does not recognize) or a bundled short-option
-#: form (`-ne` for `-n -e`) -- is refused rather than silently skipped: an
-#: unrecognized flag could itself smuggle a script value this resolver
-#: never inspects.
-_SED_SAFE_BOOLEAN_FLAGS = frozenset(
-    {
-        "-n", "--quiet", "--silent",
-        "-E", "-r", "--regexp-extended",
-        "-s", "--separate",
-        "-u", "--unbuffered",
-        "-z", "--null-data",
-        "--posix", "--sandbox",
-    }
-)
-
-#: A token that looks like a sed `-i` backup-suffix argument (`.bak`, `.`,
-#: `.orig-1`) rather than the start of a script -- used only to decide
-#: whether a bare `-i` followed by this token is GNU/BSD-ambiguous (see
-#: `_resolve_sed`), never to accept or reject a script on its own.
-_SED_SUFFIX_LIKE_RE = re.compile(r"^\.[A-Za-z0-9_.-]*$")
-
-
-def _sed_segment_writes_or_execs(segment: str) -> bool:
-    """`True` iff `segment` -- one `;`/newline-delimited sed command --
-    is a `w`/`W` (write) or `e` (execute) command, or an `s///` substitute
-    carrying a trailing `w` (write-to-file) flag. Strips a leading address
-    (`3w file`, `/re/,$e cmd`, ...) first, so a `w`/`W`/`e` occurring inside
-    ordinary substitute TEXT (e.g. the letter `e` in a replacement `bye`) is
-    never mistaken for the COMMAND. Fail-closed on anything not positively
-    cleared: an address form this does not recognize (a custom `\\cREGEXc`
-    delimiter, a GNU step address `first~step`) leaves the segment
-    unstripped, and a command letter outside `_SED_SAFE_COMMANDS` falls
-    through to the catch-all `True` at the end."""
-    rest = _SED_ADDR_PREFIX_RE.sub("", segment, count=1).strip()
-    if not rest:
-        return False
-    if rest[0] in ("w", "W"):
-        return True
-    if rest[0] == "e" and (len(rest) == 1 or not rest[1].isalnum()):
-        return True
-    if rest[0] == "s" and len(rest) > 1:
-        delim = rest[1]
-        parts = re.split(rf"(?<!\\){re.escape(delim)}", rest[2:], maxsplit=2)
-        if len(parts) != 3:
-            # Malformed or ambiguous (e.g. this ';'-split cut a delimiter
-            # mid-command) -- not provably free of a `w` flag.
-            return True
-        flags = re.split(r"[\s;]", parts[2], maxsplit=1)[0]
-        # `e` on a substitute (`s/.../.../e`) executes the resulting line
-        # as a shell command -- an exec effect exactly like a bare `e`
-        # command, not merely a write.
-        return "w" in flags or "e" in flags
-    if rest[0] in _SED_SAFE_COMMANDS:
-        return False
-    return True
-
-
-def _sed_script_writes_or_execs(combined: str) -> bool:
-    """`True` iff any `;`/newline-delimited segment of `combined` is a
-    write/exec command per `_sed_segment_writes_or_execs`."""
-    return any(
-        _sed_segment_writes_or_execs(segment)
-        for line in combined.split("\n")
-        for segment in line.split(";")
-    )
-
-
-def _resolve_sed(operands: list[str], venue_real: str) -> Resolution:
-    """A `w`/`W` (write) or `e` (execute) command — or an `s///e` exec
-    flag — embedded IN the script writes/executes regardless of `-i`, so
-    this resolver ALWAYS parses and checks the script, `-i` or not; `-i`/
-    `--in-place`'s own file-rewrite effect is captured separately and
-    unconditionally by `bash_write_targets.segment_write_target` (see
-    `resolve_command`). Fail-closed: unresolved unless the script is
-    PROVABLY free of `w`/`W`/`e` — and a `-f`/`--file` script (read from a
-    file this resolver does not inspect) can never be proven free, so it
-    is always unresolved.
-
-    Flag parsing is closed-world too: only the exact forms `-e`/
-    `--expression`, `-f`/`--file` (each with an optional `=value`), `-i`/
-    `-i<suffix>`, `--in-place`/`--in-place=<suffix>`, and the boolean
-    flags in `_SED_SAFE_BOOLEAN_FLAGS` are recognized — a GNU long-option
-    ABBREVIATION (`--expr=`, `--fil=`) or a bundled short form (`-ne` for
-    `-n -e`) is a flag-shaped token this table does not recognize, and is
-    refused rather than silently skipped, since either could smuggle a
-    script value this resolver never inspects."""
-    scripts: list[str] = []
-    positionals: list[str] = []
-    used_script_file = False
-    used_inline = False
+def _resolve_pytest(operands: list[str], venue_real: str) -> Resolution:
+    """pytest's own closed flag/path grammar (item (c) of the closed command
+    grammar): a fixed set of boolean flags, `-k EXPR`, `-p no:cacheprovider`
+    exactly, and `--tb=` limited to its three plain-text values. A test-path
+    positional must be literal, relative, and never escape the venue via a
+    `..` segment -- an absolute path or a `..` segment could name a file
+    this table does not review. Anything else is unresolved; a clean parse
+    resolves to a write on the whole venue subtree, since pytest's own
+    plugins (cache, coverage, junit-xml via a config file) can write
+    anywhere under it without naming a path on the command line."""
     i = 0
     n = len(operands)
     while i < n:
         tok = operands[i]
-        if "=" in tok and tok.split("=", 1)[0] in (_SED_INLINE_SCRIPT_OPTS | _SED_SCRIPT_FILE_OPTS):
-            key, val = tok.split("=", 1)
-            if key in _SED_SCRIPT_FILE_OPTS:
-                used_script_file = True
-            else:
-                used_inline = True
-                scripts.append(val)
+        if tok in _PYTEST_BOOLEAN_FLAGS:
             i += 1
             continue
-        if tok in _SED_SCRIPT_FILE_OPTS:
-            used_script_file = True
-            i += 2
-            continue
-        if tok in _SED_INLINE_SCRIPT_OPTS:
-            used_inline = True
-            if i + 1 < n:
-                scripts.append(operands[i + 1])
-            i += 2
-            continue
-        if tok == "--in-place" or tok.startswith("--in-place="):
-            i += 1
-            continue
-        if tok == "-i":
-            # A bare `-i` parses differently under GNU sed (no separate
-            # argument -- an optional suffix, if any, must be glued on:
-            # `-i.bak`) and BSD/macOS sed (a MANDATORY separate suffix
-            # argument, which may be an empty string: `-i ''`). Whether the
-            # next token is "the BSD suffix" or "the first positional (the
-            # script, under GNU semantics)" is therefore not decidable from
-            # the command line alone whenever that next token is empty or
-            # looks like a suffix rather than script text -- guessing either
-            # reading risks locating the wrong text as the script and
-            # silently missing an embedded w/W/e command.
-            nxt = operands[i + 1] if i + 1 < n else None
-            if nxt is not None and (nxt == "" or _SED_SUFFIX_LIKE_RE.match(nxt)):
+        if tok in _PYTEST_VALUE_FLAGS:
+            if i + 1 >= n:
                 return Resolution(
-                    "unresolved",
-                    reason_class="contract-unresolved",
-                    reason="sed -i followed by an empty or suffix-like token is ambiguous between GNU and BSD sed -- not provably locating the real script",
+                    "unresolved", reason_class="contract-unresolved",
+                    reason=f"pytest {tok} is missing its value",
                 )
-            i += 1
+            i += 2
             continue
-        if tok.startswith("-i") and not tok.startswith("--"):
-            # `-i<suffix>` — GNU sed attaches an optional suffix directly
-            # with no separator, so this token IS the whole flag.
-            i += 1
+        if tok == "-p":
+            if i + 1 >= n or operands[i + 1] != "no:cacheprovider":
+                return Resolution(
+                    "unresolved", reason_class="contract-unresolved",
+                    reason="pytest -p is only reviewed for the exact value 'no:cacheprovider'",
+                )
+            i += 2
             continue
-        if tok in _SED_SAFE_BOOLEAN_FLAGS:
+        if tok.startswith("--tb="):
+            value = tok.split("=", 1)[1]
+            if value not in _PYTEST_ALLOWED_TB_VALUES:
+                return Resolution(
+                    "unresolved", reason_class="contract-unresolved",
+                    reason=f"pytest --tb={value!r} is outside the reviewed closed set",
+                )
             i += 1
             continue
         if tok.startswith("-"):
             return Resolution(
-                "unresolved",
-                reason_class="contract-unresolved",
-                reason=f"sed flag {tok!r} is outside the reviewed closed set",
+                "unresolved", reason_class="contract-unresolved",
+                reason=f"pytest flag {tok!r} is outside the reviewed closed set",
             )
-        positionals.append(tok)
-        i += 1
-
-    if used_script_file:
-        return Resolution(
-            "unresolved",
-            reason_class="adhoc-undeclared",
-            reason="sed -f/--file reads its script from a file this resolver does not inspect -- not provably free of a w/W/e command",
-        )
-    if not used_inline:
-        # POSIX/GNU convention: absent -e/-f, the first positional operand
-        # IS the script (everything after it is a file operand).
-        if positionals:
-            scripts.append(positionals[0])
-
-    combined = "\n".join(scripts)
-    if _sed_script_writes_or_execs(combined):
-        return Resolution(
-            "unresolved",
-            reason_class="adhoc-undeclared",
-            reason="sed script may contain a w/W (write) or e (execute) command and is not provably free of one",
-        )
-    return Resolution("resolved", resources=[])
-
-
-#: Closed grammar for `mv` -- a small reviewed boolean set plus
-#: `-t`/`--target-directory`; a backup flag (`-b`/`--backup`,
-#: `-S`/`--suffix`) is refused outright since it can write an EXTRA file
-#: (the backup copy) this table does not model.
-_MV_BOOLEAN_FLAGS = frozenset({"-f", "--force", "-i", "--interactive", "-n", "--no-clobber", "-v", "--verbose"})
-_MV_TARGET_DIR_FLAGS = frozenset({"-t", "--target-directory"})
-
-
-def _resolve_mv(operands: list[str], venue_real: str) -> Resolution:
-    """POSIX mv REMOVES its source(s) in addition to writing the
-    destination; the destination side is already correctly resolved by
-    `lib.bash_write_targets.segment_write_target` (reviewed for the
-    canon-readonly guard, and still consulted unconditionally by
-    `resolve_command` on the wrapper-stripped segment). This resolver's own
-    job is (a) refuse any flag outside the small reviewed set below, since
-    an unrecognized one could itself retarget or add a write this table
-    does not see, and (b) add each SOURCE as its own write resource -- the
-    piece the destination-only computation misses entirely."""
-    target_dir: str | None = None
-    positionals: list[str] = []
-    i = 0
-    n = len(operands)
-    while i < n:
-        tok = operands[i]
-        key = tok.split("=", 1)[0]
-        if key in _MV_TARGET_DIR_FLAGS:
-            if "=" in tok:
-                target_dir = tok.split("=", 1)[1]
-                i += 1
-            else:
-                if i + 1 >= n:
-                    return Resolution(
-                        "unresolved", reason_class="contract-unresolved",
-                        reason="mv -t/--target-directory is missing its value",
-                    )
-                target_dir = operands[i + 1]
-                i += 2
-            continue
-        if tok in _MV_BOOLEAN_FLAGS:
-            i += 1
-            continue
-        if tok.startswith("-") and tok != "-":
+        if _is_non_literal(tok) or os.path.isabs(tok):
+            return Resolution(
+                "unresolved", reason_class="residual-syntax",
+                reason="pytest test path is non-literal or absolute",
+            )
+        if ".." in tok.replace("\\", "/").split("/"):
             return Resolution(
                 "unresolved", reason_class="contract-unresolved",
-                reason=f"mv flag {tok!r} is outside the reviewed closed set",
+                reason="pytest test path escapes the venue via '..'",
             )
-        positionals.append(tok)
         i += 1
-
-    sources = positionals if target_dir is not None else positionals[:-1]
-    if not sources or (target_dir is None and len(positionals) < 2):
-        return Resolution(
-            "unresolved", reason_class="contract-unresolved",
-            reason="mv requires at least a source and a destination",
-        )
-    if any(_is_non_literal(tok) for tok in sources):
-        return Resolution("unresolved", reason_class="residual-syntax", reason="mv source operand is non-literal")
-
-    return Resolution(
-        "resolved",
-        resources=[resources.FileResource(_abs_join(src, venue_real), "write") for src in sources],
-    )
-
-
-#: Closed grammar for `install`; `-d`/`--directory` toggles directory-
-#: creation mode, handled specially below since it is not an ordinary copy.
-_INSTALL_BOOLEAN_FLAGS = frozenset({"-v", "--verbose", "-p", "--preserve-timestamps", "-C", "--compare"})
-_INSTALL_VALUE_FLAGS = frozenset({"-m", "--mode", "-o", "--owner", "-g", "--group"})
-_INSTALL_TARGET_DIR_FLAGS = frozenset({"-t", "--target-directory"})
-_INSTALL_DIR_FLAGS = frozenset({"-d", "--directory"})
-
-
-def _resolve_install(operands: list[str], venue_real: str) -> Resolution:
-    """GNU install's `-d`/`--directory` mode treats EVERY positional as its
-    own target directory to create -- a shape `lib.bash_write_targets`'
-    shared cp/mv/install dispatch does not special-case (it reads the last
-    positional as a destination and the rest as sources, exactly as wrong
-    for `-d` as it would be for an ordinary two-file copy), so this
-    resolver computes dir-mode's targets itself rather than relying on the
-    destination-only computation `resolve_command` also consults. Outside
-    `-d` mode, install's own contract is a plain copy with no source
-    removal and no case `bash_write_targets` does not already cover -- this
-    resolver only enforces the closed flag grammar and defers the
-    destination target to that shared computation."""
-    dir_mode = False
-    target_dir: str | None = None
-    positionals: list[str] = []
-    i = 0
-    n = len(operands)
-    while i < n:
-        tok = operands[i]
-        key = tok.split("=", 1)[0]
-        if key in _INSTALL_DIR_FLAGS:
-            dir_mode = True
-            i += 1
-            continue
-        if key in _INSTALL_TARGET_DIR_FLAGS:
-            if "=" in tok:
-                target_dir = tok.split("=", 1)[1]
-                i += 1
-            else:
-                if i + 1 >= n:
-                    return Resolution(
-                        "unresolved", reason_class="contract-unresolved",
-                        reason="install -t/--target-directory is missing its value",
-                    )
-                target_dir = operands[i + 1]
-                i += 2
-            continue
-        if key in _INSTALL_VALUE_FLAGS:
-            if "=" in tok:
-                i += 1
-            else:
-                if i + 1 >= n:
-                    return Resolution(
-                        "unresolved", reason_class="contract-unresolved",
-                        reason=f"install {key} is missing its value",
-                    )
-                i += 2
-            continue
-        if tok in _INSTALL_BOOLEAN_FLAGS:
-            i += 1
-            continue
-        if tok.startswith("-") and tok != "-":
-            return Resolution(
-                "unresolved", reason_class="contract-unresolved",
-                reason=f"install flag {tok!r} is outside the reviewed closed set",
-            )
-        positionals.append(tok)
-        i += 1
-
-    non_literal_check = positionals + ([target_dir] if target_dir else [])
-    if any(_is_non_literal(tok) for tok in non_literal_check):
-        return Resolution("unresolved", reason_class="residual-syntax", reason="install operand is non-literal")
-
-    if dir_mode:
-        if not positionals:
-            return Resolution(
-                "unresolved", reason_class="contract-unresolved",
-                reason="install -d/--directory with no directory operand",
-            )
-        return Resolution(
-            "resolved",
-            resources=[resources.FileResource(_abs_join(p, venue_real), "write") for p in positionals],
-        )
-
-    if target_dir is not None and not positionals:
-        return Resolution(
-            "unresolved", reason_class="contract-unresolved",
-            reason="install -t/--target-directory with no source operand",
-        )
-    if target_dir is None and len(positionals) < 2:
-        return Resolution(
-            "unresolved", reason_class="contract-unresolved",
-            reason="install requires at least a source and a destination",
-        )
-    return Resolution("resolved", resources=[])
-
-
-def _resolve_cp(operands: list[str], venue_real: str) -> Resolution:
-    """`--parents` preserves each source's own directory structure under
-    the destination, so the actual leaf path cp writes is not the plain
-    basename-under-dest join `lib.bash_write_targets.segment_write_target`
-    computes for an ordinary copy -- refused rather than reported wrong.
-    Absent `--parents`, cp's own contract is exactly what that shared,
-    already-reviewed dispatch resolves; this resolver adds nothing to it."""
-    if any(tok == "--parents" for tok in operands):
-        return Resolution(
-            "unresolved", reason_class="contract-unresolved",
-            reason="cp --parents preserves each source's own directory structure under the destination -- not the plain basename-under-dest join this table otherwise resolves",
-        )
-    return Resolution("resolved", resources=[])
+    return Resolution("resolved", resources=[resources.FileResource(venue_real, "write")])
 
 
 def _script_and_argv(operands: list[str]) -> tuple[str | None, list[str]]:
@@ -1118,9 +740,11 @@ def _resolve_interpreter(operands: list[str], venue_real: str) -> Resolution:
                 reason="python -c/--command runs inline code passed on the command line, never resolved by this table",
             )
         if tok == "-m" or tok.startswith("-m="):
-            module = tok.split("=", 1)[1] if "=" in tok else (operands[i + 1] if i + 1 < len(operands) else None)
+            has_equals = "=" in tok
+            module = tok.split("=", 1)[1] if has_equals else (operands[i + 1] if i + 1 < len(operands) else None)
             if module == "pytest":
-                return _resolve_pytest(venue_real)
+                pytest_argv = operands[i + 1 :] if has_equals else operands[i + 2 :]
+                return _resolve_pytest(pytest_argv, venue_real)
             return Resolution(
                 "unresolved",
                 reason_class="adhoc-undeclared",
@@ -1139,20 +763,9 @@ def _resolve_interpreter(operands: list[str], venue_real: str) -> Resolution:
 
 _CUSTOM_RESOLVERS = {
     "git": lambda operands, venue_real: _resolve_git(operands, venue_real),
-    "find": lambda operands, venue_real: _resolve_find(operands),
-    "awk": lambda operands, venue_real: _resolve_awk(operands),
-    "gawk": lambda operands, venue_real: _resolve_awk(operands),
-    "nawk": lambda operands, venue_real: _resolve_awk(operands),
-    "mawk": lambda operands, venue_real: _resolve_awk(operands),
-    "pytest": lambda operands, venue_real: _resolve_pytest(venue_real),
+    "pytest": lambda operands, venue_real: _resolve_pytest(operands, venue_real),
     "python3": lambda operands, venue_real: _resolve_interpreter(operands, venue_real),
     "python": lambda operands, venue_real: _resolve_interpreter(operands, venue_real),
-    "sed": lambda operands, venue_real: _resolve_sed(operands, venue_real),
-    "rg": lambda operands, venue_real: _resolve_rg(operands),
-    "date": lambda operands, venue_real: _resolve_date(operands),
-    "mv": lambda operands, venue_real: _resolve_mv(operands, venue_real),
-    "install": lambda operands, venue_real: _resolve_install(operands, venue_real),
-    "cp": lambda operands, venue_real: _resolve_cp(operands, venue_real),
 }
 
 
@@ -1174,9 +787,13 @@ def resolve_command(
 
     `venue` is realpath-resolved once and used both as the join base for
     every relative operand and as the write-target for `pytest`'s
-    whole-subtree residual. Fail-safe throughout (REQ3): the first
-    undecidable segment makes the WHOLE command unresolved — a command that
-    is 90% readable and 10% opaque is not 90% approvable."""
+    whole-subtree residual. Closed-world throughout: `_check_command_shape`
+    first rejects anything outside the one reviewed command shape (item
+    (a)), then every segment's program must itself be a table entry whose
+    effect this function knows how to dispatch -- a command that is 90%
+    readable and 10% opaque is not 90% approvable, so the first
+    undecidable segment (an unlisted program, an unlisted flag, an
+    unresolved resolver verdict) makes the WHOLE command unresolved."""
     venue_real = _realpath(venue)
     table = contract_table if contract_table is not None else load_contract_table()
 
@@ -1186,8 +803,13 @@ def resolve_command(
             text, venue_real, "residual-syntax", "command substitution, a subshell, or process substitution hides nested work"
         )
 
+    shape_violation = _check_command_shape(stripped_text)
+    if shape_violation is not None:
+        reason_class, reason = shape_violation
+        return _unresolved_with_identity(text, venue_real, reason_class, reason)
+
     try:
-        tokens = shell_tokens.separator_exact_split(stripped_text)
+        tokens = shell_tokens.separator_exact_split(_strip_standalone_stderr_merge(stripped_text))
     except Exception:
         return _unresolved_with_identity(text, venue_real, "residual-syntax", "command line failed to tokenize")
 
@@ -1197,28 +819,8 @@ def resolve_command(
 
     all_resources: list[resources.Resource] = []
     for seg in segments:
-        effect_head = _resolve_effect_head(seg, venue_real)
-        if isinstance(effect_head, Resolution):
-            return _unresolved_with_identity(
-                text, venue_real, effect_head.reason_class or "contract-unresolved", effect_head.reason or ""
-            )
-        if effect_head is None:
-            # Assignment-only segment (e.g. `FOO=bar`), or a wrapper prefix
-            # that consumed the whole segment with nothing left to run: no
-            # program, no effect of its own.
-            continue
-        head, extra_resources = effect_head
-        all_resources.extend(extra_resources)
-
-        # Write candidates (a generic `>`/`>>` redirect, or a reviewed
-        # writes-operands verb) are computed on the STRIPPED head, not the
-        # raw segment -- a wrapper prefix `resolve_command` has already
-        # reviewed as neutral (nice, timeout, ...) must not also hide the
-        # wrapped command's own write target from this generic scan.
-        write_candidates = bash_write_targets.segment_write_target(head, venue_real)
-
-        prog = widening_targets.program_name(head[0]).casefold()
-        operands = head[1:]
+        prog = widening_targets.program_name(seg[0]).casefold()
+        operands = seg[1:]
 
         entry = table.get(prog)
         if entry is None:
@@ -1241,6 +843,7 @@ def resolve_command(
                             text, venue_real, "contract-unresolved",
                             f"{prog!r} flag {tok!r} is outside the reviewed safe-flag set",
                         )
+            continue
 
         if entry.effect == "resolver":
             resolver = _CUSTOM_RESOLVERS.get(prog)
@@ -1252,14 +855,16 @@ def resolve_command(
                     text, venue_real, seg_resolution.reason_class or "contract-unresolved", seg_resolution.reason or ""
                 )
             all_resources.extend(seg_resolution.resources)
-            # A resolver-dispatched program may STILL redirect its stdout
-            # (`git status > f`); the generic redirect candidates below are
-            # collected regardless of the resolver's own verdict.
+            continue
 
-        # entry.effect in ("none", "writes-operands"): the program's OWN
-        # write targets (if any) are exactly what bash_write_targets already
-        # found in `write_candidates` — no further table dispatch needed.
-        for candidate in write_candidates:
-            all_resources.append(resources.FileResource(candidate, "write"))
+        # No table entry declares "writes-operands" any more -- every former
+        # writes-operands verb is now either a reviewed resolver or a plain
+        # unresolved entry -- so this branch only guards against a future
+        # entry naming an effect this function has no dispatch for; fail
+        # closed rather than silently treating it as a no-op.
+        return _unresolved_with_identity(
+            text, venue_real, "contract-unresolved",
+            f"program {prog!r} declares effect={entry.effect!r}, which this resolver does not dispatch",
+        )
 
     return Resolution("resolved", resources=all_resources)

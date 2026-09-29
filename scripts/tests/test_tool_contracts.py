@@ -36,7 +36,9 @@ def test_contract_table_loads_one_entry_per_program():
     assert "git" in table
     assert table["git"].effect == "resolver"
     assert table["ls"].effect == "none"
-    assert table["sed"].effect == "resolver"
+    assert table["rg"].effect == "none"
+    assert table["sed"].effect == "unresolved"
+    assert table["cp"].effect == "unresolved"
     assert table["dd"].effect == "unresolved"
     assert table["dd"].reason  # every declared-unresolved entry names why
 
@@ -62,112 +64,126 @@ def test_readonly_commands_resolve_with_no_resource(tmp_path):
         assert res.resources == [], cmd
 
 
-def test_sed_in_place_writes_file_plain_sed_does_not(tmp_path):
+def test_rg_safe_flags_closed_set(tmp_path):
+    """rg's own closed flag set has no write flag in it; --pre (runs an
+    arbitrary preprocessor command per searched file) and --replace/-r are
+    deliberately excluded, so either turns the whole command unresolved."""
     tc = _tool_contracts_module()
-    resources = _resources_module()
 
-    target = tmp_path / "f.txt"
-    target.write_text("hi")
-
-    # bash_write_targets is deliberately over-inclusive for `sed -i`: every
-    # non-flag token in the segment (the sed script AND the file operand)
-    # becomes a candidate write target, since which token is "the script"
-    # vs "the file" is not reliably decidable from shape alone. The real
-    # file operand is among the candidates, which is what matters here.
-    in_place = tc.resolve_command(f"sed -i s/a/b/ {target}", str(tmp_path))
-    assert in_place.status == "resolved"
-    assert resources.FileResource(str(target), "write") in in_place.resources
-
-    plain = tc.resolve_command(f"sed s/a/b/ {target}", str(tmp_path))
+    plain = tc.resolve_command("rg foo", str(tmp_path))
     assert plain.status == "resolved"
     assert plain.resources == []
 
+    for cmd in ("rg --pre cat foo", "rg -r replacement foo"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
 
-def test_sed_embedded_write_or_exec_command_is_unresolved(tmp_path):
+
+def test_date_is_always_unresolved(tmp_path):
+    """date is outside the reviewed read-only program table entirely, and
+    -s/--set changes system clock state -- unresolved regardless of args,
+    including a bare invocation with no flags at all."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("date", "date -s '2026-01-01'"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+
+def test_sed_is_always_unresolved(tmp_path):
+    """Deciding sed's actual effect requires knowing both whether -i is
+    present and whether its own script text hides an embedded w/W/e
+    command -- neither is in the reviewed closed command grammar, so every
+    sed invocation is unresolved, the in-place, plain-stdout, and
+    ambiguous-suffix forms alike."""
     tc = _tool_contracts_module()
 
     target = tmp_path / "f.txt"
     target.write_text("hi")
-
-    unresolved_scripts = [
-        f"sed 'w out.txt' {target}",
-        f"sed -n '3w out.txt' {target}",
-        f"sed 's/a/b/w out.txt' {target}",
-        f"sed '1,3e echo hi' {target}",
-        f"sed 'e echo hi' {target}",
-    ]
-    for cmd in unresolved_scripts:
-        res = tc.resolve_command(cmd, str(tmp_path))
-        assert res.status == "unresolved", cmd
-        assert res.reason_class == "adhoc-undeclared", cmd
-
-    # An 'e' occurring inside ordinary substitute TEXT (not as the command
-    # letter) must not be mistaken for the exec command.
-    letter_e_in_text = tc.resolve_command(f"sed 's/hi/bye/' {target}", str(tmp_path))
-    assert letter_e_in_text.status == "resolved"
-    assert letter_e_in_text.resources == []
-
-
-def test_sed_closed_world_flag_and_block_parsing(tmp_path):
-    """Finding #3, all 6 named cases from the review's root-cause finding:
-    `-i` no longer short-circuits the w/W/e check (`-i` now goes through
-    the SAME script parsing as every other invocation); an `s///e` exec
-    flag counts as exec, not merely a non-`w` no-op; a `{...}` block is
-    unresolved (its body is not recursively parsed, so it cannot be proven
-    free of a nested w/W/e); and a bundled short flag (`-ne`) or a GNU
-    long-option ABBREVIATION (`--expr=`, `--fil=`) is refused as outside
-    the closed set rather than silently skipped."""
-    tc = _tool_contracts_module()
-
-    target = tmp_path / "f.txt"
-    target.write_text("hi")
-
-    unresolved_cmds = [
-        f"sed -i '1e echo hi' {target}",
-        f"sed -e 's/.*/id/e' {target}",
-        f"sed '1{{e id;}}' {target}",
-        f"sed -ne '1e id' {target}",
-        f"sed --expr=1e {target}",
-        f"sed --fil=script.sed {target}",
-    ]
-    for cmd in unresolved_cmds:
-        res = tc.resolve_command(cmd, str(tmp_path))
-        assert res.status == "unresolved", cmd
-        assert res.reason_class in ("contract-unresolved", "adhoc-undeclared"), cmd
-
-    # Regression: ordinary flags in the reviewed closed set still resolve,
-    # -i included -- this fix must not make -i itself unresolved, only stop
-    # -i from bypassing the script check.
     for cmd in (
+        f"sed -i s/a/b/ {target}",
+        f"sed s/a/b/ {target}",
+        f"sed -i '' 's/a/b/' {target}",
+        f"sed -e '1e id' {target}",
         f"sed -n -e p {target}",
-        f"sed -i -e p {target}",
-        f"sed -E -e p {target}",
     ):
         res = tc.resolve_command(cmd, str(tmp_path))
-        assert res.status == "resolved", cmd
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
 
 
-def test_find_exec_and_awk_are_unresolved(tmp_path):
+def test_removed_write_target_verbs_are_always_unresolved(tmp_path):
+    """cp, mv, install, tee, awk, and find each used to have their own
+    write-target or argument parsing; none of that parsing is in the
+    reviewed closed command grammar any more, so every invocation of any of
+    them is unresolved regardless of flags."""
     tc = _tool_contracts_module()
 
-    exec_res = tc.resolve_command("find . -name '*.py' -exec rm {} \\;", str(tmp_path))
-    assert exec_res.status == "unresolved"
-    assert exec_res.reason_class == "contract-unresolved"
+    src = tmp_path / "src.txt"
+    src.write_text("x")
+    dest_dir = tmp_path / "dir"
+    dest_dir.mkdir()
 
-    plain_find = tc.resolve_command("find . -name '*.py'", str(tmp_path))
-    assert plain_find.status == "resolved"
-    assert plain_find.resources == []
+    for cmd in (
+        f"cp {src} {dest_dir}/",
+        f"cp --parents {src} {dest_dir}",
+        f"mv {src} {dest_dir}/dest.txt",
+        f"install {src} {dest_dir}/dest.txt",
+        f"install -d {dest_dir}/newdir",
+        f"tee {dest_dir}/out.txt",
+        "awk -f script.awk in.txt",
+        "find . -name test.py",
+        "find . -type f -name test.py",
+    ):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
 
-    awk_res = tc.resolve_command("awk '{print > \"out.txt\"}' in.txt", str(tmp_path))
-    assert awk_res.status == "unresolved"
-    assert awk_res.reason_class == "contract-unresolved"
 
-
-def test_find_delete_and_fprint_variants_are_unresolved(tmp_path):
+def test_patch_is_always_unresolved(tmp_path):
     tc = _tool_contracts_module()
 
-    for flag in ("-delete", "-fprint out.txt", "-fprint0 out.txt", "-fprintf out.txt %p", "-fls out.txt"):
-        cmd = f"find . -name '*.py' {flag}"
+    for cmd in ("patch -p1 -i diff.patch", "patch -o out.txt file.txt diff.patch"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+        assert "patch" in (res.reason or "").lower(), cmd
+
+    # A redirect-fed form (`patch < diff.patch`) is unresolved for the
+    # command-shape reason (item (a)'s redirect prohibition), not patch's
+    # own program-effect reason -- the shape check runs first and refuses
+    # the whole command before any per-program dispatch is reached.
+    redirected = tc.resolve_command("patch < diff.patch", str(tmp_path))
+    assert redirected.status == "unresolved"
+    assert redirected.reason_class == "contract-unresolved"
+    assert "redirection" in (redirected.reason or "").lower()
+
+
+def test_wrapper_prefixed_commands_are_always_unresolved(tmp_path):
+    """Every wrapper token in the reviewed closed command grammar's refusal
+    set (env, nice, timeout, nohup, eval, xargs, sudo, time, flock, command,
+    exec, builtin) is refused wherever it leads a segment -- there is no
+    stripped-wrapper form any more, since a wrapper can change what actually
+    runs, or how, in ways its own token does not show."""
+    tc = _tool_contracts_module()
+
+    target = tmp_path / "out.txt"
+    for cmd in (
+        f"env tee {target}",
+        f"nice tee {target}",
+        f"timeout 5 tee {target}",
+        "nohup ls -la",
+        f"eval 'echo hi > {target}'",
+        "xargs -a list.txt rm",
+        f"sudo --chdir=/tmp tee {target}",
+        "time -o out.txt sleep 1",
+        f"flock -c 'echo hi > {target}' lockfile",
+        "command ls -la",
+        "exec ls -la",
+        "builtin cd /tmp",
+    ):
         res = tc.resolve_command(cmd, str(tmp_path))
         assert res.status == "unresolved", cmd
         assert res.reason_class == "contract-unresolved", cmd
@@ -209,15 +225,14 @@ def test_git_venue_flags_require_matching_venue(tmp_path):
 
 
 def test_git_global_flags_outside_closed_set_are_unresolved(tmp_path):
-    """Finding #1, root cause: only -C/--git-dir/--work-tree (already
-    tested in test_git_venue_flags_require_matching_venue) and --no-pager
-    are in the reviewed closed set of git GLOBAL flags. Every other global
-    flag -- including ones a real `git` would happily accept -- is
-    unresolved rather than silently skipped, since each can change WHICH
-    resource a subsequent subcommand actually touches (`-c`/`--config-env`
-    can rewrite the push destination via `url.insteadOf`; `--exec-path`
-    points at a different git subprogram directory; `--namespace` targets
-    a different ref namespace)."""
+    """Only -C/--git-dir/--work-tree (tested separately) and --no-pager are
+    in the reviewed closed set of git GLOBAL flags. Every other global flag
+    -- including ones a real `git` would happily accept -- is unresolved
+    rather than silently skipped, since each can change WHICH resource a
+    subsequent subcommand actually touches (`-c`/`--config-env` can rewrite
+    the push destination via `url.insteadOf`; `--exec-path` points at a
+    different git subprogram directory; `--namespace` targets a different
+    ref namespace)."""
     tc = _tool_contracts_module()
 
     for cmd in (
@@ -236,9 +251,9 @@ def test_git_global_flags_outside_closed_set_are_unresolved(tmp_path):
 
 
 def test_git_repeated_venue_flag_is_unresolved(tmp_path):
-    """Finding #1: a repeated -C/--git-dir/--work-tree is refused rather
-    than letting the second occurrence silently retarget git past the
-    value the first occurrence was checked against."""
+    """A repeated -C/--git-dir/--work-tree is refused rather than letting
+    the second occurrence silently retarget git past the value the first
+    occurrence was checked against."""
     tc = _tool_contracts_module()
 
     other = tmp_path / "other"
@@ -255,11 +270,10 @@ def test_git_repeated_venue_flag_is_unresolved(tmp_path):
 
 
 def test_git_push_follow_tags_and_set_upstream_are_unresolved(tmp_path):
-    """Finding #5: --follow-tags (pushes extra tag refs this table does not
-    review) and -u/--set-upstream (writes local .git/config, a file this
-    table does not resolve) are deliberately excluded from the allowed
-    push-flag set -- each is unresolved rather than silently treated as a
-    no-op push flag."""
+    """--follow-tags (pushes extra tag refs this table does not review) and
+    -u/--set-upstream (writes local .git/config, a file this table does not
+    resolve) are deliberately excluded from the allowed push-flag set --
+    each is unresolved rather than silently treated as a no-op push flag."""
     tc = _tool_contracts_module()
 
     for cmd in (
@@ -272,46 +286,51 @@ def test_git_push_follow_tags_and_set_upstream_are_unresolved(tmp_path):
         assert res.reason_class == "contract-unresolved", cmd
 
 
+def test_git_branch_safe_flags_resolve_others_unresolved(tmp_path):
+    """git branch resolves to no effect under its own closed boolean-flag
+    set; any value-taking flag or positional branch name falls outside that
+    set and is unresolved, since each names a create/rename/delete or a
+    different filter than plain listing."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("git branch", "git branch -a", "git branch --list", "git branch -v"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "resolved", cmd
+        assert res.resources == [], cmd
+
+    for cmd in ("git branch new-feature", "git branch -d old-feature", "git branch --contains HEAD"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+
 def test_env_assignment_prefix_unresolved(tmp_path):
-    """Finding #2, the shared root-cause primitive: a leading environment-
-    variable assignment -- bare (`NAME=value cmd`) or via the `env`
-    wrapper (`env NAME=value cmd`) -- is unresolved unless NAME is in the
-    (today empty) reviewed-benign allowlist, since an injected variable
-    can change a program's behavior in ways this table's own contract
-    never reviewed."""
+    """A leading NAME=value assignment disqualifies its segment outright:
+    an injected variable can change any program's behavior in ways this
+    table cannot see (a different config file, a different PATH, an
+    injected interpreter flag via a *_OPTS-style variable)."""
     tc = _tool_contracts_module()
 
     for cmd in (
         "GIT_SSH_COMMAND=evil git push origin main",
         "GIT_DIR=/tmp/other git status",
         "PYTHONPATH=/tmp/evil python3 -m pytest -q",
-        "env GIT_SSH_COMMAND=evil git push origin main",
-        "env PYTHONPATH=/tmp/evil python3 -m pytest -q",
     ):
         res = tc.resolve_command(cmd, str(tmp_path))
         assert res.status == "unresolved", cmd
         assert res.reason_class == "contract-unresolved", cmd
         assert "environment assignment" in (res.reason or ""), (cmd, res.reason)
 
-
-def test_rg_pre_and_date_set_are_unresolved(tmp_path):
-    tc = _tool_contracts_module()
-
-    rg_res = tc.resolve_command("rg --pre cat foo", str(tmp_path))
-    assert rg_res.status == "unresolved"
-    assert rg_res.reason_class == "contract-unresolved"
-
-    rg_plain = tc.resolve_command("rg foo", str(tmp_path))
-    assert rg_plain.status == "resolved"
-    assert rg_plain.resources == []
-
-    date_res = tc.resolve_command("date -s '2026-01-01'", str(tmp_path))
-    assert date_res.status == "unresolved"
-    assert date_res.reason_class == "contract-unresolved"
-
-    date_plain = tc.resolve_command("date", str(tmp_path))
-    assert date_plain.status == "resolved"
-    assert date_plain.resources == []
+    # `env` is itself a forbidden wrapper token (its own dedicated test), so
+    # `env NAME=value cmd` is refused there first -- the wrapper-token check
+    # runs before this module ever looks at env's own operands.
+    for cmd in (
+        "env GIT_SSH_COMMAND=evil git push origin main",
+        "env PYTHONPATH=/tmp/evil python3 -m pytest -q",
+    ):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
 
 
 def test_python_dash_c_is_unresolved_pytest_module_resolves_like_pytest(tmp_path):
@@ -327,22 +346,76 @@ def test_python_dash_c_is_unresolved_pytest_module_resolves_like_pytest(tmp_path
     assert via_module.resources == [resources.FileResource(str(tmp_path.resolve()), "write")]
 
 
-def test_redirect_and_cp_targets_become_file_resources(tmp_path):
+def test_pytest_resolves_to_venue_subtree(tmp_path):
+    tc = _tool_contracts_module()
+    resources = _resources_module()
+
+    res = tc.resolve_command("pytest -q scripts/tests/test_foo.py", str(tmp_path))
+    assert res.status == "resolved"
+    assert res.resources == [resources.FileResource(str(tmp_path.resolve()), "write")]
+
+
+def test_pytest_closed_flag_and_path_grammar(tmp_path):
+    """pytest's own closed flag/path grammar (item (c)): a flag outside the
+    reviewed set, an absolute test path, and a test path escaping the venue
+    via '..' each turn the whole command unresolved rather than partially
+    trusting the rest of the line."""
+    tc = _tool_contracts_module()
+
+    for cmd in (
+        "pytest --maxfail=1",
+        "pytest -p someplugin",
+        "pytest --tb=long",
+        f"pytest {tmp_path}/scripts/tests/test_foo.py",
+        "pytest ../outside/test_foo.py",
+    ):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class in ("contract-unresolved", "residual-syntax"), cmd
+
+
+def test_closed_grammar_resolved_examples(tmp_path):
+    """Three commands squarely inside the closed grammar's positive cases:
+    pytest with its full reviewed flag set, a chained pair of read-only git
+    subcommands, and pytest piped through tail with the one reviewed
+    redirection exception (`2>&1`, stderr merged into stdout)."""
+    tc = _tool_contracts_module()
+    resources = _resources_module()
+
+    pytest_res = tc.resolve_command(
+        "pytest -q -x -v -s -k expr -p no:cacheprovider --tb=short scripts/tests/test_foo.py",
+        str(tmp_path),
+    )
+    assert pytest_res.status == "resolved"
+    assert pytest_res.resources == [resources.FileResource(str(tmp_path.resolve()), "write")]
+
+    git_chain = tc.resolve_command("git status && git diff", str(tmp_path))
+    assert git_chain.status == "resolved"
+    assert git_chain.resources == []
+
+    piped = tc.resolve_command("pytest -q 2>&1 | tail -5", str(tmp_path))
+    assert piped.status == "resolved"
+    assert piped.resources == [resources.FileResource(str(tmp_path.resolve()), "write")]
+
+
+def test_redirection_operators_are_unresolved_except_stderr_merge(tmp_path):
+    """Every redirection operator disqualifies its whole command except the
+    one reviewed exception, the standalone token `2>&1` (stderr merged into
+    stdout) -- a redirect target is an arbitrary path this table has no
+    write-target parser for any more."""
     tc = _tool_contracts_module()
     resources = _resources_module()
 
     dest = tmp_path / "out.txt"
-    redirect = tc.resolve_command(f"echo hi > {dest}", str(tmp_path))
-    assert redirect.status == "resolved"
-    assert redirect.resources == [resources.FileResource(str(dest), "write")]
+    for op in (">", ">>", ">|", "<", "<<", "<<<"):
+        cmd = f"echo hi {op} {dest}"
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
 
-    src = tmp_path / "src.txt"
-    src.write_text("x")
-    dest_dir = tmp_path / "dir"
-    dest_dir.mkdir()
-    cp_res = tc.resolve_command(f"cp {src} {dest_dir}/", str(tmp_path))
-    assert cp_res.status == "resolved"
-    assert cp_res.resources == [resources.FileResource(str(dest_dir / "src.txt"), "write")]
+    merged = tc.resolve_command("pytest -q 2>&1", str(tmp_path))
+    assert merged.status == "resolved"
+    assert merged.resources == [resources.FileResource(str(tmp_path.resolve()), "write")]
 
 
 def test_dollar_backtick_and_subshell_segments_unresolved(tmp_path):
@@ -353,15 +426,6 @@ def test_dollar_backtick_and_subshell_segments_unresolved(tmp_path):
         assert res.status == "unresolved", cmd
         assert res.reason_class == "residual-syntax", cmd
         assert res.identity is not None, cmd
-
-
-def test_pytest_resolves_to_venue_subtree(tmp_path):
-    tc = _tool_contracts_module()
-    resources = _resources_module()
-
-    res = tc.resolve_command("pytest -q scripts/tests/test_foo.py", str(tmp_path))
-    assert res.status == "resolved"
-    assert res.resources == [resources.FileResource(str(tmp_path.resolve()), "write")]
 
 
 def test_undeclared_adhoc_script_is_unresolved_with_identity(tmp_path):
@@ -419,120 +483,10 @@ def test_sibling_helper_edit_changes_unresolved_script_identity(tmp_path):
         outer.rmdir()
 
 
-def test_contract_resolver_closed_world_mutation(tmp_path):
-    """Mutation-style discriminating test for the closed-world property.
-    Two of the six mutation groups below are generated FROM THE LOADED
-    CONTRACT TABLE itself (every `effect="none"` entry's own `safe_flags`,
-    every wrapper name `_strip_closed_wrappers` actually recognizes) rather
-    than hand-picked per-finding examples, so a future table entry sharing
-    the same open-world gap fails this test even if nobody wrote a case
-    naming it by hand. The remaining groups (env-assignment prefix, git
-    global-flag grammar, and the always-refused wrapper-token set) have no
-    table-side enumeration to drive from -- each is its own closed set by
-    construction (see `_strip_closed_wrappers`'s docstring) -- so those stay
-    literal, matching what the resolver's own source declares reviewed."""
-    tc = _tool_contracts_module()
-    resources = _resources_module()
-
-    baseline_resolved_commands = [
-        "ls -la",
-        "git status",
-        "git push origin main",
-        "pytest -q scripts/tests/test_foo.py",
-    ]
-
-    # Mutation 1 (finding #2, root cause): an unreviewed env-assignment
-    # prefix must unresolve EVERY baseline command, not only git/sed.
-    for cmd in baseline_resolved_commands:
-        baseline = tc.resolve_command(cmd, str(tmp_path))
-        assert baseline.status == "resolved", cmd
-
-        mutated = tc.resolve_command(f"UNREVIEWED_VAR=x {cmd}", str(tmp_path))
-        assert mutated.status == "unresolved", cmd
-        assert mutated.reason_class == "contract-unresolved", cmd
-
-    # Mutation 2 (finding #1): an unrecognized git global flag must
-    # unresolve a command that resolves cleanly without it.
-    unknown_global_flag = tc.resolve_command("git --namespace=x status", str(tmp_path))
-    assert unknown_global_flag.status == "unresolved"
-    assert unknown_global_flag.reason_class == "contract-unresolved"
-
-    # Mutation 3 (finding #1): a DUPLICATED venue-retargeting flag must
-    # unresolve rather than let the second occurrence silently win.
-    other = tmp_path / "other"
-    other.mkdir()
-    duplicated_venue_flag = tc.resolve_command(f"git -C {tmp_path} -C {other} status", str(tmp_path))
-    assert duplicated_venue_flag.status == "unresolved"
-    assert duplicated_venue_flag.reason_class == "contract-unresolved"
-    assert "repeated" in (duplicated_venue_flag.reason or "")
-
-    # Mutation 4 (N3, table-driven): an unrecognized flag on a bare
-    # invocation of every `effect="none"` table entry must unresolve --
-    # UNLESS that entry declares `safe_flags=["*"]`, the reviewed assertion
-    # that no flag of that program writes anywhere, in which case the same
-    # arbitrary flag is a POSITIVE control and must still resolve.
-    table = tc.load_contract_table()
-    unreviewed_flag = "--definitely-unreviewed-flag"
-    for name, entry in table.items():
-        if entry.effect != "none":
-            continue
-        if name == "env":
-            # `env` is dispatched through `_strip_closed_wrappers` BEFORE
-            # its own table entry is ever consulted -- any flag on it is
-            # refused there (covered by mutation 5 below), so its
-            # `safe_flags=["*"]` entry is a documented defensive backstop
-            # this generic loop cannot reach and must not assert against.
-            continue
-        cmd = f"{name} {unreviewed_flag}"
-        res = tc.resolve_command(cmd, str(tmp_path))
-        if entry.safe_flags is not None and "*" in entry.safe_flags:
-            assert res.status == "resolved", cmd
-        else:
-            assert res.status == "unresolved", cmd
-            assert res.reason_class == "contract-unresolved", cmd
-            assert "safe-flag" in (res.reason or ""), (cmd, res.reason)
-
-    # Mutation 5 (N2, table-driven): every wrapper name `_strip_closed_
-    # wrappers` recognizes (nice/timeout/nohup/env) must unresolve when
-    # given a flag outside its own reviewed grammar, rather than silently
-    # stepping past it.
-    unreviewed_wrapper_flag_cmds = [
-        f"nice {unreviewed_flag} ls -la",
-        f"timeout {unreviewed_flag} 5 ls -la",
-        f"nohup {unreviewed_flag} ls -la",
-        f"env {unreviewed_flag} ls -la",
-    ]
-    for cmd in unreviewed_wrapper_flag_cmds:
-        res = tc.resolve_command(cmd, str(tmp_path))
-        assert res.status == "unresolved", cmd
-        assert res.reason_class == "contract-unresolved", cmd
-
-    # Mutation 6 (N2): a wrapper token outside the reviewed set (eval,
-    # xargs, time, sudo, doas, flock -- none of which has a table entry of
-    # its own) prefixed onto an otherwise-resolvable command must never
-    # resolve; it falls through to the ordinary unknown-program refusal.
-    for wrapper in ("eval", "xargs", "time", "sudo", "doas", "flock"):
-        cmd = f"{wrapper} ls -la"
-        res = tc.resolve_command(cmd, str(tmp_path))
-        assert res.status == "unresolved", cmd
-        assert res.reason_class == "unknown-program", cmd
-
-    # Mutation 7 (N1, non-destination operand coverage): every SOURCE
-    # operand of a `mv`, not only its destination, must surface as its own
-    # resolved write resource -- the piece the destination-only shared
-    # write-target computation misses.
-    src = tmp_path / "src.txt"
-    src.write_text("x")
-    dest = tmp_path / "dest.txt"
-    mv_res = tc.resolve_command(f"mv {src} {dest}", str(tmp_path))
-    assert mv_res.status == "resolved"
-    assert resources.FileResource(str(src), "write") in mv_res.resources
-
-
 def test_land_op_never_produced_by_this_resolver(tmp_path):
-    """C1: no contract entry or custom resolver in this module may ever
-    return a VcsRefResource with op='land' — landing is decided solely by
-    the (separately checkpointed) landed-spec resolver."""
+    """No contract entry or custom resolver in this module may ever return
+    a VcsRefResource with op='land' -- landing is decided solely by the
+    (separately checkpointed) landed-spec resolver."""
     tc = _tool_contracts_module()
     resources = _resources_module()
 
@@ -551,180 +505,72 @@ def test_land_op_never_produced_by_this_resolver(tmp_path):
                 assert r.op != "land", cmd
 
 
-def test_contract_table_and_ledger_never_covered_via_resolver(tmp_path):
-    """CLI-integration-adjacent form of test_contract_tables_and_ledger_dir_
-    never_covered: resolving a command that plainly writes the contract
-    table itself still yields a resource resources.py's own protected-
-    surfaces logic refuses to cover — the resolver does not special-case
-    the path, it stays an ordinary FileResource and the refusal lives in
-    resources.py (already tested there)."""
-    tc = _tool_contracts_module()
-    resources = _resources_module()
-
-    venue = tmp_path / "venue"
-    (venue / "scripts" / "agentctl").mkdir(parents=True)
-    contracts_path = venue / "scripts" / "agentctl" / "tool_contracts.toml"
-    contracts_path.write_text("")
-
-    res = tc.resolve_command(f"echo x > {contracts_path}", str(venue))
-    assert res.status == "resolved"
-    assert res.resources == [resources.FileResource(str(contracts_path), "write")]
-
-    protected = resources.protected_permission_surfaces(repo_root=str(venue))
-    approved_whole_venue = resources.FileResource(str(venue), "write")
-    assert not approved_whole_venue.covers(res.resources[0], protected=protected)
-
-
-# ---------------------------------------------------------------------------
-# N1/N2/N3 dedicated per-case examples (round-3 review should-fix (d))
-# ---------------------------------------------------------------------------
-
-
-def test_mv_resolves_source_and_target_dir_and_refuses_unknown_flag(tmp_path):
-    tc = _tool_contracts_module()
-    resources = _resources_module()
-
-    src = tmp_path / "src.txt"
-    src.write_text("x")
-    dest = tmp_path / "dest.txt"
-    plain = tc.resolve_command(f"mv {src} {dest}", str(tmp_path))
-    assert plain.status == "resolved"
-    assert resources.FileResource(str(src), "write") in plain.resources
-    assert resources.FileResource(str(dest), "write") in plain.resources
-
-    other_src = tmp_path / "a.txt"
-    other_src.write_text("x")
-    dest_dir = tmp_path / "dir"
-    dest_dir.mkdir()
-    via_target_dir = tc.resolve_command(f"mv -t {dest_dir} {other_src}", str(tmp_path))
-    assert via_target_dir.status == "resolved"
-    assert resources.FileResource(str(other_src), "write") in via_target_dir.resources
-
-    backup_flag = tc.resolve_command(f"mv -b {src} {dest}", str(tmp_path))
-    assert backup_flag.status == "unresolved"
-    assert backup_flag.reason_class == "contract-unresolved"
-
-
-def test_patch_is_always_unresolved(tmp_path):
+def test_closed_world_mutation_catalogue(tmp_path):
+    """One table-driven negative control per clause of the closed command
+    grammar (`_check_command_shape`) and per closed per-program flag set in
+    the loaded contract table: each mutation below takes a command this
+    resolver accepts and applies exactly one violation named in the closed
+    grammar, and every mutated command must turn unresolved -- proving each
+    clause is load-bearing rather than a dead check nothing exercises."""
     tc = _tool_contracts_module()
 
-    for cmd in ("patch < diff.patch", "patch -p1 -i diff.patch", "patch -o out.txt file.txt diff.patch"):
+    resolved_examples = [
+        "ls -la",
+        "git status",
+        "git push origin main",
+        "pytest -q scripts/tests/test_foo.py",
+    ]
+    for cmd in resolved_examples:
+        baseline = tc.resolve_command(cmd, str(tmp_path))
+        assert baseline.status == "resolved", cmd
+
+    # (v) a leading environment-variable assignment.
+    for cmd in resolved_examples:
+        mutated = tc.resolve_command(f"UNREVIEWED_VAR=x {cmd}", str(tmp_path))
+        assert mutated.status == "unresolved", cmd
+
+    # (vi) each wrapper token, as a prefix.
+    wrapper_tokens = (
+        "env", "nice", "timeout", "nohup", "eval", "xargs", "sudo",
+        "time", "flock", "command", "exec", "builtin",
+    )
+    for wrapper in wrapper_tokens:
+        for cmd in resolved_examples:
+            mutated = tc.resolve_command(f"{wrapper} {cmd}", str(tmp_path))
+            assert mutated.status == "unresolved", (wrapper, cmd)
+
+    # (ii) a path-qualified program token.
+    for cmd in resolved_examples:
+        prog, _, rest = cmd.partition(" ")
+        mutated_cmd = f"./{prog} {rest}" if rest else f"./{prog}"
+        mutated = tc.resolve_command(mutated_cmd, str(tmp_path))
+        assert mutated.status == "unresolved", mutated_cmd
+
+    # (iii) each redirection operator, outside the one reviewed exception.
+    for op in (">", ">>", ">|", ">&", "&>", "<", "<<", "<<<"):
+        for cmd in resolved_examples:
+            mutated = tc.resolve_command(f"{cmd} {op} x", str(tmp_path))
+            assert mutated.status == "unresolved", (op, cmd)
+
+    # (iv) each non-literal marker, plus a leading '~', appended as a
+    # trailing operand.
+    for marker_token in ("$HOME", "`pwd`", "*.txt", "file?.txt", "[abc].txt", "{a,b}.txt", "~/file.txt"):
+        for cmd in resolved_examples:
+            mutated = tc.resolve_command(f"{cmd} {marker_token}", str(tmp_path))
+            assert mutated.status == "unresolved", (marker_token, cmd)
+
+    # (i) an unknown flag, generated from the loaded contract table itself:
+    # every effect="none" entry either declares safe_flags=["*"] (any flag
+    # is a positive control and must still resolve) or a closed set (an
+    # unreviewed flag must unresolve).
+    table = tc.load_contract_table()
+    for name, entry in table.items():
+        if entry.effect != "none":
+            continue
+        cmd = f"{name} --definitely-unreviewed-flag"
         res = tc.resolve_command(cmd, str(tmp_path))
-        assert res.status == "unresolved", cmd
-        assert res.reason_class == "contract-unresolved", cmd
-        assert "patch" in (res.reason or "").lower(), cmd
-
-
-def test_install_directory_mode_and_unknown_flag(tmp_path):
-    tc = _tool_contracts_module()
-    resources = _resources_module()
-
-    newdir = tmp_path / "newdir"
-    dir_mode = tc.resolve_command(f"install -d {newdir}", str(tmp_path))
-    assert dir_mode.status == "resolved"
-    assert resources.FileResource(str(newdir), "write") in dir_mode.resources
-
-    src = tmp_path / "src.txt"
-    src.write_text("x")
-    dest = tmp_path / "dest.txt"
-    plain = tc.resolve_command(f"install {src} {dest}", str(tmp_path))
-    assert plain.status == "resolved"
-
-    unknown_flag = tc.resolve_command(f"install -Z context {src} {dest}", str(tmp_path))
-    assert unknown_flag.status == "unresolved"
-    assert unknown_flag.reason_class == "contract-unresolved"
-
-
-def test_cp_parents_is_unresolved(tmp_path):
-    tc = _tool_contracts_module()
-
-    src_dir = tmp_path / "a" / "b"
-    src_dir.mkdir(parents=True)
-    src = src_dir / "f.txt"
-    src.write_text("x")
-    dest_dir = tmp_path / "out"
-    dest_dir.mkdir()
-
-    res = tc.resolve_command(f"cp --parents {src} {dest_dir}", str(tmp_path))
-    assert res.status == "unresolved"
-    assert res.reason_class == "contract-unresolved"
-    assert "parents" in (res.reason or "")
-
-
-def test_named_always_refused_wrapper_examples_are_unresolved(tmp_path):
-    """N2, the exact examples named in the review finding: eval, xargs -a,
-    time -o, sudo --chdir, and flock -c are never recognized as strippable
-    wrappers -- each falls through to the ordinary unknown-program
-    refusal, on the exact invocation shapes the finding named."""
-    tc = _tool_contracts_module()
-
-    for cmd in (
-        "eval 'echo hi > out.txt'",
-        "xargs -a list.txt rm",
-        "time -o out.txt sleep 1",
-        "sudo --chdir=/tmp tee out.txt",
-        "flock -c 'echo hi > out.txt' lockfile",
-    ):
-        res = tc.resolve_command(cmd, str(tmp_path))
-        assert res.status == "unresolved", cmd
-        assert res.reason_class == "unknown-program", cmd
-
-
-def test_env_chdir_is_unresolved(tmp_path):
-    """N2: unlike the tokens above, `env` DOES have closed-wrapper handling
-    (a leading run of bare assignments) -- but ANY flag on it, --chdir
-    included, is refused explicitly rather than silently stepped past."""
-    tc = _tool_contracts_module()
-
-    res = tc.resolve_command("env --chdir=/tmp tee out.txt", str(tmp_path))
-    assert res.status == "unresolved"
-    assert res.reason_class == "contract-unresolved"
-    assert "env flag" in (res.reason or "")
-
-
-def test_nice_wrapped_write_resolves_on_stripped_segment(tmp_path):
-    tc = _tool_contracts_module()
-    resources = _resources_module()
-
-    dest = tmp_path / "out.txt"
-    res = tc.resolve_command(f"nice tee {dest}", str(tmp_path))
-    assert res.status == "resolved"
-    assert resources.FileResource(str(dest), "write") in res.resources
-
-
-def test_nohup_wraps_and_contributes_nohup_out(tmp_path):
-    tc = _tool_contracts_module()
-    resources = _resources_module()
-
-    res = tc.resolve_command("nohup ls -la", str(tmp_path))
-    assert res.status == "resolved"
-    assert resources.FileResource(str(tmp_path / "nohup.out"), "write") in res.resources
-
-
-def test_none_effect_named_examples_outside_safe_flags_are_unresolved(tmp_path):
-    """N3, the exact examples named in the review finding: `tree -o`,
-    `less -o`, and `file -C` each has a write-capable flag deliberately
-    excluded from its reviewed safe_flags allowlist."""
-    tc = _tool_contracts_module()
-
-    for cmd in ("tree -o out.txt", "less -o out.txt f.txt", "file -C f.txt"):
-        res = tc.resolve_command(cmd, str(tmp_path))
-        assert res.status == "unresolved", cmd
-        assert res.reason_class == "contract-unresolved", cmd
-        assert "safe-flag" in (res.reason or ""), cmd
-
-
-def test_sed_bsd_ambiguous_empty_suffix_is_unresolved(tmp_path):
-    """N4 (prior segment's fix): `sed -i ''` is ambiguous between GNU sed
-    (an empty in-place suffix) and BSD/macOS sed (a mandatory, here-empty,
-    suffix argument before the script) -- unresolved rather than guessing
-    which reading applies, since guessing wrong risks missing an embedded
-    w/W/e command hiding in whichever token is actually the script."""
-    tc = _tool_contracts_module()
-
-    target = tmp_path / "f.txt"
-    target.write_text("hi")
-    res = tc.resolve_command(f"sed -i '' 's/a/b/' {target}", str(tmp_path))
-    assert res.status == "unresolved"
-    assert res.reason_class == "contract-unresolved"
-    assert "ambiguous" in (res.reason or "")
+        if entry.safe_flags is not None and "*" in entry.safe_flags:
+            assert res.status == "resolved", cmd
+        else:
+            assert res.status == "unresolved", cmd
+            assert res.reason_class == "contract-unresolved", cmd

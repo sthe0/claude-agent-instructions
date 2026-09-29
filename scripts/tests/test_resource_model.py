@@ -964,13 +964,17 @@ def test_readonly_commands_need_no_resource(tmp_path):
     venue = tmp_path / "venue"
     venue.mkdir()
 
-    for cmd in ("ls -la", "cat foo.txt", "grep -n x foo.txt", "git status", "pwd"):
+    for cmd in ("ls -la", "cat foo.txt", "grep -n x foo.txt", "git status"):
         r = tc.resolve_command(cmd, str(venue))
         assert r.status == "resolved", cmd
         assert r.resources == [], cmd
 
 
 def test_sed_in_place_writes_file_plain_sed_does_not(tmp_path):
+    """sed's write target depends on -i's presence and on its own script
+    text (an embedded w/W/e command writes or executes regardless of -i);
+    neither is decidable from the closed command grammar alone, so both the
+    plain and the -i form are unresolved."""
     tc = _tool_contracts_module()
     venue = tmp_path / "venue"
     venue.mkdir()
@@ -978,13 +982,12 @@ def test_sed_in_place_writes_file_plain_sed_does_not(tmp_path):
     target.write_text("hi", encoding="utf-8")
 
     r_plain = tc.resolve_command(f"sed 's/hi/bye/' {target}", str(venue))
-    assert r_plain.status == "resolved"
-    assert r_plain.resources == []
+    assert r_plain.status == "unresolved"
+    assert r_plain.reason_class == "contract-unresolved"
 
     r_inplace = tc.resolve_command(f"sed -i 's/hi/bye/' {target}", str(venue))
-    assert r_inplace.status == "resolved"
-    assert all(res.kind == "file" for res in r_inplace.resources)
-    assert any(res.path == str(target) for res in r_inplace.resources)
+    assert r_inplace.status == "unresolved"
+    assert r_inplace.reason_class == "contract-unresolved"
 
 
 def test_find_exec_and_awk_are_unresolved(tmp_path):
@@ -992,20 +995,28 @@ def test_find_exec_and_awk_are_unresolved(tmp_path):
     venue = tmp_path / "venue"
     venue.mkdir()
 
+    # Each command below carries a non-literal marker of its own (`*` in the
+    # glob, `{`/`$` in the -exec block and the awk script) ahead of find's
+    # or awk's own program-effect status, so the command-shape check's
+    # residual-syntax refusal fires before either program is ever dispatched.
     r_find_exec = tc.resolve_command("find . -name '*.py' -exec rm {} \\;", str(venue))
     assert r_find_exec.status == "unresolved"
-    assert r_find_exec.reason_class == "contract-unresolved"
+    assert r_find_exec.reason_class == "residual-syntax"
 
     r_find_plain = tc.resolve_command("find . -name '*.py'", str(venue))
-    assert r_find_plain.status == "resolved"
-    assert r_find_plain.resources == []
+    assert r_find_plain.status == "unresolved"
+    assert r_find_plain.reason_class == "residual-syntax"
 
     r_awk = tc.resolve_command("awk '{print $1}' foo.txt", str(venue))
     assert r_awk.status == "unresolved"
-    assert r_awk.reason_class == "contract-unresolved"
+    assert r_awk.reason_class == "residual-syntax"
 
 
 def test_redirect_cp_tee_targets_become_file_resources(tmp_path):
+    """A generic shell redirect target and cp's/tee's own write targets are
+    all outside the reviewed closed command grammar now -- none of them
+    parses an arbitrary operand into a FileResource any more, despite this
+    test's own (unchanged, name-pinned) name."""
     tc = _tool_contracts_module()
     venue = tmp_path / "venue"
     venue.mkdir()
@@ -1015,17 +1026,17 @@ def test_redirect_cp_tee_targets_become_file_resources(tmp_path):
     redirected = venue / "out.txt"
 
     r_redirect = tc.resolve_command(f"echo hi > {redirected}", str(venue))
-    assert r_redirect.status == "resolved"
-    assert [res.path for res in r_redirect.resources] == [str(redirected)]
+    assert r_redirect.status == "unresolved"
+    assert r_redirect.reason_class == "contract-unresolved"
 
     r_cp = tc.resolve_command(f"cp {src} {dst}", str(venue))
-    assert r_cp.status == "resolved"
-    assert any(res.path == str(dst) for res in r_cp.resources)
+    assert r_cp.status == "unresolved"
+    assert r_cp.reason_class == "contract-unresolved"
 
     tee_target = venue / "tee_out.txt"
     r_tee = tc.resolve_command(f"tee {tee_target}", str(venue))
-    assert r_tee.status == "resolved"
-    assert any(res.path == str(tee_target) for res in r_tee.resources)
+    assert r_tee.status == "unresolved"
+    assert r_tee.reason_class == "contract-unresolved"
 
 
 def test_dollar_backtick_heredoc_subshell_segments_unresolved(tmp_path):
@@ -1057,7 +1068,11 @@ def test_negative_control_and_final_check_commands_resolved(tmp_path):
     )
     assert r_nc.status == "resolved"
 
-    r_final = tc.resolve_command('echo "OK stage 1"', str(venue))
+    # `echo` is outside the reviewed read-only program table (it was never
+    # in the whitelist's explicit list), so a final-check command built on
+    # it is unresolved like any other unreviewed program -- `git status` is
+    # the in-whitelist equivalent for a no-op final check.
+    r_final = tc.resolve_command("git status", str(venue))
     assert r_final.status == "resolved"
     assert r_final.resources == []
 
