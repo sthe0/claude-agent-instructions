@@ -8892,6 +8892,7 @@ COMMANDS = {
     "plan": cmd_plan,
     "plan-render": cmd_plan_render,
     "plan-grants": cmd_plan_grants,
+    "plan-resources": plan_resources.cmd_plan_resources,
     "submit-plan": cmd_submit_plan,
     "present-plan": cmd_present_plan,
     "confirm-delivery": cmd_confirm_delivery,
@@ -8968,7 +8969,7 @@ _SESSION_COMMANDS = (
     "question-enumerate", "question-enumerate-worker", "question-enumerate-escape",
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
-    "plan-render", "plan-grants", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
+    "plan-render", "plan-grants", "plan-resources", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "risk-accept",
     "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
@@ -9041,11 +9042,15 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("control", ("question-raise",),
      "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
      "grammar-bound name, never the prose --control of record-result/close"),
-    ("plan", ("plan-render", "plan-grants", "plan-review-delta", "submit-plan", "replan", "drive",
+    ("plan", ("plan-render", "plan-grants", "plan-resources", "plan-review-delta", "submit-plan", "replan", "drive",
               "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
               "question-rebind", "question-raise", "present-plan", "order-dispose"),
      "plan file path"),
+    ("corpus", ("plan-resources",), "directory/ies to scan for *.toml plans — file paths, not narrative"),
+    ("commands_file", ("plan-resources",), "path to a file of literal command lines — a file path"),
+    ("dump_commands", ("plan-resources",), "output file path for the collected command list"),
+    ("report_json", ("plan-resources",), "output file path for the JSON resolution report"),
     ("digest", ("question-enumerate-worker",),
      "plan content digest the launcher computed — the sidecar's key, passed down "
      "verbatim rather than a narrative"),
@@ -9364,6 +9369,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="TOML plan whose per-stage grant set (declared + derived) to render "
              "on demand (a projection, never written to disk)")
     sp.add_argument("--format", choices=["compact", "full", "json"], default="compact")
+    # Session-free read, same reason as plan-render's suppressed --session above.
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-resources"); sp.add_argument("--plan", required=False, default=None,
+        help="TOML plan whose per-stage typed resources (declared + derived rules, "
+             "add_dirs, spawn/landed shape) to resolve on demand -- plan mode")
+    sp.add_argument("--format", choices=["compact", "full", "json"], default="compact")
+    sp.add_argument("--corpus", nargs="+", default=None,
+        help="corpus mode: directory/ies to scan for *.toml plans, resolving every "
+             "declared+derived Bash rule found through tool_contracts.resolve_command")
+    sp.add_argument("--commands-file", default=None,
+        help="corpus mode: a file of literal command lines (one per line, '#'-comments "
+             "skipped) to resolve directly, in addition to any --corpus scan")
+    sp.add_argument("--dump-commands", default=None,
+        help="corpus mode: write every collected command line to this file")
+    sp.add_argument("--report-json", default=None,
+        help="corpus mode: write the full resolution report (JSON) to this file")
+    sp.add_argument("--require-no-unknown-program", action="store_true", default=False,
+        help="corpus mode: fail (non-ok Directive) if any command resolves to "
+             "reason_class=unknown-program")
     # Session-free read, same reason as plan-render's suppressed --session above.
     sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
     sp = add("submit-plan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)

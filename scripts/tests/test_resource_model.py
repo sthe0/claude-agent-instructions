@@ -838,3 +838,284 @@ def test_agent_path_audit_records_env_overrides(store, fixtures_dir, tmp_path, m
     entry = store.load(sid).history[-1]
     assert entry["order_approvals_dir_override"] == ledger_override
     assert entry["tool_contracts_override"] == contracts_override
+
+
+# --- Checkpoint (c): plan-resources CLI + contract-resolution edge cases -----
+
+
+def _plan_resources_module():
+    spec = importlib.util.find_spec("agentctl.plan_resources")
+    assert spec is not None, "agentctl.plan_resources module not found"
+    from agentctl import plan_resources
+
+    return plan_resources
+
+
+def test_readonly_commands_need_no_resource(tmp_path):
+    tc = _tool_contracts_module()
+    venue = tmp_path / "venue"
+    venue.mkdir()
+
+    for cmd in ("ls -la", "cat foo.txt", "grep -n x foo.txt", "git status", "pwd"):
+        r = tc.resolve_command(cmd, str(venue))
+        assert r.status == "resolved", cmd
+        assert r.resources == [], cmd
+
+
+def test_sed_in_place_writes_file_plain_sed_does_not(tmp_path):
+    tc = _tool_contracts_module()
+    venue = tmp_path / "venue"
+    venue.mkdir()
+    target = venue / "f.txt"
+    target.write_text("hi", encoding="utf-8")
+
+    r_plain = tc.resolve_command(f"sed 's/hi/bye/' {target}", str(venue))
+    assert r_plain.status == "resolved"
+    assert r_plain.resources == []
+
+    r_inplace = tc.resolve_command(f"sed -i 's/hi/bye/' {target}", str(venue))
+    assert r_inplace.status == "resolved"
+    assert all(res.kind == "file" for res in r_inplace.resources)
+    assert any(res.path == str(target) for res in r_inplace.resources)
+
+
+def test_find_exec_and_awk_are_unresolved(tmp_path):
+    tc = _tool_contracts_module()
+    venue = tmp_path / "venue"
+    venue.mkdir()
+
+    r_find_exec = tc.resolve_command("find . -name '*.py' -exec rm {} \\;", str(venue))
+    assert r_find_exec.status == "unresolved"
+    assert r_find_exec.reason_class == "declared-unresolved"
+
+    r_find_plain = tc.resolve_command("find . -name '*.py'", str(venue))
+    assert r_find_plain.status == "resolved"
+    assert r_find_plain.resources == []
+
+    r_awk = tc.resolve_command("awk '{print $1}' foo.txt", str(venue))
+    assert r_awk.status == "unresolved"
+    assert r_awk.reason_class == "declared-unresolved"
+
+
+def test_redirect_cp_tee_targets_become_file_resources(tmp_path):
+    tc = _tool_contracts_module()
+    venue = tmp_path / "venue"
+    venue.mkdir()
+    src = venue / "src.txt"
+    src.write_text("hi", encoding="utf-8")
+    dst = venue / "dst.txt"
+    redirected = venue / "out.txt"
+
+    r_redirect = tc.resolve_command(f"echo hi > {redirected}", str(venue))
+    assert r_redirect.status == "resolved"
+    assert [res.path for res in r_redirect.resources] == [str(redirected)]
+
+    r_cp = tc.resolve_command(f"cp {src} {dst}", str(venue))
+    assert r_cp.status == "resolved"
+    assert any(res.path == str(dst) for res in r_cp.resources)
+
+    tee_target = venue / "tee_out.txt"
+    r_tee = tc.resolve_command(f"tee {tee_target}", str(venue))
+    assert r_tee.status == "resolved"
+    assert any(res.path == str(tee_target) for res in r_tee.resources)
+
+
+def test_dollar_backtick_heredoc_subshell_segments_unresolved(tmp_path):
+    tc = _tool_contracts_module()
+    venue = tmp_path / "venue"
+    venue.mkdir()
+
+    for cmd in ("echo $(date)", "echo `date`", "(cd /tmp && ls)"):
+        r = tc.resolve_command(cmd, str(venue))
+        assert r.status == "unresolved", cmd
+        assert r.reason_class == "nested-execution", cmd
+
+    # A `$(...)` INSIDE a heredoc body is invisible to the nested-execution
+    # check -- the body is stripped before that check ever runs -- so it
+    # must never be classified `reason_class="nested-execution"`.
+    heredoc_cmd = "cat <<'EOF'\nprint($(date))\nEOF"
+    r_heredoc = tc.resolve_command(heredoc_cmd, str(venue))
+    assert not (r_heredoc.status == "unresolved" and r_heredoc.reason_class == "nested-execution")
+
+
+def test_negative_control_and_final_check_commands_resolved(tmp_path):
+    tc = _tool_contracts_module()
+    venue = tmp_path / "venue"
+    venue.mkdir()
+
+    r_nc = tc.resolve_command(
+        "pytest -q scripts/tests/test_resource_model.py -p no:cacheprovider", str(venue)
+    )
+    assert r_nc.status == "resolved"
+
+    r_final = tc.resolve_command('echo "OK stage 1"', str(venue))
+    assert r_final.status == "resolved"
+    assert r_final.resources == []
+
+
+def test_pytest_resolves_to_venue_subtree(tmp_path):
+    tc = _tool_contracts_module()
+    venue = tmp_path / "venue"
+    venue.mkdir()
+
+    r = tc.resolve_command("pytest -q scripts/tests/test_resource_model.py", str(venue))
+    assert r.status == "resolved"
+    assert len(r.resources) == 1
+    assert r.resources[0].kind == "file"
+    assert r.resources[0].path == str(venue)
+
+
+def test_contract_table_loader_one_entry_per_program(tmp_path):
+    tc = _tool_contracts_module()
+    dup_table = tmp_path / "dup_contracts.toml"
+    dup_table.write_text(
+        '[[program]]\nname = "ls"\neffect = "none"\n\n'
+        '[[program]]\nname = "ls"\neffect = "none"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        tc.load_contract_table(str(dup_table))
+
+
+def _bare_stage(state_mod, index, *, executor="in_thread", landed=None):
+    verify_kind = state_mod.CheckKind.LANDED.value if landed is not None else state_mod.CheckKind.SHELL.value
+    return state_mod.Stage(
+        index=index, title=f"s{index}",
+        subject=state_mod.Subject(material="m", result="img"),
+        means=state_mod.Means(means="Edit", method="do"),
+        actor=state_mod.Actor(executor=executor),
+        criterion=state_mod.Criterion(
+            criterion_type=state_mod.CriterionType.MEASURABLE.value, done_criterion="c",
+            verify_kind=verify_kind, landed=landed,
+        ),
+        outcome=state_mod.Outcome(status=state_mod.StageStatus.ACTIVE.value),
+    )
+
+
+def test_spawn_and_landed_yield_specialist_and_vcs_ref():
+    state_mod = _state_module()
+    plan_resources = _plan_resources_module()
+    resources = _resources_module()
+
+    spawn_stage = _bare_stage(state_mod, 1, executor="spawn:developer")
+    spawn_resources = plan_resources._stage_spawn_resources(spawn_stage)
+    assert len(spawn_resources) == 1
+    assert isinstance(spawn_resources[0], resources.SpecialistResource)
+    assert spawn_resources[0].role == "developer"
+    assert plan_resources._stage_landed_resources(spawn_stage) == []
+
+    landed = state_mod.LandedSpec(target="main", remote="origin", delivered_stage=0)
+    landed_stage = _bare_stage(state_mod, 2, landed=landed)
+    landed_resources = plan_resources._stage_landed_resources(landed_stage)
+    assert len(landed_resources) == 1
+    assert isinstance(landed_resources[0], resources.VcsRefResource)
+    assert landed_resources[0].op == "land"
+    assert plan_resources._stage_spawn_resources(landed_stage) == []
+
+    plain_stage = _bare_stage(state_mod, 3)
+    assert plan_resources._stage_spawn_resources(plain_stage) == []
+    assert plan_resources._stage_landed_resources(plain_stage) == []
+
+
+def test_landed_resource_does_not_cover_push_grant():
+    state_mod = _state_module()
+    plan_resources = _plan_resources_module()
+    resources = _resources_module()
+
+    landed = state_mod.LandedSpec(target="main", remote="origin", delivered_stage=0)
+    landed_stage = _bare_stage(state_mod, 1, landed=landed)
+    landed_resources = plan_resources._stage_landed_resources(landed_stage)
+    assert len(landed_resources) == 1
+    landed_res = landed_resources[0]
+    assert landed_res.op == "land"
+
+    push_grant = resources.VcsRefResource("origin", "main", "push")
+    assert not push_grant.covers(landed_res)
+    assert not landed_res.covers(push_grant)
+
+
+def test_executed_script_directory_hash_capped_falls_back_to_opaque(tmp_path):
+    tc = _tool_contracts_module()
+    venue = tmp_path / "venue"
+    venue.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    script = outside / "main.py"
+    script.write_text("print('hi')\n", encoding="utf-8")
+    for i in range(70):
+        (outside / f"sibling_{i}.txt").write_text("x", encoding="utf-8")
+
+    r = tc.resolve_command(f"python3 {script}", str(venue))
+    assert r.status == "unresolved"
+    assert r.identity[-1] == ("opaque",)
+
+
+def test_covers_and_identity_compare_realpath(tmp_path):
+    resources = _resources_module()
+
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    (real_dir / "f.txt").write_text("hi", encoding="utf-8")
+    link_dir = tmp_path / "link"
+    link_dir.symlink_to(real_dir)
+
+    approved = resources.FileResource(str(real_dir), "write")
+    assert approved.covers(resources.FileResource(str(link_dir / "f.txt"), "write"))
+
+    approved_via_link = resources.FileResource(str(link_dir), "write")
+    assert approved_via_link == resources.FileResource(str(real_dir), "write")
+
+
+def test_force_and_delete_push_not_covered_by_push(tmp_path):
+    tc = _tool_contracts_module()
+    venue = tmp_path / "venue"
+    venue.mkdir()
+
+    r_force = tc.resolve_command("git push --force origin main", str(venue))
+    assert r_force.status == "unresolved"
+    assert r_force.reason_class == "force-or-delete-push"
+
+    r_delete = tc.resolve_command("git push --delete origin main", str(venue))
+    assert r_delete.status == "unresolved"
+    assert r_delete.reason_class == "force-or-delete-push"
+
+    r_force_lease = tc.resolve_command("git push --force-with-lease origin main", str(venue))
+    assert r_force_lease.status == "unresolved"
+    assert r_force_lease.reason_class == "force-or-delete-push"
+
+    # Zero-refspec push: never resolves to an empty-covered set.
+    r_zero = tc.resolve_command("git push origin", str(venue))
+    assert r_zero.status == "unresolved"
+    assert r_zero.reason_class == "contract-unresolved"
+
+    r_ok = tc.resolve_command("git push origin main", str(venue))
+    assert r_ok.status == "resolved"
+    assert len(r_ok.resources) == 1
+    assert r_ok.resources[0].op == "push"
+
+
+def test_plan_resources_cli_lists_typed_resources(fixtures_dir):
+    from argparse import Namespace
+
+    plan_resources = _plan_resources_module()
+
+    args = Namespace(
+        plan=str(fixtures_dir / "plan_two_stage.toml"),
+        format="json", corpus=None, commands_file=None,
+        dump_commands=None, report_json=None, require_no_unknown_program=False,
+    )
+    d = plan_resources.cmd_plan_resources(args)
+    assert d.ok
+    assert "stages" in d.data
+    stage_1 = d.data["stages"]["1"]
+    for key in ("rules", "add_dirs", "spawn", "landed", "stage_effects"):
+        assert key in stage_1
+
+    args_text = Namespace(
+        plan=str(fixtures_dir / "plan_two_stage.toml"),
+        format="compact", corpus=None, commands_file=None,
+        dump_commands=None, report_json=None, require_no_unknown_program=False,
+    )
+    d_text = plan_resources.cmd_plan_resources(args_text)
+    assert d_text.ok
+    assert "# Plan resources" in d_text.detail

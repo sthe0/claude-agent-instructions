@@ -13,13 +13,18 @@ computation all three call.
 """
 from __future__ import annotations
 
+import dataclasses
+import json
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from . import grants as _grants
 from . import resources as _resources
-from .plan import PlanDoc, _effective_grants_for_stage, _venue_for
+from .directive import Directive
+from .plan import PlanDoc, _effective_grants_for_stage, _venue_for, load_plan
 from .state import CheckKind, Stage
-from .tool_contracts import Resolution, resolve_command
+from .tool_contracts import Resolution, load_contract_table, resolve_command
 
 
 def resolve_rule_grant(rule: str, venue: str) -> Resolution:
@@ -125,3 +130,165 @@ def compute_stage_resources(stage: Stage, venue: str) -> StageResources:
 def compute_plan_resources(doc: PlanDoc, *, venue: str | None = None) -> list[StageResources]:
     v = venue if venue is not None else _venue_for(doc)
     return [compute_stage_resources(s, v) for s in doc.stages]
+
+
+# --- `agentctl plan-resources` CLI: plan mode + corpus mode ----------------
+#
+# Plan mode (`--plan P`) renders the SAME per-rule detail `compute_stage_resources`
+# computes, but keeps each rule's own Resolution intact (status, reason_class,
+# resources, identity) rather than collapsing an unresolved one into the lossy
+# `identity or (reason_class, rule)` tuple that aggregation uses for coverage
+# checks -- a CLI inspector needs the full picture, a coverage check only needs
+# a hashable key.
+#
+# Corpus mode (`--corpus DIR...` / `--commands-file F`) resolves literal command
+# TEXTS directly through `tool_contracts.resolve_command`, the same function
+# dispatch/resolve-permission use for a plan's own Bash rules -- so a script's
+# effects-registry entry (e.g. land-branch.py) resolves identically whether the
+# command reached this module via a plan's declared grant or via a corpus scan.
+
+
+def _resource_to_dict(res: _resources.Resource) -> dict:
+    return dataclasses.asdict(res)
+
+
+def _resolution_to_dict(res: Resolution, *, label: str, label_key: str = "rule") -> dict:
+    return {
+        label_key: label,
+        "status": res.status,
+        "resources": [_resource_to_dict(r) for r in res.resources],
+        "reason_class": res.reason_class,
+        "reason": res.reason,
+        "identity": list(res.identity) if res.identity is not None else None,
+    }
+
+
+def _plan_resources_json(doc: PlanDoc, venue: str) -> dict:
+    stages = {}
+    for s in doc.stages:
+        effective = _effective_grants_for_stage(s, venue)
+        rules = [
+            _resolution_to_dict(resolve_rule_grant(rg.rule, venue), label=rg.rule)
+            for rg in effective.allow
+        ]
+        add_dirs = [
+            _resolution_to_dict(
+                resolve_add_dir_grant(ad.path, ad.mode), label=ad.path, label_key="path"
+            )
+            for ad in effective.add_dirs
+        ]
+        stages[str(s.index)] = {
+            "rules": rules,
+            "add_dirs": add_dirs,
+            "spawn": [_resource_to_dict(r) for r in _stage_spawn_resources(s)],
+            "landed": [_resource_to_dict(r) for r in _stage_landed_resources(s)],
+            "stage_effects": [dataclasses.asdict(e) for e in (getattr(s, "effects", []) or [])],
+        }
+    return {"stages": stages}
+
+
+def _render_plan_resources_text(data: dict) -> str:
+    lines = ["# Plan resources"]
+    for idx, stage in sorted(data["stages"].items(), key=lambda kv: int(kv[0])):
+        lines.append(f"\n## Stage {idx}")
+        for r in stage["rules"]:
+            if r["status"] == "resolved":
+                kinds = ", ".join(res["kind"] for res in r["resources"]) or "(none)"
+                lines.append(f"- resolved: `{r['rule']}` -> {kinds}")
+            else:
+                lines.append(f"- unresolved ({r['reason_class']}): `{r['rule']}`")
+        for r in stage["spawn"]:
+            lines.append(f"- spawn -> specialist:{r['role']}")
+        for r in stage["landed"]:
+            lines.append(f"- landed -> vcs_ref:{r['remote']}/{r['ref']}/{r['op']}")
+    return "\n".join(lines) + "\n"
+
+
+def _iter_commands_file(path: str) -> list[str]:
+    out = []
+    for raw in Path(path).read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        out.append(line)
+    return out
+
+
+def _iter_corpus_commands(corpus_dirs: list[str]) -> list[tuple[str, str, str]]:
+    """Best-effort: walk each corpus dir for `*.toml` plan files and yield
+    (source-path, venue, Bash-command-text) for every declared+derived Bash
+    rule across every stage. A file that fails to load as a plan is skipped
+    outright -- the corpus may hold fixtures that are deliberately not full
+    plans, and this is a read-only inspection, not a validator."""
+    out: list[tuple[str, str, str]] = []
+    for root in corpus_dirs:
+        for p in sorted(Path(root).rglob("*.toml")):
+            try:
+                doc = load_plan(str(p), strict=False)
+            except Exception:
+                continue
+            venue = _venue_for(doc) or str(Path.cwd())
+            for s in doc.stages:
+                effective = _effective_grants_for_stage(s, venue)
+                for rg in effective.allow:
+                    parsed = _grants.rule_program_and_arg(rg.rule)
+                    if parsed and parsed[0] == "Bash" and not parsed[1].endswith(":*"):
+                        out.append((str(p), venue, parsed[1]))
+    return out
+
+
+def _cmd_plan_resources_corpus(args) -> Directive:
+    venue = str(Path.cwd())
+    contract_path = os.environ.get("AGENTCTL_TOOL_CONTRACTS")
+    table = load_contract_table(contract_path)
+
+    commands: list[tuple[str, str, str]] = []
+    commands_file = getattr(args, "commands_file", None)
+    if commands_file:
+        commands.extend(
+            ("(commands-file)", venue, c) for c in _iter_commands_file(commands_file)
+        )
+    corpus = getattr(args, "corpus", None) or []
+    if corpus:
+        commands.extend(_iter_corpus_commands(corpus))
+
+    dump_path = getattr(args, "dump_commands", None)
+    if dump_path:
+        Path(dump_path).write_text(
+            "".join(f"{cmd}\n" for _src, _v, cmd in commands), encoding="utf-8"
+        )
+
+    results = []
+    unknown_programs: set[str] = set()
+    for source, cmd_venue, cmd in commands:
+        res = resolve_command(cmd, cmd_venue, contract_table=table)
+        entry = _resolution_to_dict(res, label=cmd, label_key="command")
+        entry["source"] = source
+        results.append(entry)
+        if res.status == "unresolved" and res.reason_class == "unknown-program":
+            unknown_programs.add(cmd)
+
+    data = {"results": results, "unknown_programs": sorted(unknown_programs)}
+    report_path = getattr(args, "report_json", None)
+    if report_path:
+        Path(report_path).write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+
+    ok = not (getattr(args, "require_no_unknown_program", False) and unknown_programs)
+    text = json.dumps(data, indent=2, sort_keys=True)
+    return Directive(ok, "(render)", "inspect", text, data=data)
+
+
+def cmd_plan_resources(args, *, store=None, runner=None) -> Directive:
+    if getattr(args, "commands_file", None) or getattr(args, "corpus", None):
+        return _cmd_plan_resources_corpus(args)
+
+    doc = load_plan(args.plan)
+    venue = _venue_for(doc)
+    data = _plan_resources_json(doc, venue)
+    fmt = getattr(args, "format", "compact") or "compact"
+    text = (
+        json.dumps(data, indent=2, sort_keys=True)
+        if fmt == "json"
+        else _render_plan_resources_text(data)
+    )
+    return Directive(True, "(render)", "inspect", text, data=data)
