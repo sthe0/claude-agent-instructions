@@ -73,7 +73,7 @@ class ToolUse:
     line_no: int
     stop_kind: str
     stop_text: str | None
-    # Same "cwd" field as `BashToolUse.cwd` -- see its docstring.
+    # Same "cwd" field as `BashToolUse.cwd` -- see the comment on that field.
     cwd: str = ""
 
 

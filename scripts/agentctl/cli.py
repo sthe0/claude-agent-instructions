@@ -5731,40 +5731,102 @@ def _consume_once_grants(state: SessionState, stage_index: int) -> None:
             entry["consumed"] = True
 
 
+def _split_words_with_spans(text: str) -> list[tuple[str, int, int]] | None:
+    """Split a single, separator-free command statement into its whitespace-
+    delimited words. Each entry is `(unquoted_value, start, end)`, where
+    `(start, end)` is the word's span in the ORIGINAL text, quotes and
+    backslash-escapes included -- so a caller can rewrite only the words it
+    actually changes and leave every other word's original spelling
+    (quoting, escaping) byte-identical. `None` on unbalanced quoting."""
+    n = len(text)
+    i = 0
+    words: list[tuple[str, int, int]] = []
+    while i < n:
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n:
+            break
+        start = i
+        buf: list[str] = []
+        while i < n and not text[i].isspace():
+            c = text[i]
+            if c in "'\"":
+                quote = c
+                i += 1
+                while i < n and text[i] != quote:
+                    if quote == '"' and text[i] == "\\" and i + 1 < n and text[i + 1] in ('"', "\\", "$", "`"):
+                        buf.append(text[i + 1])
+                        i += 2
+                        continue
+                    buf.append(text[i])
+                    i += 1
+                if i >= n:
+                    return None
+                i += 1
+                continue
+            if c == "\\" and i + 1 < n:
+                buf.append(text[i + 1])
+                i += 2
+                continue
+            buf.append(c)
+            i += 1
+        words.append(("".join(buf), start, i))
+    return words
+
+
 def _rebase_bash_command_to_venue(command: str, drifted_cwd: str, venue: str) -> str | None:
     """Rewrite `command` as if it had been run from `venue` instead of
-    `drifted_cwd`: tokenize it, and for each token that names a path actually
-    existing under `drifted_cwd`, replace it with that same path's spelling
-    relative to `venue`. Tokens that don't resolve to an existing path there
-    (verbs, flags, bare arguments) are left untouched. Returns None when the
-    command doesn't tokenize (unbalanced quoting) or when rebasing changed
-    nothing -- a no-op rewrite is never worth re-checking against `coverage`.
+    `drifted_cwd`: for each RELATIVE word that names a path actually existing
+    under `drifted_cwd`, replace just that word's span with that same path's
+    spelling relative to `venue`. Every other word -- verbs, flags, bare
+    arguments, and any word that is already an absolute path -- is left
+    byte-identical, quoting and escaping included. Returns None when:
+    `command` is not a single top-level statement (a compound command's
+    OTHER segment may be a genuine miss that this function has no way to
+    check -- see finding 1, round 4); it doesn't tokenize (unbalanced
+    quoting); or rebasing changed nothing (a no-op rewrite is never worth
+    re-checking against `coverage`).
+
+    An absolute word is skipped on purpose (finding 2, round 4): rewriting
+    `<venue>/scripts/x` to `scripts/x` would call a command covered under its
+    RELATIVE spelling even though the child actually typed the absolute one,
+    and `_segment_covered`'s own docstring says the two spellings are not
+    equivalent -- that would name the cwd as the cause when the real cause is
+    the absolute spelling, which a venue-launched child would still have hit.
 
     Text rewrite, not path resolution, by design: `grants.grant_covers_call`
     matches Bash rules against the LITERAL command string (round 3, see
     `_segment_covered`), so the only way to ask "would this be covered from
     the venue" is to produce the literal text a venue-launched child would
-    actually have typed, then run it through that same matcher."""
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
+    actually have typed, then run it through that same matcher. Editing
+    spans in place (rather than `shlex.split` + `shlex.join`, the prior
+    approach) is what keeps an unchanged word's original quoting intact --
+    `shlex.join` re-quotes by its own minimal-quoting heuristic, which drops
+    a literal quote a derived grant still expects (finding 3, round 4)."""
+    if _grants.top_level_segment_count(command) != 1:
         return None
-    if not tokens:
+    words = _split_words_with_spans(command)
+    if not words:
         return None
-    changed = False
-    rebased: list[str] = []
-    for tok in tokens:
-        candidate = os.path.normpath(os.path.join(drifted_cwd, tok))
-        if os.path.exists(candidate):
-            rel = os.path.relpath(candidate, venue)
-            if not rel.startswith(".."):
-                rebased.append(rel)
-                changed = True
-                continue
-        rebased.append(tok)
-    if not changed:
+    real_drifted = os.path.realpath(drifted_cwd)
+    real_venue = os.path.realpath(venue)
+    edits: list[tuple[int, int, str]] = []
+    for word, start, end in words:
+        if os.path.isabs(word):
+            continue
+        candidate = os.path.realpath(os.path.join(real_drifted, word))
+        if not os.path.exists(candidate):
+            continue
+        rel = os.path.relpath(candidate, real_venue)
+        if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+            continue
+        edits.append((start, end, shlex.quote(rel)))
+    if not edits:
         return None
-    return shlex.join(rebased)
+    rebased = command
+    for start, end, replacement in sorted(edits, key=lambda e: e[0], reverse=True):
+        rebased = rebased[:start] + replacement + rebased[end:]
+    return rebased
 
 
 def _classify_transcript_denials(
@@ -5776,7 +5838,7 @@ def _classify_transcript_denials(
     materialization failed to carry it), uncovered -> either `cwd_drift` (a Bash
     call denied only because the child ran it from a subdirectory of the stage
     venue -- rebasing the command's path-like tokens back to the venue would make
-    it coverable under the SAME matcher, R6) or `planning_misses` (a genuine miss
+    it coverable under the SAME matcher) or `planning_misses` (a genuine miss
     the child correctly worked around without asking). A stop already present in
     any of the three ledgers by `tool_use_id` is never re-appended, so a later
     PERMISSION-REQUEST self-report for the SAME call doesn't double-count it --
@@ -5816,7 +5878,7 @@ def _classify_transcript_denials(
             state.materialization_defects.append({**row_base, "evidence": "transcript"})
             continue
         if use.tool_name == "Bash" and use.cwd and venue and \
-                os.path.normpath(use.cwd) != os.path.normpath(venue):
+                os.path.realpath(use.cwd) != os.path.realpath(venue):
             rebased = _rebase_bash_command_to_venue(use.command, use.cwd, venue)
             if rebased and _grants.grant_covers_call(coverage, "Bash", {"command": rebased}):
                 state.cwd_drift.append({**row_base, "cwd": use.cwd, "rebased_command": rebased})
@@ -6089,7 +6151,7 @@ def cmd_grant_stats(args, *, store: StateStore, runner: Runner | None = None) ->
     settings_drift (a stage's live settings document changed underneath the
     spawn), and cwd_drift (a Bash denial that's only uncovered because the child
     ran it from a subdirectory of the stage venue -- rebasing it back to the
-    venue would be covered, R6). A pure read of state.planning_misses/
+    venue would be covered). A pure read of state.planning_misses/
     materialization_defects/settings_drift/cwd_drift -- see state.py's schema-39
     field block for each row's shape."""
     state = _require(store, args.session)

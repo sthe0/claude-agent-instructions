@@ -685,6 +685,17 @@ def _verify_command_segments(verify_command: str) -> list[str]:
     return [seg for seg in raw if not _is_unresolvable_segment(seg)]
 
 
+def top_level_segment_count(command: str) -> int | None:
+    """Public wrapper on `_raw_top_level_segments`, for a caller outside this
+    module (`cli.py`'s `_rebase_bash_command_to_venue`) that only needs to know
+    whether `command` is a single top-level statement, not the segment text
+    itself. `None` propagates the same unbalanced-quote signal."""
+    segments = _raw_top_level_segments(command)
+    if segments is None:
+        return None
+    return len(segments)
+
+
 def _in_venue(path: str, venue: str) -> bool:
     """True iff `path`, joined against `venue` and normalized, resolves to
     somewhere inside `venue`. An absolute `path` is never venue-local. A

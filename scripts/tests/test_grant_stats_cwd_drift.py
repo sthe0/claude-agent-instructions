@@ -217,7 +217,10 @@ def test_edit_denial_never_drift(store, fixtures_dir, tmp_path):
 def test_uncovered_at_venue_stays_miss(store, fixtures_dir, tmp_path):
     """cwd equal to the venue itself (no drift at all) -- an uncovered
     command stays a planning_miss; the drift branch never fires because cwd
-    doesn't differ from the venue."""
+    doesn't differ from the venue. Characterization test: `other.py` is
+    never created, so the command is uncovered (and thus a planning_miss)
+    regardless of whether the cwd-equals-venue guard runs at all -- it pins
+    the outcome rather than discriminating the guard's own removal."""
     sid = "drift-at-venue-stays-miss"
     venue = _venue_session(store, fixtures_dir, tmp_path, sid)
 
@@ -270,7 +273,10 @@ def test_covered_drifted_stays_materialization_defect(store, fixtures_dir, tmp_p
 def test_no_cwd_stays_miss(store, fixtures_dir, tmp_path):
     """No `cwd` field on the assistant line at all (parses to "" per
     `transcript_stops.py`) -- the drift branch's "cwd is non-empty"
-    precondition guards this; stays a planning_miss."""
+    precondition guards this; stays a planning_miss. Characterization test:
+    the raw command text (`python3 widget.py --flag`, no cwd to rebase from)
+    is uncovered either way, so it pins the outcome rather than
+    discriminating the empty-cwd guard's own removal."""
     sid = "drift-no-cwd-stays-miss"
     venue = _venue_session(
         store, fixtures_dir, tmp_path, sid,
@@ -417,3 +423,119 @@ def test_legacy_state_dict_without_cwd_drift_loads():
     data.pop("cwd_drift", None)
     restored = SessionState.from_dict(data)
     assert restored.cwd_drift == []
+
+
+def test_drift_compound_command_with_ungranted_segment_stays_miss(store, fixtures_dir, tmp_path):
+    """Round-4 review finding 1 (blocking): a compound command whose FIRST
+    segment rebases-and-covers must not let a later, genuinely-ungranted
+    segment escape as `cwd_drift`. `python3 widget.py && rm -rf other` is
+    denied at `<venue>/scripts`; the first segment alone would rebase to the
+    granted `python3 scripts/widget.py`, but the second names no grant at
+    all. The whole call must stay a `planning_miss` -- `top_level_segment_count`
+    refuses to rebase anything but a single top-level statement."""
+    sid = "drift-compound-stays-miss"
+    venue = _venue_session(
+        store, fixtures_dir, tmp_path, sid,
+        grants_toml='[stage.grants]\nallow = ["Bash(python3 scripts/widget.py:*)"]\n',
+    )
+    (venue / "scripts").mkdir()
+    (venue / "scripts" / "widget.py").write_text("# widget\n")
+
+    transcript = tmp_path / "t-compound.jsonl"
+    _write_denial_transcript(transcript, [{
+        "tool_use_id": "toolu_drift_compound",
+        "command": "python3 widget.py && rm -rf other",
+        "cwd": str(venue / "scripts"),
+    }])
+
+    state = store.load(sid)
+    stage = state.active_stage()
+    coverage = cli._effective_stage_grants(state, stage.index)
+    cli._classify_transcript_denials(state, stage, coverage, str(transcript))
+
+    assert not state.cwd_drift
+    assert len(state.planning_misses) == 1
+    assert state.planning_misses[0]["tool_use_id"] == "toolu_drift_compound"
+
+
+def test_rebase_leaves_absolute_path_word_untouched(store, fixtures_dir, tmp_path):
+    """Round-4 review finding 2 (should-fix): an absolute-path word that
+    happens to resolve under the drifted cwd must NOT be rewritten to its
+    venue-relative spelling -- the cause of the denial is the absolute
+    spelling, not the cwd, and a venue-launched child typing the same
+    absolute text would still be denied. Only the venue-relative spelling is
+    granted here, so the absolute-spelled call must stay a `planning_miss`."""
+    sid = "drift-absolute-path-untouched"
+    venue = _venue_session(
+        store, fixtures_dir, tmp_path, sid,
+        grants_toml='[stage.grants]\nallow = ["Bash(python3 scripts/widget.py:*)"]\n',
+    )
+    (venue / "scripts").mkdir()
+    (venue / "scripts" / "widget.py").write_text("# widget\n")
+
+    transcript = tmp_path / "t-absolute.jsonl"
+    _write_denial_transcript(transcript, [{
+        "tool_use_id": "toolu_drift_abs",
+        "command": f"python3 {venue / 'scripts' / 'widget.py'}",
+        "cwd": str(venue / "scripts"),
+    }])
+
+    state = store.load(sid)
+    stage = state.active_stage()
+    coverage = cli._effective_stage_grants(state, stage.index)
+    cli._classify_transcript_denials(state, stage, coverage, str(transcript))
+
+    assert not state.cwd_drift
+    assert len(state.planning_misses) == 1
+    assert state.planning_misses[0]["tool_use_id"] == "toolu_drift_abs"
+
+
+def test_rebase_preserves_quoting_of_untouched_word(tmp_path):
+    """Round-4 review finding 3 (should-fix): `_rebase_bash_command_to_venue`
+    edits only the words it actually changes, in place, so an untouched
+    word's original quoting survives byte-for-byte -- unlike the prior
+    `shlex.split`/`shlex.join` round trip, which re-quotes every word by its
+    own minimal-quoting heuristic and drops a literal quote a derived grant
+    still expects. `grep -q 'cwd_drift' README.md` from `<venue>/scripts`
+    must rebase to `grep -q 'cwd_drift' scripts/README.md` -- the quoted
+    search word untouched, only the path word rewritten."""
+    from agentctl import cli as _cli
+
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "README.md").write_text("cwd_drift\n")
+
+    rebased = _cli._rebase_bash_command_to_venue(
+        "grep -q 'cwd_drift' README.md", str(scripts_dir), str(tmp_path),
+    )
+    assert rebased == "grep -q 'cwd_drift' scripts/README.md"
+
+
+def test_rebase_resolves_symlinked_venue_before_comparing(tmp_path):
+    """Round-4 review finding 4 (should-fix): the transcript's recorded `cwd`
+    and the stage `venue` are resolved via `os.path.realpath` before the
+    containment check, so a symlink hop between the two spellings of the
+    same directory doesn't make a genuine drift look like it escapes the
+    venue. `real_dir` is the actual venue; `sym_dir` is a symlink to it, the
+    spelling `state.repo_root` would carry when the plan names the venue via
+    the link. The transcript records `real_dir/scripts` as `cwd` -- the
+    resolved spelling a harness can produce (finding 4's own example is
+    `/private/tmp/...` vs `/tmp/...` on macOS).
+
+    Without realpath, `relpath(real_dir/scripts/widget.py, sym_dir)` walks
+    off through `..` (the two spellings share no path components), so the
+    call incorrectly stays a `planning_miss`. With realpath, both resolve to
+    `real_dir` and the rebase produces the venue-relative text a grant there
+    covers."""
+    from agentctl import cli as _cli
+
+    real_dir = tmp_path / "real-venue"
+    (real_dir / "scripts").mkdir(parents=True)
+    (real_dir / "scripts" / "widget.py").write_text("# widget\n")
+    sym_dir = tmp_path / "sym-venue"
+    sym_dir.symlink_to(real_dir)
+
+    rebased = _cli._rebase_bash_command_to_venue(
+        "python3 widget.py", str(real_dir / "scripts"), str(sym_dir),
+    )
+    assert rebased == "python3 scripts/widget.py"
