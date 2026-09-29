@@ -2028,6 +2028,56 @@ def plan_meta_digest(doc: PlanDoc) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def order_digest(doc: PlanDoc) -> str:
+    """The order-approvals ledger key (`order_approvals.py`) — narrower than
+    `plan_meta_digest`/`order_place` on purpose: it excludes every DERIVED
+    order field (`coverage`, each requirement's `derivation`, `malformed`,
+    `requirements_dropped`) because those describe how the order is
+    currently BEING SERVED, not what the customer actually ordered. Two
+    plans serving the identical order through a different coverage map (a
+    stage renamed, a control moved) must key to the SAME ledger entry, or a
+    customer's earlier approval would silently stop covering a later,
+    functionally-identical replan (K5's failure mode one level up: not a
+    reused task_id, but a reused order re-derived into a new digest).
+
+    Requirements ride in as an (id, text) SET (`frozenset`, not the
+    `order_place` tuple's insertion-ordered list) — reordering the
+    `[[meta.order.requirements]]` table in the TOML changes nothing a
+    customer approved, so it must not change this digest either.
+
+    `doc.meta.goal` is the one field this shares with `plan_meta_digest`
+    that is NOT part of `order_place` — included directly because the goal
+    is part of what was ordered, same as `done_criterion`.
+
+    `repo_root` is deliberately ABSENT (unlike `plan_meta_digest`): a plan
+    reused against a different checkout of the same order is still the same
+    order, and a self-grant must not re-ask merely because `repo_root`
+    moved."""
+    order = doc.meta.order
+    if order is None:
+        customer_id = customer = functional_place = ""
+        requires_traceability = False
+        requirement_set: frozenset = frozenset()
+    else:
+        customer_id = order.customer_id
+        customer = order.customer
+        functional_place = order.functional_place
+        requires_traceability = order.requires_traceability
+        requirement_set = frozenset((r.id, r.text) for r in order.requirements)
+    payload = repr((
+        doc.meta.goal,
+        doc.meta.done_criterion,
+        doc.meta.criterion_type,
+        doc.meta.weight_class,
+        customer_id,
+        customer,
+        functional_place,
+        requires_traceability,
+        tuple(sorted(requirement_set)),
+    ))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def plan_meta_element_key(doc: PlanDoc, element: str) -> str:
     """Digest of a single plan-level field a Question can target — 'goal' or
     'done_criterion' — narrower than `plan_meta_digest`, which bundles goal,

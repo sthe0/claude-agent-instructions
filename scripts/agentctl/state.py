@@ -81,6 +81,19 @@ class Route(str, Enum):
     SPAWN = "SPAWN"          # substantive: planner/developer specialists
 
 
+# The reserved actor identity for engine-authored acts — `resolve-permission
+# --by agent`'s self-grant path (order_approvals.approved_resources coverage
+# check, never a customer-authored write to the ledger itself) and nothing
+# else. Never a valid `cmd_approve --by` (an approval must be customer-
+# authored to mean anything — self-approval would let the engine stamp its
+# own permission) and never a valid `[meta.order].customer_id` (a plan
+# claiming the engine AS its own customer is the same defect from the order
+# side — submission.py's `_order_violations` refuses it). Compared
+# case-foldedly everywhere it is checked, so `Agent`/`AGENT`/`agent` are all
+# the same reserved identity.
+AGENT_ACTOR = "agent"
+
+
 class CriterionType(str, Enum):
     MEASURABLE = "measurable"
     ACCEPTANCE_REVIEW = "acceptance_review"

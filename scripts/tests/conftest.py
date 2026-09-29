@@ -302,6 +302,18 @@ def _isolate_task_accumulator(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_order_approvals(tmp_path, monkeypatch):
+    """Redirect the order-keyed permission-approvals ledger to tmp for the
+    suite at large, the same accommodation as `_isolate_task_accumulator`
+    above and for the same reason: `order_approvals.py` has no per-call
+    `root` plumbed through from `cli.py`, so without this override every test
+    that drives an approve/resolve-permission path would read and write the
+    same real `~/.claude-agent/agentctl/order-approvals/` file the live
+    machine uses."""
+    monkeypatch.setenv("AGENTCTL_ORDER_APPROVALS_DIR", str(tmp_path / "order-approvals"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_writer_gate_advisories(tmp_path, monkeypatch):
     """Redirect the published-text gate's fail-open advisory sink to tmp for the
     suite at large.

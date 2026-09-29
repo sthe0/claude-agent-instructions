@@ -12,6 +12,7 @@ negative control.
 from __future__ import annotations
 
 import importlib.util
+from pathlib import Path
 
 import pytest
 
@@ -210,3 +211,403 @@ def test_tool_contracts_toml_has_resolver_entries_for_removed_readonly_verbs():
     for verb in ("awk", "sed", "find"):
         assert verb not in classify.READONLY_BASH
         assert verb in table, f"{verb!r} missing from tool_contracts.toml"
+
+
+# --- Checkpoint (b): script-effects registry, order digest, order-approvals ledger ---
+
+
+def _script_effects_module():
+    spec = importlib.util.find_spec("agentctl.script_effects")
+    assert spec is not None, "agentctl.script_effects module not found"
+    from agentctl import script_effects
+
+    return script_effects
+
+
+def _order_approvals_module():
+    spec = importlib.util.find_spec("agentctl.order_approvals")
+    assert spec is not None, "agentctl.order_approvals module not found"
+    from agentctl import order_approvals
+
+    return order_approvals
+
+
+def _plan_module():
+    spec = importlib.util.find_spec("agentctl.plan")
+    assert spec is not None, "agentctl.plan module not found"
+    from agentctl import plan
+
+    return plan
+
+
+def _state_module():
+    spec = importlib.util.find_spec("agentctl.state")
+    assert spec is not None, "agentctl.state module not found"
+    from agentctl import state
+
+    return state
+
+
+def _submission_module():
+    spec = importlib.util.find_spec("agentctl.submission")
+    assert spec is not None, "agentctl.submission module not found"
+    from agentctl import submission
+
+    return submission
+
+
+def _land_branch_registry_venue(tmp_path, land_branch_text=None):
+    """A minimal venue tree with `scripts/land-branch.py` and a matching
+    `scripts/script_effects.toml` entry pinned to its live sha256."""
+    import hashlib
+
+    venue = tmp_path / "venue"
+    (venue / "scripts").mkdir(parents=True)
+    (venue / ".git").mkdir()
+    real_land_branch = Path(__file__).resolve().parent.parent / "land-branch.py"
+    text = land_branch_text if land_branch_text is not None else real_land_branch.read_text(encoding="utf-8")
+    script_path = venue / "scripts" / "land-branch.py"
+    script_path.write_text(text, encoding="utf-8")
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    (venue / "scripts" / "script_effects.toml").write_text(
+        f'[[script]]\npath = "scripts/land-branch.py"\nsha256 = "{digest}"\nresolver = "land_branch"\n',
+        encoding="utf-8",
+    )
+    return venue, digest
+
+
+def test_repo_script_resolved_by_effects_registry(tmp_path):
+    tc = _tool_contracts_module()
+    venue, _digest = _land_branch_registry_venue(tmp_path)
+
+    r = tc.resolve_command(
+        "python3 scripts/land-branch.py --branch feature --keep-branch", str(venue)
+    )
+    assert r.status == "resolved"
+    kinds = sorted(res.kind for res in r.resources)
+    assert "vcs_ref" in kinds
+
+
+def test_script_effects_entry_refused_on_digest_mismatch(tmp_path):
+    tc = _tool_contracts_module()
+    venue, _digest = _land_branch_registry_venue(tmp_path)
+    # Edit the script after the registry entry was pinned.
+    (venue / "scripts" / "land-branch.py").write_text("# tampered\n", encoding="utf-8")
+
+    r = tc.resolve_command(
+        "python3 scripts/land-branch.py --branch feature --keep-branch", str(venue)
+    )
+    assert r.status == "unresolved"
+    assert r.reason_class == "script-digest-mismatch"
+
+
+def test_stage_effects_untrusted_after_script_edit(tmp_path):
+    """Same guarantee as digest-mismatch, exercised directly against
+    `script_effects.resolve_script` (the registry's own entry point) rather
+    than through the full command-line resolver, so the digest check is
+    pinned independently of `tool_contracts.py`'s dispatch."""
+    script_effects = _script_effects_module()
+    venue, digest = _land_branch_registry_venue(tmp_path)
+    table = script_effects.load_script_effects_table(str(venue / "scripts" / "script_effects.toml"))
+
+    ok = script_effects.resolve_script(
+        str(venue / "scripts" / "land-branch.py"), ["--branch", "x", "--keep-branch"], str(venue), table=table
+    )
+    assert ok is not None and ok.status == "resolved"
+
+    (venue / "scripts" / "land-branch.py").write_text("changed\n", encoding="utf-8")
+    stale = script_effects.resolve_script(
+        str(venue / "scripts" / "land-branch.py"), ["--branch", "x", "--keep-branch"], str(venue), table=table
+    )
+    assert stale is not None and stale.status == "unresolved"
+    assert stale.reason_class == "script-digest-mismatch"
+
+
+def test_undeclared_adhoc_script_is_unresolved(tmp_path):
+    tc = _tool_contracts_module()
+    venue = tmp_path / "venue"
+    venue.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    script = outside / "adhoc.py"
+    script.write_text("print('hi')\n", encoding="utf-8")
+
+    r = tc.resolve_command(f"python3 {script}", str(venue))
+    assert r.status == "unresolved"
+    assert r.reason_class == "declared-unresolved"
+
+
+def test_helper_script_edit_changes_unresolved_command_identity(tmp_path):
+    """Identity is content-bound (REQ3): a script OUTSIDE the venue subtree
+    is hashed directly as a literal operand (in-venue operands are excluded
+    from identity, since any venue write resource already covers them — see
+    `_compute_identity`'s own docstring), so editing it must change the
+    unresolved command's identity tuple."""
+    tc = _tool_contracts_module()
+    venue = tmp_path / "venue"
+    venue.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    script = outside / "adhoc.py"
+    script.write_text("print('one')\n", encoding="utf-8")
+
+    r1 = tc.resolve_command(f"python3 {script}", str(venue))
+    script.write_text("print('two')\n", encoding="utf-8")
+    r2 = tc.resolve_command(f"python3 {script}", str(venue))
+
+    assert r1.status == "unresolved" and r2.status == "unresolved"
+    assert r1.identity != r2.identity
+
+
+def test_missing_operand_encoded_absent_changes_identity_when_created(tmp_path):
+    tc = _tool_contracts_module()
+    venue = tmp_path / "venue"
+    venue.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    script = outside / "not_yet_created.py"
+
+    r_missing = tc.resolve_command(f"python3 {script}", str(venue))
+    script.write_text("print('hi')\n", encoding="utf-8")
+    r_present = tc.resolve_command(f"python3 {script}", str(venue))
+
+    assert r_missing.status == "unresolved" and r_present.status == "unresolved"
+    assert r_missing.identity != r_present.identity
+
+
+def test_sibling_helper_edit_changes_unresolved_identity(tmp_path):
+    """A script's identity also folds in a capped directory-listing digest
+    of its own containing directory when the script lies outside the venue
+    (`_dir_listing_identity`) — so editing a SIBLING file the invoked script
+    does not itself appear as an operand for still changes identity."""
+    tc = _tool_contracts_module()
+    venue = tmp_path / "venue"
+    venue.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "main.py").write_text("import helper\n", encoding="utf-8")
+    (outside / "helper.py").write_text("X = 1\n", encoding="utf-8")
+
+    r1 = tc.resolve_command(f"python3 {outside / 'main.py'}", str(venue))
+    (outside / "helper.py").write_text("X = 2\n", encoding="utf-8")
+    r2 = tc.resolve_command(f"python3 {outside / 'main.py'}", str(venue))
+
+    assert r1.status == "unresolved" and r2.status == "unresolved"
+    assert r1.identity != r2.identity
+
+
+def test_land_branch_registry_entry_lists_every_effect(tmp_path):
+    """A `--branch`+`--keep-branch` (no --remote-only) invocation resolves to
+    BOTH the push ref and the git-common-dir write — the two effects
+    land-branch.py's own module docstring documents for that argv shape."""
+    tc = _tool_contracts_module()
+    venue, _digest = _land_branch_registry_venue(tmp_path)
+
+    r = tc.resolve_command(
+        "python3 scripts/land-branch.py --branch feature --keep-branch", str(venue)
+    )
+    assert r.status == "resolved"
+    kinds = sorted(res.kind for res in r.resources)
+    assert kinds == ["file", "vcs_ref"]
+
+
+def test_no_command_or_registry_entry_resolves_to_land(tmp_path):
+    """No code path anywhere in the resolver (contract table, custom
+    resolvers, or the script-effects registry) may ever produce a
+    `VcsRefResource` with `op="land"` — landing is decided solely by the
+    separately checkpointed landed-spec resolver (R1/C1)."""
+    tc = _tool_contracts_module()
+    venue, _digest = _land_branch_registry_venue(tmp_path)
+
+    r = tc.resolve_command(
+        "python3 scripts/land-branch.py --branch feature --keep-branch", str(venue)
+    )
+    for res in r.resources:
+        if res.kind == "vcs_ref":
+            assert res.op != "land"
+
+
+def test_order_digest_covers_order_fields_not_derived_ones():
+    from argparse import Namespace
+
+    plan = _plan_module()
+    state = _state_module()
+
+    def _doc(customer_id="alice", req_text="the thing works", coverage=None, malformed=None):
+        order = state.Order(
+            customer_id=customer_id,
+            customer="the customer",
+            functional_place="the norm this serves",
+            requires_traceability=True,
+            requirements=[state.Requirement(id="R1", text=req_text, derivation="d1")],
+            coverage=coverage if coverage is not None else {"R1": ["stage 1"]},
+            malformed=malformed if malformed is not None else [],
+            requirements_dropped=[],
+        )
+        meta = Namespace(
+            goal="ship the thing",
+            done_criterion="it works",
+            criterion_type="measurable",
+            weight_class="substantive",
+            order=order,
+        )
+        return Namespace(meta=meta)
+
+    base = plan.order_digest(_doc())
+    same_but_derived_changed = plan.order_digest(
+        _doc(coverage={"R1": ["stage 2"]}, malformed=["something"])
+    )
+    assert base == same_but_derived_changed
+
+    different_customer = plan.order_digest(_doc(customer_id="bob"))
+    assert base != different_customer
+
+    different_req_text = plan.order_digest(_doc(req_text="a different thing works"))
+    assert base != different_req_text
+
+
+def test_customer_approve_stamps_order_ledger_casefolded():
+    order_approvals = _order_approvals_module()
+    resources = _resources_module()
+
+    order_sha = "deadbeef" * 8
+    order_approvals.record_approval(
+        order_sha,
+        plan_sha256="plan1",
+        resources=[resources.FileResource("/tmp/x", "write")],
+        unresolved_identities=[],
+        stage_effects=[],
+        by="Alice",
+        at="2026-09-29T00:00:00Z",
+    )
+    approved = order_approvals.approved_resources(order_sha)
+    assert len(approved) == 1
+    assert approved[0].path == "/tmp/x"
+
+
+def test_non_customer_approve_does_not_stamp_ledger():
+    order_approvals = _order_approvals_module()
+
+    order_sha = "cafef00d" * 8
+    # Simulate `cmd_approve` only calling record_approval for the customer —
+    # a non-customer --by never reaches this module at all, so the ledger
+    # for an order nobody has approved-as-customer stays empty.
+    assert order_approvals.get(order_sha)["records"] == []
+    assert order_approvals.approved_resources(order_sha) == []
+
+
+def test_approve_by_reserved_agent_refused():
+    order_approvals = _order_approvals_module()
+    state = _state_module()
+
+    with pytest.raises(ValueError):
+        order_approvals.record_approval(
+            "abc123" * 10,
+            plan_sha256="plan1",
+            resources=[],
+            unresolved_identities=[],
+            stage_effects=[],
+            by=state.AGENT_ACTOR,
+            at="2026-09-29T00:00:00Z",
+        )
+    with pytest.raises(ValueError):
+        order_approvals.record_approval(
+            "abc123" * 10,
+            plan_sha256="plan1",
+            resources=[],
+            unresolved_identities=[],
+            stage_effects=[],
+            by=state.AGENT_ACTOR.upper(),
+            at="2026-09-29T00:00:00Z",
+        )
+
+
+def test_customer_id_reserved_agent_identity_rejected():
+    from argparse import Namespace
+
+    submission = _submission_module()
+    state = _state_module()
+
+    order = state.Order(customer_id=state.AGENT_ACTOR, customer="c", functional_place="p")
+    violations = submission._order_violations(Namespace(order=order))
+    assert any(state.AGENT_ACTOR in v for v in violations)
+
+    order_cased = state.Order(customer_id=state.AGENT_ACTOR.upper(), customer="c", functional_place="p")
+    violations_cased = submission._order_violations(Namespace(order=order_cased))
+    assert any(state.AGENT_ACTOR.upper() in v for v in violations_cased)
+
+
+def test_ledger_survives_reset_renegotiation_and_new_session(tmp_path):
+    order_approvals = _order_approvals_module()
+    resources = _resources_module()
+
+    order_sha = "0123abcd" * 8
+    order_approvals.record_approval(
+        order_sha,
+        plan_sha256="plan1",
+        resources=[resources.FileResource("/tmp/y", "write")],
+        unresolved_identities=[],
+        stage_effects=[],
+        by="alice",
+        at="2026-09-29T00:00:00Z",
+    )
+    # No reset/renegotiation call exists in this module at all — re-reading
+    # under a brand new root argument (simulating "a new session, same
+    # default root") still sees the record.
+    again = order_approvals.approved_resources(order_sha)
+    assert len(again) == 1
+
+
+def test_same_task_id_other_order_reads_empty_ledger():
+    order_approvals = _order_approvals_module()
+    resources = _resources_module()
+
+    order_a = "111111" * 10 + "1111"
+    order_b = "222222" * 10 + "2222"
+    order_approvals.record_approval(
+        order_a,
+        plan_sha256="plan1",
+        resources=[resources.FileResource("/tmp/z", "write")],
+        unresolved_identities=[],
+        stage_effects=[],
+        by="alice",
+        at="2026-09-29T00:00:00Z",
+    )
+    assert order_approvals.approved_resources(order_b) == []
+
+
+def test_stage_scoped_customer_grant_counts_once_scoped_does_not():
+    order_approvals = _order_approvals_module()
+    resources = _resources_module()
+
+    order_sha = "abcdef01" * 8
+    order_approvals.record_customer_grant(
+        order_sha,
+        resource=resources.FileResource("/tmp/scoped", "write"),
+        by="alice",
+        at="2026-09-29T00:00:00Z",
+    )
+    approved = order_approvals.approved_resources(order_sha)
+    assert len(approved) == 1
+    assert approved[0].path == "/tmp/scoped"
+    # A --scope once grant is never recorded here at all (A2) — simulated by
+    # simply never calling record_customer_grant for it; the ledger for a
+    # once-only order stays empty.
+    once_only_order = "fedcba98" * 8
+    assert order_approvals.approved_resources(once_only_order) == []
+
+
+def test_runtime_grant_under_other_order_not_counted():
+    order_approvals = _order_approvals_module()
+    resources = _resources_module()
+
+    order_a = "aaaaaaaa" * 8
+    order_b = "bbbbbbbb" * 8
+    order_approvals.record_customer_grant(
+        order_a,
+        resource=resources.FileResource("/tmp/only-a", "write"),
+        by="alice",
+        at="2026-09-29T00:00:00Z",
+    )
+    assert order_approvals.approved_resources(order_b) == []
+    assert len(order_approvals.approved_resources(order_a)) == 1

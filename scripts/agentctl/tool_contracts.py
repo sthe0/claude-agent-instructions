@@ -69,6 +69,7 @@ class Resolution:
     command's `resources` is always empty; `reason_class` is a short,
     machine-stable tag (`"nested-execution"`, `"unknown-program"`,
     `"declared-unresolved"`, `"force-or-delete-push"`, `"contract-unresolved"`,
+    `"script-digest-mismatch"`,
     `"non-literal-target"`) and `identity` is the content-bound tuple REQ3
     requires so two textually-different unresolved commands with the same
     real effect (or the same command re-run unchanged) can be told apart from
@@ -378,10 +379,32 @@ def _resolve_pytest(venue_real: str) -> Resolution:
     return Resolution("resolved", resources=[resources.FileResource(venue_real, "write")])
 
 
-def _resolve_interpreter() -> Resolution:
-    # No script-effects registry exists to consult yet (a later checkpoint);
-    # until then every interpreter invocation is unresolved and falls back
-    # to the content-bound identity computed by the caller.
+def _script_and_argv(operands: list[str]) -> tuple[str | None, list[str]]:
+    """The interpreter's first non-flag operand is "the script" (mirrors
+    `_compute_identity`'s own `script_candidate` convention); everything
+    after it is the script's OWN argv, flags included — an interpreter-level
+    flag before the script (`python3 -u script.py --branch x`) is skipped,
+    not mistaken for one of the script's own arguments."""
+    for i, tok in enumerate(operands):
+        if not tok.startswith("-"):
+            return tok, operands[i + 1 :]
+    return None, []
+
+
+def _resolve_interpreter(operands: list[str], venue_real: str) -> Resolution:
+    """Consult the script-effects registry (`script_effects.py`) for a
+    reviewed, digest-pinned entry matching the script being run. No entry —
+    or no script at all (e.g. `python3 -c "..."`) — falls back to the
+    original unresolved verdict, unchanged from before the registry existed;
+    the caller (`resolve_command`) computes content-bound identity for that
+    case regardless of what this function returns for `identity`."""
+    from . import script_effects  # deferred: see script_effects.py's own docstring
+
+    script, script_argv = _script_and_argv(operands)
+    if script is not None:
+        resolved = script_effects.resolve_script(script, script_argv, venue_real)
+        if resolved is not None:
+            return resolved
     return Resolution("unresolved", reason_class="declared-unresolved", reason="no script-effects registry entry")
 
 
@@ -393,8 +416,8 @@ _CUSTOM_RESOLVERS = {
     "nawk": lambda operands, venue_real: _resolve_awk(operands),
     "mawk": lambda operands, venue_real: _resolve_awk(operands),
     "pytest": lambda operands, venue_real: _resolve_pytest(venue_real),
-    "python3": lambda operands, venue_real: _resolve_interpreter(),
-    "python": lambda operands, venue_real: _resolve_interpreter(),
+    "python3": lambda operands, venue_real: _resolve_interpreter(operands, venue_real),
+    "python": lambda operands, venue_real: _resolve_interpreter(operands, venue_real),
 }
 
 

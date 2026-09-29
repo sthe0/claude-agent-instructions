@@ -62,7 +62,7 @@ from . import exempt_paths
 from .conditions import judge_restatement, restatement_prefilter
 from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
-from .state import CheckKind, CriterionType, WeightClass
+from .state import AGENT_ACTOR, CheckKind, CriterionType, WeightClass
 from .text_shape import ELEMENT_NAMES
 from .text_shape import normalize_string as _normalize_string
 
@@ -464,6 +464,14 @@ def _order_violations(meta) -> list[str]:
             f"declares. A key matching no id covers nothing — most often a requirement id "
             f"renamed on one side only, which leaves the real requirement uncovered while "
             f"the map still looks full"
+        )
+    if order.customer_id and order.customer_id.casefold() == AGENT_ACTOR:
+        out.append(
+            f"[meta.order] customer_id={order.customer_id!r} is the reserved engine actor "
+            f"identity ({AGENT_ACTOR!r}). The order-approvals ledger (order_approvals.py) "
+            f"only ever stamps a record for a CUSTOMER-authored approve; a plan naming the "
+            f"engine as its own customer would let the engine's self-grant path read its "
+            f"own approval back as if a real customer had given it"
         )
     return out
 
