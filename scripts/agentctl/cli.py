@@ -9205,7 +9205,9 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "comma-separated stage indices the launcher narrowed the pass to"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
-    ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge"), "who acted — a name, not a narrative"),
+    ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge", "resolve-permission"),
+     "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
+     "identity token like any other --by, not free text)"),
     # --decision is NOT listed here: argparse `choices=` already makes it a non-candidate
     # for the @<path> partition (test_argv_text_call_sites.py's _is_candidate excludes any
     # action with choices set), so classifying it would be a stale entry the moment it's added.
