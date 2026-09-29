@@ -1356,3 +1356,41 @@ def test_wildcard_rule_line_resolves_over_its_argument_tail(store, fixtures_dir,
     for wildcard_rule in wildcard_rules:
         assert rules_by_text[wildcard_rule]["status"] == "unresolved"
         assert rules_by_text[wildcard_rule]["reason_class"] == "wildcard-tail", wildcard_rule
+
+
+def test_self_grants_fixture_resolves_declared_rules_to_resources(fixtures_dir, tmp_path):
+    """`grant_plans/self-grants.toml` (test_grant_derivation.py /
+    test_spawn_stage2_image.py's real-plan-shaped fixture, pinned verbatim by
+    test_self_grants_fixture_declared_rules_present_verbatim) exercises the
+    resource layer without touching the fixture's own rule text -- a
+    modification there would risk weakening that verbatim pin."""
+    plan_mod = _plan_module()
+    plan_resources = _plan_resources_module()
+
+    fixture_path = fixtures_dir / "grant_plans" / "self-grants.toml"
+    text = fixture_path.read_text(encoding="utf-8").replace(
+        "__CLAUDE_AGENT_HOME__", str(tmp_path / "agent-home")
+    )
+    plan_path = tmp_path / "self-grants.toml"
+    plan_path.write_text(text, encoding="utf-8")
+
+    doc = plan_mod.load_plan(str(plan_path), strict=False)
+    venue = plan_mod._venue_for(doc)
+    stage1 = next(s for s in doc.stages if s.index == 1)
+
+    stage1_resources = plan_resources.compute_stage_resources(stage1, venue)
+
+    # The literal push rule resolves to a concrete VcsRefResource, matching
+    # `_resolve_git`'s destination-ref-only keying (git push origin
+    # perm-grants -> refs/heads/perm-grants on origin).
+    resources = _resources_module()
+    assert resources.VcsRefResource("origin", "perm-grants", "push") in stage1_resources.resources
+
+    # The wildcard-tail rule pinned verbatim alongside it stays unresolved,
+    # by the SAME reason_class the dispatch/resolve-permission/plan-resources
+    # surfaces above agree on -- not silently dropped or miscounted as
+    # resolved just because it came from a real-plan-shaped fixture rather
+    # than a synthetic one.
+    assert ("wildcard-tail", "Bash(python3 scripts/probe-hook-decision-semantics.py:*)") in (
+        stage1_resources.unresolved
+    )
