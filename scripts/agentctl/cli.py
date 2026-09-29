@@ -28,7 +28,7 @@ from pathlib import Path
 import proc_tree
 from lib import argv_text, config_root, kind_baselines, transcript_stops, widening_targets
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grants as _grants, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grants as _grants, ledger, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -52,6 +52,7 @@ from .plan import (
     grants_sha256,
     load_plan,
     load_plan_with_digest,
+    order_digest,
     plan_has_any_grants,
     plan_meta_digest,
     plan_meta_element_key,
@@ -81,6 +82,7 @@ from .state import (
     Actor,
     AcceptanceBypass,
     AcceptanceReview,
+    AGENT_ACTOR,
     AUTHORIZE_REPLAN_MARKER,
     CheckKind,
     CheckVenue,
@@ -4644,6 +4646,14 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     )
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty approver: --by must name who approved"]
+    elif args.by.strip().casefold() == AGENT_ACTOR:
+        # Approval is a customer act by definition -- the agent's own reserved
+        # identity can never be the approver, mirroring submission.py's refusal
+        # of `customer_id == AGENT_ACTOR` and order_approvals.py's two writers.
+        blockers = blockers + [
+            f"--by {args.by!r} is the agent's own reserved identity "
+            f"({AGENT_ACTOR!r}) -- approval must be attributed to the customer"
+        ]
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
         # The escape counts ride the REFUSAL specifically: the coordinator reading it
@@ -4722,6 +4732,34 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if snap:
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
     state.log("approve", by=args.by)
+    # REQ4: stamp the order-approvals ledger for the CUSTOMER only -- never
+    # AGENT_ACTOR (refused above, before this point is ever reached) and
+    # never a non-customer --by (a reviewer, a delegate) whose approval does
+    # not carry the customer's own authority to pre-grant resources. Gated on
+    # a non-empty customer_id: an order-less plan (customer_id == "") can
+    # never casefold-match any --by, so this is a no-op for every plan
+    # authored before [meta.order] existed.
+    if _approved_doc is not None:
+        order = _approved_doc.meta.order
+        customer_id = order.customer_id if order is not None else ""
+        if customer_id and args.by.strip().casefold() == customer_id.casefold():
+            stage_resources = plan_resources.compute_plan_resources(_approved_doc)
+            all_resources: list = []
+            all_unresolved: list = []
+            all_stage_effects: list = []
+            for sr in stage_resources:
+                all_resources.extend(sr.resources)
+                all_unresolved.extend(sr.unresolved)
+                all_stage_effects.extend(e.to_dict() for e in sr.stage_effects)
+            order_approvals.record_approval(
+                order_digest(_approved_doc),
+                plan_sha256=_approved_digest or "",
+                resources=all_resources,
+                unresolved_identities=all_unresolved,
+                stage_effects=all_stage_effects,
+                by=args.by,
+                at=dt.datetime.now(dt.timezone.utc).isoformat(),
+            )
     store.save(state)
     return _with_advisories(Directive(
         True, state.node, "partition",

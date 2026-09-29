@@ -133,6 +133,7 @@ from pathlib import Path
 
 from . import grants as _grants
 from .grants import AddDirGrant, RuleGrant, StageGrants
+from .script_effects import StageEffectDeclaration
 from .state import (
     Actor,
     CheckKind,
@@ -312,6 +313,42 @@ def _parse_stage_grants(raw: object, context: str, *, strict: bool) -> "StageGra
         except _grants.GrantValidationError as exc:
             raise PlanError(f"{context}: grants: {exc}") from exc
     return stage_grants if not stage_grants.is_empty() else None
+
+
+def _parse_stage_effects(raw: object, context: str) -> list[StageEffectDeclaration]:
+    """Parse a stage's optional `[[stage.effects]]` array into validated
+    `StageEffectDeclaration`s, or `[]` when the stage declares none at all —
+    byte-identical to every plan authored before this field existed.
+
+    Load-time validation is limited to SHAPE (every field present) and the
+    R1/C1 refusal of a declared `op="land"` — mirroring the same defensive
+    check `tool_contracts.load_contract_table` and `script_effects.
+    load_script_effects_table` apply to their own tables (C1: no contract,
+    registry or [[stage.effects]] entry may ever declare op="land"). Whether
+    the declared digest still matches the live script, and whether this plan
+    is still the last user-approved version, are RESOLVE-time questions
+    (cli.py, via `script_effects.resolve_script`) — not decidable from the
+    TOML alone."""
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        raise PlanError(f"{context}: effects must be an array of tables, got {type(raw).__name__}")
+    out: list[StageEffectDeclaration] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise PlanError(f"{context}: effects[{i}] must be a table, got {item!r}")
+        if item.get("op") == "land":
+            raise PlanError(
+                f"{context}: effects[{i}] declares op=\"land\", which is refused -- "
+                f"no [[stage.effects]] entry may ever produce an op=\"land\" resource (R1/C1)"
+            )
+        path = item.get("path")
+        sha256 = item.get("sha256")
+        resolver = item.get("resolver")
+        if not path or not sha256 or not resolver:
+            raise PlanError(f"{context}: effects[{i}] needs 'path', 'sha256' and 'resolver'")
+        out.append(StageEffectDeclaration(path=str(path), sha256=str(sha256), resolver=str(resolver)))
+    return out
 
 
 # A landed check's target/remote are git ref NAMES, never shell content: no
@@ -1468,6 +1505,7 @@ def parse_plan(
                 ephemeral_artifacts_waiver=ephemeral_artifacts_waiver,
                 outcome=Outcome(status=StageStatus.PENDING.value),
                 grants=_parse_stage_grants(s.get("grants"), stage_ctx, strict=strict),
+                effects=_parse_stage_effects(s.get("effects"), stage_ctx),
             )
         )
 

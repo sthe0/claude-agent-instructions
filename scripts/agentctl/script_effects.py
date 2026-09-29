@@ -45,6 +45,32 @@ class ScriptEntry:
     resolver: str
 
 
+@dataclass(frozen=True)
+class StageEffectDeclaration:
+    """One `[[stage.effects]]` entry: a plan author's own claim that a
+    specific script, pinned to the exact bytes they reviewed, resolves this
+    stage's calls through `resolver`. Same shape as `ScriptEntry` (path/
+    sha256/resolver) — kept as a distinct type rather than reused directly
+    because its trust boundary is different: a GLOBAL `script_effects.toml`
+    entry is trusted because it was reviewed into the repo; a plan-declared
+    entry is trusted only for AS LONG AS the declaring plan itself stays the
+    last user-approved version (cli.py's job, not this module's) — conflating
+    the two types would make that distinction easy to lose at a call site."""
+    path: str
+    sha256: str
+    resolver: str
+
+    def to_dict(self) -> dict:
+        return {"path": self.path, "sha256": self.sha256, "resolver": self.resolver}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "StageEffectDeclaration":
+        return cls(path=d["path"], sha256=d["sha256"], resolver=d["resolver"])
+
+    def as_script_entry(self) -> ScriptEntry:
+        return ScriptEntry(path=self.path, sha256=self.sha256, resolver=self.resolver)
+
+
 def load_script_effects_table(path: str | os.PathLike | None = None) -> dict[str, ScriptEntry]:
     """Load `script_effects.toml` into `{repo_relative_path: ScriptEntry}`.
 
@@ -63,6 +89,14 @@ def load_script_effects_table(path: str | os.PathLike | None = None) -> dict[str
             raise ValueError(f"script_effects.toml entry missing 'path': {item!r}")
         if script_path in entries:
             raise ValueError(f"script_effects.toml: duplicate path {script_path!r}")
+        if item.get("op") == "land":
+            # R1/C1: same refusal as tool_contracts.load_contract_table -- no
+            # registry entry may ever declare (let alone produce) op="land".
+            raise ValueError(
+                f"script_effects.toml: entry {script_path!r} declares op=\"land\", "
+                f"which is refused -- no registry entry may ever produce an "
+                f"op=\"land\" resource"
+            )
         sha = str(item.get("sha256", ""))
         resolver = str(item.get("resolver", ""))
         if not sha or not resolver:

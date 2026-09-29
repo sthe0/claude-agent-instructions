@@ -109,6 +109,14 @@ def load_contract_table(path: str | os.PathLike | None = None) -> dict[str, Cont
             raise ValueError(f"tool_contracts.toml: a [[program]] entry is missing 'name': {raw!r}")
         if name in table:
             raise ValueError(f"tool_contracts.toml: duplicate [[program]] entry for {name!r}")
+        if raw.get("op") == "land":
+            # R1/C1: landing is categorically more privileged than pushing, decided
+            # solely by the dedicated landed-spec comparison in resources.py's
+            # VcsRefResource — never by a contract table entry.
+            raise ValueError(
+                f"tool_contracts.toml: program {name!r} declares op=\"land\", which "
+                f"is refused -- no contract entry may ever produce an op=\"land\" resource"
+            )
         effect = raw.get("effect")
         if effect not in _VALID_EFFECTS:
             raise ValueError(

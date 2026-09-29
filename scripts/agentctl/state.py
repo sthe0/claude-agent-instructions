@@ -21,8 +21,9 @@ from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
 from .grants import StageGrants
+from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 39  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 40  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -36,6 +37,8 @@ SCHEMA_VERSION = 39  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # denial that becomes covered once rebased from a drifted transcript
                      # cwd back to the stage venue (a planning artifact, not a genuine
                      # grant-coverage gap; see `_classify_transcript_denials`)
+                     # 40: Stage gains `effects` (declared [[stage.effects]] — resource
+                     # model, checkpoint c)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1374,6 +1377,13 @@ class Stage:
     # spawned children keep receiving the same DERIVED grants they always did. See
     # grants.py's module docstring for why this is the sole validated entry point.
     grants: StageGrants | None = None
+    # Declared [[stage.effects]] (resource model, checkpoint c): the plan author's
+    # own claim that a specific, digest-pinned script resolves this stage's calls
+    # through a named resolver — trusted only while the live script's bytes still
+    # match the pinned digest (script_effects.resolve_script enforces that at
+    # resolve time; this field only carries the declaration). Empty on every plan
+    # authored before this field, byte-identical to "no declared effects".
+    effects: list[StageEffectDeclaration] = field(default_factory=list)
 
     @property
     def depends_on(self) -> list[int]:
@@ -1424,6 +1434,7 @@ class Stage:
                 outcome=Outcome(**d["outcome"]) if d.get("outcome") else Outcome(),
                 control=d.get("control"),
                 grants=StageGrants.from_dict(d.get("grants")),
+                effects=[StageEffectDeclaration.from_dict(e) for e in d.get("effects", [])],
             )
         # legacy FLAT shape -> nested groups (migration shim)
         return cls(
@@ -1462,6 +1473,7 @@ class Stage:
             ),
             control=d.get("control"),
             grants=StageGrants.from_dict(d.get("grants")),
+            effects=[StageEffectDeclaration.from_dict(e) for e in d.get("effects", [])],
         )
 
 
