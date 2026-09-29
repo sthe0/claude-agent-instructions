@@ -2,10 +2,10 @@
 
 `agentctl` is the **deterministic control-flow engine** for a substantive task. It owns the *spine* — classify → plan → approve → execute → verify → resolve — while **prose supplies the cognition** at each step (the classification judgment, the plan content, the marker handling). The canon: **code = deterministic control-flow, prose = cognition.** The engine never decides *what* the right answer is; it decides *which step is legal next* and *which gate blocks*.
 
-Run it from the repo `scripts/` dir:
+Run it from any cwd via the standalone entry point:
 
 ```bash
-cd ~/claude-agent-instructions/scripts && python3 -m agentctl <cmd>
+python3 ~/claude-agent-instructions/scripts/agentctl-cli.py <cmd>
 ```
 
 Each command returns a **Directive** (JSON): the next node, which cognitive leaf to run, and whether a gate blocks.

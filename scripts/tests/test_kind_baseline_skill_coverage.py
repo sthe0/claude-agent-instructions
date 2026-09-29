@@ -16,6 +16,10 @@ files that starts with one of a fixed set of prefixes (python3-invocation, the t
 absolute/relative `cd ... && python3 -m agentctl` forms, or a bare `git ` verb) — a
 narrow net, deliberately: it is not a general markdown-command extractor, only
 enough to catch a change that quietly adds an instruction the baseline cannot serve.
+The two `cd ...` prefixes are kept for historical skill text even though CLAUDE.md,
+the cursor mirror and scripts/agentctl/README.md now prescribe the cd-free
+`python3 <scripts>/agentctl-cli.py <cmd>` form instead (Issue #267) — that form
+already starts with `python3 ` and needs no prefix of its own.
 A `<scripts>` placeholder is substituted with the kind's own absolute scripts/ dir
 (the same substitution spawn-specialist.py performs when it builds a brief's
 "File-access scope" header) before the coverage check runs.

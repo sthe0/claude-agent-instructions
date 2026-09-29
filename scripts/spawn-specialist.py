@@ -268,6 +268,23 @@ def assemble_prompt(
             scope_lines.extend(stage_grant_provenance_lines(stage_grant_entries))
         scope_lines.append("")
         sections += scope_lines
+    sections += [
+        "## The engine belongs to the parent",
+        "",
+        "The `agentctl` session and plan driving this task are the parent's, not "
+        "yours — never call a user-authority verb (AGENTCTL_USER_AUTHORITY_VERBS in "
+        "scripts/lib/widening_targets.py: approve, resolve-permission, resolve, "
+        "dispatch, record-result, replan, and the rest of that set). The read-only "
+        "verbs this brief prescribes, and `classify`/`status` on your own "
+        "session, are allowed. Keep cwd at your working directory root and run "
+        "repo-relative commands without `cd`-ing first: `python3 "
+        "<abs-path>/agentctl-cli.py <verb> ...` works from any cwd; the "
+        "repo-relative `python3 scripts/agentctl-cli.py <verb> ...` only when your "
+        "cwd already is the repo/worktree root. If your work needs a parent-engine "
+        "action, return a marker (see § Return markers) instead of calling it "
+        "yourself.",
+        "",
+    ]
     if getattr(args, "kind", None) == "planner":
         sections += [
             "## Prescribed research commands",
