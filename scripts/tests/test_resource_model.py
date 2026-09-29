@@ -655,12 +655,54 @@ def _order_plan_path(tmp_path, customer_id="acme"):
     return path
 
 
-def _park_permission_request(cli, store, sid, fixtures_dir, action="PERMISSION-REQUEST: touch a file\n"):
+def _order_plan_with_grant_path(tmp_path, customer_id="acme", allow_rules=()):
+    """Like `_order_plan_path`, plus a declared `[stage.grants]` on stage 1 --
+    needed by a test whose self_grant check must see the stage's own
+    EFFECTIVE (declared) grants, not only the order-approvals ledger."""
+    rules_toml = ", ".join(f'"{r}"' for r in allow_rules)
+    path = tmp_path / "plan_order_grant.toml"
+    path.write_text(
+        "[meta]\n"
+        'weight_class = "small_change"\n'
+        'task_id = "demo-order-grant"\n'
+        'goal = "g"\n'
+        'done_criterion = "dc"\n'
+        'criterion_type = "measurable"\n'
+        "\n"
+        "[meta.order]\n"
+        f'customer_id = "{customer_id}"\n'
+        'customer = "the customer"\n'
+        'functional_place = "the norm this serves"\n'
+        "\n"
+        "[[stage]]\n"
+        "index = 1\n"
+        'title = "Scaffold module"\n'
+        'executor = "spawn:developer"\n'
+        'expected_result_image = "module file exists"\n'
+        'criterion_type = "measurable"\n'
+        'done_criterion = "ok"\n'
+        "depends_on = []\n"
+        "\n"
+        "[stage.grants]\n"
+        f"allow = [{rules_toml}]\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _park_permission_request(
+    cli, store, sid, fixtures_dir, action="PERMISSION-REQUEST: touch a file\n", plan_path=None,
+):
     """Drive a session to EXECUTING (via the two-stage demo fixture, whose
     submission-clean shape reaching approve/partition/dispatch is already
     established by test_permission_gate.py's identical setup) and park one
     permission request -- the precondition `cmd_resolve_permission` itself
-    requires (`state.permission_request is not None`)."""
+    requires (`state.permission_request is not None`). `plan_path`, when
+    given, is submitted/approved/dispatched INSTEAD of the two-stage demo
+    fixture -- needed by any test whose self_grant check must run at
+    DISPATCH time against a plan carrying `[meta.order]` or declared
+    `[stage.grants]`, since `state.plan_path` is whatever `cmd_submit_plan`
+    set at park time, not whatever a test overrides afterward."""
     from argparse import Namespace
 
     from agentctl.dispatch import RunResult
@@ -668,7 +710,7 @@ def _park_permission_request(cli, store, sid, fixtures_dir, action="PERMISSION-R
     def ns(**kw):
         return Namespace(**kw)
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = plan_path if plan_path is not None else str(fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(ns(session=sid, task="res-demo", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -682,7 +724,7 @@ def _park_permission_request(cli, store, sid, fixtures_dir, action="PERMISSION-R
                          m3_severe=False, m4_severe=False), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)
     runner = lambda argv: RunResult(0, stdout=action)
-    cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
+    return cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
                         dry_run=False), store=store, runner=runner,
                      perm_checker=lambda a: False)
 
@@ -1119,3 +1161,198 @@ def test_plan_resources_cli_lists_typed_resources(fixtures_dir):
     d_text = plan_resources.cmd_plan_resources(args_text)
     assert d_text.ok
     assert "# Plan resources" in d_text.detail
+
+
+# --- Checkpoint (c5): dispatch's Resource:/Rule: self-grant resolution -------
+
+
+def test_permission_request_resource_line_and_self_grant_directive(store, fixtures_dir, tmp_path):
+    """A dispatched child's `Rule:` line, resolved by the ENGINE (never the
+    child's own `Resource:` line), decides self_grant. An agreeing `Resource:`
+    line changes nothing; a DISAGREEING one routes to the user with a reason
+    naming both, rather than trusting either alone."""
+    from argparse import Namespace
+
+    cli = _cli_module()
+    order_approvals = _order_approvals_module()
+    resources = _resources_module()
+    plan_mod = _plan_module()
+
+    plan_path = _order_plan_path(tmp_path, customer_id="acme")
+    doc = plan_mod.load_plan(str(plan_path))
+    order_approvals.record_approval(
+        plan_mod.order_digest(doc),
+        plan_sha256="p1",
+        resources=[resources.VcsRefResource("origin", "main", "push")],
+        unresolved_identities=[],
+        stage_effects=[],
+        by="acme",
+        at="2026-09-29T00:00:00Z",
+    )
+
+    # An agreeing Resource: line changes nothing -- self_grant still fires,
+    # decided from the Rule: line's own resolution.
+    d_agree = _park_permission_request(
+        cli, store, "resource-line-agree", fixtures_dir,
+        action=(
+            "PERMISSION-REQUEST: push the branch\n"
+            "Rule: Bash(git push origin main)\n"
+            "Resource: vcs_ref(origin, main, push)\n"
+        ),
+        plan_path=str(plan_path),
+    )
+    assert d_agree.action == "self_grant", d_agree.detail
+    assert store.load("resource-line-agree").permission_request is None
+
+    # A DISAGREEING Resource: line (names a different destination than the
+    # Rule: line the engine itself resolves) must never be trusted over the
+    # engine's own resolution -- routed to the user, reason names both.
+    d_disagree = _park_permission_request(
+        cli, store, "resource-line-disagree", fixtures_dir,
+        action=(
+            "PERMISSION-REQUEST: push the branch\n"
+            "Rule: Bash(git push origin main)\n"
+            "Resource: vcs_ref(origin, other-branch, push)\n"
+        ),
+        plan_path=str(plan_path),
+    )
+    assert d_disagree.action == "ask_user_permission"
+    disagreement = d_disagree.data.get("resource_disagreement")
+    assert disagreement, d_disagree.data
+    assert "vcs_ref(origin, other-branch, push)" in disagreement
+    assert "Bash(git push origin main)" in disagreement
+    state = store.load("resource-line-disagree")
+    assert state.permission_request is not None
+
+
+def test_effective_rules_are_checked_against_resources(store, fixtures_dir, tmp_path):
+    """The stage's own EFFECTIVE (declared+derived) grants are checked as
+    RESOURCES, not as rule TEXT: a declared push rule naming a different
+    source ref for the same destination still covers a differently-spelled
+    request for that destination -- something the old string-only
+    `grants.grant_covers_call` self_covered short-circuit cannot see (it
+    requires literal command-string equality), making this a genuinely new
+    self_grant path, not a restatement of the pre-existing one."""
+    from argparse import Namespace
+
+    cli = _cli_module()
+
+    # No order-approvals ledger entry at all -- coverage must come purely
+    # from the stage's own declared [stage.grants], not the customer ledger.
+    plan_path = _order_plan_with_grant_path(
+        tmp_path, customer_id="acme",
+        allow_rules=["Bash(git push origin featureX:main)"],
+    )
+
+    d = _park_permission_request(
+        cli, store, "effective-rules-resource-check", fixtures_dir,
+        action=(
+            "PERMISSION-REQUEST: push the branch\n"
+            "Rule: Bash(git push origin HEAD:main)\n"
+        ),
+        plan_path=str(plan_path),
+    )
+    assert d.action == "self_grant", d.detail
+    assert store.load("effective-rules-resource-check").permission_request is None
+
+
+def test_wildcard_rule_line_resolves_over_its_argument_tail(store, fixtures_dir, tmp_path):
+    """A `:*`-wildcard-tail Bash rule is UNRESOLVED regardless of what its
+    concrete argument would otherwise resolve to (REQ5 wildcard-tail case) --
+    checked for equal `reason_class == "wildcard-tail"` across all three
+    surfaces that resolve a rule: `resolve-permission --by agent`, `dispatch`,
+    and `plan-resources --format json`. A literal (non-wildcard) push rule is
+    the positive control, proving the refusal is specific to the wildcard
+    tail and not to these two commands in general."""
+    from argparse import Namespace
+
+    cli = _cli_module()
+    state_mod = _state_module()
+    order_approvals = _order_approvals_module()
+    resources = _resources_module()
+    plan_mod = _plan_module()
+    plan_resources = _plan_resources_module()
+
+    wildcard_rules = ["Bash(find:*)", "Bash(python3 scripts/land-branch.py:*)"]
+
+    # The stage declares NO grants at all here -- both the wildcard
+    # land-branch.py rule used by part (2) and the literal push rule used by
+    # part (3) must stay undeclared, so `grant_covers_call`'s literal-text
+    # `self_covered` short-circuit (which matches a DECLARED rule's own
+    # `:*`-stripped text regardless of the wildcard-tail RESOURCE semantics
+    # `plan_resources.resolve_rule_grant` applies -- see `_segment_covered`)
+    # never fires and both requests reach the new self_grant/ask_user_permission
+    # fork this test is exercising, with coverage coming only from the
+    # order-approvals ledger below.
+    plan_path = _order_plan_path(tmp_path, customer_id="acme")
+    doc = plan_mod.load_plan(str(plan_path))
+    order_approvals.record_approval(
+        plan_mod.order_digest(doc),
+        plan_sha256="p1",
+        resources=[resources.VcsRefResource("origin", "main", "push")],
+        unresolved_identities=[],
+        stage_effects=[],
+        by="acme",
+        at="2026-09-29T00:00:00Z",
+    )
+
+    # (1) resolve-permission --by agent refuses each outright.
+    for i, wildcard_rule in enumerate(wildcard_rules):
+        sid = f"wildcard-resolve-{i}"
+        _park_permission_request(cli, store, sid, fixtures_dir, plan_path=str(plan_path))
+        d = cli.cmd_resolve_permission(
+            Namespace(session=sid, decision="granted", scope="stage", by=state_mod.AGENT_ACTOR,
+                      rules=[wildcard_rule], add_dirs=None),
+            store=store,
+        )
+        assert not d.ok
+        assert d.data.get("reason_class") == "wildcard-tail", (wildcard_rule, d.data)
+
+    # (2) dispatch: a Rule: line with a wildcard tail never self-grants, with
+    # the SAME reason_class -- equal, not merely "also unresolved". Only the
+    # land-branch.py rule is exercised here, not `find:*`: `find` sits in
+    # every spawn kind's baseline read-only inspection bucket
+    # (lib.kind_baselines._READ_ONLY_INSPECTION), unioned into the stage's
+    # effective coverage BEFORE dispatch ever reaches rule resolution -- so a
+    # `Rule: Bash(find:*)` request is already self_covered by that baseline
+    # and correctly routes to the (distinct, also-correct) materialization-
+    # defect branch instead. That path has no reason_class of its own to
+    # compare, so asserting wildcard-tail equality there would assert
+    # something structurally unreachable, not a real property of this rule.
+    d_land_branch = _park_permission_request(
+        cli, store, "wildcard-dispatch-land-branch", fixtures_dir,
+        action="PERMISSION-REQUEST: run it\nRule: Bash(python3 scripts/land-branch.py:*)\n",
+        plan_path=str(plan_path),
+    )
+    assert d_land_branch.action == "ask_user_permission", d_land_branch.detail
+    assert d_land_branch.data.get("reason_class") == "wildcard-tail", d_land_branch.data
+
+    # (3) dispatch positive control: a literal (non-wildcard) push rule,
+    # undeclared on the stage but matching the ledger entry, DOES self-grant
+    # via resource resolution -- proving (1)/(2) refuse the wildcard tail
+    # specifically, not push commands, or dispatch's self_grant path, in
+    # general.
+    d_control = _park_permission_request(
+        cli, store, "wildcard-control-push", fixtures_dir,
+        action="PERMISSION-REQUEST: push the branch\nRule: Bash(git push origin main)\n",
+        plan_path=str(plan_path),
+    )
+    assert d_control.action == "self_grant", d_control.detail
+
+    # (4) plan-resources --format json: the same two wildcard rules, declared
+    # on a plan, list as unresolved with the SAME reason_class.
+    wildcard_plan_dir = tmp_path / "wildcard-plan-dir"
+    wildcard_plan_dir.mkdir()
+    wildcard_plan_path = _order_plan_with_grant_path(
+        wildcard_plan_dir, customer_id="acme", allow_rules=wildcard_rules,
+    )
+    args = Namespace(
+        plan=str(wildcard_plan_path), format="json", corpus=None, commands_file=None,
+        dump_commands=None, report_json=None, require_no_unknown_program=False,
+    )
+    d_pr = plan_resources.cmd_plan_resources(args)
+    assert d_pr.ok
+    rules_by_text = {r["rule"]: r for r in d_pr.data["stages"]["1"]["rules"]}
+    for wildcard_rule in wildcard_rules:
+        assert rules_by_text[wildcard_rule]["status"] == "unresolved"
+        assert rules_by_text[wildcard_rule]["reason_class"] == "wildcard-tail", wildcard_rule
