@@ -65,14 +65,7 @@ PLANNER_CHECK_ORDER_COVERAGE_RULE = f"Bash(python3 {SCRIPTS_DIR}/check-order-cov
 PLANNER_PLAN_GRANTS_RULE = f"Bash(python3 {SCRIPTS_DIR}/agentctl-cli.py plan-grants:*)"
 PLANNER_LIST_DENIED_RULE = f"Bash(python3 {SCRIPTS_DIR}/check-spawn-tool-run.py --list-denied:*)"
 
-# Cd-free standalone-entrypoint spelling of the two `-m agentctl` read-only
-# verbs already in _READ_ONLY_INSPECTION above (see agentctl-cli.py) — an
-# added grant, not a replacement; the `-m` forms stay. Absolute-only, same
-# reasoning as the PLANNER_* rules above: a planner's cwd is normally OUTSIDE
-# this repo, and test_p06_planner_research_rules_absolute_and_no_relative_baselines
-# asserts planner's own baseline carries no repo-relative `scripts/...` rule
-# at all. Every other kind below adds both spellings via
-# _abs_and_relative_script_rules, same as the rest of its row.
+# cd-free spelling of the two `-m agentctl` read-only verbs; absolute-only like the other PLANNER_* rules.
 PLANNER_AGENTCTL_CLI_STATUS_CLASSIFY_RULES = [
     f"Bash(python3 {SCRIPTS_DIR}/agentctl-cli.py classify:*)",
     f"Bash(python3 {SCRIPTS_DIR}/agentctl-cli.py status:*)",

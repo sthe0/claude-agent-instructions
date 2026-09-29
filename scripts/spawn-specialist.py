@@ -272,10 +272,10 @@ def assemble_prompt(
         "## The engine belongs to the parent",
         "",
         "The `agentctl` session and plan driving this task are the parent's, not "
-        "yours — never call a user-authority verb (AGENTCTL_USER_AUTHORITY_VERBS, "
-        "scripts/lib/widening_targets.py:329: approve, resolve-permission, resolve, "
+        "yours — never call a user-authority verb (AGENTCTL_USER_AUTHORITY_VERBS in "
+        "scripts/lib/widening_targets.py: approve, resolve-permission, resolve, "
         "dispatch, record-result, replan, and the rest of that set). The read-only "
-        "verbs your brief above prescribes, and `classify`/`status` on your own "
+        "verbs this brief prescribes, and `classify`/`status` on your own "
         "session, are allowed. Keep cwd at your working directory root and run "
         "repo-relative commands without `cd`-ing first: `python3 "
         "<abs-path>/agentctl-cli.py <verb> ...` works from any cwd; the "
