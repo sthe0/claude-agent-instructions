@@ -494,10 +494,21 @@ def _plan_review_verdict_blockers(pr, *, state: SessionState | None = None, doc=
     # against, discharge cannot be established at all.
     if pr.verdict != _PLAN_REVIEW_REVISE or not pr.concerns or state is None or doc is None:
         return default
-    if all(
-        _concern_discharged(pr.scope, cid, text, state, doc)
-        for cid, text in zip(_plan_review_concern_ids(pr), pr.concerns)
-    ):
+    ids = _plan_review_concern_ids(pr)
+    # A freshly-classified record always partitions every concern id into exactly
+    # one bucket (even when they all land in the same one), so the two lists sum
+    # to len(concerns); a legacy record predating this classification leaves both
+    # default-empty, summing to 0 (< len(concerns) whenever concerns is non-empty).
+    # Checking the sum rather than "are both lists empty?" also gets the edge case
+    # right: a fresh record where EVERY concern happens to be out-of-scope must
+    # still read as classified, not be mistaken for an unclassified legacy one.
+    classified = len(pr.in_scope_concern_ids) + len(pr.out_of_scope_concern_ids) >= len(pr.concerns)
+    blocking_ids = set(pr.in_scope_concern_ids) if classified else set(ids)
+    texts_by_id = dict(zip(ids, pr.concerns))
+    relevant = [(cid, texts_by_id[cid]) for cid in ids if cid in blocking_ids]
+    if not relevant:
+        return []
+    if all(_concern_discharged(pr.scope, cid, text, state, doc) for cid, text in relevant):
         return []
     return default
 
@@ -570,6 +581,58 @@ _PLAN_REVIEW_PART_TOKEN_RE = re.compile(
 def _concern_names_part(text: str, part_name: str) -> bool:
     m = _PLAN_REVIEW_PART_TOKEN_RE.match(text)
     return m is not None and m.group(1) == part_name
+
+
+#: The two structural tokens that always name a part OUTSIDE any stage's scope —
+#: a stage-scoped reviewer never examined the order or the plan's meta. Distinct
+#: from a `stage:<n>` token (checked separately, since only a DIFFERENT stage's
+#: number is out-of-scope) and from an arbitrary word-colon prefix like `Risk:`/
+#: `Note:`, which _PLAN_REVIEW_PART_TOKEN_RE also matches syntactically but which
+#: names no engine-defined part.
+_PLAN_REVIEW_RECOGNIZED_NON_STAGE_PREFIXES = ("meta:", "order:")
+
+
+def _concern_part_token(text: str) -> "str | None":
+    """The concern's leading structural part token, if it is one the engine
+    actually defines (`meta:`, `order:`, or a valid `stage:<n>`) — None for an
+    untagged concern or one with an unrecognized word-colon prefix (`Risk:`,
+    `Note:`, ...), which _PLAN_REVIEW_PART_TOKEN_RE matches syntactically but
+    which is not a structural part name, so classify_concerns must not treat it
+    as naming (and thus being out-of-scope for) any particular part."""
+    m = _PLAN_REVIEW_PART_TOKEN_RE.match(_normalize_string(text))
+    if m is None:
+        return None
+    token = m.group(1)
+    if token in _PLAN_REVIEW_RECOGNIZED_NON_STAGE_PREFIXES:
+        return token
+    if _plan_review_scope_stage_index(token) is not None:
+        return token
+    return None
+
+
+def classify_concerns(scope: str, ids: list[str], concerns: list[str]) -> "tuple[list[str], list[str]]":
+    """Partition each concern id by whether its concern text's leading
+    structural part token matches the review's own `scope`.
+
+    Whole-plan scope ("") means everything is in-scope by definition — a
+    whole-plan reviewer's remit covers every part. For a stage scope, a concern
+    naming a DIFFERENT stage, or `meta:`/`order:`, is out-of-scope (that
+    reviewer never examined those parts); an own-stage-tagged concern, or one
+    with no recognized part token at all (untagged, or an ad-hoc `Risk:`/
+    `Note:` prefix), stays in-scope — an unclassifiable concern defaults to
+    blocking, not to being silently waived.
+    """
+    if not scope:
+        return list(ids), []
+    in_scope: list[str] = []
+    out_of_scope: list[str] = []
+    for cid, text in zip(ids, concerns):
+        token = _concern_part_token(text)
+        if token is not None and token != scope:
+            out_of_scope.append(cid)
+        else:
+            in_scope.append(cid)
+    return in_scope, out_of_scope
 
 
 def plan_review_prior_pass(state: SessionState, scope: str, target_plan: str | None):
@@ -1013,6 +1076,36 @@ def plan_review_delta(state: SessionState, doc) -> "tuple[bool, set[int]]":
         if stage_meta_moved or index in stage_moved:
             needing.add(index)
     return False, needing
+
+
+def review_delta(state: SessionState, doc, target_plan: "str | None" = None) -> dict:
+    """Shared shape for "what does a reviewer still need to look at" — used by
+    `_obs_submit_plan` (in place of hardcoded whole-plan render prose) and
+    `cmd_replan`'s post-approval replan-refusal message (non-round-release
+    branch only). Wraps the pure `plan_review_delta` computation with the two
+    pieces those callers actually need: `scopes` (the exact `--scope` string
+    for each stage still needing its own pass) and `render_command` (the
+    `plan-render` invocation covering exactly those parts).
+
+    NOT wired into `cmd_plan_review_delta`, which keeps its own existing
+    output-key contract (`markdown`/`whole_plan`/`stages`) unchanged."""
+    whole_plan, stages = plan_review_delta(state, doc)
+    stage_list = sorted(stages)
+    scopes = [] if whole_plan else [_plan_review_scope_for_stage(i) for i in stage_list]
+    plan_path = target_plan or state.plan_path
+    if whole_plan or not stage_list:
+        render_command = f"agentctl plan-render --plan {plan_path}"
+    else:
+        render_command = (
+            f"agentctl plan-render --plan {plan_path} "
+            f"--stage {','.join(str(i) for i in stage_list)}"
+        )
+    return {
+        "whole_plan": whole_plan,
+        "stages": stage_list,
+        "scopes": scopes,
+        "render_command": render_command,
+    }
 
 
 def plan_presentation_active(state: SessionState) -> bool:

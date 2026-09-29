@@ -22,7 +22,7 @@ from enum import Enum
 
 from .grants import StageGrants
 
-SCHEMA_VERSION = 37  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 38  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -30,6 +30,8 @@ SCHEMA_VERSION = 37  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # materialization_defects/settings_drift (permission-grant model)
                      # 37: PlanReview gains regression_command/regression_exit/remedy_tags;
                      # SessionState gains plan_review_passes
+                     # 38: PlanReview gains in_scope_concern_ids/out_of_scope_concern_ids
+                     # (advisory-scope classification of a stage-scoped review's concerns)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -449,6 +451,8 @@ class PlanReview:
     regression_command: str = ""
     regression_exit: "int | None" = None
     remedy_tags: list[str] = field(default_factory=list)
+    in_scope_concern_ids: list[str] = field(default_factory=list)
+    out_of_scope_concern_ids: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "PlanReview | None":
@@ -468,6 +472,8 @@ class PlanReview:
             regression_command=d.get("regression_command", ""),
             regression_exit=d.get("regression_exit"),
             remedy_tags=list(d.get("remedy_tags", [])),
+            in_scope_concern_ids=list(d.get("in_scope_concern_ids", [])),
+            out_of_scope_concern_ids=list(d.get("out_of_scope_concern_ids", [])),
         )
 
 

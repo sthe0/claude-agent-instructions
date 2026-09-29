@@ -70,6 +70,7 @@ from __future__ import annotations
 import os
 
 from . import gates
+from .plan import PlanError, load_plan
 from .plugins import Plugin, PluginDirective, register
 from .state import CheckVenue, Node, WeightClass
 
@@ -97,7 +98,9 @@ def _obs_submit_plan(state, bag) -> list[PluginDirective]:
     node-guarded to PLAN_READY, the node `cmd_submit_plan` lands on. Reuses
     gates.plan_review_blockers verbatim — never re-derives the precondition —
     so the trigger and the gate can never disagree about whether a review is
-    still owed."""
+    still owed. The render hint fed to the reviewer is scoped via
+    gates.review_delta rather than hardcoded to the whole plan, so a reviewer
+    asked to cover only a moved stage is not handed the entire plan to re-read."""
     if getattr(state, "node", None) != Node.PLAN_READY.value:
         return []
     target_plan = getattr(state, "plan_path", None)
@@ -106,23 +109,38 @@ def _obs_submit_plan(state, bag) -> list[PluginDirective]:
         return []
     specialist = _SLOT_SPECIALIST["plan_review"]
     venue = state.resolve_check_venue(CheckVenue.DELIVERY.value) or "<delivery venue>"
+    try:
+        doc = load_plan(target_plan) if target_plan else None
+    except (OSError, PlanError):
+        doc = None
+    if doc is not None:
+        delta = gates.review_delta(state, doc, target_plan)
+    else:
+        delta = {"whole_plan": True, "stages": [], "scopes": [],
+                  "render_command": f"agentctl plan-render --plan {target_plan}"}
+    scope_suffix = (
+        "" if delta["whole_plan"] or len(delta["scopes"]) != 1
+        else f" --scope {delta['scopes'][0]}"
+    )
     return [PluginDirective(
         plugin="review_dispatch",
         action="spawn_thinker_review",
         detail=(
             f"spawn the `{specialist}` specialization with --workdir {venue} (never "
             f"--session -- a review spawn is not the plan's executor); feed it "
-            f"`agentctl plan-render --plan {target_plan}` and `agentctl question-list "
+            f"`{delta['render_command']}` and `agentctl question-list "
             f"--session {state.session_id} --format md`; the reviewer must compute the "
             f"sha256 of {target_plan} from its OWN read and report it as a `Plan digest: "
             f"<sha256-hex>` line in its REVIEW message -- it never calls `agentctl "
             f"plan-review` itself. The ROOT then records the verdict: `agentctl "
             f"plan-review --session {state.session_id} --verdict pass|revise|override "
-            f"--reviewer {specialist} --plan-digest <sha256-hex>` (a pass does NOT bind "
-            f"without a matching --plan-digest)"
+            f"--reviewer {specialist} --plan-digest <sha256-hex>{scope_suffix}` (a pass "
+            f"does NOT bind without a matching --plan-digest)"
         ),
         blocking=True,
-        data={"slot": "plan_review", "specialist": specialist, "blockers": blockers},
+        data={"slot": "plan_review", "specialist": specialist, "blockers": blockers,
+              "whole_plan": delta["whole_plan"], "stages": delta["stages"],
+              "scopes": delta["scopes"], "render_command": delta["render_command"]},
     )]
 
 
