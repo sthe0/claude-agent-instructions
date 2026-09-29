@@ -290,6 +290,28 @@ def test_regression_evidence_ignores_out_of_scope_concern(gate_on, tmp_path, fix
     assert gates._plan_review_regression_evidence(whole, stage1, doc1) is False
 
 
+
+@pytest.mark.parametrize("scope,tag", [("stage:1", "stage:1"), ("stage:1", "stage:01"), ("stage:01", "stage:1")])
+def test_regression_evidence_counts_in_scope_concern(gate_on, tmp_path, fixtures_dir, scope, tag):
+    """Positive twin of the test above: an IN-SCOPE concern naming its own
+    changed stage, with a failing regression command, is evidence -- also when
+    either side spells the stage zero-padded."""
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    whole = _whole_review(plan_path, load_plan(str(plan_path)))
+
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1and2_retitled.toml").read_text())
+    doc1 = load_plan(str(plan_path))
+    concerns = [f"{tag}: the retitled stage regressed"]
+    ids = ["c1"]
+    in_scope, out_of_scope = gates.classify_concerns(scope, ids, concerns)
+    assert in_scope == ["c1"] and out_of_scope == []
+    stage1 = _stage_review(plan_path, doc1, 1, concerns=concerns, concern_ids=ids,
+                           in_scope_concern_ids=in_scope, out_of_scope_concern_ids=out_of_scope,
+                           regression_command="pytest -q", regression_exit=1)
+
+    assert gates._plan_review_regression_evidence(whole, stage1, doc1) is True
+
 # --- 4. gates.review_delta ---------------------------------------------------
 
 def test_review_delta_helper(gate_on, tmp_path, fixtures_dir):

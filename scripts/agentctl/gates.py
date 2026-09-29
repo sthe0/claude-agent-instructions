@@ -578,9 +578,19 @@ _PLAN_REVIEW_PART_TOKEN_RE = re.compile(
 )
 
 
+def _same_part(token: str, part_name: str) -> bool:
+    """Two part tokens name the same part: stage tokens by parsed index
+    (`stage:01` == `stage:1`), anything else by exact spelling."""
+    a = _plan_review_scope_stage_index(token)
+    b = _plan_review_scope_stage_index(part_name)
+    if a is not None and b is not None:
+        return a == b
+    return token == part_name
+
+
 def _concern_names_part(text: str, part_name: str) -> bool:
     m = _PLAN_REVIEW_PART_TOKEN_RE.match(text)
-    return m is not None and m.group(1) == part_name
+    return m is not None and _same_part(m.group(1), part_name)
 
 
 #: The two structural tokens that always name a part OUTSIDE any stage's scope —
@@ -630,7 +640,6 @@ def classify_concerns(scope: str, ids: list[str], concerns: list[str]) -> "tuple
     """
     if not scope:
         return list(ids), []
-    scope_stage = _plan_review_scope_stage_index(scope)
     in_scope: list[str] = []
     out_of_scope: list[str] = []
     for cid, text in zip(ids, concerns):
@@ -638,10 +647,7 @@ def classify_concerns(scope: str, ids: list[str], concerns: list[str]) -> "tuple
         if token is None:
             in_scope.append(cid)
             continue
-        token_stage = _plan_review_scope_stage_index(token)
-        same = (token_stage == scope_stage if token_stage is not None and scope_stage is not None
-                else token == scope)
-        if same:
+        if _same_part(token, scope):
             in_scope.append(cid)
         else:
             out_of_scope.append(cid)
