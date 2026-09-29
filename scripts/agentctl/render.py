@@ -14,6 +14,7 @@ carries every stage's index and title.
 """
 from __future__ import annotations
 
+import argparse
 import json
 
 from lib import kind_baselines
@@ -441,12 +442,39 @@ def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:
     return Directive(True, "(render)", "inspect", text, data={"markdown": text})
 
 
+def plan_render_stage_arg_type(raw: str) -> str:
+    """argparse `type=` for `plan-render --stage`: eagerly validates a bare int
+    or a comma-separated list of ints (e.g. '3' or '3,5') at PARSE time, so a
+    malformed value ('abc') or an empty one ('') fails with a clean argparse
+    usage error instead of either a bare ValueError surfacing deep inside
+    `_parse_stage_arg`, or (for '', which `_parse_stage_arg` would silently
+    treat as an empty index list) a silently-empty render."""
+    parts = raw.split(",")
+    if not raw or any(not part.strip() for part in parts):
+        raise argparse.ArgumentTypeError(
+            f"invalid --stage value: {raw!r} (expected an int, or a comma-separated "
+            "list of ints, e.g. '3' or '3,5')"
+        )
+    for part in parts:
+        try:
+            int(part.strip())
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                f"invalid --stage value: {raw!r} (expected an int, or a comma-separated "
+                "list of ints, e.g. '3' or '3,5')"
+            ) from None
+    return raw
+
+
 def _parse_stage_arg(raw) -> "list[int] | None":
     """Parse `--stage` into a sorted list of stage indices, or None when unset.
 
     Accepts a bare int — direct Namespace construction (tests), or a legacy
-    caller — or a str, either a single index ('3') or a comma-separated list
-    ('3,5'), as real CLI parsing now supplies."""
+    caller that bypasses argparse — or a str, either a single index ('3') or a
+    comma-separated list ('3,5'). The int branch is kept even though real CLI
+    parsing now always supplies a str (validated by `plan_render_stage_arg_type`
+    beforehand): several callers (tests, and any future non-CLI caller) build a
+    Namespace directly with a bare int, bypassing argparse entirely."""
     if raw is None:
         return None
     if isinstance(raw, int):

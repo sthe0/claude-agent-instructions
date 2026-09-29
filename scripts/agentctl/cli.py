@@ -66,7 +66,14 @@ from .plan import (
     _venue_for,
 )
 from .text_shape import WHOLE_STAGE_ELEMENT
-from .render import cmd_plan_grants, cmd_plan_render, render_plan_grants, render_plan_md, render_stages_md
+from .render import (
+    cmd_plan_grants,
+    cmd_plan_render,
+    plan_render_stage_arg_type,
+    render_plan_grants,
+    render_plan_md,
+    render_stages_md,
+)
 from .submission import submission_advice, submission_violations
 from .state import (
     _EXECUTION_NODES,
@@ -9075,7 +9082,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("plan-render"); sp.add_argument("--plan", required=True,
         help="TOML plan to render to a markdown prose view on demand (a projection, "
              "never written to disk — the TOML is the single source of truth)")
-    sp.add_argument("--stage", type=str, default=None,
+    sp.add_argument("--stage", type=plan_render_stage_arg_type, default=None,
         help="render only this stage index, or a comma-separated list of stage "
              "indices (e.g. '3,5'), as a brief projection instead of the whole "
              "plan (the spawn prompt's per-dispatch projection, or a reviewer's "

@@ -467,6 +467,23 @@ def test_parse_stage_arg_none_stays_none():
     assert _parse_stage_arg(None) is None
 
 
+@pytest.mark.parametrize("raw", ["abc", "", "1,abc", "1,"])
+def test_plan_render_stage_arg_type_rejects_malformed(raw):
+    import argparse
+
+    from agentctl.render import plan_render_stage_arg_type
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        plan_render_stage_arg_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["3", "3,5"])
+def test_plan_render_stage_arg_type_accepts_wellformed(raw):
+    from agentctl.render import plan_render_stage_arg_type
+
+    assert plan_render_stage_arg_type(raw) == raw
+
+
 def test_plan_render_csv_stage_renders_both_headings(fixtures_dir):
     plan_path = fixtures_dir / "plan_two_stage_substantive.toml"
     directive = cmd_plan_render(ns(plan=str(plan_path), stage="1,2"))
@@ -478,20 +495,27 @@ def test_plan_render_csv_stage_renders_both_headings(fixtures_dir):
 
 
 def test_plan_render_single_int_stage_byte_identical_to_pre_csv_shape(fixtures_dir):
+    """The CSV form must not change the single-stage rendering shape at all --
+    assert directly against render_stage_brief, the pre-CSV function itself,
+    not just against another cmd_plan_render call."""
+    from agentctl.render import render_stage_brief
+
     plan_path = fixtures_dir / "plan_two_stage_substantive.toml"
+    doc = load_plan(str(plan_path))
     single = cmd_plan_render(ns(plan=str(plan_path), stage=1))
     via_str = cmd_plan_render(ns(plan=str(plan_path), stage="1"))
     assert single.ok and via_str.ok
-    assert single.data["markdown"] == via_str.data["markdown"]
-    assert "Scaffold module" in single.data["markdown"]
-    assert "Add tests" not in single.data["markdown"]
+    assert single.data["markdown"] == render_stage_brief(doc, 1)
+    assert via_str.data["markdown"] == render_stage_brief(doc, 1)
 
 
 def test_plan_render_without_stage_is_unchanged_whole_plan_view(fixtures_dir):
+    """No --stage must not change the whole-plan rendering shape at all --
+    assert directly against render_plan_md, the pre-CSV function itself."""
+    from agentctl.render import render_plan_md
+
     plan_path = fixtures_dir / "plan_two_stage_substantive.toml"
+    doc = load_plan(str(plan_path))
     directive = cmd_plan_render(ns(plan=str(plan_path), stage=None))
     assert directive.ok
-    md = directive.data["markdown"]
-    assert "Scaffold module" in md
-    assert "Add tests" in md
-    assert "Wire CI" in md
+    assert directive.data["markdown"] == render_plan_md(doc)
