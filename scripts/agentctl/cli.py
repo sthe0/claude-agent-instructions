@@ -3595,6 +3595,30 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                     data={"grants_block": compact_grants_block},
                 )
 
+        # Refuse to stamp a receipt for a plan `approve` would refuse on premise
+        # grounds — reverses the #60 "present, then discover at approve"
+        # ordering (incident 2026-09-28: an essence was stamped with 12 raised
+        # candidates, approve then refused). Runs after the coverage/grants
+        # containment checks above so their data payloads survive on a refusal,
+        # and excludes the essence-coverage half (include_essence_coverage=
+        # False): that half compares this receipt against itself, which is
+        # circular before it exists — approve's own gating stays unfiltered.
+        if bag is not None and gates.plan_presentation_active(state):
+            try:
+                _premise_blk = plugins_premise.premise_blockers(
+                    state, bag, include_essence_coverage=False
+                )
+            except (OSError, PlanError):
+                _premise_blk = []  # surfaced already by the coverage/grants checks above
+            if _premise_blk:
+                return Directive(
+                    False, state.node, "noop",
+                    "cannot present essence: premise blockers stand — dispose "
+                    "every open question and undispositioned order element, "
+                    "same routes `approve` prints — stamping nothing",
+                    data={"blockers": _premise_blk},
+                )
+
     # grants_sha256 over whatever doc this branch already loaded (full/essence);
     # replan_diff loads its own, since neither branch above populated one for it.
     # A load failure here leaves the digest None rather than raising — the same

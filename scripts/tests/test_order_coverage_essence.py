@@ -74,6 +74,18 @@ def _block(store, sid) -> str:
     return plugins_premise.coverage_block(state, state.plugins["premise"])
 
 
+def _mark_enumerated(store, sid) -> None:
+    """Puts the bag's enumeration half into a premise-clear state (landed, not
+    stale) so a present-plan call in this file exercises ONLY the coverage/grants
+    containment this file is about — not the new premise-blockers refusal
+    `cmd_present_plan` now applies before stamping an essence."""
+    state = store.load(sid)
+    state.plugins["premise"]["enumerated"] = True
+    state.plugins["premise"]["enumerated_at"] = plugins_premise._plan_content_digest(
+        load_plan(_PLAN))
+    store.save(state)
+
+
 def _grants_block() -> str:
     return render_plan_grants(load_plan(_PLAN), fmt="compact").strip()
 
@@ -156,6 +168,7 @@ def test_present_plan_stamps_an_essence_that_embeds_the_block(store, tmp_path, a
     _order(store, sid, id="O1", element="the gate", as_="covered", stage=1)
     _order(store, sid, id="O2", element="automating the inventory", as_="cut",
            reason="named in the order brief as out of scope")
+    _mark_enumerated(store, sid)
 
     block = _block(store, sid)
     d = _present(store, sid, f"## Essence\n\nprose first.\n\n{block}\n\nand after.\n", tmp_path)
@@ -203,6 +216,7 @@ def test_present_plan_refuses_an_essence_when_the_order_bag_is_empty(store, tmp_
 def test_gate_goes_red_when_an_element_is_cut_after_presenting(store, tmp_path, armed):
     sid = _plan_ready(store)
     _order(store, sid, id="O1", element="the gate", as_="covered", stage=1)
+    _mark_enumerated(store, sid)
     assert _present(store, sid, _block(store, sid), tmp_path).ok is True
     assert _coverage_blockers(store, sid) == []
 
@@ -223,6 +237,7 @@ def test_gate_goes_red_when_an_element_is_cut_after_presenting(store, tmp_path, 
 def test_gate_goes_red_when_a_new_element_is_raised_after_presenting(store, tmp_path, armed):
     sid = _plan_ready(store)
     _order(store, sid, id="O1", element="the gate", as_="covered", stage=1)
+    _mark_enumerated(store, sid)
     assert _present(store, sid, _block(store, sid), tmp_path).ok is True
 
     _order(store, sid, id="O2", element="the norm sentence", as_="covered", stage=2)
