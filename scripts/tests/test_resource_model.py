@@ -24,6 +24,14 @@ def _resources_module():
     return resources
 
 
+def _tool_contracts_module():
+    spec = importlib.util.find_spec("agentctl.tool_contracts")
+    assert spec is not None, "agentctl.tool_contracts module not found"
+    from agentctl import tool_contracts
+
+    return tool_contracts
+
+
 def test_covers_file_by_containment_protected_roots_never(tmp_path, monkeypatch):
     resources = _resources_module()
 
@@ -165,3 +173,40 @@ def test_contract_tables_and_ledger_dir_never_covered(tmp_path):
     assert exact_scripts_approval.covers(
         resources.FileResource(str(venue / "scripts"), "write"), protected=protected
     )
+
+
+def _classify_module():
+    spec = importlib.util.find_spec("agentctl.classify")
+    assert spec is not None, "agentctl.classify module not found"
+    from agentctl import classify
+
+    return classify
+
+
+def test_classify_action_awk_find_sed_not_side_effect_free():
+    """REQ3: a coarse verb-only classifier must not call awk/sed/find
+    side-effect-free — each can be argument-dependently writing (awk
+    `print > "file"`, sed `-i`, find `-exec`), which classify_action cannot
+    see from the verb alone. agentctl/tool_contracts.py's resolve_command()
+    is the reviewed, argument-aware resolver these three now route through
+    instead."""
+    classify = _classify_module()
+
+    for verb in ("awk", "sed", "find"):
+        assert verb not in classify.READONLY_BASH
+        assert classify.classify_action("Bash", verb=verb) != "side-effect-free"
+
+
+def test_tool_contracts_toml_has_resolver_entries_for_removed_readonly_verbs():
+    """Cross-module consistency: a verb removed from classify.py's
+    READONLY_BASH because it needs argument-aware resolution must actually
+    HAVE a reviewed resolver entry in tool_contracts.toml — otherwise the
+    removal just makes the verb `unknown-program`-unresolved by omission
+    rather than by a reviewed decision."""
+    classify = _classify_module()
+    tc = _tool_contracts_module()
+
+    table = tc.load_contract_table()
+    for verb in ("awk", "sed", "find"):
+        assert verb not in classify.READONLY_BASH
+        assert verb in table, f"{verb!r} missing from tool_contracts.toml"

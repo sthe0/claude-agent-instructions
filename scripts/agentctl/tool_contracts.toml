@@ -1,0 +1,279 @@
+# Reviewed per-tool effect contracts (REQ3).
+#
+# One [[program]] entry per program NAME (agentctl/tool_contracts.py's loader
+# refuses a duplicate name). `effect` is one of:
+#   "none"       - the program's own documented contract never writes to the
+#                  filesystem or an external resource. A generic shell output
+#                  redirect (`>`, `>>`) on the SAME segment still resolves to
+#                  a file write regardless of this entry -- that is the
+#                  shell's own effect, not the program's, and is decided by
+#                  lib/bash_write_targets, not by this table.
+#   "writes-operands" - the program's own contract writes a file named by its
+#                  arguments; the target(s) are located by the shared
+#                  lib/bash_write_targets lexer (already reviewed there for
+#                  the canon-readonly guard), never by pattern-matching this
+#                  entry's own text.
+#   "unresolved" - the effect is not decidable from the command line alone
+#                  (an unbounded DSL, an argument-dependent target this table
+#                  does not attempt to resolve, or a form this plan
+#                  deliberately leaves unresolved e.g. a delete/force push).
+#   "resolver"   - argument-dependent; resolved by the matching Python
+#                  function in `agentctl/tool_contracts.py`'s
+#                  `_CUSTOM_RESOLVERS` table, cited per program below.
+#
+# `source` names where the contract was verified (man page / --help output /
+# an in-repo module this plan already reviews for the same lexing).
+
+# --- read-only (effect = "none") --------------------------------------------
+
+[[program]]
+name = "ls"
+effect = "none"
+source = "GNU coreutils ls(1): lists directory entries; no write."
+
+[[program]]
+name = "cat"
+effect = "none"
+source = "POSIX cat(1): concatenates and prints files; no write."
+
+[[program]]
+name = "head"
+effect = "none"
+source = "GNU coreutils head(1): prints the first part of files; no write."
+
+[[program]]
+name = "tail"
+effect = "none"
+source = "GNU coreutils tail(1): prints the last part of files; no write."
+
+[[program]]
+name = "less"
+effect = "none"
+source = "less(1): a pager; no write."
+
+[[program]]
+name = "more"
+effect = "none"
+source = "more(1): a pager; no write."
+
+[[program]]
+name = "wc"
+effect = "none"
+source = "GNU coreutils wc(1): counts lines/words/bytes; no write."
+
+[[program]]
+name = "stat"
+effect = "none"
+source = "GNU coreutils stat(1): displays file status; no write."
+
+[[program]]
+name = "file"
+effect = "none"
+source = "file(1): determines file type; no write."
+
+[[program]]
+name = "tree"
+effect = "none"
+source = "tree(1): lists directory contents as a tree; no write."
+
+[[program]]
+name = "du"
+effect = "none"
+source = "GNU coreutils du(1): estimates file space usage; no write."
+
+[[program]]
+name = "df"
+effect = "none"
+source = "GNU coreutils df(1): reports filesystem disk usage; no write."
+
+[[program]]
+name = "grep"
+effect = "none"
+source = "GNU grep(1): prints matching lines; no write (absent -l/--include write flags -- grep has none)."
+
+[[program]]
+name = "rg"
+effect = "none"
+source = "ripgrep --help: a search tool; no write flag exists."
+
+[[program]]
+name = "printf"
+effect = "none"
+source = "POSIX printf(1): writes to stdout only; a `>` redirect is the shell's effect, resolved separately."
+
+[[program]]
+name = "echo"
+effect = "none"
+source = "POSIX echo(1): writes to stdout only; a `>` redirect is the shell's effect, resolved separately."
+
+[[program]]
+name = "jq"
+effect = "none"
+source = "jq(1): a JSON filter writing to stdout only (no -o); a `>` redirect is the shell's effect."
+
+[[program]]
+name = "realpath"
+effect = "none"
+source = "GNU coreutils realpath(1): prints a resolved path; no write."
+
+[[program]]
+name = "readlink"
+effect = "none"
+source = "GNU coreutils readlink(1): prints a symlink target; no write."
+
+[[program]]
+name = "which"
+effect = "none"
+source = "which(1): locates a program in PATH; no write."
+
+[[program]]
+name = "whoami"
+effect = "none"
+source = "GNU coreutils whoami(1): prints the effective user; no write."
+
+[[program]]
+name = "date"
+effect = "none"
+source = "GNU coreutils date(1) without -s/--set: prints the date; no write."
+
+[[program]]
+name = "pwd"
+effect = "none"
+source = "POSIX pwd(1): prints the working directory; no write."
+
+[[program]]
+name = "env"
+effect = "none"
+source = "POSIX env(1) run bare (no command operand): prints the environment; no write. A command operand makes `env` a wrapper, stripped before program identification ever sees it."
+
+[[program]]
+name = "printenv"
+effect = "none"
+source = "GNU coreutils printenv(1): prints environment variables; no write."
+
+[[program]]
+name = "shasum"
+effect = "none"
+source = "Perl shasum(1): prints a digest to stdout only; no write absent -o (not offered by this program)."
+
+[[program]]
+name = "sha256sum"
+effect = "none"
+source = "GNU coreutils sha256sum(1): prints a digest to stdout only; no write flag exists."
+
+# --- read-only git/arc subcommands (dispatched via the "resolver" entry
+# below, listed here only for the loader's one-entry-per-program review) ----
+
+# --- write-target verbs resolved via lib/bash_write_targets -----------------
+
+[[program]]
+name = "sed"
+effect = "writes-operands"
+source = "GNU sed(1): -i/--in-place rewrites its file operand(s) in place; resolved by lib/bash_write_targets.segment_write_target (already reviewed for the canon-readonly guard). Absent -i, sed writes stdout only."
+
+[[program]]
+name = "tee"
+effect = "writes-operands"
+source = "POSIX tee(1): writes each non-flag operand as a file; resolved by lib/bash_write_targets.segment_write_target."
+
+[[program]]
+name = "cp"
+effect = "writes-operands"
+source = "POSIX cp(1): writes its destination operand; resolved by lib/bash_write_targets.segment_write_target (directory destinations expanded to per-source targets)."
+
+[[program]]
+name = "mv"
+effect = "writes-operands"
+source = "POSIX mv(1): writes its destination operand; resolved by lib/bash_write_targets.segment_write_target."
+
+[[program]]
+name = "install"
+effect = "writes-operands"
+source = "GNU coreutils install(1): writes its destination operand; resolved by lib/bash_write_targets.segment_write_target."
+
+[[program]]
+name = "patch"
+effect = "writes-operands"
+source = "POSIX patch(1): writes files named inside the patch body, not the command line; lib/bash_write_targets reports the cwd it is applied in (the only honest target derivable from the command line alone)."
+
+# --- always unresolved (effect not decidable from the command line) --------
+
+[[program]]
+name = "dd"
+effect = "unresolved"
+reason = "dd's of= target is not resolved by lib/bash_write_targets (no verb dispatch for it); treated as unresolved rather than silently missed."
+source = "GNU coreutils dd(1): writes its of= operand."
+
+[[program]]
+name = "rsync"
+effect = "unresolved"
+reason = "rsync's destination argument and --delete/-a semantics are not resolved by this table."
+source = "rsync(1): writes/deletes at its destination argument."
+
+[[program]]
+name = "ln"
+effect = "unresolved"
+reason = "ln's link-target semantics (and -f overwrite) are not resolved by this table."
+source = "POSIX ln(1): creates a link at its destination operand."
+
+[[program]]
+name = "truncate"
+effect = "unresolved"
+reason = "truncate's target argument is not resolved by this table."
+source = "GNU coreutils truncate(1): writes (truncates) its file operand."
+
+[[program]]
+name = "touch"
+effect = "unresolved"
+reason = "touch's operand(s) are not resolved by this table (also creates missing files, not only mtimes)."
+source = "POSIX touch(1): creates/updates its file operand(s)."
+
+[[program]]
+name = "curl"
+effect = "unresolved"
+reason = "curl's -o/-O/--upload-file targets and outbound network effect are not resolved by this table."
+source = "curl(1): can write a local file (-o/-O) and/or call an external service."
+
+[[program]]
+name = "wget"
+effect = "unresolved"
+reason = "wget's -O target and outbound network effect are not resolved by this table."
+source = "wget(1): can write a local file (-O) and/or call an external service."
+
+[[program]]
+name = "kill"
+effect = "unresolved"
+reason = "signals an external process; not a resource this table types."
+source = "POSIX kill(1): sends a signal to a process."
+
+# --- argument-dependent, resolved by a named Python function ---------------
+
+[[program]]
+name = "awk"
+effect = "resolver"
+source = "POSIX awk(1): `print > \"file\"` inside an awk program can write anywhere the script names, decided by data the command line does not show -- always unresolved (matches grants.py's _UNCONDITIONALLY_REFUSED_PROGRAMS bias)."
+
+[[program]]
+name = "find"
+effect = "resolver"
+source = "POSIX find(1): -exec/-execdir/-ok/-okdir run an arbitrary command per matched file -- unresolved; absent those flags find itself never writes."
+
+[[program]]
+name = "git"
+effect = "resolver"
+source = "git-push(1) / git(1): a read-only subcommand (log, status, diff, show, branch, remote, config, rev-parse, ls-files, blame) resolves to no effect; `push` with a literal remote and literal, non-force, non-delete refspec(s) resolves to a vcs_ref push resource per refspec destination; a force or delete form, a zero-refspec push, or any other subcommand is unresolved."
+
+[[program]]
+name = "pytest"
+effect = "resolver"
+source = "pytest writes cache/coverage artifacts under its invocation cwd (.pytest_cache, coverage files); resolved to a write on the whole venue subtree -- a known over-broad residual (a test could theoretically write further out via an absolute path in its own body, not decidable from the command line)."
+
+[[program]]
+name = "python3"
+effect = "resolver"
+source = "An interpreter's effect is entirely a property of the script it runs, not decidable from the command line; resolved to 'unresolved' with a content-bound identity (REQ3) unless a future script-effects registry entry covers the exact script by digest (checkpoint b)."
+
+[[program]]
+name = "python"
+effect = "resolver"
+source = "Same as python3."

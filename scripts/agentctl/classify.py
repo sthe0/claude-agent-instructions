@@ -50,9 +50,13 @@ ROUTE_BY_WEIGHT = {
 # ---------------------------------------------------------------------------
 
 READONLY_BASH: set[str] = {
-    "ls", "head", "tail", "cat", "less", "more", "find", "wc", "stat", "file",
-    "tree", "du", "df", "grep", "rg", "awk", "sed", "echo", "printf", "jq",
+    "ls", "head", "tail", "cat", "less", "more", "wc", "stat", "file",
+    "tree", "du", "df", "grep", "rg", "echo", "printf", "jq",
     "realpath", "readlink", "which", "whoami", "date", "pwd", "env", "printenv",
+    # awk/sed/find are deliberately ABSENT: each can be argument-dependently
+    # writing (awk `print > "file"`, sed `-i`, find `-exec`) in a way this
+    # coarse verb-only classifier cannot see — agentctl/tool_contracts.py's
+    # resolve_command() is the reviewed, argument-aware resolver for these.
     # A digest over bytes already readable is as side-effect-free as `cat`, and the
     # engine's own plan-review gate REQUIRES a reviewer-computed sha256 — without a
     # hashing verb here (and the matching settings/base.json entry) that gate demands
