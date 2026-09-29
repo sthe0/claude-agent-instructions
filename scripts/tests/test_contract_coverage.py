@@ -29,6 +29,7 @@ re-decide it.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import inspect
 import re
 from pathlib import Path
@@ -40,6 +41,7 @@ from agentctl.grants import AddDirGrant, RuleGrant, StageGrants
 from agentctl.plan import (
     PlanDoc, PlanMeta, diff_plans, stage_carry_key, stage_question_key,
 )
+from agentctl.script_effects import StageEffectDeclaration
 from agentctl.state import (
     Actor, Criterion, LandedSpec, Means, Outcome, Principle, Stage, Subject, Supply,
 )
@@ -604,6 +606,9 @@ def _stage(index=2, **over):
             allow=[RuleGrant(rule="Bash(pytest -q:*)", provenance="declared")],
             add_dirs=[AddDirGrant(path="scratch", mode="read", provenance="declared")],
         ),
+        effects=[StageEffectDeclaration(
+            path="scripts/named.sh", sha256="e" * 64, resolver="repo_script",
+        )],
     )
     fields.update(over)
     return Stage(**fields)
@@ -629,13 +634,21 @@ def _get(obj, dotted):
 
 
 def _set(obj, dotted, value):
+    """Mirrors `_get`'s dotted-path walk. A list element that is itself a
+    FROZEN dataclass (e.g. `StageEffectDeclaration`) cannot take `setattr`,
+    so that one case is handled by replacing the element in place via
+    `dataclasses.replace` rather than mutating it."""
     parts = dotted.split(".")
     for part in parts[:-1]:
         if isinstance(obj, list):
             obj = obj[0]
         obj = getattr(obj, part)
     if isinstance(obj, list):
-        obj = obj[0]
+        target = obj[0]
+        if dataclasses.is_dataclass(target) and target.__dataclass_params__.frozen:
+            obj[0] = dataclasses.replace(target, **{parts[-1]: value})
+            return
+        obj = target
     setattr(obj, parts[-1], value)
 
 
@@ -743,6 +756,9 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "grants.add_dirs.path": frozenset({"diff_plans"}),
     "grants.add_dirs.mode": frozenset({"diff_plans"}),
     "grants.add_dirs.provenance": frozenset(),
+    "effects.path": frozenset({"diff_plans"}),
+    "effects.sha256": frozenset({"diff_plans"}),
+    "effects.resolver": frozenset({"diff_plans"}),
 }
 
 

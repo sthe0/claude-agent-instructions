@@ -1630,6 +1630,7 @@ def _structural_signature(doc: PlanDoc) -> dict:
                 s.criterion.done_criterion,
                 s.criterion.criterion_type,
                 *grants_place(s),
+                *effects_place(s),
             )
             for s in doc.stages
         },
@@ -1755,6 +1756,26 @@ def grants_place(stage) -> tuple:
     if g is None or g.is_empty():
         return ()
     return (g.effective_tuple(),)
+
+
+def effects_place(stage) -> tuple:
+    """The stage's declared `[[stage.effects]]` script-effect claims as a
+    contribution to a change-decision key: a ONE-element tuple holding a
+    hashable, order-independent `frozenset` of (path, sha256, resolver)
+    triples, or the EMPTY tuple when the stage declares no effects at all.
+    Mirrors `grants_place` in shape and in rationale: like a declared grant,
+    a declared script-effect trust claim is a permission surface (which
+    scripts resolve this stage's calls, pinned to which bytes) that an
+    executor may not silently move under the light (`--renormalize`) path,
+    so this is spliced into `_structural_signature` (below) and into
+    `gates._renorm_stage_residual` (imported from here) on the same footing
+    as `grants`. Also unclaimed by `stage_carry_key`/`stage_question_key`
+    for the same reason: no name in the question-target vocabulary names a
+    stage's trusted-script surface."""
+    effects = getattr(stage, "effects", None)
+    if not effects:
+        return ()
+    return (frozenset((e.path, e.sha256, e.resolver) for e in effects),)
 
 
 _NEGATIVE_CONTROL_PLACE_ABSENT = (None, None)
