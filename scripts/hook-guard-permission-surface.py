@@ -16,18 +16,27 @@ replacement the abandonment leaf calls for: NO cross-invocation state, NO
 UNKNOWN=>deny — every branch fires only on POSITIVE identification, and
 anything ambiguous, unreadable or unparsable ALLOWS.
 
-`decide(tool_name, tool_input, cwd, permission_mode, read_file)` is a function
-of its arguments only — no transcript read, no session state, no filesystem
-read except through the injected `read_file`. It returns exactly `"allow"` or
-`"ask"`, NEVER `"deny"`: `ask` behaves like `deny` in headless mode (no TTY to
-answer it) but shows a real interactive dialog when one exists, which is the
-whole point of a guard whose job is to let a HUMAN see and approve an
-out-of-scope grant (docs/components/settings-and-permissions.md § Hook
-decision semantics, "ask" ≡ "deny" in headless, real dialog interactively).
-`permission_mode` does not change the returned decision — it is accepted for
-interface parity with that decision table, not consulted, since the guard's
-own answer to "is this a G-target" never depends on which mode the session is
-in.
+`decide(tool_name, tool_input, cwd, permission_mode, read_file)` and
+`decide_detailed` read no transcript, no session state, no environment
+variable, and no filesystem beyond the injected `read_file` — both return
+only `"allow"` or `"ask"`, never `"deny"`. `permission_mode` does not change
+the returned decision — it is accepted for interface parity with that
+decision table, not consulted, since the guard's own answer to "is this a
+G-target" never depends on which mode the session is in.
+
+Turning a G-branch `"ask"` into `"deny"` is `main()`'s concern, not the
+decision functions' — applied once, right before a fire is logged and
+printed, gated on `AGENT_RECURSION_DEPTH >= 1`: a spawned (`-p`, headless)
+child has no TTY to answer an interactive `ask` dialog, so the harness's own
+semantics silently turn an unanswered `ask` into a deny with the reason
+DROPPED (docs/components/settings-and-permissions.md § Hook decision
+semantics, "ask" ≡ "deny" in headless, real dialog interactively) — the
+child never learns why. Emitting an explicit `deny` carrying
+`_PERMISSION_REQUEST_HINT` in the reason instead gives the child its only
+real feedback channel back: the reason text itself, telling it to surface a
+`PERMISSION-REQUEST:` to its parent instead of retrying blindly. At depth 0
+(a root/interactive session, which CAN show the dialog to a human) the
+decision stays `"ask"`, unchanged.
 
 All G-target predicates come from `lib/widening_targets.py` — the SAME shape
 predicates `agentctl/grants.py`'s validator refuses a grant for — so this
@@ -124,17 +133,22 @@ MultiEdit's `edits` array is applied in order to reconstruct the after-text.
 NotebookEdit is checked by `notebook_path` alone (G1-state, G3) — a notebook
 is not a settings document, so G1-edit does not apply to it.
 
-Every fire is logged, but ONLY inside `main()` — `decide()` itself performs no
-I/O beyond the injected `read_file` and writes nothing. The fire log path is
-`$CLAUDE_PERMISSION_GUARD_LOG`, default `~/.local/log/claude-permission-guard.jsonl`;
-each row carries the hook input's `session_id`, `transcript_path` and
-`tool_use_id`. `scripts/replay-permission-guard.py` imports `decide()` alone,
-never this module's logger, so a replay run never appends to that log.
+Every fire (`"ask"` or `"deny"`) is logged, but ONLY inside `main()` —
+`decide()`/`decide_detailed()` themselves perform no I/O beyond the injected
+`read_file` and write nothing. The fire log path is
+`$CLAUDE_PERMISSION_GUARD_LOG`, default
+`~/.local/log/claude-permission-guard.jsonl`; each row carries the hook
+input's `session_id`, `transcript_path` and `tool_use_id`, plus the actual
+emitted `decision` — `"ask"` at depth 0, `"deny"` at depth >= 1, never
+hardcoded. `scripts/replay-permission-guard.py` imports `decide_detailed`
+alone, never this module's logger, so a replay run never appends to that log
+and never applies the depth-based deny rule — it always reports the
+G-branch's own `"ask"` verdict, independent of `AGENT_RECURSION_DEPTH`.
 
 Always exits 0 — a hook crash must never wedge the workflow, mirroring
 hook-guard-canon-readonly.py's own always-exit-0 / always-caught-exception
 structure, adapted from that template's two-way `str | None` contract to this
-guard's three-way `"allow"`/`"ask"` (never `None`, never `"deny"`) contract.
+guard's three-way `"allow"`/`"ask"`/`"deny"` (never `None`) contract.
 """
 from __future__ import annotations
 
@@ -217,6 +231,29 @@ _G2_WIDENING_FLAGS = frozenset({
 })
 
 _G2_PERMISSION_MODE_EXEMPT_VALUES = frozenset({"default", "plan"})
+
+# See module docstring for why main() turns an "ask" into this at depth >= 1.
+_PERMISSION_REQUEST_HINT = (
+    "if the action is needed, stop and return PERMISSION-REQUEST: to the "
+    "parent (Action/Why/Fallback, per the specialist marker protocol) "
+    "instead of retrying."
+)
+
+
+def _recursion_depth() -> int:
+    """AGENT_RECURSION_DEPTH (0 for a top-level/root session). Duplicates
+    hook-state-gate.py's own recursion_depth() rather than importing it --
+    that module is a top-level script, not a lib import target, and this
+    guard's own no-cross-module-state-read posture (module docstring) is
+    about session/transcript state, not this one environment variable."""
+    try:
+        return int(os.environ.get("AGENT_RECURSION_DEPTH", "0"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _with_permission_request_hint(message: str | None) -> str:
+    return f"{message} {_PERMISSION_REQUEST_HINT}" if message else _PERMISSION_REQUEST_HINT
 
 
 def _real_read_file(path: str) -> str:
@@ -719,15 +756,19 @@ def decide_detailed(
     permission_mode: str | None,
     read_file,
 ) -> tuple[str, str | None, str | None]:
-    """`(decision, branch, message)` — `decision` is `"allow"` or `"ask"`,
-    never `"deny"`. `permission_mode` is accepted, never consulted (see
-    module docstring). Any unexpected shape or internal exception allows.
+    """`(decision, branch, message)` at the G-branch level — `decision` is
+    always `"allow"` or `"ask"`, never `"deny"` (see module docstring: turning
+    an `"ask"` into a `"deny"` at depth >= 1 is `main()`'s concern, not this
+    function's). `permission_mode` is accepted, never consulted (see module
+    docstring). Any unexpected shape or internal exception allows.
 
     `decide()` is the thin single-value wrapper `main()` and every test that
     only needs the verdict use; `replay-permission-guard.py` imports THIS
     function instead because its would-fires report needs to name which
-    G-branch fired — both share the one underlying implementation below, so
-    the replay tool can never drift from the shipped hook's own decision."""
+    G-branch fired — both share the one underlying implementation, so the
+    replay tool can never drift from the shipped hook's own G-branch logic.
+    Replay never sees a `"deny"`, by construction: it never applies the
+    depth-based rule `main()` does."""
     del permission_mode
     try:
         if tool_name == "Edit":
@@ -809,7 +850,8 @@ def decide(
     permission_mode: str | None,
     read_file,
 ) -> str:
-    """`"allow"` or `"ask"` — see module docstring."""
+    """`"allow"` or `"ask"` — see module docstring; `main()` is the only place
+    a `"deny"` is produced."""
     return decide_detailed(tool_name, tool_input, cwd, permission_mode, read_file)[0]
 
 
@@ -825,7 +867,7 @@ def _log_target(tool_input: dict) -> str | None:
     return None
 
 
-def _log_fire(log_path: str, payload: dict, branch: str, message: str | None) -> None:
+def _log_fire(log_path: str, payload: dict, branch: str, message: str | None, decision: str) -> None:
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
         tool_input = {}
@@ -838,7 +880,7 @@ def _log_fire(log_path: str, payload: dict, branch: str, message: str | None) ->
         "permission_mode": payload.get("permission_mode"),
         "target": _log_target(tool_input),
         "branch": branch,
-        "decision": "ask",
+        "decision": decision,
         "message": message,
     }
     try:
@@ -870,15 +912,19 @@ def main() -> int:
     except Exception:
         return 0
 
-    if decision == "ask":
+    if decision == "ask" and _recursion_depth() >= 1:
+        decision = "deny"
+        message = _with_permission_request_hint(message or f"{branch} widening detected")
+
+    if decision in ("ask", "deny"):
         log_path = os.environ.get("CLAUDE_PERMISSION_GUARD_LOG") or str(
             Path.home() / ".local" / "log" / "claude-permission-guard.jsonl"
         )
-        _log_fire(log_path, payload, branch or "unknown", message)
+        _log_fire(log_path, payload, branch or "unknown", message, decision)
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "permissionDecision": "ask",
+                "permissionDecision": decision,
                 "permissionDecisionReason": message or f"{branch} widening detected",
             }
         }))
