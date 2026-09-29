@@ -15,6 +15,7 @@ carries every stage's index and title.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -35,6 +36,7 @@ from .plan import (
     PlanError,
     _venue_for,
     consumers,
+    first_hop,
     grants_sha256,
     interface_empty,
     load_plan,
@@ -475,9 +477,7 @@ def _unit_first_hop(doc: PlanDoc, unit: "int | str") -> set[int]:
     the order's coverage needs every stage's interface anyway."""
     if _unit_label(unit) == "order":
         return {s.index for s in doc.stages}
-    from .plan import first_hop as _first_hop
-
-    return _first_hop(doc, int(unit))
+    return first_hop(doc, int(unit))
 
 
 def _unit_relies_on_and_consumers(doc: PlanDoc, unit: "int | str") -> tuple[set[int], set[int]]:
@@ -577,9 +577,10 @@ def materialize_topo_units(doc: PlanDoc, plan_sha256: str, root: "Path | str") -
     collide), `MANIFEST.json` written inside it before the rename, then
     `os.replace`d into place in one step so a reader can never observe a
     partial tree. `os.replace` onto an existing non-empty destination
-    raises `OSError` — the signal a concurrent writer won the race first;
-    the loser discards its own temp directory and re-verifies the
-    winner's tree via `verify_topo_units` instead of retrying.
+    raises `OSError` (ENOTEMPTY/EEXIST) — the signal a concurrent writer
+    won the race first; the loser discards its own temp directory and
+    re-verifies the winner's tree via `verify_topo_units` instead of
+    retrying. Any other `OSError` propagates.
 
     Returns the materialized `root/plan_sha256/` directory."""
     root = Path(root)
@@ -610,7 +611,10 @@ def materialize_topo_units(doc: PlanDoc, plan_sha256: str, root: "Path | str") -
         )
         try:
             os.replace(tmp_dir, version_root)
-        except OSError:
+        except OSError as exc:
+            lost_race = exc.errno in (errno.ENOTEMPTY, errno.EEXIST) and version_root.is_dir()
+            if not lost_race:
+                raise
             shutil.rmtree(tmp_dir, ignore_errors=True)
             verify_topo_units(version_root, doc)
     except BaseException:
@@ -699,8 +703,8 @@ def verify_topo_units(unit_dir: "Path | str", doc: PlanDoc) -> None:
 
 
 _CONDITION_TEXT = {
-    CONDITION_MARKERS[0]: "this unit's own postcondition (what it delivers) is fully and precisely declared",
-    CONDITION_MARKERS[1]: "this unit's own precondition (what it relies on) is fully and precisely declared",
+    CONDITION_MARKERS[0]: "the unit is organized in a non-arbitrary way",
+    CONDITION_MARKERS[1]: "the unit is a genuine derivation from the order",
     CONDITION_MARKERS[2]: "this unit delivers what it declares — its supplier postcondition holds",
     CONDITION_MARKERS[3]: (
         "what this unit relies on is declared, completely, precisely, and jointly "
@@ -711,6 +715,9 @@ _CONDITION_TEXT = {
 _ENGINE_ORDERED = "engine-ordered"
 _DECLARED_ONLY_ORDERING = "declared-only (supplies-wins collapse; not dispatch-ordered)"
 _ORDER_UNIT_ORDERING = "none"
+_ORDER_UNIT_EDGE = "order-node reliance (no declared supply edge)"
+_RAW_DEPENDS_ON_ONLY_EDGE = "depends_on-only"
+_WHOLE_PRODUCT = "whole product"
 
 
 def _engine_dispatch_closure(doc: PlanDoc, n: int) -> frozenset[int]:
@@ -747,45 +754,63 @@ def _ordering_tag(doc: PlanDoc, consumer: int, supplier: int) -> str:
 
 
 def _supply_edge_label(doc: PlanDoc, consumer: int, supplier: int) -> str:
-    """The supply edge from `supplier` to `consumer`, as declared on
-    `consumer`'s own `[[stage.supplies]] on = supplier`: its element (and
-    artifact, when named), or `"depends_on-only"` when `consumer` relies on
-    `supplier` only via the raw TOML `depends_on` (no typed supply)."""
+    """Every supply edge from `supplier` to `consumer`, as declared on
+    `consumer`'s own `[[stage.supplies]] on = supplier` entries, in
+    declaration order and joined with `; ` — each its element (`whole
+    product` when the supply names none) and artifact, when named. A stage
+    declaring no supplies gets one whole-product supply per `depends_on`
+    edge at parse time, so `depends_on-only` marks exactly a raw TOML
+    `depends_on` edge the supplies-wins collapse dropped."""
     consumer_stage = next(s for s in doc.stages if s.index == consumer)
+    edges = []
     for supply in consumer_stage.supplies:
-        if supply.on == supplier:
-            if supply.artifact:
-                return f"supplies `{supply.element}` (artifact: `{supply.artifact}`)"
-            return f"supplies `{supply.element}`"
-    return "depends_on-only"
+        if supply.on != supplier:
+            continue
+        element = f"`{supply.element}`" if supply.element is not None else _WHOLE_PRODUCT
+        edge = f"supplies {element}"
+        if supply.artifact:
+            edge += f" (artifact: `{supply.artifact}`)"
+        edges.append(edge)
+    return "; ".join(edges) if edges else _RAW_DEPENDS_ON_ONLY_EDGE
 
 
 def render_topo_review_bundle(doc: PlanDoc, unit: "int | str", *, plan_sha256: str, view_dir: "Path | str") -> str:
     """The `--review-topo` starting prompt for `unit`: order context + own
     full brief + a tagged first-hop neighbour list + first-hop neighbour
-    INTERFACES (short, `render_stage_interface`) + transitive-neighbour
-    interfaces (short, beyond the first hop) + a pointer at `view_dir`
-    (where each first-hop neighbour's FULL brief is reachable via exactly
-    one `Read`) + the reconciliation procedure + the plan digest line +
-    the review protocol/checklist.
+    INTERFACES (short, `render_stage_interface`) + transitive-only
+    reliance interfaces + `view_dir` and its file list (where each
+    first-hop neighbour's FULL brief is reachable via exactly one `Read`)
+    + the reconciliation procedure + the plan digest line + the review
+    protocol/checklist.
 
     Every marker string in the protocol section is sourced from
     `plan.REVIEW_MARKER` / `plan.VERDICT_MARKER` / `plan.PLAN_DIGEST_MARKER`
     / `plan.CONDITION_MARKERS` — never duplicated here as a string literal,
     so a reviewer's reply and this bundle's own checklist can never drift
-    onto different marker spellings."""
+    onto different marker spellings.
+
+    Raises ValueError for a unit the plan does not have (an unknown stage
+    index, or `order` on a plan without an order block), and PlanError
+    for a dangling or cyclic raw reliance graph."""
     label = _unit_label(unit)
-    if label != "order" and not any(s.index == int(unit) for s in doc.stages):
+    if label == "order":
+        if doc.meta.order is None:
+            raise ValueError(f"plan {doc.meta.task_id!r} declares no order block to review")
+    elif not any(s.index == int(unit) for s in doc.stages):
         raise ValueError(f"no stage with index {unit} in plan {doc.meta.task_id!r}")
     relies_on, consumed_by = _unit_relies_on_and_consumers(doc, unit)
     first_hop_all = relies_on | consumed_by
 
-    transitive: set[int] = set()
-    for m in relies_on:
-        transitive |= reliance_closure(doc, m)
-    transitive -= first_hop_all
-    if label != "order":
-        transitive.discard(int(unit))
+    if label == "order":
+        # The order node's view already holds every stage, so nothing is
+        # transitive-only; the closures still run so a dangling or cyclic
+        # raw graph fails this unit exactly as it fails any stage unit.
+        for s in doc.stages:
+            reliance_closure(doc, s.index)
+        transitive: frozenset[int] = frozenset()
+    else:
+        transitive = reliance_closure(doc, int(unit)) - relies_on
+    titles = {s.index: s.title for s in doc.stages}
 
     lines: list[str] = [f"# Topological review unit: {label}", ""]
     lines.extend(render_order_md(doc))
@@ -797,13 +822,15 @@ def render_topo_review_bundle(doc: PlanDoc, unit: "int | str", *, plan_sha256: s
     lines.append("")
     if first_hop_all:
         for m in sorted(relies_on):
-            edge = "depends_on-only" if label == "order" else _supply_edge_label(doc, int(unit), m)
-            tag = _ORDER_UNIT_ORDERING if label == "order" else _ordering_tag(doc, int(unit), m)
-            lines.append(f"- stage {m}: supplier — {edge} — {tag}")
+            if label == "order":
+                edge, tag = _ORDER_UNIT_EDGE, _ORDER_UNIT_ORDERING
+            else:
+                edge, tag = _supply_edge_label(doc, int(unit), m), _ordering_tag(doc, int(unit), m)
+            lines.append(f"- stage {m} ({titles[m]}): supplier — {edge} — {tag}")
         for m in sorted(consumed_by):
             edge = _supply_edge_label(doc, m, int(unit))
             tag = _ordering_tag(doc, m, int(unit))
-            lines.append(f"- stage {m}: customer — {edge} — {tag}")
+            lines.append(f"- stage {m} ({titles[m]}): customer — {edge} — {tag}")
     else:
         lines.append("- *(none — this unit has no declared reliance edges)*")
     lines.append("")
@@ -817,7 +844,7 @@ def render_topo_review_bundle(doc: PlanDoc, unit: "int | str", *, plan_sha256: s
         lines.append("*(none)*")
         lines.append("")
 
-    lines.append("## Transitive interfaces")
+    lines.append("## Transitive reliances (interface only, not in the view directory)")
     lines.append("")
     if transitive:
         for m in sorted(transitive):
@@ -826,34 +853,39 @@ def render_topo_review_bundle(doc: PlanDoc, unit: "int | str", *, plan_sha256: s
         lines.append("*(none beyond the first hop)*")
         lines.append("")
 
-    lines.append("## View directory")
+    view_files = topo_unit_view(doc, unit)
+    lines.append("## Full neighbour briefs")
     lines.append("")
     lines.append(
-        f"Each first-hop neighbour's FULL brief (method/procedure included) is "
-        f"reachable via exactly one `Read` under `{view_dir}` — pull it there if "
-        f"the interface above is not enough to check a reliance/consumer edge. "
-        f"No cap, no valve, no witness: read whichever neighbour files you need."
+        f"Each first-hop neighbour's full brief (method and procedure included) is "
+        f"one `Read` away in the view directory `{view_dir}`, which holds exactly:"
     )
+    if view_files:
+        for filename in view_files:
+            lines.append(f"- `{Path(view_dir) / filename}`")
+    else:
+        lines.append("- *(no files — this unit has no first-hop neighbours)*")
     lines.append("")
 
+    concern_markers = ", ".join(f"`{marker}`" for marker in CONDITION_MARKERS)
+    gap_marker = CONDITION_MARKERS[3]
     lines.append("## Reconciliation procedure")
     lines.append("")
+    lines.append("1. Take the first-hop pairs listed above one at a time, in the listed order.")
     lines.append(
-        "1. Check C3/C4 first against the interfaces already inlined above "
-        "(neighbour and transitive) — most reliances resolve from these alone, "
-        "with no `Read` at all."
+        f"2. For each pair, decide {CONDITION_MARKERS[2].rstrip(':')} (the supplier "
+        f"delivers its declared product) and {gap_marker.rstrip(':')} (the customer's "
+        f"reliance on it is covered) from the neighbour's interface above first."
     )
     lines.append(
-        "2. For any first-hop neighbour whose interface above is not enough to "
-        "decide a reliance/consumer edge, `Read` its full brief from the view "
-        "directory. This unit's OWN full brief is already inlined above in "
-        "full — never `Read` it again from the view directory (it is not "
-        "there)."
+        "3. Only when the interface cannot decide it, `Read` that neighbour's file "
+        "from the view directory. This unit's own brief is inlined above in full "
+        "and is not in the view directory."
     )
     lines.append(
-        f"3. Check each condition below against what you've read, then reply with "
-        f"the {REVIEW_MARKER} block."
+        f"4. Report any gap a pair reveals as a condition-4 concern: one `{gap_marker}` line."
     )
+    lines.append("5. Check the remaining conditions below for this unit, then reply per the protocol.")
     lines.append("")
 
     lines.append(f"{PLAN_DIGEST_MARKER} {plan_sha256}")
@@ -861,30 +893,34 @@ def render_topo_review_bundle(doc: PlanDoc, unit: "int | str", *, plan_sha256: s
 
     lines.append("## Review protocol")
     lines.append("")
+    lines.append("Reply with these lines, in this order:")
+    lines.append(f"- `{REVIEW_MARKER}` on a line of its own;")
+    lines.append(f"- `{VERDICT_MARKER} <pass|revise>`;")
     lines.append(
-        f"Reply with a {REVIEW_MARKER} block naming this unit's four "
-        f"rely-guarantee conditions and a {VERDICT_MARKER}:"
+        f"- `{PLAN_DIGEST_MARKER} <sha256>` — echo the `{PLAN_DIGEST_MARKER}` line above "
+        f"verbatim; do not compute it;"
     )
+    lines.append(
+        f"- one concern per line, each prefixed by the marker of the condition it "
+        f"concerns ({concern_markers}); a condition-4 gap is a `{gap_marker}` line."
+    )
+    lines.append("")
+    lines.append("Conditions:")
     if label == "order":
-        lines.append(f"- `{CONDITION_MARKERS[0]}` {_CONDITION_TEXT[CONDITION_MARKERS[0]]}")
-        lines.append(
-            f"- `{CONDITION_MARKERS[1]}` {_CONDITION_TEXT[CONDITION_MARKERS[1]]} — evaluated "
-            f"JOINTLY with `{CONDITION_MARKERS[3]}`, across every stage together, against the "
-            f"order's own coverage — never per-stage"
+        joint = (
+            "evaluated jointly over all stages against each Order.coverage "
+            "requirement, not per-stage"
         )
+        lines.append(f"- `{CONDITION_MARKERS[0]}` {_CONDITION_TEXT[CONDITION_MARKERS[0]]}")
+        lines.append(f"- `{CONDITION_MARKERS[1]}` {_CONDITION_TEXT[CONDITION_MARKERS[1]]} — {joint}")
         lines.append(
             f"- `{CONDITION_MARKERS[2]}` not applicable — the order node delivers no product "
             f"of its own for a consumer to rely on"
         )
-        lines.append(
-            f"- `{CONDITION_MARKERS[3]}` {_CONDITION_TEXT[CONDITION_MARKERS[3]]} — evaluated "
-            f"JOINTLY with `{CONDITION_MARKERS[1]}`, across every stage together, against the "
-            f"order's own coverage — never per-stage"
-        )
+        lines.append(f"- `{CONDITION_MARKERS[3]}` {_CONDITION_TEXT[CONDITION_MARKERS[3]]} — {joint}")
     else:
         for marker in CONDITION_MARKERS:
             lines.append(f"- `{marker}` {_CONDITION_TEXT[marker]}")
-    lines.append(f"- `{VERDICT_MARKER}` pass | revise")
     lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"

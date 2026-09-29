@@ -10,6 +10,7 @@ end to end (module-loading/argv/DryRun pattern mirrors
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import shlex
@@ -17,8 +18,17 @@ from pathlib import Path
 
 import pytest
 
+from agentctl.plan import load_plan_with_digest
+from agentctl.render import render_topo_review_bundle
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 SCRIPT = SCRIPTS_DIR / "spawn-specialist.py"
+TOPO_PLAN_LABEL = (
+    "## Working plan — topological review unit "
+    "(projected; the full plan is never inlined for --review-topo — "
+    "see § File-access scope for the per-unit view directory)"
+)
+DONE_HEADING = "## Done criterion for this step"
 
 
 def _load():
@@ -81,6 +91,17 @@ def _dry_run(capsys, argv: list[str]) -> DryRun:
     return DryRun(rc, captured.out, captured.err)
 
 
+def _plan_sha(plan: Path) -> str:
+    return hashlib.sha256(plan.read_bytes()).hexdigest()
+
+
+@pytest.fixture(autouse=True)
+def cost_log(tmp_path, monkeypatch) -> Path:
+    path = tmp_path / "spawn-costs.jsonl"
+    monkeypatch.setattr(MOD, "COST_LOG", path)
+    return path
+
+
 @pytest.fixture
 def topo_units_dir(tmp_path, monkeypatch) -> Path:
     directory = tmp_path / "topo-units"
@@ -93,7 +114,45 @@ def two_stage_plan(fixtures_dir) -> Path:
     return fixtures_dir / "plan_two_stage.toml"
 
 
-# --- ts5: selector refusals -------------------------------------------------
+@pytest.fixture
+def plans_dir_patch(tmp_path, monkeypatch) -> Path:
+    directory = tmp_path / "plans"
+    directory.mkdir()
+    monkeypatch.setattr(MOD, "plans_dir", lambda: directory)
+    return directory
+
+
+class _FakeProc:
+    def __init__(self) -> None:
+        self.returncode = 0
+        self.pid = 424242
+
+    def communicate(self, input=None):
+        return ('{"result": "COMPLETED: ok", "cost_usd": 0}', "")
+
+
+def _stub_child_launch(monkeypatch, tmp_path, on_launch=lambda cmd: None) -> list[dict]:
+    """Stub every real-process/side-channel seam of a non-dry-run spawn; returns
+    the list the cost-log rows are appended to."""
+    logged: list[dict] = []
+
+    def fake_launch(cmd, **kwargs):
+        on_launch(cmd)
+        return _FakeProc()
+
+    monkeypatch.setattr(MOD.proc_tree, "launch_supervised", fake_launch)
+    monkeypatch.setattr(MOD.proc_tree, "install_teardown", lambda p: None)
+    monkeypatch.setattr(MOD.proc_tree, "kill_tree", lambda p: None)
+    monkeypatch.setattr(MOD, "_snapshot_transcripts", lambda *a, **k: set())
+    monkeypatch.setattr(MOD, "_discover_transcript_path", lambda *a, **k: None)
+    monkeypatch.setattr(MOD, "permissions_digest", lambda *a, **k: "")
+    monkeypatch.setattr(MOD, "deregister_child_scope", lambda *a, **k: None)
+    monkeypatch.setattr(MOD, "log_cost_entry", lambda entry: logged.append(entry))
+    monkeypatch.setattr(MOD.shutil, "which", lambda name: "/usr/bin/claude")
+    sysprompt = tmp_path / "sysprompt.md"
+    sysprompt.write_text("system prompt", encoding="utf-8")
+    monkeypatch.setattr(MOD, "composed_system_prompt_file", lambda skill: sysprompt)
+    return logged
 
 
 def test_ts5_refused_with_a_non_thinker_kind(capsys, topo_units_dir, two_stage_plan):
@@ -136,6 +195,14 @@ def test_ts5_refused_on_an_unparseable_unit(capsys, topo_units_dir, two_stage_pl
     assert "must be an integer stage index or 'order'" in result.err
 
 
+def test_ts5_refused_on_a_comma_list_naming_units(capsys, topo_units_dir, two_stage_plan):
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "1,2"]
+    result = _dry_run(capsys, argv)
+    assert result.rc == 2
+    assert "--units" in result.err
+    assert not topo_units_dir.exists()
+
+
 def test_ts5_refused_on_an_unknown_stage_index(capsys, topo_units_dir, two_stage_plan):
     argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "99"]
     result = _dry_run(capsys, argv)
@@ -148,9 +215,6 @@ def test_ts5_refused_on_order_when_the_plan_declares_no_order_block(capsys, topo
     result = _dry_run(capsys, argv)
     assert result.rc == 2
     assert "declares no [order] block" in result.err
-
-
-# --- ts6: the "order" unit works end to end (dry-run) -----------------------
 
 
 def test_ts6_dry_run_order_unit_materializes_from_a_plan_with_an_order_block(capsys, topo_units_dir, tmp_path):
@@ -176,54 +240,88 @@ def test_ts6_dry_run_order_unit_materializes_from_a_plan_with_an_order_block(cap
     argv = _base_argv("thinker", plan_path) + ["--review-topo", "order"]
     result = _dry_run(capsys, argv)
     assert result.rc == 0
-    assert "files=stage-1.md,stage-2.md" in result.out
+    view_dir = topo_units_dir / _plan_sha(plan_path) / "view-order"
+    assert f"TOPO-VIEW: {view_dir} files=stage-1.md,stage-2.md" in result.out.splitlines()
     assert "# Topological review unit: order" in result.prompt
-    assert any(d.endswith("/view-order") for d in result.add_dirs)
+    assert [d for d in result.add_dirs if d.startswith(str(topo_units_dir))] == [str(view_dir)]
 
 
-# --- ts1: prompt carries the bundle, not the whole plan; scope names the view dir ---
-
-
-def test_ts1_dry_run_prompt_carries_the_topo_bundle_not_the_whole_plan(capsys, topo_units_dir, two_stage_plan):
-    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
+def test_ts1_dry_run_plan_body_is_exactly_the_topo_bundle(capsys, topo_units_dir, two_stage_plan, tmp_path):
+    dossier = tmp_path / "dossier.md"
+    dossier.write_text("dossier-sentinel", encoding="utf-8")
+    argv = _base_argv("thinker", two_stage_plan) + [
+        "--review-topo", "2",
+        "--constraints", "constraint-sentinel",
+        "--context-dossier", str(dossier),
+    ]
     result = _dry_run(capsys, argv)
-    assert "## Working plan — topological review unit" in result.prompt
-    assert "## Working plan — stage" not in result.prompt
-    assert "# Topological review unit: 2" in result.prompt
-    # the raw plan file text is absent from the whole prompt
+    assert result.rc == 0
+
+    doc, _, sha = load_plan_with_digest(two_stage_plan)
+    view_dir = topo_units_dir / sha / "view-2"
+    expected_bundle = render_topo_review_bundle(doc, 2, plan_sha256=sha, view_dir=view_dir)
+    body = result.prompt.split(f"\n{TOPO_PLAN_LABEL}\n\n", 1)[1]
+    body = body.split(f"\n\n{DONE_HEADING}\n", 1)[0]
+    assert body == expected_bundle
+
+    lines = result.prompt.splitlines()
+    assert any(line.startswith("AGENT_RECURSION_DEPTH=") for line in lines)
+    for heading in (
+        "## Constraints",
+        "## Context dossier (what you may not infer from CLAUDE.md / repo / memory)",
+        "## File-access scope",
+    ):
+        assert heading in lines
+    assert "constraint-sentinel" in lines
+    assert "dossier-sentinel" in lines
     assert "[[stage]]" not in result.prompt
+
+
+def test_ts1_envelope_is_unchanged_only_the_plan_section_is_replaced(two_stage_plan, tmp_path):
+    dossier = tmp_path / "dossier.md"
+    dossier.write_text("dossier-sentinel", encoding="utf-8")
+    args = MOD.build_parser().parse_args(
+        [a for a in _base_argv("thinker", two_stage_plan) if a != "--dry-run"]
+        + ["--constraints", "constraint-sentinel", "--context-dossier", str(dossier)]
+    )
+    kwargs = {
+        "workdir": "/tmp/wd",
+        "permission_mode": "default",
+        "add_dir_paths": ["/tmp/view-2"],
+    }
+    bundle = "# Topological review unit: 2\n\nbundle-sentinel"
+    plain = MOD.assemble_prompt(args, 3, "perm-sentinel", **kwargs)
+    topo = MOD.assemble_prompt(args, 3, "perm-sentinel", topo_bundle=bundle, **kwargs)
+
+    plan_text = MOD.argv_text.read_required_file(args.plan, "--plan")
+    whole_plan_section = f"\n## Working plan\n\n{plan_text}\n\n{DONE_HEADING}\n"
+    assert plain.count(whole_plan_section) == 1
+    assert topo == plain.replace(
+        whole_plan_section, f"\n{TOPO_PLAN_LABEL}\n\n{bundle}\n\n{DONE_HEADING}\n"
+    )
 
 
 def test_ts1_file_access_scope_names_the_view_directory_not_plans_dir(capsys, topo_units_dir, two_stage_plan, plans_dir_patch):
     argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
     result = _dry_run(capsys, argv)
     scope_section = result.prompt.split("## File-access scope", 1)[1]
+    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2"
     assert str(plans_dir_patch) not in scope_section
-    assert any(line.strip().endswith("/view-2`") for line in scope_section.splitlines())
+    assert f"- Additional directory: `{view_dir}`" in scope_section.splitlines()
 
 
-@pytest.fixture
-def plans_dir_patch(tmp_path, monkeypatch) -> Path:
-    directory = tmp_path / "plans"
-    directory.mkdir()
-    monkeypatch.setattr(MOD, "plans_dir", lambda: directory)
-    return directory
-
-
-# --- ts2: settings payload grants exactly the view directory ----------------
-
-
-def test_ts2_add_dir_is_the_view_directory_not_plans_directory(capsys, topo_units_dir, plans_dir_patch, two_stage_plan):
+def test_ts2_exactly_one_add_dir_is_the_view_directory_not_plans_directory(capsys, topo_units_dir, plans_dir_patch, two_stage_plan):
     argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
     result = _dry_run(capsys, argv)
+    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2"
     assert str(plans_dir_patch) not in result.add_dirs
-    assert any(d.endswith("/view-2") for d in result.add_dirs)
+    assert [d for d in result.add_dirs if d.startswith(str(topo_units_dir))] == [str(view_dir)]
 
 
 def test_ts2_permissions_grant_read_only_view_directory_no_plans_rules(capsys, topo_units_dir, plans_dir_patch, two_stage_plan):
     argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
     result = _dry_run(capsys, argv)
-    view_dir = [d for d in result.add_dirs if d.endswith("/view-2")][0]
+    view_dir = str(topo_units_dir / _plan_sha(two_stage_plan) / "view-2")
     assert any(view_dir in rule and rule.startswith("Read(") for rule in result.allow)
     assert any(view_dir in rule and rule.startswith("Edit(") for rule in result.deny)
     assert not any(str(plans_dir_patch) in rule for rule in result.allow)
@@ -233,51 +331,47 @@ def test_ts2_permissions_grant_read_only_view_directory_no_plans_rules(capsys, t
     assert not any("shasum -a 256" in rule for rule in result.allow)
 
 
-# --- ts7: unit files materialized before spawn; --dry-run writes nothing ----
-
-
-def test_ts7_dry_run_prints_topo_view_line_and_writes_nothing(capsys, topo_units_dir, two_stage_plan):
+def test_ts7_dry_run_prints_the_exact_topo_view_line(capsys, topo_units_dir, two_stage_plan):
     argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
     result = _dry_run(capsys, argv)
     assert result.rc == 0
-    plan_sha = MOD.hashlib.sha256(two_stage_plan.read_bytes()).hexdigest()
-    expected_view_dir = topo_units_dir / plan_sha / "view-2"
-    assert f"TOPO-VIEW: {expected_view_dir} files=stage-1.md" in result.out
+    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2"
+    assert [line for line in result.out.splitlines() if line.startswith("TOPO-VIEW:")] == [
+        f"TOPO-VIEW: {view_dir} files=stage-1.md",
+    ]
+
+
+def test_tb14_dry_run_writes_nothing(capsys, topo_units_dir, two_stage_plan, cost_log):
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
+    result = _dry_run(capsys, argv)
+    assert result.rc == 0
     assert not topo_units_dir.exists()
+    assert not cost_log.exists()
 
 
-def test_ts7_non_dry_run_materializes_the_expected_view_directory(capsys, topo_units_dir, two_stage_plan, monkeypatch):
-    # Force the ceiling check to refuse right after materialization, so the
-    # test never needs to stub a real `claude` child process -- the view
-    # directory write already happened by the time this refusal fires.
-    monkeypatch.setattr(MOD, "dispatch_prompt_ceiling_chars", lambda model: 1)
+def test_ts7_view_directory_is_materialized_before_the_child_launches(capsys, topo_units_dir, two_stage_plan, monkeypatch, tmp_path):
+    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2"
+    seen_at_launch: list[set[str]] = []
+
+    def check_view_dir(cmd):
+        assert cmd[cmd.index("--add-dir") + 1] == str(view_dir)
+        seen_at_launch.append({p.name for p in view_dir.iterdir()})
+
+    _stub_child_launch(monkeypatch, tmp_path, on_launch=check_view_dir)
     argv = [a for a in _base_argv("thinker", two_stage_plan) if a != "--dry-run"]
     argv += ["--review-topo", "2"]
-    rc = MOD.main(argv)
-    captured = capsys.readouterr()
-    assert rc == 5
-    assert "exceeding the" in captured.err
-    plan_sha = MOD.hashlib.sha256(two_stage_plan.read_bytes()).hexdigest()
-    view_dir = topo_units_dir / plan_sha / "view-2"
-    assert view_dir.is_dir()
-    assert {p.name for p in view_dir.iterdir()} == {"stage-1.md"}
-
-
-# --- ts3: an oversize bundle is refused pre-spawn naming split and override ---
+    assert MOD.main(argv) == 0
+    assert seen_at_launch == [{"stage-1.md"}]
 
 
 def test_ts3_oversize_bundle_refused_pre_spawn_naming_split_and_override(capsys, topo_units_dir, two_stage_plan, monkeypatch):
     monkeypatch.setattr(MOD, "dispatch_prompt_ceiling_chars", lambda model: 1)
     argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
-    result = _dry_run(capsys, argv)
-    assert result.rc == 5
-    assert "split" in result.err
-    assert "override" in result.err
-    # a clean pre-spawn refusal (print + return 5), never an unhandled exception
-    assert "Traceback" not in result.err
-
-
-# --- ts4/ts9: ceiling-refusal message names both the flag and the planned driver ---
+    rc = MOD.main(argv)
+    err = capsys.readouterr().err
+    assert rc == 5
+    assert "split" in err
+    assert "override" in err
 
 
 def test_ts4_ceiling_is_216000_chars_144000_tokens_for_every_model(topo_units_dir):
@@ -302,76 +396,26 @@ def test_ts9_review_topo_ceiling_refusal_log_row_carries_unit_and_digest(capsys,
     argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
     result = _dry_run(capsys, argv)
     assert result.rc == 5
-    plan_sha = MOD.hashlib.sha256(two_stage_plan.read_bytes()).hexdigest()
     rows = [row for row in logged if row["reason"] == "prompt-too-large"]
     assert len(rows) == 1
     assert rows[0]["review_topo_unit"] == "2"
-    assert rows[0]["plan_sha256"] == plan_sha
-
-
-# --- ts8: the persisted cost-log row carries review_topo_unit and plan_sha256 ---
-
-
-class _FakeProc:
-    def __init__(self) -> None:
-        self.returncode = 0
-        self.pid = 424242
-
-    def communicate(self, input=None):
-        return ('{"result": "COMPLETED: ok", "cost_usd": 0}', "")
+    assert rows[0]["plan_sha256"] == _plan_sha(two_stage_plan)
 
 
 def test_ts8_cost_log_row_carries_review_topo_unit_and_plan_sha256(capsys, topo_units_dir, two_stage_plan, monkeypatch, tmp_path):
-    logged: list[dict] = []
-
-    def fake_launch(cmd, **kwargs):
-        return _FakeProc()
-
-    monkeypatch.setattr(MOD.proc_tree, "launch_supervised", fake_launch)
-    monkeypatch.setattr(MOD.proc_tree, "install_teardown", lambda p: None)
-    monkeypatch.setattr(MOD.proc_tree, "kill_tree", lambda p: None)
-    monkeypatch.setattr(MOD, "_snapshot_transcripts", lambda *a, **k: set())
-    monkeypatch.setattr(MOD, "_discover_transcript_path", lambda *a, **k: None)
-    monkeypatch.setattr(MOD, "permissions_digest", lambda *a, **k: "")
-    monkeypatch.setattr(MOD, "deregister_child_scope", lambda *a, **k: None)
-    monkeypatch.setattr(MOD, "log_cost_entry", lambda entry: logged.append(entry))
-    monkeypatch.setattr(MOD.shutil, "which", lambda name: "/usr/bin/claude")
-    sysprompt = tmp_path / "sysprompt.md"
-    sysprompt.write_text("system prompt", encoding="utf-8")
-    monkeypatch.setattr(MOD, "composed_system_prompt_file", lambda skill: sysprompt)
-
+    logged = _stub_child_launch(monkeypatch, tmp_path)
     argv = [a for a in _base_argv("thinker", two_stage_plan) if a != "--dry-run"]
     argv += ["--review-topo", "2"]
-    rc = MOD.main(argv)
-    assert rc == 0
+    assert MOD.main(argv) == 0
     assert len(logged) == 1
-    plan_sha = MOD.hashlib.sha256(two_stage_plan.read_bytes()).hexdigest()
     assert logged[0]["review_topo_unit"] == "2"
-    assert logged[0]["plan_sha256"] == plan_sha
+    assert logged[0]["plan_sha256"] == _plan_sha(two_stage_plan)
 
 
 def test_ts8_ordinary_spawn_cost_log_row_carries_none_for_both_fields(capsys, topo_units_dir, two_stage_plan, monkeypatch, tmp_path):
-    logged: list[dict] = []
-
-    def fake_launch(cmd, **kwargs):
-        return _FakeProc()
-
-    monkeypatch.setattr(MOD.proc_tree, "launch_supervised", fake_launch)
-    monkeypatch.setattr(MOD.proc_tree, "install_teardown", lambda p: None)
-    monkeypatch.setattr(MOD.proc_tree, "kill_tree", lambda p: None)
-    monkeypatch.setattr(MOD, "_snapshot_transcripts", lambda *a, **k: set())
-    monkeypatch.setattr(MOD, "_discover_transcript_path", lambda *a, **k: None)
-    monkeypatch.setattr(MOD, "permissions_digest", lambda *a, **k: "")
-    monkeypatch.setattr(MOD, "deregister_child_scope", lambda *a, **k: None)
-    monkeypatch.setattr(MOD, "log_cost_entry", lambda entry: logged.append(entry))
-    monkeypatch.setattr(MOD.shutil, "which", lambda name: "/usr/bin/claude")
-    sysprompt = tmp_path / "sysprompt.md"
-    sysprompt.write_text("system prompt", encoding="utf-8")
-    monkeypatch.setattr(MOD, "composed_system_prompt_file", lambda skill: sysprompt)
-
+    logged = _stub_child_launch(monkeypatch, tmp_path)
     argv = [a for a in _base_argv("developer", two_stage_plan) if a != "--dry-run"]
-    rc = MOD.main(argv)
-    assert rc == 0
+    assert MOD.main(argv) == 0
     assert len(logged) == 1
     assert logged[0]["review_topo_unit"] is None
     assert logged[0]["plan_sha256"] is None

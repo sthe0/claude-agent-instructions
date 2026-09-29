@@ -1,18 +1,22 @@
-"""Invariant 1 pin: `stage_element_keys`/`plan_meta_digest`/`plan_content_digest` and
-`render_plan_md`/`render_stages_md`/`render_stage_brief` must render byte-identical
-output for a fixed fixture plan on `origin/main` and on this tree -- including
-`render_plan_md` after it started composing the factored `render_meta_md`/
-`render_order_md`/`render_final_checks_md` helpers instead of building its markdown
-inline. The fixture carries an `[meta.order]` with a `coverage` map, a `[[final_check]]`,
-an explicit `[[stage.supplies]]` edge, and an interface_empty stage (a whitespace-only
-`expected_result_image`) so every renderer path Invariant 1 protects is exercised.
+"""Byte-invariance pin for the pre-existing plan surface: `stage_element_keys`/
+`plan_meta_digest`/`plan_content_digest` and `render_plan_md`/`render_stages_md`/
+`render_stage_brief` must produce identical output for a fixed fixture plan on
+`origin/main` and on this tree -- including `render_plan_md` after it started composing
+the factored `render_meta_md`/`render_order_md`/`render_final_checks_md` helpers instead
+of building its markdown inline. The fixture carries an `[meta.order]` with a `coverage`
+map, a `[[final_check]]`, an explicit `[[stage.supplies]]` edge, and an interface_empty
+SUPPLIER (stage 1, a whitespace-only `expected_result_image`) that stage 2 relies on, so
+the consumer-side "Depends on" rendering of an empty interface is pinned too.
 
-The stage's own verify_command copies THIS FILE ALONE into a fresh `git archive
-origin/main` checkout and runs it there, so it:
+This file travels ALONE into a fresh `git archive origin/main` checkout and runs there,
+so it:
   - imports ONLY names that already exist on origin/main;
   - never shells out to git or any other tree at run time -- every EXPECTED_* value below
-    is a LITERAL captured once, during authoring, by running the six functions below
-    against the real origin/main tree (commit 1e84be28) for the fixture inlined here;
+    is a LITERAL captured against origin/main (commit 1e84be28): each file of
+    scripts/agentctl/, scripts/lib/, scripts/difficulty_channel/, scripts/proc_tree.py
+    and scripts/tests/conftest.py was extracted with
+    `git show 1e84be28:<path> > <capture-tree>/<path>`, and the six functions below were
+    evaluated on the fixture inside that tree under pytest;
   - embeds the fixture TOML inline rather than reading a sibling fixtures file, since no
     other file travels with this one into the archived tree.
 """
@@ -56,7 +60,7 @@ label = "fixture final check"
 index = 1
 title = "Scaffold module"
 executor = "spawn:developer"
-expected_result_image = "module file exists and imports cleanly"
+expected_result_image = "   "
 criterion_type = "measurable"
 done_criterion = "python -c 'import mod' exits 0"
 depends_on = []
@@ -66,7 +70,7 @@ output_artifacts = ["mod.py"]
 index = 2
 title = "Add tests"
 executor = "spawn:developer"
-expected_result_image = "   "
+expected_result_image = "tests exist and pass"
 criterion_type = "measurable"
 done_criterion = "pytest tests/test_mod.py green"
 [[stage.supplies]]
@@ -74,10 +78,10 @@ on = 1
 """
 
 EXPECTED_STAGE1_KEYS = {
-    "": "05cbc14e5f0380173de8d38b34446198c71a76690905794bdc8c56ca95b25277",
+    "": "41c468d063eacb2316e1b592d80690a00986913a0c0823eadc9db4059d0c0d5d",
     "capability": "0e2e2f0e2c8152711da9f72cba106cc7ca515e7c5817efbd9b57c7dfe937ccf2",
     "conditions": "90d99c825e9d0d88c3c58b9e2c4f5b3c314b24dfaacc5fe8719d18f6ecd2c3b1",
-    "control": "05cbc14e5f0380173de8d38b34446198c71a76690905794bdc8c56ca95b25277",
+    "control": "41c468d063eacb2316e1b592d80690a00986913a0c0823eadc9db4059d0c0d5d",
     "criterion": "c0a8633894ba61ec1aed2f0e8bd1cf788b47bb71eb42f45a339be51c6e59e31f",
     "done_criterion": "3b407521be74892303f5fab3720df694f22d08b78ffd2ffe263fae1d5db08818",
     "executor": "fd0e2225fa989c71b242befbd56873198a3f1ec9b139638649f2aecba9c4bd04",
@@ -86,19 +90,19 @@ EXPECTED_STAGE1_KEYS = {
     "material": "34bcc81e20ec56338eb457038a039d07c8e2fbb832e5b677403b2636af3e007e",
     "means": "d24c2a580b10d5cf05fa54fc4fedba63bae251f8f8bba755dc62de85deee8e9f",
     "method": "db283606671d29b294faadca4e7df0ac587ba0eadcbb3ae9aa035bb64140e33f",
-    "order": "05cbc14e5f0380173de8d38b34446198c71a76690905794bdc8c56ca95b25277",
+    "order": "41c468d063eacb2316e1b592d80690a00986913a0c0823eadc9db4059d0c0d5d",
     "preconditions": "0df4d6a1f321d289d957288ee418f09448981d251ea59ed01099947946f0b30f",
     "principle": "f44d9a6c8e645981fe22a84c27f9849be17f6630e09576eeaee560cc0e897a08",
     "procedure": "907b7e0c97698d6453dcec4c3658a5eb3c7442f4c6ea9968c1b263561d4ec41b",
-    "requirements": "05cbc14e5f0380173de8d38b34446198c71a76690905794bdc8c56ca95b25277",
-    "result": "18e69996140207758732989114af7847192dc490348bff7a126c16abc72550f6",
+    "requirements": "41c468d063eacb2316e1b592d80690a00986913a0c0823eadc9db4059d0c0d5d",
+    "result": "5647b5160d3ecb70c383d4c4a141d0de4d19dd5780e2eeb88dba9511a463a8dd",
 }
 
 EXPECTED_STAGE2_KEYS = {
-    "": "82009c571ad95a096a7a578149eeb52ea1b58957ac3f702a1cb36aa2efa02ab0",
+    "": "e67d637c67e1b805d5a61ea3a726f35922e63bf66a86cda6a778d504c3666bf7",
     "capability": "0e2e2f0e2c8152711da9f72cba106cc7ca515e7c5817efbd9b57c7dfe937ccf2",
     "conditions": "90d99c825e9d0d88c3c58b9e2c4f5b3c314b24dfaacc5fe8719d18f6ecd2c3b1",
-    "control": "82009c571ad95a096a7a578149eeb52ea1b58957ac3f702a1cb36aa2efa02ab0",
+    "control": "e67d637c67e1b805d5a61ea3a726f35922e63bf66a86cda6a778d504c3666bf7",
     "criterion": "43d2e8ab1f8296e28c9e16ed7d399b444939d224c3dce324aff3e3e9ef210c75",
     "done_criterion": "bbe791d2bee2f68436611f173c70827b486ba82e698c09f2cfc1d7ac91245dc8",
     "executor": "fd0e2225fa989c71b242befbd56873198a3f1ec9b139638649f2aecba9c4bd04",
@@ -107,19 +111,19 @@ EXPECTED_STAGE2_KEYS = {
     "material": "bd5dc96dd518d417ac99a9128dffdcde31b22ee786d5110ad566748493a1dbc1",
     "means": "d24c2a580b10d5cf05fa54fc4fedba63bae251f8f8bba755dc62de85deee8e9f",
     "method": "db283606671d29b294faadca4e7df0ac587ba0eadcbb3ae9aa035bb64140e33f",
-    "order": "82009c571ad95a096a7a578149eeb52ea1b58957ac3f702a1cb36aa2efa02ab0",
+    "order": "e67d637c67e1b805d5a61ea3a726f35922e63bf66a86cda6a778d504c3666bf7",
     "preconditions": "0df4d6a1f321d289d957288ee418f09448981d251ea59ed01099947946f0b30f",
     "principle": "f44d9a6c8e645981fe22a84c27f9849be17f6630e09576eeaee560cc0e897a08",
     "procedure": "907b7e0c97698d6453dcec4c3658a5eb3c7442f4c6ea9968c1b263561d4ec41b",
-    "requirements": "82009c571ad95a096a7a578149eeb52ea1b58957ac3f702a1cb36aa2efa02ab0",
-    "result": "5647b5160d3ecb70c383d4c4a141d0de4d19dd5780e2eeb88dba9511a463a8dd",
+    "requirements": "e67d637c67e1b805d5a61ea3a726f35922e63bf66a86cda6a778d504c3666bf7",
+    "result": "ef43a015b4af7a4218c892bf0bde2c1774d176eb2e3b026e0ab326893341664a",
 }
 
 EXPECTED_PLAN_META_DIGEST = (
     "dea3a52ffa9d80187169a110c398381a86dce496254b2eb41dc5bc3f5d702dde"
 )
 EXPECTED_PLAN_CONTENT_DIGEST = (
-    "9d0b51fa1592068837089a400124cb469a410b802e61dd06d229c6c4d115a569"
+    "372c5a596932fba58e586c75f7cb15706c99f6b2812371f3fcab4660ad1a8ccc"
 )
 
 EXPECTED_RENDER_STAGE_BRIEF_2 = (
@@ -136,12 +140,12 @@ EXPECTED_RENDER_STAGE_BRIEF_2 = (
     "## Stage 2: Add tests\n"
     "\n"
     "- **Executor:** spawn:developer\n"
-    "- **Expected result image:**    \n"
+    "- **Expected result image:** tests exist and pass\n"
     "- **Criterion type:** measurable\n"
     "- **Done criterion:** pytest tests/test_mod.py green\n"
     "- **Depends on** (direct dependencies only; see their own stage for detail):\n"
     "  - Stage 1: Scaffold module\n"
-    "    - **Its expected result image:** module file exists and imports cleanly\n"
+    "    - **Its expected result image:**    \n"
     "    - **Its output artifacts:** mod.py\n"
     "- **Supplies** (raw provision edges this stage declares):\n"
     "  - on stage 1\n"
@@ -172,7 +176,7 @@ EXPECTED_RENDER_PLAN_MD = (
     "## Stage 1: Scaffold module\n"
     "\n"
     "- **Executor:** spawn:developer\n"
-    "- **Expected result image:** module file exists and imports cleanly\n"
+    "- **Expected result image:**    \n"
     "- **Criterion type:** measurable\n"
     "- **Done criterion:** python -c 'import mod' exits 0\n"
     "- **Grants (file-access scope):**\n"
@@ -181,7 +185,7 @@ EXPECTED_RENDER_PLAN_MD = (
     "## Stage 2: Add tests\n"
     "\n"
     "- **Executor:** spawn:developer\n"
-    "- **Expected result image:**    \n"
+    "- **Expected result image:** tests exist and pass\n"
     "- **Criterion type:** measurable\n"
     "- **Done criterion:** pytest tests/test_mod.py green\n"
     "- **Depends on:** 1\n"
@@ -205,7 +209,7 @@ EXPECTED_RENDER_STAGES_MD = (
     "## Stage 1: Scaffold module\n"
     "\n"
     "- **Executor:** spawn:developer\n"
-    "- **Expected result image:** module file exists and imports cleanly\n"
+    "- **Expected result image:**    \n"
     "- **Criterion type:** measurable\n"
     "- **Done criterion:** python -c 'import mod' exits 0\n"
     "- **Output artifacts:** mod.py\n"
@@ -230,12 +234,12 @@ EXPECTED_RENDER_STAGES_MD = (
     "## Stage 2: Add tests\n"
     "\n"
     "- **Executor:** spawn:developer\n"
-    "- **Expected result image:**    \n"
+    "- **Expected result image:** tests exist and pass\n"
     "- **Criterion type:** measurable\n"
     "- **Done criterion:** pytest tests/test_mod.py green\n"
     "- **Depends on** (direct dependencies only; see their own stage for detail):\n"
     "  - Stage 1: Scaffold module\n"
-    "    - **Its expected result image:** module file exists and imports cleanly\n"
+    "    - **Its expected result image:**    \n"
     "    - **Its output artifacts:** mod.py\n"
     "- **Supplies** (raw provision edges this stage declares):\n"
     "  - on stage 1\n"

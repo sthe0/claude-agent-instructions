@@ -1609,18 +1609,42 @@ def reliance_closure(doc: PlanDoc, n: int) -> frozenset[int]:
     do not is exactly the collapse this module exists to catch, so this
     closure does its own cycle detection rather than trusting the
     already-validated derived graph."""
+    _raise_on_reliance_cycle(doc, n)
     closure: set[int] = set()
-    stack: list[tuple[int, tuple[int, ...]]] = [(n, (n,))]
+    stack = [n]
     while stack:
-        current, path = stack.pop()
-        for dep in sorted(reliance_set(doc, current)):
-            if dep in path:
-                cycle = " -> ".join(str(p) for p in path) + f" -> {dep}"
-                raise PlanError(f"reliance cycle detected: {cycle}")
+        for dep in reliance_set(doc, stack.pop()):
             if dep not in closure:
                 closure.add(dep)
-                stack.append((dep, path + (dep,)))
+                stack.append(dep)
     return frozenset(closure)
+
+
+def _raise_on_reliance_cycle(doc: PlanDoc, start: int) -> None:
+    """Three-colour DFS over the raw reliance graph reachable from `start`.
+    A node still on the DFS stack (grey) reached again is a back edge, and
+    therefore a cycle, whichever path first reached it; a finished (black)
+    node is never re-entered, so a cycle reached only through an
+    already-visited node is still found on the path that first enters it."""
+    grey, black = set(), set()
+    path: list[int] = [start]
+    grey.add(start)
+    iterators = [iter(sorted(reliance_set(doc, start)))]
+    while iterators:
+        dep = next(iterators[-1], None)
+        if dep is None:
+            iterators.pop()
+            done = path.pop()
+            grey.discard(done)
+            black.add(done)
+            continue
+        if dep in grey:
+            cycle = path[path.index(dep):] + [dep]
+            raise PlanError(f"reliance cycle detected: {' -> '.join(str(p) for p in cycle)}")
+        if dep not in black:
+            grey.add(dep)
+            path.append(dep)
+            iterators.append(iter(sorted(reliance_set(doc, dep))))
 
 
 def interface_empty(stage: Stage) -> bool:

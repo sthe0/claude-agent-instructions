@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import hashlib
 import json
 import os
 import re
@@ -207,6 +206,7 @@ def assemble_prompt(
     evidence_dir: "str | None" = None,
     topo_bundle: "str | None" = None,
 ) -> str:
+    plan = argv_text.read_required_file(args.plan, "--plan")
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
     done_criterion = argv_text.read_arg_text(args.done_criterion)
     dossier = (
@@ -229,6 +229,7 @@ def assemble_prompt(
             f"stage's work.",
             "",
         ]
+    resolved_plan = None if topo_bundle is not None else brief_plan_path(args)
     if topo_bundle is not None:
         plan_label = (
             "## Working plan — topological review unit "
@@ -236,18 +237,16 @@ def assemble_prompt(
             "see § File-access scope for the per-unit view directory)"
         )
         plan_body = topo_bundle
+    elif resolved_plan is not None:
+        doc = load_plan(str(args.plan))
+        plan_label = (
+            f"## Working plan — stage {args.stage_index} brief "
+            f"(projected; the full plan lives at `{resolved_plan}`, not inlined here)"
+        )
+        plan_body = render_stage_brief(doc, args.stage_index)
     else:
-        resolved_plan = brief_plan_path(args)
-        if resolved_plan is not None:
-            doc = load_plan(str(args.plan))
-            plan_label = (
-                f"## Working plan — stage {args.stage_index} brief "
-                f"(projected; the full plan lives at `{resolved_plan}`, not inlined here)"
-            )
-            plan_body = render_stage_brief(doc, args.stage_index)
-        else:
-            plan_label = "## Working plan"
-            plan_body = argv_text.read_required_file(args.plan, "--plan")
+        plan_label = "## Working plan"
+        plan_body = plan
     sections += [plan_label, "", plan_body, ""]
     sections += [
         "## Done criterion for this step",
