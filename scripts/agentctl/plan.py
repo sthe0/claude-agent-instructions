@@ -192,6 +192,16 @@ class PlanMeta:
 class PlanDoc:
     meta: PlanMeta
     stages: list[Stage] = field(default_factory=list)
+    # The RAW `depends_on` TOML list for every stage, keyed by 1-based stage
+    # index, captured independently of `_build_supplies`/`Stage.depends_on`.
+    # `_build_supplies` silently discards a stage's `depends_on` list whenever
+    # that stage also declares `[[stage.supplies]]` (explicit supplies win),
+    # so `Stage.depends_on` (derived purely from `supplies`) can no longer see
+    # an edge the plan author wrote — the "supplies-wins collapse". This field
+    # is filled by `parse_plan` for EVERY stage index (empty tuple when the
+    # stage declares no `depends_on`), so the reliance helpers below can read
+    # the raw-union-of-declared-edges view without depending on `supplies`.
+    raw_depends_on: dict[int, tuple[int, ...]] = field(default_factory=dict)
 
 
 class PlanError(Exception):
@@ -1299,8 +1309,13 @@ def parse_plan(
         )
 
     stages: list[Stage] = []
+    raw_depends_on: dict[int, tuple[int, ...]] = {}
     for i, s in enumerate(raw_stages, start=1):
         index = int(s.get("index", i))
+        # Captured independently of _build_supplies (see PlanDoc.raw_depends_on)
+        # so a stage's raw depends_on survives even when it also declares
+        # [[stage.supplies]], which would otherwise discard it.
+        raw_depends_on[index] = tuple(int(d) for d in s.get("depends_on", []))
         for required in ("title", "executor", "expected_result_image", "done_criterion"):
             if not s.get(required):
                 raise PlanError(f"stage {index} missing {required!r}")
@@ -1475,7 +1490,7 @@ def parse_plan(
     if len(set(indices)) != len(indices):
         raise PlanError(f"duplicate stage indices: {indices}")
     _validate_graph(stages, is_substantive=is_substantive)
-    return PlanDoc(meta=meta, stages=stages)
+    return PlanDoc(meta=meta, stages=stages, raw_depends_on=raw_depends_on)
 
 
 def load_plan(
@@ -1520,6 +1535,101 @@ def load_plan_with_digest(
     doc = parse_plan(raw, strict=strict, strict_executor=strict_executor)
     digest = hashlib.sha256(data).hexdigest()
     return doc, data, digest
+
+
+# --- Topological-review protocol constants ------------------------------
+# Sourced by render.render_topo_review_bundle so the checklist/protocol text
+# rendered into a --review-topo starting prompt and the markers a reviewer's
+# own REVIEW: reply is parsed against never drift apart (finding tb22: no
+# string-literal duplication of these four names in render.py).
+REVIEW_MARKER = "REVIEW:"
+VERDICT_MARKER = "Verdict:"
+PLAN_DIGEST_MARKER = "Plan digest:"
+CONDITION_MARKERS = ("C1:", "C2:", "C3:", "C4:")
+
+
+def _stage_by_index(doc: PlanDoc, n: int) -> Stage:
+    """`doc`'s stage at 1-based index `n`, or PlanError if there is none."""
+    for stage in doc.stages:
+        if stage.index == n:
+            return stage
+    raise PlanError(
+        f"stage {n} not found in plan (valid indices: {sorted(s.index for s in doc.stages)})"
+    )
+
+
+def reliance_set(doc: PlanDoc, n: int) -> set[int]:
+    """Stage `n`'s RAW reliance edges: the union of its raw TOML
+    `depends_on` (`doc.raw_depends_on`) and its typed `supplies[].on`
+    edges. `_build_supplies` silently discards a stage's raw `depends_on`
+    whenever that stage also declares `[[stage.supplies]]` (explicit
+    supplies win) -- this is the "supplies-wins collapse" -- so
+    `Stage.depends_on`, which is derived purely from `supplies`, can no
+    longer see an edge the plan author wrote. Reading the raw union
+    instead recovers it. Raises PlanError when `n` is unknown or when an
+    edge points at a stage index the plan does not have."""
+    stage = _stage_by_index(doc, n)
+    valid = {s.index for s in doc.stages}
+    edges = set(doc.raw_depends_on.get(n, ())) | {s.on for s in stage.supplies}
+    dangling = edges - valid
+    if dangling:
+        raise PlanError(f"stage {n} relies on unknown stage(s) {sorted(dangling)}")
+    return edges
+
+
+def consumers(doc: PlanDoc, n: int) -> set[int]:
+    """Every stage index that relies on `n` -- the reverse of
+    `reliance_set`. Raises PlanError when `n` is unknown."""
+    _stage_by_index(doc, n)
+    return {s.index for s in doc.stages if n in reliance_set(doc, s.index)}
+
+
+def first_hop(doc: PlanDoc, n: int) -> set[int]:
+    """`n`'s direct neighbours in EITHER direction: what it relies on,
+    union what relies on it. This is the set of units a --review-topo
+    bundle inlines full interfaces for."""
+    return reliance_set(doc, n) | consumers(doc, n)
+
+
+def reliance_closure(doc: PlanDoc, n: int) -> set[int]:
+    """The transitive closure of `reliance_set` upstream from `n` (n's
+    reliances, their reliances, ...), excluding `n` itself. This is the
+    set of units a --review-topo bundle renders bare interfaces for,
+    beyond the first hop.
+
+    Raises PlanError on a reliance cycle. The raw union graph
+    `reliance_set` reads is not guaranteed acyclic even when the derived
+    (supplies-only) graph `_validate_graph` already checked is: a stage
+    pair whose raw `depends_on` cycles but whose `supplies`-derived edges
+    do not is exactly the collapse this module exists to catch, so this
+    closure does its own cycle detection rather than trusting the
+    already-validated derived graph."""
+    closure: set[int] = set()
+    stack: list[tuple[int, tuple[int, ...]]] = [(n, (n,))]
+    while stack:
+        current, path = stack.pop()
+        for dep in sorted(reliance_set(doc, current)):
+            if dep in path:
+                cycle = " -> ".join(str(p) for p in path) + f" -> {dep}"
+                raise PlanError(f"reliance cycle detected: {cycle}")
+            if dep not in closure:
+                closure.add(dep)
+                stack.append((dep, path + (dep,)))
+    return closure
+
+
+def interface_empty(stage: Stage) -> bool:
+    """True when `render_stage_interface`'s projection would carry no
+    concrete signal for a consumer beyond prose -- i.e. the stage
+    declares no `output_artifacts`. `title`/`expected_result_image`/
+    `done_criterion` are required non-empty by `parse_plan` for every
+    stage regardless of `strict`, so they can never distinguish an
+    informative interface from an empty one; `output_artifacts` is the
+    one interface-relevant field that legitimately defaults to empty.
+    `render_stage_interface(doc, n, contract=True)` falls back to the
+    full brief when this is True, rather than handing a consumer nothing
+    concrete to rely on."""
+    return not stage.output_artifacts
 
 
 def order_scope(meta) -> tuple:

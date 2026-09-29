@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -37,8 +38,15 @@ from typing import NamedTuple
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from agentctl import grants  # the sole validator every materialized rule/add_dir passes through
-from agentctl.plan import load_plan  # parse the TOML plan for a single-stage brief projection
-from agentctl.render import render_stage_brief  # pure PlanDoc+index -> markdown brief
+from agentctl.plan import PlanError, load_plan  # parse the TOML plan for a single-stage brief projection
+from agentctl.render import (  # pure PlanDoc(+index) -> markdown; TopoUnitsCorrupt/materialize_topo_units do the one bit of I/O
+    TopoUnitsCorrupt,
+    materialize_topo_units,
+    render_stage_brief,
+    render_topo_review_bundle,
+    topo_unit_files,
+    topo_unit_view,
+)
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 from lib.config_root import plans_dir, projects_roots, skills_dir  # config-root resolver (isolated system root)
@@ -197,8 +205,8 @@ def assemble_prompt(
     add_dir_paths: "list[str] | None" = None,
     stage_grant_entries: "list[dict] | None" = None,
     evidence_dir: "str | None" = None,
+    topo_bundle: "str | None" = None,
 ) -> str:
-    plan = argv_text.read_required_file(args.plan, "--plan")
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
     done_criterion = argv_text.read_arg_text(args.done_criterion)
     dossier = (
@@ -221,17 +229,25 @@ def assemble_prompt(
             f"stage's work.",
             "",
         ]
-    resolved_plan = brief_plan_path(args)
-    if resolved_plan is not None:
-        doc = load_plan(str(args.plan))
+    if topo_bundle is not None:
         plan_label = (
-            f"## Working plan — stage {args.stage_index} brief "
-            f"(projected; the full plan lives at `{resolved_plan}`, not inlined here)"
+            "## Working plan — topological review unit "
+            "(projected; the full plan is never inlined for --review-topo — "
+            "see § File-access scope for the per-unit view directory)"
         )
-        plan_body = render_stage_brief(doc, args.stage_index)
+        plan_body = topo_bundle
     else:
-        plan_label = "## Working plan"
-        plan_body = plan
+        resolved_plan = brief_plan_path(args)
+        if resolved_plan is not None:
+            doc = load_plan(str(args.plan))
+            plan_label = (
+                f"## Working plan — stage {args.stage_index} brief "
+                f"(projected; the full plan lives at `{resolved_plan}`, not inlined here)"
+            )
+            plan_body = render_stage_brief(doc, args.stage_index)
+        else:
+            plan_label = "## Working plan"
+            plan_body = argv_text.read_required_file(args.plan, "--plan")
     sections += [plan_label, "", plan_body, ""]
     sections += [
         "## Done criterion for this step",
@@ -521,6 +537,22 @@ def build_parser() -> argparse.ArgumentParser:
         "stage); when set, the assembled prompt instructs the specialist to build on "
         "that worktree/branch instead of forking fresh",
     )
+    p.add_argument(
+        "--review-topo",
+        default=None,
+        metavar="<n|order>",
+        help="materialize and dispatch ONE topological-review unit (an integer "
+        "stage index, or the literal 'order') instead of the whole-plan/"
+        "--plan-brief projection: the assembled prompt inlines the unit's own "
+        "brief plus its first-hop neighbours' INTERFACES only, and the child is "
+        "granted read-only access to a per-plan-version view directory holding "
+        "every first-hop neighbour's FULL brief, reachable via one Read. "
+        "Requires --kind thinker; refused together with --stage-index or "
+        "--plan-brief (it replaces that projection, not refines it). Splits a "
+        "plan too large for one whole-plan review spawn -- see "
+        "scripts/plan-review-topological.py for the planned whole-plan driver "
+        "that walks every unit through this flag.",
+    )
     p.add_argument("--dry-run", action="store_true", help="print the prompt and the command that would run, then exit")
     return p
 
@@ -722,6 +754,34 @@ def plans_permission_rules(kind: str, plans_directory: Path) -> tuple[list[str],
     if kind in PLANS_READ_KINDS:
         return [f"Read({base})", "Bash(shasum -a 256:*)"], [f"Edit({base})"]
     return [], []
+
+
+def parse_review_topo_unit(raw: str) -> "int | str":
+    """Parse `--review-topo`'s value into the `int | str` unit selector
+    `agentctl.render`'s topo helpers expect: an integer stage index, or the
+    literal `"order"`. Raises `ValueError` for anything else (a comma-list,
+    a non-digit non-`"order"` string) — `--review-topo` names exactly one
+    unit per spawn, never a batch; a whole-plan walk is a caller looping
+    over spawns, not a wider value here."""
+    if raw == "order":
+        return "order"
+    if raw.isdigit():
+        return int(raw)
+    raise ValueError(f"--review-topo must be an integer stage index or 'order', got: {raw!r}")
+
+
+def review_topo_view_permission_rules(view_dir: Path) -> tuple[list[str], list[str]]:
+    """(allow, deny) permission rules granting read-only access to a
+    `--review-topo` unit's materialized view directory — mirrors
+    `plans_permission_rules`' READ direction (`Read` allow paired with an
+    `Edit` deny): `--add-dir` alone would otherwise make the directory
+    writable under `acceptEdits` (see `resolve_permission_mode`).
+
+    Raises ValueError if `view_dir` is not absolute."""
+    if not view_dir.is_absolute():
+        raise ValueError(f"view_dir must be absolute, got: {view_dir}")
+    base = f"/{view_dir}/**"
+    return [f"Read({base})"], [f"Edit({base})"]
 
 
 def plans_add_dir_args(kind: str, plans_directory: Path) -> list[str]:
@@ -1631,6 +1691,72 @@ def main(argv: list[str] | None = None) -> int:
     workdir = str(args.workdir) if args.workdir is not None else os.getcwd()
 
     plans_directory = plans_dir()
+
+    # --review-topo replaces the whole-plan/--plan-brief projection outright:
+    # topo_unit stays None for every ordinary spawn (the overwhelming majority),
+    # in which case every block below that checks it is a no-op and behavior is
+    # unchanged from before this flag existed.
+    topo_unit: "int | str | None" = None
+    topo_view_dir: "Path | None" = None
+    topo_plan_sha256: "str | None" = None
+    topo_doc = None
+    if args.review_topo is not None:
+        if args.kind != "thinker":
+            print(
+                "error: --review-topo is only valid with --kind thinker (the "
+                "rely-guarantee review protocol it materializes is a thinker "
+                "return shape).",
+                file=sys.stderr,
+            )
+            log_refused("review-topo-wrong-kind", {"kind": args.kind, "review_topo_unit": args.review_topo})
+            return 2
+        if args.stage_index is not None or args.plan_brief:
+            print(
+                "error: --review-topo replaces the whole-plan/--plan-brief "
+                "projection outright -- it cannot be combined with "
+                "--stage-index or --plan-brief.",
+                file=sys.stderr,
+            )
+            log_refused("review-topo-conflict", {"kind": args.kind, "review_topo_unit": args.review_topo})
+            return 2
+        try:
+            topo_unit = parse_review_topo_unit(args.review_topo)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            log_refused("review-topo-bad-unit", {"kind": args.kind, "review_topo_unit": args.review_topo})
+            return 2
+        try:
+            topo_doc = load_plan(str(args.plan))
+        except PlanError as exc:
+            print(f"error: --review-topo: {exc}", file=sys.stderr)
+            log_refused("review-topo-plan-error", {"kind": args.kind, "review_topo_unit": str(topo_unit)})
+            return 2
+        if topo_unit == "order":
+            if topo_doc.meta.order is None:
+                print("error: --review-topo order: plan declares no [order] block.", file=sys.stderr)
+                log_refused("review-topo-no-order", {"kind": args.kind, "review_topo_unit": "order"})
+                return 2
+        elif not any(s.index == topo_unit for s in topo_doc.stages):
+            print(f"error: --review-topo {topo_unit}: no such stage index in {args.plan}.", file=sys.stderr)
+            log_refused("review-topo-unknown-unit", {"kind": args.kind, "review_topo_unit": str(topo_unit)})
+            return 2
+        topo_plan_sha256 = hashlib.sha256(Path(args.plan).read_bytes()).hexdigest()
+        topo_root = plans_directory / "_topo_review"
+        topo_view_dir = topo_root / topo_plan_sha256 / topo_unit_view(topo_unit)
+        if not args.dry_run:
+            # Materialization is real I/O (writes the view directory); --dry-run
+            # must write nothing, so it only computes the path above and prints
+            # the intended TOPO-VIEW line below, never reaching this call.
+            try:
+                materialize_topo_units(topo_doc, topo_root, [topo_unit], plan_sha256=topo_plan_sha256)
+            except (TopoUnitsCorrupt, PlanError) as exc:
+                print(f"error: --review-topo: {exc}", file=sys.stderr)
+                log_refused(
+                    "review-topo-materialize-failed",
+                    {"kind": args.kind, "review_topo_unit": str(topo_unit), "plan_sha256": topo_plan_sha256},
+                )
+                return 2
+
     # engine_grants stays None unless BOTH --session and --stage-index are given
     # AND the engine's own executor field for that stage matches --kind (checked
     # inside load_engine_stage_grants) -- a mismatch or unknown session falls
@@ -1660,7 +1786,13 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     add_dir_argv: list[str] = []
-    add_dir_argv.extend(plans_add_dir_args(args.kind, plans_directory))
+    if topo_unit is not None:
+        # --review-topo withholds the plans-directory grant entirely -- the
+        # child gets only its one-unit view directory below, never the whole
+        # plans_dir() a --plan-brief/whole-plan thinker spawn would carry.
+        add_dir_argv.extend(["--add-dir", str(topo_view_dir)])
+    else:
+        add_dir_argv.extend(plans_add_dir_args(args.kind, plans_directory))
     add_dir_argv.extend(repo_root_add_dir_args(args.kind, workdir))
     if engine_grants:
         add_dir_argv.extend(stage_grant_add_dir_args(engine_grants))
@@ -1671,6 +1803,11 @@ def main(argv: list[str] | None = None) -> int:
     permission_mode = resolve_permission_mode(args, engine_grants)
 
     perms = permissions_digest(args.project_permissions)
+    topo_bundle: "str | None" = None
+    if topo_unit is not None:
+        topo_bundle = render_topo_review_bundle(
+            topo_doc, topo_unit, plan_sha256=topo_plan_sha256, view_dir=topo_view_dir
+        )
     try:
         prompt = assemble_prompt(
             args,
@@ -1681,6 +1818,7 @@ def main(argv: list[str] | None = None) -> int:
             add_dir_paths=add_dir_paths,
             stage_grant_entries=engine_grants,
             evidence_dir=evidence_dir,
+            topo_bundle=topo_bundle,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1698,8 +1836,11 @@ def main(argv: list[str] | None = None) -> int:
             f"error: assembled prompt is {measured} chars, exceeding the "
             f"{ceiling_chars}-char ({dispatch_prompt_ceiling_tokens(model)}-token) "
             f"pre-spawn refusal ceiling for this child (resolved to --model {model}); "
-            f"refusing before spawning. Shrink constraints/dossier, or dispatch with "
-            f"--plan-brief if not already set.",
+            f"refusing before spawning. Shrink constraints/dossier, dispatch with "
+            f"--plan-brief if not already set, or split the review itself via "
+            f"--review-topo <n|order> (materializes one topological-review unit "
+            f"at a time; scripts/plan-review-topological.py is the planned "
+            f"whole-plan driver that walks every unit through it).",
             file=sys.stderr,
         )
         log_refused(
@@ -1711,6 +1852,8 @@ def main(argv: list[str] | None = None) -> int:
                 "model": model,
                 "plan_brief": getattr(args, "plan_brief", False),
                 "stage_index": args.stage_index,
+                "review_topo_unit": str(topo_unit) if topo_unit is not None else None,
+                "plan_sha256": topo_plan_sha256,
             },
         )
         return 5
@@ -1718,7 +1861,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         child_settings = build_child_settings(
             args.kind,
-            plans_directory,
+            None if topo_unit is not None else plans_directory,
             args.project_settings,
             engine_grants,
             workdir=workdir,
@@ -1728,6 +1871,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
         return 2
+
+    if topo_unit is not None:
+        # The plans-directory grant was withheld above; grant the one-unit
+        # view directory instead (Read allow + Edit deny, same directional
+        # pair plans_permission_rules uses for its own read kinds).
+        view_allow, view_deny = review_topo_view_permission_rules(topo_view_dir)
+        child_permissions = child_settings.setdefault("permissions", {})
+        child_permissions.setdefault("allow", []).extend(view_allow)
+        child_permissions.setdefault("deny", []).extend(view_deny)
 
     cmd = [
         "claude",
@@ -1757,6 +1909,9 @@ def main(argv: list[str] | None = None) -> int:
     # the launch below); `claude -p` reads its prompt from stdin.
 
     if args.dry_run:
+        if topo_unit is not None:
+            n_files = len(topo_unit_files(topo_doc, topo_unit))
+            print(f"TOPO-VIEW: {topo_view_dir} files={n_files}")
         print("=== assembled prompt (delivered via stdin) ===")
         print(prompt)
         print("\n=== command (not executed) ===")
@@ -1895,6 +2050,8 @@ def main(argv: list[str] | None = None) -> int:
         "outcome_class": outcome_class,
         "child_session_id": child_session_id,
         "transcript_path": str(transcript_path) if transcript_path is not None else None,
+        "review_topo_unit": str(topo_unit) if topo_unit is not None else None,
+        "plan_sha256": topo_plan_sha256,
         **_spawn_tags(),
     })
 

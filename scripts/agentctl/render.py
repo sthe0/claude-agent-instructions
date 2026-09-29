@@ -16,12 +16,30 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
+import tempfile
+from pathlib import Path
 
 from lib import kind_baselines
 
 from . import grants as _grants
 from .directive import Directive
-from .plan import PlanDoc, _venue_for, grants_sha256, load_plan
+from .plan import (
+    CONDITION_MARKERS,
+    PLAN_DIGEST_MARKER,
+    REVIEW_MARKER,
+    VERDICT_MARKER,
+    PlanDoc,
+    PlanError,
+    _venue_for,
+    consumers,
+    grants_sha256,
+    interface_empty,
+    load_plan,
+    reliance_closure,
+    reliance_set,
+)
 
 
 def _stage_declared_and_derived_grants(s, venue: str):
@@ -73,8 +91,12 @@ def _negative_control_lines(crit) -> list[str]:
     return []
 
 
-def render_plan_md(doc: PlanDoc) -> str:
-    """Pure: a PlanDoc -> a markdown prose view. Renders every stage in order."""
+def render_meta_md(doc: PlanDoc) -> list[str]:
+    """The plan-level header block (task id / weight class / done criterion /
+    criterion type / repo root / external research), as raw lines — factored
+    verbatim out of `render_plan_md` so a topo unit's bundle can reuse
+    exactly the same projection. `render_plan_md`'s own output is unchanged
+    (it just composes this with the other factored pieces)."""
     m = doc.meta
     lines: list[str] = [f"# Plan: {m.goal or m.task_id}", ""]
     lines.append(f"- **Task id:** {m.task_id}")
@@ -88,7 +110,16 @@ def render_plan_md(doc: PlanDoc) -> str:
     if m.external_research:
         lines.append(f"- **External research:** {m.external_research}")
     lines.append("")
+    return lines
 
+
+def render_order_md(doc: PlanDoc) -> list[str]:
+    """The `## Order` block (customer / functional_place / requirements
+    only — NOT `coverage`/`requires_traceability`; see
+    `render_order_coverage_md`), as raw lines. `[]` when the plan declares
+    no order. Factored verbatim out of `render_plan_md`."""
+    m = doc.meta
+    lines: list[str] = []
     if m.order is not None:
         o = m.order
         lines.append("## Order")
@@ -104,6 +135,61 @@ def render_plan_md(doc: PlanDoc) -> str:
                 lines.append(f"  - {label}: {r.text}")
                 lines.append(f"    - **Derivation:** {r.derivation or '*(none)*'}")
         lines.append("")
+    return lines
+
+
+def render_order_coverage_md(doc: PlanDoc) -> list[str]:
+    """The order's `coverage` map and `requires_traceability` flag, as raw
+    lines. Never rendered by `render_plan_md`/`render_order_md` before this
+    (finding ii: an order's coverage had no projection anywhere) — kept as
+    its own function rather than folded into `render_order_md` so
+    `render_plan_md`'s output stays byte-identical. `[]` when the plan
+    declares no order."""
+    m = doc.meta
+    if m.order is None:
+        return []
+    o = m.order
+    lines: list[str] = ["## Order coverage", ""]
+    lines.append(f"- **Requires traceability:** {o.requires_traceability}")
+    if o.coverage:
+        lines.append("- **Coverage:**")
+        for req_id, stage_refs in o.coverage.items():
+            refs = ", ".join(stage_refs) if stage_refs else "*(none)*"
+            lines.append(f"  - {req_id}: {refs}")
+    else:
+        lines.append("- **Coverage:** *(none declared)*")
+    lines.append("")
+    return lines
+
+
+def render_final_checks_md(doc: PlanDoc) -> list[str]:
+    """The `## Final verification` block, as raw lines. `[]` when the plan
+    declares no `final_check`. Factored verbatim out of `render_plan_md`."""
+    m = doc.meta
+    lines: list[str] = []
+    if m.final_check:
+        lines.append("## Final verification")
+        lines.append("")
+        for fc in m.final_check:
+            label = f"{fc.label}: " if fc.label else ""
+            if fc.kind == "landed" and fc.landed is not None:
+                ls = fc.landed
+                lines.append(
+                    f"- {label}**landed check:** stage {ls.delivered_stage}'s "
+                    f"delivered commit must be contained in `{ls.target}` and "
+                    f"`{ls.remote}/{ls.target}`"
+                )
+            else:
+                lines.append(f"- {label}`{fc.command}` (expected exit {fc.expected_exit})")
+        lines.append("")
+    return lines
+
+
+def render_plan_md(doc: PlanDoc) -> str:
+    """Pure: a PlanDoc -> a markdown prose view. Renders every stage in order."""
+    lines: list[str] = []
+    lines.extend(render_meta_md(doc))
+    lines.extend(render_order_md(doc))
 
     for s in doc.stages:
         lines.append(f"## Stage {s.index}: {s.title}")
@@ -157,21 +243,7 @@ def render_plan_md(doc: PlanDoc) -> str:
         lines.extend(_grants_lines(s, _venue_for(doc)))
         lines.append("")
 
-    if m.final_check:
-        lines.append("## Final verification")
-        lines.append("")
-        for fc in m.final_check:
-            label = f"{fc.label}: " if fc.label else ""
-            if fc.kind == "landed" and fc.landed is not None:
-                ls = fc.landed
-                lines.append(
-                    f"- {label}**landed check:** stage {ls.delivered_stage}'s "
-                    f"delivered commit must be contained in `{ls.target}` and "
-                    f"`{ls.remote}/{ls.target}`"
-                )
-            else:
-                lines.append(f"- {label}`{fc.command}` (expected exit {fc.expected_exit})")
-        lines.append("")
+    lines.extend(render_final_checks_md(doc))
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -337,6 +409,325 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
             else:
                 lines.append(f"- check {i} ({fc.kind})")
         lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+# --- Topological review: one plan "unit" (a stage, or the virtual order
+# node) reviewed at a time, from a small starting prompt whose first-hop
+# neighbours are reachable by exactly one `Read` in a per-unit view
+# directory, rather than inlined. See `render_topo_review_bundle`. -------
+
+class TopoUnitsCorrupt(Exception):
+    """A materialized topo-unit view directory's on-disk content does not
+    match what `topo_unit_files` would produce for its plan right now —
+    either tampered with after materialization, or (should the
+    plan_sha256 partition scheme ever be bypassed) inherited from a
+    different plan version. Raised by `verify_topo_units`."""
+
+
+def _unit_label(unit: "int | str") -> str:
+    """Canonical string label for a topo unit selector: `"order"` for the
+    order node, or the stage's decimal index for anything else."""
+    if isinstance(unit, str) and unit == "order":
+        return "order"
+    return str(int(unit))
+
+
+def _unit_own_brief(doc: PlanDoc, unit: "int | str") -> str:
+    """The unit's own FULL brief: `render_stage_brief` for a stage, or the
+    meta + order + order-coverage projection for the order node."""
+    if _unit_label(unit) == "order":
+        lines = render_meta_md(doc) + render_order_md(doc) + render_order_coverage_md(doc)
+        return "\n".join(lines).rstrip() + "\n"
+    return render_stage_brief(doc, int(unit))
+
+
+def _order_coverage_stage_indices(doc: PlanDoc) -> set[int]:
+    """Every stage index named in the order's `coverage` map values that
+    parses as an int and is a real stage in `doc` — the order node's
+    first-hop neighbours. A coverage value that isn't a bare stage index
+    (a free-text ref) is silently skipped rather than refused: the order
+    node's neighbour set is a best-effort convenience projection, not a
+    validated graph edge the way a stage's `reliance_set` is."""
+    m = doc.meta
+    if m.order is None:
+        return set()
+    valid = {s.index for s in doc.stages}
+    out: set[int] = set()
+    for refs in m.order.coverage.values():
+        for ref in refs:
+            try:
+                n = int(str(ref).strip())
+            except (TypeError, ValueError):
+                continue
+            if n in valid:
+                out.add(n)
+    return out
+
+
+def _unit_first_hop(doc: PlanDoc, unit: "int | str") -> set[int]:
+    """The first-hop STAGE neighbours of `unit`: for a stage, `first_hop`
+    (its reliances union its consumers); for the order node, every stage
+    named in the order's own `coverage` map (`_order_coverage_stage_indices`)
+    — the stages the order itself points at, since the order declares no
+    `depends_on`/`supplies` of its own to read a reliance edge from."""
+    if _unit_label(unit) == "order":
+        return _order_coverage_stage_indices(doc)
+    from .plan import first_hop as _first_hop
+
+    return _first_hop(doc, int(unit))
+
+
+def _unit_relies_on_and_consumers(doc: PlanDoc, unit: "int | str") -> tuple[set[int], set[int]]:
+    """`(relies_on, consumed_by)` for `unit` — the two tagged halves of its
+    first hop. The order node has no reliance direction of its own; every
+    coverage-named stage is reported as `consumed_by` (the order is served
+    by them, not relied on by them)."""
+    if _unit_label(unit) == "order":
+        return set(), _order_coverage_stage_indices(doc)
+    n = int(unit)
+    return reliance_set(doc, n), consumers(doc, n)
+
+
+def render_stage_interface(doc: PlanDoc, stage_index: int, *, contract: bool = False) -> str:
+    """The interface-only projection of one stage: title, expected result
+    image, criterion type, done criterion, and output_artifacts — never
+    method/means/procedure (the "how", which a consumer relying on this
+    stage's result never needs — see conditions 3/4 in
+    `render_topo_review_bundle`).
+
+    When `contract=True` and the stage's interface would carry no concrete
+    signal (`plan.interface_empty` — no declared `output_artifacts`),
+    falls back to the full `render_stage_brief` instead: a consumer asked
+    to rely on an empty interface has nothing to check its reliance
+    against, so the fallback trades brevity for something checkable.
+
+    Raises PlanError if no stage in `doc` carries `stage_index`."""
+    stage = next((s for s in doc.stages if s.index == stage_index), None)
+    if stage is None:
+        raise PlanError(f"stage {stage_index} not found in plan {doc.meta.task_id!r}")
+
+    if contract and interface_empty(stage):
+        return render_stage_brief(doc, stage_index)
+
+    lines = [f"## Stage {stage.index}: {stage.title}", ""]
+    lines.append(f"- **Expected result image:** {stage.subject.result}")
+    lines.append(f"- **Criterion type:** {stage.criterion.criterion_type}")
+    lines.append(f"- **Done criterion:** {stage.criterion.done_criterion}")
+    if stage.output_artifacts:
+        lines.append("- **Output artifacts:**")
+        for a in stage.output_artifacts:
+            lines.append(f"  - `{a}`")
+    else:
+        lines.append("- **Output artifacts:** *(none declared)*")
+    lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def topo_unit_view(unit: "int | str") -> str:
+    """The view directory's bare name for `unit` — e.g. `view-3` or
+    `view-order`. The caller joins this under the plan-version-scoped
+    materialization root (see `materialize_topo_units`). Matches the exact
+    `view-<unit>` shape `spawn-specialist.py --review-topo` grants
+    `Read(//.../view-<unit>/**)` against."""
+    return f"view-{_unit_label(unit)}"
+
+
+def topo_unit_files(doc: PlanDoc, unit: "int | str") -> dict[str, str]:
+    """The view directory's file contents for `unit`: `own.md` (this
+    unit's own full brief) plus one `<neighbour>.md` file per FIRST-HOP
+    stage neighbour, holding that neighbour's FULL brief
+    (`render_stage_brief`) — the "one Read away" material
+    `render_topo_review_bundle` only summarizes via interfaces inline.
+
+    Keys are filenames, values are file contents;
+    `materialize_topo_units` writes them verbatim."""
+    files = {"own.md": _unit_own_brief(doc, unit)}
+    for n in sorted(_unit_first_hop(doc, unit)):
+        files[f"{n}.md"] = render_stage_brief(doc, n)
+    return files
+
+
+def materialize_topo_units(
+    doc: PlanDoc, root: "Path | str", units, *, plan_sha256: str
+) -> dict[str, Path]:
+    """Write each `unit` in `units`'s view directory under
+    `root/plan_sha256/view-<unit>/`, atomically: build the directory's
+    files under a sibling temp directory (`tempfile.mkdtemp`, so its name
+    is PID/random-suffixed and cannot collide with a concurrent writer's),
+    then `os.replace` it into place in one step.
+
+    `os.replace` on a non-empty destination directory raises `OSError` —
+    the signal that a concurrent writer won the race first. The loser
+    catches it, re-verifies the winner's directory via `verify_topo_units`
+    (treating it as authoritative once it passes) rather than retrying or
+    raising, and discards its own now-orphaned temp directory.
+
+    Returns `{unit_label: materialized_directory_path}`."""
+    version_root = Path(root) / plan_sha256
+    version_root.mkdir(parents=True, exist_ok=True)
+    out: dict[str, Path] = {}
+    for unit in units:
+        label = _unit_label(unit)
+        dest = version_root / topo_unit_view(unit)
+        if dest.is_dir():
+            verify_topo_units(doc, root, plan_sha256, [unit])
+            out[label] = dest
+            continue
+        files = topo_unit_files(doc, unit)
+        tmp_dir = Path(tempfile.mkdtemp(prefix=f".{dest.name}.", dir=version_root))
+        for filename, content in files.items():
+            (tmp_dir / filename).write_text(content, encoding="utf-8")
+        try:
+            os.replace(tmp_dir, dest)
+        except OSError:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            verify_topo_units(doc, root, plan_sha256, [unit])
+        out[label] = dest
+    return out
+
+
+def verify_topo_units(doc: PlanDoc, root: "Path | str", plan_sha256: str, units) -> None:
+    """Re-check that each `unit`'s materialized view directory under
+    `root/plan_sha256/` holds EXACTLY what `topo_unit_files` would produce
+    for `doc` right now — the same filename set, byte-identical content.
+
+    Raises `TopoUnitsCorrupt` on any mismatch: a directory tampered with
+    after materialization, missing outright, or (should the plan_sha256
+    partitioning ever be bypassed) materialized from a different plan
+    version than `doc`."""
+    version_root = Path(root) / plan_sha256
+    for unit in units:
+        label = _unit_label(unit)
+        dest = version_root / topo_unit_view(unit)
+        expected = topo_unit_files(doc, unit)
+        if not dest.is_dir():
+            raise TopoUnitsCorrupt(f"unit {label!r} view directory missing: {dest}")
+        actual_names = {p.name for p in dest.iterdir() if p.is_file()}
+        if actual_names != set(expected.keys()):
+            raise TopoUnitsCorrupt(
+                f"unit {label!r} view directory {dest} file set {sorted(actual_names)} "
+                f"!= expected {sorted(expected.keys())}"
+            )
+        for filename, content in expected.items():
+            actual = (dest / filename).read_text(encoding="utf-8")
+            if actual != content:
+                raise TopoUnitsCorrupt(
+                    f"unit {label!r} view file {filename} content mismatch under {dest}"
+                )
+
+
+_CONDITION_TEXT = {
+    CONDITION_MARKERS[0]: "this unit's own postcondition (what it delivers) is fully and precisely declared",
+    CONDITION_MARKERS[1]: "this unit's own precondition (what it relies on) is fully and precisely declared",
+    CONDITION_MARKERS[2]: "this unit delivers what it declares — its supplier postcondition holds",
+    CONDITION_MARKERS[3]: (
+        "what this unit relies on is declared, completely, precisely, and jointly "
+        "with its suppliers — its consumer precondition holds"
+    ),
+}
+
+
+def render_topo_review_bundle(doc: PlanDoc, unit: "int | str", *, plan_sha256: str, view_dir: "Path | str") -> str:
+    """The `--review-topo` starting prompt for `unit`: order context + own
+    full brief + a tagged first-hop neighbour list + first-hop neighbour
+    INTERFACES (short, `render_stage_interface`) + transitive-neighbour
+    interfaces (short, beyond the first hop) + a pointer at `view_dir`
+    (where each first-hop neighbour's FULL brief is reachable via exactly
+    one `Read`) + the reconciliation procedure + the plan digest line +
+    the review protocol/checklist.
+
+    Every marker string in the protocol section is sourced from
+    `plan.REVIEW_MARKER` / `plan.VERDICT_MARKER` / `plan.PLAN_DIGEST_MARKER`
+    / `plan.CONDITION_MARKERS` — never duplicated here as a string literal
+    (finding tb22), so a reviewer's reply and this bundle's own checklist
+    can never drift onto different marker spellings."""
+    label = _unit_label(unit)
+    relies_on, consumed_by = _unit_relies_on_and_consumers(doc, unit)
+    first_hop_all = relies_on | consumed_by
+
+    transitive: set[int] = set()
+    for m in relies_on:
+        transitive |= reliance_closure(doc, m)
+    transitive -= first_hop_all
+    if label != "order":
+        transitive.discard(int(unit))
+
+    lines: list[str] = [f"# Topological review unit: {label}", ""]
+    lines.extend(render_order_md(doc))
+    lines.append("## Own brief")
+    lines.append("")
+    lines.append(_unit_own_brief(doc, unit))
+
+    lines.append("## First-hop neighbours")
+    lines.append("")
+    if first_hop_all:
+        for m in sorted(relies_on):
+            lines.append(f"- relies-on: stage {m}")
+        for m in sorted(consumed_by):
+            lines.append(f"- consumed-by: stage {m}")
+    else:
+        lines.append("- *(none — this unit has no declared reliance edges)*")
+    lines.append("")
+
+    lines.append("## Neighbour interfaces")
+    lines.append("")
+    if first_hop_all:
+        for m in sorted(first_hop_all):
+            lines.append(render_stage_interface(doc, m, contract=True))
+    else:
+        lines.append("*(none)*")
+        lines.append("")
+
+    lines.append("## Transitive interfaces")
+    lines.append("")
+    if transitive:
+        for m in sorted(transitive):
+            lines.append(render_stage_interface(doc, m, contract=True))
+    else:
+        lines.append("*(none beyond the first hop)*")
+        lines.append("")
+
+    lines.append("## View directory")
+    lines.append("")
+    lines.append(
+        f"Each first-hop neighbour's FULL brief (method/procedure included) is "
+        f"reachable via exactly one `Read` under `{view_dir}` — pull it there if "
+        f"the interface above is not enough to check a reliance/consumer edge. "
+        f"No cap, no valve, no witness: read whichever neighbour files you need."
+    )
+    lines.append("")
+
+    lines.append("## Reconciliation procedure")
+    lines.append("")
+    lines.append(
+        "1. Read `own.md` in the view directory (this unit's own full brief) and "
+        "compare it against this bundle's own brief above — they must match."
+    )
+    lines.append(
+        "2. For each first-hop neighbour, decide from the interface above whether "
+        "you need the full brief; if so, `Read` it from the view directory."
+    )
+    lines.append(
+        f"3. Check each condition below against what you've read, then reply with "
+        f"the {REVIEW_MARKER} block."
+    )
+    lines.append("")
+
+    lines.append(f"{PLAN_DIGEST_MARKER} {plan_sha256}")
+    lines.append("")
+
+    lines.append("## Review protocol")
+    lines.append("")
+    lines.append(
+        f"Reply with a {REVIEW_MARKER} block naming this unit's four "
+        f"rely-guarantee conditions and a {VERDICT_MARKER}:"
+    )
+    for marker in CONDITION_MARKERS:
+        lines.append(f"- `{marker}` {_CONDITION_TEXT[marker]}")
+    lines.append(f"- `{VERDICT_MARKER}` pass | revise | override")
+    lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 
