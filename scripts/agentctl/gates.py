@@ -687,6 +687,12 @@ def _plan_review_regression_evidence(prior_pass, review, doc) -> bool:
          on an UNRELATED part of the plan could overturn a pass that never
          claimed anything about that part.
 
+    Only an IN-SCOPE concern (`review.in_scope_concern_ids`, already computed
+    by the caller via `classify_concerns` before this runs) counts toward
+    condition 2 — a stage-scoped reviewer's regression command is presumed to
+    exercise only its own scope, so an out-of-scope concern naming a changed
+    part elsewhere proves nothing about a regression THIS review witnessed.
+
     `doc` may be None (an unloadable target plan) — a change-since-pass claim
     cannot be established against no plan at all, so this returns False rather
     than guessing."""
@@ -702,7 +708,10 @@ def _plan_review_regression_evidence(prior_pass, review, doc) -> bool:
     changed_names.update(_plan_review_scope_for_stage(i) for i in moved_stages)
     if not changed_names:
         return False
-    for concern in review.concerns:
+    in_scope_ids = set(review.in_scope_concern_ids)
+    for cid, concern in zip(_plan_review_concern_ids(review), review.concerns):
+        if cid not in in_scope_ids:
+            continue
         text = _normalize_string(concern)
         if any(_concern_names_part(text, name) for name in changed_names):
             return True

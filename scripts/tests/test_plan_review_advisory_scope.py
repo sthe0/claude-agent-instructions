@@ -264,6 +264,32 @@ def test_out_of_scope_revise_recorded_via_cli_reports_not_blocking_note(store, f
     assert gates.plan_review_blockers(store.load(sid), str(plan)) == []
 
 
+def test_regression_evidence_ignores_out_of_scope_concern(gate_on, tmp_path, fixtures_dir):
+    """A stage-scoped review's regression command is presumed to exercise only
+    its own scope -- an OUT-OF-SCOPE concern naming a part that DID change
+    (stage:2, changed since the pass) must not count as evidence for a
+    stage:1-scoped review, even though plan.changed_parts confirms stage:2
+    moved. This is what distinguishes the R3 scope filter
+    (gates._plan_review_regression_evidence) from the bare R1 changed-parts
+    check: without the filter this would wrongly return True."""
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    doc0 = load_plan(str(plan_path))
+    whole = _whole_review(plan_path, doc0)
+
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1and2_retitled.toml").read_text())
+    doc1 = load_plan(str(plan_path))
+    concerns = ["stage:2: this belongs to the other stage"]
+    ids = ["c1"]
+    in_scope, out_of_scope = gates.classify_concerns("stage:1", ids, concerns)
+    assert in_scope == [] and out_of_scope == ["c1"]
+    stage1 = _stage_review(plan_path, doc1, 1, concerns=concerns, concern_ids=ids,
+                           in_scope_concern_ids=in_scope, out_of_scope_concern_ids=out_of_scope,
+                           regression_command="pytest -q", regression_exit=1)
+
+    assert gates._plan_review_regression_evidence(whole, stage1, doc1) is False
+
+
 # --- 4. gates.review_delta ---------------------------------------------------
 
 def test_review_delta_helper(gate_on, tmp_path, fixtures_dir):
