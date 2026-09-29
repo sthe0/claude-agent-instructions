@@ -1289,10 +1289,9 @@ def test_corpus_scan_skips_acceptance_review_verify_command_either_spelling(fixt
     verify_command (it names no shell check, only a human observation to
     confirm on review) so a corpus scan never manufactures a bogus
     'unknown program' out of its prose. plan.py stores criterion_type as a
-    raw, unvalidated string, and the real Core corpus carries BOTH spellings
-    (grep-counted over scripts/tests/fixtures/plan_corpus: 28 hyphenated
-    "acceptance-review", 10 underscored "acceptance_review") -- this must
-    hold for both, not just the CriterionType enum's own underscored
+    raw, unvalidated string, and the Core corpus carries both the hyphenated
+    "acceptance-review" and the underscored "acceptance_review" spelling --
+    this must hold for both, not just the CriterionType enum's own
     spelling."""
     plan_resources = _plan_resources_module()
 

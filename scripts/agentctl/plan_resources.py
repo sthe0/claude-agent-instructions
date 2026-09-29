@@ -226,13 +226,8 @@ def _iter_corpus_commands(corpus_dirs: list[str]) -> list[tuple[str, str, str]]:
 
     Segments come from `grants._verify_command_segments`, the SAME top-level
     splitter DR-V uses to propose a permission rule -- but here WITHOUT that
-    function's `:*` wildcard suffix. DR-V's derived rule always carries one
-    (a permission-rule shape, meant for the harness's allowlist), so walking
-    `_effective_grants_for_stage(...).allow` and filtering out
-    wildcard-suffixed entries (the prior approach) discarded every
-    verify_command-derived command outright and left this scan vacuous
-    against a corpus with no declared `[stage.grants]` -- true of every
-    fixture in scripts/tests/fixtures/plan_corpus.
+    function's `:*` wildcard suffix, so the literal command text is what gets
+    resolved rather than a permission-rule shape.
 
     An `acceptance_review`-typed stage's `verify_command`/`negative_control`
     fields are skipped entirely: that criterion type names no shell check at
@@ -255,9 +250,8 @@ def _iter_corpus_commands(corpus_dirs: list[str]) -> list[tuple[str, str, str]]:
                 # plan.py stores this field as a raw, unvalidated string (plan.py
                 # crit_type = str(s.get("criterion_type", ...))), and the corpus
                 # itself carries both "acceptance_review" and "acceptance-review"
-                # spellings (28 hyphenated, 10 underscored, grep-counted over
-                # scripts/tests/fixtures/plan_corpus) -- normalize before compare
-                # or the hyphenated majority silently falls through this skip.
+                # spellings -- normalize before compare or the hyphenated form
+                # silently falls through this skip.
                 if s.criterion.criterion_type.replace("-", "_") == CriterionType.ACCEPTANCE_REVIEW.value:
                     continue
                 for text in (s.criterion.verify_command, s.criterion.negative_control):

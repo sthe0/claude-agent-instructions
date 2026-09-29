@@ -899,15 +899,22 @@ def test_jq_resolves_with_any_flag(tmp_path):
         assert res.resources == [], cmd
 
 
-def test_cd_resolves_with_any_flag(tmp_path):
-    """cd only changes the running shell's own cwd; no flag writes
-    anywhere, so safe_flags=["*"] and every form resolves."""
+def test_cd_is_always_unresolved(tmp_path):
+    """cd moves the base later segments are resolved against, so neither cd
+    itself nor anything chained after it may resolve against the venue."""
     tc = _tool_contracts_module()
 
-    for cmd in ("cd /tmp", "cd -P /tmp", "cd -"):
+    for cmd in (
+        "cd /tmp",
+        "cd -P /tmp",
+        "cd -",
+        "cd ../other && git push origin HEAD:main",
+        "cd /tmp/x && python3 -m pytest -q",
+        "cd /x && python3 scripts/land-branch.py --branch b --keep-branch --remote-only",
+    ):
         res = tc.resolve_command(cmd, str(tmp_path))
-        assert res.status == "resolved", cmd
-        assert res.resources == [], cmd
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
 
 
 def test_echo_resolves_with_any_flag(tmp_path):

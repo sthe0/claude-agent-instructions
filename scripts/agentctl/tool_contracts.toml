@@ -186,7 +186,7 @@ source = "ssh(1): executes the given command on the specified remote host, or st
 [[program]]
 name = "launchctl"
 effect = "unresolved"
-reason = "launchctl's stateful subcommands (load/unload/bootstrap/bootout/kickstart/remove/submit/start/stop) install, remove, or signal a launchd job; unlike pmset/plutil below, launchctl's subcommand is a bare word, not a dash-prefixed flag, so the safe_flags mechanism (which only inspects tokens starting with '-') cannot gate it -- marking launchctl effect='none' would let a stateful bare-word subcommand straight through unreviewed."
+reason = "launchctl's stateful subcommands (load/unload/bootstrap/bootout/kickstart/remove/submit/start/stop) install, remove, or signal a launchd job; unlike plutil below, launchctl's subcommand is a bare word, not a dash-prefixed flag, so the safe_flags mechanism (which only inspects tokens starting with '-') cannot gate it -- marking launchctl effect='none' would let a stateful bare-word subcommand straight through unreviewed."
 source = "launchctl(1) (macOS): list/print query running jobs (read-only); load/unload/bootstrap/bootout/kickstart/remove/submit install, remove, or signal a job."
 
 [[program]]
@@ -198,7 +198,7 @@ source = "plutil(1) (macOS): -lint validates a property-list file's syntax and -
 [[program]]
 name = "pmset"
 effect = "unresolved"
-reason = "pmset's stateful forms include a bare-word subcommand (`pmset schedule wake ...`), not only dash-prefixed flags (-a/-b/-c/-u); like launchctl above, a bare-word subcommand carries no '-' prefix, so the safe_flags mechanism (which only inspects tokens starting with '-') cannot gate it -- confirmed by test_pmset_safe_flags_closed_set, which caught `pmset schedule wake 2026-01-01` resolving as 'none' under an earlier safe_flags=[\"-g\"] version of this entry."
+reason = "pmset's stateful forms include a bare-word subcommand (`pmset schedule wake ...`), not only dash-prefixed flags (-a/-b/-c/-u); like launchctl above, a bare-word subcommand carries no '-' prefix, so the safe_flags mechanism (which only inspects tokens starting with '-') cannot gate it."
 source = "pmset(1) (macOS): -g displays the current power-management settings (read-only); -a/-b/-c/-u and the bare `schedule` subcommand each change live power-management state."
 
 [[program]]
@@ -209,9 +209,9 @@ source = "jq manual (jqlang.github.io/jq/manual): jq reads its input (stdin, or 
 
 [[program]]
 name = "cd"
-effect = "none"
-safe_flags = ["*"]
-source = "POSIX cd(1p) / bash builtin: changes the shell's own current working directory only; its flags (-L/-P/-e/@) control symlink-resolution semantics, never a filesystem write. safe_flags=[\"*\"]: no flag in cd writes anywhere."
+effect = "unresolved"
+reason = "cd moves the base every later relative operand, script path and implicit git repository is resolved against; this resolver joins them against the venue, so after a cd a later segment would be typed for the wrong directory (e.g. `cd ../other && git push origin HEAD:main` pushes another repository)."
+source = "POSIX cd(1p) / bash builtin: changes the shell's current working directory, which every subsequent relative path and cwd-discovered repository in the same shell uses."
 
 [[program]]
 name = "echo"
