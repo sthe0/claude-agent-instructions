@@ -70,6 +70,81 @@ def _path_is_or_under(container: str, member: str) -> bool:
     return member.startswith(prefix)
 
 
+def _git_common_dir(base_real: str) -> str | None:
+    """Realpath of the git common dir for `base_real` (where refs, config
+    and hooks actually live — the same dir across every linked worktree of
+    one repo), or `None` if `base_real` is not a git checkout at all.
+    Duplicated in miniature from `script_effects.py`'s own `_git_common_dir`
+    (that module already imports THIS one for `_resources.FileResource`, so
+    importing back here would cycle) — both only need git's own documented
+    `.git`-file/`commondir` resolution, nothing else, so keeping two small
+    copies in sync by hand is cheaper than restructuring the import graph
+    for one four-line function."""
+    git_path = os.path.join(base_real, ".git")
+    if os.path.isdir(git_path):
+        return os.path.realpath(git_path)
+    if not os.path.isfile(git_path):
+        return None
+    try:
+        with open(git_path, encoding="utf-8") as fh:
+            text = fh.read().strip()
+    except OSError:
+        return None
+    if not text.startswith("gitdir:"):
+        return None
+    target = text[len("gitdir:") :].strip()
+    resolved = target if os.path.isabs(target) else os.path.join(base_real, target)
+    common_file = os.path.join(resolved, "commondir")
+    if os.path.isfile(common_file):
+        try:
+            with open(common_file, encoding="utf-8") as fh:
+                common = fh.read().strip()
+        except OSError:
+            return os.path.realpath(resolved)
+        base = common if os.path.isabs(common) else os.path.join(resolved, common)
+        return os.path.realpath(base)
+    return os.path.realpath(resolved)
+
+
+def _git_protected_surfaces(base_real: str) -> list[str]:
+    """The git configuration/hook surfaces a read-only git subcommand's own
+    documented contract can be redirected through (F2): `core.fsmonitor` on
+    `status`, `diff.external`/`GIT_EXTERNAL_DIFF`/a configured `diff.<driver>.
+    command` textconv filter on `diff`/`log -p`/`show`, and `log.
+    showSignature`-triggered `gpg` invocation are each driven by repo
+    CONFIG, not by anything on the command line `tool_contracts.py` reviews
+    — so the config/hook files themselves, not a flag, are the actual
+    control surface and must be protected the same way the contract table
+    and script registry already are. Returns `[]` when `base_real` is not a
+    git checkout at all (nothing to protect).
+
+    Named residual, NOT covered here: `core.hooksPath` can retarget the
+    hooks directory entirely, but resolving its live value would require
+    parsing `config`'s INI grammar (multiple `[core]` sections, quoting,
+    include directives) rather than a cheap fixed-path join — out of scope
+    for this fail-toward-protecting helper; the default `<common>/hooks`
+    location is protected regardless, and a custom `core.hooksPath` target
+    is not."""
+    common = _git_common_dir(base_real)
+    if common is None:
+        return []
+    surfaces = [
+        os.path.join(common, "config"),
+        os.path.join(common, "config.worktree"),
+        os.path.join(common, "hooks"),
+        os.path.join(common, "info", "attributes"),
+    ]
+    worktrees_dir = os.path.join(common, "worktrees")
+    if os.path.isdir(worktrees_dir):
+        try:
+            names = os.listdir(worktrees_dir)
+        except OSError:
+            names = []
+        for name in names:
+            surfaces.append(os.path.join(worktrees_dir, name, "config.worktree"))
+    return [_realpath(p) for p in surfaces]
+
+
 def protected_permission_surfaces(
     *,
     repo_root: str | None = None,
@@ -83,15 +158,24 @@ def protected_permission_surfaces(
     checkout), plus an `AGENTCTL_TOOL_CONTRACTS` env override if set, plus
     the effective order-approvals ledger directory (the `ledger_dir` this
     resolution context is using, plus an `AGENTCTL_ORDER_APPROVALS_DIR` env
-    override if set). Two bases can yield the same realpath (a delivery
-    worktree and its repo_root sharing a filesystem) — callers do not need
-    a deduplicated list, `_path_is_or_under` doesn't care about duplicates."""
+    override if set), plus — for each base — its git common dir's `config`,
+    `config.worktree`, every linked worktree's `worktrees/*/config.worktree`,
+    its `hooks/` directory, its `info/attributes`, and the base's own
+    `.gitattributes` (these are the config/hook surfaces a nominally
+    read-only git subcommand's execution can be redirected through — see
+    `_git_protected_surfaces`). Two bases can yield the same realpath (a
+    delivery worktree and its repo_root sharing a filesystem) — callers do
+    not need a deduplicated list, `_path_is_or_under` doesn't care about
+    duplicates."""
     surfaces: list[str] = []
     for base in (repo_root, delivery_worktree):
         if not base:
             continue
         surfaces.append(_realpath(os.path.join(base, "scripts", "agentctl", "tool_contracts.toml")))
         surfaces.append(_realpath(os.path.join(base, "scripts", "script_effects.toml")))
+        base_real = _realpath(base)
+        surfaces.append(_realpath(os.path.join(base_real, ".gitattributes")))
+        surfaces.extend(_git_protected_surfaces(base_real))
     contracts_override = os.environ.get("AGENTCTL_TOOL_CONTRACTS")
     if contracts_override:
         surfaces.append(_realpath(contracts_override))

@@ -90,7 +90,7 @@ def load_script_effects_table(path: str | os.PathLike | None = None) -> dict[str
         if script_path in entries:
             raise ValueError(f"script_effects.toml: duplicate path {script_path!r}")
         if item.get("op") == "land":
-            # R1/C1: same refusal as tool_contracts.load_contract_table -- no
+            # Same refusal as tool_contracts.load_contract_table -- no
             # registry entry may ever declare (let alone produce) op="land".
             raise ValueError(
                 f"script_effects.toml: entry {script_path!r} declares op=\"land\", "
@@ -243,8 +243,8 @@ def _resolve_land_branch(argv: list[str], venue_real: str):
 
     if not bools["--keep-branch"]:
         # Without --keep-branch, landing always includes the remote-branch
-        # delete-push (C5: a delete-push is NEVER a covered push resource)
-        # and a worktree-remove whose path is discovered at runtime from
+        # delete-push (a delete-push is NEVER a covered push resource) and
+        # a worktree-remove whose path is discovered at runtime from
         # `git worktree list`, not from argv — neither is resolvable ahead
         # of execution.
         return Resolution(
@@ -269,8 +269,8 @@ def _resolve_land_branch(argv: list[str], venue_real: str):
 
     dash_c = values.get("-C")
     if dash_c is not None:
-        # B3: a relative `-C` value must be joined against the VENUE --
-        # the resource this resolution decides whether to self-grant a
+        # A relative `-C` value must be joined against the VENUE -- the
+        # resource this resolution decides whether to self-grant a
         # push for -- never against the analyzing process's own cwd (which
         # need not have any relation to the venue at all). Mirrors git's
         # own `-C`/`--git-dir`/`--work-tree` handling in

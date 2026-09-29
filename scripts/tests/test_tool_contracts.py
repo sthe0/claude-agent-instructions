@@ -420,17 +420,23 @@ def test_python_dash_c_is_unresolved_pytest_module_resolves_like_pytest(tmp_path
 
 
 def test_interpreter_dash_flags_outside_closed_set_are_unresolved(tmp_path):
-    """B1: only exact `-c`/`--command`/`--command=`/`-m`/`-m=` are
-    recognized as interpreter flags before the script; a glued short form
-    (`-mMOD`, `-cCODE`) or any other dash-prefixed flag (`-W`, `-X`, `-u`)
-    must be refused outright, never silently skipped past to reach a later
-    token as "the script" or "the -m module". Regression: a prior version's
-    flag loop fell through silently on an unrecognized dash token, so
-    `-mMOD scripts/land-branch.py --check` was mistaken for a plain script
-    invocation (resolving via the script-effects registry) and
-    `-cCODE -m pytest` was mistaken for a plain `-m pytest` run -- when the
-    ACTUAL python3 semantics run an arbitrary module / arbitrary inline
-    code instead. The venue below carries a real, registry-matching
+    """Only exact `-c` and `-m` (each space-separated, never glued or
+    `=`-joined) are recognized as interpreter flags before the script; a
+    glued short form (`-mMOD`, `-cCODE`), CPython's nonexistent `-m=`/
+    `--command`/`--command=` spellings, or any other dash-prefixed flag
+    (`-W`, `-X`, `-u`) must be refused outright, never silently skipped
+    past to reach a later token as "the script" or "the -m module".
+    Regression: a prior version's flag loop fell through silently on an
+    unrecognized dash token, so `-mMOD scripts/land-branch.py --check` was
+    mistaken for a plain script invocation (resolving via the
+    script-effects registry) and `-cCODE -m pytest` was mistaken for a
+    plain `-m pytest` run -- when the ACTUAL python3 semantics run an
+    arbitrary module / arbitrary inline code instead. A separate prior
+    version also treated `-m=MOD` as equivalent to `-m MOD`, when CPython's
+    own glued short-option parsing actually reads the module name as the
+    literal string `=MOD`, not `MOD` -- so `-m=pytest` does NOT run pytest
+    at all and must not be special-cased to pytest's whole-venue-write
+    verdict. The venue below carries a real, registry-matching
     `land-branch.py` so the OLD code's false "resolved" is actually
     reachable, not masked by an unrelated "script not found"."""
     tc = _tool_contracts_module()
@@ -442,6 +448,9 @@ def test_interpreter_dash_flags_outside_closed_set_are_unresolved(tmp_path):
         "python3 -W ignore scripts/land-branch.py --check",
         "python3 -X utf8 -m pytest",
         "python3 -u scripts/land-branch.py --check",
+        "python3 -m=pytest -q",
+        "python3 --command x",
+        "python3 --command=x",
     ):
         res = tc.resolve_command(cmd, str(venue))
         assert res.status == "unresolved", cmd
@@ -714,8 +723,10 @@ def test_closed_world_mutation_catalogue(tmp_path):
         assert res.status == "unresolved", cmd
 
     # (B2) each read-only git subcommand with a flag outside its own closed
-    # set -- including one no subcommand here reviews at all.
-    for subcommand in ("status", "log", "diff", "show", "rev-parse", "ls-files", "blame"):
+    # set -- generated from `_GIT_READONLY_SAFE_FLAGS` itself so a future
+    # subcommand added to that table is covered automatically, rather than
+    # from a hand-copied list that silently stops tracking it.
+    for subcommand in tc._GIT_READONLY_SAFE_FLAGS:
         cmd = f"git {subcommand} --ext-diff"
         res = tc.resolve_command(cmd, str(tmp_path))
         assert res.status == "unresolved", cmd
@@ -739,3 +750,58 @@ def test_closed_world_mutation_catalogue(tmp_path):
         "python3 scripts/land-branch.py -C .. --branch feature --keep-branch", str(venue)
     )
     assert wrong_base.status == "unresolved"
+
+    # (F1) an '@'-prefixed pytest operand -- pytest >= 8.2's own @argsfile
+    # expansion, both as a bare test-path positional and as the value of
+    # '-k'.
+    at_positional = tc.resolve_command("pytest @evil.args", str(tmp_path))
+    assert at_positional.status == "unresolved"
+    assert at_positional.reason_class == "contract-unresolved"
+
+    at_k_value = tc.resolve_command("pytest -k @evil.args", str(tmp_path))
+    assert at_k_value.status == "unresolved"
+    assert at_k_value.reason_class == "contract-unresolved"
+
+    # every effect="unresolved" table entry must refuse regardless of the
+    # operand it is given -- it is permanently unresolved by declaration,
+    # not merely absent a reviewed flag.
+    table = tc.load_contract_table()
+    for name, entry in table.items():
+        if entry.effect != "unresolved":
+            continue
+        cmd = f"{name} --whatever-operand-this-is"
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+    # (vii) each segment operator outside the closed '&&'/';'/'|' set.
+    for op in ("||", "|&", "&"):
+        for cmd in resolved_examples:
+            mutated = tc.resolve_command(f"{cmd} {op} {cmd}", str(tmp_path))
+            assert mutated.status == "unresolved", (op, cmd)
+            assert mutated.reason_class == "contract-unresolved", (op, cmd)
+
+    # (viii) an empty command segment -- a leading, trailing, or doubled
+    # separator.
+    for cmd in resolved_examples:
+        for mutated_cmd in (f"; {cmd}", f"{cmd} ;", f"{cmd} ;; {cmd}"):
+            mutated = tc.resolve_command(mutated_cmd, str(tmp_path))
+            assert mutated.status == "unresolved", mutated_cmd
+            assert mutated.reason_class == "contract-unresolved", mutated_cmd
+
+    # (ix) a bare subshell, unattached to any redirect/operator.
+    for cmd in resolved_examples:
+        mutated = tc.resolve_command(f"({cmd})", str(tmp_path))
+        assert mutated.status == "unresolved", cmd
+        assert mutated.reason_class == "residual-syntax", cmd
+
+    # (x) a bare newline statement separator smuggling in a second,
+    # unreviewed statement.
+    for cmd in resolved_examples:
+        mutated = tc.resolve_command(f"{cmd}\nrm -rf x", str(tmp_path))
+        assert mutated.status == "unresolved", cmd
+
+    # (xi) a '#' comment marker leading its own segment after a newline.
+    for cmd in resolved_examples:
+        mutated = tc.resolve_command(f"{cmd}\n#comment", str(tmp_path))
+        assert mutated.status == "unresolved", cmd

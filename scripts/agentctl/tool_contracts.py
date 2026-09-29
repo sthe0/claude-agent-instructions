@@ -10,15 +10,18 @@ place: every decision traces to either (a) a reviewed `[[program]]` entry in
 `tool_contracts.toml` naming the program's actual documented contract, (b) a
 digest-matching entry in `script_effects.py`'s registry (consulted from
 `_resolve_interpreter` for a handful of reviewed repo scripts), or (c) the
-dedicated landed-spec resolver for `op="land"` (a later checkpoint, not yet
-added). Anything this module cannot decide from (a)/(b)/(c) is `unresolved`,
-never `resolved` with an empty or guessed resource set — the same
-fail-toward-unresolved bias `resources.Resource.covers` already documents.
+dedicated landed-spec resolver for `op="land"` (`plan_resources.
+_stage_landed_resources`, which reads a stage's own `criterion.landed`
+declaration, never a command line). Anything this module cannot decide from
+(a)/(b)/(c) is `unresolved`, never `resolved` with an empty or guessed
+resource set — the same fail-toward-unresolved bias `resources.Resource.
+covers` already documents.
 
 `op="land"` is NEVER produced here: no contract entry, and no custom
 resolver in `_CUSTOM_RESOLVERS`, may ever return a `VcsRefResource` with
 `op="land"` — landing is a distinct real-world effect from pushing (R1) and
-is decided solely by the (not-yet-added) landed-spec resolver.
+is decided solely by `plan_resources._stage_landed_resources`, outside this
+module entirely.
 """
 from __future__ import annotations
 
@@ -49,7 +52,7 @@ _NON_LITERAL_MARKERS = "$*?[`{"
 #: Interpreters whose first non-flag operand is "the script" for identity
 #: purposes. Mirrors `agentctl/grants.py`'s `_INTERPRETERS`; kept as a
 #: separate constant here rather than imported, since importing a private
-#: module-level constant across files for a two-name set is not worth the
+#: module-level constant across files for this frozenset is not worth the
 #: coupling (grants.py does not export it).
 _SCRIPT_INTERPRETERS = frozenset(
     {"bash", "sh", "zsh", "dash", "python", "python3", "node", "ruby", "perl"}
@@ -477,12 +480,12 @@ _GIT_BRANCH_SAFE_FLAGS = frozenset(
 
 #: Closed, PER-SUBCOMMAND allowlist of boolean read-only flags (item (c)) --
 #: a flag outside its own subcommand's set is unresolved, never silently
-#: allowed through (B2: a prior version checked only `--output`/`--output=`
-#: for every readonly subcommand, letting everything else -- `--ext-diff`/
-#: `--textconv` (each can invoke an external program via `diff.external`/a
-#: configured filter driver), `--show-signature` (invokes `gpg`), an
-#: abbreviated `--outpu=` (git supports unique-prefix long-option
-#: abbreviation) -- resolve to no effect unreviewed). Deliberately
+#: allowed through (checking only `--output`/`--output=` for every readonly
+#: subcommand, as a narrower version of this table once did, would let
+#: everything else -- `--ext-diff`/`--textconv` (each can invoke an external
+#: program via `diff.external`/a configured filter driver), `--show-signature`
+#: (invokes `gpg`), an abbreviated `--outpu=` (git supports unique-prefix
+#: long-option abbreviation) -- resolve to no effect unreviewed). Deliberately
 #: boolean-only, same reasoning as `_GIT_BRANCH_SAFE_FLAGS`: a value-taking
 #: flag is excluded rather than given its own value-skip rule, since the
 #: per-token closed-set check below would otherwise misread that flag's own
@@ -730,6 +733,16 @@ def _resolve_pytest(operands: list[str], venue_real: str) -> Resolution:
                     "unresolved", reason_class="contract-unresolved",
                     reason=f"pytest {tok} is missing its value",
                 )
+            value = operands[i + 1]
+            if value.startswith("@"):
+                return Resolution(
+                    "unresolved", reason_class="contract-unresolved",
+                    reason=(
+                        f"pytest {tok} value {value!r} starts with '@' -- pytest >= 8.2 "
+                        "expands an '@'-prefixed argument into that file's lines, hiding "
+                        "arbitrary further arguments this table cannot see"
+                    ),
+                )
             i += 2
             continue
         if tok == "-p":
@@ -753,6 +766,15 @@ def _resolve_pytest(operands: list[str], venue_real: str) -> Resolution:
             return Resolution(
                 "unresolved", reason_class="contract-unresolved",
                 reason=f"pytest flag {tok!r} is outside the reviewed closed set",
+            )
+        if tok.startswith("@"):
+            return Resolution(
+                "unresolved", reason_class="contract-unresolved",
+                reason=(
+                    f"pytest positional {tok!r} starts with '@' -- pytest >= 8.2 "
+                    "expands an '@'-prefixed argument into that file's lines, hiding "
+                    "arbitrary further arguments this table cannot see"
+                ),
             )
         if _is_non_literal(tok) or os.path.isabs(tok):
             return Resolution(
@@ -786,15 +808,17 @@ def _resolve_interpreter(operands: list[str], venue_real: str) -> Resolution:
     """Consult the script-effects registry (`script_effects.py`) for a
     reviewed, digest-pinned entry matching the script being run. `-c`
     (inline code) is always unresolved; `-m pytest` is special-cased to the
-    same whole-venue-write verdict as bare `pytest` (finding: `pytest` via
+    same whole-venue-write verdict as bare `pytest` (`pytest` invoked via
     `python3 -m pytest` resolves the same as `pytest` itself); any other
     `-m MODULE` is unresolved. Any OTHER dash-prefixed token before the
-    script -- a glued short form (`-cCODE`, `-mMOD`), a value-taking flag
-    (`-W`, `-X`), or anything else -- is refused outright rather than
-    skipped: the closed grammar here recognizes exactly `-c`/`--command`/
-    `--command=`/`-m`/`-m=` and nothing else, so an unreviewed flag can
-    never silently shift which token this resolver treats as "the script"
-    (B1: a prior version skipped unrecognized dash tokens, letting
+    script -- a glued short form (`-cCODE`, `-mMOD`, `-m=MOD` included,
+    since CPython has no `-m=` syntax at all and would parse the literal
+    module name as `=MOD`, not `MOD`), a value-taking flag (`-W`, `-X`), or
+    anything else -- is refused outright rather than skipped: the closed
+    grammar here recognizes exactly `-c` (space-separated form only) and
+    `-m` (space-separated form only) and nothing else, so an unreviewed
+    flag can never silently shift which token this resolver treats as "the
+    script" (a prior version skipped unrecognized dash tokens, letting
     `-mMOD scripts/land-branch.py` or `-cCODE -m pytest` be mistaken for a
     plain script/pytest invocation). No entry — or no script at all — falls
     back to the original unresolved verdict; the caller (`resolve_command`)
@@ -803,17 +827,16 @@ def _resolve_interpreter(operands: list[str], venue_real: str) -> Resolution:
     from . import script_effects  # deferred: see script_effects.py's own docstring
 
     for i, tok in enumerate(operands):
-        if tok in ("-c", "--command") or tok.startswith("--command="):
+        if tok == "-c":
             return Resolution(
                 "unresolved",
                 reason_class="adhoc-undeclared",
-                reason="python -c/--command runs inline code passed on the command line, never resolved by this table",
+                reason="python -c runs inline code passed on the command line, never resolved by this table",
             )
-        if tok == "-m" or tok.startswith("-m="):
-            has_equals = "=" in tok
-            module = tok.split("=", 1)[1] if has_equals else (operands[i + 1] if i + 1 < len(operands) else None)
+        if tok == "-m":
+            module = operands[i + 1] if i + 1 < len(operands) else None
             if module == "pytest":
-                pytest_argv = operands[i + 1 :] if has_equals else operands[i + 2 :]
+                pytest_argv = operands[i + 2 :]
                 return _resolve_pytest(pytest_argv, venue_real)
             return Resolution(
                 "unresolved",
@@ -824,7 +847,7 @@ def _resolve_interpreter(operands: list[str], venue_real: str) -> Resolution:
             return Resolution(
                 "unresolved",
                 reason_class="contract-unresolved",
-                reason=f"python flag {tok!r} before the script is outside the reviewed closed set (-c/--command/-m only)",
+                reason=f"python flag {tok!r} before the script is outside the reviewed closed set (-c/-m only)",
             )
         break
 

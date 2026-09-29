@@ -178,6 +178,82 @@ def test_contract_tables_and_ledger_dir_never_covered(tmp_path):
     )
 
 
+def test_git_config_hooks_attributes_protected_surfaces(tmp_path):
+    """F2: `protected_permission_surfaces` must protect the git common dir's
+    `config`, `config.worktree`, every linked worktree's own
+    `worktrees/*/config.worktree`, `hooks/` (any file under it, not only the
+    directory itself), `info/attributes`, and the venue's own
+    `.gitattributes` -- each is a config/hook surface a nominally read-only
+    git subcommand's execution can be redirected through regardless of the
+    command line (see tool_contracts.toml's rewritten `git` entry)."""
+    resources = _resources_module()
+
+    venue = tmp_path / "venue"
+    (venue / ".git" / "hooks").mkdir(parents=True)
+    (venue / ".git" / "info").mkdir()
+    (venue / ".git" / "worktrees" / "other").mkdir(parents=True)
+    (venue / ".git" / "config").write_text("", encoding="utf-8")
+    (venue / ".git" / "config.worktree").write_text("", encoding="utf-8")
+    (venue / ".git" / "hooks" / "pre-commit").write_text("", encoding="utf-8")
+    (venue / ".git" / "info" / "attributes").write_text("", encoding="utf-8")
+    (venue / ".git" / "worktrees" / "other" / "config.worktree").write_text("", encoding="utf-8")
+    (venue / ".gitattributes").write_text("", encoding="utf-8")
+    other_file = venue / "README.md"
+    other_file.write_text("hi", encoding="utf-8")
+
+    protected = resources.protected_permission_surfaces(
+        repo_root=str(venue), delivery_worktree=None, ledger_dir=None
+    )
+
+    approved_whole_venue = resources.FileResource(str(venue), "write")
+    for rel in (
+        ".git/config",
+        ".git/config.worktree",
+        ".git/hooks/pre-commit",
+        ".git/info/attributes",
+        ".git/worktrees/other/config.worktree",
+        ".gitattributes",
+    ):
+        assert not approved_whole_venue.covers(
+            resources.FileResource(str(venue / rel), "write"), protected=protected
+        ), rel
+
+    # Positive control: an ordinary venue file remains covered as usual.
+    assert approved_whole_venue.covers(
+        resources.FileResource(str(other_file), "write"), protected=protected
+    )
+
+
+def test_git_common_dir_resolved_through_linked_worktree_gitdir_file(tmp_path):
+    """A LINKED worktree's `.git` is a FILE (`gitdir: <path>`), not a
+    directory. `protected_permission_surfaces` must resolve the real common
+    dir through that pointer (and the pointed-to gitdir's own `commondir`
+    file), exactly the resolution git itself performs -- so a write approval
+    on the linked worktree still cannot reach the MAIN checkout's config
+    via the worktree's own `.git` indirection."""
+    resources = _resources_module()
+
+    main = tmp_path / "main"
+    (main / ".git" / "worktrees" / "linked").mkdir(parents=True)
+    (main / ".git" / "config").write_text("", encoding="utf-8")
+    (main / ".git" / "worktrees" / "linked" / "commondir").write_text("../..\n", encoding="utf-8")
+
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    (linked / ".git").write_text(
+        f"gitdir: {main / '.git' / 'worktrees' / 'linked'}\n", encoding="utf-8"
+    )
+
+    protected = resources.protected_permission_surfaces(
+        repo_root=str(linked), delivery_worktree=None, ledger_dir=None
+    )
+
+    approved_linked = resources.FileResource(str(linked), "write")
+    assert not approved_linked.covers(
+        resources.FileResource(str(main / ".git" / "config"), "write"), protected=protected
+    )
+
+
 def _classify_module():
     spec = importlib.util.find_spec("agentctl.classify")
     assert spec is not None, "agentctl.classify module not found"
@@ -828,6 +904,113 @@ def test_agent_self_grant_outside_approved_resources_refused(store, fixtures_dir
     # A refused self-grant leaves the parked request untouched -- nothing
     # partially recorded, the same fail-closed shape validate_rule's own
     # refusal below gives a malformed human-materialized rule.
+    assert state.permission_request is not None
+
+
+def test_agent_self_grant_refuses_git_config_hooks_attributes(store, fixtures_dir, tmp_path):
+    """F2: a broad write approval on the WHOLE venue does not self-grant a
+    write to the venue's own git config/hook/attributes surfaces -- each is
+    a config-driven execution point a nominally read-only git subcommand can
+    be redirected through regardless of any flag on the command line (see
+    `resources._git_protected_surfaces`), so it must stay unapprovable no
+    matter how broad the approved resource is."""
+    from argparse import Namespace
+
+    cli = _cli_module()
+    state_mod = _state_module()
+    order_approvals = _order_approvals_module()
+    resources = _resources_module()
+    plan_mod = _plan_module()
+
+    venue = tmp_path / "venue"
+    (venue / ".git" / "hooks").mkdir(parents=True)
+    (venue / ".git" / "config").write_text("[core]\n", encoding="utf-8")
+    (venue / ".git" / "hooks" / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
+    (venue / ".gitattributes").write_text("* text\n", encoding="utf-8")
+
+    plan_path = _order_plan_path(tmp_path, customer_id="acme")
+    doc = plan_mod.load_plan(str(plan_path))
+    order_approvals.record_approval(
+        plan_mod.order_digest(doc),
+        plan_sha256="p1",
+        resources=[resources.FileResource(str(venue), "write")],
+        unresolved_identities=[],
+        stage_effects=[],
+        by="acme",
+        at="2026-09-29T00:00:00Z",
+    )
+
+    sid = "self-grant-git-surfaces"
+    _park_permission_request(cli, store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.plan_path = str(plan_path)
+    state.repo_root = str(venue)
+    store.save(state)
+
+    for target in (
+        venue / ".git" / "config",
+        venue / ".gitattributes",
+        venue / ".git" / "hooks" / "pre-commit",
+    ):
+        d = cli.cmd_resolve_permission(
+            Namespace(session=sid, decision="granted", scope="stage", by=state_mod.AGENT_ACTOR,
+                      rules=[f"Edit(//{target})"], add_dirs=None),
+            store=store,
+        )
+        assert not d.ok, target
+        assert d.data.get("reason_class") == "not-approved", target
+        state = store.load(sid)
+        assert state.permission_request is not None, target
+
+
+def test_land_branch_common_dir_approval_does_not_cover_git_config(store, fixtures_dir, tmp_path):
+    """F2, the land-branch case: `land-branch.py --keep-branch` resolves to a
+    `FileResource(common_dir, "write")` approval (`script_effects.
+    _resolve_land_branch`) -- an approval of the git common dir ITSELF, not
+    merely a broader venue that happens to contain it. Even this exact
+    approval must not cover `<common_dir>/config`: ordinary containment
+    would cover it (config is a plain file strictly under the approved
+    root), so only the protected-surfaces check stops it."""
+    from argparse import Namespace
+
+    cli = _cli_module()
+    state_mod = _state_module()
+    order_approvals = _order_approvals_module()
+    resources = _resources_module()
+    plan_mod = _plan_module()
+
+    venue = tmp_path / "venue"
+    (venue / ".git").mkdir(parents=True)
+    (venue / ".git" / "config").write_text("[core]\n", encoding="utf-8")
+    common_dir = str((venue / ".git").resolve())
+
+    plan_path = _order_plan_path(tmp_path, customer_id="acme")
+    doc = plan_mod.load_plan(str(plan_path))
+    order_approvals.record_approval(
+        plan_mod.order_digest(doc),
+        plan_sha256="p1",
+        resources=[resources.FileResource(common_dir, "write")],
+        unresolved_identities=[],
+        stage_effects=[],
+        by="acme",
+        at="2026-09-29T00:00:00Z",
+    )
+
+    sid = "land-branch-common-dir-config"
+    _park_permission_request(cli, store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.plan_path = str(plan_path)
+    state.repo_root = str(venue)
+    store.save(state)
+
+    d = cli.cmd_resolve_permission(
+        Namespace(session=sid, decision="granted", scope="stage", by=state_mod.AGENT_ACTOR,
+                  rules=[f"Edit(//{venue / '.git' / 'config'})"], add_dirs=None),
+        store=store,
+    )
+    assert not d.ok
+    assert d.data.get("reason_class") == "not-approved"
+    state = store.load(sid)
     assert state.permission_request is not None
 
 
