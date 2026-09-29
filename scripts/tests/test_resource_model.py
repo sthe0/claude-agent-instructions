@@ -256,6 +256,14 @@ def _submission_module():
     return submission
 
 
+def _cli_module():
+    spec = importlib.util.find_spec("agentctl.cli")
+    assert spec is not None, "agentctl.cli module not found"
+    from agentctl import cli
+
+    return cli
+
+
 def _land_branch_registry_venue(tmp_path, land_branch_text=None):
     """A minimal venue tree with `scripts/land-branch.py` and a matching
     `scripts/script_effects.toml` entry pinned to its live sha256."""
@@ -611,3 +619,222 @@ def test_runtime_grant_under_other_order_not_counted():
     )
     assert order_approvals.approved_resources(order_b) == []
     assert len(order_approvals.approved_resources(order_a)) == 1
+
+
+# --- REQ5: resolve-permission --by agent self-grant --------------------------
+
+def _order_plan_path(tmp_path, customer_id="acme"):
+    """A minimal, submission-agnostic plan file carrying `[meta.order]` --
+    `plan.load_plan` (the LENIENT loader `cmd_resolve_permission`'s self-grant
+    path reads via) never runs the submission validator, so this only needs
+    to be loadable, not submission-clean."""
+    path = tmp_path / "plan_order.toml"
+    path.write_text(
+        "[meta]\n"
+        'weight_class = "small_change"\n'
+        'task_id = "demo-order"\n'
+        'goal = "g"\n'
+        'done_criterion = "dc"\n'
+        'criterion_type = "measurable"\n'
+        "\n"
+        "[meta.order]\n"
+        f'customer_id = "{customer_id}"\n'
+        'customer = "the customer"\n'
+        'functional_place = "the norm this serves"\n'
+        "\n"
+        "[[stage]]\n"
+        "index = 1\n"
+        'title = "Scaffold module"\n'
+        'executor = "spawn:developer"\n'
+        'expected_result_image = "module file exists"\n'
+        'criterion_type = "measurable"\n'
+        'done_criterion = "ok"\n'
+        "depends_on = []\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _park_permission_request(cli, store, sid, fixtures_dir, action="PERMISSION-REQUEST: touch a file\n"):
+    """Drive a session to EXECUTING (via the two-stage demo fixture, whose
+    submission-clean shape reaching approve/partition/dispatch is already
+    established by test_permission_gate.py's identical setup) and park one
+    permission request -- the precondition `cmd_resolve_permission` itself
+    requires (`state.permission_request is not None`)."""
+    from argparse import Namespace
+
+    from agentctl.dispatch import RunResult
+
+    def ns(**kw):
+        return Namespace(**kw)
+
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    cli.cmd_start(ns(session=sid, task="res-demo", goal="g", done_criterion="dc",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    runner = lambda argv: RunResult(0, stdout=action)
+    cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
+                        dry_run=False), store=store, runner=runner,
+                     perm_checker=lambda a: False)
+
+
+def test_resolve_permission_records_author(store, fixtures_dir):
+    from argparse import Namespace
+
+    cli = _cli_module()
+    _park_permission_request(cli, store, "author1", fixtures_dir)
+    d = cli.cmd_resolve_permission(
+        Namespace(session="author1", decision="granted", scope="once", by="alice",
+                  rules=None, add_dirs=None),
+        store=store,
+    )
+    assert d.ok
+    state = store.load("author1")
+    assert state.history[-1]["event"] == "resolve_permission"
+    assert state.history[-1]["by"] == "alice"
+
+
+def test_agent_self_grant_within_approved_resources_accepted(store, fixtures_dir, tmp_path):
+    from argparse import Namespace
+
+    cli = _cli_module()
+    state_mod = _state_module()
+    order_approvals = _order_approvals_module()
+    resources = _resources_module()
+    plan_mod = _plan_module()
+
+    plan_path = _order_plan_path(tmp_path, customer_id="acme")
+    doc = plan_mod.load_plan(str(plan_path))
+    target = tmp_path / "approved_file.txt"
+    target.write_text("hi", encoding="utf-8")
+    order_approvals.record_approval(
+        plan_mod.order_digest(doc),
+        plan_sha256="p1",
+        resources=[resources.FileResource(str(target), "write")],
+        unresolved_identities=[],
+        stage_effects=[],
+        by="acme",
+        at="2026-09-29T00:00:00Z",
+    )
+
+    sid = "self-grant-ok"
+    _park_permission_request(cli, store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.plan_path = str(plan_path)
+    store.save(state)
+
+    d = cli.cmd_resolve_permission(
+        Namespace(session=sid, decision="granted", scope="stage", by=state_mod.AGENT_ACTOR,
+                  rules=[f"Edit(//{target})"], add_dirs=None),
+        store=store,
+    )
+    assert d.ok, d.detail
+    state = store.load(sid)
+    assert state.permission_request is None
+
+
+def test_agent_self_grant_outside_approved_resources_refused(store, fixtures_dir, tmp_path):
+    from argparse import Namespace
+
+    cli = _cli_module()
+    state_mod = _state_module()
+    order_approvals = _order_approvals_module()
+    resources = _resources_module()
+    plan_mod = _plan_module()
+
+    plan_path = _order_plan_path(tmp_path, customer_id="acme")
+    doc = plan_mod.load_plan(str(plan_path))
+    approved_target = tmp_path / "approved_only.txt"
+    approved_target.write_text("hi", encoding="utf-8")
+    requested_target = tmp_path / "never_approved.txt"
+    requested_target.write_text("hi", encoding="utf-8")
+    order_approvals.record_approval(
+        plan_mod.order_digest(doc),
+        plan_sha256="p1",
+        resources=[resources.FileResource(str(approved_target), "write")],
+        unresolved_identities=[],
+        stage_effects=[],
+        by="acme",
+        at="2026-09-29T00:00:00Z",
+    )
+
+    sid = "self-grant-outside"
+    _park_permission_request(cli, store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.plan_path = str(plan_path)
+    store.save(state)
+
+    d = cli.cmd_resolve_permission(
+        Namespace(session=sid, decision="granted", scope="stage", by=state_mod.AGENT_ACTOR,
+                  rules=[f"Edit(//{requested_target})"], add_dirs=None),
+        store=store,
+    )
+    assert not d.ok
+    assert d.data.get("reason_class") == "not-approved"
+    state = store.load(sid)
+    # A refused self-grant leaves the parked request untouched -- nothing
+    # partially recorded, the same fail-closed shape validate_rule's own
+    # refusal below gives a malformed human-materialized rule.
+    assert state.permission_request is not None
+
+
+def test_agent_self_grant_unresolved_rule_refused(store, fixtures_dir, tmp_path):
+    from argparse import Namespace
+
+    cli = _cli_module()
+    state_mod = _state_module()
+    plan_mod = _plan_module()
+
+    plan_path = _order_plan_path(tmp_path, customer_id="acme")
+
+    sid = "self-grant-unresolved"
+    _park_permission_request(cli, store, sid, fixtures_dir)
+    state = store.load(sid)
+    state.plan_path = str(plan_path)
+    store.save(state)
+
+    d = cli.cmd_resolve_permission(
+        Namespace(session=sid, decision="granted", scope="stage", by=state_mod.AGENT_ACTOR,
+                  rules=["NotARule"], add_dirs=None),
+        store=store,
+    )
+    assert not d.ok
+    assert d.data.get("reason_class") == "unparseable-rule"
+    state = store.load(sid)
+    assert state.permission_request is not None
+
+
+def test_agent_path_audit_records_env_overrides(store, fixtures_dir, tmp_path, monkeypatch):
+    """The two env overrides that steer which ledger/contract-table a
+    self-grant resolves against are recorded on the history entry
+    unconditionally -- a human-attributed resolution reads them too, so the
+    audit trail is uniform regardless of who `--by` names."""
+    from argparse import Namespace
+
+    cli = _cli_module()
+
+    contracts_override = str(tmp_path / "custom_tool_contracts.toml")
+    ledger_override = str(tmp_path / "custom_ledger_dir")
+    monkeypatch.setenv("AGENTCTL_ORDER_APPROVALS_DIR", ledger_override)
+    monkeypatch.setenv("AGENTCTL_TOOL_CONTRACTS", contracts_override)
+
+    sid = "audit-env"
+    _park_permission_request(cli, store, sid, fixtures_dir)
+    d = cli.cmd_resolve_permission(
+        Namespace(session=sid, decision="granted", scope="once", by="alice",
+                  rules=None, add_dirs=None),
+        store=store,
+    )
+    assert d.ok
+    entry = store.load(sid).history[-1]
+    assert entry["order_approvals_dir_override"] == ledger_override
+    assert entry["tool_contracts_override"] == contracts_override

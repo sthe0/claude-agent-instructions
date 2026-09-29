@@ -28,7 +28,7 @@ from pathlib import Path
 import proc_tree
 from lib import argv_text, config_root, kind_baselines, transcript_stops, widening_targets
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grants as _grants, ledger, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grants as _grants, ledger, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -5995,6 +5995,18 @@ def _diagnose_materialization_defect(
     )
 
 
+def _covers_resource(approved, requested, protected: list[str]) -> bool:
+    """`Resource.covers` dispatch that also threads `protected` through for a
+    `FileResource` pair -- the only kind whose `covers` accepts that kwarg
+    (resources.py's other four kinds have no path-containment notion to
+    protect). Kept here rather than in resources.py itself: `protected` is a
+    cli.py-computed, session-specific value (repo_root/delivery_worktree/
+    ledger dir), not a property of the resource pair alone."""
+    if isinstance(approved, _resources.FileResource):
+        return approved.covers(requested, protected=protected)
+    return approved.covers(requested)
+
+
 def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Resume a session parked on a PERMISSION-REQUEST once the manager has the
     user's decision. The user ask is cognitive; this only records the outcome,
@@ -6025,6 +6037,64 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
             f"--rule/--add-dir is not materialized for --scope {scope} (no persistence path exists); "
             "use --scope stage or --scope once, or omit --rule/--add-dir",
         )
+    by = (getattr(args, "by", None) or "").strip()
+    if by.casefold() == AGENT_ACTOR and args.decision == "granted":
+        # REQ5: an agent-authored --by gets no benefit of human judgment -- it
+        # must instead prove every --rule/--add-dir it wants materialized
+        # resolves (via the SAME plan_resources.py functions cmd_approve's own
+        # ledger-stamping uses -- one resolution story, never a second one
+        # trusted less) to a typed resource already covered by a resource the
+        # CUSTOMER approved for this plan's order (order_approvals.py's
+        # ledger, keyed by plan.order_digest). Unresolved or uncovered refuses
+        # the WHOLE call fail-closed, mirroring validate_rule's refusal below.
+        if scope not in ("once", "stage"):
+            return Directive(False, state.node, "noop",
+                              f"agent self-grant requires --scope once or stage, got {scope!r}")
+        self_rules = getattr(args, "rules", None) or []
+        self_add_dirs = getattr(args, "add_dirs", None) or []
+        if not self_rules and not self_add_dirs:
+            return Directive(False, state.node, "noop",
+                              "agent self-grant requires --rule/--add-dir naming what to grant")
+        if not state.plan_path:
+            return Directive(False, state.node, "noop",
+                              "agent self-grant requires an approved plan (state.plan_path is empty)")
+        from .plan import PlanError, load_plan as _load
+        try:
+            self_doc = _load(state.plan_path)
+        except (OSError, PlanError) as exc:
+            return Directive(False, state.node, "noop", f"agent self-grant: cannot read plan: {exc}")
+        self_venue = _venue_for(self_doc)
+        self_approved = order_approvals.approved_resources(order_digest(self_doc))
+        self_protected = _resources.protected_permission_surfaces(
+            repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
+            ledger_dir=str(order_approvals._root(None)),
+        )
+        self_to_check: list = []
+        for rule in self_rules:
+            self_to_check.append((rule, plan_resources.resolve_rule_grant(rule, self_venue)))
+        for spec in self_add_dirs:
+            parsed = _parse_add_dir_spec(spec)
+            if parsed is None:
+                return Directive(False, state.node, "noop",
+                                  f"malformed --add-dir spec (want 'PATH:read|write'): {spec}")
+            path, mode = parsed
+            self_to_check.append((spec, plan_resources.resolve_add_dir_grant(path, mode)))
+        for label, res in self_to_check:
+            if res.status != "resolved":
+                return Directive(
+                    False, state.node, "noop",
+                    f"agent self-grant refused: {label!r} is unresolved "
+                    f"({res.reason_class}): {res.reason}",
+                    data={"reason_class": res.reason_class or "unresolved"},
+                )
+            for resource in res.resources:
+                if not any(_covers_resource(appr, resource, self_protected) for appr in self_approved):
+                    return Directive(
+                        False, state.node, "noop",
+                        f"agent self-grant refused: {label!r} resolves to a resource not "
+                        f"covered by any resource the customer approved for this order",
+                        data={"reason_class": "not-approved"},
+                    )
     new_entries: list[dict] = []
     # `once` materializes a runtime grant exactly like `stage` does -- the
     # difference is lifetime, not whether a --rule/--add-dir gets recorded at
@@ -6071,7 +6141,15 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
         key = str(state.active_stage().index)
         state.runtime_grants.setdefault(key, []).extend(new_entries)
     state.permission_request = None
-    state.log("resolve_permission", action=req.action, decision=args.decision)
+    # `by` + the two env overrides that steer WHICH ledger/contract-table a
+    # self-grant resolved against are recorded on every call, not only a
+    # self-grant one, so the audit trail is uniform regardless of who --by
+    # names -- a human-attributed resolution reads the same overrides.
+    state.log(
+        "resolve_permission", action=req.action, decision=args.decision, by=by,
+        order_approvals_dir_override=os.environ.get("AGENTCTL_ORDER_APPROVALS_DIR"),
+        tool_contracts_override=os.environ.get("AGENTCTL_TOOL_CONTRACTS"),
+    )
     store.save(state)
     return Directive(
         True, state.node, "continue_spawn", detail,
@@ -9464,6 +9542,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--re-attest", action="store_true")
     sp = add("resolve-permission"); sp.add_argument("--session", required=True)
     sp.add_argument("--decision", choices=["granted", "denied"], required=True)
+    sp.add_argument("--by", default=None,
+                    help="who is resolving this request; the reserved identity 'agent' "
+                         "(AGENT_ACTOR) attempts a self-grant against the order-approvals "
+                         "ledger (REQ5) instead of recording a human decision -- refused "
+                         "unless every --rule/--add-dir resolves to a typed resource ALREADY "
+                         "covered by a resource the customer approved for this plan's order")
     sp.add_argument("--scope", choices=["once", "project", "global", "stage"], default="once",
                     help="'stage' additionally materializes --rule/--add-dir as a RUNTIME "
                          "grant on the active stage (state.runtime_grants), validated through "
