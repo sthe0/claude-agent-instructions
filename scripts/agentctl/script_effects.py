@@ -173,13 +173,13 @@ def resolve_script(
     script_file = Path(script_real)
     if not script_file.is_file():
         return Resolution(
-            "unresolved", reason_class="declared-unresolved",
+            "unresolved", reason_class="contract-unresolved",
             reason=f"script_effects entry {matched.path!r}: file not found at {script_real!r}",
         )
     live_digest = _sha256_of(script_file)
     if live_digest != matched.sha256:
         return Resolution(
-            "unresolved", reason_class="script-digest-mismatch",
+            "unresolved", reason_class="adhoc-undeclared",
             reason=(
                 f"script_effects entry for {matched.path!r} is pinned to sha256="
                 f"{matched.sha256}, but the live file hashes to {live_digest} — an "
@@ -191,7 +191,7 @@ def resolve_script(
     resolver_fn = _RESOLVERS.get(matched.resolver)
     if resolver_fn is None:
         return Resolution(
-            "unresolved", reason_class="declared-unresolved",
+            "unresolved", reason_class="contract-unresolved",
             reason=f"script_effects entry names unknown resolver {matched.resolver!r}",
         )
     return resolver_fn(argv, venue_real)
@@ -221,7 +221,7 @@ def _resolve_land_branch(argv: list[str], venue_real: str):
         if tok in known_value_flags:
             if i + 1 >= len(argv):
                 return Resolution(
-                    "unresolved", reason_class="declared-unresolved",
+                    "unresolved", reason_class="contract-unresolved",
                     reason=f"land-branch.py: {tok!r} missing its value",
                 )
             values[tok] = argv[i + 1]
@@ -233,7 +233,7 @@ def _resolve_land_branch(argv: list[str], venue_real: str):
             i += 1
             continue
         return Resolution(
-            "unresolved", reason_class="declared-unresolved",
+            "unresolved", reason_class="contract-unresolved",
             reason=f"land-branch.py: unrecognized argument {tok!r}",
         )
 
@@ -248,7 +248,7 @@ def _resolve_land_branch(argv: list[str], venue_real: str):
         # `git worktree list`, not from argv — neither is resolvable ahead
         # of execution.
         return Resolution(
-            "unresolved", reason_class="declared-unresolved",
+            "unresolved", reason_class="contract-unresolved",
             reason=(
                 "land-branch.py without --keep-branch deletes the remote "
                 "branch (a delete-push, never a covered push resource) and "
@@ -260,7 +260,7 @@ def _resolve_land_branch(argv: list[str], venue_real: str):
     branch = values.get("--branch")
     if not branch:
         return Resolution(
-            "unresolved", reason_class="declared-unresolved",
+            "unresolved", reason_class="contract-unresolved",
             reason=(
                 "land-branch.py: --branch omitted infers the branch from the "
                 "current git HEAD, which is not literal from argv"
@@ -272,7 +272,7 @@ def _resolve_land_branch(argv: list[str], venue_real: str):
         dash_c_real = os.path.realpath(os.path.expanduser(dash_c))
         if dash_c_real != venue_real:
             return Resolution(
-                "unresolved", reason_class="declared-unresolved",
+                "unresolved", reason_class="contract-unresolved",
                 reason=f"land-branch.py: -C {dash_c!r} targets a different checkout than the venue",
             )
 
@@ -284,7 +284,7 @@ def _resolve_land_branch(argv: list[str], venue_real: str):
         common_dir = _git_common_dir(venue_real)
         if common_dir is None:
             return Resolution(
-                "unresolved", reason_class="declared-unresolved",
+                "unresolved", reason_class="contract-unresolved",
                 reason="land-branch.py: could not resolve the git common dir for the venue",
             )
         out.append(_resources.FileResource(common_dir, "write"))

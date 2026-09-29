@@ -465,7 +465,7 @@ def _order_violations(meta) -> list[str]:
             f"renamed on one side only, which leaves the real requirement uncovered while "
             f"the map still looks full"
         )
-    if order.customer_id and order.customer_id.casefold() == AGENT_ACTOR:
+    if order.customer_id and order.customer_id.strip().casefold() == AGENT_ACTOR:
         out.append(
             f"[meta.order] customer_id={order.customer_id!r} is the reserved engine actor "
             f"identity ({AGENT_ACTOR!r}). The order-approvals ledger (order_approvals.py) "

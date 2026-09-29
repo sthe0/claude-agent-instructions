@@ -15,9 +15,10 @@ never inspects a command or a rule string.
 Five kinds are typed here (REQ2): `file`, `vcs_ref`, `specialist`, `service`,
 `dataset`. Every other candidate resource shape considered while designing
 this model (a raw shell environment variable; an arbitrary network
-endpoint) is deferred because no plan element in this codebase currently
-declares one, and inventing coverage semantics for a resource nothing yet
-resolves to would be untested by construction:
+endpoint; a money/quota amount; a read-confidentiality tier; an Org-layer
+dataset/service contract) is deferred because no plan element in this
+codebase currently declares one, and inventing coverage semantics for a
+resource nothing yet resolves to would be untested by construction:
 
 - environment-variable resources: no contract entry in this plan mutates
   process environment as its OWN effect (env-var writes only ever show up as
@@ -27,6 +28,20 @@ resolves to would be untested by construction:
   already-classified external service (the resolver's `service` status);
   a raw URL/host resource would need its own coverage story (wildcards,
   ports, schemes) with no current caller — deferred.
+- money/quota-amount resources: no contract entry names a spend ceiling or
+  a quota amount as its own resource — a paid external call is typed as a
+  `service` (exact match on name + `op_class`), never as a bounded amount;
+  deferred until a contract needs to gate on a ceiling rather than on which
+  service is called.
+- read-confidentiality resources: `file.mode` distinguishes read from
+  write but not WHICH reads are sensitive (secrets, customer PII) versus
+  ordinary; deferred until a contract needs to gate a read by sensitivity
+  rather than by path alone.
+- Org-layer dataset/service contracts: `dataset`/`service` here type only
+  what a Core resolver can name from a command line (a `(system, locator)`
+  pair, a `(name, op_class)` pair) — an Org-layer plugin's own catalog
+  (internal tracker keys, org-internal service names) is out of scope for
+  Core and deferred to whatever plugin seam names those resources.
 
 `covers(approved, requested)` is asymmetric and fails toward NOT-covered:
 the same bias `grants.grant_covers_call` documents for the same reason — a
@@ -193,25 +208,37 @@ class SpecialistResource(Resource):
 
 @dataclass(frozen=True)
 class ServiceResource(Resource):
-    """A named external service a command calls — exact match."""
+    """A named external service a command calls, at a given `op_class`
+    (e.g. `"read"` / `"write"` / `"spend"`) — exact match on both. `op_class`
+    is part of the identity for the same reason `VcsRefResource.op` is: an
+    approval for one class of operation on a service (a read-only lookup)
+    must never cover a different class (a spend-incurring call) against the
+    same service name."""
 
     name: str
+    op_class: str
     kind: str = "service"
 
     def covers(self, other: "Resource") -> bool:
         if not isinstance(other, ServiceResource):
             return False
-        return self.name == other.name
+        return (self.name, self.op_class) == (other.name, other.op_class)
 
 
 @dataclass(frozen=True)
 class DatasetResource(Resource):
-    """A named dataset a command reads or writes — exact match."""
+    """A dataset a command reads or writes, identified by the `system` that
+    hosts it (e.g. a warehouse/orchestration-platform name) plus a
+    `locator` within that system (a table/path name) — exact match on both.
+    A bare name is not enough: two systems can reuse the same locator
+    spelling for unrelated datasets, and treating that as a match would let
+    an approval for one silently cover the other."""
 
-    name: str
+    system: str
+    locator: str
     kind: str = "dataset"
 
     def covers(self, other: "Resource") -> bool:
         if not isinstance(other, DatasetResource):
             return False
-        return self.name == other.name
+        return (self.system, self.locator) == (other.system, other.locator)

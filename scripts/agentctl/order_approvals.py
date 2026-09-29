@@ -113,9 +113,9 @@ def resource_from_dict(raw: dict) -> _resources.Resource | None:
         if kind == "specialist":
             return _resources.SpecialistResource(role=raw["role"])
         if kind == "service":
-            return _resources.ServiceResource(name=raw["name"])
+            return _resources.ServiceResource(name=raw["name"], op_class=raw["op_class"])
         if kind == "dataset":
-            return _resources.DatasetResource(name=raw["name"])
+            return _resources.DatasetResource(system=raw["system"], locator=raw["locator"])
     except (KeyError, ValueError, TypeError):
         return None
     return None
@@ -219,7 +219,7 @@ def record_approval(
     only. `by` must never be `AGENT_ACTOR` — enforced by the caller (an
     `approve --by agent` is refused before this is ever reached), asserted
     here too as a last-resort guard against a future caller forgetting it."""
-    if by.casefold() == AGENT_ACTOR:
+    if by.strip().casefold() == AGENT_ACTOR:
         raise ValueError(f"order_approvals.record_approval refuses by={AGENT_ACTOR!r}")
     record = {
         "plan_sha256": plan_sha256,
@@ -249,7 +249,7 @@ def record_customer_grant(
     grant (A2: `--scope once` never calls this). Recorded as a one-resource
     record so `approved_resources()` treats it identically to an approval
     record's own resource list."""
-    if by.casefold() == AGENT_ACTOR:
+    if by.strip().casefold() == AGENT_ACTOR:
         raise ValueError(f"order_approvals.record_customer_grant refuses by={AGENT_ACTOR!r}")
     record = {
         "plan_sha256": None,

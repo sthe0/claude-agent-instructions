@@ -5450,6 +5450,15 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                 "-- asking the user rather than trusting either alone"
             )
         if self_grant_resources and resource_disagreement is None:
+            # The self_grant directive's own message tells the caller to run
+            # `resolve-permission --by agent --scope stage --rule ...` next --
+            # that command requires a pending `state.permission_request`
+            # (checked first thing in cmd_resolve_permission), so it must be
+            # parked here exactly as the ask_user_permission path below does,
+            # or the directive's own instructions would fail when followed.
+            state.permission_request = PermissionRequest(
+                action=action, stage_index=stage.index, raw=body
+            )
             state.log(
                 "permission_self_grant", stage=stage.index, action=action, rule=rule_line,
                 resources=[plan_resources._resource_to_dict(r) for r in self_grant_resources],
@@ -5679,10 +5688,10 @@ def _parse_resource_spec(text: str):
             return _resources.VcsRefResource(args[0], args[1], args[2])
         if kind == "specialist" and len(args) == 1:
             return _resources.SpecialistResource(args[0])
-        if kind == "service" and len(args) == 1:
-            return _resources.ServiceResource(args[0])
-        if kind == "dataset" and len(args) == 1:
-            return _resources.DatasetResource(args[0])
+        if kind == "service" and len(args) == 2:
+            return _resources.ServiceResource(args[0], args[1])
+        if kind == "dataset" and len(args) == 2:
+            return _resources.DatasetResource(args[0], args[1])
     except ValueError:
         return None
     return None
@@ -5715,7 +5724,7 @@ def _self_grant_resources_for_rule(
     venue = _venue_for(doc)
     res = plan_resources.resolve_rule_grant(rule_line, venue)
     if res.status != "resolved" or not res.resources:
-        return [], (res.reason_class or "unresolved")
+        return [], (res.reason_class or "contract-unresolved")
     protected = _resources.protected_permission_surfaces(
         repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
         ledger_dir=str(order_approvals._root(None)),
@@ -6211,7 +6220,23 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
         except (OSError, PlanError) as exc:
             return Directive(False, state.node, "noop", f"agent self-grant: cannot read plan: {exc}")
         self_venue = _venue_for(self_doc)
-        self_approved = order_approvals.approved_resources(order_digest(self_doc))
+        # The SAME union `_self_grant_resources_for_rule` checks (REQ5/finding
+        # #4): the order-approvals ledger alone is not the whole coverage
+        # story -- a stage's own declared/derived [stage.grants] are already
+        # user-approved (as part of the plan approval) and must self-grant
+        # here too, or dispatch's self_grant directive (which DOES check this
+        # union) would tell the caller to run a command that then refuses.
+        self_approved = list(order_approvals.approved_resources(order_digest(self_doc)))
+        self_active_stage = state.active_stage()
+        if self_active_stage is not None:
+            self_coverage = _effective_stage_grants(state, self_active_stage.index)
+            for rule_grant in self_coverage.allow:
+                eff = plan_resources.resolve_rule_grant(rule_grant.rule, self_venue)
+                if eff.status == "resolved":
+                    self_approved.extend(eff.resources)
+            for add_dir in self_coverage.add_dirs:
+                eff = plan_resources.resolve_add_dir_grant(add_dir.path, add_dir.mode)
+                self_approved.extend(eff.resources)
         self_protected = _resources.protected_permission_surfaces(
             repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
             ledger_dir=str(order_approvals._root(None)),
@@ -6227,12 +6252,19 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
             path, mode = parsed
             self_to_check.append((spec, plan_resources.resolve_add_dir_grant(path, mode)))
         for label, res in self_to_check:
-            if res.status != "resolved":
+            if res.status != "resolved" or not res.resources:
+                # Mirrors _self_grant_resources_for_rule's identical check
+                # (dispatch's own self_grant path) -- a "resolved" status
+                # with an EMPTY resource set (a readonly rule that resolves
+                # to nothing) must still refuse here, not vacuously pass the
+                # `for resource in res.resources` loop below with zero
+                # iterations and zero approvals actually checked.
+                reason_class = res.reason_class or "contract-unresolved"
+                detail = res.reason if res.status != "resolved" else "resolves to an empty resource set"
                 return Directive(
                     False, state.node, "noop",
-                    f"agent self-grant refused: {label!r} is unresolved "
-                    f"({res.reason_class}): {res.reason}",
-                    data={"reason_class": res.reason_class or "unresolved"},
+                    f"agent self-grant refused: {label!r} is unresolved ({reason_class}): {detail}",
+                    data={"reason_class": reason_class},
                 )
             for resource in res.resources:
                 if not any(_covers_resource(appr, resource, self_protected) for appr in self_approved):

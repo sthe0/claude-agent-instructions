@@ -45,7 +45,7 @@ def resolve_rule_grant(rule: str, venue: str) -> Resolution:
     parsed = _grants.rule_program_and_arg(rule)
     if parsed is None:
         return Resolution(
-            "unresolved", reason_class="unparseable-rule",
+            "unresolved", reason_class="contract-unresolved",
             reason=f"rule {rule!r} does not parse as Tool(arg)",
             identity=("unparseable-rule", rule),
         )
@@ -65,7 +65,7 @@ def resolve_rule_grant(rule: str, venue: str) -> Resolution:
         return resolve_command(arg, venue)
     if tool not in ("Edit", "Write", "Read", "NotebookEdit"):
         return Resolution(
-            "unresolved", reason_class="unknown-tool",
+            "unresolved", reason_class="unknown-program",
             reason=f"rule {rule!r} names an unrecognized tool {tool!r}",
             identity=("unknown-tool", rule),
         )

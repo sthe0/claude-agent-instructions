@@ -93,8 +93,8 @@ source = "GNU grep(1): prints matching lines; no write (absent -l/--include writ
 
 [[program]]
 name = "rg"
-effect = "none"
-source = "ripgrep --help: a search tool; no write flag exists."
+effect = "resolver"
+source = "ripgrep --help: no write flag exists, but --pre runs an arbitrary preprocessor command on every searched file -- resolved by _resolve_rg, which is unresolved iff --pre/--pre= is present."
 
 [[program]]
 name = "printf"
@@ -133,8 +133,8 @@ source = "GNU coreutils whoami(1): prints the effective user; no write."
 
 [[program]]
 name = "date"
-effect = "none"
-source = "GNU coreutils date(1) without -s/--set: prints the date; no write."
+effect = "resolver"
+source = "GNU coreutils date(1): prints the date and has no file-write flag, but -s/--set changes SYSTEM clock state -- resolved by _resolve_date, which is unresolved iff -s/--set is present."
 
 [[program]]
 name = "pwd"
@@ -161,15 +161,15 @@ name = "sha256sum"
 effect = "none"
 source = "GNU coreutils sha256sum(1): prints a digest to stdout only; no write flag exists."
 
-# --- read-only git/arc subcommands (dispatched via the "resolver" entry
-# below, listed here only for the loader's one-entry-per-program review) ----
+# --- read-only git subcommands (dispatched via the "resolver" entry below,
+# listed here only for the loader's one-entry-per-program review) ----------
 
 # --- write-target verbs resolved via lib/bash_write_targets -----------------
 
 [[program]]
 name = "sed"
-effect = "writes-operands"
-source = "GNU sed(1): -i/--in-place rewrites its file operand(s) in place; resolved by lib/bash_write_targets.segment_write_target (already reviewed for the canon-readonly guard). Absent -i, sed writes stdout only."
+effect = "resolver"
+source = "GNU sed(1): -i/--in-place rewrites its file operand(s) in place, resolved by lib/bash_write_targets.segment_write_target (already reviewed for the canon-readonly guard); absent -i, sed writes stdout only UNLESS its own script contains an embedded w/W/e command (each of which writes/executes regardless of -i) -- resolved by _resolve_sed, which is unresolved whenever a w/W/e command cannot be proven absent from the script text."
 
 [[program]]
 name = "tee"
@@ -261,7 +261,7 @@ source = "POSIX find(1): -exec/-execdir/-ok/-okdir run an arbitrary command per 
 [[program]]
 name = "git"
 effect = "resolver"
-source = "git-push(1) / git(1): a read-only subcommand (log, status, diff, show, branch, remote, config, rev-parse, ls-files, blame) resolves to no effect; `push` with a literal remote and literal, non-force, non-delete refspec(s) resolves to a vcs_ref push resource per refspec destination; a force or delete form, a zero-refspec push, or any other subcommand is unresolved."
+source = "git-push(1) / git(1): a read-only subcommand (log, status, diff, show, rev-parse, ls-files, blame) with no --output= target resolves to no effect -- branch/remote/config are excluded from this set since each can write (create/delete a branch or remote, change repo config); `push` with a literal remote and literal, non-force, non-delete refspec(s), from an allowed flag set, with -C/--git-dir/--work-tree (if given) equal to the venue, resolves to a vcs_ref push resource per refspec destination; a force/delete/mirror-equivalent form, a `+`-prefixed refspec, a zero-refspec push, any flag outside the allowed set, or any other subcommand is unresolved."
 
 [[program]]
 name = "pytest"

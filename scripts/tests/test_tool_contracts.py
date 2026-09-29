@@ -36,7 +36,7 @@ def test_contract_table_loads_one_entry_per_program():
     assert "git" in table
     assert table["git"].effect == "resolver"
     assert table["ls"].effect == "none"
-    assert table["sed"].effect == "writes-operands"
+    assert table["sed"].effect == "resolver"
     assert table["dd"].effect == "unresolved"
     assert table["dd"].reason  # every declared-unresolved entry names why
 
@@ -83,12 +83,37 @@ def test_sed_in_place_writes_file_plain_sed_does_not(tmp_path):
     assert plain.resources == []
 
 
+def test_sed_embedded_write_or_exec_command_is_unresolved(tmp_path):
+    tc = _tool_contracts_module()
+
+    target = tmp_path / "f.txt"
+    target.write_text("hi")
+
+    unresolved_scripts = [
+        f"sed 'w out.txt' {target}",
+        f"sed -n '3w out.txt' {target}",
+        f"sed 's/a/b/w out.txt' {target}",
+        f"sed '1,3e echo hi' {target}",
+        f"sed 'e echo hi' {target}",
+    ]
+    for cmd in unresolved_scripts:
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "adhoc-undeclared", cmd
+
+    # An 'e' occurring inside ordinary substitute TEXT (not as the command
+    # letter) must not be mistaken for the exec command.
+    letter_e_in_text = tc.resolve_command(f"sed 's/hi/bye/' {target}", str(tmp_path))
+    assert letter_e_in_text.status == "resolved"
+    assert letter_e_in_text.resources == []
+
+
 def test_find_exec_and_awk_are_unresolved(tmp_path):
     tc = _tool_contracts_module()
 
     exec_res = tc.resolve_command("find . -name '*.py' -exec rm {} \\;", str(tmp_path))
     assert exec_res.status == "unresolved"
-    assert exec_res.reason_class == "declared-unresolved"
+    assert exec_res.reason_class == "contract-unresolved"
 
     plain_find = tc.resolve_command("find . -name '*.py'", str(tmp_path))
     assert plain_find.status == "resolved"
@@ -96,7 +121,85 @@ def test_find_exec_and_awk_are_unresolved(tmp_path):
 
     awk_res = tc.resolve_command("awk '{print > \"out.txt\"}' in.txt", str(tmp_path))
     assert awk_res.status == "unresolved"
-    assert awk_res.reason_class == "declared-unresolved"
+    assert awk_res.reason_class == "contract-unresolved"
+
+
+def test_find_delete_and_fprint_variants_are_unresolved(tmp_path):
+    tc = _tool_contracts_module()
+
+    for flag in ("-delete", "-fprint out.txt", "-fprint0 out.txt", "-fprintf out.txt %p", "-fls out.txt"):
+        cmd = f"find . -name '*.py' {flag}"
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+
+def test_process_substitution_is_unresolved(tmp_path):
+    tc = _tool_contracts_module()
+
+    for cmd in ("diff <(sort a.txt) <(sort b.txt)", "tee >(cat) < in.txt"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "residual-syntax", cmd
+
+
+def test_git_output_flag_is_unresolved(tmp_path):
+    tc = _tool_contracts_module()
+
+    res = tc.resolve_command("git log --output=out.txt", str(tmp_path))
+    assert res.status == "unresolved"
+    assert res.reason_class == "contract-unresolved"
+
+
+def test_git_venue_flags_require_matching_venue(tmp_path):
+    tc = _tool_contracts_module()
+    resources = _resources_module()
+
+    other = tmp_path / "other"
+    other.mkdir()
+
+    for flag in ("-C", "--git-dir", "--work-tree"):
+        cmd = f"git {flag} {other} push origin main"
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+    same_dir = tc.resolve_command(f"git -C {tmp_path} push origin main", str(tmp_path))
+    assert same_dir.status == "resolved"
+    assert same_dir.resources == [resources.VcsRefResource("origin", "main", "push")]
+
+
+def test_rg_pre_and_date_set_are_unresolved(tmp_path):
+    tc = _tool_contracts_module()
+
+    rg_res = tc.resolve_command("rg --pre cat foo", str(tmp_path))
+    assert rg_res.status == "unresolved"
+    assert rg_res.reason_class == "contract-unresolved"
+
+    rg_plain = tc.resolve_command("rg foo", str(tmp_path))
+    assert rg_plain.status == "resolved"
+    assert rg_plain.resources == []
+
+    date_res = tc.resolve_command("date -s '2026-01-01'", str(tmp_path))
+    assert date_res.status == "unresolved"
+    assert date_res.reason_class == "contract-unresolved"
+
+    date_plain = tc.resolve_command("date", str(tmp_path))
+    assert date_plain.status == "resolved"
+    assert date_plain.resources == []
+
+
+def test_python_dash_c_is_unresolved_pytest_module_resolves_like_pytest(tmp_path):
+    tc = _tool_contracts_module()
+    resources = _resources_module()
+
+    dash_c = tc.resolve_command("python3 -c 'print(1)'", str(tmp_path))
+    assert dash_c.status == "unresolved"
+    assert dash_c.reason_class == "adhoc-undeclared"
+
+    via_module = tc.resolve_command("python3 -m pytest -q scripts/tests/test_foo.py", str(tmp_path))
+    assert via_module.status == "resolved"
+    assert via_module.resources == [resources.FileResource(str(tmp_path.resolve()), "write")]
 
 
 def test_redirect_and_cp_targets_become_file_resources(tmp_path):
@@ -123,7 +226,7 @@ def test_dollar_backtick_and_subshell_segments_unresolved(tmp_path):
     for cmd in ("echo $(rm -rf /tmp/x)", "echo `date`", "(cd /tmp && rm -rf x)"):
         res = tc.resolve_command(cmd, str(tmp_path))
         assert res.status == "unresolved", cmd
-        assert res.reason_class == "nested-execution", cmd
+        assert res.reason_class == "residual-syntax", cmd
         assert res.identity is not None, cmd
 
 
@@ -144,7 +247,7 @@ def test_undeclared_adhoc_script_is_unresolved_with_identity(tmp_path):
     try:
         res = tc.resolve_command(f"python3 {outside}", str(tmp_path))
         assert res.status == "unresolved"
-        assert res.reason_class == "declared-unresolved"
+        assert res.reason_class == "contract-unresolved"
         assert res.identity is not None
         assert res.identity[0] == "unresolved"
     finally:
@@ -215,7 +318,7 @@ def test_force_and_delete_push_not_covered_by_push(tmp_path):
     for cmd in refusals:
         res = tc.resolve_command(cmd, str(tmp_path))
         assert res.status == "unresolved", cmd
-        assert res.reason_class in ("force-or-delete-push", "contract-unresolved"), cmd
+        assert res.reason_class == "contract-unresolved", cmd
         # An agent self-grant must never treat any of these as covered by a
         # plain-push approval on the same ref.
         approved_plain_push = resources.VcsRefResource("origin", "main", "push")

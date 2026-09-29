@@ -102,19 +102,21 @@ def test_covers_specialist_kind_exact():
 def test_covers_service_exact():
     resources = _resources_module()
 
-    svc = resources.ServiceResource("yandex-cloud")
-    assert svc.covers(resources.ServiceResource("yandex-cloud"))
-    assert not svc.covers(resources.ServiceResource("other-service"))
+    svc = resources.ServiceResource("example-cloud", "spend")
+    assert svc.covers(resources.ServiceResource("example-cloud", "spend"))
+    assert not svc.covers(resources.ServiceResource("other-service", "spend"))
+    assert not svc.covers(resources.ServiceResource("example-cloud", "read"))
     assert not svc.covers(resources.SpecialistResource("developer"))
 
 
 def test_covers_dataset_exact():
     resources = _resources_module()
 
-    ds = resources.DatasetResource("clicks-daily")
-    assert ds.covers(resources.DatasetResource("clicks-daily"))
-    assert not ds.covers(resources.DatasetResource("clicks-hourly"))
-    assert not ds.covers(resources.ServiceResource("clicks-daily"))
+    ds = resources.DatasetResource("warehouse", "clicks-daily")
+    assert ds.covers(resources.DatasetResource("warehouse", "clicks-daily"))
+    assert not ds.covers(resources.DatasetResource("warehouse", "clicks-hourly"))
+    assert not ds.covers(resources.DatasetResource("other-system", "clicks-daily"))
+    assert not ds.covers(resources.ServiceResource("clicks-daily", "read"))
 
 
 def test_contract_tables_and_ledger_dir_never_covered(tmp_path):
@@ -306,7 +308,7 @@ def test_script_effects_entry_refused_on_digest_mismatch(tmp_path):
         "python3 scripts/land-branch.py --branch feature --keep-branch", str(venue)
     )
     assert r.status == "unresolved"
-    assert r.reason_class == "script-digest-mismatch"
+    assert r.reason_class == "adhoc-undeclared"
 
 
 def test_stage_effects_untrusted_after_script_edit(tmp_path):
@@ -328,7 +330,7 @@ def test_stage_effects_untrusted_after_script_edit(tmp_path):
         str(venue / "scripts" / "land-branch.py"), ["--branch", "x", "--keep-branch"], str(venue), table=table
     )
     assert stale is not None and stale.status == "unresolved"
-    assert stale.reason_class == "script-digest-mismatch"
+    assert stale.reason_class == "adhoc-undeclared"
 
 
 def test_undeclared_adhoc_script_is_unresolved(tmp_path):
@@ -342,7 +344,7 @@ def test_undeclared_adhoc_script_is_unresolved(tmp_path):
 
     r = tc.resolve_command(f"python3 {script}", str(venue))
     assert r.status == "unresolved"
-    assert r.reason_class == "declared-unresolved"
+    assert r.reason_class == "contract-unresolved"
 
 
 def test_helper_script_edit_changes_unresolved_command_identity(tmp_path):
@@ -850,7 +852,7 @@ def test_agent_self_grant_unresolved_rule_refused(store, fixtures_dir, tmp_path)
         store=store,
     )
     assert not d.ok
-    assert d.data.get("reason_class") == "unparseable-rule"
+    assert d.data.get("reason_class") == "contract-unresolved"
     state = store.load(sid)
     assert state.permission_request is not None
 
@@ -928,7 +930,7 @@ def test_find_exec_and_awk_are_unresolved(tmp_path):
 
     r_find_exec = tc.resolve_command("find . -name '*.py' -exec rm {} \\;", str(venue))
     assert r_find_exec.status == "unresolved"
-    assert r_find_exec.reason_class == "declared-unresolved"
+    assert r_find_exec.reason_class == "contract-unresolved"
 
     r_find_plain = tc.resolve_command("find . -name '*.py'", str(venue))
     assert r_find_plain.status == "resolved"
@@ -936,7 +938,7 @@ def test_find_exec_and_awk_are_unresolved(tmp_path):
 
     r_awk = tc.resolve_command("awk '{print $1}' foo.txt", str(venue))
     assert r_awk.status == "unresolved"
-    assert r_awk.reason_class == "declared-unresolved"
+    assert r_awk.reason_class == "contract-unresolved"
 
 
 def test_redirect_cp_tee_targets_become_file_resources(tmp_path):
@@ -970,14 +972,15 @@ def test_dollar_backtick_heredoc_subshell_segments_unresolved(tmp_path):
     for cmd in ("echo $(date)", "echo `date`", "(cd /tmp && ls)"):
         r = tc.resolve_command(cmd, str(venue))
         assert r.status == "unresolved", cmd
-        assert r.reason_class == "nested-execution", cmd
+        assert r.reason_class == "residual-syntax", cmd
 
     # A `$(...)` INSIDE a heredoc body is invisible to the nested-execution
     # check -- the body is stripped before that check ever runs -- so it
-    # must never be classified `reason_class="nested-execution"`.
+    # must never be classified `reason_class="residual-syntax"` on that
+    # account.
     heredoc_cmd = "cat <<'EOF'\nprint($(date))\nEOF"
     r_heredoc = tc.resolve_command(heredoc_cmd, str(venue))
-    assert not (r_heredoc.status == "unresolved" and r_heredoc.reason_class == "nested-execution")
+    assert not (r_heredoc.status == "unresolved" and r_heredoc.reason_class == "residual-syntax")
 
 
 def test_negative_control_and_final_check_commands_resolved(tmp_path):
@@ -1108,32 +1111,94 @@ def test_covers_and_identity_compare_realpath(tmp_path):
     assert approved_via_link == resources.FileResource(str(real_dir), "write")
 
 
-def test_force_and_delete_push_not_covered_by_push(tmp_path):
+_C5_REFUSED_PUSH_COMMANDS = [
+    "git push --force origin main",
+    "git push -f origin main",
+    "git push --force-with-lease origin main",
+    "git push --force-if-includes origin main",
+    "git push --mirror origin main",
+    "git push --prune origin main",
+    "git push --all origin main",
+    "git push --tags origin main",
+    "git push --delete origin main",
+    "git push origin +HEAD:main",
+    "git push origin :main",
+    "git push origin",
+]
+_C5_REFUSED_PUSH_IDS = [
+    "force", "dash-f", "force-with-lease", "force-if-includes", "mirror",
+    "prune", "all", "tags", "delete", "plus-refspec", "colon-refspec",
+    "zero-refspec",
+]
+
+
+@pytest.mark.parametrize("cmd", _C5_REFUSED_PUSH_COMMANDS, ids=_C5_REFUSED_PUSH_IDS)
+def test_force_and_delete_push_not_covered_by_push(tmp_path, cmd):
+    """C5: every force/delete/mirror/prune/all/tags-equivalent push, every
+    +-prefixed or :-prefixed or empty-destination refspec, and a
+    zero-refspec push resolves `unresolved` -- never to an empty-but-
+    "covered" resource set -- so none of them can ever be mistaken for a
+    plain push to the same remote/branch a ledger approved."""
     tc = _tool_contracts_module()
     venue = tmp_path / "venue"
     venue.mkdir()
 
-    r_force = tc.resolve_command("git push --force origin main", str(venue))
-    assert r_force.status == "unresolved"
-    assert r_force.reason_class == "force-or-delete-push"
+    r = tc.resolve_command(cmd, str(venue))
+    assert r.status == "unresolved", cmd
+    assert r.reason_class == "contract-unresolved", (cmd, r.reason_class)
 
-    r_delete = tc.resolve_command("git push --delete origin main", str(venue))
-    assert r_delete.status == "unresolved"
-    assert r_delete.reason_class == "force-or-delete-push"
 
-    r_force_lease = tc.resolve_command("git push --force-with-lease origin main", str(venue))
-    assert r_force_lease.status == "unresolved"
-    assert r_force_lease.reason_class == "force-or-delete-push"
+def test_force_and_delete_push_refused_via_resolve_permission_self_grant(store, fixtures_dir, tmp_path):
+    """The same C5 refusals, exercised through the CLI self-grant path
+    (`resolve-permission --by agent`), not just the bare resolver -- under a
+    ledger holding only `vcs_ref(origin, main, push)`, with a positive
+    control proving an ordinary (non-force, non-delete) push to that same
+    destination DOES self-grant."""
+    from argparse import Namespace
 
-    # Zero-refspec push: never resolves to an empty-covered set.
-    r_zero = tc.resolve_command("git push origin", str(venue))
-    assert r_zero.status == "unresolved"
-    assert r_zero.reason_class == "contract-unresolved"
+    cli = _cli_module()
+    state_mod = _state_module()
+    order_approvals = _order_approvals_module()
+    resources = _resources_module()
+    plan_mod = _plan_module()
 
-    r_ok = tc.resolve_command("git push origin main", str(venue))
-    assert r_ok.status == "resolved"
-    assert len(r_ok.resources) == 1
-    assert r_ok.resources[0].op == "push"
+    plan_path = _order_plan_path(tmp_path, customer_id="acme")
+    doc = plan_mod.load_plan(str(plan_path))
+    order_approvals.record_approval(
+        plan_mod.order_digest(doc),
+        plan_sha256="p1",
+        resources=[resources.VcsRefResource("origin", "main", "push")],
+        unresolved_identities=[],
+        stage_effects=[],
+        by="acme",
+        at="2026-09-29T00:00:00Z",
+    )
+
+    for i, cmd in enumerate(_C5_REFUSED_PUSH_COMMANDS):
+        sid = f"c5-cli-refused-{i}"
+        _park_permission_request(cli, store, sid, fixtures_dir, plan_path=str(plan_path))
+        d = cli.cmd_resolve_permission(
+            Namespace(session=sid, decision="granted", scope="stage", by=state_mod.AGENT_ACTOR,
+                      rules=[f"Bash({cmd})"], add_dirs=None),
+            store=store,
+        )
+        assert not d.ok, (cmd, d.detail)
+        assert d.data.get("reason_class") == "contract-unresolved", (cmd, d.data)
+        state = store.load(sid)
+        assert state.permission_request is not None, cmd
+
+    # Positive control: a plain push to the SAME remote/destination the
+    # ledger approved self-grants cleanly -- proving the refusals above are
+    # specific to the C5 flags/refspec shapes, not to push commands at large.
+    sid_ok = "c5-cli-positive-control"
+    _park_permission_request(cli, store, sid_ok, fixtures_dir, plan_path=str(plan_path))
+    d_ok = cli.cmd_resolve_permission(
+        Namespace(session=sid_ok, decision="granted", scope="stage", by=state_mod.AGENT_ACTOR,
+                  rules=["Bash(git push origin HEAD:main)"], add_dirs=None),
+        store=store,
+    )
+    assert d_ok.ok, d_ok.detail
+    assert store.load(sid_ok).permission_request is None
 
 
 def test_plan_resources_cli_lists_typed_resources(fixtures_dir):
@@ -1170,10 +1235,13 @@ def test_permission_request_resource_line_and_self_grant_directive(store, fixtur
     """A dispatched child's `Rule:` line, resolved by the ENGINE (never the
     child's own `Resource:` line), decides self_grant. An agreeing `Resource:`
     line changes nothing; a DISAGREEING one routes to the user with a reason
-    naming both, rather than trusting either alone."""
+    naming both, rather than trusting either alone. `self_grant` only PARKS
+    the request (finding #4) -- a follow-up `resolve-permission --by agent`
+    is what actually materializes it and clears `permission_request`."""
     from argparse import Namespace
 
     cli = _cli_module()
+    state_mod = _state_module()
     order_approvals = _order_approvals_module()
     resources = _resources_module()
     plan_mod = _plan_module()
@@ -1202,6 +1270,13 @@ def test_permission_request_resource_line_and_self_grant_directive(store, fixtur
         plan_path=str(plan_path),
     )
     assert d_agree.action == "self_grant", d_agree.detail
+    assert store.load("resource-line-agree").permission_request is not None
+    d_agree_grant = cli.cmd_resolve_permission(
+        Namespace(session="resource-line-agree", decision="granted", scope="stage",
+                  by=state_mod.AGENT_ACTOR, rules=["Bash(git push origin main)"], add_dirs=None),
+        store=store,
+    )
+    assert d_agree_grant.ok, d_agree_grant.detail
     assert store.load("resource-line-agree").permission_request is None
 
     # A DISAGREEING Resource: line (names a different destination than the
@@ -1225,6 +1300,72 @@ def test_permission_request_resource_line_and_self_grant_directive(store, fixtur
     assert state.permission_request is not None
 
 
+def test_dispatch_self_grant_resolve_permission_redispatch_carries_grant(store, fixtures_dir, tmp_path):
+    """Finding #4 end-to-end: a dispatch `self_grant` directive only PARKS
+    the request (finding #4's bug: it used to clear `permission_request`
+    with nothing actually persisted); `resolve-permission --by agent` is
+    what MATERIALIZES it as a runtime grant on the stage
+    (`state.runtime_grants`); a re-dispatch afterward carries that grant
+    forward into the stage's pre-launch coverage (`_effective_stage_grants`),
+    which is what dispatch's own `self_covered` check (`grants.
+    grant_covers_call`) reads. Re-issuing the SAME already-materialized
+    `Rule:` line on the next dispatch therefore no longer reaches
+    self_grant/ask_user_permission at all -- it is caught as a
+    materialization defect (the request claims to still need what the
+    stage's own grants already cover), which is the proof the runtime grant
+    carried forward: this exact classification is unreachable unless
+    `coverage` on the second dispatch call already contains the resource
+    `resolve-permission --by agent` persisted on the first."""
+    from argparse import Namespace
+
+    from agentctl.dispatch import RunResult
+
+    cli = _cli_module()
+    state_mod = _state_module()
+    order_approvals = _order_approvals_module()
+    resources = _resources_module()
+    plan_mod = _plan_module()
+
+    plan_path = _order_plan_path(tmp_path, customer_id="acme")
+    doc = plan_mod.load_plan(str(plan_path))
+    order_approvals.record_approval(
+        plan_mod.order_digest(doc),
+        plan_sha256="p1",
+        resources=[resources.VcsRefResource("origin", "main", "push")],
+        unresolved_identities=[],
+        stage_effects=[],
+        by="acme",
+        at="2026-09-29T00:00:00Z",
+    )
+
+    sid = "redispatch-carries-grant"
+    action = "PERMISSION-REQUEST: push the branch\nRule: Bash(git push origin main)\n"
+    d1 = _park_permission_request(cli, store, sid, fixtures_dir, action=action, plan_path=str(plan_path))
+    assert d1.action == "self_grant", d1.detail
+    assert store.load(sid).permission_request is not None
+
+    d_grant = cli.cmd_resolve_permission(
+        Namespace(session=sid, decision="granted", scope="stage",
+                  by=state_mod.AGENT_ACTOR, rules=["Bash(git push origin main)"], add_dirs=None),
+        store=store,
+    )
+    assert d_grant.ok, d_grant.detail
+    state_after_grant = store.load(sid)
+    assert state_after_grant.permission_request is None
+    stage_index = state_after_grant.active_stage().index
+    runtime_entries = state_after_grant.runtime_grants.get(str(stage_index), [])
+    assert any(e.get("rule") == "Bash(git push origin main)" for e in runtime_entries), runtime_entries
+
+    runner = lambda argv: RunResult(0, stdout=action)
+    d2 = cli.cmd_dispatch(
+        Namespace(session=sid, budget="medium", complexity="medium", dry_run=False),
+        store=store, runner=runner, perm_checker=lambda a: False,
+    )
+    assert not d2.ok
+    assert d2.marker == "OVERCOME-DIFFICULTY", d2.detail
+    assert "already covered by its materialized grants" in d2.detail, d2.detail
+
+
 def test_effective_rules_are_checked_against_resources(store, fixtures_dir, tmp_path):
     """The stage's own EFFECTIVE (declared+derived) grants are checked as
     RESOURCES, not as rule TEXT: a declared push rule naming a different
@@ -1232,10 +1373,13 @@ def test_effective_rules_are_checked_against_resources(store, fixtures_dir, tmp_
     request for that destination -- something the old string-only
     `grants.grant_covers_call` self_covered short-circuit cannot see (it
     requires literal command-string equality), making this a genuinely new
-    self_grant path, not a restatement of the pre-existing one."""
+    self_grant path, not a restatement of the pre-existing one. `self_grant`
+    only PARKS the request (finding #4) -- resolving it needs a follow-up
+    `resolve-permission --by agent`."""
     from argparse import Namespace
 
     cli = _cli_module()
+    state_mod = _state_module()
 
     # No order-approvals ledger entry at all -- coverage must come purely
     # from the stage's own declared [stage.grants], not the customer ledger.
@@ -1253,6 +1397,13 @@ def test_effective_rules_are_checked_against_resources(store, fixtures_dir, tmp_
         plan_path=str(plan_path),
     )
     assert d.action == "self_grant", d.detail
+    assert store.load("effective-rules-resource-check").permission_request is not None
+    d_grant = cli.cmd_resolve_permission(
+        Namespace(session="effective-rules-resource-check", decision="granted", scope="stage",
+                  by=state_mod.AGENT_ACTOR, rules=["Bash(git push origin HEAD:main)"], add_dirs=None),
+        store=store,
+    )
+    assert d_grant.ok, d_grant.detail
     assert store.load("effective-rules-resource-check").permission_request is None
 
 
