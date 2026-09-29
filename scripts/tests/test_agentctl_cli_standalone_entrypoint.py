@@ -1,7 +1,11 @@
 """Runtime smoke coverage for `agentctl-cli.py`, the standalone shim stage 2
 of the spawn-permission-grant-model plan adds so a review-directive or spawn
 brief can name `python3 <abs path>/agentctl-cli.py <verb> ...` from any cwd,
-without `cd scripts && python3 -m agentctl <verb>` first. Existing coverage
+without `cd scripts && python3 -m agentctl <verb>` first. This is no longer
+just an escape hatch for a review directive: CLAUDE.md, the cursor mirror and
+scripts/agentctl/README.md now prescribe this same form as the one true way
+to drive the engine (Issue #267), precisely because the old `cd`-based form
+silently changed cwd for every later command a spawned child issued. Existing coverage
 (test_stage_grants.py) only references the file's *name* inside permission
 rule strings (`Bash(agentctl-cli.py:*)`) -- nothing actually runs it. This
 file spawns it as a real subprocess (the same way a review-directive or a

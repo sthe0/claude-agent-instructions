@@ -4653,6 +4653,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "c7f4eb0c2b4fb417"
+domain = "code"
+file = "scripts/tests/test_engine_belongs_to_parent.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3fa1aa17e6c85cf7"
+domain = "code"
+file = "scripts/tests/test_engine_belongs_to_parent.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "1ac19abd5436a44b"
 domain = "code"
 file = "scripts/tests/test_enumerate_escape.py"
@@ -12088,6 +12104,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "c167c774b1adcb9f"
 domain = "code_file_rollup"
 file = "scripts/tests/test_effort_fire_synchronous_escalation.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "29a1ddcf5cae6a62"
+domain = "code_file_rollup"
+file = "scripts/tests/test_engine_belongs_to_parent.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

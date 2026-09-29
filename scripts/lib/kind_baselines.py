@@ -65,6 +65,19 @@ PLANNER_CHECK_ORDER_COVERAGE_RULE = f"Bash(python3 {SCRIPTS_DIR}/check-order-cov
 PLANNER_PLAN_GRANTS_RULE = f"Bash(python3 {SCRIPTS_DIR}/agentctl-cli.py plan-grants:*)"
 PLANNER_LIST_DENIED_RULE = f"Bash(python3 {SCRIPTS_DIR}/check-spawn-tool-run.py --list-denied:*)"
 
+# Cd-free standalone-entrypoint spelling of the two `-m agentctl` read-only
+# verbs already in _READ_ONLY_INSPECTION above (see agentctl-cli.py) — an
+# added grant, not a replacement; the `-m` forms stay. Absolute-only, same
+# reasoning as the PLANNER_* rules above: a planner's cwd is normally OUTSIDE
+# this repo, and test_p06_planner_research_rules_absolute_and_no_relative_baselines
+# asserts planner's own baseline carries no repo-relative `scripts/...` rule
+# at all. Every other kind below adds both spellings via
+# _abs_and_relative_script_rules, same as the rest of its row.
+PLANNER_AGENTCTL_CLI_STATUS_CLASSIFY_RULES = [
+    f"Bash(python3 {SCRIPTS_DIR}/agentctl-cli.py classify:*)",
+    f"Bash(python3 {SCRIPTS_DIR}/agentctl-cli.py status:*)",
+]
+
 
 def _abs_and_relative_script_rules(*script_names: str) -> list[str]:
     """Both the absolute and repo-relative `Bash(python3 ...)` rule spelling
@@ -95,7 +108,9 @@ KIND_BASELINES: dict[str, list[str]] = {
     # (grep/python3 -m agentctl introspection/ls/shasum/cat/git log); the
     # measured 42 `python3 -m agentctl` denials are user-authority verbs the
     # read-only bucket correctly excludes, not a baseline gap (see above).
-    "thinker": list(_READ_ONLY_INSPECTION),
+    "thinker": list(_READ_ONLY_INSPECTION) + _abs_and_relative_script_rules(
+        "agentctl-cli.py classify", "agentctl-cli.py status",
+    ),
     # planner: 1629 Bash calls, same read-only shape as thinker, plus the
     # plan-authoring repo verifier it measurably runs on its own output (37
     # combined calls to check-order-coverage.py), plus two research commands
@@ -108,7 +123,7 @@ KIND_BASELINES: dict[str, list[str]] = {
     # plans_dir() itself is a separate, pre-existing grant
     # (PLANS_WRITE_KINDS/plans_permission_rules) layered on in
     # build_child_settings, not duplicated here.
-    "planner": list(_READ_ONLY_INSPECTION) + [
+    "planner": list(_READ_ONLY_INSPECTION) + PLANNER_AGENTCTL_CLI_STATUS_CLASSIFY_RULES + [
         PLANNER_CHECK_ORDER_COVERAGE_RULE,
         PLANNER_PLAN_GRANTS_RULE,
         PLANNER_LIST_DENIED_RULE,
@@ -120,7 +135,9 @@ KIND_BASELINES: dict[str, list[str]] = {
     # denials) — a reviewer needs to run checks, not just read diffs.
     "code-reviewer": list(_READ_ONLY_INSPECTION) + [
         "Bash(python3 -m pytest:*)",
-        *_abs_and_relative_script_rules("verify-semantic-gates.py"),
+        *_abs_and_relative_script_rules(
+            "verify-semantic-gates.py", "agentctl-cli.py classify", "agentctl-cli.py status",
+        ),
     ],
     # tech-writer: only 13 Bash calls sampled across 10 transcripts (mostly
     # `wc`, covered by the read-only bucket) — too small a sample to justify
@@ -128,6 +145,7 @@ KIND_BASELINES: dict[str, list[str]] = {
     # `gh issue` (ticket/README publication is this kind's actual job).
     "tech-writer": list(_READ_ONLY_INSPECTION) + [
         "Bash(gh issue:*)",
+        *_abs_and_relative_script_rules("agentctl-cli.py classify", "agentctl-cli.py status"),
     ],
     # developer: the historical DEVELOPER_SETTINGS_ALLOW list, restructured
     # into this table verbatim except for the removed unbounded direct
@@ -139,6 +157,7 @@ KIND_BASELINES: dict[str, list[str]] = {
         "Bash(python3 -m pytest:*)",
         *_abs_and_relative_script_rules(
             "verify-all.py", "verify-agentctl.py", "gen_crutch_registry.py",
+            "agentctl-cli.py classify", "agentctl-cli.py status",
         ),
         # recording work on the assigned branch — never `git push`
         "Bash(git add:*)", "Bash(git commit:*)",

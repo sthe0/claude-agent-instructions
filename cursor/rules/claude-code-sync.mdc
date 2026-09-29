@@ -36,7 +36,7 @@ Numeric thresholds (`small-change-max-lines`, `max-recursion-depth`, budget tier
 ### On a substantive task
 
 1. Restate the goal and a **done criterion** — *measurable* (test, command output, file present) or *acceptance-review* (user accepts on review when no objective check exists).
-2. Drive with **`agentctl`**: `classify` → TOML plan under `~/.claude-agent/plans/` → `plan-review` (inline `thinker` cognition; record via `agentctl plan-review` when using the engine) → present/approve → execute stages → `verify-final`. Commands: `cd ~/claude-agent-instructions/scripts && python3 -m agentctl <cmd>`. Live state: `agentctl status`. Apply specialization principles in-thread at each leaf.
+2. Drive with **`agentctl`**: `classify` → TOML plan under `~/.claude-agent/plans/` → `plan-review` (inline `thinker` cognition; record via `agentctl plan-review` when using the engine) → present/approve → execute stages → `verify-final`. Commands: `python3 ~/claude-agent-instructions/scripts/agentctl-cli.py <cmd>`. Live state: `agentctl status`. Apply specialization principles in-thread at each leaf.
 3. **Plan approval is a hard gate** before any production Edit — never skip it.
 4. Markdown hand-walk is **only** the fallback when `agentctl` is unavailable (`memory-global/leaves/spine-fallback.md`) — do not treat this thin mirror as license to skip the engine when it runs.
 
