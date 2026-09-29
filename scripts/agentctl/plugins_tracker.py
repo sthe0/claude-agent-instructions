@@ -32,11 +32,14 @@ intention.
 from __future__ import annotations
 
 from .plugins import Plugin, PluginDirective, register
-from .state import Node, WeightClass
+from .state import Node, StageStatus, WeightClass
 
-# Phases the gate insists on before a tracker task may resolve. Progress and
-# replan posts are valuable but not load-bearing; the plan, the final result, and
-# the ticket status transition are the ticket's minimum honest record.
+# Phases the gate insists on before a tracker task may resolve: the plan, the
+# final result, and the ticket status transition are the ticket's minimum honest
+# record. Progress posts are gated separately, PER STAGE INSTANCE rather than as
+# a fixed phase name here — see _journal_gate below: every PASSED stage that
+# declared output_artifacts owes its own "progress:<index>" entry, not merely "a
+# progress phase somewhere in the task".
 MANDATORY_PHASES = ("plan", "result", "status")
 
 
@@ -107,17 +110,63 @@ def _observe_approve(state, bag) -> list[PluginDirective]:
     ]
 
 
+def _stage_by_index(state, index):
+    if index is None:
+        return None
+    for s in getattr(state, "stages", None) or []:
+        if s.index == index:
+            return s
+    return None
+
+
+def _last_passed_stage_index(state) -> int | None:
+    """By the time this observer runs, `state.current_stage` is already None —
+    `cmd_record_result`'s passed branch resets it BEFORE `state.log(...)` and the
+    save that `_fire_plugins` then reloads fresh — so `active_stage()` cannot
+    recover which stage just passed. `state.history` is not reset the same way:
+    the `record_result`/status=passed entry this very call wrote is always the
+    newest matching one there, so scan backward for it instead."""
+    for entry in reversed(getattr(state, "history", None) or []):
+        if entry.get("event") == "record_result" and entry.get("status") == "passed":
+            return entry.get("stage")
+    return None
+
+
 def _observe_record_result(state, bag) -> list[PluginDirective]:
     # record_result fires for passed AND failed stages. A failed stage routes the
     # session into DIAGNOSING (publish_replan covers the recovery); only a passed
     # stage is a progress boundary worth a ticket note.
     if getattr(state, "node", None) == Node.DIAGNOSING.value:
         return []
+    stage_index = _last_passed_stage_index(state)
+    stage = _stage_by_index(state, stage_index)
+    # A stage that declared output_artifacts (and carries no ephemeral waiver)
+    # changed something a ticket reader cannot otherwise discover — the journal
+    # gate below requires an individual, substantive entry for it, not a
+    # one-liner, and one keyed to THIS stage's index specifically.
+    journaled = bool(
+        stage is not None
+        and (stage.output_artifacts or [])
+        and not (stage.ephemeral_artifacts_waiver or "").strip()
+    )
+    if journaled:
+        detail = (
+            "this stage declared output_artifacts: post a SUBSTANTIVE progress "
+            "comment (figures, caveats, every artifact this stage produced — not "
+            "a one-liner), then `plugin-record --plugin tracker --phase progress "
+            f"--stage {stage_index}` — the resolution gate requires this exact "
+            "per-stage entry before the task can resolve"
+        )
+    else:
+        stage_flag = f" --stage {stage_index}" if stage_index is not None else ""
+        detail = (
+            "post a one-line progress note + artifact link (or, in PR-stage work, "
+            "update the PR instead — the skill routes transport), then "
+            f"`plugin-record --plugin tracker --phase progress{stage_flag}`"
+        )
     return [PluginDirective(
-        "tracker", "publish_progress",
-        "post a one-line progress note + artifact link (or, in PR-stage work, "
-        "update the PR instead — the skill routes transport)",
-        data={"tracker_key": _key(bag)},
+        "tracker", "publish_progress", detail,
+        data={"tracker_key": _key(bag), "stage": stage_index},
     )]
 
 
@@ -222,6 +271,39 @@ def _publish_gate(state, bag) -> list[str]:
             f"(post the comment, then `plugin-record --plugin tracker --phase <p>`)"]
 
 
+def _passed_artifact_stages(state) -> list:
+    """Every PASSED stage that declared output_artifacts without an
+    ephemeral_artifacts_waiver — each one changed something a ticket reader
+    could not otherwise discover, so each owes its own per-stage progress
+    entry (see _observe_record_result's `journaled` branch)."""
+    return [
+        s for s in getattr(state, "stages", None) or []
+        if getattr(s.outcome, "status", None) == StageStatus.PASSED.value
+        and (s.output_artifacts or [])
+        and not (s.ephemeral_artifacts_waiver or "").strip()
+    ]
+
+
+def _journal_gate(state, bag) -> list[str]:
+    pub = _published(bag)
+    missing = [s.index for s in _passed_artifact_stages(state)
+               if f"progress:{s.index}" not in pub]
+    if not missing:
+        return []
+    stage_list = ", ".join(str(i) for i in missing)
+    return [f"stage(s) {stage_list} passed with declared output_artifacts but carry no "
+            "per-stage ticket entry — post a substantive progress comment for each "
+            "(figures/caveats/artifacts, not a one-liner), then `plugin-record --plugin "
+            "tracker --phase progress --stage <n>`"]
+
+
+def _resolution_gate(state, bag) -> list[str]:
+    # Plugin.gates is a dict keyed by core-gate name, so only ONE callable can be
+    # registered under "resolution" — combine both checks here rather than trying
+    # to register two.
+    return _publish_gate(state, bag) + _journal_gate(state, bag)
+
+
 # --- lifecycle: task-scoped, retire once resolution truly passes --------------
 
 def _terminal(state, event: str) -> bool:
@@ -244,7 +326,7 @@ register(
             "replan": _observe_replan,
             "resolve": _observe_resolve,
         },
-        gates={"resolution": _publish_gate},
+        gates={"resolution": _resolution_gate},
         state_factory=lambda: {"tracker_key": "", "published_phases": {}},
         terminal=_terminal,
         auto_activate=_auto_activate,

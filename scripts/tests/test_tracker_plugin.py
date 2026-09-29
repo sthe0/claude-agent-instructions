@@ -401,10 +401,21 @@ def test_e2e_resolve_blocked_until_published_then_passes_and_retires(capsys, tmp
     # the blocked resolve still surfaces the publish_result nudge
     assert any(p["action"] == "publish_result" for p in d["data"]["plugin_directives"])
 
-    # record the three mandatory publications, then resolve passes
+    # record the three mandatory publications, then resolve is STILL blocked —
+    # both fixture stages declared output_artifacts, so each owes its own
+    # per-stage progress entry (the journal gate) before the resolution gate clears
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "plan")
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "result")
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "status")
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
+    assert rc == 1
+    assert any("stage" in b and "1" in b and "2" in b for b in d["data"]["blockers"])
+
+    # record the per-stage journal entries too, then resolve passes
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+         "--phase", "progress", "--stage", "1")
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+         "--phase", "progress", "--stage", "2")
     rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
     assert rc == 0
     assert d["node"] == Node.RESOLVED.value
@@ -435,6 +446,11 @@ def test_e2e_skip_marker_unblocks_resolution_and_stores_reason(capsys, tmp_path,
          "--phase", "plan", "--skipped", "--note", reason)
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "result")
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "status")
+    # per-stage journal entries too — both fixture stages declared output_artifacts
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+         "--phase", "progress", "--stage", "1")
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+         "--phase", "progress", "--stage", "2")
 
     rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
     assert rc == 0
@@ -443,6 +459,49 @@ def test_e2e_skip_marker_unblocks_resolution_and_stores_reason(capsys, tmp_path,
     raw = json.loads((Path(root) / f"{sid}.json").read_text(encoding="utf-8"))
     marker = raw["plugins_archive"]["tracker"]["published_phases"]["plan"]
     assert marker == {"skipped": reason}
+
+
+# --- per-stage journal gate ----------------------------------------------------
+# A PASSED stage that declared output_artifacts changed something a ticket reader
+# cannot otherwise discover — it owes its OWN progress:<n> entry, not just the
+# three whole-task phases (plan/result/status).
+
+def test_journal_gate_blocks_one_stage_at_a_time_then_clears(capsys, tmp_path, fixtures_dir):
+    root = str(tmp_path / "state")
+    sid = "tk-journal"
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _drive_to_resolution(capsys, root, sid, plan, activate_tracker=True)
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "plan")
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "result")
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "status")
+
+    # neither stage journaled yet — both indices named in the blocker
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
+    assert rc == 1
+    journal_blockers = [b for b in d["data"]["blockers"] if "stage(s)" in b]
+    assert len(journal_blockers) == 1
+    assert "1" in journal_blockers[0] and "2" in journal_blockers[0]
+
+    # journal only stage 1 — stage 2 alone remains outstanding
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+         "--phase", "progress", "--stage", "1")
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
+    assert rc == 1
+    journal_blockers = [b for b in d["data"]["blockers"] if "stage(s)" in b]
+    assert len(journal_blockers) == 1
+    assert "2" in journal_blockers[0]
+
+    # journal stage 2 too — the gate clears
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+         "--phase", "progress", "--stage", "2")
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
+    assert rc == 0
+    assert d["node"] == Node.RESOLVED.value
+
+    # the composite key keeps the two per-stage entries distinct in the bag
+    raw = json.loads((Path(root) / f"{sid}.json").read_text(encoding="utf-8"))
+    published = raw["plugins_archive"]["tracker"]["published_phases"]
+    assert "progress:1" in published and "progress:2" in published
 
 
 def test_e2e_non_tracker_session_has_no_tracker_effect(capsys, tmp_path, fixtures_dir):

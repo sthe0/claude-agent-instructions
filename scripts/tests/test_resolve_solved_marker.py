@@ -61,6 +61,14 @@ def _drive_to_resolved(store, sid, plan, *, tracker_key=None):
             cli.cmd_plugin_record(ns(session=sid, plugin="tracker", phase=phase,
                                      skipped=True, note="test fixture, nothing to publish"),
                                    store=store)
+        # both plan_two_stage.toml stages declare output_artifacts, so the
+        # per-stage journal gate also owes a progress:<n> entry for each —
+        # discharge those with the same honest skip form.
+        for stage_index in (1, 2):
+            cli.cmd_plugin_record(ns(session=sid, plugin="tracker", phase="progress",
+                                     stage=stage_index, skipped=True,
+                                     note="test fixture, nothing to publish"),
+                                   store=store)
     return cli.cmd_resolve(ns(session=sid, by="user", quality=5, quality_by="user-confirmed",
                               quality_note=None), store=store)
 

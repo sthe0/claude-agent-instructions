@@ -1375,16 +1375,25 @@ def cmd_plugin_deactivate(args, *, store: StateStore, runner: Runner | None = No
 
 def cmd_plugin_record(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Record that a plugin-side publication actually happened: marks
-    bag['published_phases'][phase]=True. The coordinator runs this AFTER the
+    bag['published_phases'][key]=True. The coordinator runs this AFTER the
     comment lands, so a publish gate (e.g. tracker's) reflects a real post rather
     than an intention. Generic — any publish-style plugin shares the convention;
     it does NOT fire a plugin event (recording a publish must not re-trigger
-    observers). No-op-with-error if the plugin is not active."""
+    observers). No-op-with-error if the plugin is not active.
+
+    `--stage <n>` composes the bag key as f"{phase}:{stage}" instead of the bare
+    phase name — the tracker plugin's per-stage journal gate (_journal_gate)
+    tests membership of "progress:<index>" for each PASSED stage that declared
+    output_artifacts, so a per-stage progress entry must be distinguishable from
+    every other stage's. Omitting --stage keeps the plain phase key, unchanged
+    for every other caller of this command (plan/result/status/searched/…)."""
     state = _require(store, args.session)
     bag = state.plugins.get(args.plugin)
     if bag is None:
         return Directive(False, state.node, "noop", f"plugin {args.plugin!r} is not active")
     phase = args.phase
+    stage = getattr(args, "stage", None)
+    key = f"{phase}:{stage}" if stage is not None else phase
     note = getattr(args, "note", None)
     skipped = bool(getattr(args, "skipped", False))
     if skipped:
@@ -1397,33 +1406,34 @@ def cmd_plugin_record(args, *, store: StateStore, runner: Runner | None = None) 
             return Directive(False, state.node, "noop",
                              "a skipped publication must carry a reason: pass --note")
         published = bag.setdefault("published_phases", {})
-        published[phase] = {"skipped": note}
-        state.log("plugin_record", plugin=args.plugin, phase=phase, skipped=True)
+        published[key] = {"skipped": note}
+        state.log("plugin_record", plugin=args.plugin, phase=phase, stage=stage, skipped=True)
         store.save(state)
         return Directive(
             True, state.node, "continue",
-            f"plugin {args.plugin!r}: phase {phase!r} publication skipped: {note}",
+            f"plugin {args.plugin!r}: phase {key!r} publication skipped: {note}",
             data={"published_phases": sorted(published)},
         )
     if phase == "skipped" and not (note and note.strip()):
         return Directive(False, state.node, "noop", "a skip must carry a reason: pass --note")
     published = bag.setdefault("published_phases", {})
-    published[phase] = True
+    published[key] = True
     # top-level bool-flag convention: a plugin whose bag seeds a bool keyed by the
     # phase name (e.g. experience: searched/recorded/skipped) reads those flags in
     # its gate; flip it true. Tracker's bag has no such keys, so it is untouched.
-    if isinstance(bag.get(phase), bool):
-        bag[phase] = True
+    # (A composite --stage key never collides with this convention's bare names.)
+    if isinstance(bag.get(key), bool):
+        bag[key] = True
     if note:
         if phase == "skipped":
             bag["skip_reason"] = note
         elif phase == "searched":
             bag["decision"] = note
-    state.log("plugin_record", plugin=args.plugin, phase=phase)
+    state.log("plugin_record", plugin=args.plugin, phase=phase, stage=stage)
     store.save(state)
     return Directive(
         True, state.node, "continue",
-        f"plugin {args.plugin!r}: phase {phase!r} recorded as published",
+        f"plugin {args.plugin!r}: phase {key!r} recorded as published",
         data={"published_phases": sorted(published)},
     )
 
@@ -9031,6 +9041,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--plugin", required=True)
     sp = add("plugin-record"); sp.add_argument("--session", required=True)
     sp.add_argument("--plugin", required=True); sp.add_argument("--phase", required=True)
+    sp.add_argument("--stage", type=int, default=None,
+                    help="compose the published_phases key as '<phase>:<stage>' instead "
+                         "of the bare phase name — used by the tracker plugin's per-stage "
+                         "progress journal gate, e.g. --phase progress --stage 4")
     sp.add_argument("--note", default=None)
     sp.add_argument("--skipped", action="store_true",
                     help="record the phase as an honest SKIP (transport unavailable): "
