@@ -1284,6 +1284,33 @@ def test_contract_table_loader_one_entry_per_program(tmp_path):
         tc.load_contract_table(str(dup_table))
 
 
+def test_corpus_scan_skips_acceptance_review_verify_command_either_spelling(fixtures_dir):
+    """`_iter_corpus_commands` must skip an acceptance_review stage's
+    verify_command (it names no shell check, only a human observation to
+    confirm on review) so a corpus scan never manufactures a bogus
+    'unknown program' out of its prose. plan.py stores criterion_type as a
+    raw, unvalidated string, and the real Core corpus carries BOTH spellings
+    (grep-counted over scripts/tests/fixtures/plan_corpus: 28 hyphenated
+    "acceptance-review", 10 underscored "acceptance_review") -- this must
+    hold for both, not just the CriterionType enum's own underscored
+    spelling."""
+    plan_resources = _plan_resources_module()
+
+    commands = plan_resources._iter_corpus_commands([str(fixtures_dir / "plan_corpus")])
+    command_texts = [c[2] for c in commands]
+
+    for prose in (
+        "user observation",
+        "user observation after new link import",
+        "user observation on MTS mobile data",
+    ):
+        assert prose not in command_texts, prose
+
+    # a measurable stage's verify_command from the same corpus IS scanned --
+    # proving the skip is scoped to acceptance_review, not a blanket filter.
+    assert any("check-inbound-diff.py" in c for c in command_texts)
+
+
 def _bare_stage(state_mod, index, *, executor="in_thread", landed=None):
     verify_kind = state_mod.CheckKind.LANDED.value if landed is not None else state_mod.CheckKind.SHELL.value
     return state_mod.Stage(

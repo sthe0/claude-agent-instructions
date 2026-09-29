@@ -175,6 +175,23 @@ def _is_non_literal(token: str) -> bool:
     return any(ch in token for ch in _NON_LITERAL_MARKERS) or token.startswith("~")
 
 
+#: Shell reserved words and block-structure punctuation. `_verify_command_
+#: segments`/`_raw_top_level_segments` (grants.py) split only on top-level
+#: `&&`/`||`/`;`/`|`, with no notion of block nesting, so a multi-line
+#: control-flow construct fed to them as flat text (`for a in x y; do ...;
+#: done`) lands each of its `for`/`do`/`done` (or `if`/`case`/...) lines as
+#: its OWN top-level segment. None of these is ever a program name; checked
+#: in `_check_command_shape` so the resolver reports the true cause --
+#: imperfect top-level segmentation of a control-flow construct -- rather
+#: than misreporting a shell keyword as an unreviewed program.
+_SHELL_RESERVED_WORDS = frozenset({
+    "if", "then", "elif", "else", "fi",
+    "for", "while", "until", "do", "done", "in",
+    "case", "esac", "select", "function",
+    "{", "}",
+})
+
+
 def _has_nested_execution(stripped_text: str) -> bool:
     """True iff `stripped_text` (heredoc bodies already stripped) contains a
     command-substitution or bare-subshell construct — `$(...)`, a backtick
@@ -299,6 +316,12 @@ def _check_command_shape(stripped_text: str) -> tuple[str, str] | None:
         if not seg:
             return "contract-unresolved", "a command segment is empty -- a leading, trailing, or doubled separator"
         first = seg[0]
+        if first in _SHELL_RESERVED_WORDS:
+            return (
+                "residual-syntax",
+                f"{first!r} is a shell keyword or block-structure token, never a program -- likely a "
+                "top-level split landing inside a multi-line control-flow construct",
+            )
         # Assignment is checked ahead of path-qualification: an assignment's
         # VALUE half routinely contains a `/` (`GIT_DIR=/tmp/other`), and
         # that value is not the program token this path-qualification check

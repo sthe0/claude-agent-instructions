@@ -805,3 +805,168 @@ def test_closed_world_mutation_catalogue(tmp_path):
     for cmd in resolved_examples:
         mutated = tc.resolve_command(f"{cmd}\n#comment", str(tmp_path))
         assert mutated.status == "unresolved", cmd
+
+
+def test_rm_is_always_unresolved(tmp_path):
+    """rm deletes its operand(s) outright; neither the target nor -r/-f is
+    in the reviewed closed command grammar, so every invocation -- bare or
+    flagged -- is unresolved."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("rm foo.txt", "rm -rf /tmp/some-dir", "rm -- -weird-name"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+
+def test_bash_is_always_unresolved(tmp_path):
+    """bash's script/-c operand can run arbitrary code the table cannot
+    see; unlike python3/python it has no script-effects registry dispatch,
+    so every form is unresolved."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("bash script.sh", "bash -c 'echo hi'", "bash"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+
+def test_ssh_is_always_unresolved(tmp_path):
+    """Whatever ssh runs happens on a remote host this table has no way to
+    inspect, so every invocation is unresolved regardless of the command
+    or host given."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("ssh host.example ls", "ssh -p 2222 host.example 'rm -rf /'", "ssh host.example"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+
+def test_launchctl_is_always_unresolved(tmp_path):
+    """launchctl's stateful subcommands (load/unload/bootstrap/kickstart/
+    remove/...) are bare words, not dash-prefixed flags, so the safe_flags
+    mechanism cannot gate them -- every invocation, including a read-only
+    'list', is unresolved rather than risk a bare-word subcommand slipping
+    through as effect='none'."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("launchctl list", "launchctl load foo.plist", "launchctl bootout system/foo"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+
+def test_plutil_safe_flags_closed_set(tmp_path):
+    """-lint and -p are read-only; every other documented plutil form
+    (-convert/-replace/-insert/-remove/-extract) rewrites the plist, so
+    only the two safe flags resolve."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("plutil -lint foo.plist", "plutil -p foo.plist"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "resolved", cmd
+        assert res.resources == [], cmd
+
+    for cmd in ("plutil -convert json foo.plist", "plutil -replace key -string v foo.plist"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+
+def test_pmset_is_always_unresolved(tmp_path):
+    """pmset's stateful `schedule` subcommand is a bare word, not a flag,
+    so safe_flags (which only inspects '-'-prefixed tokens) could not gate
+    it -- like launchctl, every invocation is unresolved, including the
+    read-only -g form, rather than risk a bare-word subcommand slipping
+    through as effect='none'."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("pmset -g", "pmset -a displaysleep 10", "pmset -b sleep 5", "pmset schedule wake 2026-01-01"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+
+def test_jq_resolves_with_any_flag(tmp_path):
+    """jq only reads its input and writes stdout -- no flag writes to a
+    file -- so safe_flags=["*"] and every form resolves."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("jq '.'", "jq -r '.foo' in.json", "jq --slurpfile x other.json '.'"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "resolved", cmd
+        assert res.resources == [], cmd
+
+
+def test_cd_resolves_with_any_flag(tmp_path):
+    """cd only changes the running shell's own cwd; no flag writes
+    anywhere, so safe_flags=["*"] and every form resolves."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("cd /tmp", "cd -P /tmp", "cd -"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "resolved", cmd
+        assert res.resources == [], cmd
+
+
+def test_echo_resolves_with_any_flag(tmp_path):
+    """echo only writes to stdout; -n/-e/-E never name a file target, so
+    safe_flags=["*"] and every form resolves."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("echo hi", "echo -n hi", "echo -e 'a\\nb'"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "resolved", cmd
+        assert res.resources == [], cmd
+
+
+def test_exit_resolves(tmp_path):
+    """exit terminates the current shell with a status; it takes no flags
+    and has no filesystem effect."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("exit", "exit 0", "exit 1"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "resolved", cmd
+        assert res.resources == [], cmd
+
+
+def test_set_resolves_with_any_flag(tmp_path):
+    """set toggles the running shell's own options or positional
+    parameters -- interpreter state local to that shell, never a
+    filesystem write -- so safe_flags=["*"] and every form resolves."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("set -e", "set -euo pipefail", "set -- a b c"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "resolved", cmd
+        assert res.resources == [], cmd
+
+
+def test_test_builtin_resolves_with_any_flag(tmp_path):
+    """test (also '[') evaluates a conditional and sets only its own exit
+    status; no flag or form writes anywhere, so safe_flags=["*"] and every
+    form resolves."""
+    tc = _tool_contracts_module()
+
+    for cmd in ("test -f foo.txt", "test -d /tmp", "test 1 -eq 1"):
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "resolved", cmd
+        assert res.resources == [], cmd
+
+
+def test_shell_reserved_words_are_residual_syntax_not_unknown_program(tmp_path):
+    """`_verify_command_segments` (grants.py) splits only on top-level
+    '&&'/'||'/';'/'|', with no notion of block nesting, so a multi-line
+    control-flow construct fed to it as flat text lands each of its
+    for/do/done (or if/case/...) line as its own top-level 'segment'. None
+    of these is ever a program name -- resolve_command must report the
+    true cause (residual-syntax) rather than misclassify a shell keyword
+    as an unreviewed program (unknown-program)."""
+    tc = _tool_contracts_module()
+
+    for keyword_segment in ("for a in x y", "do ls", "done", "if true", "then ls", "fi", "esac", "}"):
+        res = tc.resolve_command(keyword_segment, str(tmp_path))
+        assert res.status == "unresolved", keyword_segment
+        assert res.reason_class == "residual-syntax", keyword_segment

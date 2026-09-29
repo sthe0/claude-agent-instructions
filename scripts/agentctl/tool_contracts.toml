@@ -165,6 +165,78 @@ effect = "unresolved"
 reason = "signals an external process; not a resource this table types."
 source = "POSIX kill(1): sends a signal to a process."
 
+[[program]]
+name = "rm"
+effect = "unresolved"
+reason = "rm deletes its file/directory operand(s); -r/-R/-f expand the blast radius to a whole subtree and skip confirmation, and neither the target nor the flag combination is in the reviewed closed command grammar."
+source = "POSIX rm(1): removes (unlinks) each file operand; -r/-R recurses into directories, -f suppresses prompts and nonexistent-file errors."
+
+[[program]]
+name = "bash"
+effect = "unresolved"
+reason = "bash executes either an arbitrary inline command (-c), an arbitrary script operand, or an interactive shell; none of the three is decidable from the command line without a script-effects registry entry, which this table does not yet provide for bash (unlike python3/python, whose script operand IS consulted against the registry via _resolve_interpreter)."
+source = "bash(1): -c runs its following argument as a command; a positional script operand is read and executed in full, including everything it in turn invokes."
+
+[[program]]
+name = "ssh"
+effect = "unresolved"
+reason = "ssh runs a command (or an interactive shell) on a REMOTE host; whatever that remote command does is a resource this table has no way to see or type from the local command line."
+source = "ssh(1): executes the given command on the specified remote host, or starts an interactive remote shell if none is given."
+
+[[program]]
+name = "launchctl"
+effect = "unresolved"
+reason = "launchctl's stateful subcommands (load/unload/bootstrap/bootout/kickstart/remove/submit/start/stop) install, remove, or signal a launchd job; unlike pmset/plutil below, launchctl's subcommand is a bare word, not a dash-prefixed flag, so the safe_flags mechanism (which only inspects tokens starting with '-') cannot gate it -- marking launchctl effect='none' would let a stateful bare-word subcommand straight through unreviewed."
+source = "launchctl(1) (macOS): list/print query running jobs (read-only); load/unload/bootstrap/bootout/kickstart/remove/submit install, remove, or signal a job."
+
+[[program]]
+name = "plutil"
+effect = "none"
+safe_flags = ["-lint", "-p"]
+source = "plutil(1) (macOS): -lint validates a property-list file's syntax and -p prints it; both read-only. -convert/-replace/-insert/-remove/-extract (each outside safe_flags, so unresolved) rewrite the file in place or write a new one under -o."
+
+[[program]]
+name = "pmset"
+effect = "unresolved"
+reason = "pmset's stateful forms include a bare-word subcommand (`pmset schedule wake ...`), not only dash-prefixed flags (-a/-b/-c/-u); like launchctl above, a bare-word subcommand carries no '-' prefix, so the safe_flags mechanism (which only inspects tokens starting with '-') cannot gate it -- confirmed by test_pmset_safe_flags_closed_set, which caught `pmset schedule wake 2026-01-01` resolving as 'none' under an earlier safe_flags=[\"-g\"] version of this entry."
+source = "pmset(1) (macOS): -g displays the current power-management settings (read-only); -a/-b/-c/-u and the bare `schedule` subcommand each change live power-management state."
+
+[[program]]
+name = "jq"
+effect = "none"
+safe_flags = ["*"]
+source = "jq manual (jqlang.github.io/jq/manual): jq reads its input (stdin, or a --rawfile/--slurpfile/-L operand -- each a READ) and writes its result to stdout only; no jq flag writes to a file. safe_flags=[\"*\"]: no flag in jq writes anywhere."
+
+[[program]]
+name = "cd"
+effect = "none"
+safe_flags = ["*"]
+source = "POSIX cd(1p) / bash builtin: changes the shell's own current working directory only; its flags (-L/-P/-e/@) control symlink-resolution semantics, never a filesystem write. safe_flags=[\"*\"]: no flag in cd writes anywhere."
+
+[[program]]
+name = "echo"
+effect = "none"
+safe_flags = ["*"]
+source = "POSIX echo(1p) / bash builtin: writes its arguments to stdout only; -n/-e/-E (where supported) affect trailing-newline and backslash-escape handling, never a file target. safe_flags=[\"*\"]: no flag in echo writes anywhere."
+
+[[program]]
+name = "exit"
+effect = "none"
+safe_flags = ["*"]
+source = "POSIX exit(1p) / bash builtin: terminates the current shell (or subshell) with the given status; takes no flags and has no filesystem effect."
+
+[[program]]
+name = "set"
+effect = "none"
+safe_flags = ["*"]
+source = "POSIX set(1p) / bash builtin: toggles the current shell's own options (-e/-u/-o pipefail/...) or sets its positional parameters; both are interpreter state local to the running shell, never a filesystem write. safe_flags=[\"*\"]: no flag or positional form of set writes anywhere."
+
+[[program]]
+name = "test"
+effect = "none"
+safe_flags = ["*"]
+source = "POSIX test(1p) / bash builtin (also invoked as '['): evaluates a conditional expression (file-attribute, string, or arithmetic predicates) and sets only its own exit status; no flag or form of test writes anywhere. safe_flags=[\"*\"]: no flag in test writes anywhere."
+
 # --- unresolved: an embedded DSL can write data the command line never shows
 
 [[program]]

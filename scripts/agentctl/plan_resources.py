@@ -23,7 +23,7 @@ from . import grants as _grants
 from . import resources as _resources
 from .directive import Directive
 from .plan import PlanDoc, _effective_grants_for_stage, _venue_for, load_plan
-from .state import CheckKind, Stage
+from .state import CheckKind, CriterionType, Stage
 from .tool_contracts import Resolution, load_contract_table, resolve_command
 
 
@@ -216,10 +216,33 @@ def _iter_commands_file(path: str) -> list[str]:
 
 def _iter_corpus_commands(corpus_dirs: list[str]) -> list[tuple[str, str, str]]:
     """Best-effort: walk each corpus dir for `*.toml` plan files and yield
-    (source-path, venue, Bash-command-text) for every declared+derived Bash
-    rule across every stage. A file that fails to load as a plan is skipped
-    outright -- the corpus may hold fixtures that are deliberately not full
-    plans, and this is a read-only inspection, not a validator."""
+    (source-path, venue, command-text) for every LITERAL command text the
+    plan actually runs: each stage's `verify_command` and `negative_control`,
+    the plan's own `[[final_check]]` commands, and any genuinely-declared
+    literal (non-`:*`) Bash rule under `[stage.grants]`. A file that fails to
+    load as a plan is skipped outright -- the corpus may hold fixtures that
+    are deliberately not full plans, and this is a read-only inspection, not
+    a validator.
+
+    Segments come from `grants._verify_command_segments`, the SAME top-level
+    splitter DR-V uses to propose a permission rule -- but here WITHOUT that
+    function's `:*` wildcard suffix. DR-V's derived rule always carries one
+    (a permission-rule shape, meant for the harness's allowlist), so walking
+    `_effective_grants_for_stage(...).allow` and filtering out
+    wildcard-suffixed entries (the prior approach) discarded every
+    verify_command-derived command outright and left this scan vacuous
+    against a corpus with no declared `[stage.grants]` -- true of every
+    fixture in scripts/tests/fixtures/plan_corpus.
+
+    An `acceptance_review`-typed stage's `verify_command`/`negative_control`
+    fields are skipped entirely: that criterion type names no shell check at
+    all (the field may legitimately hold a human-readable observation to
+    confirm on review, e.g. `"user observation: ..."`), so feeding it through
+    a shell-command splitter manufactures a bogus, non-program first token
+    with no real command behind it -- a corpus-scan-only false positive, not
+    a gap DR-V's own derivation needs to close (DR-V's proposed permission
+    rule for such a stage is inert either way: nothing will ever invoke a
+    program literally named after the observation's first word)."""
     out: list[tuple[str, str, str]] = []
     for root in corpus_dirs:
         for p in sorted(Path(root).rglob("*.toml")):
@@ -229,11 +252,28 @@ def _iter_corpus_commands(corpus_dirs: list[str]) -> list[tuple[str, str, str]]:
                 continue
             venue = _venue_for(doc) or str(Path.cwd())
             for s in doc.stages:
-                effective = _effective_grants_for_stage(s, venue)
-                for rg in effective.allow:
-                    parsed = _grants.rule_program_and_arg(rg.rule)
-                    if parsed and parsed[0] == "Bash" and not parsed[1].endswith(":*"):
-                        out.append((str(p), venue, parsed[1]))
+                # plan.py stores this field as a raw, unvalidated string (plan.py
+                # crit_type = str(s.get("criterion_type", ...))), and the corpus
+                # itself carries both "acceptance_review" and "acceptance-review"
+                # spellings (28 hyphenated, 10 underscored, grep-counted over
+                # scripts/tests/fixtures/plan_corpus) -- normalize before compare
+                # or the hyphenated majority silently falls through this skip.
+                if s.criterion.criterion_type.replace("-", "_") == CriterionType.ACCEPTANCE_REVIEW.value:
+                    continue
+                for text in (s.criterion.verify_command, s.criterion.negative_control):
+                    if text:
+                        for seg in _grants._verify_command_segments(text):
+                            out.append((str(p), venue, seg))
+                declared = s.grants if getattr(s, "grants", None) else None
+                if declared:
+                    for rg in declared.allow:
+                        parsed = _grants.rule_program_and_arg(rg.rule)
+                        if parsed and parsed[0] == "Bash" and not parsed[1].endswith(":*"):
+                            out.append((str(p), venue, parsed[1]))
+            for fc in doc.meta.final_check:
+                if fc.command:
+                    for seg in _grants._verify_command_segments(fc.command):
+                        out.append((str(p), venue, seg))
     return out
 
 
