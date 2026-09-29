@@ -113,15 +113,25 @@ def _obs_submit_plan(state, bag) -> list[PluginDirective]:
         doc = load_plan(target_plan) if target_plan else None
     except (OSError, PlanError):
         doc = None
-    if doc is not None:
-        delta = gates.review_delta(state, doc, target_plan)
+    delta = gates.review_delta(state, doc, target_plan)
+    scopes = delta["record_scope_args"]
+    if len(scopes) <= 1:
+        scope_suffix = f" {scopes[0]}" if scopes else ""
+        record_instruction = (
+            f"The ROOT then records the verdict: `agentctl plan-review --session "
+            f"{state.session_id} --verdict pass|revise|override --reviewer {specialist} "
+            f"--plan-digest <sha256-hex>{scope_suffix}` (a pass does NOT bind without a "
+            f"matching --plan-digest)"
+        )
     else:
-        delta = {"whole_plan": True, "stages": [], "scopes": [],
-                  "render_command": f"agentctl plan-render --plan {target_plan}"}
-    scope_suffix = (
-        "" if delta["whole_plan"] or len(delta["scopes"]) != 1
-        else f" --scope {delta['scopes'][0]}"
-    )
+        record_instruction = (
+            "The ROOT then records each stage's verdict separately: " + "; ".join(
+                f"`agentctl plan-review --session {state.session_id} --verdict "
+                f"pass|revise|override --reviewer {specialist} --plan-digest "
+                f"<sha256-hex> {scope_arg}`"
+                for scope_arg in scopes
+            ) + " (a pass does NOT bind without a matching --plan-digest)"
+        )
     return [PluginDirective(
         plugin="review_dispatch",
         action="spawn_thinker_review",
@@ -132,10 +142,7 @@ def _obs_submit_plan(state, bag) -> list[PluginDirective]:
             f"--session {state.session_id} --format md`; the reviewer must compute the "
             f"sha256 of {target_plan} from its OWN read and report it as a `Plan digest: "
             f"<sha256-hex>` line in its REVIEW message -- it never calls `agentctl "
-            f"plan-review` itself. The ROOT then records the verdict: `agentctl "
-            f"plan-review --session {state.session_id} --verdict pass|revise|override "
-            f"--reviewer {specialist} --plan-digest <sha256-hex>{scope_suffix}` (a pass "
-            f"does NOT bind without a matching --plan-digest)"
+            f"plan-review` itself. {record_instruction}"
         ),
         blocking=True,
         data={"slot": "plan_review", "specialist": specialist, "blockers": blockers,

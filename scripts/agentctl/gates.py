@@ -36,6 +36,7 @@ import copy
 import hashlib
 import os
 import re
+import shlex
 from pathlib import Path
 
 from lib import config_root
@@ -1100,25 +1101,37 @@ def plan_review_delta(state: SessionState, doc) -> "tuple[bool, set[int]]":
 
 
 def review_delta(state: SessionState, doc, target_plan: "str | None" = None) -> dict:
-    """Shared shape for "what does a reviewer still need to look at" — used by
-    `_obs_submit_plan` (in place of hardcoded whole-plan render prose) and
-    `cmd_replan`'s post-approval replan-refusal message (non-round-release
-    branch only). Wraps the pure `plan_review_delta` computation with the two
-    pieces those callers actually need: `scopes` (the exact `--scope` string
-    for each stage still needing its own pass) and `render_command` (the
-    `plan-render` invocation covering exactly those parts).
+    """What a reviewer still needs to look at, projected into the fields a
+    caller renders straight into text: `scopes` (the `--scope <token>` string
+    per stage still needing its own pass), `render_command` (the
+    `plan-render` invocation covering exactly those parts), and
+    `record_scope_args` (one `--scope <token>` argument string per entry in
+    `scopes`, so a caller can emit one `plan-review ... --scope stage:<n>`
+    instruction per stage rather than a single instruction that implies
+    whole-plan coverage).
 
-    NOT wired into `cmd_plan_review_delta`, which keeps its own existing
-    output-key contract (`markdown`/`whole_plan`/`stages`) unchanged."""
+    `doc` may be None (an unloadable target plan) — returns the whole-plan
+    fallback shape (`whole_plan=True`, no stages/scopes) rather than raising,
+    so every caller gets this handling for free instead of hand-building its
+    own fallback dict."""
+    plan_path = target_plan or state.plan_path
+    quoted_plan_path = shlex.quote(plan_path) if plan_path else plan_path
+    if doc is None:
+        return {
+            "whole_plan": True,
+            "stages": [],
+            "scopes": [],
+            "render_command": f"agentctl plan-render --plan {quoted_plan_path}",
+            "record_scope_args": [],
+        }
     whole_plan, stages = plan_review_delta(state, doc)
     stage_list = sorted(stages)
     scopes = [] if whole_plan else [_plan_review_scope_for_stage(i) for i in stage_list]
-    plan_path = target_plan or state.plan_path
     if whole_plan or not stage_list:
-        render_command = f"agentctl plan-render --plan {plan_path}"
+        render_command = f"agentctl plan-render --plan {quoted_plan_path}"
     else:
         render_command = (
-            f"agentctl plan-render --plan {plan_path} "
+            f"agentctl plan-render --plan {quoted_plan_path} "
             f"--stage {','.join(str(i) for i in stage_list)}"
         )
     return {
@@ -1126,6 +1139,7 @@ def review_delta(state: SessionState, doc, target_plan: "str | None" = None) -> 
         "stages": stage_list,
         "scopes": scopes,
         "render_command": render_command,
+        "record_scope_args": [f"--scope {scope}" for scope in scopes],
     }
 
 

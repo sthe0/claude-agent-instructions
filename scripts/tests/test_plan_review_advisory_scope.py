@@ -308,6 +308,7 @@ def test_review_delta_helper(gate_on, tmp_path, fixtures_dir):
         "stages": [1],
         "scopes": ["stage:1"],
         "render_command": f"agentctl plan-render --plan {plan_path} --stage 1",
+        "record_scope_args": ["--scope stage:1"],
     }
 
 
@@ -321,6 +322,24 @@ def test_review_delta_helper_whole_plan_when_nothing_reviewed(gate_on, tmp_path,
     assert delta["stages"] == []
     assert delta["scopes"] == []
     assert delta["render_command"] == f"agentctl plan-render --plan {plan_path}"
+    assert delta["record_scope_args"] == []
+
+
+def test_review_delta_helper_unloadable_doc_falls_back_to_whole_plan(gate_on, tmp_path, fixtures_dir):
+    """`doc=None` (an unloadable target plan) must not raise -- both call sites
+    used to hand-build this fallback dict themselves; now review_delta produces
+    it internally so neither call site needs its own doc=None branch."""
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    s = _subst(plan_path=str(plan_path))
+    delta = gates.review_delta(s, None, str(plan_path))
+    assert delta == {
+        "whole_plan": True,
+        "stages": [],
+        "scopes": [],
+        "render_command": f"agentctl plan-render --plan {plan_path}",
+        "record_scope_args": [],
+    }
 
 
 # --- 5. the two review_delta call sites -------------------------------------
@@ -348,6 +367,34 @@ def test_obs_submit_plan_data_carries_scoped_delta(gate_on, tmp_path, fixtures_d
     assert "--scope stage:1" in matches[0]["detail"]
 
 
+def test_obs_submit_plan_data_carries_multi_stage_scoped_delta(gate_on, tmp_path, fixtures_dir):
+    """When MULTIPLE stages moved, the detail must name one `--scope stage:<n>`
+    record command per stage, not a single instruction that (by omitting
+    --scope, or naming only one stage) would imply whole-plan or single-stage
+    coverage."""
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    doc0 = load_plan(str(plan_path))
+    whole = _whole_review(plan_path, doc0)
+
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1and2_retitled.toml").read_text())
+    state = _subst(plan_path=str(plan_path), plan_review=whole,
+                   node=Node.PLAN_READY.value)
+    plugins.activate(state, "review_dispatch")
+    directive = Directive(True, state.node, "noop")
+    fired = plugins.fire("submit_plan", state, directive)
+    matches = [p for p in fired if p["plugin"] == "review_dispatch"
+               and p["action"] == "spawn_thinker_review"]
+    assert len(matches) == 1
+    data = matches[0]["data"]
+    assert data["whole_plan"] is False
+    assert data["stages"] == [1, 2]
+    assert data["scopes"] == ["stage:1", "stage:2"]
+    detail = matches[0]["detail"]
+    assert "--scope stage:1" in detail
+    assert "--scope stage:2" in detail
+
+
 def test_post_approval_replan_refusal_carries_delta(store, fixtures_dir, tmp_path, gate_on):
     sid = "replan-delta"
     plan_path = tmp_path / "plan.toml"
@@ -368,6 +415,30 @@ def test_post_approval_replan_refusal_carries_delta(store, fixtures_dir, tmp_pat
     assert delta["render_command"] == f"agentctl plan-render --plan {plan_path} --stage 1"
     assert "--scope stage:1" in d.detail
     assert delta["render_command"] in d.detail
+
+
+def test_post_approval_replan_refusal_carries_multi_stage_delta(store, fixtures_dir, tmp_path, gate_on):
+    """When MULTIPLE stages moved, the refusal message must name one
+    `plan-review ... --scope stage:<n>` command per stage, not a single
+    whole-plan-implying instruction."""
+    sid = "replan-multi-delta"
+    plan_path = tmp_path / "plan.toml"
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    _to_plan_ready(store, sid, str(plan_path))
+    cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="pass",
+                           reviewer="thinker", concerns=None, note="",
+                           plan_digest=_sha256_file(plan_path)), store=store)
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1and2_retitled.toml").read_text())
+    d = cli.cmd_replan(ns(session=sid, plan=str(plan_path)), store=store)
+    assert d.ok is False
+    delta = d.data["review_delta"]
+    assert delta["whole_plan"] is False
+    assert delta["stages"] == [1, 2]
+    assert delta["scopes"] == ["stage:1", "stage:2"]
+    assert "plan-review --target " + str(plan_path) + " --scope stage:1" in d.detail
+    assert "plan-review --target " + str(plan_path) + " --scope stage:2" in d.detail
 
 
 # --- 6. plan-render --stage accepts a single int or a CSV list -------------

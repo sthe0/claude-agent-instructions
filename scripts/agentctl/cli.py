@@ -7433,21 +7433,20 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             replan_data = {"blockers": prblock, "plan_review_round_release": round_release}
         else:
             try:
-                _replan_review_doc = _load(args.plan)
+                review_doc = _load(args.plan)
             except (OSError, PlanError):
-                _replan_review_doc = None
-            if _replan_review_doc is not None:
-                delta = gates.review_delta(state, _replan_review_doc, args.plan)
+                review_doc = None
+            delta = gates.review_delta(state, review_doc, args.plan)
+            if delta["record_scope_args"]:
+                review_commands = [
+                    "plan-review --target " + args.plan + " " + scope_arg
+                    for scope_arg in delta["record_scope_args"]
+                ]
             else:
-                delta = {"whole_plan": True, "stages": [], "scopes": [],
-                          "render_command": f"agentctl plan-render --plan {args.plan}"}
-            scope_suffix = (
-                "" if delta["whole_plan"] or len(delta["scopes"]) != 1
-                else f" --scope {delta['scopes'][0]}"
-            )
+                review_commands = ["plan-review --target " + args.plan]
             message = (
                 "replan blocked: the corrected plan needs a thinker review "
-                "(run: plan-review --target " + args.plan + scope_suffix
+                "(run: " + "; run: ".join(review_commands)
                 + f"; render with `{delta['render_command']}`)"
             )
             replan_data = {"blockers": prblock, "plan_review_round_release": round_release,
