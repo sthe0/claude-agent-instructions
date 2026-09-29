@@ -1014,9 +1014,9 @@ def test_find_exec_and_awk_are_unresolved(tmp_path):
 
 def test_redirect_cp_tee_targets_become_file_resources(tmp_path):
     """A generic shell redirect target and cp's/tee's own write targets are
-    all outside the reviewed closed command grammar now -- none of them
-    parses an arbitrary operand into a FileResource any more, despite this
-    test's own (unchanged, name-pinned) name."""
+    all outside the reviewed closed command grammar, so none of them parses
+    an arbitrary operand into a resolved FileResource -- each is unresolved
+    instead (test name is pinned by the plan and left unchanged)."""
     tc = _tool_contracts_module()
     venue = tmp_path / "venue"
     venue.mkdir()

@@ -8,12 +8,12 @@ command's spelling (a false "covered"/"resolved" here lets `resolve-permission
 --by agent` self-grant a call nobody reviewed). This module is that one
 place: every decision traces to either (a) a reviewed `[[program]]` entry in
 `tool_contracts.toml` naming the program's actual documented contract, (b) a
-digest-matching entry in the script-effects registry (added alongside this
-module in a later checkpoint — not yet consulted here), or (c) the dedicated
-landed-spec resolver for `op="land"` (also a later checkpoint). Anything this
-module cannot decide from (a)/(b)/(c) is `unresolved`, never `resolved` with
-an empty or guessed resource set — the same fail-toward-unresolved bias
-`resources.Resource.covers` already documents.
+digest-matching entry in `script_effects.py`'s registry (consulted from
+`_resolve_interpreter` for a handful of reviewed repo scripts), or (c) the
+dedicated landed-spec resolver for `op="land"` (a later checkpoint, not yet
+added). Anything this module cannot decide from (a)/(b)/(c) is `unresolved`,
+never `resolved` with an empty or guessed resource set — the same
+fail-toward-unresolved bias `resources.Resource.covers` already documents.
 
 `op="land"` is NEVER produced here: no contract entry, and no custom
 resolver in `_CUSTOM_RESOLVERS`, may ever return a `VcsRefResource` with
@@ -35,7 +35,7 @@ from . import resources
 
 _DEFAULT_TOML = Path(__file__).resolve().parent / "tool_contracts.toml"
 
-_VALID_EFFECTS = frozenset({"none", "writes-operands", "unresolved", "resolver"})
+_VALID_EFFECTS = frozenset({"none", "unresolved", "resolver"})
 
 #: Non-literal-path marker characters: a token containing any of these names
 #: a target that depends on data this module cannot see (glob expansion, an
@@ -193,16 +193,11 @@ def _has_nested_execution(stripped_text: str) -> bool:
     return False
 
 
-def _real_program(
-    seg: list[str], *, assignment_names: list[str] | None = None
-) -> tuple[str, list[str]] | None:
+def _real_program(seg: list[str]) -> tuple[str, list[str]] | None:
     """`(casefolded_basename, operand_tokens)` of the real (wrapper-stripped)
     program a segment invokes, or `None` for an empty/assignment-only
-    segment. When `assignment_names` is passed, every environment-variable
-    NAME stripped away to reach that program (a leading bare `KEY=VALUE`, or
-    one passed to an `env` wrapper) is appended to it -- see
-    `widening_targets.strip_wrappers`."""
-    stripped = widening_targets.strip_wrappers(seg, assignment_names=assignment_names)
+    segment."""
+    stripped = widening_targets.strip_wrappers(seg)
     if not stripped:
         return None
     return widening_targets.program_name(stripped[0]).casefold(), stripped[1:]
@@ -480,6 +475,48 @@ _GIT_BRANCH_SAFE_FLAGS = frozenset(
     }
 )
 
+#: Closed, PER-SUBCOMMAND allowlist of boolean read-only flags (item (c)) --
+#: a flag outside its own subcommand's set is unresolved, never silently
+#: allowed through (B2: a prior version checked only `--output`/`--output=`
+#: for every readonly subcommand, letting everything else -- `--ext-diff`/
+#: `--textconv` (each can invoke an external program via `diff.external`/a
+#: configured filter driver), `--show-signature` (invokes `gpg`), an
+#: abbreviated `--outpu=` (git supports unique-prefix long-option
+#: abbreviation) -- resolve to no effect unreviewed). Deliberately
+#: boolean-only, same reasoning as `_GIT_BRANCH_SAFE_FLAGS`: a value-taking
+#: flag is excluded rather than given its own value-skip rule, since the
+#: per-token closed-set check below would otherwise misread that flag's own
+#: value as an unrecognized flag. A literal positional (revision, range, or
+#: pathspec) is allowed through for every subcommand here -- read-only by
+#: each subcommand's own documented contract.
+_GIT_READONLY_SAFE_FLAGS: dict[str, frozenset[str]] = {
+    "status": frozenset({
+        "-s", "--short", "-b", "--branch", "--long",
+        "-v", "--verbose", "--porcelain", "--ignored",
+    }),
+    "log": frozenset({
+        "--oneline", "-p", "--patch", "--stat", "--graph", "--all",
+        "--color", "--no-color", "--reverse", "--name-only", "--name-status",
+    }),
+    "diff": frozenset({
+        "--stat", "--name-only", "--name-status",
+        "--color", "--no-color", "-p", "--patch", "--cached", "--staged",
+    }),
+    "show": frozenset({
+        "--stat", "--name-only", "--name-status",
+        "--color", "--no-color", "-p", "--patch",
+    }),
+    "rev-parse": frozenset({
+        "--verify", "--short", "--abbrev-ref",
+        "--is-inside-work-tree", "--show-toplevel",
+    }),
+    "ls-files": frozenset({
+        "-c", "--cached", "-o", "--others", "-m", "--modified",
+        "-d", "--deleted", "--full-name",
+    }),
+    "blame": frozenset({"-w", "--porcelain", "--line-porcelain"}),
+}
+
 
 def _find_git_subcommand(
     operands: list[str],
@@ -540,12 +577,25 @@ def _resolve_git(operands: list[str], venue_real: str) -> Resolution:
             )
 
     if subcommand in _GIT_READONLY_SUBCOMMANDS:
-        if any(tok == "--output" or tok.startswith("--output=") for tok in rest):
-            return Resolution(
-                "unresolved",
-                reason_class="contract-unresolved",
-                reason=f"git {subcommand} --output writes to a file, not resolved by this table",
-            )
+        safe_flags = _GIT_READONLY_SAFE_FLAGS[subcommand]
+        for tok in rest:
+            if tok == "--":
+                continue
+            if tok.startswith("-"):
+                key = tok.split("=", 1)[0]
+                if key not in safe_flags:
+                    return Resolution(
+                        "unresolved",
+                        reason_class="contract-unresolved",
+                        reason=f"git {subcommand} flag {tok!r} is outside the reviewed closed set",
+                    )
+                continue
+            if _is_non_literal(tok):
+                return Resolution(
+                    "unresolved",
+                    reason_class="residual-syntax",
+                    reason=f"git {subcommand} positional {tok!r} is non-literal",
+                )
         return Resolution("resolved", resources=[])
 
     if subcommand == "branch":
@@ -606,6 +656,18 @@ def _resolve_git(operands: list[str], venue_real: str) -> Resolution:
     remote, refspecs = positionals[0], positionals[1:]
     if _is_non_literal(remote):
         return Resolution("unresolved", reason_class="residual-syntax", reason="git push remote is non-literal")
+
+    if refspecs and refspecs[0] == "tag" and len(refspecs) > 1:
+        # `git push <remote> tag <tagname>` is git's own distinct shorthand
+        # for pushing `refs/tags/<tagname>` -- NOT two independent refspecs
+        # named "tag" and "<tagname>". Treating it as a flat refspec list
+        # (the code below) would misreport a nonsensical first destination
+        # literally named "tag"; refuse instead of resolving it wrong.
+        return Resolution(
+            "unresolved",
+            reason_class="contract-unresolved",
+            reason="git push <remote> tag <name> is a distinct push shorthand this table does not resolve",
+        )
 
     push_resources: list[resources.Resource] = []
     for refspec in refspecs:
@@ -726,8 +788,16 @@ def _resolve_interpreter(operands: list[str], venue_real: str) -> Resolution:
     (inline code) is always unresolved; `-m pytest` is special-cased to the
     same whole-venue-write verdict as bare `pytest` (finding: `pytest` via
     `python3 -m pytest` resolves the same as `pytest` itself); any other
-    `-m MODULE` is unresolved. No entry — or no script at all — falls back
-    to the original unresolved verdict; the caller (`resolve_command`)
+    `-m MODULE` is unresolved. Any OTHER dash-prefixed token before the
+    script -- a glued short form (`-cCODE`, `-mMOD`), a value-taking flag
+    (`-W`, `-X`), or anything else -- is refused outright rather than
+    skipped: the closed grammar here recognizes exactly `-c`/`--command`/
+    `--command=`/`-m`/`-m=` and nothing else, so an unreviewed flag can
+    never silently shift which token this resolver treats as "the script"
+    (B1: a prior version skipped unrecognized dash tokens, letting
+    `-mMOD scripts/land-branch.py` or `-cCODE -m pytest` be mistaken for a
+    plain script/pytest invocation). No entry — or no script at all — falls
+    back to the original unresolved verdict; the caller (`resolve_command`)
     computes content-bound identity for that case regardless of what this
     function returns for `identity`."""
     from . import script_effects  # deferred: see script_effects.py's own docstring
@@ -750,8 +820,13 @@ def _resolve_interpreter(operands: list[str], venue_real: str) -> Resolution:
                 reason_class="adhoc-undeclared",
                 reason=f"python -m {module!r} runs a module invocation this table does not resolve",
             )
-        if not tok.startswith("-"):
-            break
+        if tok.startswith("-"):
+            return Resolution(
+                "unresolved",
+                reason_class="contract-unresolved",
+                reason=f"python flag {tok!r} before the script is outside the reviewed closed set (-c/--command/-m only)",
+            )
+        break
 
     script, script_argv = _script_and_argv(operands)
     if script is not None:
@@ -819,7 +894,7 @@ def resolve_command(
 
     all_resources: list[resources.Resource] = []
     for seg in segments:
-        prog = widening_targets.program_name(seg[0]).casefold()
+        prog = widening_targets.program_name(seg[0])
         operands = seg[1:]
 
         entry = table.get(prog)
@@ -857,11 +932,10 @@ def resolve_command(
             all_resources.extend(seg_resolution.resources)
             continue
 
-        # No table entry declares "writes-operands" any more -- every former
-        # writes-operands verb is now either a reviewed resolver or a plain
-        # unresolved entry -- so this branch only guards against a future
-        # entry naming an effect this function has no dispatch for; fail
-        # closed rather than silently treating it as a no-op.
+        # _VALID_EFFECTS admits only "none"/"unresolved"/"resolver", each
+        # handled above; this branch guards against a future entry naming an
+        # effect this function has no dispatch for, and fails closed rather
+        # than silently treating it as a no-op.
         return _unresolved_with_identity(
             text, venue_real, "contract-unresolved",
             f"program {prog!r} declares effect={entry.effect!r}, which this resolver does not dispatch",

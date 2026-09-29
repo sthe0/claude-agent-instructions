@@ -204,7 +204,7 @@ def _resolve_land_branch(argv: list[str], venue_real: str):
     makes the whole command unresolved — an unrecognized flag might change
     the script's effects in a way this resolver has no story for (fail-closed,
     same bias as every other resolver in this codebase)."""
-    from .tool_contracts import Resolution  # deferred: see module docstring
+    from .tool_contracts import Resolution, _abs_join, _realpath  # deferred: see module docstring
 
     known_bool_flags = {"--check", "--remote-only", "--keep-branch"}
     known_value_flags = {"-C", "--branch", "--trunk", "--remote"}
@@ -269,7 +269,13 @@ def _resolve_land_branch(argv: list[str], venue_real: str):
 
     dash_c = values.get("-C")
     if dash_c is not None:
-        dash_c_real = os.path.realpath(os.path.expanduser(dash_c))
+        # B3: a relative `-C` value must be joined against the VENUE --
+        # the resource this resolution decides whether to self-grant a
+        # push for -- never against the analyzing process's own cwd (which
+        # need not have any relation to the venue at all). Mirrors git's
+        # own `-C`/`--git-dir`/`--work-tree` handling in
+        # `tool_contracts._resolve_git`.
+        dash_c_real = _realpath(_abs_join(dash_c, venue_real))
         if dash_c_real != venue_real:
             return Resolution(
                 "unresolved", reason_class="contract-unresolved",

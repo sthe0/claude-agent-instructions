@@ -9,6 +9,7 @@ stage — the shape `nc.sh` requires.
 from __future__ import annotations
 
 import importlib.util
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +28,25 @@ def _resources_module():
     from agentctl import resources
 
     return resources
+
+
+def _land_branch_registry_venue(tmp_path):
+    """A minimal venue tree with `scripts/land-branch.py` copied verbatim
+    from the real repo script, so its sha256 matches the entry already
+    pinned in the REPO-GLOBAL `scripts/script_effects.toml` --
+    `_resolve_interpreter` consults that global table (not a venue-local
+    one), so a script only resolves through the registry when its bytes are
+    byte-identical to the reviewed copy. Mirrors test_resource_model.py's
+    identically-named helper, duplicated here to keep this file's own
+    imports self-contained."""
+    venue = tmp_path / "venue"
+    (venue / "scripts").mkdir(parents=True)
+    (venue / ".git").mkdir()
+    real_land_branch = Path(__file__).resolve().parent.parent / "land-branch.py"
+    (venue / "scripts" / "land-branch.py").write_text(
+        real_land_branch.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    return venue
 
 
 def test_contract_table_loads_one_entry_per_program():
@@ -304,6 +324,59 @@ def test_git_branch_safe_flags_resolve_others_unresolved(tmp_path):
         assert res.reason_class == "contract-unresolved", cmd
 
 
+def test_git_readonly_subcommand_flags_are_closed_per_subcommand(tmp_path):
+    """B2: each read-only subcommand (log/diff/show/rev-parse/ls-files/
+    blame) reviews its OWN closed boolean-flag set (mirroring
+    `_GIT_BRANCH_SAFE_FLAGS`'s pattern), not just a shared `--output=`
+    check. A flag outside that subcommand's set -- including one this
+    table never reviewed at all (`--ext-diff`/`--textconv`, each able to
+    invoke an external program via `diff.external`/a configured filter
+    driver; `--show-signature`, which invokes `gpg`) and an abbreviated
+    form of a flag this table DOES review (`--outpu=x`, valid under git's
+    own unique-prefix long-option abbreviation) -- must be unresolved, not
+    silently passed through to "no effect". A bare invocation and one using
+    only that subcommand's own reviewed flags must still resolve."""
+    tc = _tool_contracts_module()
+
+    for subcommand, safe_flag in (
+        ("log", "--oneline"),
+        ("diff", "--stat"),
+        ("show", "--stat"),
+        ("rev-parse", "--short"),
+        ("ls-files", "--cached"),
+        ("blame", "-w"),
+    ):
+        bare = tc.resolve_command(f"git {subcommand}", str(tmp_path))
+        assert bare.status == "resolved", subcommand
+        assert bare.resources == [], subcommand
+
+        with_safe_flag = tc.resolve_command(f"git {subcommand} {safe_flag}", str(tmp_path))
+        assert with_safe_flag.status == "resolved", subcommand
+
+        for unsafe in ("--ext-diff", "--textconv", "--show-signature", "--outpu=x"):
+            res = tc.resolve_command(f"git {subcommand} {unsafe}", str(tmp_path))
+            assert res.status == "unresolved", (subcommand, unsafe)
+            assert res.reason_class == "contract-unresolved", (subcommand, unsafe)
+
+
+def test_git_push_tag_shorthand_is_unresolved(tmp_path):
+    """`git push <remote> tag <name>` is git's own distinct shorthand for
+    pushing `refs/tags/<name>` -- not two independent refspecs named "tag"
+    and "<name>". A flat refspec-list resolver that doesn't know this
+    grammar would otherwise report a nonsensical first destination named
+    literally "tag"; this must be unresolved instead. A single positional
+    refspec that happens to be literally named "tag" (no name follows it)
+    is unaffected -- there is no shorthand to misread there."""
+    tc = _tool_contracts_module()
+
+    res = tc.resolve_command("git push origin tag v1", str(tmp_path))
+    assert res.status == "unresolved"
+    assert res.reason_class == "contract-unresolved"
+
+    literal_tag_ref = tc.resolve_command("git push origin tag", str(tmp_path))
+    assert literal_tag_ref.status == "resolved"
+
+
 def test_env_assignment_prefix_unresolved(tmp_path):
     """A leading NAME=value assignment disqualifies its segment outright:
     an injected variable can change any program's behavior in ways this
@@ -344,6 +417,63 @@ def test_python_dash_c_is_unresolved_pytest_module_resolves_like_pytest(tmp_path
     via_module = tc.resolve_command("python3 -m pytest -q scripts/tests/test_foo.py", str(tmp_path))
     assert via_module.status == "resolved"
     assert via_module.resources == [resources.FileResource(str(tmp_path.resolve()), "write")]
+
+
+def test_interpreter_dash_flags_outside_closed_set_are_unresolved(tmp_path):
+    """B1: only exact `-c`/`--command`/`--command=`/`-m`/`-m=` are
+    recognized as interpreter flags before the script; a glued short form
+    (`-mMOD`, `-cCODE`) or any other dash-prefixed flag (`-W`, `-X`, `-u`)
+    must be refused outright, never silently skipped past to reach a later
+    token as "the script" or "the -m module". Regression: a prior version's
+    flag loop fell through silently on an unrecognized dash token, so
+    `-mMOD scripts/land-branch.py --check` was mistaken for a plain script
+    invocation (resolving via the script-effects registry) and
+    `-cCODE -m pytest` was mistaken for a plain `-m pytest` run -- when the
+    ACTUAL python3 semantics run an arbitrary module / arbitrary inline
+    code instead. The venue below carries a real, registry-matching
+    `land-branch.py` so the OLD code's false "resolved" is actually
+    reachable, not masked by an unrelated "script not found"."""
+    tc = _tool_contracts_module()
+    venue = _land_branch_registry_venue(tmp_path)
+
+    for cmd in (
+        "python3 -mMOD scripts/land-branch.py --check",
+        "python3 -cCODE -m pytest",
+        "python3 -W ignore scripts/land-branch.py --check",
+        "python3 -X utf8 -m pytest",
+        "python3 -u scripts/land-branch.py --check",
+    ):
+        res = tc.resolve_command(cmd, str(venue))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+
+def test_land_branch_dash_c_resolved_against_venue_not_engine_cwd(tmp_path, monkeypatch):
+    """B3: land-branch.py's `-C` value must be judged against the VENUE --
+    the resource this resolution decides whether to self-grant a push for
+    -- never against whatever directory the analyzing (agentctl engine)
+    process happens to be running from. Regression: the old code called
+    bare `os.path.realpath(os.path.expanduser(dash_c))` on a RELATIVE `-C`
+    value with no base at all, so it silently resolved against the
+    ENGINE's own cwd. Rigged here so a relative `-C ..`, computed from the
+    engine's (monkeypatched) cwd one level inside the venue, coincidentally
+    lands back on the venue itself -- even though the textually-identical
+    command, run for real with the venue as ITS working directory, targets
+    the venue's PARENT: a different checkout entirely."""
+    tc = _tool_contracts_module()
+    venue = _land_branch_registry_venue(tmp_path)
+    venue_real = str(venue.resolve())
+
+    engine_cwd = venue / "somedir"
+    engine_cwd.mkdir()
+    monkeypatch.chdir(engine_cwd)
+
+    r = tc.resolve_command(
+        "python3 scripts/land-branch.py -C .. --branch feature --keep-branch", venue_real
+    )
+    assert r.status == "unresolved", r
+    assert r.reason_class == "contract-unresolved", r
+    assert "different checkout" in (r.reason or ""), r.reason
 
 
 def test_pytest_resolves_to_venue_subtree(tmp_path):
@@ -574,3 +704,38 @@ def test_closed_world_mutation_catalogue(tmp_path):
         else:
             assert res.status == "unresolved", cmd
             assert res.reason_class == "contract-unresolved", cmd
+
+    # (B1) each interpreter flag before the script that is outside the
+    # closed -c/--command/-m set: a glued short form and an unreviewed
+    # value-taking flag alike.
+    for flag in ("-cCODE", "-mMOD", "-W", "-X", "-u", "-O"):
+        cmd = f"python3 {flag} scripts/does_not_matter.py"
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+
+    # (B2) each read-only git subcommand with a flag outside its own closed
+    # set -- including one no subcommand here reviews at all.
+    for subcommand in ("status", "log", "diff", "show", "rev-parse", "ls-files", "blame"):
+        cmd = f"git {subcommand} --ext-diff"
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+    # (B2) `git push` with a flag outside `_GIT_PUSH_ALLOWED_FLAGS`.
+    for flag in ("--force-with-lease", "--receive-pack=evil", "--signed"):
+        cmd = f"git push {flag} origin main"
+        res = tc.resolve_command(cmd, str(tmp_path))
+        assert res.status == "unresolved", cmd
+        assert res.reason_class == "contract-unresolved", cmd
+
+    # (B3) land-branch.py's -C with a relative base that does NOT resolve
+    # to the venue: covered end-to-end (registry lookup + digest match,
+    # false-positive-fooled-engine-cwd) by
+    # test_land_branch_dash_c_resolved_against_venue_not_engine_cwd; here we
+    # only confirm a plain relative-but-wrong -C is still refused through
+    # the same reviewed venue-relative path resolution.
+    venue = _land_branch_registry_venue(tmp_path)
+    wrong_base = tc.resolve_command(
+        "python3 scripts/land-branch.py -C .. --branch feature --keep-branch", str(venue)
+    )
+    assert wrong_base.status == "unresolved"

@@ -8,11 +8,6 @@
 #                  a file write regardless of this entry -- that is the
 #                  shell's own effect, not the program's, and is decided by
 #                  lib/bash_write_targets, not by this table.
-#   "writes-operands" - the program's own contract writes a file named by its
-#                  arguments; the target(s) are located by the shared
-#                  lib/bash_write_targets lexer (already reviewed there for
-#                  the canon-readonly guard), never by pattern-matching this
-#                  entry's own text.
 #   "unresolved" - the effect is not decidable from the command line alone
 #                  (an unbounded DSL, an argument-dependent target this table
 #                  does not attempt to resolve, or a form this plan
@@ -60,16 +55,15 @@ source = "GNU coreutils wc(1): counts lines/words/bytes; no write. safe_flags=[\
 name = "grep"
 effect = "none"
 safe_flags = ["*"]
-source = "GNU grep(1): prints matching lines; no write (absent -l/--include write flags -- grep has none). safe_flags=[\"*\"]: no flag in grep(1) writes anywhere."
+source = "GNU grep(1): prints matching lines to stdout; no write. safe_flags=[\"*\"]: no flag in grep(1) writes anywhere."
 
 [[program]]
 name = "rg"
 effect = "none"
 safe_flags = ["-n", "--line-number", "-N", "--no-line-number", "-i", "--ignore-case", "-s", "--case-sensitive", "-S", "--smart-case", "-v", "--invert-match", "-w", "--word-regexp", "-x", "--line-regexp", "-c", "--count", "--count-matches", "-l", "--files-with-matches", "--files-without-match", "-o", "--only-matching", "-A", "-B", "-C", "--context", "--after-context", "--before-context", "-e", "--regexp", "-f", "--file", "-F", "--fixed-strings", "-g", "--glob", "--iglob", "-t", "--type", "-T", "--type-not", "--hidden", "--no-ignore", "-u", "--unrestricted", "-m", "--max-count", "-q", "--quiet", "-a", "--text", "-H", "--with-filename", "-I", "--no-filename", "--color", "--heading", "--no-heading", "-p", "--pretty"]
-source = "ripgrep --help: every flag in this list is read-only per its own doc; --pre/--pre-glob (runs an arbitrary preprocessor command per file) and --replace/-r (rewrites matched text, only meaningful combined with a write flag ripgrep does not have on its own but still excluded on principle) are deliberately absent."
+source = "ripgrep --help: every flag in this list is read-only per its own doc; --pre/--pre-glob (runs an arbitrary preprocessor command per file) and --replace/-r (rewrites matched text, only meaningful combined with a write flag ripgrep does not have on its own but still excluded on principle) are deliberately absent. Residual this table does not resolve: the session environment variable RIPGREP_CONFIG_PATH can inject additional, unreviewed flags (including --pre) via an ambient config file."
 
-# --- read-only git subcommands (dispatched via the "resolver" entry below,
-# listed here only for the loader's one-entry-per-program review) ----------
+# --- unresolved: outside the reviewed read-only table, not git-related -----
 
 [[program]]
 name = "date"
@@ -77,7 +71,8 @@ effect = "unresolved"
 reason = "date is outside the reviewed read-only program table, and -s/--set changes SYSTEM clock state, which this table does not review at any flag grammar."
 source = "GNU coreutils date(1): -s/--set changes system clock state; otherwise prints the date."
 
-# --- write-target verbs resolved via lib/bash_write_targets -----------------
+# --- unresolved: write target is named by an operand this table does not
+# resolve --------------------------------------------------------------------
 
 [[program]]
 name = "sed"
@@ -120,7 +115,7 @@ source = "POSIX patch(1): writes the file(s) named by the patch body it is given
 [[program]]
 name = "dd"
 effect = "unresolved"
-reason = "dd's of= target is not resolved by lib/bash_write_targets (no verb dispatch for it); treated as unresolved rather than silently missed."
+reason = "dd's of= target is not resolved by this table; treated as unresolved rather than silently missed."
 source = "GNU coreutils dd(1): writes its of= operand."
 
 [[program]]
@@ -165,7 +160,7 @@ effect = "unresolved"
 reason = "signals an external process; not a resource this table types."
 source = "POSIX kill(1): sends a signal to a process."
 
-# --- argument-dependent, resolved by a named Python function ---------------
+# --- unresolved: an embedded DSL can write data the command line never shows
 
 [[program]]
 name = "awk"
@@ -179,20 +174,22 @@ effect = "unresolved"
 reason = "-exec/-execdir/-ok/-okdir run an arbitrary command per matched file, and a plain listing invocation is outside the reviewed read-only program table."
 source = "POSIX find(1): -exec/-execdir/-ok/-okdir run an arbitrary command per matched file."
 
+# --- argument-dependent, resolved by a named Python resolver function ------
+
 [[program]]
 name = "git"
 effect = "resolver"
-source = "git-push(1) / git(1): a read-only subcommand (log, status, diff, show, rev-parse, ls-files, blame) with no --output= target resolves to no effect; `branch` resolves to no effect under its own closed boolean-flag set (any value-taking flag or positional branch name is unresolved, since each names a create/rename/delete or filters differently than plain listing) -- remote/config are excluded entirely since each can write (create/delete a remote, change repo config); `push` with a literal remote and literal, non-force, non-delete refspec(s), from an allowed flag set, with -C/--git-dir/--work-tree (if given) equal to the venue, resolves to a vcs_ref push resource per refspec destination; a force/delete/mirror-equivalent form, a `+`-prefixed refspec, a zero-refspec push, any flag outside the allowed set, or any other subcommand is unresolved."
+source = "git-push(1) / git(1): a read-only subcommand (log, status, diff, show, rev-parse, ls-files, blame) resolves to no effect only under its OWN closed, boolean-only flag set (agentctl/tool_contracts.py's _GIT_READONLY_SAFE_FLAGS) -- a flag outside that per-subcommand set (e.g. diff/show's --ext-diff/--textconv, which can invoke an external program via the config-driven diff.external or a configured filter driver; log/status's --show-signature, which invokes gpg; any flag touching the config-driven fsmonitor hook; or an abbreviated long option, since git supports unique-prefix abbreviation) is unresolved; `branch` resolves to no effect under its own closed boolean-flag set (any value-taking flag or positional branch name is unresolved, since each names a create/rename/delete or filters differently than plain listing) -- remote/config are excluded entirely since each can write (create/delete a remote, change repo config); `push` with a literal remote and literal, non-force, non-delete refspec(s), from an allowed flag set, with -C/--git-dir/--work-tree (if given) equal to the venue, resolves to a vcs_ref push resource per refspec destination -- the `push <remote> tag <name>` shorthand (a distinct grammar form, not two independent refspecs) is unresolved rather than misparsed; a force/delete/mirror-equivalent form, a `+`-prefixed refspec, a zero-refspec push, any flag outside the allowed set, or any other subcommand is unresolved. Residuals this table does not attempt to resolve: a configured `remote.<name>.push` refspec mapping and any pre-push hook can each change what a resolved push actually does on the remote, and ambient session environment variables (GIT_*, e.g. GIT_SSH_COMMAND) can redirect the transport -- all outside the command line this table reviews."
 
 [[program]]
 name = "pytest"
 effect = "resolver"
-source = "pytest writes cache/coverage artifacts under its invocation cwd (.pytest_cache, coverage files); resolved to a write on the whole venue subtree -- a known over-broad residual (a test could theoretically write further out via an absolute path in its own body, not decidable from the command line)."
+source = "pytest writes cache/coverage artifacts under its invocation cwd (.pytest_cache, coverage files); resolved to a write on the whole venue subtree -- a known over-broad residual (a test could theoretically write further out via an absolute path in its own body, not decidable from the command line). Further residuals this table does not resolve: tmp_path-based tests write under the system temp dir rather than the venue subtree; an ini file above the venue can move pytest's own rootdir/.pytest_cache location; an ancestor conftest.py outside the venue still executes; and session environment variables such as PYTEST_ADDOPTS inject extra, unreviewed CLI flags."
 
 [[program]]
 name = "python3"
 effect = "resolver"
-source = "An interpreter's effect is entirely a property of the script it runs, not decidable from the command line; resolved to 'unresolved' with a content-bound identity (REQ3) unless a future script-effects registry entry covers the exact script by digest (checkpoint b)."
+source = "An interpreter's effect is entirely a property of the script it runs, not decidable from the command line; resolved to 'unresolved' with a content-bound identity (REQ3) unless a script-effects registry entry (agentctl/script_effects.py, consulted from _resolve_interpreter) covers the exact script by digest."
 
 [[program]]
 name = "python"
