@@ -829,6 +829,22 @@ disposition = "keep"
 ground = "The third file in the engine whose subject IS free-text meaning: it decides whether a stage's `procedure` says anything its `method` does not — whether an author has written the requirement twice instead of writing a requirement and a sequence. Its regexes and its token overlap are `collapse_prefilter`, a high-recall structural PREFILTER whose only consumer (`submission._procedure_collapse`) gates it behind `judge_collapse` before any violation is emitted — the prefilter alone refuses nothing. Same correction as the two rows above, and it stands with conditions.py on the stronger side of them: the guarded decision drives a REFUSAL, not a warning."
 
 [[entry]]
+id = "0967b15a23a3a0e9"
+domain = "code"
+file = "scripts/agentctl/render.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "94756809ef1b3c37"
+domain = "code"
+file = "scripts/agentctl/render.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "a4383c9467ffa316"
 domain = "code"
 file = "scripts/agentctl/render.py"
@@ -10141,7 +10157,7 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
-id = "86562516b3aba165"
+id = "4ec6f4e0f44a3a98"
 domain = "code"
 file = "scripts/tests/test_spawn_topo_review.py"
 class = "not-a-gate"
@@ -10149,7 +10165,31 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
-id = "511fae9357d0db8e"
+id = "8ce60d544b376e97"
+domain = "code"
+file = "scripts/tests/test_spawn_topo_review.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "314a0c0a7fc5753a"
+domain = "code"
+file = "scripts/tests/test_spawn_topo_review.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "0e50ca0a723c9dc8"
+domain = "code"
+file = "scripts/tests/test_spawn_topo_review.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "d76d0b1eb9839186"
 domain = "code"
 file = "scripts/tests/test_spawn_topo_review.py"
 class = "not-a-gate"
@@ -15297,6 +15337,22 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "1e733e869ad577a6"
+domain = "prose"
+file = "memory-global/leaves/doubt-own-snapshot.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "eb42602133c650d7"
+domain = "prose"
+file = "memory-global/leaves/doubt-own-snapshot.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "9b17e56cd51f28d0"
 domain = "prose"
 file = "memory-global/leaves/doubt-own-snapshot.md"
@@ -20084,6 +20140,46 @@ ground = "Experience leaves (difficulty/v1) are historical narrative records of 
 id = "d1ab2c313f3e6334"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-09-27-negative-finding-amplified-from-bounded-probe.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "0386dd5439e182aa"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-09-29-tracker-publish-gate-missed-per-stage-artifacts.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "d828abcb44bd5d83"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-09-29-tracker-publish-gate-missed-per-stage-artifacts.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "7923af5f0acfb0ad"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-09-29-tracker-publish-gate-missed-per-stage-artifacts.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "221f14b885efc475"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-09-29-tracker-publish-gate-missed-per-stage-artifacts.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "f0ee161e41ccd26b"
+domain = "prose"
+file = "memory-global/leaves/experience/MEMORY.md"
 class = "not-normative"
 disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
@@ -27905,6 +28001,22 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
+id = "2306d9456b2e5ea9"
+domain = "prose"
+file = "skills/tracker-management/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "2fd952c2e974ec2f"
+domain = "prose"
+file = "skills/tracker-management/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
 id = "a5c3fcfc3c6660db"
 domain = "prose"
 file = "skills/tracker-management/SKILL.md"
@@ -27914,6 +28026,14 @@ ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the s
 
 [[entry]]
 id = "1fdf52b1917372c5"
+domain = "prose"
+file = "skills/tracker-management/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "f9d10328695e8d2e"
 domain = "prose"
 file = "skills/tracker-management/SKILL.md"
 class = "perception"

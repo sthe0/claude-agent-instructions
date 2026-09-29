@@ -326,6 +326,17 @@ def plans_dir() -> Path:
     return agent_home() / "plans"
 
 
+def agentctl_topo_units_dir() -> Path:
+    """Materialized ``--review-topo`` unit tree root (``<root>/agentctl/
+    topo-units`` — see agentctl/render.py's ``materialize_topo_units``). One
+    subdirectory per plan content sha256. Honors an
+    ``$AGENTCTL_TOPO_UNITS_DIR`` override at the call site
+    (spawn-specialist.py), mirroring ``agentctl_task_accumulator_dir()``'s
+    role for task-accumulators — every test sets the override to a temp
+    directory so materialization never writes under this default root."""
+    return agentctl_dir() / "topo-units"
+
+
 def legacy_home() -> Path:
     """The pre-isolation root (``~/.claude``), for read-time fallback only —
     never a write target. Distinct from ``agent_home()``'s own legacy fallback:

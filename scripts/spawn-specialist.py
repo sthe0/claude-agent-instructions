@@ -38,18 +38,18 @@ from typing import NamedTuple
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from agentctl import grants  # the sole validator every materialized rule/add_dir passes through
-from agentctl.plan import PlanError, load_plan  # parse the TOML plan for a single-stage brief projection
+from agentctl.plan import PlanError, load_plan, load_plan_with_digest  # parse the TOML plan for a single-stage brief projection
 from agentctl.render import (  # pure PlanDoc(+index) -> markdown; TopoUnitsCorrupt/materialize_topo_units do the one bit of I/O
     TopoUnitsCorrupt,
     materialize_topo_units,
     render_stage_brief,
     render_topo_review_bundle,
-    topo_unit_files,
     topo_unit_view,
+    topo_unit_view_dirname,
 )
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
-from lib.config_root import plans_dir, projects_roots, skills_dir  # config-root resolver (isolated system root)
+from lib.config_root import agentctl_topo_units_dir, plans_dir, projects_roots, skills_dir  # config-root resolver (isolated system root)
 from lib.kind_baselines import (  # re-exported below so `MOD.KIND_BASELINES` etc. keep working for importlib callers
     KIND_BASELINES,
     PLANNER_CHECK_ORDER_COVERAGE_RULE,
@@ -547,9 +547,11 @@ def build_parser() -> argparse.ArgumentParser:
         "brief plus its first-hop neighbours' INTERFACES only, and the child is "
         "granted read-only access to a per-plan-version view directory holding "
         "every first-hop neighbour's FULL brief, reachable via one Read. "
-        "Requires --kind thinker; refused together with --stage-index or "
-        "--plan-brief (it replaces that projection, not refines it). Splits a "
-        "plan too large for one whole-plan review spawn -- see "
+        "Requires --kind thinker; refused together with --stage-index (it "
+        "replaces that projection, not refines it) but may be combined with "
+        "--plan-brief, which is a no-op here (--review-topo never requires "
+        "--stage-index, so --plan-brief's own eligibility check never fires). "
+        "Splits a plan too large for one whole-plan review spawn -- see "
         "scripts/plan-review-topological.py for the planned whole-plan driver "
         "that walks every unit through this flag.",
     )
@@ -759,14 +761,22 @@ def plans_permission_rules(kind: str, plans_directory: Path) -> tuple[list[str],
 def parse_review_topo_unit(raw: str) -> "int | str":
     """Parse `--review-topo`'s value into the `int | str` unit selector
     `agentctl.render`'s topo helpers expect: an integer stage index, or the
-    literal `"order"`. Raises `ValueError` for anything else (a comma-list,
-    a non-digit non-`"order"` string) — `--review-topo` names exactly one
-    unit per spawn, never a batch; a whole-plan walk is a caller looping
-    over spawns, not a wider value here."""
+    literal `"order"`. Raises `ValueError` for anything else — `--review-topo`
+    names exactly one unit per spawn, never a batch; a whole-plan walk is a
+    caller looping over spawns, not a wider value here. A comma-list is
+    named explicitly in the message (as `--units`, the flag a future batch
+    driver would use) rather than folded into the generic case, since a
+    caller reaching for a list here is reaching for the wrong flag, not
+    typing a malformed single selector."""
     if raw == "order":
         return "order"
     if raw.isdigit():
         return int(raw)
+    if "," in raw:
+        raise ValueError(
+            f"--review-topo takes exactly one unit, not a comma list; a batch of units "
+            f"is --units' job (not this flag), got: {raw!r}"
+        )
     raise ValueError(f"--review-topo must be an integer stage index or 'order', got: {raw!r}")
 
 
@@ -1710,11 +1720,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             log_refused("review-topo-wrong-kind", {"kind": args.kind, "review_topo_unit": args.review_topo})
             return 2
-        if args.stage_index is not None or args.plan_brief:
+        if args.stage_index is not None:
             print(
-                "error: --review-topo replaces the whole-plan/--plan-brief "
+                "error: --review-topo replaces the whole-plan/--stage-index "
                 "projection outright -- it cannot be combined with "
-                "--stage-index or --plan-brief.",
+                "--stage-index.",
                 file=sys.stderr,
             )
             log_refused("review-topo-conflict", {"kind": args.kind, "review_topo_unit": args.review_topo})
@@ -1726,7 +1736,7 @@ def main(argv: list[str] | None = None) -> int:
             log_refused("review-topo-bad-unit", {"kind": args.kind, "review_topo_unit": args.review_topo})
             return 2
         try:
-            topo_doc = load_plan(str(args.plan))
+            topo_doc, _topo_plan_bytes, topo_plan_sha256 = load_plan_with_digest(str(args.plan))
         except PlanError as exc:
             print(f"error: --review-topo: {exc}", file=sys.stderr)
             log_refused("review-topo-plan-error", {"kind": args.kind, "review_topo_unit": str(topo_unit)})
@@ -1740,15 +1750,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: --review-topo {topo_unit}: no such stage index in {args.plan}.", file=sys.stderr)
             log_refused("review-topo-unknown-unit", {"kind": args.kind, "review_topo_unit": str(topo_unit)})
             return 2
-        topo_plan_sha256 = hashlib.sha256(Path(args.plan).read_bytes()).hexdigest()
-        topo_root = plans_directory / "_topo_review"
-        topo_view_dir = topo_root / topo_plan_sha256 / topo_unit_view(topo_unit)
+        topo_units_override = os.environ.get("AGENTCTL_TOPO_UNITS_DIR")
+        topo_root = Path(topo_units_override) if topo_units_override else agentctl_topo_units_dir()
+        topo_view_dir = topo_root / topo_plan_sha256 / topo_unit_view_dirname(topo_unit)
         if not args.dry_run:
-            # Materialization is real I/O (writes the view directory); --dry-run
-            # must write nothing, so it only computes the path above and prints
-            # the intended TOPO-VIEW line below, never reaching this call.
+            # Materialization is real I/O (writes the whole plan-version topo
+            # tree); --dry-run must write nothing, so it only computes the path
+            # above and prints the intended TOPO-VIEW line below, never
+            # reaching this call.
             try:
-                materialize_topo_units(topo_doc, topo_root, [topo_unit], plan_sha256=topo_plan_sha256)
+                materialize_topo_units(topo_doc, topo_plan_sha256, topo_root)
             except (TopoUnitsCorrupt, PlanError) as exc:
                 print(f"error: --review-topo: {exc}", file=sys.stderr)
                 log_refused(
@@ -1840,7 +1851,11 @@ def main(argv: list[str] | None = None) -> int:
             f"--plan-brief if not already set, or split the review itself via "
             f"--review-topo <n|order> (materializes one topological-review unit "
             f"at a time; scripts/plan-review-topological.py is the planned "
-            f"whole-plan driver that walks every unit through it).",
+            f"whole-plan driver that walks every unit through it). If none of "
+            f"that brings it under the ceiling, a user-authored override -- "
+            f"dispatching this child by hand, outside this refusal -- is the "
+            f"remaining exit; this script never raises the ceiling or degrades "
+            f"the prompt silently to force a fit.",
             file=sys.stderr,
         )
         log_refused(
@@ -1910,8 +1925,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         if topo_unit is not None:
-            n_files = len(topo_unit_files(topo_doc, topo_unit))
-            print(f"TOPO-VIEW: {topo_view_dir} files={n_files}")
+            view_files = topo_unit_view(topo_doc, topo_unit)
+            print(f"TOPO-VIEW: {topo_view_dir} files={','.join(view_files)}")
         print("=== assembled prompt (delivered via stdin) ===")
         print(prompt)
         print("\n=== command (not executed) ===")

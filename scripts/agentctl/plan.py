@@ -1540,8 +1540,8 @@ def load_plan_with_digest(
 # --- Topological-review protocol constants ------------------------------
 # Sourced by render.render_topo_review_bundle so the checklist/protocol text
 # rendered into a --review-topo starting prompt and the markers a reviewer's
-# own REVIEW: reply is parsed against never drift apart (finding tb22: no
-# string-literal duplication of these four names in render.py).
+# own REVIEW: reply is parsed against never drift apart: render.py must
+# import these, never duplicate them as string literals.
 REVIEW_MARKER = "REVIEW:"
 VERDICT_MARKER = "Verdict:"
 PLAN_DIGEST_MARKER = "Plan digest:"
@@ -1558,7 +1558,7 @@ def _stage_by_index(doc: PlanDoc, n: int) -> Stage:
     )
 
 
-def reliance_set(doc: PlanDoc, n: int) -> set[int]:
+def reliance_set(doc: PlanDoc, n: int) -> frozenset[int]:
     """Stage `n`'s RAW reliance edges: the union of its raw TOML
     `depends_on` (`doc.raw_depends_on`) and its typed `supplies[].on`
     edges. `_build_supplies` silently discards a stage's raw `depends_on`
@@ -1566,32 +1566,37 @@ def reliance_set(doc: PlanDoc, n: int) -> set[int]:
     supplies win) -- this is the "supplies-wins collapse" -- so
     `Stage.depends_on`, which is derived purely from `supplies`, can no
     longer see an edge the plan author wrote. Reading the raw union
-    instead recovers it. Raises PlanError when `n` is unknown or when an
-    edge points at a stage index the plan does not have."""
+    instead recovers it. Raises PlanError when `n` is unknown, when `n`
+    has no entry in `doc.raw_depends_on` (parse_plan populates one for
+    every stage; a missing key means the caller handed us a foreign
+    PlanDoc, not "no edges"), or when an edge points at a stage index the
+    plan does not have."""
     stage = _stage_by_index(doc, n)
+    if n not in doc.raw_depends_on:
+        raise PlanError(f"stage {n} has no raw_depends_on entry (foreign or stale PlanDoc)")
     valid = {s.index for s in doc.stages}
-    edges = set(doc.raw_depends_on.get(n, ())) | {s.on for s in stage.supplies}
+    edges = set(doc.raw_depends_on[n]) | {s.on for s in stage.supplies}
     dangling = edges - valid
     if dangling:
         raise PlanError(f"stage {n} relies on unknown stage(s) {sorted(dangling)}")
-    return edges
+    return frozenset(edges)
 
 
-def consumers(doc: PlanDoc, n: int) -> set[int]:
+def consumers(doc: PlanDoc, n: int) -> frozenset[int]:
     """Every stage index that relies on `n` -- the reverse of
     `reliance_set`. Raises PlanError when `n` is unknown."""
     _stage_by_index(doc, n)
-    return {s.index for s in doc.stages if n in reliance_set(doc, s.index)}
+    return frozenset(s.index for s in doc.stages if n in reliance_set(doc, s.index))
 
 
-def first_hop(doc: PlanDoc, n: int) -> set[int]:
+def first_hop(doc: PlanDoc, n: int) -> frozenset[int]:
     """`n`'s direct neighbours in EITHER direction: what it relies on,
     union what relies on it. This is the set of units a --review-topo
     bundle inlines full interfaces for."""
     return reliance_set(doc, n) | consumers(doc, n)
 
 
-def reliance_closure(doc: PlanDoc, n: int) -> set[int]:
+def reliance_closure(doc: PlanDoc, n: int) -> frozenset[int]:
     """The transitive closure of `reliance_set` upstream from `n` (n's
     reliances, their reliances, ...), excluding `n` itself. This is the
     set of units a --review-topo bundle renders bare interfaces for,
@@ -1615,21 +1620,20 @@ def reliance_closure(doc: PlanDoc, n: int) -> set[int]:
             if dep not in closure:
                 closure.add(dep)
                 stack.append((dep, path + (dep,)))
-    return closure
+    return frozenset(closure)
 
 
 def interface_empty(stage: Stage) -> bool:
     """True when `render_stage_interface`'s projection would carry no
-    concrete signal for a consumer beyond prose -- i.e. the stage
-    declares no `output_artifacts`. `title`/`expected_result_image`/
-    `done_criterion` are required non-empty by `parse_plan` for every
-    stage regardless of `strict`, so they can never distinguish an
-    informative interface from an empty one; `output_artifacts` is the
-    one interface-relevant field that legitimately defaults to empty.
-    `render_stage_interface(doc, n, contract=True)` falls back to the
-    full brief when this is True, rather than handing a consumer nothing
-    concrete to rely on."""
-    return not stage.output_artifacts
+    concrete signal for a consumer beyond prose -- i.e. the stage's
+    result image or done criterion is blank. `output_artifacts` legitimately
+    defaults to empty for stages with no file deliverable, so it cannot be
+    the signal; `subject.result` and `criterion.done_criterion` are what a
+    consumer actually relies on, and TOML can still hand parse_plan a
+    whitespace-only string for either. `render_stage_interface(doc, n,
+    contract=True)` falls back to the full brief when this is True, rather
+    than handing a consumer nothing concrete to rely on."""
+    return not stage.subject.result.strip() or not stage.criterion.done_criterion.strip()
 
 
 def order_scope(meta) -> tuple:

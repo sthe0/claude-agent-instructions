@@ -15,6 +15,7 @@ carries every stage's index and title.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -140,11 +141,9 @@ def render_order_md(doc: PlanDoc) -> list[str]:
 
 def render_order_coverage_md(doc: PlanDoc) -> list[str]:
     """The order's `coverage` map and `requires_traceability` flag, as raw
-    lines. Never rendered by `render_plan_md`/`render_order_md` before this
-    (finding ii: an order's coverage had no projection anywhere) — kept as
-    its own function rather than folded into `render_order_md` so
-    `render_plan_md`'s output stays byte-identical. `[]` when the plan
-    declares no order."""
+    lines. Kept as its own function rather than folded into
+    `render_order_md` so `render_plan_md`'s output stays byte-identical.
+    `[]` when the plan declares no order."""
     m = doc.meta
     if m.order is None:
         return []
@@ -419,11 +418,14 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
 # directory, rather than inlined. See `render_topo_review_bundle`. -------
 
 class TopoUnitsCorrupt(Exception):
-    """A materialized topo-unit view directory's on-disk content does not
-    match what `topo_unit_files` would produce for its plan right now —
-    either tampered with after materialization, or (should the
-    plan_sha256 partition scheme ever be bypassed) inherited from a
-    different plan version. Raised by `verify_topo_units`."""
+    """A materialized `<root>/<plan_sha256>/` topo-unit tree's on-disk
+    content does not match what `topo_unit_files`/`topo_unit_view` would
+    produce for its plan right now — tampered with after materialization,
+    partially deleted, or (should the plan_sha256 partitioning ever be
+    bypassed) inherited from a different plan version. Raised by
+    `verify_topo_units`, which names the offending path and the remedy
+    (delete the tree and re-run `materialize_topo_units`, which
+    re-renders it from the plan bytes)."""
 
 
 def _unit_label(unit: "int | str") -> str:
@@ -434,46 +436,45 @@ def _unit_label(unit: "int | str") -> str:
     return str(int(unit))
 
 
+def _all_units(doc: PlanDoc) -> list["int | str"]:
+    """Every topo unit `doc` has: each stage's index, plus the virtual
+    `"order"` node when the plan declares a `[meta.order]` block."""
+    units: list["int | str"] = [s.index for s in doc.stages]
+    if doc.meta.order is not None:
+        units.append("order")
+    return units
+
+
+def _order_brief(doc: PlanDoc) -> str:
+    """The order node's own full brief: meta + order + order-coverage +
+    final-checks, concatenated — the exact `order.md` content
+    `topo_unit_files` materializes, so the bundle's own-brief section and
+    the materialized file can never drift apart."""
+    lines = (
+        render_meta_md(doc)
+        + render_order_md(doc)
+        + render_order_coverage_md(doc)
+        + render_final_checks_md(doc)
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _unit_own_brief(doc: PlanDoc, unit: "int | str") -> str:
-    """The unit's own FULL brief: `render_stage_brief` for a stage, or the
-    meta + order + order-coverage projection for the order node."""
+    """The unit's own FULL brief: `render_stage_brief` for a stage, or
+    `_order_brief` for the order node."""
     if _unit_label(unit) == "order":
-        lines = render_meta_md(doc) + render_order_md(doc) + render_order_coverage_md(doc)
-        return "\n".join(lines).rstrip() + "\n"
+        return _order_brief(doc)
     return render_stage_brief(doc, int(unit))
-
-
-def _order_coverage_stage_indices(doc: PlanDoc) -> set[int]:
-    """Every stage index named in the order's `coverage` map values that
-    parses as an int and is a real stage in `doc` — the order node's
-    first-hop neighbours. A coverage value that isn't a bare stage index
-    (a free-text ref) is silently skipped rather than refused: the order
-    node's neighbour set is a best-effort convenience projection, not a
-    validated graph edge the way a stage's `reliance_set` is."""
-    m = doc.meta
-    if m.order is None:
-        return set()
-    valid = {s.index for s in doc.stages}
-    out: set[int] = set()
-    for refs in m.order.coverage.values():
-        for ref in refs:
-            try:
-                n = int(str(ref).strip())
-            except (TypeError, ValueError):
-                continue
-            if n in valid:
-                out.add(n)
-    return out
 
 
 def _unit_first_hop(doc: PlanDoc, unit: "int | str") -> set[int]:
     """The first-hop STAGE neighbours of `unit`: for a stage, `first_hop`
-    (its reliances union its consumers); for the order node, every stage
-    named in the order's own `coverage` map (`_order_coverage_stage_indices`)
-    — the stages the order itself points at, since the order declares no
-    `depends_on`/`supplies` of its own to read a reliance edge from."""
+    (its reliance set union its consumers); for the order node, every
+    stage in the plan — the order declares no `depends_on`/`supplies` of
+    its own to read a narrower neighbour set from, and a reviewer checking
+    the order's coverage needs every stage's interface anyway."""
     if _unit_label(unit) == "order":
-        return _order_coverage_stage_indices(doc)
+        return {s.index for s in doc.stages}
     from .plan import first_hop as _first_hop
 
     return _first_hop(doc, int(unit))
@@ -481,11 +482,12 @@ def _unit_first_hop(doc: PlanDoc, unit: "int | str") -> set[int]:
 
 def _unit_relies_on_and_consumers(doc: PlanDoc, unit: "int | str") -> tuple[set[int], set[int]]:
     """`(relies_on, consumed_by)` for `unit` — the two tagged halves of its
-    first hop. The order node has no reliance direction of its own; every
-    coverage-named stage is reported as `consumed_by` (the order is served
-    by them, not relied on by them)."""
+    first hop (rendered `supplier` / `customer` respectively). The order
+    node relies on every stage's product (it delivers no product of its
+    own for a stage to consume), so every stage is reported as
+    `relies_on`, never `consumed_by`."""
     if _unit_label(unit) == "order":
-        return set(), _order_coverage_stage_indices(doc)
+        return {s.index for s in doc.stages}, set()
     n = int(unit)
     return reliance_set(doc, n), consumers(doc, n)
 
@@ -498,10 +500,11 @@ def render_stage_interface(doc: PlanDoc, stage_index: int, *, contract: bool = F
     `render_topo_review_bundle`).
 
     When `contract=True` and the stage's interface would carry no concrete
-    signal (`plan.interface_empty` — no declared `output_artifacts`),
-    falls back to the full `render_stage_brief` instead: a consumer asked
-    to rely on an empty interface has nothing to check its reliance
-    against, so the fallback trades brevity for something checkable.
+    signal (`plan.interface_empty` — a blank expected result image or
+    done criterion), falls back to the full `render_stage_brief` instead:
+    a consumer asked to rely on an empty interface has nothing to check
+    its reliance against, so the fallback trades brevity for something
+    checkable.
 
     Raises PlanError if no stage in `doc` carries `stage_index`."""
     stage = next((s for s in doc.stages if s.index == stage_index), None)
@@ -525,97 +528,174 @@ def render_stage_interface(doc: PlanDoc, stage_index: int, *, contract: bool = F
     return "\n".join(lines).rstrip() + "\n"
 
 
-def topo_unit_view(unit: "int | str") -> str:
+def topo_unit_view_dirname(unit: "int | str") -> str:
     """The view directory's bare name for `unit` — e.g. `view-3` or
-    `view-order`. The caller joins this under the plan-version-scoped
-    materialization root (see `materialize_topo_units`). Matches the exact
-    `view-<unit>` shape `spawn-specialist.py --review-topo` grants
-    `Read(//.../view-<unit>/**)` against."""
+    `view-order`. Matches the exact `view-<unit>` shape
+    `spawn-specialist.py --review-topo` grants `Read(//.../view-<unit>/**)`
+    against."""
     return f"view-{_unit_label(unit)}"
 
 
-def topo_unit_files(doc: PlanDoc, unit: "int | str") -> dict[str, str]:
-    """The view directory's file contents for `unit`: `own.md` (this
-    unit's own full brief) plus one `<neighbour>.md` file per FIRST-HOP
-    stage neighbour, holding that neighbour's FULL brief
-    (`render_stage_brief`) — the "one Read away" material
-    `render_topo_review_bundle` only summarizes via interfaces inline.
+def topo_unit_view(doc: PlanDoc, unit: "int | str") -> list[str]:
+    """The sorted `stage-<a>.md` filenames making up `unit`'s view
+    directory: one per member of its first hop (`_unit_first_hop`) — never
+    the unit's own file, never `order.md` for a stage unit, and never a
+    transitive-only member. The order node's first hop is every stage, so
+    its view holds every stage file."""
+    return [f"stage-{n}.md" for n in sorted(_unit_first_hop(doc, unit))]
 
-    Keys are filenames, values are file contents;
-    `materialize_topo_units` writes them verbatim."""
-    files = {"own.md": _unit_own_brief(doc, unit)}
-    for n in sorted(_unit_first_hop(doc, unit)):
-        files[f"{n}.md"] = render_stage_brief(doc, n)
+
+def topo_unit_files(doc: PlanDoc) -> dict[str, str]:
+    """Every topo unit file for the WHOLE plan, keyed by filename:
+    `stage-<n>.md` (`render_stage_brief`) for every stage, plus `order.md`
+    (`_order_brief`) when the plan declares an order block. A pure
+    function of the plan bytes — `materialize_topo_units` writes these
+    verbatim once per plan sha256, and every unit's view directory
+    (`topo_unit_view`) is a copy of a subset of them."""
+    files = {f"stage-{s.index}.md": render_stage_brief(doc, s.index) for s in doc.stages}
+    if doc.meta.order is not None:
+        files["order.md"] = _order_brief(doc)
     return files
 
 
-def materialize_topo_units(
-    doc: PlanDoc, root: "Path | str", units, *, plan_sha256: str
-) -> dict[str, Path]:
-    """Write each `unit` in `units`'s view directory under
-    `root/plan_sha256/view-<unit>/`, atomically: build the directory's
-    files under a sibling temp directory (`tempfile.mkdtemp`, so its name
-    is PID/random-suffixed and cannot collide with a concurrent writer's),
-    then `os.replace` it into place in one step.
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    `os.replace` on a non-empty destination directory raises `OSError` —
-    the signal that a concurrent writer won the race first. The loser
-    catches it, re-verifies the winner's directory via `verify_topo_units`
-    (treating it as authoritative once it passes) rather than retrying or
-    raising, and discards its own now-orphaned temp directory.
 
-    Returns `{unit_label: materialized_directory_path}`."""
-    version_root = Path(root) / plan_sha256
-    version_root.mkdir(parents=True, exist_ok=True)
-    out: dict[str, Path] = {}
-    for unit in units:
-        label = _unit_label(unit)
-        dest = version_root / topo_unit_view(unit)
-        if dest.is_dir():
-            verify_topo_units(doc, root, plan_sha256, [unit])
-            out[label] = dest
-            continue
-        files = topo_unit_files(doc, unit)
-        tmp_dir = Path(tempfile.mkdtemp(prefix=f".{dest.name}.", dir=version_root))
-        for filename, content in files.items():
+def materialize_topo_units(doc: PlanDoc, plan_sha256: str, root: "Path | str") -> Path:
+    """Write the WHOLE per-plan-version topo unit tree under
+    `root/plan_sha256/`: every unit file (`topo_unit_files`), a
+    `MANIFEST.json` mapping each root file and each `view-<unit>/` copy to
+    its sha256, and one `view-<unit>/` per unit (every stage, plus the
+    order node when the plan declares one) holding byte-identical COPIES —
+    never hardlinks — of exactly that unit's first-hop files. A pure
+    function of the plan bytes: idempotent, so a later call for the same
+    `plan_sha256` is a re-verification, never a re-render.
+
+    Built under a process-unique temporary sibling of `root/plan_sha256/`
+    (never a fixed name, so two concurrent materializations can never
+    collide), `MANIFEST.json` written inside it before the rename, then
+    `os.replace`d into place in one step so a reader can never observe a
+    partial tree. `os.replace` onto an existing non-empty destination
+    raises `OSError` — the signal a concurrent writer won the race first;
+    the loser discards its own temp directory and re-verifies the
+    winner's tree via `verify_topo_units` instead of retrying.
+
+    Returns the materialized `root/plan_sha256/` directory."""
+    root = Path(root)
+    version_root = root / plan_sha256
+    if version_root.is_dir():
+        verify_topo_units(version_root, doc)
+        return version_root
+
+    root.mkdir(parents=True, exist_ok=True)
+    units = _all_units(doc)
+    unit_files = topo_unit_files(doc)
+    manifest: dict[str, str] = {}
+    tmp_dir = Path(tempfile.mkdtemp(prefix=f".{plan_sha256}.{os.getpid()}.", dir=root))
+    try:
+        for filename, content in unit_files.items():
             (tmp_dir / filename).write_text(content, encoding="utf-8")
+            manifest[filename] = _sha256_text(content)
+        for unit in units:
+            view_name = topo_unit_view_dirname(unit)
+            view_dir = tmp_dir / view_name
+            view_dir.mkdir()
+            for filename in topo_unit_view(doc, unit):
+                content = unit_files[filename]
+                (view_dir / filename).write_text(content, encoding="utf-8")
+                manifest[f"{view_name}/{filename}"] = _sha256_text(content)
+        (tmp_dir / "MANIFEST.json").write_text(
+            json.dumps(manifest, sort_keys=True, indent=2), encoding="utf-8"
+        )
         try:
-            os.replace(tmp_dir, dest)
+            os.replace(tmp_dir, version_root)
         except OSError:
             shutil.rmtree(tmp_dir, ignore_errors=True)
-            verify_topo_units(doc, root, plan_sha256, [unit])
-        out[label] = dest
-    return out
+            verify_topo_units(version_root, doc)
+    except BaseException:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+    return version_root
 
 
-def verify_topo_units(doc: PlanDoc, root: "Path | str", plan_sha256: str, units) -> None:
-    """Re-check that each `unit`'s materialized view directory under
-    `root/plan_sha256/` holds EXACTLY what `topo_unit_files` would produce
-    for `doc` right now — the same filename set, byte-identical content.
+def _verify_topo_file(path: Path, expected_content: str, expected_sha256: str, remedy: str) -> None:
+    if not path.is_file():
+        raise TopoUnitsCorrupt(f"{path} is missing; {remedy}")
+    actual = path.read_text(encoding="utf-8")
+    if _sha256_text(actual) != expected_sha256 or actual != expected_content:
+        raise TopoUnitsCorrupt(f"{path} content does not match its MANIFEST.json sha256; {remedy}")
 
-    Raises `TopoUnitsCorrupt` on any mismatch: a directory tampered with
-    after materialization, missing outright, or (should the plan_sha256
-    partitioning ever be bypassed) materialized from a different plan
-    version than `doc`."""
-    version_root = Path(root) / plan_sha256
-    for unit in units:
-        label = _unit_label(unit)
-        dest = version_root / topo_unit_view(unit)
-        expected = topo_unit_files(doc, unit)
-        if not dest.is_dir():
-            raise TopoUnitsCorrupt(f"unit {label!r} view directory missing: {dest}")
-        actual_names = {p.name for p in dest.iterdir() if p.is_file()}
-        if actual_names != set(expected.keys()):
-            raise TopoUnitsCorrupt(
-                f"unit {label!r} view directory {dest} file set {sorted(actual_names)} "
-                f"!= expected {sorted(expected.keys())}"
+
+def verify_topo_units(unit_dir: "Path | str", doc: PlanDoc) -> None:
+    """Re-check an ALREADY-MATERIALIZED `root/plan_sha256/` tree
+    (`unit_dir` — the WHOLE version-root directory, not a single view) for
+    `doc` right now: every root file and every `view-<unit>/` copy against
+    `MANIFEST.json`, AND the file SET at both levels — the root holds
+    exactly the expected unit files, `MANIFEST.json`, and one
+    `view-<unit>/` per unit, and each `view-<unit>/` holds exactly that
+    unit's `topo_unit_view`, nothing extra and nothing missing.
+
+    Raises `TopoUnitsCorrupt` naming the offending path and the remedy
+    (delete `unit_dir` and re-run `materialize_topo_units`, which
+    re-materializes it) on any mismatch."""
+    unit_dir = Path(unit_dir)
+    remedy = f"delete {unit_dir} and re-run to re-materialize it"
+    if not unit_dir.is_dir():
+        raise TopoUnitsCorrupt(f"{unit_dir} is missing; {remedy}")
+
+    unit_files = topo_unit_files(doc)
+    expected_manifest: dict[str, str] = {
+        filename: _sha256_text(content) for filename, content in unit_files.items()
+    }
+    expected_view_files: dict[str, set[str]] = {}
+    for unit in _all_units(doc):
+        view_name = topo_unit_view_dirname(unit)
+        names = set(topo_unit_view(doc, unit))
+        expected_view_files[view_name] = names
+        for filename in names:
+            expected_manifest[f"{view_name}/{filename}"] = _sha256_text(unit_files[filename])
+
+    manifest_path = unit_dir / "MANIFEST.json"
+    if not manifest_path.is_file():
+        raise TopoUnitsCorrupt(f"{manifest_path} is missing; {remedy}")
+    try:
+        actual_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise TopoUnitsCorrupt(f"{manifest_path} is not valid JSON ({exc}); {remedy}") from exc
+    if actual_manifest != expected_manifest:
+        raise TopoUnitsCorrupt(f"{manifest_path} does not match the expected manifest; {remedy}")
+
+    root_files = {p.name for p in unit_dir.iterdir() if p.is_file()}
+    expected_root_files = set(unit_files.keys()) | {"MANIFEST.json"}
+    if root_files != expected_root_files:
+        extra = [str(unit_dir / n) for n in sorted(root_files - expected_root_files)]
+        missing = [str(unit_dir / n) for n in sorted(expected_root_files - root_files)]
+        raise TopoUnitsCorrupt(f"{unit_dir} file set mismatch — extra: {extra}, missing: {missing}; {remedy}")
+
+    root_dirs = {p.name for p in unit_dir.iterdir() if p.is_dir()}
+    expected_root_dirs = set(expected_view_files.keys())
+    if root_dirs != expected_root_dirs:
+        extra = [str(unit_dir / n) for n in sorted(root_dirs - expected_root_dirs)]
+        missing = [str(unit_dir / n) for n in sorted(expected_root_dirs - root_dirs)]
+        raise TopoUnitsCorrupt(
+            f"{unit_dir} view directory set mismatch — extra: {extra}, missing: {missing}; {remedy}"
+        )
+
+    for filename, content in unit_files.items():
+        _verify_topo_file(unit_dir / filename, content, expected_manifest[filename], remedy)
+
+    for view_name, names in expected_view_files.items():
+        view_dir = unit_dir / view_name
+        actual_names = {p.name for p in view_dir.iterdir() if p.is_file()}
+        if actual_names != names:
+            extra = [str(view_dir / n) for n in sorted(actual_names - names)]
+            missing = [str(view_dir / n) for n in sorted(names - actual_names)]
+            raise TopoUnitsCorrupt(f"{view_dir} file set mismatch — extra: {extra}, missing: {missing}; {remedy}")
+        for filename in names:
+            _verify_topo_file(
+                view_dir / filename, unit_files[filename], expected_manifest[f"{view_name}/{filename}"], remedy
             )
-        for filename, content in expected.items():
-            actual = (dest / filename).read_text(encoding="utf-8")
-            if actual != content:
-                raise TopoUnitsCorrupt(
-                    f"unit {label!r} view file {filename} content mismatch under {dest}"
-                )
 
 
 _CONDITION_TEXT = {
@@ -627,6 +707,57 @@ _CONDITION_TEXT = {
         "with its suppliers — its consumer precondition holds"
     ),
 }
+
+_ENGINE_ORDERED = "engine-ordered"
+_DECLARED_ONLY_ORDERING = "declared-only (supplies-wins collapse; not dispatch-ordered)"
+_ORDER_UNIT_ORDERING = "none"
+
+
+def _engine_dispatch_closure(doc: PlanDoc, n: int) -> frozenset[int]:
+    """The transitive closure of the DERIVED, supplies-only `Stage.depends_on`
+    graph upstream from stage `n`, excluding `n` itself -- the engine's OWN
+    dispatch-ordering view. Narrower than `plan.reliance_closure`, which
+    closes over the raw `depends_on ∪ supplies.on` union `_build_supplies`'s
+    supplies-wins collapse may have silently widened away from what the
+    engine actually dispatches on. Used only to compute a first-hop edge's
+    ORDERING tag."""
+    stage_by_index = {s.index: s for s in doc.stages}
+    closure: set[int] = set()
+    stack = [n]
+    while stack:
+        current = stack.pop()
+        for dep in stage_by_index[current].depends_on:
+            if dep not in closure:
+                closure.add(dep)
+                stack.append(dep)
+    return frozenset(closure)
+
+
+def _ordering_tag(doc: PlanDoc, consumer: int, supplier: int) -> str:
+    """Whether the edge "`consumer` relies on `supplier`" is reflected in
+    the engine's own dispatch order (`supplier` in the transitive closure of
+    `consumer`'s derived `Stage.depends_on`) or only in the raw declared
+    union `reliance_set` reads. This is the exact drift the supplies-wins
+    collapse can introduce: a plan author's TOML `depends_on` edge that
+    `_build_supplies` then drops from what the engine actually dispatches
+    on, once that stage also declares `[[stage.supplies]]`."""
+    if supplier in _engine_dispatch_closure(doc, consumer):
+        return _ENGINE_ORDERED
+    return _DECLARED_ONLY_ORDERING
+
+
+def _supply_edge_label(doc: PlanDoc, consumer: int, supplier: int) -> str:
+    """The supply edge from `supplier` to `consumer`, as declared on
+    `consumer`'s own `[[stage.supplies]] on = supplier`: its element (and
+    artifact, when named), or `"depends_on-only"` when `consumer` relies on
+    `supplier` only via the raw TOML `depends_on` (no typed supply)."""
+    consumer_stage = next(s for s in doc.stages if s.index == consumer)
+    for supply in consumer_stage.supplies:
+        if supply.on == supplier:
+            if supply.artifact:
+                return f"supplies `{supply.element}` (artifact: `{supply.artifact}`)"
+            return f"supplies `{supply.element}`"
+    return "depends_on-only"
 
 
 def render_topo_review_bundle(doc: PlanDoc, unit: "int | str", *, plan_sha256: str, view_dir: "Path | str") -> str:
@@ -640,10 +771,12 @@ def render_topo_review_bundle(doc: PlanDoc, unit: "int | str", *, plan_sha256: s
 
     Every marker string in the protocol section is sourced from
     `plan.REVIEW_MARKER` / `plan.VERDICT_MARKER` / `plan.PLAN_DIGEST_MARKER`
-    / `plan.CONDITION_MARKERS` — never duplicated here as a string literal
-    (finding tb22), so a reviewer's reply and this bundle's own checklist
-    can never drift onto different marker spellings."""
+    / `plan.CONDITION_MARKERS` — never duplicated here as a string literal,
+    so a reviewer's reply and this bundle's own checklist can never drift
+    onto different marker spellings."""
     label = _unit_label(unit)
+    if label != "order" and not any(s.index == int(unit) for s in doc.stages):
+        raise ValueError(f"no stage with index {unit} in plan {doc.meta.task_id!r}")
     relies_on, consumed_by = _unit_relies_on_and_consumers(doc, unit)
     first_hop_all = relies_on | consumed_by
 
@@ -664,9 +797,13 @@ def render_topo_review_bundle(doc: PlanDoc, unit: "int | str", *, plan_sha256: s
     lines.append("")
     if first_hop_all:
         for m in sorted(relies_on):
-            lines.append(f"- relies-on: stage {m}")
+            edge = "depends_on-only" if label == "order" else _supply_edge_label(doc, int(unit), m)
+            tag = _ORDER_UNIT_ORDERING if label == "order" else _ordering_tag(doc, int(unit), m)
+            lines.append(f"- stage {m}: supplier — {edge} — {tag}")
         for m in sorted(consumed_by):
-            lines.append(f"- consumed-by: stage {m}")
+            edge = _supply_edge_label(doc, m, int(unit))
+            tag = _ordering_tag(doc, m, int(unit))
+            lines.append(f"- stage {m}: customer — {edge} — {tag}")
     else:
         lines.append("- *(none — this unit has no declared reliance edges)*")
     lines.append("")
@@ -702,12 +839,16 @@ def render_topo_review_bundle(doc: PlanDoc, unit: "int | str", *, plan_sha256: s
     lines.append("## Reconciliation procedure")
     lines.append("")
     lines.append(
-        "1. Read `own.md` in the view directory (this unit's own full brief) and "
-        "compare it against this bundle's own brief above — they must match."
+        "1. Check C3/C4 first against the interfaces already inlined above "
+        "(neighbour and transitive) — most reliances resolve from these alone, "
+        "with no `Read` at all."
     )
     lines.append(
-        "2. For each first-hop neighbour, decide from the interface above whether "
-        "you need the full brief; if so, `Read` it from the view directory."
+        "2. For any first-hop neighbour whose interface above is not enough to "
+        "decide a reliance/consumer edge, `Read` its full brief from the view "
+        "directory. This unit's OWN full brief is already inlined above in "
+        "full — never `Read` it again from the view directory (it is not "
+        "there)."
     )
     lines.append(
         f"3. Check each condition below against what you've read, then reply with "
@@ -724,9 +865,26 @@ def render_topo_review_bundle(doc: PlanDoc, unit: "int | str", *, plan_sha256: s
         f"Reply with a {REVIEW_MARKER} block naming this unit's four "
         f"rely-guarantee conditions and a {VERDICT_MARKER}:"
     )
-    for marker in CONDITION_MARKERS:
-        lines.append(f"- `{marker}` {_CONDITION_TEXT[marker]}")
-    lines.append(f"- `{VERDICT_MARKER}` pass | revise | override")
+    if label == "order":
+        lines.append(f"- `{CONDITION_MARKERS[0]}` {_CONDITION_TEXT[CONDITION_MARKERS[0]]}")
+        lines.append(
+            f"- `{CONDITION_MARKERS[1]}` {_CONDITION_TEXT[CONDITION_MARKERS[1]]} — evaluated "
+            f"JOINTLY with `{CONDITION_MARKERS[3]}`, across every stage together, against the "
+            f"order's own coverage — never per-stage"
+        )
+        lines.append(
+            f"- `{CONDITION_MARKERS[2]}` not applicable — the order node delivers no product "
+            f"of its own for a consumer to rely on"
+        )
+        lines.append(
+            f"- `{CONDITION_MARKERS[3]}` {_CONDITION_TEXT[CONDITION_MARKERS[3]]} — evaluated "
+            f"JOINTLY with `{CONDITION_MARKERS[1]}`, across every stage together, against the "
+            f"order's own coverage — never per-stage"
+        )
+    else:
+        for marker in CONDITION_MARKERS:
+            lines.append(f"- `{marker}` {_CONDITION_TEXT[marker]}")
+    lines.append(f"- `{VERDICT_MARKER}` pass | revise")
     lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
