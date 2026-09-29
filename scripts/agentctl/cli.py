@@ -66,7 +66,14 @@ from .plan import (
     _venue_for,
 )
 from .text_shape import WHOLE_STAGE_ELEMENT
-from .render import cmd_plan_grants, cmd_plan_render, render_plan_grants, render_plan_md, render_stages_md
+from .render import (
+    cmd_plan_grants,
+    cmd_plan_render,
+    plan_render_stage_arg_type,
+    render_plan_grants,
+    render_plan_md,
+    render_stages_md,
+)
 from .submission import submission_advice, submission_violations
 from .state import (
     _EXECUTION_NODES,
@@ -3969,6 +3976,9 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         regression_exit=regression_exit if is_post_pass_revise else None,
         remedy_tags=[gates._remedy_tag_for_concern(c) for c in concerns],
     )
+    review.in_scope_concern_ids, review.out_of_scope_concern_ids = gates.classify_concerns(
+        scope, plan_review_concern_ids(review), review.concerns
+    )
     evidenced = is_post_pass_revise and gates._plan_review_regression_evidence(prior_pass, review, doc)
     if is_post_pass_revise and not evidenced:
         # The prior PASS stays authoritative — plan_review_passes is never
@@ -4109,10 +4119,16 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                 "regression_command_error": regression_command_error,
             },
         )
+    out_of_scope_note = ""
+    if review.out_of_scope_concern_ids:
+        out_of_scope_note = (
+            f" ({len(review.out_of_scope_concern_ids)} out-of-scope findings "
+            "recorded, not blocking)"
+        )
     return Directive(
         True, state.node, "continue",
         f"thinker review recorded for {target} (verdict={args.verdict}); "
-        "the plan-review gate is now satisfied for this plan version",
+        "the plan-review gate is now satisfied for this plan version" + out_of_scope_note,
     )
 
 
@@ -7416,16 +7432,33 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         # valve just retired, and the loop would have no exit. This is the path the
         # valve exists for: post-approval replan is where review cycles recur.
         round_release = _note_round_release(state, prblock, store)
-        message = (
-            "replan blocked: the review-round budget is spent, so the decision is "
-            "yours — see blockers"
-            if round_release
-            else "replan blocked: the corrected plan needs a thinker review "
-                 "(run: plan-review --target " + args.plan + ")"
-        )
-        return Directive(False, state.node, "plan_review", message,
-                         data={"blockers": prblock,
-                               "plan_review_round_release": round_release})
+        if round_release:
+            message = (
+                "replan blocked: the review-round budget is spent, so the decision is "
+                "yours — see blockers"
+            )
+            replan_data = {"blockers": prblock, "plan_review_round_release": round_release}
+        else:
+            try:
+                review_doc = _load(args.plan)
+            except (OSError, PlanError):
+                review_doc = None
+            delta = gates.review_delta(state, review_doc, args.plan)
+            if delta["record_scope_args"]:
+                review_commands = [
+                    "plan-review --target " + args.plan + " " + scope_arg
+                    for scope_arg in delta["record_scope_args"]
+                ]
+            else:
+                review_commands = ["plan-review --target " + args.plan]
+            message = (
+                "replan blocked: the corrected plan needs a thinker review "
+                "(run: " + "; run: ".join(review_commands)
+                + f"; render with `{delta['render_command']}`)"
+            )
+            replan_data = {"blockers": prblock, "plan_review_round_release": round_release,
+                           "review_delta": delta}
+        return Directive(False, state.node, "plan_review", message, data=replan_data)
 
     # Submission seam (b): the single NEW-side load and the check it feeds. Its placement
     # answers two separate orderings at once.
@@ -9049,9 +9082,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("plan-render"); sp.add_argument("--plan", required=True,
         help="TOML plan to render to a markdown prose view on demand (a projection, "
              "never written to disk — the TOML is the single source of truth)")
-    sp.add_argument("--stage", type=int, default=None,
-        help="render only this stage index as a brief projection, instead of "
-             "the whole plan (the spawn prompt's per-dispatch projection)")
+    sp.add_argument("--stage", type=plan_render_stage_arg_type, default=None,
+        help="render only this stage index, or a comma-separated list of stage "
+             "indices (e.g. '3,5'), as a brief projection instead of the whole "
+             "plan (the spawn prompt's per-dispatch projection, or a reviewer's "
+             "scoped delta)")
     # Accept (and ignore) --session so the harness-session auto-injection
     # (_inject_default_session) is a no-op here: rendering is a pure, session-free
     # read of the plan file, unlike every other verb which drives session state.

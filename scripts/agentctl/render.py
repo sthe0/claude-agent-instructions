@@ -14,6 +14,7 @@ carries every stage's index and title.
 """
 from __future__ import annotations
 
+import argparse
 import json
 
 from lib import kind_baselines
@@ -441,6 +442,46 @@ def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:
     return Directive(True, "(render)", "inspect", text, data={"markdown": text})
 
 
+def plan_render_stage_arg_type(raw: str) -> str:
+    """argparse `type=` for `plan-render --stage`: eagerly validates a bare int
+    or a comma-separated list of ints (e.g. '3' or '3,5') at PARSE time, so a
+    malformed value ('abc') or an empty one ('') fails with a clean argparse
+    usage error instead of either a bare ValueError surfacing deep inside
+    `_parse_stage_arg`, or (for '', which `_parse_stage_arg` would silently
+    treat as an empty index list) a silently-empty render."""
+    parts = raw.split(",")
+    if not raw or any(not part.strip() for part in parts):
+        raise argparse.ArgumentTypeError(
+            f"invalid --stage value: {raw!r} (expected an int, or a comma-separated "
+            "list of ints, e.g. '3' or '3,5')"
+        )
+    for part in parts:
+        try:
+            int(part.strip())
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                f"invalid --stage value: {raw!r} (expected an int, or a comma-separated "
+                "list of ints, e.g. '3' or '3,5')"
+            ) from None
+    return raw
+
+
+def _parse_stage_arg(raw) -> "list[int] | None":
+    """Parse `--stage` into a sorted list of stage indices, or None when unset.
+
+    Accepts a bare int — direct Namespace construction (tests), or a legacy
+    caller that bypasses argparse — or a str, either a single index ('3') or a
+    comma-separated list ('3,5'). The int branch is kept even though real CLI
+    parsing now always supplies a str (validated by `plan_render_stage_arg_type`
+    beforehand): several callers (tests, and any future non-CLI caller) build a
+    Namespace directly with a bare int, bypassing argparse entirely."""
+    if raw is None:
+        return None
+    if isinstance(raw, int):
+        return [raw]
+    return sorted(int(part.strip()) for part in str(raw).split(",") if part.strip())
+
+
 def cmd_plan_render(args, *, store=None, runner=None) -> Directive:
     """Render the declared TOML plan to markdown on demand — a read-only PROJECTION,
     never written to disk by the engine. The markdown is the Directive's detail (the
@@ -448,14 +489,21 @@ def cmd_plan_render(args, *, store=None, runner=None) -> Directive:
     data['markdown'] for programmatic capture.
 
     `--stage N` (schema-independent; reads an already-loaded PlanDoc) renders only
-    that stage via `render_stage_brief` instead of the whole plan."""
+    that stage via `render_stage_brief` instead of the whole plan; `--stage N,M`
+    renders each of those stages via `render_stages_md`, byte-identically to
+    `render_stage_brief` in the single-stage case."""
     doc = load_plan(args.plan)
-    stage_index = getattr(args, "stage", None)
-    if stage_index is not None:
+    stage_indices = _parse_stage_arg(getattr(args, "stage", None))
+    if stage_indices is None:
+        md = render_plan_md(doc)
+    elif len(stage_indices) == 1:
         try:
-            md = render_stage_brief(doc, stage_index)
+            md = render_stage_brief(doc, stage_indices[0])
         except ValueError as exc:
             return Directive(False, "(render)", "error", str(exc), data={})
     else:
-        md = render_plan_md(doc)
+        try:
+            md = render_stages_md(doc, stage_indices)
+        except ValueError as exc:
+            return Directive(False, "(render)", "error", str(exc), data={})
     return Directive(True, "(render)", "inspect", md, data={"markdown": md})
