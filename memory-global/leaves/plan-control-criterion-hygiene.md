@@ -4,7 +4,7 @@ description: Fifteen plan-authoring norms for a stage's control criterion — de
 type: feedback
 schema: leaf/v1
 created: 2026-08-31
-last_verified: 2026-09-28
+last_verified: 2026-09-29
 ---
 
 # Plan control-criterion hygiene
@@ -198,6 +198,24 @@ is the same authoring blind spot applied to the *replan-count* axis instead.
 > "anchor to something immutable" move the norm already prescribes, applied
 > across a *stage-to-stage* transition (a later stage's own cleanup) rather
 > than the whole-plan merge/rollout transition the first observation covered.
+
+> **Observed, a third time.** A sub-task's `final_check` and stage-3
+> `verify_command` both asserted a review-request status field not in
+> `('merged', 'discarded')` — "a new, unmerged PR exists" — as the success
+> shape. Reviewers merged the
+> PR after a clean review (0 open issues), the *best* possible terminal state
+> for a PR the agent itself never merged, and `verify-final` failed on exactly
+> the collision this norm predicts. The same stage's check also copied the
+> order's own requirement text verbatim (`fresh_arcadia.ya_tools`), freezing
+> an unverified schema guess the implementation legitimately corrected
+> mid-stage to `fresh_arcadia.allowed_commands` once `parse_v2_config`
+> rejected the guessed key (norm 2's class, riding the same criterion). The
+> repair accepted `status in ('open', 'merged')` as success, failing only on
+> `discarded`/absent, and replaced the "PR still open" proxy with an explicit
+> "no merge command issued by this session" check — the self-merge invariant
+> this criterion was actually meant to guard, stated directly instead of
+> through a state (open) that a fully legitimate reviewer merge was always
+> going to falsify.
 
 ### 6. Sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc
 
