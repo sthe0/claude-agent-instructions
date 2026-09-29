@@ -49,6 +49,11 @@ class BashToolUse:
     line_no: int  # 1-indexed line of the tool_use (assistant) line in the transcript
     stop_kind: str  # one of STOP_KINDS
     stop_text: str | None  # the tool_result's text; None when stop_kind == "ran"
+    # The tool_use (assistant) line's top-level "cwd" field -- the child's actual
+    # working directory when it issued this call, which follows a `cd` rather than
+    # staying pinned to the stage's launch venue. Defaults to "" so existing
+    # fixtures/callers that never populate it still construct and parse.
+    cwd: str = ""
 
 
 # Finding S4: `_classify_transcript_denials` needs file-tool denials classified
@@ -68,6 +73,8 @@ class ToolUse:
     line_no: int
     stop_kind: str
     stop_text: str | None
+    # Same "cwd" field as `BashToolUse.cwd` -- see its docstring.
+    cwd: str = ""
 
 
 def _result_text(content: object) -> str:
@@ -111,7 +118,7 @@ def parse_bash_tool_uses(path: str | Path) -> list[BashToolUse]:
     transcript file this module reads is produced by the harness itself, never
     hand-authored, so a single corrupt line should not blind the parser to every
     call around it."""
-    bash_uses: dict[str, tuple[int, str]] = {}  # tool_use_id -> (line_no, command)
+    bash_uses: dict[str, tuple[int, str, str]] = {}  # tool_use_id -> (line_no, command, cwd)
     out: list[BashToolUse] = []
     with Path(path).open(encoding="utf-8") as fh:
         for line_no, raw in enumerate(fh, start=1):
@@ -127,6 +134,7 @@ def parse_bash_tool_uses(path: str | Path) -> list[BashToolUse]:
             entry_type = entry.get("type")
             content = entry.get("message", {}).get("content") or []
             if entry_type == "assistant":
+                cwd = entry.get("cwd") or ""
                 for block in content:
                     if not isinstance(block, dict) or block.get("type") != "tool_use":
                         continue
@@ -136,7 +144,7 @@ def parse_bash_tool_uses(path: str | Path) -> list[BashToolUse]:
                     if not tool_use_id:
                         continue
                     command = block.get("input", {}).get("command", "")
-                    bash_uses[tool_use_id] = (line_no, command)
+                    bash_uses[tool_use_id] = (line_no, command, cwd)
             elif entry_type == "user":
                 for block in content:
                     if not isinstance(block, dict) or block.get("type") != "tool_result":
@@ -144,7 +152,7 @@ def parse_bash_tool_uses(path: str | Path) -> list[BashToolUse]:
                     tool_use_id = block.get("tool_use_id")
                     if tool_use_id not in bash_uses:
                         continue
-                    use_line_no, command = bash_uses.pop(tool_use_id)
+                    use_line_no, command, cwd = bash_uses.pop(tool_use_id)
                     is_error = bool(block.get("is_error"))
                     text = _result_text(block.get("content"))
                     stop_kind = _classify(entry.get("toolDenialKind"), is_error, text)
@@ -154,6 +162,7 @@ def parse_bash_tool_uses(path: str | Path) -> list[BashToolUse]:
                         line_no=use_line_no,
                         stop_kind=stop_kind,
                         stop_text=text if stop_kind != "ran" else None,
+                        cwd=cwd,
                     ))
     return out
 
@@ -168,7 +177,7 @@ def parse_tool_uses(path: str | Path) -> list[ToolUse]:
     regression test pins `parse_bash_tool_uses` DROPPING a non-Bash tool_use
     even when it has a matching tool_result, so widening its own tool-name
     filter in place would silently invert an intentionally-pinned behavior."""
-    uses: dict[str, tuple[int, str, str | None, str | None]] = {}
+    uses: dict[str, tuple[int, str, str | None, str | None, str]] = {}
     out: list[ToolUse] = []
     with Path(path).open(encoding="utf-8") as fh:
         for line_no, raw in enumerate(fh, start=1):
@@ -184,6 +193,7 @@ def parse_tool_uses(path: str | Path) -> list[ToolUse]:
             entry_type = entry.get("type")
             content = entry.get("message", {}).get("content") or []
             if entry_type == "assistant":
+                cwd = entry.get("cwd") or ""
                 for block in content:
                     if not isinstance(block, dict) or block.get("type") != "tool_use":
                         continue
@@ -207,7 +217,7 @@ def parse_tool_uses(path: str | Path) -> list[ToolUse]:
                     else:
                         command = None
                         file_path = tool_input.get("file_path", "")
-                    uses[tool_use_id] = (line_no, tool_name, command, file_path)
+                    uses[tool_use_id] = (line_no, tool_name, command, file_path, cwd)
             elif entry_type == "user":
                 for block in content:
                     if not isinstance(block, dict) or block.get("type") != "tool_result":
@@ -215,7 +225,7 @@ def parse_tool_uses(path: str | Path) -> list[ToolUse]:
                     tool_use_id = block.get("tool_use_id")
                     if tool_use_id not in uses:
                         continue
-                    use_line_no, tool_name, command, file_path = uses.pop(tool_use_id)
+                    use_line_no, tool_name, command, file_path, cwd = uses.pop(tool_use_id)
                     is_error = bool(block.get("is_error"))
                     text = _result_text(block.get("content"))
                     stop_kind = _classify(entry.get("toolDenialKind"), is_error, text)
@@ -227,5 +237,6 @@ def parse_tool_uses(path: str | Path) -> list[ToolUse]:
                         line_no=use_line_no,
                         stop_kind=stop_kind,
                         stop_text=text if stop_kind != "ran" else None,
+                        cwd=cwd,
                     ))
     return out

@@ -22,7 +22,7 @@ from enum import Enum
 
 from .grants import StageGrants
 
-SCHEMA_VERSION = 38  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 39  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -32,6 +32,10 @@ SCHEMA_VERSION = 38  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # SessionState gains plan_review_passes
                      # 38: PlanReview gains in_scope_concern_ids/out_of_scope_concern_ids
                      # (advisory-scope classification of a stage-scoped review's concerns)
+                     # 39: SessionState gains cwd_drift -- an uncovered-at-raw-text Bash
+                     # denial that becomes covered once rebased from a drifted transcript
+                     # cwd back to the stage venue (a planning artifact, not a genuine
+                     # grant-coverage gap; see `_classify_transcript_denials`)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1723,14 +1727,24 @@ class SessionState:
     #                              hash differs between immediately-before-launch and
     #                              immediately-after-exit (a live settings document
     #                              changed underneath the spawn).
-    # All five are absent on every pre-schema-36 state (absent key -> dataclass default
-    # via from_dict's cls(**data)): {}/None/[]/[]/[] is exactly "no grant activity has
-    # ever been recorded", which is true of every session that predates this field.
+    #   cwd_drift                 one dict per Bash denial classified NOT covered at
+    #                              its raw transcript text, but WOULD be covered if
+    #                              the command were rebased from the transcript's
+    #                              recorded cwd back to the stage venue -- a planning
+    #                              artifact (the child ran from a subdirectory), not
+    #                              a genuine grant-coverage gap. Never asked_user;
+    #                              never promoted by the live PERMISSION-REQUEST path
+    #                              (that path only ever scans planning_misses).
+    # All six are absent on every pre-schema-36 (cwd_drift: pre-schema-39) state
+    # (absent key -> dataclass default via from_dict's cls(**data)): {}/None/[]/[]/[]/[]
+    # is exactly "no grant activity has ever been recorded", true of every session
+    # that predates these fields.
     runtime_grants: dict[str, list[dict]] = field(default_factory=dict)
     approved_grants_sha256: str | None = None
     planning_misses: list[dict] = field(default_factory=list)
     materialization_defects: list[dict] = field(default_factory=list)
     settings_drift: list[dict] = field(default_factory=list)
+    cwd_drift: list[dict] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:

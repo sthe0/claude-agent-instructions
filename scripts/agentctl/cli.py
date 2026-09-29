@@ -5731,23 +5731,65 @@ def _consume_once_grants(state: SessionState, stage_index: int) -> None:
             entry["consumed"] = True
 
 
+def _rebase_bash_command_to_venue(command: str, drifted_cwd: str, venue: str) -> str | None:
+    """Rewrite `command` as if it had been run from `venue` instead of
+    `drifted_cwd`: tokenize it, and for each token that names a path actually
+    existing under `drifted_cwd`, replace it with that same path's spelling
+    relative to `venue`. Tokens that don't resolve to an existing path there
+    (verbs, flags, bare arguments) are left untouched. Returns None when the
+    command doesn't tokenize (unbalanced quoting) or when rebasing changed
+    nothing -- a no-op rewrite is never worth re-checking against `coverage`.
+
+    Text rewrite, not path resolution, by design: `grants.grant_covers_call`
+    matches Bash rules against the LITERAL command string (round 3, see
+    `_segment_covered`), so the only way to ask "would this be covered from
+    the venue" is to produce the literal text a venue-launched child would
+    actually have typed, then run it through that same matcher."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    changed = False
+    rebased: list[str] = []
+    for tok in tokens:
+        candidate = os.path.normpath(os.path.join(drifted_cwd, tok))
+        if os.path.exists(candidate):
+            rel = os.path.relpath(candidate, venue)
+            if not rel.startswith(".."):
+                rebased.append(rel)
+                changed = True
+                continue
+        rebased.append(tok)
+    if not changed:
+        return None
+    return shlex.join(rebased)
+
+
 def _classify_transcript_denials(
     state: SessionState, stage: Stage, coverage: _grants.StageGrants, transcript_path: str | None,
 ) -> None:
     """After a dispatched child returns, classify every permission-denial stop its
     transcript recorded against the stage's PRE-LAUNCH coverage set: covered ->
     `materialization_defects` (the grant existed; --settings/--add-dir
-    materialization failed to carry it), uncovered -> `planning_misses` (a genuine
-    miss the child correctly worked around without asking). A stop already present
-    in either ledger by `tool_use_id` is never re-appended, so a later
-    PERMISSION-REQUEST self-report for the SAME call doesn't double-count it.
+    materialization failed to carry it), uncovered -> either `cwd_drift` (a Bash
+    call denied only because the child ran it from a subdirectory of the stage
+    venue -- rebasing the command's path-like tokens back to the venue would make
+    it coverable under the SAME matcher, R6) or `planning_misses` (a genuine miss
+    the child correctly worked around without asking). A stop already present in
+    any of the three ledgers by `tool_use_id` is never re-appended, so a later
+    PERMISSION-REQUEST self-report for the SAME call doesn't double-count it --
+    and a rescan of the same transcript never reclassifies a `cwd_drift` row.
     No resolvable transcript (no `transcript_path`, or the file is absent -- the
     common case until stage 2 wires `transcript_path` onto the cost-log ledger) is a
     no-op; the `Rule:`-line self-reported fallback is `cmd_dispatch`'s job instead."""
     if not transcript_path or not Path(transcript_path).exists():
         return
     known_ids = {m.get("tool_use_id") for m in state.materialization_defects} | \
-        {m.get("tool_use_id") for m in state.planning_misses}
+        {m.get("tool_use_id") for m in state.planning_misses} | \
+        {m.get("tool_use_id") for m in state.cwd_drift}
+    venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
     for use in transcript_stops.parse_tool_uses(transcript_path):
         if use.stop_kind != "permission-denial" or use.tool_use_id in known_ids:
             continue
@@ -5772,8 +5814,14 @@ def _classify_transcript_denials(
         }
         if _grants.grant_covers_call(coverage, use.tool_name, call_input):
             state.materialization_defects.append({**row_base, "evidence": "transcript"})
-        else:
-            state.planning_misses.append({**row_base, "asked_user": False, "source": "transcript"})
+            continue
+        if use.tool_name == "Bash" and use.cwd and venue and \
+                os.path.normpath(use.cwd) != os.path.normpath(venue):
+            rebased = _rebase_bash_command_to_venue(use.command, use.cwd, venue)
+            if rebased and _grants.grant_covers_call(coverage, "Bash", {"command": rebased}):
+                state.cwd_drift.append({**row_base, "cwd": use.cwd, "rebased_command": rebased})
+                continue
+        state.planning_misses.append({**row_base, "asked_user": False, "source": "transcript"})
 
 
 def _diagnose_materialization_defect(
@@ -6037,10 +6085,13 @@ def cmd_grant_stats(args, *, store: StateStore, runner: Runner | None = None) ->
     planning_misses (denials NOT covered by a stage's effective grant set --
     correctly asked the user), materialization_defects (denials the effective
     grant set DID cover, but the child's own --settings/--add-dir materialization
-    failed to carry -- routes the stage to FAILED/DIAGNOSING, never a re-ask), and
+    failed to carry -- routes the stage to FAILED/DIAGNOSING, never a re-ask),
     settings_drift (a stage's live settings document changed underneath the
-    spawn). A pure read of state.planning_misses/materialization_defects/
-    settings_drift -- see state.py's schema-36 field block for each row's shape."""
+    spawn), and cwd_drift (a Bash denial that's only uncovered because the child
+    ran it from a subdirectory of the stage venue -- rebasing it back to the
+    venue would be covered, R6). A pure read of state.planning_misses/
+    materialization_defects/settings_drift/cwd_drift -- see state.py's schema-39
+    field block for each row's shape."""
     state = _require(store, args.session)
     asked = sum(1 for m in state.planning_misses if m.get("asked_user"))
     unasked = len(state.planning_misses) - asked
@@ -6048,6 +6099,7 @@ def cmd_grant_stats(args, *, store: StateStore, runner: Runner | None = None) ->
         "planning_misses": state.planning_misses,
         "materialization_defects": state.materialization_defects,
         "settings_drift": state.settings_drift,
+        "cwd_drift": state.cwd_drift,
         "planning_miss_counts": {"asked": asked, "unasked": unasked},
     }
     if getattr(args, "json", False):
@@ -6057,6 +6109,7 @@ def cmd_grant_stats(args, *, store: StateStore, runner: Runner | None = None) ->
             f"planning_misses: {len(state.planning_misses)} (asked={asked}, unasked={unasked})\n"
             f"materialization_defects: {len(state.materialization_defects)}\n"
             f"settings_drift: {len(state.settings_drift)}\n"
+            f"cwd_drift: {len(state.cwd_drift)}\n"
         )
     return Directive(True, state.node, "inspect", text, data=data)
 
