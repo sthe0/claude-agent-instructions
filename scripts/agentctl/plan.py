@@ -146,6 +146,7 @@ from .state import (
     Means,
     Order,
     Outcome,
+    PLAN_REVIEW_TOPO_ORDER_UNIT,
     Principle,
     Stage,
     StageStatus,
@@ -1744,6 +1745,23 @@ def order_place(meta) -> tuple:
     ),)
 
 
+def order_extra_digest(meta: PlanMeta) -> str:
+    """Digest of the order unit's own extra bits — `final_check`, `external_research`,
+    `task_id`, `delivery_worktree` — the four PlanMeta fields neither `plan_meta_digest`
+    nor any stage's `stage_interface_digest` covers, so a topo review of the order unit
+    has something to bind to beyond the meta digest it already shares with every stage."""
+    payload = repr((
+        tuple(
+            (fc.command, fc.expected_exit, fc.label, fc.venue, fc.kind)
+            for fc in meta.final_check
+        ),
+        meta.external_research,
+        meta.task_id,
+        meta.delivery_worktree,
+    ))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _structural_signature(doc: PlanDoc) -> dict:
     """The fields whose change makes a replan substantive."""
     return {
@@ -2222,6 +2240,62 @@ def plan_meta_element_keys(doc: PlanDoc) -> dict[str, str]:
 
 def plan_stage_digests(doc: PlanDoc) -> dict[int, str]:
     return {s.index: stage_element_keys(s)[WHOLE_STAGE_ELEMENT] for s in doc.stages}
+
+
+def topo_unit_binding(doc: PlanDoc, unit: str) -> dict:
+    """The exact digest/key set a CURRENT `PlanTopoReview` for `unit` (`'order'` or a
+    1-based stage index as a string, per `state.plan_review_topo_scope_unit`'s shape)
+    must match against `doc`, recomputed fresh from `doc` on every call — never cached,
+    never read off a stored record.
+
+    Always returns the same five keys regardless of unit kind, empty/"" for whichever
+    half doesn't apply, so callers (the topo recording branch, the walk stale-set, the
+    scoped-discharge comparison) can diff a stored `PlanTopoReview` against this return
+    value key-by-key without a unit-kind branch of their own:
+
+    - `meta_digest` — every unit's own copy of `plan_meta_digest(doc)`; a goal/order
+      edit stales every unit at once, the same way it already stales every stage.
+    - `order_extra_digest` — the order unit only; see `order_extra_digest`'s own
+      docstring for what it covers that `meta_digest` doesn't.
+    - `stage_key` — a stage unit only: its own whole-stage digest
+      (`stage_element_keys(stage)[WHOLE_STAGE_ELEMENT]`, the same value
+      `plan_stage_digests` reports for it).
+    - `neighbor_file_digests` — a stage unit only: `{str(i): sha256(render_stage_brief)}`
+      for every `i` in `first_hop(doc, n)` — the reviewer's own reading list for a
+      --review-topo bundle on this unit, so a neighbour's method/procedure edit (which
+      moves its brief but not its `stage_key`) still stales this unit's record.
+    - `interface_keys` — a stage unit only: `{str(i): stage_interface_digest(...)}` for
+      every `i` in `reliance_closure(doc, n) - reliance_set(doc, n)` — the further-out
+      ring the reviewer read for context but whose file wasn't in the bundle, keyed
+      narrower than a full brief (interface only) since that's all that ring commits to.
+    """
+    meta_digest = plan_meta_digest(doc)
+    if unit == PLAN_REVIEW_TOPO_ORDER_UNIT:
+        return {
+            "meta_digest": meta_digest,
+            "stage_key": "",
+            "neighbor_file_digests": {},
+            "interface_keys": {},
+            "order_extra_digest": order_extra_digest(doc.meta),
+        }
+    n = int(unit)
+    stage = _stage_by_index(doc, n)
+    from .render import render_stage_brief
+    neighbor_file_digests = {
+        str(i): hashlib.sha256(render_stage_brief(doc, i).encode("utf-8")).hexdigest()
+        for i in sorted(first_hop(doc, n))
+    }
+    interface_keys = {
+        str(i): stage_interface_digest(doc, _stage_by_index(doc, i))
+        for i in sorted(reliance_closure(doc, n) - reliance_set(doc, n))
+    }
+    return {
+        "meta_digest": meta_digest,
+        "stage_key": stage_element_keys(stage)[WHOLE_STAGE_ELEMENT],
+        "neighbor_file_digests": neighbor_file_digests,
+        "interface_keys": interface_keys,
+        "order_extra_digest": "",
+    }
 
 
 def plan_content_digest(doc: PlanDoc) -> str:
