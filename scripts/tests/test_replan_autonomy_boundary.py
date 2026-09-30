@@ -282,24 +282,20 @@ def test_substantive_replan_within_boundary_self_approved(eng):
     assert eng.run("approve", session="r1", by="agent")["ok"] is True
 
 
-@pytest.mark.parametrize("variant,kwargs", [
-    ("new_file", dict(extra_outputs=("brand_new_module.py",))),
-    ("new_specialist", dict(executor2="spawn:tech-writer")),
-])
-def test_new_resource_goes_to_user(eng, variant, kwargs):
-    plan = approved_order(eng)
-    d = eng.open("n1", eng.write(plan_text(**kwargs)))
+def assert_new_resource_goes_to_user(eng: Eng, **plan_kwargs):
+    approved_order(eng)
+    d = eng.open("n1", eng.write(plan_text(**plan_kwargs)))
     assert action(d) == "await_user_approval"
     assert d["marker"] == "PLAN-READY"
     assert autonomy(d)["extra_resources"]
 
 
 def test_new_file_resource_goes_to_user(eng):
-    test_new_resource_goes_to_user(eng, "new_file", dict(extra_outputs=("brand_new_module.py",)))
+    assert_new_resource_goes_to_user(eng, extra_outputs=("brand_new_module.py",))
 
 
 def test_new_specialist_kind_goes_to_user(eng):
-    test_new_resource_goes_to_user(eng, "new_specialist", dict(executor2="spawn:tech-writer"))
+    assert_new_resource_goes_to_user(eng, executor2="spawn:tech-writer")
 
 
 def test_new_landing_target_goes_to_user(eng):
@@ -310,33 +306,27 @@ def test_new_landing_target_goes_to_user(eng):
     assert any("ticket/other" in json.dumps(r) for r in autonomy(d)["extra_resources"])
 
 
-@pytest.mark.parametrize("kwargs", [
-    dict(goal="Demonstrate a different goal entirely"),
-    dict(req="the fixture plan meets a different requirement"),
-    dict(place="a different functional place"),
-    dict(customer="someone-else"),
-    dict(traceability=True),
-])
-def test_order_change_goes_to_user(eng, kwargs):
+def assert_order_change_goes_to_user(eng: Eng, *variants: dict):
     approved_order(eng)
-    d = eng.open("o1", eng.write(plan_text(**kwargs)))
-    assert action(d) == "await_user_approval"
-    assert autonomy(d)["reason"]
+    for i, plan_kwargs in enumerate(variants):
+        d = eng.open(f"o{i}", eng.write(plan_text(**plan_kwargs), f"order-variant-{i}.toml"))
+        assert action(d) == "await_user_approval", plan_kwargs
+        assert autonomy(d)["reason"]
 
 
 def test_goal_wording_change_goes_to_user(eng):
-    test_order_change_goes_to_user(eng, dict(goal="Demonstrate a different goal entirely"))
+    assert_order_change_goes_to_user(eng, dict(goal="Demonstrate a different goal entirely"))
 
 
 def test_requirement_text_change_goes_to_user(eng):
-    test_order_change_goes_to_user(eng, dict(req="the fixture plan meets a different requirement"))
+    assert_order_change_goes_to_user(eng, dict(req="the fixture plan meets a different requirement"))
 
 
 def test_functional_place_traceability_customer_change_goes_to_user(eng):
-    test_order_change_goes_to_user(eng, dict(place="a different functional place"))
-    for i, kwargs in enumerate((dict(customer="someone-else"), dict(traceability=True))):
-        d = eng.open(f"o-{i}", eng.write(plan_text(**kwargs)))
-        assert action(d) == "await_user_approval"
+    assert_order_change_goes_to_user(
+        eng, dict(place="a different functional place"), dict(customer="someone-else"),
+        dict(traceability=True),
+    )
 
 
 def test_refinement_moving_order_digest_goes_to_user(eng):
@@ -445,6 +435,22 @@ def test_first_thinker_verdict_per_identity_set_survives_byte_edit(eng, venue):
     assert action(eng.open("t2", retitled)) == "self_approve"
     other = eng.write(cmd_plan(venue, "frobnicate --medium"))
     assert action(eng.open("t3", other)) == "await_user_approval"
+
+
+def test_first_thinker_verdict_not_carried_across_user_reapproval(eng, venue):
+    base = cmd_plan(venue)
+    approved_order(eng, base)
+    slow = eng.write(cmd_plan(venue, "frobnicate --slow"))
+    eng.open("t1", slow)
+    thinker_review(eng, "t1", slow)
+    assert action(eng.open("t2", slow)) == "self_approve"
+    retitled = eng.write(base.replace('title = "', 'title = "Reapproved ', 1), "reapproved.toml")
+    eng.open("t3", retitled)
+    assert eng.run("approve", session="t3", by="user")["ok"] is True
+    assert [r["by"] for r in eng.ledger(retitled)["records"]] == ["user", "user"]
+    d = eng.open("t4", slow)
+    assert action(d) == "await_user_approval"
+    assert autonomy(d)["thinker_pass"] is False
 
 
 def test_declared_unresolved_wildcard_rule_goes_to_user_despite_thinker_pass(eng, venue):
@@ -772,5 +778,178 @@ def test_agent_acknowledge_keeps_spend_baseline(eng):
     eng.diagnose("a1")
     assert ack(eng)["ok"] is True
     assert eng.state("a1").effort_baseline["spend"] == pytest.approx(0.0)
+
+
+# --- renegotiation at the diagnosing-replan ceiling --------------------------------------
+
+
+def at_ceiling(eng: Eng, sid: str = "a1", **first_record) -> str:
+    """An agent session failed into DIAGNOSING with the task at the replan ceiling and a
+    complete record `first_tag` that predates the (recorded) bare-replan refusal."""
+    from agentctl import task_accumulator
+
+    plan = approved_order(eng)
+    agent_session(eng, sid, plan, execute=False)
+    eng.fail_stage(sid)
+    task_accumulator.add(f"task-{sid}", "replan_count", Thresholds().effort_replan_absolute(),
+                         session_id="seed", now=None)
+    eng.diagnose(sid, "a", **first_record)
+    return plan
+
+
+def renegotiate(eng: Eng, sid: str, replanned: str, decision: str = "continue", **flags):
+    return eng.run("replan", session=sid, plan=replanned, renegotiation_decision=decision,
+                   renegotiated_by="agent", renegotiation_note="within the boundary", **flags)
+
+
+def ceiling_refusal(eng: Eng, sid: str, replanned: str):
+    d = eng.run("replan", session=sid, plan=replanned)
+    assert d["marker"] == "ESCALATE_TO_USER" and d["action"] == "renegotiate", d
+    return d
+
+
+def test_agent_renegotiation_continue_after_planning_cycle_within_boundary_accepted(eng):
+    at_ceiling(eng)
+    replanned = eng.write(plan_text(stage3=True))
+    ceiling_refusal(eng, "a1", replanned)
+    eng.diagnose("a1", "b")
+    d = renegotiate(eng, "a1", replanned)
+    assert d["ok"] is True, d
+    assert action(d) == "self_approve"
+    assert eng.state("a1").renegotiations[-1]["by"] == "agent"
+
+
+@pytest.mark.parametrize("gap, needle", [
+    (dict(difference=False), "differences_to_remove"),
+    (dict(normalize=False), "normalization"),
+])
+def test_agent_renegotiation_continue_requires_planning_difficulty_record(eng, gap, needle):
+    at_ceiling(eng, **gap)
+    replanned = eng.write(plan_text(stage3=True))
+    ceiling_refusal(eng, "a1", replanned)
+    eng.diagnose("a1", "b", **gap)
+    refused = renegotiate(eng, "a1", replanned)
+    assert refused["ok"] is False
+    assert needle in refused["detail"]
+    assert not eng.state("a1").renegotiations
+
+
+def test_agent_renegotiation_continue_refuses_record_declared_before_ceiling(eng):
+    at_ceiling(eng)
+    replanned = eng.write(plan_text(stage3=True))
+    ceiling_refusal(eng, "a1", replanned)
+    refused = renegotiate(eng, "a1", replanned)
+    assert refused["ok"] is False
+    assert "predates the ceiling event" in refused["detail"]
+
+
+def test_agent_renegotiation_refused_when_resources_widen(eng):
+    at_ceiling(eng)
+    widened = eng.write(plan_text(stage3=True, extra_outputs=("brand_new_module.py",)))
+    ceiling_refusal(eng, "a1", widened)
+    eng.diagnose("a1", "b")
+    refused = renegotiate(eng, "a1", widened)
+    assert refused["ok"] is False
+    assert "outside the approved boundary" in refused["detail"]
+
+
+def test_agent_renegotiation_refused_when_order_changes(eng):
+    at_ceiling(eng)
+    moved = eng.write(plan_text(goal="Demonstrate a different goal entirely"))
+    ceiling_refusal(eng, "a1", moved)
+    eng.diagnose("a1", "b")
+    refused = renegotiate(eng, "a1", moved)
+    assert refused["ok"] is False
+    assert "outside the approved boundary" in refused["detail"]
+
+
+def test_agent_cannot_rescope_or_abandon(eng):
+    at_ceiling(eng)
+    replanned = eng.write(plan_text(stage3=True))
+    ceiling_refusal(eng, "a1", replanned)
+    eng.diagnose("a1", "b")
+    for decision in ("rescope", "abandon"):
+        refused = renegotiate(eng, "a1", replanned, decision)
+        assert refused["ok"] is False
+        assert "that is the user's decision" in refused["detail"]
+    assert eng.state("a1").node == Node.DIAGNOSING.value
+
+
+# --- pushing to trunk is never self-granted ---------------------------------------------
+
+
+def test_trunk_push_self_grant_goes_to_user(eng):
+    plan = approved_order(eng, plan_text(stage2_extra=LAND_MAIN))
+    agent_session(eng, "a1", plan, execute=False)
+    eng.fail_stage("a1")
+    eng.diagnose("a1")
+    pushing = eng.write(plan_text(stage2_extra=LAND_MAIN + grant_block(PUSH_MAIN), stage3=True))
+    d = eng.run("replan", session="a1", plan=pushing)
+    assert d["marker"] == "PLAN-READY", d
+    assert action(d) == "await_user_approval"
+    extra = autonomy(d)["extra_resources"]
+    assert any("vcs_ref" in json.dumps(r) and "origin" in json.dumps(r) and "main" in json.dumps(r)
+               and "push" in json.dumps(r) for r in extra), extra
+
+    eng.park_permission("a1", PUSH_MAIN)
+    granted = eng.run("resolve_permission", session="a1", decision="granted", by="agent",
+                      scope="stage", rule=[PUSH_MAIN])
+    assert granted["ok"] is False
+    assert "not covered by any resource the customer approved" in granted["detail"]
+
+
+# --- the whole cycle through the real entry point ---------------------------------------
+
+
+def sub(eng: Eng, cmd: str, **flags) -> dict:
+    argv = [sys.executable, str(SCRIPTS / "agentctl-cli.py"), "--state-root", str(eng.root),
+            cmd.replace("_", "-")]
+    for name, value in flags.items():
+        flag = "--" + name.replace("_", "-")
+        if value is True:
+            argv.append(flag)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                argv.extend([flag, str(item)])
+        elif value is not None and value is not False:
+            argv.extend([flag, str(value)])
+    done = subprocess.run(argv, capture_output=True, text=True, env=os.environ.copy(), timeout=120)
+    return json.loads(done.stdout)
+
+
+def test_e2e_agent_replan_cycle_without_user(eng):
+    plan = approved_order(eng)
+    for step in ("start", "classify", "plan", "submit_plan"):
+        flags = {
+            "start": dict(task="task-e2e", goal="g", done_criterion="dc"),
+            "classify": dict(architectural=True, files=5, changed_lines=200, wall_clock_min=60),
+            "plan": {},
+            "submit_plan": dict(plan=plan),
+        }[step]
+        d = sub(eng, step, session="e1", **flags)
+    assert action(d) == "self_approve", d
+    assert sub(eng, "approve", session="e1", by="agent")["ok"] is True
+    sub(eng, "partition", session="e1")
+    sub(eng, "next_stage", session="e1")
+    eng.seed_replans("e1", Thresholds().effort_replan_absolute())
+    fired = sub(eng, "record_result", session="e1", status="passed", actual="ok",
+                control="reviewed: ok", observation=OBSERVATIONS[0])
+    assert fired["data"]["agent_route"]["route"] == "agent_planning_difficulty_cycle", fired
+    for step, flags in (
+        ("declare", dict(expected="e", actual="a", mismatch="m")),
+        ("investigate", dict(localized_expectation="le", localized_actual="la",
+                             hypothesis=["h1", "h2"])),
+        ("critique", dict(functional_ground="fg", replanning_task="rt",
+                          failure_address="нормативное", difference_to_remove="d")),
+        ("normalize", dict(factor="f", level="note")),
+    ):
+        sub(eng, step, session="e1", **flags)
+    assert sub(eng, "fire_acknowledge", session="e1", decision="revise", by="agent")["ok"] is True
+    replanned = eng.write(plan_text(stage3=True))
+    d = sub(eng, "replan", session="e1", plan=replanned)
+    assert action(d) == "self_approve", d
+    assert sub(eng, "approve", session="e1", by="agent")["ok"] is True
+    assert [e.get("by") for e in eng.state("e1").history if e.get("event") == "approve"] == ["agent", "agent"]
+    assert [r["by"] for r in eng.ledger(plan)["records"]] == ["user"]
 
 
