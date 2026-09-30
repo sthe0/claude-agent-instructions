@@ -60,7 +60,7 @@ common_dir="$(git -C "$source_real" rev-parse --path-format=absolute --git-commo
 
 created_root=""
 if [[ -z "$root" ]]; then
-  root="$(mktemp -u /tmp/instruction-sandbox.XXXXXX)"
+  root="$(mktemp -d /tmp/instruction-sandbox.XXXXXX)"
   created_root=1
 fi
 root_real="$(readlink -m "$root")"
@@ -90,12 +90,14 @@ if [[ -n "$dry_run" ]]; then
 fi
 
 mkdir -p "$root_real"
+built=""
 cleanup_on_failure() {
-  if [[ -n "$created_root" && -n "$root_real" && "$root_real" == /tmp/instruction-sandbox.* ]]; then
+  if [[ -z "$built" && -n "$created_root" && -n "$root_real" && "$root_real" == /tmp/instruction-sandbox.* ]]; then
     rm -rf -- "$root_real"
   fi
 }
-trap cleanup_on_failure ERR
+# EXIT, not ERR: `die` calls `exit 2` directly, which an ERR trap never sees.
+trap cleanup_on_failure EXIT
 
 # Clone from the common git dir so a linked-worktree --source works the same as
 # a plain checkout; the SHA was already resolved in --source.
@@ -130,5 +132,5 @@ env "${unset_args[@]}" \
   printf 'ISB_CORE_SHA=%s\n' "$sha"
 } > "$root_real/sandbox.env"
 
-trap - ERR
+built=1
 echo "$root_real"
