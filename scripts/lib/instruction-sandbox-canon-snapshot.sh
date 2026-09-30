@@ -11,13 +11,21 @@
 #
 # Canon checkout: CLAUDE_INSTRUCTIONS_CANON, default $HOME/claude-agent-instructions.
 # Exits nonzero rather than print a partial listing.
+#
+# --composer <plugin.sh>  also append that project composer's own composer_snapshot
+#                         lines, each prefixed `composer:<plugin name> `; a failing
+#                         composer_snapshot fails the whole run.
 set -euo pipefail
 shopt -s inherit_errexit
 
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
-  exit 0
-fi
+composer=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --composer) [[ $# -ge 2 ]] || { echo "--composer needs a value" >&2; exit 2; }; composer="$2"; shift 2 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
 
 canon="${CLAUDE_INSTRUCTIONS_CANON:-$HOME/claude-agent-instructions}"
 agent_home="$HOME/.claude-agent"
@@ -80,3 +88,10 @@ listing() {
 
 out="$(listing)"
 printf '%s\n' "$out" | LC_ALL=C sort
+
+if [[ -n "$composer" ]]; then
+  prefix="composer:$(basename "$composer" .sh)"
+  lines="$(bash -c 'source "$1" || exit 1; composer_snapshot' _ "$composer")" \
+    || { echo "composer_snapshot failed: $composer" >&2; exit 1; }
+  while IFS= read -r line; do printf '%s %s\n' "$prefix" "$line"; done <<< "$lines"
+fi

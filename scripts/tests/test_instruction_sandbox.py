@@ -302,3 +302,257 @@ def test_assert_scrub_effective_goes_red_on_leak(tmp_path):
     assert_scrub_effective(dump, ["CLAUDE_POLICY_LEDGER"], {}, {})
     with pytest.raises(AssertionError):
         assert_scrub_effective(dump, ["CLAUDE_POLICY_LEDGER"], {"d": {"f": b"1"}}, {"d": {"f": b"2"}})
+
+
+PROJECT_CHECK = REPO / "scripts" / "lib" / "instruction-sandbox-project-check.sh"
+
+_COMPOSER = """composer_detect() {{ [[ -f "$1/.marker" ]]; }}
+composer_protected_paths() {{ echo "{protected}"; }}
+composer_validate() {{ {validate}; }}
+composer_compose() {{
+  mkdir -p "$ISB_PROJECT_ROOT/.claude"
+  echo project > "$ISB_PROJECT_ROOT/CLAUDE.md"
+  ln -s "$1/inner" "$ISB_PROJECT_ROOT/.claude/inner"
+{extra}
+}}
+composer_snapshot() {{ {snapshot}; }}
+"""
+
+
+def _composer(plugins: Path, name: str, protected: Path, validate="true", extra="", snapshot="echo state-a") -> Path:
+    (plugins / "composers").mkdir(parents=True, exist_ok=True)
+    path = plugins / "composers" / f"{name}.sh"
+    path.write_text(_COMPOSER.format(protected=protected, validate=validate, extra=extra, snapshot=snapshot))
+    return path
+
+
+def _stub_source(tmp_path: Path) -> Path:
+    src = tmp_path / "src"
+    (src / "scripts").mkdir(parents=True)
+    stub = src / "scripts" / "setup-symlinks.sh"
+    stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+    stub.chmod(0o755)
+    _git(src, "init", "-q")
+    _git(src, "add", "-A")
+    _git(src, "commit", "-q", "-m", "stub")
+    return src
+
+
+@pytest.fixture
+def project_env(tmp_path, fake_home):
+    mount = tmp_path / "mount"
+    (mount / "inner").mkdir(parents=True)
+    (mount / ".marker").write_text("")
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    plugins = tmp_path / "plugins"
+    env = _base_env(fake_home)
+    env["CLAUDE_INSTRUCTION_SANDBOX_PLUGIN_DIR"] = str(plugins)
+    return mount, protected, plugins, env
+
+
+def _refused(res, root: Path):
+    assert res.returncode != 0
+    assert "refus" in res.stderr.lower(), res.stderr
+    assert not root.exists()
+
+
+def _build(args, env):
+    return _run([str(SANDBOX), "--source", str(REPO), *args], env)
+
+
+def test_project_mount_refuses_without_composer(tmp_path, project_env):
+    mount, _, plugins, env = project_env
+    (plugins / "composers").mkdir(parents=True)
+    root = tmp_path / "r"
+    res = _build(["--root", str(root), "--project-mount", str(mount)], env)
+    _refused(res, root)
+    assert str(plugins) in res.stderr
+
+
+def test_project_mount_refuses_ambiguous_composers(tmp_path, project_env):
+    mount, protected, plugins, env = project_env
+    _composer(plugins, "one", protected)
+    _composer(plugins, "two", protected)
+    root = tmp_path / "r"
+    _refused(_build(["--root", str(root), "--project-mount", str(mount)], env), root)
+    ok = _build(["--root", str(root), "--project-mount", str(mount), "--project-composer", "one", "--dry-run"], env)
+    assert ok.returncode == 0, ok.stderr
+
+
+def test_project_mount_refuses_failed_validation(tmp_path, project_env):
+    mount, protected, plugins, env = project_env
+    _composer(plugins, "one", protected, validate="echo nope >&2; return 1")
+    root = tmp_path / "r"
+    _refused(_build(["--root", str(root), "--project-mount", str(mount)], env), root)
+
+
+def test_project_mount_refuses_protected_path_and_alias(tmp_path, project_env):
+    _, protected, plugins, env = project_env
+    (protected / ".marker").write_text("")
+    (protected / "sub").mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(protected)
+    _composer(plugins, "one", protected)
+    for mount in (protected, protected / "sub", alias, alias / "sub"):
+        root = tmp_path / "r"
+        res = _build(["--root", str(root), "--project-mount", str(mount), "--project-composer", "one"], env)
+        _refused(res, root)
+        assert "protected" in res.stderr
+
+
+def test_project_mount_refuses_mount_inside_root(tmp_path, project_env):
+    _, protected, plugins, env = project_env
+    root = tmp_path / "r"
+    inner = root / "mount"
+    inner.mkdir(parents=True)
+    (inner / ".marker").write_text("")
+    _composer(plugins, "one", protected)
+    res = _build(["--root", str(root), "--project-mount", str(inner)], env)
+    assert res.returncode != 0 and "refus" in res.stderr.lower()
+    assert _tree(root) == {"mount": None, "mount/.marker": b""}
+
+
+def test_project_composition_passes_check_and_records_keys(tmp_path, project_env):
+    mount, protected, plugins, env = project_env
+    composer = _composer(plugins, "one", protected)
+    src = _stub_source(tmp_path)
+    root = tmp_path / "r"
+    res = _run([str(SANDBOX), "--source", str(src), "--root", str(root), "--project-mount", str(mount)], env)
+    assert res.returncode == 0, res.stderr
+    keys = dict(ln.split("=", 1) for ln in (root / "sandbox.env").read_text().splitlines())
+    assert keys["ISB_PROJECT_MOUNT"] == str(mount)
+    assert keys["ISB_COMPOSER"] == str(composer)
+    assert keys["ISB_PROTECTED"] == str(protected)
+    check = _run([str(PROJECT_CHECK), str(root)], env)
+    assert check.returncode == 0, check.stdout
+    assert check.stdout.startswith("CHECK project:structure PASS")
+
+
+def test_failed_compose_assertions_fail_build(tmp_path, project_env):
+    mount, protected, plugins, env = project_env
+    _composer(plugins, "one", protected, extra='rm -rf "$ISB_PROJECT_ROOT/CLAUDE.md"')
+    src = _stub_source(tmp_path)
+    res = _run([str(SANDBOX), "--source", str(src), "--root", str(tmp_path / "r"), "--project-mount", str(mount)], env)
+    assert res.returncode != 0
+    assert "CLAUDE.md" in res.stderr
+
+
+def _composed_root(tmp_path: Path):
+    mount = tmp_path / "cmount"
+    protected = tmp_path / "cprotected"
+    root = tmp_path / "croot"
+    (mount / "inner").mkdir(parents=True)
+    protected.mkdir()
+    (protected / "x").write_text("")
+    (root / "project" / ".claude").mkdir(parents=True)
+    (root / "project" / "CLAUDE.md").write_text("p")
+    (root / "sandbox.env").write_text(f"ISB_PROJECT_MOUNT={mount}\nISB_PROTECTED={protected}\n")
+    return root, mount, protected
+
+
+def _check(root: Path) -> subprocess.CompletedProcess:
+    return _run([str(PROJECT_CHECK), str(root)], os.environ.copy())
+
+
+def test_project_check_fails_on_dangling_and_protected_links(tmp_path):
+    root, mount, protected = _composed_root(tmp_path)
+    claude = root / "project" / ".claude"
+    assert _check(root).returncode == 0
+
+    (claude / "dangling").symlink_to(mount / "missing")
+    res = _check(root)
+    assert res.returncode == 1 and "FAIL" in res.stdout and "dangling" in res.stdout
+    (claude / "dangling").unlink()
+
+    (mount / "hooks").symlink_to(protected / "x")
+    (claude / "hooks").symlink_to(mount / "hooks")
+    res = _check(root)
+    assert res.returncode == 1 and str(protected) in res.stdout
+    (claude / "hooks").unlink()
+
+    outside = tmp_path / "outside"
+    outside.write_text("")
+    (claude / "out").symlink_to(outside)
+    assert _check(root).returncode == 1
+
+
+def test_project_check_inspects_settings_for_protected_paths(tmp_path):
+    root, mount, protected = _composed_root(tmp_path)
+    claude = root / "project" / ".claude"
+
+    def hook(path):
+        return json.dumps({"hooks": {"Stop": [{"command": f"python3 {path}/scripts/h.py"}]}})
+
+    (claude / "settings.json").write_text(hook(root / "project"))
+    assert _check(root).returncode == 0
+
+    (claude / "settings.json").write_text(hook(protected))
+    res = _check(root)
+    assert res.returncode == 1 and "settings.json" in res.stdout and str(protected) in res.stdout
+
+    (claude / "settings.json").write_text(hook(f"{protected}-sibling"))
+    assert _check(root).returncode == 0
+
+    (claude / "settings.json").unlink()
+    (mount / "local.json").write_text(hook(protected))
+    (claude / "settings.local.json").symlink_to(mount / "local.json")
+    res = _check(root)
+    assert res.returncode == 1 and "settings.local.json" in res.stdout
+
+
+def test_project_check_fails_on_missing_structure(tmp_path):
+    root, _, _ = _composed_root(tmp_path)
+    (root / "project" / "CLAUDE.md").unlink()
+    assert _check(root).returncode == 1
+
+
+def test_snapshot_composer_lines_and_failure(canon_env, tmp_path):
+    _, _, env = canon_env
+    protected = tmp_path / "p"
+    plugin = _composer(tmp_path / "pl", "proj", protected, snapshot="echo a; echo b")
+    plain = _snap(env)
+    res = _run([str(SNAPSHOT), "--composer", str(plugin)], env)
+    assert res.returncode == 0, res.stderr
+    assert res.stdout == plain + "composer:proj a\ncomposer:proj b\n"
+    bad = _composer(tmp_path / "pl", "bad", protected, snapshot="return 3")
+    assert _run([str(SNAPSHOT), "--composer", str(bad)], env).returncode != 0
+
+
+_PROBE = """
+env > "$ISB_ROOT/compose.env"
+for V in {vars}; do
+  dir="$(eval echo "\\${{$V:-$ISB_ROOT/fallback-$V}}")"
+  mkdir -p "$dir"
+  echo probe > "$dir/probe"
+done
+d="${{CLAUDE_INSTRUCTION_SANDBOX_PLUGIN_DIR:-$ISB_ROOT/fallback-CLAUDE_INSTRUCTION_SANDBOX_PLUGIN_DIR}}/composers"
+mkdir -p "$d"
+echo probe > "$d/probe"
+"""
+
+
+def test_compose_scrub_keeps_caller_overrides_away(tmp_path, fake_home):
+    mount = tmp_path / "mount"
+    (mount / "inner").mkdir(parents=True)
+    (mount / ".marker").write_text("")
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    env = _base_env(fake_home)
+    real_dirs = {}
+    for var in SCRUB_VARS:
+        d = tmp_path / "real" / var
+        d.mkdir(parents=True)
+        env[var] = str(d)
+        real_dirs[var] = d
+    plugins = real_dirs["CLAUDE_INSTRUCTION_SANDBOX_PLUGIN_DIR"]
+    _composer(plugins, "one", protected, extra=_PROBE.format(vars=" ".join(SCRUB_VARS)))
+    src = _stub_source(tmp_path)
+    before = {v: _tree(d) for v, d in real_dirs.items()}
+
+    root = tmp_path / "r"
+    res = _run([str(SANDBOX), "--source", str(src), "--root", str(root), "--project-mount", str(mount)], env)
+    assert res.returncode == 0, res.stderr
+
+    after = {v: _tree(d) for v, d in real_dirs.items()}
+    assert_scrub_effective(root / "compose.env", SCRUB_VARS, before, after)
