@@ -845,7 +845,7 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
 _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
     "review round budget exhausted at round {rounds} (Rule-of-Three — config.md's "
     "effort-replan-absolute, reused) — no further thinker review is required, but the "
-    "decision is yours and must be recorded. Two exits, both executable from this "
+    "decision is the coordinator's and must be recorded. Two exits, both executable from this "
     "state: (1) run a fresh whole-plan thinker review and record plan-review --verdict "
     "pass — this clears the gate exactly as an on-budget pass always does, because it "
     "is an honest pass, not an override; or (2) go ahead with the plan as it stands, "
@@ -874,7 +874,7 @@ _PLAN_REVIEW_ROUND_RELEASE_MESSAGE_POST_PASS = (
     "recorded this approval cycle, and a recorded pass is terminal: 'run a fresh "
     "whole-plan thinker review' is no longer an exit, because an on-budget pass would have "
     "cleared the gate directly rather than reaching this message at all. The decision "
-    "is yours and must be recorded. Two exits, both executable from this state: (1) go "
+    "is the coordinator's and must be recorded. Two exits, both executable from this state: (1) go "
     "ahead with the plan as it stands, without a further review, by running "
     "plan-review --verdict override --reviewer <you> --note <why it is acceptable>; or "
     "(2) edit the plan as the concern proposes (cut or add) and re-apply it by the "
@@ -935,7 +935,7 @@ def plan_review_round_release_active(state: SessionState | None, thr: Thresholds
 PLAN_ENUMERATE_ROUND_RELEASE_MESSAGE = (
     "enumeration round budget exhausted at pass {passes} (Rule-of-Three — config.md's "
     "effort-replan-absolute, reused) — no further re-run is required, but the decision is "
-    "yours and must be recorded: to proceed with the plan as it stands, run "
+    "the coordinator's and must be recorded: to proceed with the plan as it stands, run "
     "question-enumerate-escape --reason enumerate_rounds_exhausted --note <why the current "
     "plan is acceptable>; to refine instead, edit the plan and re-run question-enumerate "
     "— the budget does not refill on an edit, so a re-run does not by itself open this gate; "
@@ -1791,7 +1791,7 @@ def acceptance_review_blockers(state: SessionState, stage: "_Stage") -> list[str
 _CODE_REVIEW_ROUND_RELEASE_MESSAGE = (
     "code review round budget exhausted at round {rounds} (Rule-of-Three — config.md's "
     "effort-replan-absolute, reused) — no further code-reviewer pass is required, but the "
-    "decision is yours and must be recorded: to accept the code as it stands, run "
+    "decision is the coordinator's and must be recorded: to accept the code as it stands, run "
     "code-review --verdict override --reviewer <you> --note <why it is acceptable>; "
     "to request changes instead, address them and re-run code-review — the budget does "
     "not refill, so a re-review does not by itself open this gate; record-result still "

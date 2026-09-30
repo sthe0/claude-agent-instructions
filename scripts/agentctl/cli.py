@@ -537,6 +537,96 @@ def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: f
     return fire
 
 
+def _autonomy_for(state: SessionState, doc) -> dict:
+    """`gates.autonomy_boundary` for `doc`, against the ledger of the order this session
+    was user-approved under (the baseline plan's order key), so a changed order reads as
+    `order_changed` rather than as an empty ledger of its own."""
+    key = _ledgered_order_key(state) or order_digest(doc)
+    ledger = order_approvals.get(key)
+    protected = _resources.protected_permission_surfaces(
+        repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
+        ledger_dir=str(order_approvals._root(None)),
+    )
+    view = plan_resources.compute_boundary_view(doc, order_digest(doc), venue=_venue_for(doc))
+    return gates.autonomy_boundary(
+        ledger, view, ledger.get("first_thinker_verdicts"), protected=protected,
+    )
+
+
+def _record_customer_stage_grants(state: SessionState, by: str, scope: str, entries: list[dict]) -> None:
+    """A customer's `--scope stage` grant widens the order's approved set for later
+    replans; a `once` grant is a single re-launch and never does."""
+    customer_id = _order_customer_id(state)
+    if scope != "stage" or not customer_id or by.strip().casefold() != customer_id.casefold():
+        return
+    try:
+        doc = load_plan(state.plan_path)
+    except (OSError, PlanError):
+        return
+    venue = _venue_for(doc)
+    key = order_digest(doc)
+    for entry in entries:
+        if "rule" in entry:
+            resolution = plan_resources.resolve_rule_grant(entry["rule"], venue)
+        else:
+            resolution = plan_resources.resolve_add_dir_grant(entry["path"], entry["mode"])
+        if resolution.status != "resolved":
+            continue
+        for resource in resolution.resources:
+            order_approvals.record_customer_grant(
+                key, resource=resource, by=by, at=dt.datetime.now(dt.timezone.utc).isoformat(),
+            )
+
+
+def _agent_review_override(state: SessionState) -> dict | None:
+    """The coordinator's own plan-review override on record, which the user must see
+    named when the plan reaches them: the review was waived, not passed."""
+    for review in (state.plan_review, *state.plan_stage_reviews.values()):
+        if (review is not None and review.verdict == gates._PLAN_REVIEW_OVERRIDE
+                and (review.reviewer or "").strip().casefold() == AGENT_ACTOR):
+            return {"reviewer": review.reviewer, "scope": review.scope, "note": review.note,
+                    "plan_path": review.plan_path}
+    return None
+
+
+def _record_first_thinker_verdict(state: SessionState, doc, review, scope: str) -> None:
+    """Write the thinker's first whole-plan verdict on the changed unresolved commands
+    into the order's ledger, once per (approved version, changed identities) key. An
+    override, an unattested review or a stage-scoped one is never that verdict."""
+    if doc is None or scope or not review.plan_sha256:
+        return
+    if review.verdict not in (gates._PLAN_REVIEW_PASS, gates._PLAN_REVIEW_REVISE):
+        return
+    key = _ledgered_order_key(state)
+    if key is None:
+        return
+    verdict_key = _autonomy_for(state, doc)["first_verdict_key"]
+    if verdict_key is None:
+        return
+    order_approvals.record_first_thinker_verdict(key, verdict_key, {
+        "verdict": review.verdict, "plan_sha256": review.plan_sha256, "reviewer": review.reviewer,
+    })
+
+
+def _kind_within_boundary(state: SessionState, kind: str, doc) -> str:
+    """A refinement that moves the order digest or adds a resource beyond the user's
+    approved set is not a refinement: it re-enters the approval gate as substantive."""
+    if kind != "refinement" or _ledgered_order_key(state) is None:
+        return kind
+    verdict = _autonomy_for(state, doc)
+    if verdict["order_changed"] or verdict["extra_resources"]:
+        return "substantive"
+    return kind
+
+
+def _autonomy_directive_data(state: SessionState, doc) -> dict:
+    """The `data['autonomy']` block a plan-approval-bound Directive carries: the
+    boundary verdict plus the action it routes to (self_approve inside, the user's
+    approval outside)."""
+    verdict = _autonomy_for(state, doc)
+    return {**verdict, "action": "self_approve" if verdict["eligible"] else "await_user_approval"}
+
+
 _CRITERION_ENGINE_WRITTEN_FIELDS = frozenset({"observation"})
 
 
@@ -3416,11 +3506,22 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     if bag is not None:
         _launch_enumeration(state, bag, doc, plan_path)
     store.save(state)
-    d = Directive(
-        True, state.node, "await_user_approval",
-        "plan ready; HARD GATE — get explicit user approval before approve",
-        marker="PLAN-READY",
-    )
+    autonomy = _autonomy_directive_data(state, doc)
+    override = _agent_review_override(state)
+    directive_data = {"autonomy": autonomy, **({"agent_review_override": override} if override else {})}
+    if autonomy["action"] == "self_approve":
+        d = Directive(
+            True, state.node, "self_approve",
+            "plan is inside the boundary the user approved for this order; run "
+            "`approve --by agent`",
+            data=directive_data,
+        )
+    else:
+        d = Directive(
+            True, state.node, "await_user_approval",
+            "plan ready; HARD GATE — get explicit user approval before approve",
+            marker="PLAN-READY", data=directive_data,
+        )
     _attach_advisories(d, "plan_completeness",
                        {"plan": plan_path, "stage_count": len(state.stages),
                         "titles": [s.title for s in state.stages]},
@@ -3803,6 +3904,9 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             "show_full_plan_marker": SHOW_FULL_PLAN_MARKER,
             "next_steps": next_steps,
         }
+        override = _agent_review_override(state)
+        if override is not None:
+            data["agent_review_override"] = override
         return Directive(True, state.node, "continue", detail, data=data)
 
     if kind == PLAN_PRESENTATION_KIND_REPLAN_DIFF:
@@ -4057,7 +4161,18 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         # pass-through (no check) when the plan has no [meta.order] or an empty
         # customer_id, same as cmd_accept.
         order = doc.meta.order if doc is not None else None
-        if order is not None and order.customer_id and new_reviewer != order.customer_id:
+        if new_reviewer.casefold() == AGENT_ACTOR:
+            # The coordinator may override only where the round/friction release names
+            # the decision as its own; the override never counts as a passing first
+            # verdict for the autonomy boundary (it is not written to the ledger).
+            if not (gates.plan_review_round_release_active(state)
+                    or gates.cross_axis_friction_release_active(state)):
+                return Directive(
+                    False, state.node, "noop",
+                    "an agent-authored override is refused: it is available only once the "
+                    "review-round or cross-axis friction release is active",
+                )
+        elif order is not None and order.customer_id and new_reviewer != order.customer_id:
             return Directive(
                 False, state.node, "noop",
                 f"override reviewer {new_reviewer!r} does not match order customer_id "
@@ -4222,6 +4337,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         # CONTRACT INVERSION note on the pass path of _plan_review_verdict_blockers),
         # so it must not become a terminal pass either.
         state.plan_review_passes[scope] = review
+    _record_first_thinker_verdict(state, doc, review, scope)
     # POST-APPROVAL round counting. cmd_submit_plan's increment covers only the
     # pre-approval resubmission loop; review cycles overwhelmingly recur AFTER
     # approval, on the `replan` path, where the same thinker review is demanded and
@@ -4758,23 +4874,37 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             # while `question-candidate-dispose --id qenum-meta-1` had nothing to find.
             store.save(state)
     review_blockers = gates.plan_review_blockers(state, state.plan_path)
+    by_agent = bool(args.by and args.by.strip().casefold() == AGENT_ACTOR)
     blockers = (
         gates.blockers(state, "plan_approval")
         + plugins.plugin_gate_blockers(state, "plan_approval")
         + review_blockers
-        + gates.plan_presentation_blockers(state, state.plan_path)
-        + gates.grants_approval_blockers(state, state.plan_path)
     )
+    if not by_agent:
+        blockers = (
+            blockers
+            + gates.plan_presentation_blockers(state, state.plan_path)
+            + gates.grants_approval_blockers(state, state.plan_path)
+        )
+    agent_autonomy: dict | None = None
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty approver: --by must name who approved"]
-    elif args.by.strip().casefold() == AGENT_ACTOR:
-        # Approval is a customer act by definition -- the agent's own reserved
-        # identity can never be the approver, mirroring submission.py's refusal
-        # of `customer_id == AGENT_ACTOR` and order_approvals.py's two writers.
-        blockers = blockers + [
-            f"--by {args.by!r} is the agent's own reserved identity "
-            f"({AGENT_ACTOR!r}) -- approval must be attributed to the customer"
-        ]
+    elif by_agent:
+        # The coordinator approves only inside the boundary the user approved for this
+        # order (a ledger entry and an eligible verdict on the CURRENT bytes); it never
+        # stamps the ledger, so its approval is never a later boundary.
+        if _approved_doc is not None and _ledgered_order_key(state) is not None:
+            agent_autonomy = _autonomy_for(state, _approved_doc)
+        if agent_autonomy is None:
+            blockers = blockers + [
+                f"--by {args.by!r}: {gates.AUTONOMY_REASON_NO_VERSION} -- approval must be "
+                "attributed to the customer"
+            ]
+        elif not agent_autonomy["eligible"]:
+            blockers = blockers + [
+                f"--by {args.by!r} refused: outside the approved boundary -- "
+                + "; ".join(agent_autonomy["reasons"])
+            ]
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
         # The escape counts ride the REFUSAL specifically: the coordinator reading it
@@ -4852,7 +4982,20 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         snap = _snapshot_approved_plan(store, state)
     if snap:
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
-    state.log("approve", by=args.by)
+    if agent_autonomy is not None:
+        state.log(
+            "approve", by=args.by,
+            extra_resources=[e["name"] for e in agent_autonomy["extra_resources"]],
+            unresolved_changed_commands=[
+                c["source"] for c in agent_autonomy["unresolved_changed_commands"]],
+            active_overrides=[
+                f"{name}={os.environ[name]}"
+                for name in ("AGENTCTL_ORDER_APPROVALS_DIR", "AGENTCTL_TOOL_CONTRACTS")
+                if os.environ.get(name)
+            ],
+        )
+    else:
+        state.log("approve", by=args.by)
     # REQ4: stamp the order-approvals ledger for the CUSTOMER only -- never
     # AGENT_ACTOR (refused above, before this point is ever reached) and
     # never a non-customer --by (a reviewer, a delegate) whose approval does
@@ -5856,6 +5999,8 @@ def _self_grant_resources_for_rule(
     resource are both distinguishable in the returned Directive's data."""
     if not state.plan_path:
         return [], "no-plan"
+    if _open_effort_fire(state):
+        return [], "open-effort-fire"
     try:
         doc = load_plan(state.plan_path)
     except (OSError, PlanError):
@@ -6390,6 +6535,10 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
         if scope not in ("once", "stage"):
             return Directive(False, state.node, "noop",
                               f"agent self-grant requires --scope once or stage, got {scope!r}")
+        if _open_effort_fire(state):
+            return Directive(False, state.node, "noop",
+                              f"agent self-grant refused: {gates.AUTONOMY_REASON_OPEN_FIRE}",
+                              data={"reason_class": "open-effort-fire"})
         self_rules = getattr(args, "rules", None) or []
         self_add_dirs = getattr(args, "add_dirs", None) or []
         if not self_rules and not self_add_dirs:
@@ -6503,6 +6652,7 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
     if new_entries:
         key = str(state.active_stage().index)
         state.runtime_grants.setdefault(key, []).extend(new_entries)
+        _record_customer_stage_grants(state, by, scope, new_entries)
     state.permission_request = None
     # `by` + the two env overrides that steer WHICH ledger/contract-table a
     # self-grant resolved against are recorded on every call, not only a
@@ -8061,7 +8211,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         if round_release:
             message = (
                 "replan blocked: the review-round budget is spent, so the decision is "
-                "yours — see blockers"
+                "the coordinator's — see blockers"
             )
             replan_data = {"blockers": prblock, "plan_review_round_release": round_release}
         else:
@@ -8130,7 +8280,8 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # block below, whose enumeration folding is destructive and PERSISTED —
     # nothing that may refuse can follow it; this command has still written
     # nothing to disk at this point.
-    auth_kind = diff_plans(_load(_replan_baseline_path(state), strict=False), new)
+    auth_kind = _kind_within_boundary(
+        state, diff_plans(_load(_replan_baseline_path(state), strict=False), new), new)
     arblock = gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)
     _log_gate(state, "replan_authorization", arblock, passed=not arblock)
     if arblock:
@@ -8290,7 +8441,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         _log_normalize_event(state, factor=normalize_factor, level=normalize_level,
                              destination=None, in_diagnosis=(state.node == Node.DIAGNOSING.value))
 
-    kind = diff_plans(old, new)
+    kind = _kind_within_boundary(state, diff_plans(old, new), new)
     # The replan-loop counterpart of cmd_approve's reset: a replan that gets this far has
     # applied a corrected plan, so the rounds spent arguing about the previous one are
     # settled and the next loop starts from zero. Placed here — past every refusal of this
@@ -8553,10 +8704,20 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     )
     effort.rederive(state)  # re-derive AFTER logging so this replan is counted
     store.save(state)
+    autonomy = _autonomy_directive_data(state, new)
+    override = _agent_review_override(state)
+    directive_data = {"autonomy": autonomy, **({"agent_review_override": override} if override else {})}
+    if autonomy["action"] == "self_approve":
+        return _with_advisories(Directive(
+            True, state.node, "self_approve",
+            "substantive replan inside the boundary the user approved for this order; run "
+            "`approve --by agent`",
+            data=directive_data,
+        ), echo_advice)
     return _with_advisories(Directive(
         True, state.node, "await_user_approval",
         "substantive replan; HARD GATE — re-approval required",
-        marker="PLAN-READY",
+        marker="PLAN-READY", data=directive_data,
     ), echo_advice)
 
 
@@ -9097,11 +9258,22 @@ def cmd_drive(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     # --- the plan-approval GATE-STOP (at PLAN_READY) ---
     if node == Node.PLAN_READY.value:
         approver = getattr(args, "approved_by", None)
+        autonomy = None
+        if not (approver and approver.strip()) and state.plan_path:
+            try:
+                drive_doc = load_plan(state.plan_path)
+            except (OSError, PlanError):
+                drive_doc = None
+            if drive_doc is not None and _ledgered_order_key(state) is not None:
+                autonomy = _autonomy_directive_data(state, drive_doc)
+                if autonomy["action"] == "self_approve":
+                    approver = AGENT_ACTOR
         if not (approver and approver.strip()):
             return Directive(True, node, "await_user_approval",
                              "drive: plan ready — HARD GATE; get explicit user approval, then "
                              "re-run drive with --approved-by <who>",
-                             marker="PLAN-READY", data={"trace": trace})
+                             marker="PLAN-READY",
+                             data={"trace": trace, **({"autonomy": autonomy} if autonomy else {})})
         ap = argparse.Namespace(session=args.session, by=approver)
         d = _run_step(cmd_approve, ap, store=store, runner=runner, trace=trace)
         if not d.ok:

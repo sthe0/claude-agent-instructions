@@ -185,7 +185,7 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
         control = stage.criterion.negative_control
         if control:
             take(resolve_command(control, v), "negative_control", control, ("negative-control", control))
-    for check in doc.final_check:
+    for check in doc.meta.final_check:
         if check.command:
             take(resolve_command(check.command, v), "final_check", check.command,
                  ("final-check", check.command))
