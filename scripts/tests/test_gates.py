@@ -241,8 +241,8 @@ def test_enumerate_round_release_inactive_below_threshold():
 
 
 def test_enumerate_round_release_active_at_and_past_threshold():
-    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 3}) is True
-    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 4}) is True
+    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 5}) is True
+    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 6}) is True
 
 
 def test_enumerate_round_release_none_bag_is_inactive():

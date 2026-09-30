@@ -82,6 +82,6 @@ def test_the_section_quotes_no_threshold_value():
     README is a second source that drifts silently the first time the row is retuned."""
     body = _section()
     for row, value in (("effort-divergence-multiple", "5"),
-                       ("effort-replan-absolute", "3")):
+                       ("effort-replan-absolute", "5")):
         # the key may appear; `<key>` immediately followed by its value may not
         assert not re.search(rf"`{row}`[^.\n]*?(?:\bis\b|=)\s*`?{value}\b", body), row

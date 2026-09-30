@@ -398,7 +398,7 @@ def test_an_orderless_plan_s_digest_is_unchanged_by_the_order_field(tmp_path, fi
 
 # --- enumerate round-release: staleness blocker collapses; others survive -------
 
-def _stale_bag_state(plan_path, *, passes=3):
+def _stale_bag_state(plan_path, *, passes=5):
     """A substantive session with a stale enumeration (enumerated_at mismatches the
     current plan content) and `enumerate_pass` set to `passes`. Question and order
     halves are pre-satisfied so only the staleness branch can fire."""
@@ -416,7 +416,7 @@ def test_staleness_still_blocks_below_threshold(fixtures_dir):
     """RED arm: one pass below the threshold the routing message must NOT appear —
     _ENUMERATE_STALE still blocks, byte-identical to before this stage."""
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    state, _ = _stale_bag_state(plan_path, passes=2)  # threshold is 3
+    state, _ = _stale_bag_state(plan_path, passes=4)  # threshold is 5
     blockers = plugins.plugin_gate_blockers(state, "plan_approval")
     assert blockers == [f"[premise] {pp._ENUMERATE_STALE}"]
 
@@ -425,28 +425,28 @@ def test_staleness_blocker_collapses_to_routing_message_at_threshold(fixtures_di
     """At threshold, the routing message replaces _ENUMERATE_STALE and names the
     typed escape. The gate stays non-empty (never auto-approves)."""
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    state, _ = _stale_bag_state(plan_path, passes=3)
+    state, _ = _stale_bag_state(plan_path, passes=5)
     blockers = plugins.plugin_gate_blockers(state, "plan_approval")
     assert len(blockers) == 1
     assert pp._ENUMERATE_STALE not in blockers[0]
     assert "enumeration round budget exhausted" in blockers[0]
     assert f"--reason {premise.ESCAPE_ENUMERATE_ROUNDS_EXHAUSTED}" in blockers[0]
-    assert "at pass 3" in blockers[0]
+    assert "at pass 5" in blockers[0]
 
 
 def test_staleness_routing_message_carries_live_pass_count(fixtures_dir):
     """The message contains the LIVE count, not a threshold-shaped literal."""
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    state, _ = _stale_bag_state(plan_path, passes=5)
+    state, _ = _stale_bag_state(plan_path, passes=6)
     blockers = plugins.plugin_gate_blockers(state, "plan_approval")
-    assert "at pass 5" in blockers[0]
+    assert "at pass 6" in blockers[0]
 
 
 def test_other_premise_blockers_survive_active_release(fixtures_dir):
     """The release collapses ONLY the staleness blocker — an undispositioned question
     still blocks, mirroring the invariant that the release never approves by itself."""
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    state, bag = _stale_bag_state(plan_path, passes=3)
+    state, bag = _stale_bag_state(plan_path, passes=5)
     bag["questions"] = [{
         "id": "Q1", "target": "plan.goal", "statement": "what is the goal?",
         "disposition": "open", "reason": "",
@@ -463,7 +463,7 @@ def test_staleness_cleared_after_escape_recorded(fixtures_dir, store):
     branch. Other blockers still stand — the escape is not a global approve."""
     from argparse import Namespace
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    state, bag = _stale_bag_state(plan_path, passes=3)
+    state, bag = _stale_bag_state(plan_path, passes=5)
     store.save(state)
 
     d = cli.cmd_question_enumerate_escape(

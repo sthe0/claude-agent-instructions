@@ -42,8 +42,8 @@ def test_release_inactive_below_threshold():
 
 
 def test_release_active_at_and_past_threshold():
-    assert _COUNTER.release_active(_Subject(rounds=3)) is True
-    assert _COUNTER.release_active(_Subject(rounds=4)) is True
+    assert _COUNTER.release_active(_Subject(rounds=5)) is True
+    assert _COUNTER.release_active(_Subject(rounds=6)) is True
 
 
 def test_release_inactive_for_none_subject():
@@ -62,8 +62,8 @@ def test_release_threshold_comes_from_config_not_a_literal():
 
 def test_cross_axis_ceiling_sums_rather_than_compares_individually():
     """The done-criterion scenario: two axes each individually BELOW the threshold
-    (2 and 2) still trip the combined ceiling once their SUM (4) reaches it."""
-    assert compute_cross_axis_ceiling([2, 2]) is True
+    (3 and 2) still trip the combined ceiling once their SUM (5) reaches it."""
+    assert compute_cross_axis_ceiling([3, 2]) is True
 
 
 def test_cross_axis_ceiling_inactive_below_the_summed_threshold():
@@ -71,11 +71,11 @@ def test_cross_axis_ceiling_inactive_below_the_summed_threshold():
 
 
 def test_cross_axis_ceiling_active_at_exactly_the_threshold():
-    assert compute_cross_axis_ceiling([1, 1, 1]) is True
+    assert compute_cross_axis_ceiling([1, 1, 1, 1, 1]) is True
 
 
 def test_cross_axis_ceiling_treats_none_values_as_zero():
-    assert compute_cross_axis_ceiling([3, None]) is True
+    assert compute_cross_axis_ceiling([5, None]) is True
     assert compute_cross_axis_ceiling([None, None]) is False
 
 
