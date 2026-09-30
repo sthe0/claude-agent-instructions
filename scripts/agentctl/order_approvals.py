@@ -83,7 +83,30 @@ def _path(order_sha256: str, root: Path | None = None) -> Path:
 
 
 def _empty(order_sha256: str) -> dict:
-    return {"schema_version": SCHEMA_VERSION, "order_sha256": order_sha256, "records": []}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "order_sha256": order_sha256,
+        "records": [],
+        "effort_since_user_approval": {"spend": 0.0, "wall_clock": 0.0},
+        "open_effort_fires": [],
+        "first_thinker_verdicts": {},
+    }
+
+
+def first_thinker_verdict_key(plan_sha256: str, changed_identities: list[tuple]) -> str:
+    """The `first_thinker_verdicts` dict key for a given last-user-approved
+    `plan_sha256` and the sorted set of changed unresolved identities versus
+    that version — a digest of both, so a byte-only edit that leaves the
+    identity set unchanged keeps the same key (REQ7/REQ8: 'a byte-only edit
+    keeps the key'), while a user re-approval (which moves `plan_sha256`)
+    always produces a fresh key ('no verdict carries across a user
+    re-approval') with no explicit pruning needed."""
+    import hashlib
+    import json
+
+    normalized = sorted(list(identity) for identity in changed_identities)
+    payload = json.dumps({"plan_sha256": plan_sha256, "changed": normalized}, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def resource_to_dict(resource: _resources.Resource) -> dict:
@@ -133,10 +156,27 @@ def _coerce(raw: str, order_sha256: str) -> dict:
     records = data.get("records")
     if not isinstance(records, list):
         records = []
+    effort_since = data.get("effort_since_user_approval")
+    if not isinstance(effort_since, dict):
+        effort_since = {"spend": 0.0, "wall_clock": 0.0}
+    else:
+        effort_since = {
+            "spend": float(effort_since.get("spend", 0.0) or 0.0),
+            "wall_clock": float(effort_since.get("wall_clock", 0.0) or 0.0),
+        }
+    open_fires = data.get("open_effort_fires")
+    if not isinstance(open_fires, list):
+        open_fires = []
+    first_verdicts = data.get("first_thinker_verdicts")
+    if not isinstance(first_verdicts, dict):
+        first_verdicts = {}
     return {
         "schema_version": SCHEMA_VERSION,
         "order_sha256": data.get("order_sha256", order_sha256),
         "records": records,
+        "effort_since_user_approval": effort_since,
+        "open_effort_fires": open_fires,
+        "first_thinker_verdicts": first_verdicts,
     }
 
 
@@ -213,12 +253,24 @@ def record_approval(
     stage_effects: list[dict],
     by: str,
     at: str,
+    effort_estimate: dict | None = None,
     root: Path | None = None,
 ) -> dict:
     """Append one approval record, stamped by `cmd_approve` for the customer
-    only. `by` must never be `AGENT_ACTOR` — enforced by the caller (an
-    `approve --by agent` is refused before this is ever reached), asserted
-    here too as a last-resort guard against a future caller forgetting it."""
+    only, AFTER `effort.arm()` has computed `effort_estimate` (so the stamped
+    value is the armed one — REQ8). `by` must never be `AGENT_ACTOR` —
+    enforced by the caller (an `approve --by agent` is refused before this is
+    ever reached), asserted here too as a last-resort guard against a future
+    caller forgetting it.
+
+    A fresh user approval "restarts the order window" (REQ8): the per-order
+    spend/wall-clock accumulation since the last user approval is zeroed and
+    any open effort-fire markers are cleared, since the newly-stamped
+    estimate supersedes whatever the prior window was measured against.
+    `first_thinker_verdicts` needs no explicit clearing — its keys are
+    digests of `(plan_sha256, changed_identities)` and `plan_sha256` here is
+    always the newly-approved version, so no old verdict key can ever match
+    again (see `first_thinker_verdict_key`)."""
     if by.strip().casefold() == AGENT_ACTOR:
         raise ValueError(f"order_approvals.record_approval refuses by={AGENT_ACTOR!r}")
     record = {
@@ -228,11 +280,14 @@ def record_approval(
         "stage_effects": stage_effects,
         "by": by,
         "at": at,
+        "effort_estimate": effort_estimate,
     }
     path = _path(order_sha256, root)
     with _FileLock(path):
         data = _coerce(path.read_text(encoding="utf-8"), order_sha256) if path.exists() else _empty(order_sha256)
         data["records"].append(record)
+        data["effort_since_user_approval"] = {"spend": 0.0, "wall_clock": 0.0}
+        data["open_effort_fires"] = []
         _write_atomic(path, data)
         return data
 
@@ -264,6 +319,101 @@ def record_customer_grant(
         data = _coerce(path.read_text(encoding="utf-8"), order_sha256) if path.exists() else _empty(order_sha256)
         data["records"].append(record)
         _write_atomic(path, data)
+        return data
+
+
+def latest_user_approved_record(order_sha256: str, *, root: Path | None = None) -> dict | None:
+    """The most recent record whose `plan_sha256` is set (a `record_approval`
+    call always sets it; a `record_customer_grant` call always leaves it
+    `None`) — the "last user-approved version" every autonomy-boundary
+    condition compares against, never the previous plan. `None` if the order
+    has no user-approved version yet (U1, Q5: the order's own plan is such a
+    case, and its replans still go to the user)."""
+    data = get(order_sha256, root=root)
+    for record in reversed(data["records"]):
+        if record.get("plan_sha256"):
+            return record
+    return None
+
+
+def flush_effort(
+    order_sha256: str,
+    *,
+    spend_delta: float,
+    wall_clock_delta: float,
+    root: Path | None = None,
+) -> dict:
+    """Move an unflushed session-local spend/wall-clock delta into the
+    order's running `effort_since_user_approval` total — called at every
+    scan point (record-result, verify-final, approve, replan, submit-plan)
+    and before `cmd_reset` discards the session, so a new session of the
+    same ledgered order never restarts spend/wall-clock from zero (REQ8)."""
+    path = _path(order_sha256, root)
+    with _FileLock(path):
+        data = _coerce(path.read_text(encoding="utf-8"), order_sha256) if path.exists() else _empty(order_sha256)
+        data["effort_since_user_approval"]["spend"] += float(spend_delta)
+        data["effort_since_user_approval"]["wall_clock"] += float(wall_clock_delta)
+        _write_atomic(path, data)
+        return data
+
+
+def record_effort_fire(
+    order_sha256: str,
+    *,
+    scale: str,
+    detail: dict,
+    at: str,
+    root: Path | None = None,
+) -> dict:
+    """Append an open, user-owed fire marker for a `spend`/`wall_clock`-scale
+    effort fire against this order — cleared only by a customer-authored
+    fire-acknowledge or approve (REQ7: `dispatch` self_grant and
+    `resolve-permission --by agent` both refuse while any marker is open)."""
+    record = {"scale": scale, "detail": detail, "at": at}
+    path = _path(order_sha256, root)
+    with _FileLock(path):
+        data = _coerce(path.read_text(encoding="utf-8"), order_sha256) if path.exists() else _empty(order_sha256)
+        data["open_effort_fires"].append(record)
+        _write_atomic(path, data)
+        return data
+
+
+def clear_effort_fires(order_sha256: str, *, root: Path | None = None) -> dict:
+    """Clear every open effort-fire marker for this order — called by a
+    customer-authored fire-acknowledge or approve (approve also restarts the
+    order window via `record_approval` itself)."""
+    path = _path(order_sha256, root)
+    with _FileLock(path):
+        data = _coerce(path.read_text(encoding="utf-8"), order_sha256) if path.exists() else _empty(order_sha256)
+        data["open_effort_fires"] = []
+        _write_atomic(path, data)
+        return data
+
+
+def get_first_thinker_verdict(order_sha256: str, key: str, *, root: Path | None = None) -> dict | None:
+    """The recorded first-thinker verdict for this `(plan_sha256,
+    changed_identities)` digest key, or `None` if none is recorded yet."""
+    data = get(order_sha256, root=root)
+    verdict = data["first_thinker_verdicts"].get(key)
+    return verdict if isinstance(verdict, dict) else None
+
+
+def record_first_thinker_verdict(
+    order_sha256: str,
+    key: str,
+    verdict: dict,
+    *,
+    root: Path | None = None,
+) -> dict:
+    """Write the first-thinker verdict for `key`, ONLY when absent — written
+    by `cmd_plan_review`, so a later pass never replaces an earlier revise
+    (REQ7: 'written ... only when absent')."""
+    path = _path(order_sha256, root)
+    with _FileLock(path):
+        data = _coerce(path.read_text(encoding="utf-8"), order_sha256) if path.exists() else _empty(order_sha256)
+        if key not in data["first_thinker_verdicts"]:
+            data["first_thinker_verdicts"][key] = verdict
+            _write_atomic(path, data)
         return data
 
 
