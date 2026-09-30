@@ -444,13 +444,13 @@ delivery_note = ""
 
 [[rule]]
 id = "approved-order-plan-changes-self-approved-in-boundary"
-tier = 0
+tier = 1
 locator_heading = "### Acting without asking"
 locator_phrase = "plan changes are self-approved inside its boundary"
-kernel_reason = "NOT-NOTICING"
-delivery_kind = ""
-delivery_marker = ""
-delivery_note = ""
+kernel_reason = ""
+delivery_kind = "agentctl_construct"
+delivery_marker = "--by agent"
+delivery_note = "The engine computes gates.autonomy_boundary on every submit-plan/replan and returns action 'self_approve' only inside it; cmd_approve refuses --by agent outside it. '--by agent' is the observable CLI-invocation proxy; it also counts agent-authored fire-acknowledge and resolve-permission, which belong to the same autonomy boundary."
 
 [[rule]]
 id = "parallel-sessions-share-working-tree"
