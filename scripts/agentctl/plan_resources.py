@@ -132,6 +132,66 @@ def compute_plan_resources(doc: PlanDoc, *, venue: str | None = None) -> list[St
     return [compute_stage_resources(s, v) for s in doc.stages]
 
 
+#: Elements whose text the engine itself executes verbatim; an unresolved command
+#: sourced from one of them is a fixed text a reviewer can vouch for once.
+ENGINE_EXECUTED_ORIGINS = frozenset({"verify_command", "negative_control", "final_check"})
+
+
+@dataclass
+class BoundaryView:
+    """A plan's typed resources and unresolved command identities, each unresolved one
+    tagged with the plan element it came from, for `gates.autonomy_boundary`."""
+    order_sha256: str
+    resources: list = field(default_factory=list)
+    unresolved: list[dict] = field(default_factory=list)
+
+
+def _unresolved_item(identity, origin: str, source: str) -> dict:
+    return {"identity": list(identity), "origin": origin, "source": source}
+
+
+def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None = None) -> BoundaryView:
+    """`compute_plan_resources`' resources plus the engine-executed fixed texts
+    (negative_control, final_check commands) resolved directly, with every unresolved
+    identity carrying its origin: a derived verify-command rule is judged by the
+    segment it was derived from, not by its `:*` spelling."""
+    v = venue if venue is not None else _venue_for(doc)
+    view = BoundaryView(order_sha256=order_sha256)
+
+    def take(res: Resolution, origin: str, source: str, fallback: tuple) -> None:
+        if res.status == "resolved":
+            view.resources.extend(res.resources)
+        else:
+            view.unresolved.append(_unresolved_item(res.identity or fallback, origin, source))
+
+    for stage in doc.stages:
+        effective = _effective_grants_for_stage(stage, v)
+        for rule_grant in effective.allow:
+            provenance = rule_grant.provenance
+            if provenance == "derived:DR-V":
+                parsed = _grants.rule_program_and_arg(rule_grant.rule)
+                segment = parsed[1][:-2] if parsed and parsed[1].endswith(":*") else rule_grant.rule
+                take(resolve_command(segment, v), "verify_command", segment, ("derived-verify", segment))
+                continue
+            origin = "declared" if provenance == "declared" else (
+                "output_artifact" if provenance == "derived:DR-O" else provenance
+            )
+            take(resolve_rule_grant(rule_grant.rule, v), origin, rule_grant.rule,
+                 ("unresolved", rule_grant.rule))
+        for add_dir in effective.add_dirs:
+            view.resources.extend(resolve_add_dir_grant(add_dir.path, add_dir.mode).resources)
+        view.resources.extend(_stage_spawn_resources(stage))
+        view.resources.extend(_stage_landed_resources(stage))
+        control = stage.criterion.negative_control
+        if control:
+            take(resolve_command(control, v), "negative_control", control, ("negative-control", control))
+    for check in doc.final_check:
+        if check.command:
+            take(resolve_command(check.command, v), "final_check", check.command,
+                 ("final-check", check.command))
+    return view
+
+
 # --- `agentctl plan-resources` CLI: plan mode + corpus mode ----------------
 #
 # Plan mode (`--plan P`) renders the SAME per-rule detail `compute_stage_resources`

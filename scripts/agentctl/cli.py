@@ -4864,13 +4864,12 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         order = _approved_doc.meta.order
         customer_id = order.customer_id if order is not None else ""
         if customer_id and args.by.strip().casefold() == customer_id.casefold():
-            stage_resources = plan_resources.compute_plan_resources(_approved_doc)
-            all_resources: list = []
-            all_unresolved: list = []
+            order_key = order_digest(_approved_doc)
+            view = plan_resources.compute_boundary_view(_approved_doc, order_key)
+            all_resources = view.resources
+            all_unresolved = [item["identity"] for item in view.unresolved]
             all_stage_effects: list = []
-            for sr in stage_resources:
-                all_resources.extend(sr.resources)
-                all_unresolved.extend(sr.unresolved)
+            for sr in plan_resources.compute_plan_resources(_approved_doc):
                 all_stage_effects.extend(e.to_dict() for e in sr.stage_effects)
             armed_estimate = {
                 scale: float((state.effort_estimate or {}).get(scale) or 0.0)

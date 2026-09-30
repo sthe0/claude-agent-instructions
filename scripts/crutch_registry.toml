@@ -733,6 +733,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
+id = "f8ac1084d3367594"
+domain = "code"
+file = "scripts/agentctl/plan_resources.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "44a505091444a325"
 domain = "code"
 file = "scripts/agentctl/plan_resources.py"
@@ -13479,7 +13487,7 @@ disposition = "keep"
 ground = "CLAUDE.md's own § Coordination heading names this class explicitly: \"Cognition the engine does NOT replace (always yours)\" — escalation timing, task-weight judgment, verification-axis discipline, and outcome framing are judgment calls over conversational/task content, not predicates decidable from observable repo/engine state."
 
 [[entry]]
-id = "2a1fa683d325447b"
+id = "ae1cc972b5387c4e"
 domain = "prose"
 file = "CLAUDE.md"
 class = "perception"
@@ -15378,6 +15386,22 @@ ground = "The statement's own text names a concrete enforcing artifact (a script
 
 [[entry]]
 id = "75b777c47870d568"
+domain = "prose"
+file = "memory-global/leaves/doubt-own-snapshot.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "1e733e869ad577a6"
+domain = "prose"
+file = "memory-global/leaves/doubt-own-snapshot.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "eb42602133c650d7"
 domain = "prose"
 file = "memory-global/leaves/doubt-own-snapshot.md"
 class = "perception"
@@ -20177,6 +20201,46 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
+id = "0386dd5439e182aa"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-09-29-tracker-publish-gate-missed-per-stage-artifacts.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "d828abcb44bd5d83"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-09-29-tracker-publish-gate-missed-per-stage-artifacts.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "7923af5f0acfb0ad"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-09-29-tracker-publish-gate-missed-per-stage-artifacts.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "221f14b885efc475"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-09-29-tracker-publish-gate-missed-per-stage-artifacts.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "f0ee161e41ccd26b"
+domain = "prose"
+file = "memory-global/leaves/experience/MEMORY.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
 id = "90c17797498e932c"
 domain = "prose"
 file = "memory-global/leaves/experience/MEMORY.md"
@@ -23929,22 +23993,6 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "66659cfe8e7ddf1d"
-domain = "prose"
-file = "memory-global/leaves/redispatch-continuity-check.md"
-class = "perception"
-disposition = "keep"
-ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
-
-[[entry]]
-id = "79021cc9804c78a6"
-domain = "prose"
-file = "memory-global/leaves/redispatch-continuity-check.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
 id = "104e73995fcf19fa"
 domain = "prose"
 file = "memory-global/leaves/redispatch-continuity-check.md"
@@ -24034,6 +24082,14 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "afe5eddd4b7e6061"
+domain = "prose"
+file = "memory-global/leaves/regex-not-for-semantic-classification.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "3e05e68325f16a63"
 domain = "prose"
 file = "memory-global/leaves/regex-not-for-semantic-classification.md"
 class = "perception"
@@ -25271,6 +25327,14 @@ file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"
 class = "not-normative"
 disposition = "keep"
 ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "4d08993446e4e241"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/settings-permission-tiers.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
 id = "87490549d868c30c"
@@ -27993,6 +28057,22 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
+id = "2306d9456b2e5ea9"
+domain = "prose"
+file = "skills/tracker-management/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "2fd952c2e974ec2f"
+domain = "prose"
+file = "skills/tracker-management/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
 id = "a5c3fcfc3c6660db"
 domain = "prose"
 file = "skills/tracker-management/SKILL.md"
@@ -28002,6 +28082,14 @@ ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the s
 
 [[entry]]
 id = "1fdf52b1917372c5"
+domain = "prose"
+file = "skills/tracker-management/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "f9d10328695e8d2e"
 domain = "prose"
 file = "skills/tracker-management/SKILL.md"
 class = "perception"

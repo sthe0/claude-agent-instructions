@@ -2373,3 +2373,111 @@ def blockers(state: SessionState, gate_name: str) -> list[str]:
     if guardian is None:
         return [f"unknown gate {gate_name!r}"]
     return guardian(state)
+
+
+# --- Unit 2: the autonomy boundary -------------------------------------------------
+
+AUTONOMY_REASON_NO_VERSION = "no user-approved version for this order"
+AUTONOMY_REASON_ORDER_CHANGED = "the order itself changed since the user's approval"
+AUTONOMY_REASON_OPEN_FIRE = "open spend/wall-clock fire owed to the user"
+_AUTONOMY_ENGINE_EXECUTED_ORIGINS = frozenset({"verify_command", "negative_control", "final_check"})
+
+
+def _identity_key(identity) -> str:
+    import json
+
+    return json.dumps(list(identity), sort_keys=True)
+
+
+def _resource_name(data: dict) -> str:
+    if data["kind"] == "vcs_ref":
+        return f"vcs_ref({data['remote']}, {data['ref']}, {data['op']})"
+    fields = ", ".join(str(v) for k, v in data.items() if k != "kind")
+    return f"{data['kind']}({fields})"
+
+
+def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict | None = None,
+                      *, protected: list[str] | None = None) -> dict:
+    """Whether the coordinator may approve `resolved_plan` (a `plan_resources.
+    BoundaryView`) on the user's behalf, given the order's ledger snapshot: the same
+    order, no resource outside what the user approved for it, no changed command of
+    unknown effect without a first passing thinker review, no open fire owed to the
+    user. Pure: every input is a stored value; the reference is the last USER-approved
+    version, never the previous plan."""
+    from . import order_approvals as _oa
+
+    records = list(ledger_snapshot.get("records") or [])
+    last = next((r for r in reversed(records) if r.get("plan_sha256")), None)
+    out = {
+        "eligible": False, "reason": AUTONOMY_REASON_NO_VERSION,
+        "reasons": [AUTONOMY_REASON_NO_VERSION],
+        "order_changed": False, "extra_resources": [], "unresolved_changed_commands": [],
+        "thinker_pass": None, "open_effort_fire": bool(ledger_snapshot.get("open_effort_fires")),
+        "first_verdict_key": None,
+    }
+    if last is None:
+        return out
+    reasons: list[str] = []
+    out["order_changed"] = resolved_plan.order_sha256 != ledger_snapshot.get("order_sha256")
+    if out["order_changed"]:
+        reasons.append(AUTONOMY_REASON_ORDER_CHANGED)
+    if out["open_effort_fire"]:
+        reasons.append(AUTONOMY_REASON_OPEN_FIRE)
+
+    approved = [
+        res for res in (
+            _oa.resource_from_dict(raw) for record in records for raw in (record.get("resources") or [])
+        ) if res is not None
+    ]
+    seen: set[str] = set()
+    for requested in resolved_plan.resources:
+        if any(
+            a.covers(requested, protected=protected) if hasattr(a, "path") else a.covers(requested)
+            for a in approved
+        ):
+            continue
+        data = _oa.resource_to_dict(requested)
+        name = _resource_name(data)
+        if name in seen:
+            continue
+        seen.add(name)
+        out["extra_resources"].append({
+            **data, "name": name,
+            "reason": f"{name} is outside the resource set the user approved for this order",
+        })
+    if out["extra_resources"]:
+        reasons.append(
+            "resource outside the set the user approved for this order: "
+            + ", ".join(e["name"] for e in out["extra_resources"])
+        )
+
+    approved_ids = {_identity_key(i) for i in (last.get("unresolved_identities") or [])}
+    engine_changed = False
+    for item in resolved_plan.unresolved:
+        if _identity_key(item["identity"]) in approved_ids:
+            continue
+        needs_user = item["origin"] not in _AUTONOMY_ENGINE_EXECUTED_ORIGINS
+        out["unresolved_changed_commands"].append({**item, "needs_user": needs_user})
+        engine_changed = engine_changed or not needs_user
+    user_owned = [c["source"] for c in out["unresolved_changed_commands"] if c["needs_user"]]
+    if user_owned:
+        reasons.append(
+            "a changed unresolved command outside the engine-executed fixed texts (a declared "
+            "rule or a derived output-artifact rule) goes to the user: " + ", ".join(user_owned)
+        )
+    if engine_changed:
+        key = _oa.first_thinker_verdict_key(
+            last["plan_sha256"], [c["identity"] for c in out["unresolved_changed_commands"]],
+        )
+        out["first_verdict_key"] = key
+        verdict = (first_verdicts or {}).get(key)
+        out["thinker_pass"] = bool(isinstance(verdict, dict) and verdict.get("verdict") == "pass")
+        if not out["thinker_pass"]:
+            reasons.append(
+                "a changed unresolved engine-executed command has no first passing thinker review: "
+                + ", ".join(c["source"] for c in out["unresolved_changed_commands"] if not c["needs_user"])
+            )
+    out["reasons"] = reasons
+    out["eligible"] = not reasons
+    out["reason"] = reasons[0] if reasons else "inside the boundary the user approved for this order"
+    return out
