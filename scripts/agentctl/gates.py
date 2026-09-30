@@ -2405,8 +2405,7 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
     version, never the previous plan."""
     from . import order_approvals as _oa
 
-    records = list(ledger_snapshot.get("records") or [])
-    last = next((r for r in reversed(records) if r.get("plan_sha256")), None)
+    last = _oa.latest_user_approved_of(ledger_snapshot)
     out = {
         "eligible": False, "reason": AUTONOMY_REASON_NO_VERSION,
         "reasons": [AUTONOMY_REASON_NO_VERSION],

@@ -154,7 +154,7 @@ def runs_verify_command(criterion) -> bool:
     """Whether the engine itself executes this criterion's `verify_command` -- the one
     predicate both the executor and the boundary's resource resolution key on."""
     return bool(criterion.verify_command) and (
-        criterion.criterion_type.replace("-", "_") == CriterionType.MEASURABLE.value
+        criterion.criterion_type == CriterionType.MEASURABLE.value
     )
 
 

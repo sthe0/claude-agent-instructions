@@ -6086,8 +6086,9 @@ def _self_grant_resources_for_rule(
 ) -> tuple[list, str | None]:
     """Resolve a PERMISSION-REQUEST's self-reported `Rule:` line to the
     resource(s) it names, then check those resources against the UNION of
-    (a) this order's customer-approved resources (`order_approvals`'s
-    ledger, keyed by `plan.order_digest` -- the SAME resolution
+    (a) `order_approvals.boundary_resources` -- the last user-approved
+    version's resources plus customer stage grants, keyed by
+    `plan.order_digest` -- the SAME resolution
     `cmd_resolve_permission --by agent` uses, REQ5) and (b) the stage's own
     EFFECTIVE (declared + derived) grants, each independently re-resolved to
     resources rather than compared by rule TEXT -- a declared grant spelled

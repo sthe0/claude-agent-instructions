@@ -326,8 +326,13 @@ def latest_user_approved_record(order_sha256: str, *, root: Path | None = None) 
     condition compares against, never the previous plan. `None` if the order
     has no user-approved version yet (U1, Q5: the order's own plan is such a
     case, and its replans still go to the user)."""
-    data = get(order_sha256, root=root)
-    for record in reversed(data["records"]):
+    return latest_user_approved_of(get(order_sha256, root=root))
+
+
+def latest_user_approved_of(snapshot: dict) -> dict | None:
+    """Pure form of `latest_user_approved_record` over a ledger snapshot -- the one
+    definition of "the last user-approved version" every boundary consumer shares."""
+    for record in reversed(list(snapshot.get("records") or [])):
         if record.get("plan_sha256"):
             return record
     return None
@@ -422,7 +427,7 @@ def boundary_resources_of(snapshot: dict) -> list[_resources.Resource]:
     user dropped there must not stay self-grantable. Unrecognized/malformed
     entries are silently dropped (tolerant read, matching `resource_from_dict`)."""
     records = list(snapshot.get("records") or [])
-    last = next((r for r in reversed(records) if r.get("plan_sha256")), None)
+    last = latest_user_approved_of(snapshot)
     out: list[_resources.Resource] = []
     for record in records:
         if record is not last and record.get("plan_sha256"):

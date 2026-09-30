@@ -374,6 +374,7 @@ def test_resource_dropped_at_user_reapproval_routes_dispatched_request_to_user(e
         store=eng.store, runner=lambda argv: RunResult(0, stdout=reply), perm_checker=lambda a: False,
     )
     assert d.action == "ask_user_permission", d.detail
+    assert d.data["reason_class"] == "not-approved", d.data
 
 
 def test_refinement_moving_order_digest_goes_to_user(eng):
