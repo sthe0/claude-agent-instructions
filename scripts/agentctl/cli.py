@@ -9739,7 +9739,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "comma-separated stage indices the launcher narrowed the pass to"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
-    ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge", "resolve-permission"),
+    ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge", "resolve-permission",
+            "task-reset"),
      "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
      "identity token like any other --by, not free text)"),
     # --decision is NOT listed here: argparse `choices=` already makes it a non-candidate
@@ -9761,7 +9762,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("verdict", ("accept",), "'|'-delimited requirement-verdict record"),
     ("budget", ("dispatch",), "budget tier name"),
     ("complexity", ("dispatch",), "complexity tier name"),
-    ("cost_log", ("record-result", "resolve", "verify-final", "replan", "effort-check"),
+    ("cost_log", ("record-result", "resolve", "verify-final", "replan", "effort-check", "submit-plan"),
      "cost log file path (test override)"),
     ("quality_by", ("resolve", "close"), "how the quality rating was obtained — a fixed token"),
     ("confirmed_by", ("close",), "who confirmed — a name, not a narrative"),

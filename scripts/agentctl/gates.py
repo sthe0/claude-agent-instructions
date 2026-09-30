@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -2384,8 +2385,6 @@ _AUTONOMY_ENGINE_EXECUTED_ORIGINS = frozenset({"verify_command", "negative_contr
 
 
 def _identity_key(identity) -> str:
-    import json
-
     return json.dumps(list(identity), sort_keys=True)
 
 

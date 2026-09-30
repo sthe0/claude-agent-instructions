@@ -42,7 +42,8 @@ SCHEMA_VERSION = 41  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # 41: SessionState gains order_effort_flushed/order_effort_base/
                      # order_effort_frozen/agent_ack_difficulty_ids (autonomy boundary:
                      # order-keyed spend/wall-clock accumulation, frozen user-approved
-                     # estimate, agent-acknowledged difficulty records)
+                     # estimate, agent-acknowledged difficulty records,
+                     # renegotiation_ceiling_difficulty_id)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
