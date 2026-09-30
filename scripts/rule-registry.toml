@@ -514,7 +514,7 @@ locator_phrase = "Two re-entry signals"
 kernel_reason = "NOT-NOTICING"
 delivery_kind = ""
 delivery_marker = ""
-delivery_note = "Engine-backed: a replans-scale fire on a user-approved order is closed by fire-acknowledge --by agent (gated on a post-fire difficulty record with a real normalize); a resolved re-entry at effort-replan-absolute reopens needs --reopen-user-decision (gates.resolved_reentry_blockers)."
+delivery_note = "Tier 0: the ask-the-user-whether-the-order-still-stands question itself is prose. Engine-backed parts: a replans-scale fire on a user-approved order is closed by fire-acknowledge --by agent (gated on a post-fire difficulty record with a real normalize); a resolved re-entry at effort-replan-absolute reopens needs --reopen-user-decision (gates.resolved_reentry_blockers)."
 
 # ---------------------------------------------------------------------------
 # ### When the user corrects agent behavior
