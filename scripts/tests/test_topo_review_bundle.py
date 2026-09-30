@@ -558,6 +558,21 @@ def test_tb20_forced_race_loser_reverifies_winner_and_removes_its_temp(tmp_path,
     _assert_views_are_copies(version_root)
 
 
+def test_tb20_non_race_oserror_propagates_and_removes_temp(tmp_path, monkeypatch):
+    doc = _race_doc()
+
+    def replace_with_unrelated_error(src, dst):
+        raise OSError(errno.EXDEV, "cross-device link")
+
+    monkeypatch.setattr(render.os, "replace", replace_with_unrelated_error)
+
+    with pytest.raises(OSError) as exc_info:
+        materialize_topo_units(doc, "shaX", tmp_path)
+
+    assert exc_info.value.errno == errno.EXDEV
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_tb20_concurrent_threads_all_return_one_verified_tree(tmp_path):
     doc = _race_doc()
     workers = 6

@@ -372,6 +372,7 @@ def test_ts3_oversize_bundle_refused_pre_spawn_naming_split_and_override(capsys,
     assert rc == 5
     assert "split" in err
     assert "override" in err
+    assert "never raises the ceiling" in err
 
 
 def test_ts4_ceiling_is_216000_chars_144000_tokens_for_every_model(topo_units_dir):
