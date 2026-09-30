@@ -430,6 +430,113 @@ def _replan_baseline_path(state: SessionState) -> str | None:
     return snap if (snap and Path(snap).exists()) else state.plan_path
 
 
+_ORDER_EFFORT_SCALES = (
+    (effort.SCALE_SPEND, effort.ORDER_SPEND_KEY),
+    (effort.SCALE_WALL_CLOCK, effort.ORDER_WALL_CLOCK_KEY),
+)
+
+
+def _ledgered_order_key(state: SessionState) -> str | None:
+    """The order-approvals ledger key of this session's order, iff the order has a
+    user-approved version there — the condition every order-keyed effort and
+    autonomy path is gated on. None for an order-less or never-user-approved plan,
+    which keeps today's per-session behavior."""
+    path = _replan_baseline_path(state) if state.plan_path else None
+    if not path:
+        return None
+    try:
+        doc = load_plan(path, strict=False)
+    except (OSError, PlanError):
+        return None
+    key = order_digest(doc)
+    return key if order_approvals.latest_user_approved_record(key) is not None else None
+
+
+def _effort_cross_totals(state: SessionState) -> dict:
+    """`task_accumulator`'s per_axis_totals, plus — for a ledgered order — the order's
+    spend/wall-clock total since the last user approval (ledger window + this
+    session's unflushed delta, minus the total at this session's last fire), under the
+    keys `effort.effective_deltas` reads."""
+    totals = dict(task_accumulator.get(state.task_id)["per_axis_totals"])
+    key = _ledgered_order_key(state)
+    if key is None:
+        return totals
+    window = order_approvals.get(key)["effort_since_user_approval"]
+    flushed = state.order_effort_flushed or {}
+    actual = effort.actual(state)
+    base = state.order_effort_base or {}
+    for scale, total_key in _ORDER_EFFORT_SCALES:
+        unflushed = max(0.0, actual[scale] - float(flushed.get(scale, actual[scale])))
+        total = float(window.get(scale) or 0.0) + unflushed
+        floor = float(base.get(scale) or 0.0)
+        totals[total_key] = total - (floor if total >= floor else 0.0)
+    return totals
+
+
+def _flush_order_effort(state: SessionState) -> None:
+    """Move this session's unflushed spend/wall-clock into its order's ledger window."""
+    key = _ledgered_order_key(state)
+    if key is None:
+        return
+    actual = effort.actual(state)
+    flushed = state.order_effort_flushed
+    if flushed is not None:
+        spend = max(0.0, actual[effort.SCALE_SPEND] - float(flushed.get(effort.SCALE_SPEND) or 0.0))
+        wall = max(0.0, actual[effort.SCALE_WALL_CLOCK] - float(flushed.get(effort.SCALE_WALL_CLOCK) or 0.0))
+        if spend or wall:
+            order_approvals.flush_effort(key, spend_delta=spend, wall_clock_delta=wall)
+    state.order_effort_flushed = {
+        effort.SCALE_SPEND: actual[effort.SCALE_SPEND],
+        effort.SCALE_WALL_CLOCK: actual[effort.SCALE_WALL_CLOCK],
+    }
+
+
+def _order_customer_id(state: SessionState) -> str:
+    path = _replan_baseline_path(state) if state.plan_path else None
+    if not path:
+        return ""
+    try:
+        order = load_plan(path, strict=False).meta.order
+    except (OSError, PlanError):
+        return ""
+    return order.customer_id if order is not None else ""
+
+
+def _clear_open_fires_if_customer(state: SessionState, by: str) -> None:
+    """A customer-authored acknowledgement is the only act that discharges the open
+    user-owed fire marker of the order (an agent-authored one never does)."""
+    key = _ledgered_order_key(state)
+    customer_id = _order_customer_id(state)
+    if key is not None and customer_id and by.strip().casefold() == customer_id.casefold():
+        order_approvals.clear_effort_fires(key)
+
+
+def _open_effort_fire(state: SessionState) -> list[dict]:
+    """The open spend/wall-clock fire markers owed to the user for this session's order."""
+    key = _ledgered_order_key(state)
+    return list(order_approvals.get(key)["open_effort_fires"]) if key else []
+
+
+def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: float) -> dict:
+    """`effort.record_fire` plus, on a spend/wall-clock fire of a ledgered order, the
+    open user-owed marker and the order-level baseline rebase."""
+    fire = effort.record_fire(state, div, now=now)
+    if div.scale in effort.RATIO_SCALES:
+        key = _ledgered_order_key(state)
+        if key is not None:
+            _flush_order_effort(state)
+            order_approvals.record_effort_fire(
+                key, scale=div.scale, detail={"actual": div.actual, "estimate": div.estimate,
+                                               "multiple": div.multiple},
+                at=dt.datetime.now(dt.timezone.utc).isoformat(),
+            )
+            window = order_approvals.get(key)["effort_since_user_approval"]
+            state.order_effort_base = {
+                scale: float(window.get(scale) or 0.0) for scale, _ in _ORDER_EFFORT_SCALES
+            }
+    return fire
+
+
 _CRITERION_ENGINE_WRITTEN_FIELDS = frozenset({"observation"})
 
 
@@ -1022,7 +1129,7 @@ def _diagnose_venue_refusal(
     data = {}
     if div is not None and gates.effort_active(state):
         now = _utcnow()
-        data["effort_divergence"] = effort.record_fire(state, div, now=now)
+        data["effort_divergence"] = _record_effort_fire(state, div, now=now)
     store.save(state)
     return Directive(
         False, state.node, "declare", message,
@@ -1273,6 +1380,9 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
             False, prior.node, "noop", "; ".join(reentry_blockers),
             data={"blockers": reentry_blockers, "resolved_reentry_count": reentry_count},
         )
+    if prior is not None:
+        effort.refresh_spend(prior, _cost_rows(args), prior.plan_path)
+        _flush_order_effort(prior)
     new = SessionState(
         session_id=args.session,
         task_id=args.task,
@@ -1327,11 +1437,20 @@ def cmd_task_reset(args, *, store: StateStore, runner: Runner | None = None) -> 
     `--renegotiation-decision continue|rescope` (see
     `task_accumulator.reset`'s own docstring) — that path folds the reset into
     an already-required customer decision instead of a separate command."""
+    by = (args.by or "").strip()
+    if not by or by.casefold() == AGENT_ACTOR:
+        return Directive(
+            False, "(task-scoped)", "noop",
+            f"task-reset is a user decision: --by must name the customer, not "
+            f"{AGENT_ACTOR!r}",
+            marker=DIRECTIVE_ESCALATE_TO_USER,
+            data={"task": args.task, "by": by},
+        )
     task_accumulator.reset(args.task)
     return Directive(
         True, "(task-scoped)", "noop",
-        f"cross-session task accumulator reset for task {args.task!r}: {args.reason}",
-        data={"task": args.task, "reason": args.reason},
+        f"cross-session task accumulator reset for task {args.task!r} by {by}: {args.reason}",
+        data={"task": args.task, "reason": args.reason, "by": by},
     )
 
 
@@ -3183,6 +3302,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
             marker=DIRECTIVE_ESCALATE_TO_USER,
             data={"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)},
         )
+    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
+    _flush_order_effort(state)
     plan_path = args.plan
     # #15: a resubmission — the coordinator revised the plan at PLAN_READY (after a
     # thinker `revise` verdict, or the user's own pre-approval edit) and re-runs
@@ -4751,6 +4872,10 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                 all_resources.extend(sr.resources)
                 all_unresolved.extend(sr.unresolved)
                 all_stage_effects.extend(e.to_dict() for e in sr.stage_effects)
+            armed_estimate = {
+                scale: float((state.effort_estimate or {}).get(scale) or 0.0)
+                for scale in effort.RATIO_SCALES
+            }
             order_approvals.record_approval(
                 order_digest(_approved_doc),
                 plan_sha256=_approved_digest or "",
@@ -4759,7 +4884,16 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                 stage_effects=all_stage_effects,
                 by=args.by,
                 at=dt.datetime.now(dt.timezone.utc).isoformat(),
+                effort_estimate=armed_estimate,
             )
+            state.order_effort_frozen = armed_estimate
+            actual_now = effort.actual(state)
+            state.order_effort_flushed = {
+                scale: actual_now[scale] for scale, _ in _ORDER_EFFORT_SCALES
+            }
+            state.order_effort_base = {}
+        else:
+            _flush_order_effort(state)
     store.save(state)
     return _with_advisories(Directive(
         True, state.node, "partition",
@@ -6920,11 +7054,10 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     # unconditionally — only ACTING on a fire is gated by gates.effort_active — see
     # effort.py's module docstring and gates.effort_active's docstring.
     effort.refresh_spend(state, _rows, state.plan_path)
-    div = effort.divergence(
-        state, cross_session_totals=task_accumulator.get(state.task_id)["per_axis_totals"],
-    )
+    _flush_order_effort(state)
+    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state))
     if effort.armed(state):
-        _cross = task_accumulator.get(state.task_id)["per_axis_totals"]
+        _cross = _effort_cross_totals(state)
         _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross)
         _ro_comparand = effort.comparands(state, Thresholds())
         for _ro_scale in effort.RECORD_ONLY_SCALES:
@@ -6944,7 +7077,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         state.log("record_result", stage=stage.index, status="passed")
         if div is not None and gates.effort_active(state):
             now = _utcnow()
-            fire = effort.record_fire(state, div, now=now)
+            fire = _record_effort_fire(state, div, now=now)
             return _diagnose_effort_divergence(state, store, div, fire)
         store.save(state)
         if state.all_stages_passed():
@@ -6987,7 +7120,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         # instead of re-transitioning or opening a second Difficulty, but still honor
         # divergence()'s CALLER OBLIGATION (record the fire so it doesn't re-trip).
         now = _utcnow()
-        data["effort_divergence"] = effort.record_fire(state, div, now=now)
+        data["effort_divergence"] = _record_effort_fire(state, div, now=now)
     store.save(state)
     return Directive(
         False, state.node, "declare",
@@ -7045,11 +7178,10 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # plan_path (including engine-mandated review spawns no stage attributes), the
     # rollup needs only what record-result already stamped onto each Outcome.
     effort.refresh_spend(state, _cost_rows(args), state.plan_path)
-    div = effort.divergence(
-        state, cross_session_totals=task_accumulator.get(state.task_id)["per_axis_totals"],
-    )
+    _flush_order_effort(state)
+    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state))
     if effort.armed(state):
-        _cross = task_accumulator.get(state.task_id)["per_axis_totals"]
+        _cross = _effort_cross_totals(state)
         _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross)
         _ro_comparand = effort.comparands(state, Thresholds())
         for _ro_scale in effort.RECORD_ONLY_SCALES:
@@ -7134,7 +7266,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             # record_result's failed branch (still honoring divergence()'s CALLER
             # OBLIGATION: record the fire so it doesn't re-trip).
             now = _utcnow()
-            data["effort_divergence"] = effort.record_fire(state, div, now=now)
+            data["effort_divergence"] = _record_effort_fire(state, div, now=now)
         store.save(state)
         return Directive(
             False, state.node, "declare",
@@ -7148,7 +7280,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # record-result to fire from).
     if div is not None and gates.effort_active(state):
         now = _utcnow()
-        fire = effort.record_fire(state, div, now=now)
+        fire = _record_effort_fire(state, div, now=now)
         return _diagnose_effort_divergence(state, store, div, fire)
 
     # Compute whole-plan cost rollup from already-attributed stage outcomes.
@@ -8259,6 +8391,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # is not lost by refreshing against the old path here — it is simply picked up by
     # the NEXT refresh against the new path, once a branch below rewrites plan_path.
     effort.refresh_spend(state, _cost_rows(args), state.plan_path)
+    _flush_order_effort(state)
 
     if kind == "no_change":
         # A legacy session with no approved-plan snapshot (plan_snapshot_path=None)
@@ -8470,6 +8603,7 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
         "note": getattr(args, "note", None),
     }
     state.log("fire_acknowledge", by=args.by, decision=decision)
+    _clear_open_fires_if_customer(state, args.by)
     if decision == "abandon":
         state.blocked_from = state.node
         state.node = Node.BLOCKED.value
@@ -8578,7 +8712,7 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
     # decided on the cross-session one is how a watch goes silent on exactly the case it
     # exists for: a resolved re-entry hands the fresh SessionState a replan count of 0
     # while the accumulator still holds the prior laps. See effort.effective_deltas.
-    cross_totals = task_accumulator.get(state.task_id)["per_axis_totals"]
+    cross_totals = _effort_cross_totals(state)
     local = effort.deltas(state)
     delta = effort.effective_deltas(state, cross_session_totals=cross_totals)
     comparand = effort.comparands(state, thr)
@@ -10021,6 +10155,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--task", required=True, help="task_id whose accumulator to zero")
     sp.add_argument("--reason", required=True,
                     help="why this task's accumulated cross-session friction is being forgiven")
+    sp.add_argument("--by", required=True,
+                    help="the customer authorizing the reset; the coordinator is refused")
     return p
 
 

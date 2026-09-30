@@ -23,7 +23,7 @@ from enum import Enum
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 40  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 41  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -39,6 +39,10 @@ SCHEMA_VERSION = 40  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # grant-coverage gap; see `_classify_transcript_denials`)
                      # 40: Stage gains `effects` (declared [[stage.effects]] — resource
                      # model, checkpoint c)
+                     # 41: SessionState gains order_effort_flushed/order_effort_base/
+                     # order_effort_frozen/agent_ack_difficulty_ids (autonomy boundary:
+                     # order-keyed spend/wall-clock accumulation, frozen user-approved
+                     # estimate, agent-acknowledged difficulty records)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1698,6 +1702,19 @@ class SessionState:
     effort_spend_seen: dict = field(default_factory=dict)
     user_prompt_count: int = 0
     effort_crossings: list[dict] = field(default_factory=list)
+    # Order-keyed effort custody (autonomy boundary). Only meaningful for a session
+    # whose order has a user-approved version in order_approvals' ledger.
+    #   order_effort_flushed  the actual spend/wall_clock already moved into the ledger
+    #                         (None until the first approve of this session).
+    #   order_effort_base     the ledger's window total at this session's last spend/
+    #                         wall_clock fire — the order-level twin of effort_baseline.
+    #   order_effort_frozen   the user-approved spend/wall_clock estimate rederive keeps.
+    #   agent_ack_difficulty_ids  ids of difficulty records an agent-authored
+    #                         fire-acknowledge / renegotiation already consumed.
+    order_effort_flushed: dict | None = None
+    order_effort_base: dict = field(default_factory=dict)
+    order_effort_frozen: dict | None = None
+    agent_ack_difficulty_ids: list[str] = field(default_factory=list)
     # DIAGNOSING-renegotiation audit trail (GitHub #177) — one record per customer
     # decision at the diagnosing_replan round-release gate, keyed by string (decision,
     # note, by, ts, task_replan_count_at_decision). Same plain list[dict] shape as
