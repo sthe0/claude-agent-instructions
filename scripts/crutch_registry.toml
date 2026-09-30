@@ -9421,6 +9421,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "8135c123ea707e5c"
+domain = "code"
+file = "scripts/tests/test_replan_autonomy_boundary.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "cfd0ac5d2e93ad88"
 domain = "code"
 file = "scripts/tests/test_replan_autonomy_boundary.py"

@@ -110,9 +110,12 @@ class Eng:
                     argv.extend([flag, str(item)])
             elif value is not None and value is not False:
                 argv.extend([flag, str(value)])
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
-            rc = cli.main(argv)
+        buf, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+            try:
+                rc = cli.main(argv)
+            except SystemExit as exit_:
+                return {"ok": False, "rc": exit_.code, "marker": None, "detail": err.getvalue()}
         out = json.loads(buf.getvalue())
         out["rc"] = rc
         return out
@@ -555,5 +558,219 @@ def test_present_directive_discloses_agent_review_override(eng, tmp_path):
     thinker_review(eng, "o1", plan, "override", "agent")
     after = eng.run("present_plan", session="o1", kind="essence", rendering_file=str(rendering))
     assert after["data"]["agent_review_override"]["reviewer"] == "agent"
+
+
+# --- effort custody across sessions of one order --------------------------------------
+
+
+def window(eng: Eng, plan: str) -> dict:
+    return eng.ledger(plan)["effort_since_user_approval"]
+
+
+def agent_session(eng: Eng, sid: str, plan: str, *, execute: bool = True):
+    d = eng.open(sid, plan)
+    assert action(d) == "self_approve", d
+    assert eng.run("approve", session=sid, by="agent")["ok"] is True
+    if execute:
+        eng.execute(sid)
+
+
+def book_spend(eng: Eng, sid: str, plan: str, usd: float):
+    return eng.run("record_result", session=sid, status="passed", actual="ok",
+                   control="reviewed: ok", observation=OBSERVATIONS[0],
+                   cost_log=eng.cost_log(plan, usd))
+
+
+def test_self_approval_does_not_restamp_user_ledger(eng):
+    plan = approved_order(eng)
+    agent_session(eng, "a1", plan, execute=False)
+    records = eng.ledger(plan)["records"]
+    assert [r["by"] for r in records] == ["user"]
+
+
+def test_effort_accumulates_across_agent_approved_sessions(eng):
+    plan = approved_order(eng)
+    agent_session(eng, "a1", plan)
+    book_spend(eng, "a1", plan, 2.0)
+    second = eng.write(plan_text(), "second.toml")
+    agent_session(eng, "a2", second)
+    book_spend(eng, "a2", second, 3.0)
+    assert window(eng, plan)["spend"] == pytest.approx(5.0)
+
+
+def test_effort_flushed_at_approve_replan_submit(eng):
+    plan = approved_order(eng)
+    agent_session(eng, "a1", plan)
+    assert getattr(eng.state("a1"), "order_effort_flushed", None) is not None
+    eng.run("record_result", session="a1", status="failed", actual="boom",
+            cost_log=eng.cost_log(plan, 2.0))
+    eng.diagnose("a1")
+    replanned = eng.write(plan_text(stage3=True))
+    eng.run("replan", session="a1", plan=replanned, cost_log=eng.cost_log(plan, 4.0))
+    assert window(eng, plan)["spend"] == pytest.approx(4.0)
+    resubmitted = eng.write(plan_text(stage3=True), "resubmitted.toml")
+    eng.run("submit_plan", session="a1", plan=resubmitted, cost_log=eng.cost_log(replanned, 6.0))
+    assert window(eng, plan)["spend"] == pytest.approx(4.0 + 6.0)
+
+
+def test_agent_approval_keeps_user_approved_effort_estimate(eng):
+    plan = approved_order(eng)
+    approved = eng.ledger(plan)["records"][-1]["effort_estimate"]
+    agent_session(eng, "a1", eng.write(plan_text(stage3=True), "bigger.toml"), execute=False)
+    estimate = eng.state("a1").effort_estimate
+    assert {scale: estimate[scale] for scale in approved} == approved
+
+
+def test_task_reset_by_agent_refused(eng):
+    from agentctl import task_accumulator
+
+    task_accumulator.add("t-reset", "replan_count", 5, session_id="x", now=None)
+    refused = eng.run("task_reset", task="t-reset", reason="loop broke", by="agent")
+    assert refused["ok"] is False
+    assert refused["marker"] == "ESCALATE_TO_USER"
+    assert task_accumulator.get("t-reset")["per_axis_totals"]["replan_count"] == 5
+    assert eng.run("task_reset", task="t-reset", reason="the user renegotiated", by="user")["ok"] is True
+    assert task_accumulator.get("t-reset")["per_axis_totals"].get("replan_count", 0) == 0
+
+
+# --- spend / wall-clock fires belong to the user ---------------------------------------
+
+SELF_RULE = PUSH_MAIN.replace("main", "ticket/x")
+
+
+def agent_grant(eng: Eng, sid: str):
+    eng.park_permission(sid)
+    return eng.run("resolve_permission", session=sid, decision="granted", by="agent",
+                   scope="stage", rule=[SELF_RULE])
+
+
+def test_open_spend_fire_blocks_self_approval_in_new_session(eng):
+    plan = approved_order(eng)
+    agent_session(eng, "a1", plan)
+    eng.spend_fire("a1", plan)
+    assert [f["scale"] for f in eng.ledger(plan)["open_effort_fires"]] == ["spend"]
+    d = eng.open("b1", eng.write(plan_text(), "b.toml"))
+    assert action(d) == "await_user_approval"
+    assert autonomy(d)["open_effort_fire"] is True
+    assert eng.run("approve", session="b1", by="agent")["ok"] is False
+
+
+def test_open_spend_fire_blocks_agent_self_grant(eng):
+    plan = approved_order(eng, plan_text(stage2_extra=grant_block(SELF_RULE)))
+    agent_session(eng, "a1", plan)
+    assert agent_grant(eng, "a1")["ok"] is True
+    eng.spend_fire("a1", plan)
+    refused = agent_grant(eng, "a1")
+    assert refused["ok"] is False
+    assert refused["data"]["reason_class"] == "open-effort-fire"
+
+
+def test_spend_and_wall_clock_fires_go_to_user(eng):
+    plan = approved_order(eng)
+    agent_session(eng, "a1", plan)
+    eng.spend_fire("a1", plan)
+    spend = eng.run("fire_acknowledge", session="a1", decision="revise", by="agent")
+    assert spend["ok"] is False
+    assert "owed to the user" in spend["detail"]
+    state = eng.state("a1")
+    state.effort_fires[-1]["scale"] = effort.SCALE_WALL_CLOCK
+    eng.store.save(state)
+    wall = eng.run("fire_acknowledge", session="a1", decision="revise", by="agent")
+    assert wall["ok"] is False
+    assert "owed to the user" in wall["detail"]
+
+
+# --- the replans-scale fire: the agent's own planning-difficulty cycle -----------------
+
+
+def replans_fire(eng: Eng, sid: str = "a1", *, usd: float | None = None):
+    plan = approved_order(eng)
+    agent_session(eng, sid, plan)
+    eng.seed_replans(sid, Thresholds().effort_replan_absolute())
+    flags = {"cost_log": eng.cost_log(plan, usd)} if usd is not None else {}
+    d = eng.run("record_result", session=sid, status="passed", actual="ok",
+                control="reviewed: ok", observation=OBSERVATIONS[0], **flags)
+    assert eng.state(sid).effort_fires[-1]["scale"] == effort.SCALE_REPLANS, d
+    return d
+
+
+def ack(eng: Eng, sid: str = "a1", decision: str = "revise"):
+    return eng.run("fire_acknowledge", session=sid, decision=decision, by="agent")
+
+
+def test_replans_fire_without_difficulty_record_cannot_be_agent_acknowledged(eng):
+    fired = replans_fire(eng)
+    assert fired["data"]["agent_route"]["route"] == "agent_planning_difficulty_cycle"
+    refused = ack(eng)
+    assert refused["ok"] is False
+    assert refused["marker"] == "ESCALATE_TO_USER"
+    assert "no complete planning-difficulty record" in refused["detail"]
+
+
+def test_agent_acknowledge_requires_difference_to_remove(eng):
+    replans_fire(eng)
+    eng.diagnose("a1", difference=False)
+    refused = ack(eng)
+    assert refused["ok"] is False
+    assert "differences_to_remove" in refused["detail"]
+
+
+def test_agent_acknowledge_requires_normalize_record(eng):
+    replans_fire(eng)
+    eng.diagnose("a1", normalize=False)
+    refused = ack(eng)
+    assert refused["ok"] is False
+    assert "normalization" in refused["detail"]
+
+
+def test_agent_acknowledge_refuses_record_declared_before_fire(eng):
+    replans_fire(eng)
+    eng.diagnose("a1")
+    state = eng.state("a1")
+    state.effort_fires[-1]["difficulty_id_at_fire"] = cli._difficulty_id(state.difficulty)
+    eng.store.save(state)
+    refused = ack(eng)
+    assert refused["ok"] is False
+    assert "predates the fire" in refused["detail"]
+
+
+def test_agent_cannot_acknowledge_with_continue_or_abandon(eng):
+    replans_fire(eng)
+    eng.diagnose("a1")
+    for decision in ("continue", "abandon"):
+        refused = ack(eng, decision=decision)
+        assert refused["ok"] is False
+        assert "the agent may only revise" in refused["detail"]
+    assert eng.state("a1").effort_fires[-1].get("ack") is None
+
+
+def test_replans_fire_with_complete_planning_record_proceeds_without_user(eng):
+    replans_fire(eng)
+    eng.diagnose("a1")
+    assert ack(eng)["ok"] is True
+    assert eng.state("a1").effort_fires[-1]["ack"]["by"] == "agent"
+    d = eng.run("replan", session="a1", plan=eng.write(plan_text(stage3=True)))
+    assert action(d) == "self_approve", d
+    assert eng.run("approve", session="a1", by="agent")["ok"] is True
+    approvers = [e.get("by") for e in eng.state("a1").history if e.get("event") == "approve"]
+    assert approvers == ["agent", "agent"]
+
+
+def test_agent_replan_after_agent_ack_refuses_normalization_waiver(eng):
+    replans_fire(eng)
+    eng.diagnose("a1")
+    assert ack(eng)["ok"] is True
+    refused = eng.run("replan", session="a1", plan=eng.write(plan_text(stage3=True)),
+                      normalization_waiver="one-off")
+    assert refused["ok"] is False
+    assert "normalization-waiver is not accepted" in refused["detail"]
+
+
+def test_agent_acknowledge_keeps_spend_baseline(eng):
+    replans_fire(eng, usd=2.0)
+    assert eng.state("a1").effort_baseline["spend"] == pytest.approx(2.0)
+    eng.diagnose("a1")
+    assert ack(eng)["ok"] is True
+    assert eng.state("a1").effort_baseline["spend"] == pytest.approx(0.0)
 
 

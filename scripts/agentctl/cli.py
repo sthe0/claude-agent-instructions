@@ -5084,6 +5084,11 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if snap:
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
     if agent_autonomy is not None:
+        approved = order_approvals.latest_user_approved_record(_ledgered_order_key(state))
+        frozen = (approved or {}).get("effort_estimate") or {}
+        if frozen:
+            state.order_effort_frozen = {scale: float(value) for scale, value in frozen.items()}
+            effort.rederive(state)
         state.log(
             "approve", by=args.by,
             extra_resources=[e["name"] for e in agent_autonomy["extra_resources"]],
@@ -10069,6 +10074,8 @@ def build_parser() -> argparse.ArgumentParser:
     # Session-free read, same reason as plan-render's suppressed --session above.
     sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
     sp = add("submit-plan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
+    sp.add_argument("--cost-log", dest="cost_log", default=None,
+                    help="override cost log path for tests (defaults to cost.COST_LOG)")
     sp = add("present-plan"); sp.add_argument("--session", required=True)
     sp.add_argument("--kind", choices=list(PLAN_PRESENTATION_KINDS), default=PLAN_PRESENTATION_KIND_ESSENCE,
                     help="essence = free-form summary, no completeness check; "
