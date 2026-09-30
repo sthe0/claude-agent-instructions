@@ -108,7 +108,11 @@ if [[ -n "$project_mount" ]]; then
     candidates=()
     shopt -s nullglob
     for f in "$plugin_dir"/composers/*.sh; do
-      if composer_complete "$f" && composer_run "$f" composer_detect "$mount_real" >/dev/null 2>&1; then
+      if ! composer_complete "$f"; then
+        echo "instruction-sandbox: warning: skipping $f: does not define the five-function composer contract" >&2
+        continue
+      fi
+      if composer_run "$f" composer_detect "$mount_real" >/dev/null 2>&1; then
         candidates+=("$f")
       fi
     done
@@ -138,8 +142,13 @@ fi
 
 created_root=""
 if [[ -z "$root" ]]; then
-  root="$(mktemp -d /tmp/instruction-sandbox.XXXXXX)"
-  created_root=1
+  if [[ -n "$dry_run" ]]; then
+    # -u: report a name only, no write, no cleanup obligation for the dry-run path.
+    root="$(mktemp -u /tmp/instruction-sandbox.XXXXXX)"
+  else
+    root="$(mktemp -d /tmp/instruction-sandbox.XXXXXX)"
+    created_root=1
+  fi
 fi
 root_real="$(readlink -m "$root")"
 canon="$(readlink -m "${CLAUDE_INSTRUCTIONS_CANON:-$HOME/claude-agent-instructions}")"
@@ -148,7 +157,8 @@ home_real="$(readlink -m "$HOME")"
 [[ "$root_real" != "/" && "$root_real" != "$home_real" ]] \
   || die "refusing root $root_real"
 for guarded in "$home_real/.claude-agent" "$home_real/.claude" "$home_real/.cursor" \
-               "$source_real" "$canon"; do
+               "$source_real" "$canon" \
+               ${mount_real:+"$mount_real"} ${protected[@]+"${protected[@]}"}; do
   if inside "$root_real" "$guarded"; then
     die "refusing root $root_real: inside protected path $guarded"
   fi

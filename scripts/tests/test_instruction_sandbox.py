@@ -140,6 +140,15 @@ def test_dry_run_writes_nothing(tmp_path, fake_home):
     assert not root.exists()
 
 
+def test_dry_run_without_root_creates_no_tmp_dir(fake_home):
+    import glob
+    before = set(glob.glob("/tmp/instruction-sandbox.*"))
+    res = _run([str(SANDBOX), "--source", str(REPO), "--dry-run"], _base_env(fake_home))
+    assert res.returncode == 0
+    after = set(glob.glob("/tmp/instruction-sandbox.*"))
+    assert after == before, f"dry run without --root left behind: {after - before}"
+
+
 @pytest.fixture(scope="module")
 def real_build(tmp_path_factory):
     base = tmp_path_factory.mktemp("isb-real")
@@ -411,6 +420,29 @@ def test_project_mount_refuses_mount_inside_root(tmp_path, project_env):
     res = _build(["--root", str(root), "--project-mount", str(inner)], env)
     assert res.returncode != 0 and "refus" in res.stderr.lower()
     assert _tree(root) == {"mount": None, "mount/.marker": b""}
+
+
+def test_project_mount_refuses_root_inside_mount_or_protected(tmp_path, project_env):
+    mount, protected, plugins, env = project_env
+    _composer(plugins, "one", protected)
+    root_in_mount = mount / "sub" / "r"
+    res = _build(["--root", str(root_in_mount), "--project-mount", str(mount)], env)
+    _refused(res, root_in_mount)
+    root_in_protected = protected / "r"
+    res2 = _build(["--root", str(root_in_protected), "--project-mount", str(mount)], env)
+    _refused(res2, root_in_protected)
+
+
+def test_project_mount_warns_on_incomplete_composer(tmp_path, project_env):
+    mount, _, plugins, env = project_env
+    (plugins / "composers").mkdir(parents=True, exist_ok=True)
+    broken = plugins / "composers" / "broken.sh"
+    broken.write_text("composer_detect() { return 0; }\n")
+    root = tmp_path / "r"
+    res = _build(["--root", str(root), "--project-mount", str(mount)], env)
+    _refused(res, root)
+    assert "broken.sh" in res.stderr
+    assert "five-function" in res.stderr
 
 
 def test_project_composition_passes_check_and_records_keys(tmp_path, project_env):
