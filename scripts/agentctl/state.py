@@ -1715,6 +1715,10 @@ class SessionState:
     order_effort_base: dict = field(default_factory=dict)
     order_effort_frozen: dict | None = None
     agent_ack_difficulty_ids: list[str] = field(default_factory=list)
+    #   renegotiation_ceiling_difficulty_id  id of the difficulty record open when the
+    #                         diagnosing-replan ceiling last refused a replan; an agent
+    #                         `continue` needs a record declared after it.
+    renegotiation_ceiling_difficulty_id: str | None = None
     # DIAGNOSING-renegotiation audit trail (GitHub #177) — one record per customer
     # decision at the diagnosing_replan round-release gate, keyed by string (decision,
     # note, by, ts, task_replan_count_at_decision). Same plain list[dict] shape as

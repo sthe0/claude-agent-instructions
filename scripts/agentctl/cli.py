@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 import proc_tree
@@ -521,6 +521,7 @@ def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: f
     """`effort.record_fire` plus, on a spend/wall-clock fire of a ledgered order, the
     open user-owed marker and the order-level baseline rebase."""
     fire = effort.record_fire(state, div, now=now)
+    fire["difficulty_id_at_fire"] = _difficulty_id(state.difficulty)
     if div.scale in effort.RATIO_SCALES:
         key = _ledgered_order_key(state)
         if key is not None:
@@ -535,6 +536,86 @@ def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: f
                 scale: float(window.get(scale) or 0.0) for scale, _ in _ORDER_EFFORT_SCALES
             }
     return fire
+
+
+def _difficulty_id(difficulty) -> str | None:
+    """Content identity of a difficulty record's declared/investigated/critiqued sections
+    — None until it is declared. Two records with the same sections are one record, so an
+    agent cannot re-spend a consumed one under a fresh acknowledgement."""
+    if difficulty is None or difficulty.declaration is None:
+        return None
+    payload = {
+        "declaration": asdict(difficulty.declaration),
+        "investigation": asdict(difficulty.investigation) if difficulty.investigation else None,
+        "critique": asdict(difficulty.critique) if difficulty.critique else None,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def _agent_replans_fire_route(state: SessionState) -> dict | None:
+    """The agent's own route for an unacknowledged `replans`-scale fire of a ledgered
+    order: a planning-difficulty cycle, not a question to the user. None for every other
+    fire (spend/wall-clock stay the user's) and for a session with no user-approved order."""
+    if _ledgered_order_key(state) is None or not state.effort_fires:
+        return None
+    last = state.effort_fires[-1]
+    if last.get("ack") is not None or last.get("scale") != effort.SCALE_REPLANS:
+        return None
+    return {
+        "route": "agent_planning_difficulty_cycle",
+        "steps": ["declare", "investigate", "critique (differences_to_remove)", "normalize",
+                  "fire-acknowledge --decision revise --by agent", "replan"],
+    }
+
+
+def _agent_fire_ack_refusal(state: SessionState, last: dict, decision: str) -> str | None:
+    """Why an agent-authored fire-acknowledge is refused, or None when it may proceed."""
+    if _ledgered_order_key(state) is None:
+        return "the order has no user-approved version; the fire is the user's decision"
+    if last.get("scale") != effort.SCALE_REPLANS:
+        return "an open spend/wall-clock fire is owed to the user, not the agent"
+    if decision != "revise":
+        return f"decision {decision!r} on a fire is the user's; the agent may only revise"
+    diff = state.difficulty
+    did = _difficulty_id(diff)
+    if did is None or not diff.complete():
+        return "no complete planning-difficulty record (declare, investigate, critique) is open"
+    if did == last.get("difficulty_id_at_fire"):
+        return "the difficulty record predates the fire; declare one after it"
+    if did in state.agent_ack_difficulty_ids:
+        return "this difficulty record already discharged an earlier fire"
+    if not diff.critique.differences_to_remove:
+        return "the critique names no differences_to_remove"
+    if diff.normalization is None or not diff.normalization.factor.strip():
+        return "no real normalization record (a waiver does not discharge an agent fire)"
+    return None
+
+
+def _agent_renegotiation_refusal(state: SessionState, decision: str, doc) -> str | None:
+    """Why an agent-authored renegotiation at the diagnosing-replan ceiling is refused,
+    or None when a `continue` may proceed."""
+    if decision != "continue":
+        return f"{decision!r} changes the order's scope or ends it; that is the user's decision"
+    if doc is None or _ledgered_order_key(state) is None:
+        return "the order has no user-approved version to continue within"
+    diff = state.difficulty
+    did = _difficulty_id(diff)
+    if did is None or not diff.complete():
+        return "no complete planning-difficulty record (declare, investigate, critique) is open"
+    if state.renegotiation_ceiling_difficulty_id is None:
+        return "no ceiling refusal is recorded; run the replan without a decision first"
+    if did == state.renegotiation_ceiling_difficulty_id:
+        return "the difficulty record predates the ceiling event; declare one after it"
+    if did in state.agent_ack_difficulty_ids:
+        return "this difficulty record already discharged an earlier decision"
+    if not diff.critique.differences_to_remove:
+        return "the critique names no differences_to_remove"
+    if diff.normalization is None or not diff.normalization.factor.strip():
+        return "no real normalization record (a waiver does not discharge an agent decision)"
+    boundary = _autonomy_for(state, doc)
+    if not boundary["eligible"]:
+        return f"the plan is outside the approved boundary: {boundary['reason']}"
+    return None
 
 
 def _autonomy_for(state: SessionState, doc) -> dict:
@@ -1278,10 +1359,14 @@ def _diagnose_effort_divergence(
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
     state.difficulty = Difficulty()
     store.save(state)
+    data = {"effort_divergence": fire}
+    route = _agent_replans_fire_route(state)
+    if route is not None:
+        data["agent_route"] = route
     return Directive(
         False, state.node, "declare", div.framing,
         marker="OVERCOME-DIFFICULTY",
-        data={"effort_divergence": fire},
+        data=data,
     )
 
 
@@ -1302,6 +1387,27 @@ def _effort_fire_escalation_data(state: SessionState) -> dict:
         "multiple": fire.get("multiple"),
         "ts": fire.get("ts"),
     }
+
+
+def _effort_fire_refusal(state: SessionState, what: str, efblock: list[str]) -> Directive:
+    """The refusal `gates.effort_fire_blockers` produces at dispatch/replan/submit_plan.
+    A replans-scale fire of a ledgered order names the agent's planning-difficulty cycle;
+    every other fire is the user's decision."""
+    data = {"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)}
+    route = _agent_replans_fire_route(state)
+    if route is None:
+        return Directive(
+            False, state.node, "fire_acknowledge",
+            f"{what} blocked by an unacknowledged effort-divergence fire",
+            marker=DIRECTIVE_ESCALATE_TO_USER, data=data,
+        )
+    data["agent_route"] = route
+    return Directive(
+        False, state.node, "planning_difficulty",
+        f"{what} blocked by an unacknowledged replans-scale effort-divergence fire; "
+        "run the planning-difficulty cycle (" + " → ".join(route["steps"]) + ")",
+        marker="OVERCOME-DIFFICULTY", data=data,
+    )
 
 
 def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) -> None:
@@ -3386,12 +3492,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     efblock = gates.effort_fire_blockers(state)
     _log_gate(state, "effort_fire", efblock, passed=not efblock)
     if efblock:
-        return Directive(
-            False, state.node, "fire_acknowledge",
-            "submit_plan blocked by an unacknowledged effort-divergence fire",
-            marker=DIRECTIVE_ESCALATE_TO_USER,
-            data={"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)},
-        )
+        return _effort_fire_refusal(state, "submit_plan", efblock)
     effort.refresh_spend(state, _cost_rows(args), state.plan_path)
     _flush_order_effort(state)
     plan_path = args.plan
@@ -5421,12 +5522,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     efblock = gates.effort_fire_blockers(state)
     _log_gate(state, "effort_fire", efblock, passed=not efblock)
     if efblock:
-        return Directive(
-            False, state.node, "fire_acknowledge",
-            "dispatch blocked by an unacknowledged effort-divergence fire",
-            marker=DIRECTIVE_ESCALATE_TO_USER,
-            data={"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)},
-        )
+        return _effort_fire_refusal(state, "dispatch", efblock)
     try:
         host = runtime_host.require_bound_host(state)
     except runtime_host.HostAmbiguousError as exc:
@@ -8034,12 +8130,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     efblock = gates.effort_fire_blockers(state)
     _log_gate(state, "effort_fire", efblock, passed=not efblock)
     if efblock:
-        return Directive(
-            False, state.node, "fire_acknowledge",
-            "replan blocked by an unacknowledged effort-divergence fire",
-            marker=DIRECTIVE_ESCALATE_TO_USER,
-            data={"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)},
-        )
+        return _effort_fire_refusal(state, "replan", efblock)
 
     # precondition: inside the DIAGNOSING cycle, the difficulty record must be
     # complete before a plan may be re-normed (variant (b) — internal command
@@ -8073,6 +8164,8 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     if rrblock:
         decision = getattr(args, "renegotiation_decision", None)
         if not decision:
+            state.renegotiation_ceiling_difficulty_id = _difficulty_id(state.difficulty)
+            store.save(state)
             return Directive(
                 False, state.node, "renegotiate", "replan blocked: " + rrblock[0],
                 marker=DIRECTIVE_ESCALATE_TO_USER,
@@ -8097,7 +8190,17 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         except (OSError, PlanError):
             order_doc = None
         order = order_doc.meta.order if order_doc is not None else None
-        if order is not None and order.customer_id and renegotiated_by != order.customer_id:
+        if renegotiated_by.casefold() == AGENT_ACTOR:
+            refusal = _agent_renegotiation_refusal(state, decision, order_doc)
+            if refusal is not None:
+                return Directive(
+                    False, state.node, "renegotiate",
+                    f"renegotiation by the agent refused: {refusal}",
+                    marker=DIRECTIVE_ESCALATE_TO_USER,
+                    data={"blockers": rrblock, "reason": refusal},
+                )
+            state.agent_ack_difficulty_ids.append(_difficulty_id(state.difficulty))
+        elif order is not None and order.customer_id and renegotiated_by != order.customer_id:
             return Directive(
                 False, state.node, "renegotiate",
                 f"renegotiation author {renegotiated_by!r} does not match order "
@@ -8160,6 +8263,19 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # `pending_factor` is this call's OWN still-unmutated --normalize-factor: the gate
     # judges it directly rather than reading state.difficulty.normalization, which this
     # command has deliberately not written yet (see the comment above).
+    agent_acked_difficulty = (
+        state.difficulty is not None
+        and _difficulty_id(state.difficulty) in state.agent_ack_difficulty_ids
+    )
+    if agent_acked_difficulty and getattr(args, "normalization_waiver", None) is not None:
+        _log_gate(state, "normalization_waiver", ["agent-acknowledged fire"], passed=False)
+        return Directive(
+            False, state.node, "normalize",
+            "replan refused: the agent-acknowledged fire's difficulty closes on its real "
+            "normalization record; a --normalization-waiver is not accepted",
+            marker=DIRECTIVE_ESCALATE_TO_USER,
+            data={"blockers": ["normalization waiver on an agent-acknowledged fire"]},
+        )
     nblock = gates.normalization_blockers(state, pending_factor=normalize_factor or None)
     if nblock:
         waiver = getattr(args, "normalization_waiver", None)
@@ -8434,6 +8550,14 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # the event together here, rather than staging the record earlier, is what keeps
     # a refused-then-retried call from either double-counting the event or
     # persisting an orphaned record with no event to match it.
+    if agent_acked_difficulty and diff_plans(old, new) == "no_change":
+        return Directive(
+            False, state.node, "replan",
+            "replan refused: the corrected plan leaves the operative surface unchanged, "
+            "so the agent-acknowledged fire's difficulty is not addressed by it",
+            marker=DIRECTIVE_ESCALATE_TO_USER,
+            data={"blockers": ["corrected plan changes no operative surface"]},
+        )
     if normalize_factor:
         if state.node == Node.DIAGNOSING.value:
             state.difficulty.normalization = Normalization(
@@ -8756,6 +8880,23 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
                          "must be one of continue, abandon, revise")
     if not args.by or not args.by.strip():
         return Directive(False, state.node, "noop", "empty --by: must name who decided")
+    by_agent = args.by.strip().casefold() == AGENT_ACTOR
+    if by_agent:
+        refusal = _agent_fire_ack_refusal(state, last, decision)
+        if refusal is not None:
+            return Directive(
+                False, state.node, "fire_acknowledge",
+                f"fire-acknowledge by the agent refused: {refusal}",
+                marker=DIRECTIVE_ESCALATE_TO_USER,
+                data={"effort_fire": _effort_fire_escalation_data(state), "reason": refusal},
+            )
+        state.agent_ack_difficulty_ids.append(_difficulty_id(state.difficulty))
+        # The replans-scale fire rebased every scale's baseline; the spend / wall-clock
+        # progress it swallowed is still owed to the user's own fire.
+        replaced = last.get("replaced_baseline") or {}
+        for scale in effort.SCALE_ORDER:
+            if scale != effort.SCALE_REPLANS and scale in replaced:
+                state.effort_baseline[scale] = replaced[scale]
     last["ack"] = {
         "by": args.by,
         "decision": decision,

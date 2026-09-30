@@ -646,8 +646,10 @@ def record_fire(state: SessionState, div: Divergence, *, now: float) -> dict:
     exactly that absence to refuse dispatch/replan/submit_plan until
     `agentctl fire-acknowledge` appends one (never replaces the record; the audit
     trail stays append-only)."""
+    replaced_baseline = dict(state.effort_baseline or {})
     state.effort_baseline = actual(state)
     record = {
+        "replaced_baseline": replaced_baseline,
         "scale": div.scale,
         "kind": div.kind,
         "actual": div.actual,
