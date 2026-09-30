@@ -2423,13 +2423,7 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
     if out["open_effort_fire"]:
         reasons.append(AUTONOMY_REASON_OPEN_FIRE)
 
-    approved = [
-        res for res in (
-            _oa.resource_from_dict(raw)
-            for record in records if record is last or not record.get("plan_sha256")
-            for raw in (record.get("resources") or [])
-        ) if res is not None
-    ]
+    approved = _oa.boundary_resources_of(ledger_snapshot)
     seen: set[str] = set()
     for requested in resolved_plan.resources:
         if any(a.covers(requested, protected=protected) for a in approved):

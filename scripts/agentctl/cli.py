@@ -1066,7 +1066,7 @@ def _verify_command_result(stage, runner: Runner | None, cwd: str | None = None)
     so the engine keeps its flag-only behaviour. Otherwise delegates to _run_check,
     which is also used for typed final_check entries at verify-final."""
     crit = stage.criterion
-    if not crit.verify_command or crit.criterion_type != CriterionType.MEASURABLE.value:
+    if not plan_resources.runs_verify_command(crit):
         return True, None
     return _run_check(crit.verify_command, crit.expected_exit, runner, cwd)
 
@@ -6115,7 +6115,7 @@ def _self_grant_resources_for_rule(
         repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
         ledger_dir=str(order_approvals._root(None)),
     )
-    approved: list = list(order_approvals.approved_resources(order_digest(doc)))
+    approved: list = list(order_approvals.boundary_resources(order_digest(doc)))
     for rule_grant in coverage.allow:
         eff = plan_resources.resolve_rule_grant(rule_grant.rule, venue)
         if eff.status == "resolved":
@@ -6661,7 +6661,7 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
         # user-approved (as part of the plan approval) and must self-grant
         # here too, or dispatch's self_grant directive (which DOES check this
         # union) would tell the caller to run a command that then refuses.
-        self_approved = list(order_approvals.approved_resources(order_digest(self_doc)))
+        self_approved = list(order_approvals.boundary_resources(order_digest(self_doc)))
         self_active_stage = state.active_stage()
         if self_active_stage is not None:
             self_coverage = _effective_stage_grants_for_self_grant(state, self_active_stage.index)

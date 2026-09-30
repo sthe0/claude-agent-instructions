@@ -299,7 +299,7 @@ def record_customer_grant(
 ) -> dict:
     """Append a single customer-authored `resolve-permission --scope stage`
     grant (A2: `--scope once` never calls this). Recorded as a one-resource
-    record so `approved_resources()` treats it identically to an approval
+    record so `boundary_resources()` treats it identically to an approval
     record's own resource list."""
     if by.strip().casefold() == AGENT_ACTOR:
         raise ValueError(f"order_approvals.record_customer_grant refuses by={AGENT_ACTOR!r}")
@@ -414,16 +414,28 @@ def record_first_thinker_verdict(
         return data
 
 
-def approved_resources(order_sha256: str, *, root: Path | None = None) -> list[_resources.Resource]:
-    """Every resource ever approved for this order, across every record —
-    the set `resolve-permission --by agent` and `dispatch`'s self_grant check
-    a requested resource's coverage against (REQ5). Unrecognized/malformed
+def boundary_resources_of(snapshot: dict) -> list[_resources.Resource]:
+    """The resources the user's approval of this order stands behind: the LAST
+    user-approved version's own resource list plus every customer stage-scoped
+    grant (a record with `plan_sha256` None). Earlier user-approved versions are
+    deliberately excluded -- a re-approval may narrow the set, and a resource the
+    user dropped there must not stay self-grantable. Unrecognized/malformed
     entries are silently dropped (tolerant read, matching `resource_from_dict`)."""
-    data = get(order_sha256, root=root)
+    records = list(snapshot.get("records") or [])
+    last = next((r for r in reversed(records) if r.get("plan_sha256")), None)
     out: list[_resources.Resource] = []
-    for record in data["records"]:
+    for record in records:
+        if record is not last and record.get("plan_sha256"):
+            continue
         for raw in record.get("resources") or []:
             resource = resource_from_dict(raw)
             if resource is not None:
                 out.append(resource)
     return out
+
+
+def boundary_resources(order_sha256: str, *, root: Path | None = None) -> list[_resources.Resource]:
+    """`boundary_resources_of` over the stored ledger -- the set `resolve-permission
+    --by agent` and `dispatch`'s self_grant check a requested resource's coverage
+    against (REQ5), and the reference set of `gates.autonomy_boundary`."""
+    return boundary_resources_of(get(order_sha256, root=root))

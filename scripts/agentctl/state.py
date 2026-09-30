@@ -90,7 +90,7 @@ class Route(str, Enum):
 
 
 # The reserved actor identity for engine-authored acts — `resolve-permission
-# --by agent`'s self-grant path (order_approvals.approved_resources coverage
+# --by agent`'s self-grant path (order_approvals.boundary_resources coverage
 # check, never a customer-authored write to the ledger itself) and nothing
 # else. Never a valid `cmd_approve --by` (an approval must be customer-
 # authored to mean anything — self-approval would let the engine stamp its

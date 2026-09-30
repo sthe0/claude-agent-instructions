@@ -339,6 +339,43 @@ def test_resource_dropped_at_user_reapproval_is_no_longer_approved(eng):
     assert any("brand_new_module.py" in json.dumps(r) for r in autonomy(d)["extra_resources"])
 
 
+def narrowed_after_user_dropped_push(eng: Eng, sid: str) -> str:
+    """The user approves an order that includes a push to ticket/x, then re-approves it
+    without that push; returns the narrowed plan's path with an agent session executing it."""
+    rule = PUSH_MAIN.replace("main", "ticket/x")
+    wide = approved_order(eng, plan_text(stage2_extra=grant_block(rule)))
+    assert "ticket/x" in json.dumps(eng.ledger(wide)["records"][0]["resources"])
+    narrowed = eng.write(plan_text(), "narrowed-grant.toml")
+    eng.open("re", narrowed)
+    assert eng.run("approve", session="re", by="user")["ok"] is True
+    agent_session(eng, sid, narrowed)
+    return narrowed
+
+
+def test_resource_dropped_at_user_reapproval_is_refused_by_agent_resolve_permission(eng):
+    narrowed_after_user_dropped_push(eng, "a1")
+    eng.park_permission("a1", PUSH_MAIN)
+    refused = eng.run("resolve_permission", session="a1", decision="granted", by="agent",
+                      scope="stage", rule=[PUSH_MAIN.replace("main", "ticket/x")])
+    assert refused["ok"] is False
+    assert "not covered by any resource the customer approved" in refused["detail"]
+
+
+def test_resource_dropped_at_user_reapproval_routes_dispatched_request_to_user(eng):
+    from argparse import Namespace
+
+    from agentctl.dispatch import RunResult
+
+    narrowed_after_user_dropped_push(eng, "a1")
+    rule = PUSH_MAIN.replace("main", "ticket/x")
+    reply = f"PERMISSION-REQUEST:\nAction: push\nWhy: needed\nFallback if denied: stop\nRule: {rule}\n"
+    d = cli.cmd_dispatch(
+        Namespace(session="a1", budget="medium", complexity="medium", dry_run=False),
+        store=eng.store, runner=lambda argv: RunResult(0, stdout=reply), perm_checker=lambda a: False,
+    )
+    assert d.action == "ask_user_permission", d.detail
+
+
 def test_refinement_moving_order_digest_goes_to_user(eng):
     plan = approved_order(eng)
     eng.open("m1", plan)

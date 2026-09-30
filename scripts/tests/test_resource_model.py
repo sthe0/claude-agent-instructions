@@ -566,7 +566,7 @@ def test_customer_approve_stamps_order_ledger_casefolded():
         by="Alice",
         at="2026-09-29T00:00:00Z",
     )
-    approved = order_approvals.approved_resources(order_sha)
+    approved = order_approvals.boundary_resources(order_sha)
     assert len(approved) == 1
     assert approved[0].path == "/tmp/x"
 
@@ -579,7 +579,7 @@ def test_non_customer_approve_does_not_stamp_ledger():
     # a non-customer --by never reaches this module at all, so the ledger
     # for an order nobody has approved-as-customer stays empty.
     assert order_approvals.get(order_sha)["records"] == []
-    assert order_approvals.approved_resources(order_sha) == []
+    assert order_approvals.boundary_resources(order_sha) == []
 
 
 def test_approve_by_reserved_agent_refused():
@@ -640,7 +640,7 @@ def test_ledger_survives_reset_renegotiation_and_new_session(tmp_path):
     # No reset/renegotiation call exists in this module at all — re-reading
     # under a brand new root argument (simulating "a new session, same
     # default root") still sees the record.
-    again = order_approvals.approved_resources(order_sha)
+    again = order_approvals.boundary_resources(order_sha)
     assert len(again) == 1
 
 
@@ -659,7 +659,7 @@ def test_same_task_id_other_order_reads_empty_ledger():
         by="alice",
         at="2026-09-29T00:00:00Z",
     )
-    assert order_approvals.approved_resources(order_b) == []
+    assert order_approvals.boundary_resources(order_b) == []
 
 
 def test_stage_scoped_customer_grant_counts_once_scoped_does_not():
@@ -673,14 +673,14 @@ def test_stage_scoped_customer_grant_counts_once_scoped_does_not():
         by="alice",
         at="2026-09-29T00:00:00Z",
     )
-    approved = order_approvals.approved_resources(order_sha)
+    approved = order_approvals.boundary_resources(order_sha)
     assert len(approved) == 1
     assert approved[0].path == "/tmp/scoped"
     # A --scope once grant is never recorded here at all (A2) — simulated by
     # simply never calling record_customer_grant for it; the ledger for a
     # once-only order stays empty.
     once_only_order = "fedcba98" * 8
-    assert order_approvals.approved_resources(once_only_order) == []
+    assert order_approvals.boundary_resources(once_only_order) == []
 
 
 def test_runtime_grant_under_other_order_not_counted():
@@ -695,8 +695,8 @@ def test_runtime_grant_under_other_order_not_counted():
         by="alice",
         at="2026-09-29T00:00:00Z",
     )
-    assert order_approvals.approved_resources(order_b) == []
-    assert len(order_approvals.approved_resources(order_a)) == 1
+    assert order_approvals.boundary_resources(order_b) == []
+    assert len(order_approvals.boundary_resources(order_a)) == 1
 
 
 # --- REQ5: resolve-permission --by agent self-grant --------------------------

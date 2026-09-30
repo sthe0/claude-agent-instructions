@@ -150,6 +150,14 @@ def _unresolved_item(identity, origin: str, source: str) -> dict:
     return {"identity": list(identity), "origin": origin, "source": source}
 
 
+def runs_verify_command(criterion) -> bool:
+    """Whether the engine itself executes this criterion's `verify_command` -- the one
+    predicate both the executor and the boundary's resource resolution key on."""
+    return bool(criterion.verify_command) and (
+        criterion.criterion_type.replace("-", "_") == CriterionType.MEASURABLE.value
+    )
+
+
 def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None = None) -> BoundaryView:
     """`compute_plan_resources`' resources plus the engine-executed fixed texts
     (verify_command, negative_control, final_check commands) resolved directly as whole
@@ -180,8 +188,8 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
             view.resources.extend(resolve_add_dir_grant(add_dir.path, add_dir.mode).resources)
         view.resources.extend(_stage_spawn_resources(stage))
         view.resources.extend(_stage_landed_resources(stage))
-        verify = stage.criterion.verify_command
-        if verify and stage.criterion.criterion_type.replace("-", "_") != CriterionType.ACCEPTANCE_REVIEW.value:
+        if runs_verify_command(stage.criterion):
+            verify = stage.criterion.verify_command
             take(resolve_command(verify, v), "verify_command", verify, ("verify-command", verify))
         control = stage.criterion.negative_control
         if control:
