@@ -115,7 +115,7 @@ A `claude -p` spawn is a **one-shot batch process**, unlike the root/interactive
 Each specialist's first non-empty line carries one of these. The wrapper validates and prefixes the output with `MALFORMED:` if the marker is missing.
 
 - `COMPLETED:` — step done; summary + artifacts.
-- `PLAN-READY:` — **planner-only.** Plan ready; manager must obtain explicit user approval before next spawn. Hard gate.
+- `PLAN-READY:` — **planner-only.** Plan ready; manager must obtain explicit user approval before next spawn. Hard gate — except a later plan of a user-approved order, self-approved on the engine's `self_approve`.
 - `INCOMPLETE:` — partial; what's done, what's left, blocker.
 - `CLARIFY:` — specialist needs one specific fact (path, number, choice between named options) to continue. Manager answers, re-spawns with answer embedded.
 - `REPLAN:` — plan-level difficulty; specialist proposes a revision.

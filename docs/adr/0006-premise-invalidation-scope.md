@@ -126,7 +126,7 @@ instead.
    three have no stage field of their own and still fall back to the rest-of-stage definition
    (stage 2's own scope); a finer split was not attempted.
 3. **Splitting the pre-approval round budget from `effort-replan-absolute`** — stage 7 reused the
-   existing Rule-of-Three config key rather than adding a dedicated one; stage 7's own refutation
+   existing config key (then `3`) rather than adding a dedicated one; stage 7's own refutation
    names the observable (the release firing on most substantive plans) that would justify the
    split, which does not yet exist.
 

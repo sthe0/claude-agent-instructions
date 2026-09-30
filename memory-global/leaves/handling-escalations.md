@@ -16,7 +16,7 @@ The **routing** of each marker and the **continuation-prompt assembly** are owne
 
 This leaf is the **cognition the engine deliberately does not replace** — the judgment to apply at each marker before/around the engine's transition. Marker definitions: [spawning-specialists.md](spawning-specialists.md) § Return markers.
 
-**`PLAN-READY:`** — a **hard gate**. Stop and present the plan to the user for explicit approval before any further spawn; never infer approval from silence or a side comment — require a positive answer. (The engine holds at the approval gate via `await_plan_approval`; you supply the ask and the decision.)
+**`PLAN-READY:`** — a **hard gate**. Stop and present the plan to the user for explicit approval before any further spawn; never infer approval from silence or a side comment — require a positive answer. (The engine holds at the approval gate via `await_plan_approval`; you supply the ask and the decision.) A later plan of a user-approved order that the engine routes to `self_approve` instead of `PLAN-READY` is self-approved (`approve --by agent`) — see [acting-without-asking.md](acting-without-asking.md) § Substantive plan changes.
 
 **`CLARIFY:`** — judgment: if the question needs the user's input (intent, preference, choice), ask the user first — do not invent an answer. Otherwise answer it directly. The engine fills your answer into the `clarify` continuation and re-spawns.
 

@@ -23,7 +23,7 @@ End your output with the marker that names your outcome, written however reads n
 Two things do still matter. Do not present a marker you do not mean — the pass reads your message's declared disposition, and a marker written casually is read as your real verdict. And if you discuss markers in prose (weighing whether to `REPLAN:`, quoting this contract), make the marker you actually return unambiguous — a message that signals two markers with no clear terminal one is treated as markerless.
 
 - `COMPLETED:` — the step is done; include a summary, artifact paths (PR link, branch, files changed, test output), and any local plan revisions you applied.
-- `PLAN-READY:` — (planner) the plan is ready and the manager **must** obtain explicit user approval before spawning the next specialist. The planner's SKILL.md carries the enforced `Plan:` / `Summary:` format.
+- `PLAN-READY:` — (planner) the plan is ready and the manager **must** obtain explicit user approval before spawning the next specialist (a later plan of a user-approved order may instead be self-approved on the engine's `self_approve`). The planner's SKILL.md carries the enforced `Plan:` / `Summary:` format.
 - `INCOMPLETE:` — partial; what is done, what remains, what blocks completion.
 - `CLARIFY:` — you need a small, specific answer to continue: a file path, a value, a choice between named options, a confirmation about a corner case. Prefer this over `ESCALATE:` when the answer is short and work resumes immediately. Format:
 
