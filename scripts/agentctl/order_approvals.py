@@ -52,6 +52,8 @@ lock on a sibling `.lock` file spanning the read-modify-write) and its atomic
 """
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import json
 import os
 import tempfile
@@ -101,9 +103,6 @@ def first_thinker_verdict_key(plan_sha256: str, changed_identities: list[tuple])
     keeps the key'), while a user re-approval (which moves `plan_sha256`)
     always produces a fresh key ('no verdict carries across a user
     re-approval') with no explicit pruning needed."""
-    import hashlib
-    import json
-
     normalized = sorted(list(identity) for identity in changed_identities)
     payload = json.dumps({"plan_sha256": plan_sha256, "changed": normalized}, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -115,8 +114,6 @@ def resource_to_dict(resource: _resources.Resource) -> dict:
     JSON-native strings, so a generic field walk is sufficient; no per-kind
     special-casing is needed and none is added, so a new kind added to
     resources.py serializes here without an order_approvals.py change."""
-    import dataclasses
-
     return dataclasses.asdict(resource)
 
 

@@ -203,7 +203,7 @@ class Resource:
 
     kind: str
 
-    def covers(self, other: "Resource") -> bool:  # pragma: no cover - overridden
+    def covers(self, other: "Resource", *, protected: list[str] | None = None) -> bool:  # pragma: no cover - overridden
         raise NotImplementedError
 
 
@@ -270,7 +270,7 @@ class VcsRefResource(Resource):
     op: str
     kind: str = "vcs_ref"
 
-    def covers(self, other: "Resource") -> bool:
+    def covers(self, other: "Resource", *, protected: list[str] | None = None) -> bool:
         if not isinstance(other, VcsRefResource):
             return False
         return (self.remote, self.ref, self.op) == (other.remote, other.ref, other.op)
@@ -284,7 +284,7 @@ class SpecialistResource(Resource):
     role: str
     kind: str = "specialist"
 
-    def covers(self, other: "Resource") -> bool:
+    def covers(self, other: "Resource", *, protected: list[str] | None = None) -> bool:
         if not isinstance(other, SpecialistResource):
             return False
         return self.role == other.role
@@ -303,7 +303,7 @@ class ServiceResource(Resource):
     op_class: str
     kind: str = "service"
 
-    def covers(self, other: "Resource") -> bool:
+    def covers(self, other: "Resource", *, protected: list[str] | None = None) -> bool:
         if not isinstance(other, ServiceResource):
             return False
         return (self.name, self.op_class) == (other.name, other.op_class)
@@ -322,7 +322,7 @@ class DatasetResource(Resource):
     locator: str
     kind: str = "dataset"
 
-    def covers(self, other: "Resource") -> bool:
+    def covers(self, other: "Resource", *, protected: list[str] | None = None) -> bool:
         if not isinstance(other, DatasetResource):
             return False
         return (self.system, self.locator) == (other.system, other.locator)

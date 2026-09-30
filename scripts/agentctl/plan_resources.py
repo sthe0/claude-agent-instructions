@@ -152,9 +152,10 @@ def _unresolved_item(identity, origin: str, source: str) -> dict:
 
 def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None = None) -> BoundaryView:
     """`compute_plan_resources`' resources plus the engine-executed fixed texts
-    (negative_control, final_check commands) resolved directly, with every unresolved
-    identity carrying its origin: a derived verify-command rule is judged by the
-    segment it was derived from, not by its `:*` spelling."""
+    (verify_command, negative_control, final_check commands) resolved directly as whole
+    texts, with every unresolved identity carrying its origin. The DR-V rules derived
+    from a verify_command are skipped: derivation drops segments it cannot read off
+    the text, so only the direct resolution sees them."""
     v = venue if venue is not None else _venue_for(doc)
     view = BoundaryView(order_sha256=order_sha256)
 
@@ -169,9 +170,6 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
         for rule_grant in effective.allow:
             provenance = rule_grant.provenance
             if provenance == "derived:DR-V":
-                parsed = _grants.rule_program_and_arg(rule_grant.rule)
-                segment = parsed[1][:-2] if parsed and parsed[1].endswith(":*") else rule_grant.rule
-                take(resolve_command(segment, v), "verify_command", segment, ("derived-verify", segment))
                 continue
             origin = "declared" if provenance == "declared" else (
                 "output_artifact" if provenance == "derived:DR-O" else provenance
@@ -182,6 +180,9 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
             view.resources.extend(resolve_add_dir_grant(add_dir.path, add_dir.mode).resources)
         view.resources.extend(_stage_spawn_resources(stage))
         view.resources.extend(_stage_landed_resources(stage))
+        verify = stage.criterion.verify_command
+        if verify and stage.criterion.criterion_type.replace("-", "_") != CriterionType.ACCEPTANCE_REVIEW.value:
+            take(resolve_command(verify, v), "verify_command", verify, ("verify-command", verify))
         control = stage.criterion.negative_control
         if control:
             take(resolve_command(control, v), "negative_control", control, ("negative-control", control))

@@ -469,13 +469,14 @@ def _effort_cross_totals(state: SessionState) -> dict:
         unflushed = max(0.0, actual[scale] - float(flushed.get(scale, actual[scale])))
         total = float(window.get(scale) or 0.0) + unflushed
         floor = float(base.get(scale) or 0.0)
+        # The floor is subtracted only while the window has not been reset below it (a fresh user approval).
         totals[total_key] = total - (floor if total >= floor else 0.0)
     return totals
 
 
-def _flush_order_effort(state: SessionState) -> None:
+def _flush_order_effort(state: SessionState, key: str | None = None) -> None:
     """Move this session's unflushed spend/wall-clock into its order's ledger window."""
-    key = _ledgered_order_key(state)
+    key = key or _ledgered_order_key(state)
     if key is None:
         return
     actual = effort.actual(state)
@@ -525,7 +526,7 @@ def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: f
     if div.scale in effort.RATIO_SCALES:
         key = _ledgered_order_key(state)
         if key is not None:
-            _flush_order_effort(state)
+            _flush_order_effort(state, key)
             order_approvals.record_effort_fire(
                 key, scale=div.scale, detail={"actual": div.actual, "estimate": div.estimate,
                                                "multiple": div.multiple},
@@ -8536,6 +8537,15 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         _log_gate(state, "replan_coverage", cov, passed=not cov)
         if cov:
             waiver = getattr(args, "coverage_waiver", None)
+            if agent_acked_difficulty and waiver is not None:
+                _log_gate(state, "replan_coverage_waiver", ["agent-acknowledged fire"], passed=False)
+                return Directive(
+                    False, state.node, "declare",
+                    "replan refused: the agent-acknowledged fire's corrected plan must pass the "
+                    "critique coverage check; a --coverage-waiver is not accepted",
+                    marker=DIRECTIVE_ESCALATE_TO_USER,
+                    data={"coverage_blockers": cov, "blockers": ["coverage waiver on an agent-acknowledged fire"]},
+                )
             if waiver is None:
                 return Directive(False, state.node, "declare", "replan blocked: critique coverage",
                                  data={"coverage_blockers": cov})
@@ -8555,13 +8565,16 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # the event together here, rather than staging the record earlier, is what keeps
     # a refused-then-retried call from either double-counting the event or
     # persisting an orphaned record with no event to match it.
-    if agent_acked_difficulty and diff_plans(old, new) == "no_change":
+    if agent_acked_difficulty and (
+        diff_plans(old, new) == "no_change"
+        or not any((d or "").strip() for d in state.difficulty.critique.differences_to_remove)
+    ):
         return Directive(
             False, state.node, "replan",
-            "replan refused: the corrected plan leaves the operative surface unchanged, "
-            "so the agent-acknowledged fire's difficulty is not addressed by it",
+            "replan refused: the agent-acknowledged fire's corrected plan must change the "
+            "operative surface against a critique that names a difference to remove",
             marker=DIRECTIVE_ESCALATE_TO_USER,
-            data={"blockers": ["corrected plan changes no operative surface"]},
+            data={"blockers": ["corrected plan changes no operative surface, or no difference to remove"]},
         )
     if normalize_factor:
         if state.node == Node.DIAGNOSING.value:

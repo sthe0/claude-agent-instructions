@@ -329,6 +329,16 @@ def test_functional_place_traceability_customer_change_goes_to_user(eng):
     )
 
 
+def test_resource_dropped_at_user_reapproval_is_no_longer_approved(eng):
+    approved_order(eng, plan_text(extra_outputs=("brand_new_module.py",)))
+    narrowed = eng.write(plan_text(), "narrowed.toml")
+    eng.open("r1", narrowed)
+    assert eng.run("approve", session="r1", by="user")["ok"] is True
+    d = eng.open("r2", eng.write(plan_text(extra_outputs=("brand_new_module.py",)), "readded.toml"))
+    assert action(d) == "await_user_approval"
+    assert any("brand_new_module.py" in json.dumps(r) for r in autonomy(d)["extra_resources"])
+
+
 def test_refinement_moving_order_digest_goes_to_user(eng):
     plan = approved_order(eng)
     eng.open("m1", plan)
@@ -464,6 +474,16 @@ def test_declared_unresolved_wildcard_rule_goes_to_user_despite_thinker_pass(eng
     assert action(eng.open("t2", wild)) == "await_user_approval"
 
 
+@pytest.mark.parametrize("command", ["frobnicate $(id)", "frobnicate --fast > /dev/null"])
+def test_verify_command_the_grant_derivation_cannot_read_still_needs_first_thinker_pass(eng, venue, command):
+    approved_order(eng, cmd_plan(venue))
+    d = eng.open("t1", eng.write(cmd_plan(venue, command)))
+    assert action(d) == "await_user_approval"
+    assert [(c["source"], c["origin"]) for c in changed(d)] == [(command, "verify_command")]
+    assert autonomy(d)["thinker_pass"] is False
+    assert "first passing thinker review" in autonomy(d)["reason"]
+
+
 def test_derived_rule_judged_by_its_source_command(eng, venue):
     approved_order(eng, cmd_plan(venue))
     d = eng.open("t1", eng.write(cmd_plan(venue, "frobnicate --slow")))
@@ -514,7 +534,7 @@ def test_autonomy_data_and_audit_log_list_changed_commands(eng, venue):
     assert entry["extra_resources"] == []
 
 
-def test_first_thinker_verdict_not_carried_across_user_reapproval(eng, venue):
+def test_first_thinker_verdict_not_carried_across_reapproval_with_new_stage(eng, venue):
     approved_order(eng, cmd_plan(venue))
     slow = eng.write(cmd_plan(venue, "frobnicate --slow"))
     eng.open("t1", slow)
@@ -739,6 +759,16 @@ def test_agent_acknowledge_refuses_record_declared_before_fire(eng):
     refused = ack(eng)
     assert refused["ok"] is False
     assert "predates the fire" in refused["detail"]
+
+
+def test_agent_replan_after_agent_ack_refuses_coverage_waiver(eng):
+    replans_fire(eng)
+    eng.diagnose("a1")
+    assert ack(eng)["ok"] is True
+    untouched = eng.write(plan_text().replace('title = "', 'title = "Edited ', 1))
+    refused = eng.run("replan", session="a1", plan=untouched, coverage_waiver="one-off")
+    assert refused["ok"] is False
+    assert "coverage-waiver is not accepted" in refused["detail"]
 
 
 def test_agent_cannot_acknowledge_with_continue_or_abandon(eng):
