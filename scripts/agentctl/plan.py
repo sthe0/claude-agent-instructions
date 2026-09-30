@@ -2260,27 +2260,36 @@ def topo_unit_binding(doc: PlanDoc, unit: str) -> dict:
     - `stage_key` — a stage unit only: its own whole-stage digest
       (`stage_element_keys(stage)[WHOLE_STAGE_ELEMENT]`, the same value
       `plan_stage_digests` reports for it).
-    - `neighbor_file_digests` — a stage unit only: `{str(i): sha256(render_stage_brief)}`
-      for every `i` in `first_hop(doc, n)` — the reviewer's own reading list for a
-      --review-topo bundle on this unit, so a neighbour's method/procedure edit (which
-      moves its brief but not its `stage_key`) still stales this unit's record.
+    - `neighbor_file_digests` — `{str(i): sha256(render_stage_brief)}` for every `i` in
+      `first_hop(doc, n)` for a stage unit, or for EVERY stage index for the order unit
+      (its bundle inlines every stage's full brief, not just a first-hop ring — "Stage 1
+      supplies ... every stage for the order node" per this stage's Material) — the
+      reviewer's own reading list, so a neighbour's method/procedure edit (which moves
+      its brief but not its `stage_key`) still stales this unit's record, and any stage
+      edit at all stales the order node (tr6).
     - `interface_keys` — a stage unit only: `{str(i): stage_interface_digest(...)}` for
       every `i` in `reliance_closure(doc, n) - reliance_set(doc, n)` — the further-out
       ring the reviewer read for context but whose file wasn't in the bundle, keyed
       narrower than a full brief (interface only) since that's all that ring commits to.
+      Empty for the order node, whose view already holds every stage as a full brief —
+      no transitive-only ring is left once nothing is farther than first-hop.
     """
+    from .render import render_stage_brief
     meta_digest = plan_meta_digest(doc)
     if unit == PLAN_REVIEW_TOPO_ORDER_UNIT:
+        neighbor_file_digests = {
+            str(s.index): hashlib.sha256(render_stage_brief(doc, s.index).encode("utf-8")).hexdigest()
+            for s in sorted(doc.stages, key=lambda s: s.index)
+        }
         return {
             "meta_digest": meta_digest,
             "stage_key": "",
-            "neighbor_file_digests": {},
+            "neighbor_file_digests": neighbor_file_digests,
             "interface_keys": {},
             "order_extra_digest": order_extra_digest(doc.meta),
         }
     n = int(unit)
     stage = _stage_by_index(doc, n)
-    from .render import render_stage_brief
     neighbor_file_digests = {
         str(i): hashlib.sha256(render_stage_brief(doc, i).encode("utf-8")).hexdigest()
         for i in sorted(first_hop(doc, n))
