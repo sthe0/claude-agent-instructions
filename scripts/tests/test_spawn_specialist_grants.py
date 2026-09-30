@@ -24,6 +24,8 @@ avoids re-deriving that plumbing rather than duplicating it.
 from __future__ import annotations
 
 import importlib.util
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -405,6 +407,11 @@ def test_gc9_nested_read_parent_write_child_refused():
     assert "/tmp/gcbase/sub" in str(excinfo.value)
     assert "'/tmp/gcbase'" in str(excinfo.value)
 
+    # The same pair listed write-first is refused with the same message.
+    with pytest.raises(MOD.GrantShadowError) as write_first:
+        MOD.stage_grant_rules(list(reversed(entries)))
+    assert str(write_first.value) == str(excinfo.value)
+
 
 def test_gc10_read_child_is_covered_by_write_parent():
     # This is what fails if coverage matches only an identical base and not
@@ -556,3 +563,222 @@ def test_gc19_refusal_names_both_provenances():
     )
     assert "derived:DR-R" in message
     assert "runtime" in message
+
+
+# --- (G) build_child_settings: an Edit allow some Edit deny covers entirely --
+#
+# The guard globs every writable directory is paired with are spelled once,
+# in `write_guard_deny_rules` (gs1). Once every source has contributed,
+# `build_child_settings` refuses a payload in which any Edit deny covers an
+# Edit allow ENTIRELY, whatever the two sources, since the client would void
+# the allow in silence; a deny covering only part of an allow is the guards'
+# ordinary job (gs3, gs4). `**` spans zero or more whole segments, `*` stays
+# inside one (gs2, gs7); a deny not ending in `/**` covers exact paths only,
+# so it never voids a subtree allow (gs5, gs6). gc_mutation_control.py
+# checks each case goes red under the weakening it exists to catch.
+
+_GUARD_GLOB_TAILS = ("/**/.claude/**)", "/**/settings*.json)", "/**/.git/**)", "/**/.git)")
+
+
+def _guards(base: str) -> list[str]:
+    return [f"Edit({base}{tail}" for tail in _GUARD_GLOB_TAILS]
+
+
+def _settings_with_pair(monkeypatch, allow: list[str], deny: list[str]) -> dict:
+    # The allow is injected as the target project's own rule: that is the
+    # one source whose rules reach the final check unfiltered by shape, so
+    # a pair `grants.validate_rule` refuses upstream (an exact `.git` path)
+    # still exercises the coverage relation itself. The deny comes from our
+    # own machinery, because a pair with BOTH sides from project settings is
+    # only warned about, never refused.
+    monkeypatch.setattr(MOD, "project_settings_permission_rules", lambda _file: (list(allow), []))
+    monkeypatch.setattr(MOD, "write_grant_cwd_deny_rules", lambda *_args: list(deny))
+    return MOD.build_child_settings("developer")
+
+
+def test_gs1_guard_globs_have_one_home(tmp_path, monkeypatch):
+    base = GRANTS.rule_file_arg(str(tmp_path))
+    monkeypatch.setattr(MOD, "_vcs_root", lambda _cwd: str(tmp_path))
+    assert MOD.write_guard_deny_rules(base) == MOD.repo_root_deny_rules("developer", str(tmp_path))
+    source = SCRIPT.read_text()
+    # Each tail is delimited by its closing paren: `/**/.git)` is not a
+    # substring of `/**/.git/**)`.
+    for tail in _GUARD_GLOB_TAILS:
+        assert source.count(tail) == 1, tail
+
+
+def test_gs2_file_allow_under_a_claude_guard_is_refused(tmp_path, monkeypatch):
+    root = GRANTS.rule_file_arg(str(tmp_path / "root"))
+    allow = f"Edit({root}/.claude/worktrees/w/scripts/tests/t.py)"
+    deny = f"Edit({root}/**/.claude/**)"
+    with pytest.raises(MOD.GrantShadowError):
+        _settings_with_pair(monkeypatch, [allow], [deny])
+
+
+def test_gs3_write_add_dir_is_not_voided_by_its_own_guards(tmp_path):
+    target = tmp_path / "b"
+    base = GRANTS.rule_file_arg(str(target))
+    settings = MOD.build_child_settings(
+        "developer", engine_grants=[{"path": str(target), "mode": "write", "provenance": "runtime"}]
+    )
+    assert f"Edit({base}/**)" in settings["permissions"]["allow"]
+    assert settings["permissions"]["deny"] == _guards(base)
+
+
+def test_gs4_subtree_allow_beside_a_non_subtree_deny_survives(tmp_path, monkeypatch):
+    base = GRANTS.rule_file_arg(str(tmp_path / "b"))
+    settings = _settings_with_pair(monkeypatch, [f"Edit({base}/**)"], [f"Edit({base}/**/.git)"])
+    assert f"Edit({base}/**)" in settings["permissions"]["allow"]
+
+
+def test_gs5_exact_path_allow_matched_by_a_non_subtree_deny_is_refused(tmp_path, monkeypatch):
+    base = GRANTS.rule_file_arg(str(tmp_path / "b"))
+    with pytest.raises(MOD.GrantShadowError):
+        _settings_with_pair(monkeypatch, [f"Edit({base}/x/.git)"], [f"Edit({base}/**/.git)"])
+
+
+def test_gs6_subtree_allow_is_not_covered_by_a_non_subtree_deny(tmp_path, monkeypatch):
+    base = GRANTS.rule_file_arg(str(tmp_path / "b"))
+    settings = _settings_with_pair(monkeypatch, [f"Edit({base}/x/.git/**)"], [f"Edit({base}/**/.git)"])
+    assert f"Edit({base}/x/.git/**)" in settings["permissions"]["allow"]
+
+
+def test_gs7_single_star_stays_inside_one_segment(tmp_path, monkeypatch):
+    base = GRANTS.rule_file_arg(str(tmp_path / "b"))
+    allow = f"Edit({base}/x/settings/a.json)"
+    settings = _settings_with_pair(monkeypatch, [allow], [f"Edit({base}/**/settings*.json)"])
+    assert allow in settings["permissions"]["allow"]
+
+
+def test_gs8_subtree_deny_does_not_reach_a_prefix_sibling(tmp_path, monkeypatch):
+    base = GRANTS.rule_file_arg(str(tmp_path / "b"))
+    allow = f"Edit({base}2/f)"
+    settings = _settings_with_pair(monkeypatch, [allow], [f"Edit({base}/**)"])
+    assert allow in settings["permissions"]["allow"]
+
+
+def _write_grant_under_repo_claude_dir(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    venue = root / ".claude" / "worktrees" / "w"
+    target = venue / "scripts"
+    target.mkdir(parents=True)
+    monkeypatch.setattr(MOD, "_vcs_root", lambda _cwd: str(root))
+    with pytest.raises(MOD.GrantShadowError) as excinfo:
+        MOD.build_child_settings(
+            "developer",
+            engine_grants=[{"path": str(target), "mode": "write", "provenance": "runtime"}],
+            workdir=str(venue),
+        )
+    return root, target, str(excinfo.value)
+
+
+def test_gs9_stage_write_grant_under_the_repo_claude_guard_is_refused(tmp_path, monkeypatch):
+    _write_grant_under_repo_claude_dir(tmp_path, monkeypatch)
+
+
+def test_gs10_refusal_quotes_both_rules_and_their_sources(tmp_path, monkeypatch):
+    root, target, message = _write_grant_under_repo_claude_dir(tmp_path, monkeypatch)
+    assert f"Edit({GRANTS.rule_file_arg(str(target))}/**)" in message
+    assert f"Edit({GRANTS.rule_file_arg(str(root))}/**/.claude/**)" in message
+    assert "runtime" in message
+    assert "repo_root_deny_rules" in message
+
+
+def test_gs11_file_allow_under_a_derived_read_names_both_sources(tmp_path):
+    read_dir = tmp_path / "b"
+    read_dir.mkdir()
+    engine_grants = [
+        {"rule": f"Edit({GRANTS.rule_file_arg(str(read_dir / 'w.sh'))})", "provenance": "runtime"},
+        {"path": str(read_dir), "mode": "read", "provenance": "derived:DR-R"},
+    ]
+    with pytest.raises(MOD.GrantShadowError) as excinfo:
+        MOD.build_child_settings("developer", engine_grants=engine_grants)
+    assert "runtime" in str(excinfo.value)
+    assert "derived:DR-R" in str(excinfo.value)
+
+
+def test_gs12_planner_plans_dir_inside_repo_claude_dir_gets_no_guards(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    venue = root / "venue"
+    plans = root / ".claude" / "plans"
+    venue.mkdir(parents=True)
+    plans.mkdir(parents=True)
+    monkeypatch.setattr(MOD, "_vcs_root", lambda _cwd: str(root))
+    guards = _guards(GRANTS.rule_file_arg(str(root)))
+
+    settings = MOD.build_child_settings("planner", plans_directory=plans, workdir=str(venue))
+    assert f"Edit({GRANTS.rule_file_arg(str(plans))}/**)" in settings["permissions"]["allow"]
+    assert not set(guards) & set(settings["permissions"].get("deny", []))
+
+    assert MOD.repo_root_deny_rules("developer", str(venue)) == guards
+
+
+# These cases continue the gs series in gc_mutation_control.py (gs13..gs15)
+# but carry no `gs`/`gc` ordinal in their names: an external plan pins
+# `pytest -k test_gc` and `pytest -k test_gs` to fixed pass counts, and `-k`
+# matches any name containing the substring.
+
+
+def _refusal_sides(message: str, rule: str) -> tuple[str, str]:
+    # The allow and the deny are the same rule text here, so the message is
+    # split on its two quotations of it: what follows the first is the
+    # allow's source, what follows the second the deny's.
+    _, allow_part, deny_part = message.split(repr(rule))
+    return allow_part, deny_part
+
+
+def test_shadow_refusal_names_each_side_producer_when_the_rule_texts_match(tmp_path, monkeypatch):
+    rule = f"Edit({GRANTS.rule_file_arg(str(tmp_path / 'p' / 'f.py'))})"
+    monkeypatch.setattr(MOD, "project_settings_permission_rules", lambda _file: ([], [rule]))
+    with pytest.raises(MOD.GrantShadowError) as excinfo:
+        MOD.build_child_settings("developer", engine_grants=[{"rule": rule, "provenance": "runtime"}])
+    allow_part, deny_part = _refusal_sides(str(excinfo.value), rule)
+    assert "runtime" in allow_part and MOD.PROJECT_SETTINGS_SOURCE not in allow_part
+    assert MOD.PROJECT_SETTINGS_SOURCE in deny_part and "runtime" not in deny_part
+
+
+def test_project_settings_own_shadowed_pair_warns_and_proceeds(tmp_path, monkeypatch, capsys):
+    base = GRANTS.rule_file_arg(str(tmp_path / "p"))
+    allow, deny = f"Edit({base}/docs/x.md)", f"Edit({base}/docs/**)"
+    monkeypatch.setattr(MOD, "project_settings_permission_rules", lambda _file: ([allow], [deny]))
+    settings = MOD.build_child_settings("developer")
+    assert allow in settings["permissions"]["allow"]
+    stderr = capsys.readouterr().err
+    assert allow in stderr and deny in stderr
+
+
+def test_project_settings_deny_over_an_engine_allow_still_refuses(tmp_path, monkeypatch):
+    base = GRANTS.rule_file_arg(str(tmp_path / "p"))
+    allow = f"Edit({base}/docs/x.md)"
+    monkeypatch.setattr(MOD, "project_settings_permission_rules", lambda _file: ([], [f"Edit({base}/docs/**)"]))
+    with pytest.raises(MOD.GrantShadowError):
+        MOD.build_child_settings("developer", engine_grants=[{"rule": allow, "provenance": "runtime"}])
+
+
+# --- (H) the mutation control runs as part of this suite ---------------------
+
+
+def _git_history_unavailable() -> bool:
+    if shutil.which("git") is None:
+        return True
+    probe = subprocess.run(
+        ["git", "-C", str(SCRIPT.parent), "rev-parse", "--is-shallow-repository"],
+        capture_output=True, text=True,
+    )
+    return probe.returncode != 0 or probe.stdout.strip() != "false"
+
+
+pytestmark_git = pytest.mark.skipif(
+    _git_history_unavailable(),
+    reason="gc_mutation_control.py recovers its pre-fix subjects from a full, non-shallow git history",
+)
+
+
+@pytestmark_git
+def test_mutation_control_is_collected_and_discriminates():
+    # Wall-clock ~2.9 min: forty-four subjects at ~4.0 s each, measured 2026-09-30.
+    control_path = Path(__file__).resolve().parent / "gc_mutation_control.py"
+    spec = importlib.util.spec_from_file_location("gc_mutation_control", control_path)
+    control = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(control)
+    assert control.main() == 0

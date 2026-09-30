@@ -798,7 +798,17 @@ def repo_root_deny_rules(kind: str, cwd: str) -> list[str]:
     root = _vcs_root(cwd)
     if not root:
         return []
-    base = grants.rule_file_arg(root.rstrip("/"))
+    return write_guard_deny_rules(grants.rule_file_arg(root.rstrip("/")))
+
+
+def write_guard_deny_rules(base: str) -> list[str]:
+    """The four guard `Edit` DENY globs — `.claude/`, `settings*.json`,
+    `.git/` and `.git` anywhere below `base`, a `grants.rule_file_arg`
+    prefix — that pair with every writable directory this module
+    materializes: a declared WRITE add_dir (`stage_grant_rules`) and a
+    `developer` spawn's VCS repo root (`repo_root_deny_rules`).
+    The guard globs are spelled in this one function only.
+    """
     return [
         f"Edit({base}/**/.claude/**)",
         f"Edit({base}/**/settings*.json)",
@@ -866,12 +876,23 @@ def _validates(rule: str) -> bool:
     return True
 
 
-def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
+def stage_grant_rules(
+    entries: list[dict],
+    *,
+    allow_provenance: "dict[str, str] | None" = None,
+    deny_provenance: "dict[str, str] | None" = None,
+) -> tuple[list[str], list[str]]:
     """(allow, deny) rule strings materialized from a flat stage-grants list
     (agentctl `cmd_stage_grants`'s `.data["grants"]` shape: each entry
-    carries either `"rule"`, or `"path"`+`"mode"`, plus `"provenance"` —
-    provenance is not consumed here, only by `stage_grant_provenance_lines`
-    for the prompt header). A `"rule"` entry passes through
+    carries either `"rule"`, or `"path"`+`"mode"`, plus `"provenance"`).
+    When `allow_provenance`/`deny_provenance` are given, every emitted allow
+    / deny rule is recorded in its own side's map, in place, under the
+    provenance of the entry that emitted it — the first entry wins for a
+    rule two entries emit on the same side — so a refusal raised after the
+    rules leave this function can still name the grant each came from. The
+    sides are kept apart because one rule text can be an allow from one
+    entry and a deny from another. A
+    `"rule"` entry passes through
     `grants.validate_rule` here too — an engine grant is never trusted more
     than a declared one materialized straight from the plan TOML, per this
     module's own validate-at-every-entry-point invariant.
@@ -885,8 +906,8 @@ def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
     `grants.validate_add_dir` already accepted, bypassing `validate_rule`
     entirely — `validate_add_dir`'s own write-mode checks (glob/absolute/
     `.git`/launch-surface) are what stand in for it. The synthesized allow
-    is paired with four guard DENYs (`.claude/`, `settings*.json`, `.git/`,
-    `.git`) under the same prefix, since `--add-dir` alone would otherwise
+    is paired with the four guard DENYs of `write_guard_deny_rules`
+    under the same prefix, since `--add-dir` alone would otherwise
     hand the child raw filesystem write into those without the kind's own
     baseline denies (which only ever cover this repo's and the plans dir's
     own such paths, never an arbitrary declared add_dir).
@@ -919,11 +940,13 @@ def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
     iterates only `allow` and `add_dirs`), so the same glob shape that
     would refuse an allow rule is fine here."""
     validated: list[str | _AddDir] = []
+    provenances: list[str] = []
     for entry in entries:
         rule = entry.get("rule")
         if rule is not None:
             grants.validate_rule(rule)
             validated.append(rule)
+            provenances.append(entry.get("provenance", "unknown"))
             continue
         path = entry.get("path")
         mode = entry.get("mode")
@@ -931,25 +954,26 @@ def stage_grant_rules(entries: list[dict]) -> tuple[list[str], list[str]]:
             continue
         grants.validate_add_dir(path, mode)
         validated.append(_AddDir(_canonical_add_dir_base(path), mode, entry.get("provenance", "unknown")))
+        provenances.append(entry.get("provenance", "unknown"))
     add_dirs = [item for item in validated if isinstance(item, _AddDir)]
 
     allow: list[str] = []
     deny: list[str] = []
-    for item in validated:
+    for item, entry_provenance in zip(validated, provenances):
+        allow_start, deny_start = len(allow), len(deny)
         if not isinstance(item, _AddDir):
             allow.append(item)
         elif item.mode == "write":
             allow.append(f"Edit({item.base}/**)")
-            deny.extend(
-                [
-                    f"Edit({item.base}/**/.claude/**)",
-                    f"Edit({item.base}/**/settings*.json)",
-                    f"Edit({item.base}/**/.git/**)",
-                    f"Edit({item.base}/**/.git)",
-                ]
-            )
+            deny.extend(write_guard_deny_rules(item.base))
         elif _read_add_dir_needs_deny(item, add_dirs):
             deny.append(f"Edit({item.base}/**)")
+        if allow_provenance is not None:
+            for rule in allow[allow_start:]:
+                allow_provenance.setdefault(rule, entry_provenance)
+        if deny_provenance is not None:
+            for rule in deny[deny_start:]:
+                deny_provenance.setdefault(rule, entry_provenance)
     return allow, deny
 
 
@@ -990,15 +1014,17 @@ def stage_grant_provenance_lines(entries: list[dict]) -> list[str]:
 
 
 class GrantShadowError(ValueError):
-    """A write add_dir grant would lie under an Edit deny that voids it,
-    from either of two places. Across sources: another source (the
-    plans-dir deny, a target project's own deny) has already denied Edit
-    onto a directory the write lands in — the two grants only meet inside
-    `build_child_settings`, since each source validates independently and
-    neither knows about the other's rules (`_check_write_add_dirs_not_shadowed`).
-    Within one `stage_grant_rules` entry list: a read add_dir's base
-    strictly contains the write's and no write covers the read
-    (`_read_add_dir_needs_deny`)."""
+    """An Edit allow the child was granted would lie under an Edit deny
+    that voids it, detected in one of three places. Across sources, early:
+    another source (the plans-dir deny, a target project's own deny) has
+    already denied Edit onto a directory a write add_dir lands in — the two
+    grants only meet inside `build_child_settings`, since each source
+    validates independently and neither knows about the other's rules
+    (`_check_write_add_dirs_not_shadowed`). Within one `stage_grant_rules`
+    entry list: a read add_dir's base strictly contains the write's and no
+    write covers the read (`_read_add_dir_needs_deny`). Across the finished
+    payload, last: any Edit deny covers an Edit allow entirely, whatever
+    either one's source (`_check_no_allow_fully_denied`)."""
 
 
 def _deny_rule_directory_prefix(deny_rule: str) -> "str | None":
@@ -1087,6 +1113,104 @@ def _check_write_add_dirs_not_shadowed(entries: list[dict], existing_deny: list[
                 )
 
 
+_UNDECIDABLE_GLOB_CHARS = frozenset("?[]{}!")
+
+
+def _edit_rule_absolute_path(rule: str) -> "str | None":
+    """The absolute path glob an `Edit(//<path>)` rule names; `None` for a
+    rule whose extent this module cannot decide — another tool, a
+    project-relative or `~` path, a glob metacharacter other than `*`."""
+    parsed = grants.rule_program_and_arg(rule)
+    if parsed is None or parsed[0] != "Edit" or not parsed[1].startswith("//"):
+        return None
+    path = grants.rule_file_path(parsed[1])
+    if any(ch in path for ch in _UNDECIDABLE_GLOB_CHARS):
+        return None
+    return path
+
+
+def _edit_glob_regex(glob_path: str) -> "re.Pattern[str] | None":
+    """`glob_path` as a regex over absolute paths: a `**` segment matches
+    zero or more whole segments, `*` matches within one segment. `None`
+    for a shape with no such reading (an empty segment, `**` fused into a
+    longer segment)."""
+    parts = []
+    for segment in glob_path[1:].split("/"):
+        if segment == "**":
+            parts.append("(?:/[^/]+)*")
+        elif not segment or "**" in segment:
+            return None
+        else:
+            parts.append("/" + "[^/]*".join(re.escape(piece) for piece in segment.split("*")))
+    return re.compile("".join(parts))
+
+
+def _edit_deny_covers_allow(deny_rule: str, allow_rule: str) -> bool:
+    """Whether every path `allow_rule` grants Edit on is also matched by
+    `deny_rule`. Decided only for an allow naming one exact path or one
+    whole subtree (`<path>/**`); anything undecidable counts as not
+    covered, so it is never refused. A deny ending in `/**` covers the
+    whole subtree of every path it matches; any other deny covers only the
+    exact paths it matches, so it can void a single-path allow but never a
+    subtree allow."""
+    deny_path = _edit_rule_absolute_path(deny_rule)
+    allow_path = _edit_rule_absolute_path(allow_rule)
+    if deny_path is None or allow_path is None:
+        return False
+    if allow_path.endswith("/**"):
+        allow_path = allow_path[: -len("/**")]
+        if not deny_path.endswith("/**"):
+            return False
+    if "*" in allow_path:
+        return False
+    pattern = _edit_glob_regex(deny_path)
+    return pattern is not None and pattern.fullmatch(allow_path) is not None
+
+
+PROJECT_SETTINGS_SOURCE = "project_settings_permission_rules"
+
+
+def _check_no_allow_fully_denied(
+    allow: list[str], deny: list[str], allow_source: dict[str, str], deny_source: dict[str, str]
+) -> None:
+    """Refuse a finished permissions payload in which some Edit deny covers
+    an Edit allow entirely: the Claude client resolves deny over allow with
+    no diagnostic, so the allow would be void. A deny covering only part of
+    an allow is the guard denies' ordinary job and is never refused. Both
+    rules are named with their source, each looked up on its own side —
+    the provenance of the grant entry that produced the rule, or the name
+    of the function that emitted a rule no entry produced.
+
+    A pair whose allow AND deny both come from the target project's own
+    `settings.local.json` (`PROJECT_SETTINGS_SOURCE`) is only warned about
+    on stderr, not refused: that pair is not the orchestrator's to fix, and
+    the parent session in that project already runs with the same dead
+    allow. Refusing it would fail every developer spawn into the project. A
+    pair with only one side from project settings is still refused — the
+    other side is ours."""
+    for allow_rule in allow:
+        for deny_rule in deny:
+            if not _edit_deny_covers_allow(deny_rule, allow_rule):
+                continue
+            allow_from = allow_source.get(allow_rule, "unknown")
+            deny_from = deny_source.get(deny_rule, "unknown")
+            if allow_from == PROJECT_SETTINGS_SOURCE and deny_from == PROJECT_SETTINGS_SOURCE:
+                print(
+                    f"spawn-specialist: warning: Edit allow {allow_rule!r} is entirely covered by "
+                    f"Edit deny {deny_rule!r}, so the allow is void — both come from the target "
+                    f"project's own settings.local.json, so the spawn proceeds",
+                    file=sys.stderr,
+                )
+                continue
+            raise GrantShadowError(
+                f"Edit allow {allow_rule!r} "
+                f"(source {allow_from}) "
+                f"is entirely covered by Edit deny {deny_rule!r} "
+                f"(source {deny_from}) "
+                f"— the client resolves deny over allow, so the allow would be void; refused"
+            )
+
+
 def build_child_settings(
     kind: str,
     plans_directory: "Path | None" = None,
@@ -1135,39 +1259,68 @@ def build_child_settings(
     would make the whole cwd writable, not just the granted directory --
     the deny it adds here narrows back to the grant, and runs BEFORE
     `_check_write_add_dirs_not_shadowed` below so a write add_dir that
-    itself sits under cwd is refused rather than silently shadowed."""
+    itself sits under cwd is refused rather than silently shadowed.
+
+    Once every source has contributed, `_check_no_allow_fully_denied`
+    refuses the payload if any Edit deny covers an Edit allow entirely —
+    it runs last because a deny from any source, the repo-root guards
+    included, can void an allow from any other. Each rule is recorded with
+    its source as it is added, in a map for its own side, so the refusal
+    names both even when the allow and the deny are the same rule text."""
     settings: dict = {
         "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(SPAWN_AUTOCOMPACT_WINDOW_TOKENS)},
         "autoCompactWindow": SPAWN_AUTOCOMPACT_WINDOW_TOKENS,
     }
     allow: list[str] = []
     deny: list[str] = []
+    allow_source: dict[str, str] = {}
+    deny_source: dict[str, str] = {}
+
+    def add_allow(rules: list[str], source: str, per_rule: "dict[str, str] | None" = None) -> None:
+        allow.extend(rules)
+        for rule in rules:
+            allow_source.setdefault(rule, (per_rule or {}).get(rule, source))
+
+    def add_deny(rules: list[str], source: str, per_rule: "dict[str, str] | None" = None) -> None:
+        deny.extend(rules)
+        for rule in rules:
+            deny_source.setdefault(rule, (per_rule or {}).get(rule, source))
+
     baseline = baseline_for_workdir(kind, workdir)
     for rule in baseline:
         grants.validate_rule(rule)
-    allow.extend(baseline)
+    add_allow(baseline, "baseline_for_workdir")
     if kind in PROJECT_SETTINGS_KINDS:
         project_allow, project_deny = project_settings_permission_rules(project_settings_file)
-        allow.extend(project_allow)
-        deny.extend(project_deny)
+        add_allow(project_allow, PROJECT_SETTINGS_SOURCE)
+        add_deny(project_deny, PROJECT_SETTINGS_SOURCE)
     if plans_directory is not None:
         plans_allow, plans_deny = plans_permission_rules(kind, plans_directory)
-        allow.extend(plans_allow)
-        deny.extend(plans_deny)
-    deny.extend(write_grant_cwd_deny_rules(kind, engine_grants, workdir))
+        add_allow(plans_allow, "plans_permission_rules")
+        add_deny(plans_deny, "plans_permission_rules")
+    add_deny(write_grant_cwd_deny_rules(kind, engine_grants, workdir), "write_grant_cwd_deny_rules")
     if engine_grants:
         _check_write_add_dirs_not_shadowed(engine_grants, deny)
-        engine_allow, engine_deny = stage_grant_rules(engine_grants)
-        allow.extend(engine_allow)
-        deny.extend(engine_deny)
+        engine_allow_provenance: dict[str, str] = {}
+        engine_deny_provenance: dict[str, str] = {}
+        engine_allow, engine_deny = stage_grant_rules(
+            engine_grants, allow_provenance=engine_allow_provenance, deny_provenance=engine_deny_provenance
+        )
+        add_allow(engine_allow, "stage_grant_rules", engine_allow_provenance)
+        add_deny(engine_deny, "stage_grant_rules", engine_deny_provenance)
     if evidence_dir:
-        ev_entries = [{"path": evidence_dir, "mode": "write"}]
+        ev_entries = [{"path": evidence_dir, "mode": "write", "provenance": "evidence_dir"}]
         _check_write_add_dirs_not_shadowed(ev_entries, deny)
-        ev_allow, ev_deny = stage_grant_rules(ev_entries)
-        allow.extend(ev_allow)
-        deny.extend(ev_deny)
+        ev_allow_provenance: dict[str, str] = {}
+        ev_deny_provenance: dict[str, str] = {}
+        ev_allow, ev_deny = stage_grant_rules(
+            ev_entries, allow_provenance=ev_allow_provenance, deny_provenance=ev_deny_provenance
+        )
+        add_allow(ev_allow, "stage_grant_rules", ev_allow_provenance)
+        add_deny(ev_deny, "stage_grant_rules", ev_deny_provenance)
     if workdir is not None:
-        deny.extend(repo_root_deny_rules(kind, workdir))
+        add_deny(repo_root_deny_rules(kind, workdir), "repo_root_deny_rules")
+    _check_no_allow_fully_denied(allow, deny, allow_source, deny_source)
     permissions: dict = {}
     if allow:
         permissions["allow"] = allow
