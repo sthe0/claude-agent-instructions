@@ -1660,6 +1660,34 @@ def interface_empty(stage: Stage) -> bool:
     return not stage.subject.result.strip() or not stage.criterion.done_criterion.strip()
 
 
+def stage_interface_digest(doc: PlanDoc, stage: Stage) -> str:
+    """Digest over a stage's INTERFACE only -- title, expected result image,
+    criterion type, done criterion, and output_artifacts -- never
+    method/means/procedure, so a method-only edit never moves it (stage 2's
+    interface_keys binding).
+
+    When `interface_empty(stage)`, digests the bytes of
+    `render_stage_interface(doc, stage.index, contract=True)` instead -- the
+    SAME full-brief fallback a --review-topo bundle actually renders for such
+    a stage -- rather than the blank interface fields, so a method-only edit
+    to an interface_empty transitive member (which a reviewer read in full
+    via that fallback) still stales every record whose interface_keys names
+    it. Imports render_stage_interface locally: render.py imports from this
+    module, so a module-level import here would cycle."""
+    if interface_empty(stage):
+        from .render import render_stage_interface
+        payload = render_stage_interface(doc, stage.index, contract=True)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    payload = repr((
+        stage.title,
+        stage.subject.result,
+        stage.criterion.criterion_type,
+        stage.criterion.done_criterion,
+        tuple(stage.output_artifacts),
+    ))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def order_scope(meta) -> tuple:
     """The SCOPE-bearing half of the order, as a contribution to a change-decision key:
     a one-element tuple holding the requirement ids and the coverage map's keys, or the
