@@ -409,7 +409,7 @@ def thinker_review(eng: Eng, sid: str, plan: str, verdict: str = "pass", reviewe
 
 
 def changed(d: dict) -> list[dict]:
-    return autonomy(d)["unresolved_changed_commands"]
+    return autonomy(d).get("unresolved_changed_commands") or []
 
 
 def test_unresolved_changed_engine_command_needs_first_thinker_pass(eng, venue):
@@ -563,7 +563,7 @@ def test_present_directive_discloses_agent_review_override(eng, tmp_path):
     release_review_rounds(eng, "o1")
     thinker_review(eng, "o1", plan, "override", "agent")
     after = eng.run("present_plan", session="o1", kind="essence", rendering_file=str(rendering))
-    assert after["data"]["agent_review_override"]["reviewer"] == "agent"
+    assert (after["data"].get("agent_review_override") or {}).get("reviewer") == "agent"
 
 
 # --- effort custody across sessions of one order --------------------------------------
@@ -621,7 +621,8 @@ def test_effort_flushed_at_approve_replan_submit(eng):
 
 def test_agent_approval_keeps_user_approved_effort_estimate(eng):
     plan = approved_order(eng)
-    approved = eng.ledger(plan)["records"][-1]["effort_estimate"]
+    approved = eng.ledger(plan)["records"][-1].get("effort_estimate")
+    assert approved
     agent_session(eng, "a1", eng.write(plan_text(stage3=True), "bigger.toml"), execute=False)
     estimate = eng.state("a1").effort_estimate
     assert {scale: estimate[scale] for scale in approved} == approved
