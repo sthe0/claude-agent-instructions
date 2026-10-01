@@ -44,6 +44,7 @@ from .dispatch import (
 )
 from .machine import transition
 from .plan import (
+    CONDITION_MARKERS,
     META_PART,
     PlanDoc,
     PlanError,
@@ -53,6 +54,8 @@ from .plan import (
     load_plan,
     load_plan_with_digest,
     order_digest,
+    pair_binding,
+    parse_pair,
     plan_has_any_grants,
     plan_meta_digest,
     plan_meta_element_key,
@@ -114,9 +117,11 @@ from .state import (
     PLAN_PRESENTATION_KINDS,
     PLAN_PRESENTATION_RENDERING_CAP_BYTES,
     PlanFrame,
+    PlanPairReview,
     PlanPresentation,
     PlanReview,
     plan_review_concern_ids,
+    plan_review_pair_scope,
     plan_review_scope_for_stage,
     plan_review_scope_stage_index,
     ReattestStash,
@@ -140,6 +145,8 @@ GATE_LOG = config_root.agentctl_gate_log()
 # correlated back to an instruction-commit range. Same fixed-path/append-only
 # idiom as ~/.local/log/claude-spawn-costs.jsonl (spawn-specialist.py).
 TASK_QUALITY_LOG = Path.home() / ".local" / "log" / "claude-task-quality.jsonl"
+ESCALATION_LEDGER_ENV = "AGENTCTL_ESCALATION_LEDGER"
+DEFAULT_ESCALATION_LEDGER = Path.home() / ".local" / "log" / "claude-plan-review-escalations.jsonl"
 _GIT_HEAD_TIMEOUT_S = 5
 _VALID_QUALITY_RATINGS = (1, 2, 3, 4, 5)
 
@@ -4179,6 +4186,146 @@ def _note_round_release(state, review_blockers, store: StateStore) -> dict | Non
     return {"rounds": state.plan_review_rounds}
 
 
+def _append_escalation_ledger(rows: list[dict]) -> None:
+    """Append condition-4 gap-ledger lines. Fail-open like _write_quality_row: a
+    ledger I/O error never blocks the review record that already happened. The path
+    is resolved per call so a test (or operator) override takes effect immediately."""
+    if not rows:
+        return
+    path = Path(os.environ.get(ESCALATION_LEDGER_ENV) or DEFAULT_ESCALATION_LEDGER)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def _condition4_ledger_rows(
+    state: SessionState, doc: PlanDoc, target: str, review: PlanPairReview,
+    concerns: list[str], outcome: str,
+) -> list[dict]:
+    marker = CONDITION_MARKERS[3]
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    return [
+        {
+            "ts": now,
+            "session": state.session_id,
+            "plan_path": target,
+            "task_id": doc.meta.task_id,
+            "unit": review.pair,
+            "dependency_stage": review.service,
+            "condition": marker.rstrip(":"),
+            "concern": concern,
+            "concern_sha256": hashlib.sha256(concern.encode("utf-8")).hexdigest(),
+            "outcome": outcome,
+        }
+        for concern in concerns
+        if concern.lstrip().startswith(marker)
+    ]
+
+
+def _cmd_plan_review_pair(
+    args, state: SessionState, target: str, pair: str, *,
+    store: StateStore, runner: Runner | None,
+) -> Directive:
+    """The `--scope topo:<pair>` branch of cmd_plan_review.
+
+    Branches off BEFORE the whole-plan / stage terminal-pass machinery on purpose: a
+    pair record is judged only against a CURRENT same-pair record (gates.pair_status),
+    never against the nearest whole-plan pass, and it is written only to
+    state.plan_pair_reviews — never to plan_review, plan_review_passes or
+    plan_stage_reviews, and it never advances plan_review_rounds. The binding is
+    recomputed here from a FRESH load of the evaluated plan, never taken from node
+    files materialized at spawn time or from state.stages."""
+    def refuse(msg: str) -> Directive:
+        return Directive(False, state.node, "noop", msg)
+
+    try:
+        doc, _, live = load_plan_with_digest(target)
+        parse_pair(doc, pair)
+    except (OSError, PlanError, ValueError) as e:
+        return refuse(f"--scope 'topo:{pair}' cannot be recorded against {target}: {e}")
+    verdict = args.verdict
+    reviewer = (getattr(args, "reviewer", "") or "").strip()
+    note = (getattr(args, "note", "") or "").strip()
+    attested = (getattr(args, "plan_digest", None) or "").strip().lower()
+    if verdict == gates._PLAN_REVIEW_PASS and not attested:
+        return refuse(
+            f"a pass for pair {pair!r} needs --plan-digest: a reviewer that cannot attest "
+            "the plan bytes it read cannot bind a pair"
+        )
+    if attested and attested != live:
+        return refuse(
+            f"--plan-digest {attested!r} does not match a fresh load of {target!r} "
+            f"({live!r}): the reviewer read a different or stale plan; re-read the "
+            "current plan and re-run plan-review"
+        )
+    prev = state.plan_pair_reviews.get(pair)
+    if prev is not None and prev.plan_path != target:
+        prev = None
+    if verdict == gates._PLAN_REVIEW_OVERRIDE:
+        if not reviewer or not note:
+            return refuse("a pair override needs a non-empty --reviewer and --note")
+        if prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE and reviewer == (prev.reviewer or "").strip():
+            return refuse(
+                f"override must come from a distinct reviewer: {reviewer!r} is the "
+                "reviewer whose 'revise' verdict it would override (the user is the "
+                "expected override author)"
+            )
+        order = doc.meta.order
+        if order is not None and order.customer_id and reviewer != order.customer_id:
+            return refuse(
+                f"override reviewer {reviewer!r} does not match order customer_id "
+                f"{order.customer_id!r}; record it as the customer of record, or correct --reviewer"
+            )
+    regression_command = (getattr(args, "regression_command", "") or "").strip()
+    regression_exit: int | None = None
+    if verdict == gates._PLAN_REVIEW_REVISE and gates.pair_status(state, doc, target, pair) == "current":
+        if not regression_command:
+            return refuse(
+                f"a current pass for pair {pair!r} is overturned only by run-demonstrated "
+                "regression evidence: re-run with --regression-command that exits non-zero"
+            )
+        try:
+            _, result = _run_check(regression_command, 0, runner, cwd=state.repo_root)
+            regression_exit = result.returncode if result is not None else None
+        except Exception:  # noqa: BLE001 - a broken command is no evidence
+            regression_exit = None
+        if not regression_exit:
+            return refuse(
+                f"--regression-command did not demonstrate a regression (exit "
+                f"{regression_exit!r}): the current pass for pair {pair!r} stands"
+            )
+    base, service = parse_pair(doc, pair)
+    concerns = list(getattr(args, "concerns", None) or [])
+    review = PlanPairReview(
+        pair=pair, base=base, service=service, verdict=verdict, reviewer=reviewer,
+        concerns=concerns, note=note, plan_path=target, plan_sha256=attested,
+        **pair_binding(doc, pair),
+    )
+    ledger = []
+    if verdict == gates._PLAN_REVIEW_REVISE:
+        ledger = _condition4_ledger_rows(state, doc, target, review, concerns, "confirmed-gap")
+    elif verdict == gates._PLAN_REVIEW_OVERRIDE and prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE:
+        ledger = _condition4_ledger_rows(state, doc, target, prev, prev.concerns, "false-alarm")
+    state.plan_pair_reviews[pair] = review
+    state.log("plan_pair_review", target=target, pair=pair, verdict=verdict, reviewer=reviewer,
+              plan_sha256=attested, concerns=concerns, note=note,
+              regression_command=regression_command, regression_exit=regression_exit,
+              ledger_lines=len(ledger))
+    store.save(state)
+    _append_escalation_ledger(ledger)
+    status = gates.pair_status(state, doc, target, pair)
+    return Directive(
+        True, state.node, "continue",
+        f"pair review recorded for {pair!r} against {target} (verdict={verdict}); "
+        f"pair status: {status}",
+        data={"pair": pair, "pair_status": status, "ledger_lines": len(ledger)},
+    )
+
+
 def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Record a thinker review of a plan version, backing the plan-review gate.
 
@@ -4212,6 +4359,9 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             "no plan to review: submit a plan first, or pass --target <plan.toml>",
         )
     scope = (getattr(args, "scope", None) or "").strip()
+    pair = plan_review_pair_scope(scope)
+    if pair is not None:
+        return _cmd_plan_review_pair(args, state, target, pair, store=store, runner=runner)
     doc = None
     parse_error = None
     try:
@@ -9765,7 +9915,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "the escape is --note, which is RESOLVE"),
     ("reviewer", ("plan-review", "stage-review", "code-review"), "reviewer name"),
     ("plan_digest", ("plan-review",), "sha256 the review binds to"),
-    ("scope", ("plan-review", "risk-accept"), "'' or 'stage:<n>' — the review's binding, not narrative"),
+    ("scope", ("plan-review", "risk-accept"), "'' or 'stage:<n>' or 'topo:<pair>' — the review's binding, not narrative"),
     ("concern_ids", ("plan-review",),
      "explicit stable ids for --concern, positionally paired — ids, not narrative"),
     ("concern_id", ("risk-accept",), "the concern id this acceptance answers — an id, not narrative"),
@@ -10149,8 +10299,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "it — a reviewer that could not read the plan cannot attest.")
     sp.add_argument("--scope", default=None,
                     help="'stage:<n>' to bind this review to one stage instead of the "
-                         "whole plan; omitted (or '') means whole-plan, the only kind "
-                         "that existed before stage 5")
+                         "whole plan, or 'topo:<pair>' (e.g. topo:3-1, topo:plan-7, "
+                         "topo:base-plan) to record one reliance-pair review; omitted "
+                         "(or '') means whole-plan, the only kind that existed before stage 5")
     sp.add_argument("--findings-blocking", dest="findings_blocking", type=int, default=None,
                     help="count of blocking findings this round produced (audit trail)")
     sp.add_argument("--findings-nonblocking", dest="findings_nonblocking", type=int,

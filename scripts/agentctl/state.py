@@ -44,12 +44,12 @@ SCHEMA_VERSION = 42  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # order-keyed spend/wall-clock accumulation, frozen user-approved
                      # estimate, agent-acknowledged difficulty records,
                      # renegotiation_ceiling_difficulty_id)
-                     # 42: SessionState gains plan_topo_reviews -- topological per-unit
-                     # plan-review records (PlanTopoReview), a third record family
-                     # alongside plan_review/plan_stage_reviews that binds to
-                     # neighbour-file and interface digests instead of whole-plan
+                     # 42: SessionState gains plan_pair_reviews -- topological per-pair
+                     # plan-review records (PlanPairReview), a third record family
+                     # alongside plan_review/plan_stage_reviews that binds to the
+                     # seven plan.pair_binding digests instead of whole-plan
                      # content and can discharge stage:<n> obligations via scoped
-                     # discharge (see PlanTopoReview's docstring)
+                     # discharge (see PlanPairReview's docstring)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -529,79 +529,82 @@ def plan_review_concern_ids(pr: "PlanReview") -> list[str]:
     return [ids[i] if i < len(ids) and ids[i] else f"c{i}" for i in range(len(pr.concerns))]
 
 
-_PLAN_REVIEW_TOPO_SCOPE_PREFIX = "topo:"
-PLAN_REVIEW_TOPO_ORDER_UNIT = "order"
+_PLAN_REVIEW_PAIR_SCOPE_PREFIX = "topo:"
+
+# The seven plan.pair_binding digests a pair record carries, in the fixed order
+# gates.pair_status reports the first moved one (`edge` right after `context`).
+PAIR_BINDING_KEYS = (
+    "context_digest", "edge_digest", "base_key", "base_file_digest",
+    "service_key", "service_interface_digest", "service_file_digest",
+)
 
 
-def plan_review_topo_scope(unit: str) -> str:
-    return f"{_PLAN_REVIEW_TOPO_SCOPE_PREFIX}{unit}"
-
-
-def plan_review_topo_scope_unit(scope: str) -> "str | None":
-    """The unit token ('<n>' or 'order') a `topo:<unit>` scope names, or None
-    when `scope` is not a topo scope at all -- callers still validate that a
-    numeric unit names an existing stage (this only parses the string shape)."""
-    if not scope.startswith(_PLAN_REVIEW_TOPO_SCOPE_PREFIX):
+def plan_review_pair_scope(scope: str) -> "str | None":
+    """The pair id a `topo:<pair>` scope names, or None when `scope` is not a
+    topo scope at all -- callers still validate that the id is one of
+    `plan.review_pairs` of the evaluated plan (this only parses the shape)."""
+    if not scope.startswith(_PLAN_REVIEW_PAIR_SCOPE_PREFIX):
         return None
-    rest = scope[len(_PLAN_REVIEW_TOPO_SCOPE_PREFIX):]
-    if rest == PLAN_REVIEW_TOPO_ORDER_UNIT or rest.isdigit():
-        return rest
-    return None
+    return scope[len(_PLAN_REVIEW_PAIR_SCOPE_PREFIX):] or None
 
 
-# One thinker review of a single topological-review UNIT (a stage, or the virtual
-# "order" node standing for the customer's order) -- schema 40. Recorded by
-# cmd_plan_review's `--scope topo:<n>|topo:order` branch, kept in
-# SessionState.plan_topo_reviews (never in plan_review / plan_stage_reviews /
-# plan_review_passes, which stay reserved for whole-plan and stage:<n> records).
+# One thinker review of a single base-service PAIR (b, s) -- one reliance edge, base
+# b relying on service s; the nodes are stage indices plus the synthetic `plan` and
+# `base` (see plan.review_pairs). Recorded by cmd_plan_review's `--scope topo:<pair>`
+# branch, kept in SessionState.plan_pair_reviews keyed by pair id (never in
+# plan_review / plan_stage_reviews / plan_review_passes, which stay reserved for
+# whole-plan and stage:<n> records). ONE record type serves every pair, the order
+# pair (`base-plan`) and the plan-coverage pairs (`plan-<s>`) included: `base` and
+# `service` hold a stage index, "plan" or "base", and only plan.pair_binding's node
+# keys differ.
 #
-# A unit's record binds to exactly the bytes its reviewer could see: its own
-# `stage_key` (absent -- "" -- for the order node, which has none),
-# `neighbor_file_digests` (the sha256 of render_stage_brief for every first-hop
-# neighbour -- the exact bytes a Read in the unit's view directory would return),
-# `interface_keys` (plan.stage_interface_digest for every transitive-only member of
-# its reliance closure), and, for the order node only, `order_extra_digest` (a
-# digest over final_check/external_research/task_id/delivery_worktree -- the four
-# fields gates.py's own docstring names as covered by neither the meta digest nor
-# any stage key). `meta_digest` is shared with PlanReview's `reviewed_meta_digest`
-# semantics -- any stage edit stales the order node because every unit read the
-# order.
+# A pair record binds to exactly the bytes its reviewer could see: the seven digests
+# of plan.pair_binding, recomputed by the engine from a fresh load of the evaluated
+# plan at record time (never read off the materialized view files or state.stages).
+# `plan_sha256` is audit only -- currency is decided by the binding digests via
+# gates.pair_status, never by the whole-plan sha.
 #
-# `plan_path` is the path this record was computed against (the session's
-# registered plan, or a --target override) -- a record for a different path counts
-# as `missing` for evaluating any other path (WALK/COMPOSE never mix plan files).
+# `plan_path` is the path this record was computed against (the session's registered
+# plan, or a --target override) -- a record for a different path counts as `missing`
+# for evaluating any other path (WALK/COMPOSE never mix plan files).
 @dataclass
-class PlanTopoReview:
-    unit: str
+class PlanPairReview:
+    pair: str
+    base: "int | str"
+    service: "int | str"
     verdict: str
     reviewer: str
     concerns: list[str] = field(default_factory=list)
     note: str = ""
-    plan_sha256: str = ""
     plan_path: str = ""
-    meta_digest: str = ""
-    stage_key: str = ""
-    neighbor_file_digests: dict[str, str] = field(default_factory=dict)
-    interface_keys: dict[str, str] = field(default_factory=dict)
-    order_extra_digest: str = ""
+    plan_sha256: str = ""
+    context_digest: str = ""
+    edge_digest: str = ""
+    base_key: str = ""
+    base_file_digest: str = ""
+    service_key: str = ""
+    service_interface_digest: str = ""
+    service_file_digest: str = ""
+
+    def binding(self) -> dict[str, str]:
+        """The stored digests, in the shape plan.pair_binding returns."""
+        return {key: getattr(self, key) for key in PAIR_BINDING_KEYS}
 
     @classmethod
-    def from_dict(cls, d: dict | None) -> "PlanTopoReview | None":
+    def from_dict(cls, d: dict | None) -> "PlanPairReview | None":
         if not d:
             return None
         return cls(
-            unit=d["unit"],
+            pair=d["pair"],
+            base=d.get("base", ""),
+            service=d.get("service", ""),
             verdict=d["verdict"],
             reviewer=d.get("reviewer", ""),
             concerns=list(d.get("concerns", [])),
             note=d.get("note", ""),
-            plan_sha256=d.get("plan_sha256", ""),
             plan_path=d.get("plan_path", ""),
-            meta_digest=d.get("meta_digest", ""),
-            stage_key=d.get("stage_key", ""),
-            neighbor_file_digests=dict(raw) if isinstance(raw := d.get("neighbor_file_digests"), dict) else {},
-            interface_keys=dict(raw2) if isinstance(raw2 := d.get("interface_keys"), dict) else {},
-            order_extra_digest=d.get("order_extra_digest", ""),
+            plan_sha256=d.get("plan_sha256", ""),
+            **{key: d.get(key, "") for key in PAIR_BINDING_KEYS},
         )
 
 
@@ -1615,15 +1618,16 @@ class SessionState:
     # rather than tracked as a separate flag. Empty on legacy states (absent key ->
     # dataclass default via from_dict).
     plan_review_passes: dict[str, "PlanReview"] = field(default_factory=dict)
-    # Topological per-UNIT thinker reviews (schema 40), keyed by unit token ('<n>'
-    # or 'order') — a third record family alongside plan_review/plan_stage_reviews,
-    # never merged into either. A topo record binds to neighbour-file and interface
-    # digests rather than to the whole plan's content, so it never advances
-    # plan_review_rounds and is never itself a stage:<n>/whole-plan record; it can
-    # only DISCHARGE a stage:<n> obligation via gates.py's scoped-discharge logic
-    # (see PlanTopoReview's own docstring for the exact binding). Empty on legacy
-    # states (absent key -> dataclass default via from_dict).
-    plan_topo_reviews: dict[str, "PlanTopoReview"] = field(default_factory=dict)
+    # Topological per-PAIR thinker reviews (schema 42), keyed by pair id ('3-1',
+    # 'plan-7', 'base-plan') — a third record family alongside
+    # plan_review/plan_stage_reviews, never merged into either. A pair record binds
+    # to the seven plan.pair_binding digests rather than to the whole plan's
+    # content, so it never advances plan_review_rounds and is never itself a
+    # stage:<n>/whole-plan record; it can only DISCHARGE a stage:<n> obligation via
+    # gates.py's scoped-discharge logic (see PlanPairReview's own docstring for the
+    # exact binding). Empty on legacy states (absent key -> dataclass default via
+    # from_dict); a legacy `plan_topo_reviews` key is dropped at load.
+    plan_pair_reviews: dict[str, "PlanPairReview"] = field(default_factory=dict)
     # Recorded risk acceptances discharging `revise` concerns (schema 28) — see
     # RiskAcceptance's docstring for the binding. Empty on legacy pre-schema-28
     # states (absent key -> dataclass default via from_dict), which is what makes
@@ -2077,9 +2081,10 @@ class SessionState:
             scope: r for scope, v in (data.get("plan_review_passes") or {}).items()
             if (r := PlanReview.from_dict(v)) is not None
         }
-        data["plan_topo_reviews"] = {
-            unit: r for unit, v in (data.get("plan_topo_reviews") or {}).items()
-            if (r := PlanTopoReview.from_dict(v)) is not None
+        data.pop("plan_topo_reviews", None)
+        data["plan_pair_reviews"] = {
+            pair: r for pair, v in (data.get("plan_pair_reviews") or {}).items()
+            if (r := PlanPairReview.from_dict(v)) is not None
         }
         data["risk_acceptances"] = [
             r for r in (RiskAcceptance.from_dict(x) for x in data.get("risk_acceptances", [])) if r is not None

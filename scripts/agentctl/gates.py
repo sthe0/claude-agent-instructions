@@ -54,12 +54,13 @@ from .plan import (
     grants_sha256,
     load_plan,
     order_place,
+    pair_binding,
     plan_has_any_grants,
     stage_question_key,
 )
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
-from .state import Node, SessionState, StageStatus, WeightClass
+from .state import Node, PAIR_BINDING_KEYS, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
@@ -676,6 +677,28 @@ def plan_review_prior_pass(state: SessionState, scope: str, target_plan: str | N
     if prior.plan_path != target_plan and not _binds_across_path_change(prior, target_plan):
         return None
     return prior
+
+
+def pair_status(state: SessionState, doc, plan_path: str, pair: str) -> str:
+    """Whether review pair `pair` has been reviewed, and with what verdict — the one
+    currency rule every consumer of a `PlanPairReview` calls, so what makes a record
+    count cannot drift between them.
+
+    `missing` — no record, or one computed against a different plan path. Otherwise
+    the stored seven digests are compared, in `PAIR_BINDING_KEYS` order, with a fresh
+    `plan.pair_binding(doc, pair)`: the first that moved gives `stale:<key>` (the
+    digest name without its `_digest`/`_key` suffix, e.g. `stale:service_file`); with
+    all current the verdict is reported — `current` for a pass, `override`, or
+    `revise`. Raises ValueError for a pair `doc` does not have."""
+    record = state.plan_pair_reviews.get(pair)
+    if record is None or record.plan_path != plan_path:
+        return "missing"
+    fresh = pair_binding(doc, pair)
+    stored = record.binding()
+    for key in PAIR_BINDING_KEYS:
+        if stored[key] != fresh[key]:
+            return "stale:" + key.removesuffix("_digest").removesuffix("_key")
+    return "current" if record.verdict == _PLAN_REVIEW_PASS else record.verdict
 
 
 def _plan_review_regression_evidence(prior_pass, review, doc) -> bool:
