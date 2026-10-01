@@ -24,7 +24,6 @@ from agentctl.plan import (
     load_plan,
     pair_binding,
     review_pairs,
-    split_pair_id,
 )
 from agentctl.render import render_stage_brief, render_stage_interface
 from agentctl.state import (
@@ -792,6 +791,8 @@ def test_tr7_walk_orders_base_before_service_with_advisory_readiness(make_env):
     assert sorted(levels[3]) == ["2-1", "3-1"]
     rows = _rows(env)
     depths = gates.pair_depths(doc)
+    from agentctl.plan import split_pair_id
+
     for pid, row in rows.items():
         assert row["level"] == depths[split_pair_id(pid)[0]]
         for prereq in gates.pair_prereqs(doc, pid):
