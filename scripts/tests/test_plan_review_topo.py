@@ -230,21 +230,18 @@ def test_tr1_pair_record_is_keyed_by_pair_id_with_the_seven_digests(env):
     assert state.plan_review_rounds == 0
 
 
-def test_tr2_pass_without_plan_sha256_is_refused(env):
+def test_tr2_pass_needs_a_digest_and_records_without_prerequisite_pairs(env):
     d = env.record("topo:3-1", "pass", digest=None)
     assert not d.ok
     assert "--plan-digest" in d.detail
     assert env.state().plan_pair_reviews == {}
 
-
-def test_tr2_pair_with_every_prerequisite_pair_missing_still_records(env):
-    assert env.state().plan_pair_reviews == {}
     d = env.record("topo:3-2", "pass")
     assert d.ok, d.detail
     assert env.status("3-2") == "current"
 
 
-def test_tr3_condition4_revise_appends_one_ledger_line_and_override_nets_it_out(env):
+def test_tr3_condition4_ledger_lines_and_whole_plan_records_untouched(env):
     concern = f"{C4} stage 3 relies on a product stage 1 never delivers"
     d = env.record("topo:3-1", "revise", concerns=[concern, f"{CONDITION_MARKERS[0]} wording only"])
     assert d.ok, d.detail
@@ -266,27 +263,25 @@ def test_tr3_condition4_revise_appends_one_ledger_line_and_override_nets_it_out(
     assert (netted["unit"], netted["concern_sha256"]) == ("3-1", line["concern_sha256"])
     assert netted["concern"] == concern
 
+    lines_before = env.ledger_lines()
+    assert env.record("topo:3-2", "revise", concerns=[f"{CONDITION_MARKERS[0]} wording only"]).ok
+    assert env.record("topo:plan-3", "pass", concerns=[f"{C4} stray marker on a pass"]).ok
+    assert env.record("topo:base-plan", "revise").ok
+    assert env.ledger_lines() == lines_before
 
-def test_tr3_revise_without_condition4_concern_and_any_pass_append_nothing(env):
-    assert env.record("topo:3-1", "revise", concerns=[f"{CONDITION_MARKERS[0]} wording only"]).ok
-    assert env.record("topo:3-2", "pass", concerns=[f"{C4} stray marker on a pass"]).ok
-    assert env.record("topo:plan-3", "revise").ok
-    assert env.ledger_lines() == []
-
-
-def test_tr3_prior_whole_plan_pass_leaves_whole_plan_records_untouched(env):
     _seed_whole_plan_pass(env)
     before = _review_dicts(env.state())
-    concern = f"{C4} gap behind a whole-plan pass"
-    d = env.record("topo:3-1", "revise", concerns=[concern])
+    gap = f"{C4} gap behind a whole-plan pass"
+    d = env.record("topo:3-1", "revise", concerns=[gap])
     assert d.ok, d.detail
-    assert [row["outcome"] for row in env.ledger_lines()] == ["confirmed-gap"]
+    assert [row["outcome"] for row in env.ledger_lines()[len(lines_before):]] == ["confirmed-gap"]
     state = env.state()
     assert state.plan_pair_reviews["3-1"].verdict == "revise"
     assert _review_dicts(state) == before
 
 
-def test_tr6_method_only_edits_stale_exactly_the_pairs_whose_nodes_moved(env):
+def test_tr6_staleness_by_edge_kind(make_env):
+    env = make_env()
     env.record_all()
     env.edit(lambda d: d["stage"][0].update(method="edited"))
     assert env.status("3-1") == "stale:service"
@@ -302,14 +297,12 @@ def test_tr6_method_only_edits_stale_exactly_the_pairs_whose_nodes_moved(env):
     assert env.status("3-1") == "current"
     assert env.status("3-2") == "stale:service"
 
-
-def test_tr6_order_requirement_edit_stales_every_pair_on_context(env):
+    env = make_env()
     env.record_all()
     env.edit(lambda d: d["meta"]["order"]["requirements"][0].update(text="changed"))
     assert env.statuses() == {pair: "stale:context" for pair in review_pairs(env.doc())}
 
-
-def test_tr6_final_check_command_edit_stales_plan_pairs_only(env):
+    env = make_env()
     env.record_all()
     env.edit(lambda d: d["final_check"][0].update(command="false"))
     statuses = env.statuses()
@@ -317,26 +310,20 @@ def test_tr6_final_check_command_edit_stales_plan_pairs_only(env):
     assert statuses["plan-3"].startswith("stale:")
     assert statuses["3-1"] == statuses["3-2"] == "current"
 
+    for mutate in (lambda d: d["meta"].update(goal="another goal"),
+                   lambda d: d["final_check"][0].update(label="fc-renamed")):
+        env = make_env()
+        env.record_all()
+        env.edit(mutate)
+        statuses = env.statuses()
+        assert statuses["3-1"] == statuses["3-2"] == "stale:base_file"
+        assert statuses["plan-3"] == "stale:base"
 
-@pytest.mark.parametrize("mutate", [
-    lambda d: d["meta"].update(goal="another goal"),
-    lambda d: d["final_check"][0].update(label="fc-renamed"),
-], ids=["goal", "final_check_label"])
-def test_tr6_plan_meta_edit_stales_stage_stage_pairs_on_base_file(env, mutate):
-    env.record_all()
-    env.edit(mutate)
-    statuses = env.statuses()
-    assert statuses["3-1"] == statuses["3-2"] == "stale:base_file"
-    assert statuses["plan-3"] == "stale:base"
-
-
-def test_tr6_output_artifacts_edit_stales_base_plan_on_service_interface(env):
+    env = make_env()
     env.record_all()
     env.edit(lambda d: d["stage"][1].update(output_artifacts=["new-artifact.py"]))
     assert env.status("base-plan") == "stale:service_interface"
 
-
-def test_tr6_effects_only_edit_stales_the_pair_on_service_file(make_env):
     def effects(resolver):
         return [{"path": "scripts/x.sh", "sha256": "a" * 64, "resolver": resolver}]
 
@@ -348,8 +335,7 @@ def test_tr6_effects_only_edit_stales_the_pair_on_service_file(make_env):
     assert env.status("4-3") == "stale:service_file"
     assert env.status("4-2") == "current"
 
-
-def test_tr6_removing_a_raw_only_edge_stales_the_pair_on_edge_alone(env):
+    env = make_env()
     env.record_all()
     before = pair_binding(env.doc(), "3-1")
     env.edit(lambda d: d["stage"][2].update(depends_on=[1]))
@@ -357,8 +343,6 @@ def test_tr6_removing_a_raw_only_edge_stales_the_pair_on_edge_alone(env):
     assert {k for k in before if before[k] != after[k]} == {"edge_digest"}
     assert env.status("3-1") == "stale:edge"
 
-
-def test_tr6_ordering_tag_flip_via_a_third_stage_stales_the_pair_on_edge_alone(make_env):
     data = _data()
     data["stage"][0].update(depends_on=[2], supplies=[{"on": 2}])
     env = make_env(data)
@@ -373,7 +357,8 @@ def test_tr6_ordering_tag_flip_via_a_third_stage_stales_the_pair_on_edge_alone(m
     assert env.status("3-2") == "stale:edge"
 
 
-def test_tr10_state_files_load_across_schema_variants(env):
+def test_tr10_state_files_load_across_schema_variants_and_effects_move_the_service_file(make_env):
+    env = make_env()
     doc = env.doc()
     record = PlanPairReview(pair="3-1", base=3, service=1, verdict="pass", reviewer="thinker",
                             plan_path=str(env.plan), **pair_binding(doc, "3-1"))
@@ -402,8 +387,6 @@ def test_tr10_state_files_load_across_schema_variants(env):
     assert both.plan_pair_reviews["3-1"] == record
     assert both.stages[0].effects[0].resolver == "r"
 
-
-def test_tr10_effects_edit_moves_the_service_file_digest(make_env):
     def effects(resolver):
         return [{"path": "scripts/x.sh", "sha256": "a" * 64, "resolver": resolver}]
 
@@ -447,7 +430,7 @@ def test_tr11_non_direct_edges_pair_ids_and_staleness(make_env):
     assert env.status("4-3") == "current"
 
 
-def test_tr15_pass_echoing_a_digest_the_plan_no_longer_has_is_refused(env):
+def test_tr15_freshness_and_target_copy_recording(env):
     spawn_time_digest = _sha(env.plan)
     env.edit(lambda d: d["stage"][0].update(method="edited after the node files were cut"))
     d = env.record("topo:3-1", "pass", digest=spawn_time_digest)
@@ -455,8 +438,6 @@ def test_tr15_pass_echoing_a_digest_the_plan_no_longer_has_is_refused(env):
     assert "fresh load" in d.detail
     assert env.state().plan_pair_reviews == {}
 
-
-def test_tr15_record_against_target_copy_names_the_target(env):
     copy_path = env.tmp_path / "copy.toml"
     copy_path.write_bytes(env.plan.read_bytes())
     env.edit(lambda d: d["stage"][0].update(method="session plan moved on"))
@@ -468,14 +449,14 @@ def test_tr15_record_against_target_copy_names_the_target(env):
     assert env.status("3-1") == "missing"
 
 
-def test_tr16_pair_revise_ignores_a_whole_plan_pass_over_superseded_content(env):
+def test_tr16_prior_pass_branching_overturn_and_scope_parsing(make_env):
+    env = make_env()
     _seed_whole_plan_pass(env, reviewed_meta_digest="superseded", reviewed_stage_keys={"1": "old"})
     d = env.record("topo:3-1", "revise", concerns=["needs work"])
     assert d.ok, d.detail
     assert env.state().plan_pair_reviews["3-1"].verdict == "revise"
 
-
-def test_tr16_current_same_pair_pass_is_overturned_only_by_failing_regression_evidence(env):
+    env = make_env()
     assert env.record("topo:3-1", "pass").ok
 
     d = env.record("topo:3-1", "revise", concerns=["regressed"])
@@ -493,34 +474,27 @@ def test_tr16_current_same_pair_pass_is_overturned_only_by_failing_regression_ev
     assert d.ok, d.detail
     assert env.status("3-1") == "revise"
 
-
-def test_tr16_revise_over_an_override_needs_no_regression_command(env):
+    env = make_env()
     assert env.record("topo:3-1", "pass").ok
     assert env.record("topo:3-1", "override", reviewer="fedor", note="accepted").ok
     assert env.status("3-1") == "override"
     assert env.record("topo:3-1", "revise", concerns=["reopened"]).ok
 
-
-def test_tr16_stage_and_whole_plan_scopes_keep_their_terminal_pass_behaviour(env):
+    env = make_env()
     for scope in ("", "stage:1"):
         assert env.record(scope, "pass").ok
         d = env.record(scope, "revise", concerns=["late objection"])
         assert d.data["plan_review_post_pass_unevidenced"] is True
         assert env.state().plan_review_passes[scope].verdict == "pass"
 
-
-@pytest.mark.parametrize("pair", ["3-1", "plan-3", "base-plan"])
-def test_tr16_scope_parsing_accepts_review_pairs(env, pair):
-    assert plan_review_pair_scope(f"topo:{pair}") == pair
-    assert env.record(f"topo:{pair}", "pass").ok
-    assert pair in env.state().plan_pair_reviews
-
-
-@pytest.mark.parametrize("scope", ["topo:9-1", "topo:3", "topo:order", "topo:foo", "topo:", "foo"])
-def test_tr16_scope_parsing_refuses_everything_else(env, scope):
-    d = env.record(scope, "pass")
-    assert not d.ok
+    env = make_env()
+    for scope in ("topo:9-1", "topo:3", "topo:order", "topo:foo", "topo:", "foo"):
+        assert not env.record(scope, "pass").ok, scope
     assert env.state().plan_pair_reviews == {}
+    for pair in ("3-1", "plan-3", "base-plan"):
+        assert plan_review_pair_scope(f"topo:{pair}") == pair
+        assert env.record(f"topo:{pair}", "pass").ok
+        assert pair in env.state().plan_pair_reviews
 
 
 def _interface_empty_data() -> dict:
@@ -535,29 +509,20 @@ def _interface_empty_data() -> dict:
     }
 
 
-def test_tr18_interface_empty_service_binds_the_full_brief_fallback(make_env):
+@pytest.mark.parametrize("pair, service, expected_render", [
+    ("1-2", 2, lambda doc: render_stage_interface(doc, 2, contract=True)),
+    ("2-4", 4, lambda doc: render_stage_brief(doc, 4)),
+], ids=["interface_empty_service", "source_service"])
+def test_tr18_interface_empty_or_source_service_binds_the_full_brief(make_env, pair, service, expected_render):
     env = make_env(_interface_empty_data())
     doc = env.doc()
-    assert pair_binding(doc, "1-2")["service_interface_digest"] == _text_sha(
-        render_stage_interface(doc, 2, contract=True))
+    assert pair_binding(doc, pair)["service_interface_digest"] == _text_sha(expected_render(doc))
     env.record_all()
-    before = pair_binding(doc, "1-2")
-    env.edit(lambda d: d["stage"][1].update(method="edited"))
-    after = pair_binding(env.doc(), "1-2")
+    before = pair_binding(doc, pair)
+    env.edit(lambda d: d["stage"][service - 1].update(method="edited"))
+    after = pair_binding(env.doc(), pair)
     assert after["service_interface_digest"] != before["service_interface_digest"]
-    assert env.status("1-2") == "stale:service"
-
-
-def test_tr18_source_service_binds_the_full_brief(make_env):
-    env = make_env(_interface_empty_data())
-    doc = env.doc()
-    assert pair_binding(doc, "2-4")["service_interface_digest"] == _text_sha(render_stage_brief(doc, 4))
-    env.record_all()
-    before = pair_binding(doc, "2-4")
-    env.edit(lambda d: d["stage"][3].update(method="edited"))
-    after = pair_binding(env.doc(), "2-4")
-    assert after["service_interface_digest"] != before["service_interface_digest"]
-    assert env.status("2-4") == "stale:service"
+    assert env.status(pair) == "stale:service"
 
 
 def test_tr21_pair_override_checks_and_storage(make_env):
