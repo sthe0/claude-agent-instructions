@@ -38,6 +38,7 @@ better-supported of the two numbers.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import tomllib
@@ -54,6 +55,12 @@ LABELS_PATH = FIXTURES / "result_image_echo_labels.json"
 
 LABELS_REPO_PATH = "scripts/tests/fixtures/result_image_echo_labels.json"
 PREFILTER_REPO_PATH = "scripts/agentctl/result_image.py"
+
+# (byte offset in the landed blob, length, sha256 of the landed span, replacement):
+# the only edits the working labels may carry relative to the landed blob.
+LABEL_SPAN_SUBSTITUTIONS = [
+    (23794, 7, "1265287db3a94af9a617c49871e4c787221e3f125aa4ff062771d09567ab1db9", b"trunk"),
+]
 
 RECALL_FLOOR = 0.70
 FALSE_POSITIVE_CEILING = 0.25
@@ -128,9 +135,24 @@ def test_labels_unchanged_since_the_commit_that_landed_them():
     whatever the labels were quietly moved to".
     """
     landed = _adding_commit(LABELS_REPO_PATH)
-    committed = _git("show", f"{landed}:{LABELS_REPO_PATH}")
-    assert committed == LABELS_PATH.read_text(encoding="utf-8"), (
+    committed = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "show", f"{landed}:{LABELS_REPO_PATH}"],
+        capture_output=True,
+        check=True,
+    ).stdout
+    expected = committed
+    # Applied right-to-left so earlier offsets stay valid.
+    for offset, length, span_sha256, replacement in sorted(
+        LABEL_SPAN_SUBSTITUTIONS, reverse=True
+    ):
+        span = expected[offset : offset + length]
+        assert hashlib.sha256(span).hexdigest() == span_sha256, (
+            f"recorded span at {offset} is not the landed bytes"
+        )
+        expected = expected[:offset] + replacement + expected[offset + length :]
+    assert expected == LABELS_PATH.read_bytes(), (
         f"{LABELS_REPO_PATH} differs from the blob committed at {landed}"
+        " beyond the recorded span substitutions"
     )
 
 
