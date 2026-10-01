@@ -741,8 +741,43 @@ def _parse_search_hits(output: str) -> "list[tuple[str, str]]":
     return hits
 
 
+_CANDIDATE_EXCERPT_CHARS = 2000
+
+
+def _parse_search_paths(output: str) -> "dict[str, str]":
+    """Leaf name -> absolute path, from the `extend --leaf <path>` line after each hit."""
+    paths: "dict[str, str]" = {}
+    name = None
+    for line in output.splitlines():
+        m = re.match(r"\s*\[\s*\d+\]\s+(\S+\.md)\s*$", line)
+        if m:
+            name = m.group(1)
+            continue
+        m = re.match(r"\s*extend --leaf (\S+)\s*$", line)
+        if m and name:
+            paths[name] = m.group(1)
+            name = None
+    return paths
+
+
+def _candidate_text(description: str, path: "str | None") -> str:
+    """The description plus the leaf's `## Difficulty` section (what the search scored
+    on), capped; an unreadable leaf gives the description alone."""
+    if not path:
+        return description
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return description
+    m = re.search(r"^## Difficulty[ \t]*\n(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
+    if not m:
+        return description
+    return f"{description}\n\n{m.group(1).strip()}"[:_CANDIDATE_EXCERPT_CHARS]
+
+
 def _judge_ground_against_candidates(
-    ground_text: str, hits: "list[tuple[str, str]]", runner
+    ground_text: str, hits: "list[tuple[str, str]]", runner,
+    paths: "dict[str, str] | None" = None,
 ) -> "tuple[str, str]":
     """(outcome, detail) for one ground against its lexically nominated candidates.
     The candidates are only nominees: the judge alone decides "same difficulty?".
@@ -751,7 +786,8 @@ def _judge_ground_against_candidates(
     enabled = os.environ.get("AGENTCTL_ADVISOR") != "0"
     for name, description in hits:
         verdict, reason = advisor.judge_same_difficulty(
-            ground_text, description, runner, enabled=enabled
+            ground_text, _candidate_text(description, (paths or {}).get(name)),
+            runner, enabled=enabled,
         )
         if reason:
             return "judge-unavailable", f"{name}: {reason}"
@@ -799,7 +835,9 @@ def build_findings_from_grounds(
         else:
             hits = _parse_search_hits(output)
             if hits:
-                outcome, detail = _judge_ground_against_candidates(ground_text, hits, runner)
+                outcome, detail = _judge_ground_against_candidates(
+                    ground_text, hits, runner, _parse_search_paths(output)
+                )
             else:
                 outcome, detail = "no-match", output
         dedup_log.append({
