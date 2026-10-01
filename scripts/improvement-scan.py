@@ -358,6 +358,10 @@ class PriorBoardItem:
     # CARRIED (unchanged) item can recompute its CostSignal via
     # `parse_backlog_cost_rate` without a fresh classifier call.
     cost_estimate: str = ""
+    # Whether the live record carried an explicit severity label when last classified (a
+    # labeled singleton is scorable), and the size of the cluster it was scored in.
+    severity_labeled: bool = False
+    cluster_size: int = 1
 
 
 @dataclass(frozen=True)
@@ -403,6 +407,8 @@ def load_prior_board(path: "str | Path") -> PriorBoard:
             recommended_next_step=str(entry.get("recommended_next_step", "planner")),
             blocked_by=tuple(entry.get("blocked_by") or ()),
             cost_estimate=str(entry.get("cost_estimate", "")),
+            severity_labeled=bool(entry.get("severity_labeled", False)),
+            cluster_size=int(entry.get("cluster_size", 1)),
         )
     return PriorBoard(
         schema=BOARD_SCHEMA, generated_at=str(raw.get("generated_at", "")), items=items
@@ -428,6 +434,8 @@ def write_board(board: PriorBoard, path: "str | Path") -> None:
                 "recommended_next_step": item.recommended_next_step,
                 "blocked_by": list(item.blocked_by),
                 "cost_estimate": item.cost_estimate,
+                "severity_labeled": item.severity_labeled,
+                "cluster_size": item.cluster_size,
             }
             for ref, item in board.items.items()
         },
@@ -895,17 +903,39 @@ def diff_backlog(
     return new_items, changed_items, unchanged_refs, closed_refs
 
 
+def rescore_candidates(
+    records: "list[DifficultyRecord]", prior: PriorBoard
+) -> "list[tuple[str, DifficultyRecord]]":
+    """Unchanged prior items parked as no-urgency-signal whose live record now carries an
+    explicit severity label — offered for classification again instead of carried verbatim."""
+    out = []
+    for record in records:
+        ref = _item_ref(record)
+        item = prior.items.get(ref)
+        if (
+            item is not None
+            and item.classification == "no-urgency-signal"
+            and record.severity_labeled
+            and prior.is_unchanged(ref, _backlog_text(record), "open")
+        ):
+            out.append((ref, record))
+    return out
+
+
 def build_worklist(
     new_items: "list[tuple[str, DifficultyRecord]]",
     changed_items: "list[tuple[str, DifficultyRecord]]",
     coverage_gaps: "list[dict]",
     closed_refs: "list[str]",
     *,
+    rescore_items: "list[tuple[str, DifficultyRecord]]" = (),
     now: "datetime | None" = None,
 ) -> dict:
     now = now or datetime.now(timezone.utc)
     items = []
-    for bucket, batch in (("new", new_items), ("changed", changed_items)):
+    for bucket, batch in (
+        ("new", new_items), ("changed", changed_items), ("rescore", rescore_items)
+    ):
         for ref, record in batch:
             items.append(
                 {
@@ -914,6 +944,7 @@ def build_worklist(
                     "title": record.target,
                     "functional_ground": record.functional_ground,
                     "severity": record.severity.value,
+                    "severity_labeled": record.severity_labeled,
                     "reporter": record.reporter,
                     "evidence": record.evidence,
                     "cost_estimate": record.cost_estimate,
@@ -1016,11 +1047,11 @@ def classify_and_score(
         other_cluster_count = cluster_size.get(ref, 1) - 1
         recurrence_mass = severity.mass + other_cluster_count
         evidence = tuple(e for e in (c.get("evidence"),) if e)
-        if other_cluster_count == 0:
-            # Operationalized "no severity signal AND no cluster" as a singleton cluster:
-            # every DifficultyRecord always carries a severity (the GitHub adapter
-            # defaults an unlabeled issue to MEDIUM), so "no signal" can't be observed
-            # post-parse — a lone item with no cluster-mates is the closest proxy.
+        severity_labeled = bool(c.get("severity_labeled", False))
+        if other_cluster_count == 0 and not severity_labeled:
+            # "No severity signal AND no cluster": the adapter defaults an unlabeled issue
+            # to MEDIUM, so only the record's `severity_labeled` flag tells a stated
+            # severity from a defaulted one.
             no_urgency_signal.append(ref)
             fresh[ref] = PriorBoardItem(
                 classification="no-urgency-signal",
@@ -1033,6 +1064,8 @@ def classify_and_score(
                 recommended_next_step=c["recommended_next_step"],
                 blocked_by=tuple(c.get("blocked_by") or ()),
                 cost_estimate=c.get("cost_estimate", ""),
+                severity_labeled=severity_labeled,
+                cluster_size=cluster_size.get(ref, 1),
             )
             continue
         score = score_item(
@@ -1050,6 +1083,8 @@ def classify_and_score(
             recommended_next_step=c["recommended_next_step"],
             blocked_by=tuple(c.get("blocked_by") or ()),
             cost_estimate=c.get("cost_estimate", ""),
+            severity_labeled=severity_labeled,
+            cluster_size=cluster_size.get(ref, 1),
         )
 
     all_items = {**carried, **fresh}
@@ -1070,6 +1105,8 @@ def classify_and_score(
             recommended_next_step=item.recommended_next_step,
             blocked_by=item.blocked_by,
             cost_estimate=item.cost_estimate,
+            severity_labeled=item.severity_labeled,
+            cluster_size=item.cluster_size,
         )
         if final_items[ref].rank is not None:
             findings.append(
@@ -1253,11 +1290,14 @@ def _run_backlog_phase_a(args: argparse.Namespace) -> int:
     channels = args.channels or default_channels()
     records, coverage_gaps = collect_records(channels)
     new_items, changed_items, unchanged_refs, closed_refs = diff_backlog(records, prior)
-    worklist = build_worklist(new_items, changed_items, coverage_gaps, closed_refs)
+    rescore_items = rescore_candidates(records, prior)
+    worklist = build_worklist(
+        new_items, changed_items, coverage_gaps, closed_refs, rescore_items=rescore_items
+    )
     write_worklist(worklist, args.emit_worklist)
     print(
         f"improvement-scan backlog (phase A): {len(new_items)} new, {len(changed_items)} changed, "
-        f"{len(unchanged_refs)} unchanged, {len(closed_refs)} closed, "
+        f"{len(rescore_items)} rescore, {len(unchanged_refs)} unchanged, {len(closed_refs)} closed, "
         f"{len(coverage_gaps)} coverage gap(s) -> {args.emit_worklist}"
     )
     return 0

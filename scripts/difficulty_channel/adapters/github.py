@@ -253,11 +253,13 @@ def _issue_to_record(issue: dict) -> DifficultyRecord:
     labels = [lbl["name"] for lbl in (issue.get("labels") or [])]
 
     severity = Severity.MEDIUM
+    severity_labeled = False
     layer = "core"
     for lbl in labels:
         if lbl.startswith("severity:"):
             try:
                 severity = Severity.parse(lbl[len("severity:"):])
+                severity_labeled = True
             except ValueError:
                 pass
         elif lbl.startswith("layer:"):
@@ -294,6 +296,7 @@ def _issue_to_record(issue: dict) -> DifficultyRecord:
         evidence=evidence,
         cost_estimate=cost_estimate,
         ref=ref,
+        severity_labeled=severity_labeled,
     )
 
 

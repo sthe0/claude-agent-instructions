@@ -56,6 +56,8 @@ class DifficultyRecord:
     ref: str = ""      # stable external identity (e.g. a GitHub issue URL) — never mutated by
                         # content edits, unlike target/functional_ground; "" when a channel has
                         # no such handle (e.g. a freshly-submitted record with no ref back yet)
+    severity_labeled: bool = False  # True only when a channel parsed an explicit severity,
+                                    # so a defaulted severity stays distinguishable from a stated one
 
     def __post_init__(self) -> None:
         # Validate/normalise the severity enum even if a raw string slipped in.
