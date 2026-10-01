@@ -223,7 +223,7 @@ All text in `~/claude-agent-instructions/` and `.claude/agent-memory/` is **Engl
 
 ## Instructions repository (git)
 
-Edit policy for `~/claude-agent-instructions/`: `sync-instructions-repo.sh pull` + reconcile before editing; `git commit` after (mandatory); `push` only after **explicit user confirmation**, except an **author-machine carve-out** for memory-leaf/docs-only edits (folds push into content-approval — no PR, no second confirm; behavioral/executable surface keeps the separate gate). Full workflow: `~/.claude-agent/skills/self-improvement/policy.md` § Git sync.
+Edit policy for `~/claude-agent-instructions/`: `sync-instructions-repo.sh pull` + reconcile before editing; `git commit` after (mandatory); `push` only after **explicit user confirmation** — **immediately followed by a `pull` of the canonical checkout, so a conflicting concurrent push surfaces now rather than at the next session's pre-edit pull** — except an **author-machine carve-out** for memory-leaf/docs-only edits (folds push and the immediate pull-back into content-approval — no PR, no second confirm; behavioral/executable surface keeps the separate gate). Full workflow: `~/.claude-agent/skills/self-improvement/policy.md` § Git sync.
 
 ---
 

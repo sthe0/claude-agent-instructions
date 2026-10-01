@@ -1,10 +1,10 @@
 ---
 name: agentctl-acceptance-judge-gate
-description: "How agentctl's acceptance-judge gate on record-result --status passed actually works: a haiku model compares --observation against stage.subject.result, verdicts live in state.stage_reviews (not an 'advisor' key); the predicted short-observation mitigation is now falsified; a FOURTH occurrence measured 20 blocks on 7 of 8 stages of one plan, and revise verdicts are not kept in engine history"
+description: "How agentctl's acceptance-judge gate on record-result --status passed actually works: a haiku model compares --observation against stage.subject.result, verdicts live in state.stage_reviews (not an 'advisor' key); the predicted short-observation mitigation is now falsified; a FOURTH occurrence measured 20 blocks on 7 of 8 stages of one plan; a FIFTH occurrence post-R4-fix converged via resubmission instead of needing an override, suggesting specific-clause gaps converge while qualitative-adequacy gaps still goalpost-move; revise verdicts are not kept in engine history"
 type: reference
 schema: leaf/v1
 created: 2026-08-26
-last_verified: 2026-09-25
+last_verified: 2026-10-01
 ---
 
 ## Difficulty
@@ -205,6 +205,28 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
   `_record_result`/`_record_raised` with `judge_binary_ask`, so every call (verdict or fail-open)
   writes a `judge_ledger` `decided` line — previously it called `begin_attributed_call` but never
   `decided`, so a busy session's judge calls left zero ledger rows.
+
+- **FIFTH occurrence (2026-10-01, `pre-land-instruction-smoke-test` plan, stage 3) — first
+  observed CONVERGENCE via resubmission since the R4 fix, not an override.** Unlike every prior
+  occurrence above, this one cleared with a genuine `pass` verdict after 3 resubmissions, each
+  addressing the judge's stated gap concretely (read the reason straight from `state.log`'s
+  `acceptance_judge_verdict` entries per the R4 fix, rather than hunting the ledger) — no
+  `stage-review --verdict override` was needed. The gaps named were narrower and more literal than
+  the "aggregate vs specific" goalpost-moving documented above: round 1 named five missing
+  sub-claims by topic (canon-snapshot evidence, named evidence files, installer confirmation,
+  "no root created"), round 2 named one of those five still missing, round 3 pointed at a single
+  clause — the `expected_result_image`'s "with an explicit message" — and was satisfied once the
+  observation quoted the literal refusal string verbatim. Tentative read: a judge gap stated as a
+  *specific missing clause* (quote this exact fact) converges on resubmission; a judge gap stated
+  as a *qualitative adequacy complaint* ("doesn't demonstrate", "asserts a proxy for") is the
+  pattern that goalpost-moves instead — consistent with, not yet proof against, the open mitigation
+  proposed above (bound the judge's demand to "name ≥N concrete facts"). Same plan separately
+  reproduced the "Related friction at resolution" plan-digest-staling-`AcceptanceReview` bullet
+  verbatim: a single narrow, non-substantive `invariants`-field clarification (no `criterion`/
+  `verify_command`/`grants`/goal change) staled the already-recorded whole-plan review and forced a
+  fresh `accept`, which — because `accept --author` must match `order.customer_id` — required a
+  genuine new `AskUserQuestion` re-confirming the same R1-R6 verdicts rather than any self-granted
+  bypass ([[resolve-by-user-needs-real-ask]]).
 
 ## See also
 

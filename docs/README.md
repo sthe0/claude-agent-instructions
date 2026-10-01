@@ -58,6 +58,7 @@ Setup and distribution, the git workflow, the verification-guard suite, and laye
 - [Maintaining a layer over a moving Core](operations/layer-maintenance.md) — the rebase and rerere recipe for keeping a Team or Personal layer current as Core evolves.
 - [Difficulty-channel onboarding](operations/difficulty-channel-onboarding.md) — configuring the Core-difficulty filing channel on a new machine (credentials, channel selection, the file-difficulty.py CLI, and the author-side digest).
 - [Cross-session filesystem-scope isolation](operations/cross-session-scope-isolation.md) — the deterministic session-scope registry + conflict detector + PreToolUse hook that denies/warns when two live sessions overlap the same working tree/mount; isolate, not serialize.
+- [Pre-land instruction smoke test](operations/pre-land-instruction-smoke-test.md) — loading a committed candidate revision into a throw-away sandbox, running its own static checks plus a tool-less live session, and what that does and does not catch.
 
 ## Decisions — architecture decision records
 
