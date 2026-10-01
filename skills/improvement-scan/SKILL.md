@@ -41,27 +41,30 @@ Procedure step 6).
    Read the printed new/changed/closed/coverage-gap counts.
 
 3. **Classify** (the perception step). For every item in `worklist.json`'s
-   `items` (buckets `new`/`changed`/`rescore` — `rescore` is a prior unscored item
-   whose record now carries a severity label), copy the worklist's `severity` and
-   `severity_labeled` into the item (a labeled singleton is scored, so omitting the
-   flag leaves it unscored) and supply, per item ref:
-   `breadth` (`narrow`/`shared-mechanism`/`universal`), `cost_to_resolve`
-   (a budget tier key), `in_flight` (a readiness coefficient key), and
-   `recommended_next_step` (one of `self-improvement`/`planner`/
-   `file-difficulty`) — reasoning from the item's own text per
-   `backlog-triage-practice.md` § Priority rubric, never guessed. An item with
-   no severity label (`severity_labeled` false) and no cluster-mate stays unscored
-   as no-urgency-signal instead of a guessed weight. Write the result plus `worklist.json`'s `closed_refs`
-   as `classifications.json` (shape: `{"items": {<ref>: {...}}, "closed_refs":
-   [...]}`).
+   `items` (buckets `new`/`changed`/`rescore` — `rescore` is a prior unscored
+   item whose record now carries a severity label), supply only the judgment,
+   per item ref: `breadth` (`narrow`/`shared-mechanism`/`universal`),
+   `cost_to_resolve` (a budget tier key), `in_flight` (a readiness coefficient
+   key), `recommended_next_step` (one of `self-improvement`/`planner`/
+   `file-difficulty`), and optionally `blocked_by`. Reason from the item's own
+   text per `backlog-triage-practice.md` § Priority rubric, never guessed.
+   Do not copy the item's title, ground, severity, `severity_labeled`, evidence
+   or digest: phase B merges them from the worklist. An item with no severity
+   label and no cluster-mate stays unscored as no-urgency-signal. Write
+   `classifications.json` as `{"items": {<ref>: {...}}, "closed_refs": [...]}`
+   with `worklist.json`'s `closed_refs`.
 
 4. **Backlog producer, phase B** (score + merge):
    ```
    python3 scripts/improvement-scan.py backlog --prior board-prior.json \
-     --classifications classifications.json --out board-new.json --store <store>
+     --worklist worklist.json --classifications classifications.json \
+     --out board-new.json --store <store>
    ```
-   An out-of-vocabulary value here is rejected before anything is written —
-   fix the classification and rerun rather than loosening the vocabulary.
+   Without `--worklist`, each classification must itself carry `title`,
+   `functional_ground`, `severity` and `source_digest`. A ref missing from the
+   worklist, or a missing field, exits 2 naming the ref; an out-of-vocabulary
+   value is rejected before anything is written — fix the classification and
+   rerun rather than loosening the vocabulary.
 
 5. **Telemetry producer, scan mode:**
    ```

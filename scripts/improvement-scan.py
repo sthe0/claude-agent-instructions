@@ -407,7 +407,7 @@ def load_prior_board(path: "str | Path") -> PriorBoard:
             recommended_next_step=str(entry.get("recommended_next_step", "planner")),
             blocked_by=tuple(entry.get("blocked_by") or ()),
             cost_estimate=str(entry.get("cost_estimate", "")),
-            severity_labeled=bool(entry.get("severity_labeled", False)),
+            severity_labeled=entry.get("severity_labeled") is True,
             cluster_size=int(entry.get("cluster_size", 1)),
         )
     return PriorBoard(
@@ -1047,7 +1047,7 @@ def classify_and_score(
         other_cluster_count = cluster_size.get(ref, 1) - 1
         recurrence_mass = severity.mass + other_cluster_count
         evidence = tuple(e for e in (c.get("evidence"),) if e)
-        severity_labeled = bool(c.get("severity_labeled", False))
+        severity_labeled = c.get("severity_labeled") is True
         if other_cluster_count == 0 and not severity_labeled:
             # "No severity signal AND no cluster": the adapter defaults an unlabeled issue
             # to MEDIUM, so only the record's `severity_labeled` flag tells a stated
@@ -1303,15 +1303,63 @@ def _run_backlog_phase_a(args: argparse.Namespace) -> int:
     return 0
 
 
+_REQUIRED_ITEM_METADATA = ("title", "functional_ground", "severity", "source_digest")
+
+
+def _merge_worklist_metadata(
+    classified: "dict[str, dict]", worklist_items: "list[dict] | None"
+) -> "dict[str, dict]":
+    """Overlay each classification on its worklist item (the classification wins for
+    any field it names). Raises ValueError naming the ref (and field) on an unknown ref
+    or on required metadata still missing after the merge.
+    """
+    by_ref = (
+        {w.get("item_ref"): w for w in worklist_items} if worklist_items is not None else None
+    )
+    merged: "dict[str, dict]" = {}
+    for ref, c in classified.items():
+        base: dict = {}
+        if by_ref is not None:
+            if ref not in by_ref:
+                raise ValueError(f"classified ref {ref!r} is not in the worklist")
+            base = {k: v for k, v in by_ref[ref].items() if k not in ("item_ref", "bucket")}
+        item = {**base, **c}
+        for field in _REQUIRED_ITEM_METADATA:
+            if not item.get(field):
+                raise ValueError(
+                    f"item {ref!r} lacks {field!r} (supply it, or pass --worklist to merge it)"
+                )
+        merged[ref] = item
+    return merged
+
+
+def _read_json_object(path: str, what: str) -> "dict | None":
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        print(f"improvement-scan backlog (phase B): cannot read {what}: {exc}", file=sys.stderr)
+        return None
+
+
 def _run_backlog_phase_b(args: argparse.Namespace) -> int:
     prior = load_prior_board(args.prior) if args.prior else _empty_board()
-    try:
-        payload = json.loads(Path(args.classifications).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        print(f"improvement-scan backlog (phase B): cannot read classifications: {exc}", file=sys.stderr)
+    payload = _read_json_object(args.classifications, "classifications")
+    if payload is None:
         return 2
-    closed_refs = payload.get("closed_refs") or []
-    classified = payload.get("items") or {}
+    worklist = None
+    if args.worklist:
+        worklist = _read_json_object(args.worklist, "worklist")
+        if worklist is None:
+            return 2
+    closed_refs = payload.get("closed_refs") or (worklist or {}).get("closed_refs") or []
+    try:
+        classified = _merge_worklist_metadata(
+            payload.get("items") or {},
+            (worklist.get("items") or []) if worklist is not None else None,
+        )
+    except ValueError as exc:
+        print(f"improvement-scan backlog (phase B): {exc}", file=sys.stderr)
+        return 2
 
     try:
         board, findings, no_urgency_signal = classify_and_score(prior, classified, closed_refs)
@@ -1430,6 +1478,10 @@ def main(argv: "list[str] | None" = None) -> int:
     p_backlog.add_argument(
         "--classifications", default=None,
         help="phase B: model-supplied classifications file (see --emit-worklist's output shape)",
+    )
+    p_backlog.add_argument(
+        "--worklist", default=None,
+        help="phase B: the phase-A worklist; its item metadata is merged under each classification",
     )
     p_backlog.add_argument("--out", default=None, help="phase B: write the merged board here")
     p_backlog.add_argument(

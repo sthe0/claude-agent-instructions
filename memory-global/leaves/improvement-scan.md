@@ -32,9 +32,10 @@ the script's own closed vocabularies gate.
   [[backlog-triage-practice]] § Reuse across runs). Two phases: phase A
   (`--emit-worklist`) collects raw records and diffs them against a `--prior`
   board JSON, emitting only new/changed items plus `closed_refs`; phase B
-  (`--classifications --out`) takes a live session's classifications (breadth,
-  cost_to_resolve, in_flight, recommended_next_step — validated against closed
-  vocabularies, rejecting the whole call on the first out-of-vocabulary value),
+  (`--worklist --classifications --out`) takes a live session's judgment
+  (breadth, cost_to_resolve, in_flight, recommended_next_step — validated against
+  closed vocabularies, rejecting the whole call on the first out-of-vocabulary
+  value) and merges item metadata from `--worklist` (a gap exits 2 naming the ref),
   scores and ranks via
   `score(item) = breadth_weight × recurrence_mass / cost_to_resolve`, and
   writes both a new board JSON and `Finding` rows to the durable store.
