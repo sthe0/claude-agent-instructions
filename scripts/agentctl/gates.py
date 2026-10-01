@@ -56,6 +56,7 @@ from .plan import (
     order_place,
     pair_binding,
     plan_has_any_grants,
+    review_pairs,
     stage_question_key,
 )
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
@@ -701,6 +702,123 @@ def pair_status(state: SessionState, doc, plan_path: str, pair: str) -> str:
     return "current" if record.verdict == _PLAN_REVIEW_PASS else record.verdict
 
 
+_PAIR_SATISFIED = ("current", "override")
+
+
+def pair_binding_hash(doc, pair: str) -> str:
+    """sha256 of `pair`'s seven-digest binding, joined in `PAIR_BINDING_KEYS` order —
+    the value a whole-plan record keeps per pair in `reviewed_pair_bindings`."""
+    binding = pair_binding(doc, pair)
+    text = "\n".join(f"{key}={binding[key]}" for key in PAIR_BINDING_KEYS)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def pair_baseline_bindings(doc) -> "dict[str, str]":
+    return {pid: pair_binding_hash(doc, pid) for pid in review_pairs(doc)}
+
+
+def split_pair(pair: str) -> "tuple[int | str, int | str]":
+    """`(b, s)` of a pair id already known to be in `review_pairs`, with no
+    re-validation (`plan.parse_pair` re-enumerates every pair per call)."""
+    b, s = pair.split("-", 1)
+    return (int(b) if b.isdigit() else b, int(s) if s.isdigit() else s)
+
+
+def pair_depths(doc) -> "dict[int | str, int]":
+    """Depth of every node in the graph whose edges are the review pairs (b -> s):
+    a node no pair serves is a root at 0, any other is 1 + the deepest base that
+    relies on it being served by. Raises PlanError naming the cycle when the
+    graph has one."""
+    edges = [split_pair(pid) for pid in review_pairs(doc)]
+    bases_of: "dict[int | str, list[int | str]]" = {}
+    for b, s in edges:
+        bases_of.setdefault(s, []).append(b)
+        bases_of.setdefault(b, [])
+    depths: "dict[int | str, int]" = {}
+    visiting: list = []
+
+    def depth(node):
+        if node in depths:
+            return depths[node]
+        if node in visiting:
+            cycle = visiting[visiting.index(node):] + [node]
+            raise PlanError("review pair graph has a cycle: " + " -> ".join(str(n) for n in cycle))
+        visiting.append(node)
+        value = 1 + max((depth(b) for b in bases_of[node]), default=-1)
+        visiting.pop()
+        depths[node] = value
+        return value
+
+    for node in bases_of:
+        depth(node)
+    return depths
+
+
+def pair_prereqs(doc, pair: str, depths: "dict[int | str, int] | None" = None) -> "list[str]":
+    """Every shallower pair whose service is one of `pair`'s two endpoints, in
+    `review_pairs` order — the pairs that settle what `pair`'s briefs are
+    relied on for."""
+    depths = depths if depths is not None else pair_depths(doc)
+    b, s = split_pair(pair)
+    return [
+        pid for pid in review_pairs(doc)
+        if split_pair(pid)[1] in (b, s) and depths[split_pair(pid)[0]] < depths[b]
+    ]
+
+
+def pair_walk(state: SessionState, doc, plan_path: str) -> "list[dict]":
+    """One row per review pair — `pair`, `base`, `service`, `level`, `status`,
+    `ready`, `waiting` — in `review_pairs` order. Readiness is advisory: a pair is
+    ready once every prerequisite is current or override."""
+    depths = pair_depths(doc)
+    pairs = review_pairs(doc)
+    status = {pid: pair_status(state, doc, plan_path, pid) for pid in pairs}
+    rows = []
+    for pid in pairs:
+        b, s = split_pair(pid)
+        waiting = [p for p in pair_prereqs(doc, pid, depths) if status[p] not in _PAIR_SATISFIED]
+        rows.append({
+            "pair": pid, "base": str(b), "service": str(s), "level": depths[b],
+            "status": status[pid], "ready": not waiting, "waiting": waiting,
+        })
+    return rows
+
+
+def has_pair_records_for(state: SessionState, target_plan: "str | None") -> bool:
+    return bool(target_plan) and any(
+        record.plan_path == target_plan for record in state.plan_pair_reviews.values()
+    )
+
+
+def walk_stale_pairs(state: SessionState, doc, plan_path: str, baseline) -> "list[str]":
+    """The walk-stale set W in `review_pairs` order: pairs incident to a stage that
+    moved since `baseline` (a whole-plan record), pairs not current/override whose
+    live binding differs from the baseline's recorded one or whose own latest record
+    is a revise written after the baseline, and pairs the baseline never knew of.
+    A baseline with no recorded bindings makes W every pair."""
+    pairs = review_pairs(doc)
+    recorded = getattr(baseline, "reviewed_pair_bindings", None)
+    if baseline is None or not recorded:
+        return list(pairs)
+    _, moved = changed_parts(doc, _plan_review_baseline(baseline))
+    stale = []
+    for pid in pairs:
+        b, s = split_pair(pid)
+        if b in moved or s in moved or pid not in recorded:
+            stale.append(pid)
+            continue
+        if pair_status(state, doc, plan_path, pid) in _PAIR_SATISFIED:
+            continue
+        record = state.plan_pair_reviews.get(pid)
+        revised_since = (
+            record is not None and record.plan_path == plan_path
+            and record.verdict == _PLAN_REVIEW_REVISE and record.record_seq > baseline.record_seq
+        )
+        if revised_since or pair_binding_hash(doc, pid) != recorded[pid]:
+            stale.append(pid)
+    return stale
+
+
 def _plan_review_regression_evidence(prior_pass, review, doc) -> bool:
     """Whether a post-pass `revise` review carries run-demonstrated evidence
     sufficient to overturn `prior_pass` (a whole-plan or stage-scoped PASS
@@ -800,6 +918,11 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     stage-scoped reviewer never saw the order, so it cannot re-cover a meta
     change no matter how current its own stage's key is.
 
+    When a pair record exists for `target_plan`, the walk-stale set W
+    (`walk_stale_pairs`) is computed whatever `changed_parts` reports: every moved
+    stage's obligation discharges via pairs only if EVERY pair of W is current or
+    override, and each uncovered member of W adds a blocker naming its pair.
+
     A path that differs is excused by byte identity and by nothing weaker: the
     recorded meta/stage keys this function decides staleness by cover only what
     `plan_meta_digest`/`plan_stage_digests` hash, so a DIFFERENT file agreeing on
@@ -821,31 +944,84 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     blockers = _plan_review_verdict_blockers(whole, state=state, doc=doc)
     if blockers:
         return blockers
-    for index in sorted(moved_stages):
-        scope = _plan_review_scope_for_stage(index)
-        spr = state.plan_stage_reviews.get(scope)
-        if spr is None or (spr.plan_path != target_plan
-                           and not _binds_across_path_change(spr, target_plan)):
-            return [
-                f"stage {index} changed since the whole-plan review; needs its own "
-                f"pass — run: plan-review --scope {scope}"
-            ]
-        stage_meta_moved, stage_moved = changed_parts(doc, _plan_review_baseline(spr))
-        if stage_meta_moved:
-            return [
-                f"thinker review for stage {index} is stale — the plan's meta/order "
-                "changed since it was reviewed; re-run plan-review (a stage-scoped "
-                "review cannot cover a meta change)"
-            ]
-        if index in stage_moved:
-            return [
-                f"thinker review is stale — stage {index} changed again since "
-                f"{scope!r} was reviewed; re-run plan-review --scope {scope}"
-            ]
-        blockers = _plan_review_verdict_blockers(spr, state=state, doc=doc)
-        if blockers:
-            return blockers
-    return []
+    if not has_pair_records_for(state, target_plan):
+        for index in sorted(moved_stages):
+            blockers = _stage_route_gaps(state, target_plan, doc, index)
+            if blockers:
+                return blockers
+        return []
+    try:
+        walk_stale = walk_stale_pairs(state, doc, target_plan, whole)
+    except PlanError as exc:
+        return [f"review pairs cannot be enumerated for this plan: {exc}"]
+    status = {pid: pair_status(state, doc, target_plan, pid) for pid in walk_stale}
+    discharged_by_pairs = all(status[pid] in _PAIR_SATISFIED for pid in walk_stale)
+    direct = {index: _stage_route_gaps(state, target_plan, doc, index)
+              for index in sorted(moved_stages)}
+    blockers = []
+    if not discharged_by_pairs:
+        blockers = next((b for b in direct.values() if b), [])
+    for pid in walk_stale:
+        if status[pid] in _PAIR_SATISFIED:
+            continue
+        moved_ends = [x for x in split_pair(pid) if x in moved_stages]
+        if moved_ends and all(not direct[x] for x in moved_ends):
+            continue
+        blockers.append(
+            f"review pair {pid} is {status[pid]} and is not covered by a stage-scoped "
+            f"pass — run: plan-review-topological.py --pairs {pid}"
+        )
+    return blockers
+
+
+def _stage_route_gaps(state: SessionState, target_plan: str, doc, index: int) -> list[str]:
+    """What keeps moved stage `index` from being covered by its own `stage:<n>`
+    review at its current key; [] when that stage-scoped pass stands."""
+    scope = _plan_review_scope_for_stage(index)
+    spr = state.plan_stage_reviews.get(scope)
+    if spr is None or (spr.plan_path != target_plan
+                       and not _binds_across_path_change(spr, target_plan)):
+        return [
+            f"stage {index} changed since the whole-plan review; needs its own "
+            f"pass — run: plan-review --scope {scope}"
+        ]
+    stage_meta_moved, stage_moved = changed_parts(doc, _plan_review_baseline(spr))
+    if stage_meta_moved:
+        return [
+            f"thinker review for stage {index} is stale — the plan's meta/order "
+            "changed since it was reviewed; re-run plan-review (a stage-scoped "
+            "review cannot cover a meta change)"
+        ]
+    if index in stage_moved:
+        return [
+            f"thinker review is stale — stage {index} changed again since "
+            f"{scope!r} was reviewed; re-run plan-review --scope {scope}"
+        ]
+    return _plan_review_verdict_blockers(spr, state=state, doc=doc)
+
+
+def pair_discharged_stages(state: SessionState, doc, plan_path: str) -> "list[str]":
+    """The `stage:<n>` scopes that show no blocker only because every pair of the
+    walk-stale set is current or override, not because of their own stage-scoped
+    pass. Empty unless the coverage route is pair-driven and reachable."""
+    whole = state.plan_review
+    if whole is None or not has_pair_records_for(state, plan_path):
+        return []
+    if whole.plan_path != plan_path and not _binds_across_path_change(whole, plan_path):
+        return []
+    meta_moved, moved_stages = changed_parts(doc, _plan_review_baseline(whole))
+    if meta_moved or _plan_review_verdict_blockers(whole, state=state, doc=doc):
+        return []
+    try:
+        walk_stale = walk_stale_pairs(state, doc, plan_path, whole)
+    except PlanError:
+        return []
+    if any(pair_status(state, doc, plan_path, pid) not in _PAIR_SATISFIED for pid in walk_stale):
+        return []
+    return [
+        _plan_review_scope_for_stage(index) for index in sorted(moved_stages)
+        if _stage_route_gaps(state, plan_path, doc, index)
+    ]
 
 
 #: Message substituted for whatever `plan_review_blockers` would otherwise return once
@@ -873,7 +1049,8 @@ _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
     "decision is the coordinator's and must be recorded. Two exits, both executable from this "
     "state: (1) run a fresh whole-plan thinker review and record plan-review --verdict "
     "pass — this clears the gate exactly as an on-budget pass always does, because it "
-    "is an honest pass, not an override; or (2) go ahead with the plan as it stands, "
+    "is an honest pass, not an override — on a plan too large for one reviewer, run "
+    "plan-review-topological.py over its pairs and then plan-review-compose; or (2) go ahead with the plan as it stands, "
     "without a further review, by running plan-review --verdict override --reviewer "
     "<you> --note <why it is acceptable>. To cut scope instead, edit the plan and "
     "re-apply it by the route your state allows — `submit-plan` before approval, "
@@ -1069,12 +1246,16 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
     same branches, same messages, as before stage-scoped reviews existed at all;
     `doc` (schema 28, for accepted-risk discharge) is still loaded and threaded
     through on this path, but no branch below it depends on the load having
-    succeeded. Once a stage-scoped review exists, coverage is delegated to
+    succeeded. Once a stage-scoped review exists, or a pair review is recorded for
+    the evaluated plan path, coverage is delegated to
     `_plan_review_blockers_coverage`, which checks the whole-plan record's own
     attestation/verdict directly (`_plan_review_verdict_blockers`) rather than via
     `_plan_review_blockers_whole` — the byte-hash staleness check in that helper
-    would trip on any unrelated edit and defeat per-stage coverage, so staleness
-    here is decided solely by `changed_parts` against the recorded meta/stage keys.
+    would trip on any unrelated edit and defeat per-stage coverage. Staleness there
+    is decided by `changed_parts` against the recorded meta/stage keys; once pair
+    records exist for the plan it is no longer decided by that alone — the walk-stale
+    set (`walk_stale_pairs`, per-pair bindings recorded in `reviewed_pair_bindings`)
+    can discharge a moved stage's obligation, and adds a blocker per uncovered pair.
 
     Round release wraps the OUTERMOST result: whatever combination of "no review",
     "stale", or "verdict blocked" branches produced a non-empty list, past the round
@@ -1089,7 +1270,10 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
             doc = load_plan(target_plan)
         except (OSError, PlanError):
             doc = None
-    if not state.plan_stage_reviews or doc is None:
+    coverage_route = doc is not None and (
+        bool(state.plan_stage_reviews) or has_pair_records_for(state, target_plan)
+    )
+    if not coverage_route:
         blockers = _plan_review_blockers_whole(state.plan_review, target_plan, state=state, doc=doc)
     else:
         blockers = _plan_review_blockers_coverage(state, target_plan, doc)
@@ -1173,6 +1357,19 @@ def review_delta(state: SessionState, doc, target_plan: "str | None" = None) -> 
         "render_command": render_command,
         "record_scope_args": [f"--scope {scope}" for scope in scopes],
     }
+
+
+def pairs_hint_for(state: SessionState, doc, plan_path: "str | None") -> "list[str]":
+    """The walk-stale set W of `doc` in `review_pairs` order, for the scoped
+    `plan-review-topological.py --pairs` rerun; [] when no whole-plan baseline or
+    pair record exists to scope against, or the pairs cannot be enumerated."""
+    whole = state.plan_review
+    if whole is None or not has_pair_records_for(state, plan_path):
+        return []
+    try:
+        return walk_stale_pairs(state, doc, plan_path, whole)
+    except PlanError:
+        return []
 
 
 def plan_presentation_active(state: SessionState) -> bool:

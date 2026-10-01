@@ -20,6 +20,7 @@ from agentctl import cli, gates
 from agentctl.dispatch import RunResult
 from agentctl.plan import (
     CONDITION_MARKERS,
+    changed_parts,
     load_plan,
     pair_binding,
     review_pairs,
@@ -174,6 +175,7 @@ class Env:
 @pytest.fixture
 def make_env(tmp_path, store, monkeypatch):
     monkeypatch.setenv("AGENTCTL_ESCALATION_LEDGER", str(tmp_path / "ledger.jsonl"))
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
 
     def make(data: dict | None = None) -> Env:
         data = data if data is not None else _data()
@@ -586,3 +588,643 @@ def test_tr21_pair_override_checks_and_storage(make_env):
     confirmed, netted = env.ledger_lines()
     assert (confirmed["outcome"], netted["outcome"]) == ("confirmed-gap", "false-alarm")
     assert netted["concern_sha256"] == confirmed["concern_sha256"] == _text_sha(concern)
+
+
+def _walk(env: Env, target: Path | None = None, fmt: str = "json"):
+    return cli.cmd_plan_review_walk(
+        Namespace(session=SID, target=str(target) if target else None, format=fmt), store=env.store)
+
+
+def _compose(env: Env, target: Path | None = None):
+    return cli.cmd_plan_review_compose(
+        Namespace(session=SID, target=str(target) if target else None), store=env.store)
+
+
+def _delta(env: Env):
+    return cli.cmd_plan_review_delta(Namespace(session=SID, plan=None), store=env.store)
+
+
+def _blockers(env: Env, path: Path | None = None) -> list[str]:
+    return gates.plan_review_blockers(env.state(), str(path or env.plan))
+
+
+def _rows(env: Env, target: Path | None = None) -> dict[str, dict]:
+    d = _walk(env, target)
+    assert d.ok, d.detail
+    return {row["pair"]: row for level in d.data["levels"] for row in level}
+
+
+def _w(env: Env) -> list[str]:
+    state = env.state()
+    return gates.walk_stale_pairs(state, env.doc(), str(env.plan), state.plan_review)
+
+
+def _effects(resolver: str) -> list[dict]:
+    return [{"path": "scripts/x.sh", "sha256": "a" * 64, "resolver": resolver}]
+
+
+def _diamond_data() -> dict:
+    """s=1; a=2 and b=3 rely on s; c=4 relies on a and b and, raw-only, on s. The plan's
+    only reliance stage is c. Pairs: base-plan, plan-4, 4-1, 4-2, 4-3, 2-1, 3-1."""
+    return {
+        "meta": {"task_id": "t", "goal": "G", "done_criterion": "DC",
+                 "order": _order(coverage={"R1": ["stage 4 verify_command"]})},
+        "final_check": [{"command": "true", "expected_exit": 0, "label": "fc1"}],
+        "stage": [
+            _stage(1),
+            _stage(2, depends_on=[1], supplies=[{"on": 1}]),
+            _stage(3, depends_on=[1], supplies=[{"on": 1}]),
+            _stage(4, depends_on=[1, 2, 3], supplies=[{"on": 2}, {"on": 3}]),
+        ],
+    }
+
+
+def _bounded_data() -> dict:
+    """n=1, a=2, b=3, c=4: a relies on n, b on a (not on n), c on nothing and nothing
+    relies on c. Pairs: base-plan, plan-3, plan-4, 2-1, 3-2."""
+    return {
+        "meta": {"task_id": "t", "goal": "G", "done_criterion": "DC", "order": _order()},
+        "final_check": [{"command": "true", "expected_exit": 0, "label": "fc1"}],
+        "stage": [
+            _stage(1),
+            _stage(2, depends_on=[1], supplies=[{"on": 1}]),
+            _stage(3, depends_on=[2], supplies=[{"on": 2}]),
+            _stage(4),
+        ],
+    }
+
+
+def _edit_n_interface(d):
+    d["stage"][0].update(expected_result_image="img edited")
+
+
+def _edit_n_method(d):
+    d["stage"][0].update(method="method-1 edited")
+
+
+def _edit_b_drops_a(d):
+    d["stage"][2].update(depends_on=[], supplies=[])
+
+
+def _hand_baseline(env: Env, *, record_seq: int = 1, **overrides) -> PlanReview:
+    """A whole-plan pass bound to the plan as it stands, with the pair bindings both
+    real writers record, seeded directly into the state."""
+    doc = env.doc()
+    review = PlanReview(
+        plan_path=str(env.plan), verdict="pass", reviewer="thinker", plan_sha256=_sha(env.plan),
+        reviewed_meta_digest=cli.plan_meta_digest(doc),
+        reviewed_stage_keys={str(k): v for k, v in cli.plan_stage_digests(doc).items()},
+        reviewed_pair_bindings={pid: gates.pair_binding_hash(doc, pid) for pid in review_pairs(doc)},
+        record_seq=record_seq, **overrides,
+    )
+
+    def seed(state):
+        state.plan_review = review
+        state.plan_review_passes[""] = review
+
+    env.mutate_state(seed)
+    return review
+
+
+def test_tr4_compose_over_all_current_pair_passes_writes_an_ordinary_whole_plan_pass(env, monkeypatch):
+    env.record_all()
+    monkeypatch.setattr(cli, "_record_first_thinker_verdict",
+                        lambda *a, **k: pytest.fail("compose must not record a first-thinker verdict"))
+    d = _compose(env)
+    assert d.ok, d.detail
+    state = env.state()
+    review = state.plan_review
+    assert review.reviewer == cli.TOPOLOGICAL_COMPOSITION_REVIEWER == "topological-composition"
+    assert review.verdict == "pass" and review.scope == ""
+    assert review.plan_path == str(env.plan)
+    assert review.plan_sha256 == _sha(env.plan)
+    assert state.plan_review_passes[""] == review
+    assert set(review.reviewed_pair_bindings) == set(review_pairs(env.doc()))
+    assert _blockers(env) == []
+
+
+def test_tr5_compose_refuses_a_missing_pair_and_names_it(env):
+    for pair in ("base-plan", "plan-3", "3-1"):
+        assert env.record(f"topo:{pair}", "pass").ok
+    d = _compose(env)
+    assert not d.ok
+    assert d.data["failing"] == {"3-2": "missing"}
+    assert "3-2 (missing)" in d.detail
+    assert env.state().plan_review is None
+
+
+def test_tr5_compose_refuses_a_moved_stage_key_naming_every_incident_pair(env):
+    env.record_all()
+    env.edit(lambda d: d["stage"][2].update(method="edited"))
+    d = _compose(env)
+    assert not d.ok
+    assert set(d.data["failing"]) == {"plan-3", "3-1", "3-2"}
+    assert all(pair in d.detail for pair in d.data["failing"])
+    assert env.state().plan_review is None
+
+
+def test_tr5_compose_refuses_a_moved_service_file_digest(make_env):
+    data = _tb8_data()
+    data["stage"][2]["effects"] = _effects("r1")
+    env = make_env(data)
+    env.record_all()
+    env.edit(lambda d: d["stage"][2].update(effects=_effects("r2")))
+    d = _compose(env)
+    assert not d.ok
+    assert d.data["failing"] == {"4-3": "stale:service_file", "3-1": "stale:base_file"}
+
+
+def test_tr5_compose_refuses_a_moved_service_interface_digest(env):
+    env.record_all()
+    env.edit(lambda d: d["stage"][1].update(output_artifacts=["new-artifact.py"]))
+    d = _compose(env)
+    assert not d.ok
+    assert d.data["failing"]["base-plan"] == "stale:service_interface"
+    assert all(s.startswith("stale:") for s in d.data["failing"].values())
+
+
+def test_tr5_compose_refuses_a_moved_meta_digest(env):
+    env.record_all()
+    env.edit(lambda d: d["meta"].update(goal="another goal"))
+    d = _compose(env)
+    assert not d.ok
+    assert set(d.data["failing"]) == set(review_pairs(env.doc()))
+
+
+def test_tr5_compose_refuses_a_revise_record(env):
+    for pair in review_pairs(env.doc()):
+        verdict = "revise" if pair == "3-1" else "pass"
+        assert env.record(f"topo:{pair}", verdict, concerns=["gap"] if verdict == "revise" else None).ok
+    d = _compose(env)
+    assert not d.ok
+    assert d.data["failing"] == {"3-1": "revise"}
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d["final_check"][0].update(command="false"),
+    lambda d: d["meta"].update(external_research=["https://example.invalid/doc"]),
+    lambda d: d["meta"].update(task_id="renamed"),
+    lambda d: d["meta"].update(delivery_worktree="/tmp/other-worktree"),
+], ids=["final_check", "external_research", "task_id", "delivery_worktree"])
+def test_tr5_plan_node_edits_fail_base_plan_and_plan_s_pairs_and_no_stage_stage_pair(env, mutate):
+    env.record_all()
+    env.edit(mutate)
+    d = _compose(env)
+    assert not d.ok
+    failing = d.data["failing"]
+    assert {"base-plan", "plan-3"} <= set(failing)
+    stage_stage = {pid: status for pid, status in failing.items() if pid not in ("base-plan", "plan-3")}
+    assert set(stage_stage.values()) <= {"stale:base_file"}
+    assert env.state().plan_review is None
+
+
+def test_tr5_final_check_edit_names_exactly_base_plan_and_plan_s_pairs(env):
+    env.record_all()
+    env.edit(lambda d: d["final_check"][0].update(command="false"))
+    d = _compose(env)
+    assert not d.ok
+    assert set(d.data["failing"]) == {"base-plan", "plan-3"}
+
+
+def test_tr7_walk_orders_base_before_service_and_pairs_levels_by_depth_of_base(make_env):
+    env = make_env(_diamond_data())
+    doc = env.doc()
+    assert set(review_pairs(doc)) == {"base-plan", "plan-4", "4-1", "4-2", "4-3", "2-1", "3-1"}
+    d = _walk(env)
+    assert d.ok, d.detail
+    levels = [[row["pair"] for row in level] for level in d.data["levels"]]
+    assert levels[0] == ["base-plan"]
+    assert levels[1] == ["plan-4"]
+    assert sorted(levels[2]) == ["4-1", "4-2", "4-3"]
+    assert sorted(levels[3]) == ["2-1", "3-1"]
+    rows = _rows(env)
+    depths = gates.pair_depths(doc)
+    for pid, row in rows.items():
+        assert row["level"] == depths[gates.split_pair(pid)[0]]
+        for prereq in gates.pair_prereqs(doc, pid):
+            assert rows[prereq]["level"] < row["level"], (pid, prereq)
+    assert rows["2-1"]["level"] > rows["4-2"]["level"]
+
+
+def test_tr7_walk_ready_progression_is_advisory_and_names_waiting_prerequisites(make_env):
+    env = make_env(_diamond_data())
+
+    def ready() -> set[str]:
+        return {pid for pid, row in _rows(env).items()
+                if row["ready"] and row["status"] not in gates._PAIR_SATISFIED}
+
+    assert ready() == {"base-plan"}
+    assert env.record("topo:base-plan", "pass").ok
+    assert ready() == {"plan-4"}
+    assert env.record("topo:plan-4", "pass").ok
+    assert ready() == {"4-1", "4-2", "4-3"}
+    rows = _rows(env)
+    assert sorted(rows["2-1"]["waiting"]) == ["4-1", "4-2"]
+    assert sorted(rows["3-1"]["waiting"]) == ["4-1", "4-3"]
+    assert not rows["2-1"]["ready"] and not rows["3-1"]["ready"]
+
+    d = env.record("topo:2-1", "pass")
+    assert d.ok, d.detail
+    assert _rows(env)["2-1"]["status"] == "current"
+
+
+def test_tr7_walk_marks_stale_and_missing_pairs_and_emits_the_documented_json_keys(make_env):
+    env = make_env(_diamond_data())
+    for pair in review_pairs(env.doc()):
+        if pair != "3-1":
+            assert env.record(f"topo:{pair}", "pass").ok
+    env.edit(lambda d: d["stage"][1].update(method="edited"))
+    before = env.store.path(SID).read_bytes()
+    d = _walk(env)
+    assert env.store.path(SID).read_bytes() == before
+    assert set(d.data) == {"plan_path", "discharges", "levels"}
+    assert d.data["plan_path"] == str(env.plan)
+    assert json.loads(d.detail) == d.data
+    rows = _rows(env)
+    assert rows["3-1"]["status"] == "missing"
+    assert rows["4-2"]["status"] == "stale:service"
+    assert rows["2-1"]["status"] == "stale:base"
+    assert rows["base-plan"]["status"] == "current"
+    for row in rows.values():
+        assert set(row) == {"pair", "base", "service", "level", "status", "ready", "waiting",
+                            "spawn", "record"}
+    assert rows["base-plan"]["spawn"] is None and rows["base-plan"]["record"] is None
+    assert "--review-topo 3-1" in rows["3-1"]["spawn"]
+    assert str(env.plan) in rows["3-1"]["spawn"]
+    assert "--scope topo:3-1" in rows["3-1"]["record"]
+    assert f"--target {env.plan}" in rows["3-1"]["record"]
+
+
+def test_tr7_walk_text_format_lists_every_pair_by_level(env):
+    d = _walk(env, fmt="text")
+    assert d.ok
+    assert "level 0:" in d.detail
+    assert all(f"  {pair}: missing" in d.detail for pair in review_pairs(env.doc()))
+
+
+def test_tr8_round_release_and_delta_messages_name_the_topological_route(env):
+    message = gates._PLAN_REVIEW_ROUND_RELEASE_MESSAGE
+    assert "plan-review-topological.py" in message
+    assert "plan-review-compose" in message
+    d = _delta(env)
+    assert d.data["whole_plan"] is True
+    assert "plan-review-topological.py" in d.detail
+    assert "plan-review-compose" in d.detail
+
+
+def test_tr12_raw_only_depends_on_edge_is_a_pair_and_comes_from_the_plan_file_not_state_stages(env):
+    doc = env.doc()
+    assert "3-2" in review_pairs(doc)
+    stage_3 = next(s for s in doc.stages if s.index == 3)
+    assert stage_3.depends_on == [1]
+    env.mutate_state(lambda state: setattr(state, "stages", list(doc.stages)))
+    env.record_all()
+    env.edit(lambda d: d["stage"][1].update(method="edited"))
+    assert env.status("3-2") == "stale:service"
+    d = _compose(env)
+    assert not d.ok
+    assert d.data["failing"] == {"3-2": "stale:service"}
+    assert "3-2" in d.detail
+
+
+def test_tr17_target_computes_everything_from_the_target_path(env):
+    copy_path = env.tmp_path / "copy.toml"
+    copy_path.write_bytes(env.plan.read_bytes())
+    env.record_all()
+    assert all(row["status"] == "current" for row in _rows(env).values())
+    before = env.store.path(SID).read_bytes()
+    d = _walk(env, copy_path)
+    assert env.store.path(SID).read_bytes() == before
+    assert d.data["plan_path"] == str(copy_path)
+    assert all(row["status"] == "missing" for level in d.data["levels"] for row in level)
+    assert str(copy_path) in d.data["levels"][0][0]["spawn"]
+
+    refused = _compose(env, copy_path)
+    assert not refused.ok
+    assert str(copy_path) in refused.detail
+    assert set(refused.data["failing"]) == set(review_pairs(env.doc()))
+    assert set(refused.data["failing"].values()) == {"missing"}
+
+    for pair in review_pairs(env.doc(copy_path)):
+        assert env.record(f"topo:{pair}", "pass", target=copy_path).ok
+    assert all(row["status"] == "current" for row in _rows(env, copy_path).values())
+    assert all(row["status"] == "missing" for row in _rows(env).values())
+    d = _compose(env, copy_path)
+    assert d.ok, d.detail
+    assert env.state().plan_review.plan_path == str(copy_path)
+
+
+def test_tr17_target_digests_come_from_the_target_not_the_session_plan(env):
+    copy_path = env.tmp_path / "copy.toml"
+    copy_path.write_bytes(env.plan.read_bytes())
+    env.edit(lambda d: d["stage"][0].update(method="the session plan moved on"))
+    for pair in review_pairs(env.doc(copy_path)):
+        assert env.record(f"topo:{pair}", "pass", target=copy_path).ok
+    d = _compose(env, copy_path)
+    assert d.ok, d.detail
+    review = env.state().plan_review
+    assert review.plan_sha256 == _sha(copy_path) != _sha(env.plan)
+    assert review.reviewed_meta_digest == cli.plan_meta_digest(env.doc(copy_path))
+
+
+def _record_pairs(env: Env, *, skip: tuple[str, ...] = ()) -> None:
+    for pair in review_pairs(env.doc()):
+        if pair not in skip:
+            assert env.record(f"topo:{pair}", "pass").ok, pair
+
+
+def _bounded_env(make_env, *, skip: tuple[str, ...] = ("plan-4",)) -> Env:
+    """The four-stage fixture with every pair but `skip` recorded current against the
+    pre-edit plan and a whole-plan baseline carrying one binding hash per pair."""
+    env = make_env(_bounded_data())
+    _record_pairs(env, skip=skip)
+    _hand_baseline(env)
+    return env
+
+
+def test_tr13_scoped_discharge_needs_every_pair_of_w_current_with_no_stage_scoped_record(env):
+    _record_pairs(env)
+    assert _compose(env).ok
+    env.edit(lambda d: d["stage"][2].update(method="edited"))
+    state = env.state()
+    assert state.plan_stage_reviews == {}
+    assert _w(env) == ["plan-3", "3-1", "3-2"]
+    blockers = _blockers(env)
+    assert blockers and not any("content changed" in b for b in blockers)
+    assert all(any(pair in b for b in blockers) for pair in ("plan-3", "3-1", "3-2"))
+
+    assert env.record("topo:3-1", "pass").ok
+    assert _blockers(env)
+    assert env.record("topo:plan-3", "pass").ok
+    blockers = _blockers(env)
+    assert blockers and any("3-2" in b for b in blockers)
+    assert not any("3-1" in b or "plan-3" in b for b in blockers if "review pair" in b)
+
+    assert env.record("topo:3-2", "pass").ok
+    assert _blockers(env) == []
+
+
+def test_tr13_a_never_recorded_incident_pair_is_in_w_and_blocks_the_discharge(make_env):
+    env = make_env()
+    _record_pairs(env, skip=("3-2",))
+    _hand_baseline(env)
+    env.edit(lambda d: d["stage"][2].update(method="edited"))
+    assert env.status("3-2") == "missing"
+    assert "3-2" in _w(env)
+    assert env.record("topo:plan-3", "pass").ok
+    assert env.record("topo:3-1", "pass").ok
+    blockers = _blockers(env)
+    assert any("3-2 is missing" in b for b in blockers)
+    assert env.record("topo:3-2", "pass").ok
+    assert _blockers(env) == []
+
+
+def test_tr13_bounded_w_is_exactly_the_stale_neighbourhood_of_the_edited_stage(make_env):
+    env = _bounded_env(make_env)
+    env.edit(_edit_n_interface)
+    assert env.status("3-2") == "stale:service_file"
+    assert _w(env) == ["2-1", "3-2"]
+    assert env.state().plan_stage_reviews == {}
+
+    assert env.record("topo:2-1", "pass").ok
+    blockers = _blockers(env)
+    assert blockers and any("3-2" in b for b in blockers)
+
+    assert env.record("topo:3-2", "pass").ok
+    assert env.status("plan-4") == "missing"
+    assert _blockers(env) == []
+
+
+def test_tr13_new_pair_outside_the_baseline_is_in_w_and_blocks_until_recorded(make_env):
+    env = _bounded_env(make_env, skip=())
+    assert "plan-2" not in review_pairs(env.doc())
+    env.edit(_edit_b_drops_a)
+    assert "plan-2" in review_pairs(env.doc())
+    assert "plan-2" in _w(env)
+    assert env.record("topo:plan-3", "pass").ok
+    blockers = _blockers(env)
+    assert any("plan-2" in b for b in blockers)
+    assert env.record("topo:plan-2", "pass").ok
+    assert _blockers(env) == []
+
+
+@pytest.mark.parametrize("via", ["cli", "compose"])
+def test_tr13_cli_recorded_baseline_covers_exactly_the_review_pairs(make_env, via):
+    env = make_env(_bounded_data())
+    _record_pairs(env)
+    if via == "cli":
+        assert env.record("", "pass").ok
+    else:
+        assert _compose(env).ok
+    before = review_pairs(env.doc())
+    recorded = env.state().plan_review.reviewed_pair_bindings
+    assert set(recorded) == set(before) and len(recorded) == len(before)
+    env.edit(_edit_b_drops_a)
+    assert "plan-2" in _w(env)
+
+
+def test_tr13_legacy_baseline_without_pair_bindings_makes_w_every_pair(make_env):
+    env = make_env(_bounded_data())
+    _record_pairs(env)
+    assert _compose(env).ok
+    path = env.store.path(SID)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    for record in (raw["plan_review"], raw["plan_review_passes"][""]):
+        record.pop("reviewed_pair_bindings")
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert env.state().plan_review.reviewed_pair_bindings in (None, {})
+    env.edit(_edit_b_drops_a)
+    pairs = list(review_pairs(env.doc()))
+    assert _w(env) == pairs
+    assert _blockers(env)
+    unrecorded = [p for p in pairs if env.status(p) != "current"]
+    assert unrecorded and len(unrecorded) < len(pairs)
+    for pair in unrecorded[:-1]:
+        assert env.record(f"topo:{pair}", "pass").ok
+        assert _blockers(env)
+    assert env.record(f"topo:{unrecorded[-1]}", "pass").ok
+    assert _blockers(env) == []
+
+
+def test_tr13_final_check_only_edit_blocks_on_the_plan_node_pairs(env):
+    _record_pairs(env)
+    assert _compose(env).ok
+    env.edit(lambda d: d["final_check"][0].update(command="false"))
+    state = env.state()
+    assert state.plan_stage_reviews == {}
+    meta_moved, moved = changed_parts(env.doc(), gates._plan_review_baseline(state.plan_review))
+    assert not meta_moved and not moved
+    assert env.status("base-plan").startswith("stale:") and env.status("plan-3").startswith("stale:")
+    assert env.status("3-1") == env.status("3-2") == "current"
+    assert _w(env) == ["base-plan", "plan-3"]
+    blockers = _blockers(env)
+    assert all(any(pair in b for b in blockers) for pair in ("base-plan", "plan-3"))
+    assert env.record("topo:base-plan", "pass").ok
+    assert any("plan-3" in b for b in _blockers(env))
+    assert env.record("topo:plan-3", "pass").ok
+    assert _blockers(env) == []
+
+
+def test_tr14_delta_names_exactly_w_for_an_interface_edit(make_env):
+    env = _bounded_env(make_env)
+    env.edit(_edit_n_interface)
+    d = _delta(env)
+    assert d.data["pairs"] == ["2-1", "3-2"]
+    assert "plan-review-topological.py --pairs 2-1,3-2" in d.detail
+
+
+def test_tr14_delta_names_only_the_incident_pair_for_a_method_only_edit(make_env):
+    env = _bounded_env(make_env)
+    env.edit(_edit_n_method)
+    assert env.status("3-2") == "current"
+    d = _delta(env)
+    assert d.data["pairs"] == ["2-1"]
+    assert "plan-review-topological.py --pairs 2-1" in d.detail
+
+
+def test_tr14_delta_on_the_new_pair_fixture_lists_the_new_plan_pair(make_env):
+    env = _bounded_env(make_env, skip=())
+    env.edit(_edit_b_drops_a)
+    assert "plan-2" in _delta(env).data["pairs"]
+
+
+def test_tr19_walk_discharges_lists_only_stages_clear_through_the_pairs(env):
+    _record_pairs(env)
+    assert _compose(env).ok
+    env.edit(lambda d: (d["stage"][0].update(method="edited"), d["stage"][1].update(method="edited")))
+    assert _w(env) == ["3-1", "3-2"]
+    assert _walk(env).data["discharges"] == []
+
+    assert env.record("topo:3-1", "pass").ok
+    assert _walk(env).data["discharges"] == []
+
+    env.record("stage:1", "pass")
+    assert len(env.state().plan_stage_reviews) == 1
+    assert env.record("topo:3-2", "pass").ok
+    assert _blockers(env) == []
+    assert _walk(env).data["discharges"] == ["stage:2"]
+
+    env.record("stage:2", "pass")
+    assert len(env.state().plan_stage_reviews) == 2
+    assert _walk(env).data["discharges"] == []
+
+
+def test_tr20_replan_target_composes_a_pass_bound_to_the_replacement_plan(env):
+    plan_b = env.tmp_path / "plan-b.toml"
+    data_b = copy.deepcopy(env._data)
+    data_b["stage"][0]["method"] = "replacement method"
+    _write(plan_b, data_b)
+    for pair in review_pairs(env.doc(plan_b)):
+        assert env.record(f"topo:{pair}", "pass", target=plan_b).ok, pair
+    d = _compose(env, plan_b)
+    assert d.ok, d.detail
+    review = env.state().plan_review
+    assert review.plan_path == str(plan_b)
+    assert review.plan_sha256 == _sha(plan_b)
+    assert review.reviewed_meta_digest == cli.plan_meta_digest(env.doc(plan_b))
+    assert _blockers(env, plan_b) == []
+    assert _blockers(env, env.plan)
+
+
+def _override_pair(env: Env, pair: str) -> None:
+    assert env.record(f"topo:{pair}", "revise", concerns=["open question"]).ok
+    assert env.record(f"topo:{pair}", "override", reviewer="fedor", note="accepted as is").ok
+
+
+def test_tr22_override_counts_for_readiness_and_compose_names_it_in_the_note(make_env):
+    env = make_env(_diamond_data())
+    for pair in ("base-plan", "plan-4", "4-2", "4-3"):
+        assert env.record(f"topo:{pair}", "pass").ok
+    _override_pair(env, "4-1")
+    rows = _rows(env)
+    assert rows["4-1"]["status"] == "override"
+    assert rows["4-1"]["spawn"] is None and rows["4-1"]["record"] is None
+    assert rows["2-1"]["ready"] and rows["2-1"]["waiting"] == []
+    assert rows["3-1"]["ready"] and rows["3-1"]["waiting"] == []
+
+    assert env.record("topo:2-1", "pass").ok
+    assert env.record("topo:3-1", "pass").ok
+    d = _compose(env)
+    assert d.ok, d.detail
+    review = env.state().plan_review
+    assert "4-1" in review.note
+    assert d.data["overridden"] == ["4-1"]
+    assert _blockers(env) == []
+
+    env.edit(lambda d: d["stage"][0].update(method="edited"))
+    refused = _compose(env)
+    assert not refused.ok
+    assert refused.data["failing"]["4-1"].startswith("stale:")
+    assert "4-1" in refused.detail
+
+
+def _stale_and_revise_round(env: Env) -> None:
+    """P_OLD = {3-1 stale, plan-3 revise}: the earlier round's records, left behind by
+    a later edit and a later revise."""
+    assert env.record("topo:base-plan", "pass").ok
+    assert env.record("topo:plan-3", "revise", concerns=["gap"]).ok
+    assert env.record("topo:3-1", "pass").ok
+    assert env.record("topo:3-2", "pass").ok
+    env.edit(lambda d: d["stage"][0].update(method="edited in the earlier round"))
+    assert env.status("3-1").startswith("stale:")
+    assert env.status("plan-3") == "revise"
+
+
+def test_tr23_fresh_whole_plan_pass_leaves_w_empty_though_old_pair_records_stay_stale(env):
+    _stale_and_revise_round(env)
+    assert env.record("", "pass").ok
+    assert _w(env) == []
+    assert _blockers(env) == []
+    assert env.status("3-1").startswith("stale:") and env.status("plan-3") == "revise"
+
+
+def test_tr24_fresh_whole_plan_override_without_a_digest_leaves_w_empty(env):
+    _stale_and_revise_round(env)
+    d = env.record("", "override", reviewer="thinker", note="round budget spent", digest=None)
+    assert d.ok, d.detail
+    assert env.state().plan_review.verdict == "override"
+    assert _w(env) == []
+    assert _blockers(env) == []
+
+
+def test_tr25_missing_plan_node_pair_in_the_baseline_still_blocks_on_its_own_status(make_env):
+    env = make_env(_bounded_data())
+    _record_pairs(env, skip=("plan-4",))
+    assert env.record("", "pass").ok
+    assert "plan-4" in env.state().plan_review.reviewed_pair_bindings
+    env.edit(lambda d: d["final_check"][0].update(command="false"))
+    assert env.state().plan_stage_reviews == {}
+    blockers = _blockers(env)
+    assert blockers
+    assert any("plan-4 is missing" in b for b in blockers)
+
+
+def test_tr26_a_whole_plan_revise_baseline_blocks_even_when_w_is_empty(env):
+    _record_pairs(env)
+    d = env.record("", "revise", concerns=["the plan needs more work"])
+    assert not d.ok
+    assert env.state().plan_review.verdict == "revise"
+    assert _w(env) == []
+    assert _blockers(env)
+
+
+def _unrelated_edit_after_a_fresh_baseline(env: Env, record_baseline) -> None:
+    _stale_and_revise_round(env)
+    record_baseline()
+    assert _w(env) == []
+    env.edit(lambda d: d["stage"][1].update(method="edited after the fresh baseline"))
+    assert _w(env) == ["3-2"]
+    blockers = _blockers(env)
+    assert blockers and any("3-2" in b for b in blockers)
+    assert not any("3-1" in b or "plan-3" in b for b in blockers)
+    assert env.record("topo:3-2", "pass").ok
+    assert _blockers(env) == []
+
+
+def test_tr27_no_recurring_block_on_an_unrelated_edit_after_a_fresh_pass(env):
+    _unrelated_edit_after_a_fresh_baseline(env, lambda: env.record("", "pass"))
+
+
+def test_tr28_no_recurring_block_on_an_unrelated_edit_after_a_fresh_override(env):
+    _unrelated_edit_after_a_fresh_baseline(
+        env, lambda: env.record("", "override", reviewer="thinker", note="round budget spent", digest=None))

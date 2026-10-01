@@ -49,7 +49,10 @@ SCHEMA_VERSION = 42  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # alongside plan_review/plan_stage_reviews that binds to the
                      # seven plan.pair_binding digests instead of whole-plan
                      # content and can discharge stage:<n> obligations via scoped
-                     # discharge (see PlanPairReview's docstring)
+                     # discharge (see PlanPairReview's docstring); PlanReview gains
+                     # reviewed_pair_bindings (pair id -> sha256 of its seven-digest
+                     # binding) and record_seq, PlanPairReview gains record_seq, both
+                     # stamped from SessionState.next_record_seq
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -484,6 +487,12 @@ class PlanReview:
     remedy_tags: list[str] = field(default_factory=list)
     in_scope_concern_ids: list[str] = field(default_factory=list)
     out_of_scope_concern_ids: list[str] = field(default_factory=list)
+    # Schema 42: pair id -> sha256 of that pair's seven-digest pair_binding at record
+    # time, for EVERY pair of the reviewed plan, whatever the verdict. None on a
+    # record written before the field existed (gates read that as "every pair is
+    # walk-stale"). `record_seq` totally orders review records of every kind.
+    reviewed_pair_bindings: "dict[str, str] | None" = None
+    record_seq: int = 0
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "PlanReview | None":
@@ -505,6 +514,10 @@ class PlanReview:
             remedy_tags=list(d.get("remedy_tags", [])),
             in_scope_concern_ids=list(d.get("in_scope_concern_ids", [])),
             out_of_scope_concern_ids=list(d.get("out_of_scope_concern_ids", [])),
+            reviewed_pair_bindings=(
+                dict(rpb) if isinstance(rpb := d.get("reviewed_pair_bindings"), dict) else None
+            ),
+            record_seq=d.get("record_seq") or 0,
         )
 
 
@@ -585,6 +598,7 @@ class PlanPairReview:
     service_key: str = ""
     service_interface_digest: str = ""
     service_file_digest: str = ""
+    record_seq: int = 0
 
     def binding(self) -> dict[str, str]:
         """The stored digests, in the shape plan.pair_binding returns."""
@@ -604,6 +618,7 @@ class PlanPairReview:
             note=d.get("note", ""),
             plan_path=d.get("plan_path", ""),
             plan_sha256=d.get("plan_sha256", ""),
+            record_seq=d.get("record_seq") or 0,
             **{key: d.get(key, "") for key in PAIR_BINDING_KEYS},
         )
 
@@ -1628,6 +1643,10 @@ class SessionState:
     # exact binding). Empty on legacy states (absent key -> dataclass default via
     # from_dict); a legacy `plan_topo_reviews` key is dropped at load.
     plan_pair_reviews: dict[str, "PlanPairReview"] = field(default_factory=dict)
+    # Monotonic counter stamped (then incremented) into `record_seq` at every
+    # review-record write -- whole-plan, composed or per-pair -- so records carry a
+    # total order that does not depend on wall-clock time.
+    next_record_seq: int = 0
     # Recorded risk acceptances discharging `revise` concerns (schema 28) — see
     # RiskAcceptance's docstring for the binding. Empty on legacy pre-schema-28
     # states (absent key -> dataclass default via from_dict), which is what makes

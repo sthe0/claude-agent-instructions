@@ -61,6 +61,7 @@ from .plan import (
     plan_meta_element_key,
     plan_meta_element_keys,
     plan_stage_digests,
+    review_pairs,
     stage_element_keys,
     stage_part,
     stage_question_key,
@@ -4303,7 +4304,7 @@ def _cmd_plan_review_pair(
     review = PlanPairReview(
         pair=pair, base=base, service=service, verdict=verdict, reviewer=reviewer,
         concerns=concerns, note=note, plan_path=target, plan_sha256=attested,
-        **pair_binding(doc, pair),
+        record_seq=_next_record_seq(state), **pair_binding(doc, pair),
     )
     ledger = []
     if verdict == gates._PLAN_REVIEW_REVISE:
@@ -4324,6 +4325,38 @@ def _cmd_plan_review_pair(
         f"pair status: {status}",
         data={"pair": pair, "pair_status": status, "ledger_lines": len(ledger)},
     )
+
+
+TOPOLOGICAL_COMPOSITION_REVIEWER = "topological-composition"
+
+
+def _next_record_seq(state) -> int:
+    state.next_record_seq += 1
+    return state.next_record_seq
+
+
+def _stamp_whole_plan_baseline(state, review: PlanReview, doc) -> None:
+    """Give a whole-plan record its place in the review-record order and, when its
+    plan loads, the per-pair binding hashes the walk-stale set is later measured
+    against. A plan whose pairs cannot be enumerated leaves the bindings unset,
+    which the gate reads as every pair being stale."""
+    review.record_seq = _next_record_seq(state)
+    if doc is None:
+        return
+    try:
+        review.reviewed_pair_bindings = gates.pair_baseline_bindings(doc)
+    except PlanError:
+        review.reviewed_pair_bindings = None
+
+
+def _count_plan_review_round(state: SessionState, target: str) -> None:
+    """The post-approval round count of a whole-plan review (see the comment in
+    cmd_plan_review): once per plan VERSION, never for an unreadable plan."""
+    if state.approval is not None and state.approval.passed:
+        counted = _plan_file_sha256(target)
+        if counted and counted != state.plan_review_counted_digest:
+            state.plan_review_rounds += 1
+            state.plan_review_counted_digest = counted
 
 
 def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -4503,6 +4536,8 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     review.in_scope_concern_ids, review.out_of_scope_concern_ids = gates.classify_concerns(
         scope, plan_review_concern_ids(review), review.concerns
     )
+    if not scope:
+        _stamp_whole_plan_baseline(state, review, doc)
     evidenced = is_post_pass_revise and gates._plan_review_regression_evidence(prior_pass, review, doc)
     if is_post_pass_revise and not evidenced:
         # The prior PASS stays authoritative — plan_review_passes is never
@@ -4610,11 +4645,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     #
     # Placed BEFORE the blockers call so the verdict that exhausts the budget surfaces
     # the release in its own Directive, rather than one round later.
-    if state.approval is not None and state.approval.passed:
-        counted = _plan_file_sha256(target)
-        if counted and counted != state.plan_review_counted_digest:
-            state.plan_review_rounds += 1
-            state.plan_review_counted_digest = counted
+    _count_plan_review_round(state, target)
     blockers = gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)
     state.log("plan_review", target=target, verdict=args.verdict, scope=scope,
@@ -4786,11 +4817,14 @@ def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = No
         return Directive(False, state.node, "noop", f"{target} failed to load: {e}")
     whole_plan_needed, stage_indices = gates.plan_review_delta(state, doc)
     stages = sorted(stage_indices)
+    pairs = gates.pairs_hint_for(state, doc, target)
     if whole_plan_needed:
         md = render_plan_md(doc)
         detail = (
             f"whole-plan review needed for {target}: its meta/order changed since "
-            "the last whole-plan review, or none has been recorded yet"
+            "the last whole-plan review, or none has been recorded yet; the topological "
+            "route reviews it pair by pair (plan-review-topological.py, then "
+            "plan-review-compose)"
         )
     elif stages:
         md = render_stages_md(doc, stages)
@@ -4798,9 +4832,117 @@ def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = No
     else:
         md = ""
         detail = f"no review gap: every part of {target} is covered by its current review"
+    if pairs:
+        detail += f"; walk-stale pairs — run: plan-review-topological.py --pairs {','.join(pairs)}"
     return Directive(
         True, state.node, "inspect", detail,
-        data={"markdown": md, "whole_plan": whole_plan_needed, "stages": stages},
+        data={"markdown": md, "whole_plan": whole_plan_needed, "stages": stages, "pairs": pairs},
+    )
+
+
+def _walk_target(args, state: SessionState) -> "str | None":
+    return getattr(args, "target", None) or state.plan_path
+
+
+def cmd_plan_review_walk(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Read-only: every review pair of the plan in dependency order (base before
+    service), with its status, advisory readiness and the commands that spawn its
+    reviewer and record its verdict. `--target` walks a plan file other than the
+    session's own, computing every digest and depth from it. Writes nothing."""
+    state = _require(store, args.session)
+    target = _walk_target(args, state)
+    if not target:
+        return Directive(False, state.node, "noop", "no plan to walk: submit a plan first, or pass --target <plan.toml>")
+    try:
+        doc = load_plan(target)
+        rows = gates.pair_walk(state, doc, target)
+    except (OSError, PlanError) as e:
+        return Directive(False, state.node, "noop", f"{target} cannot be walked: {e}")
+    quoted = shlex.quote(target)
+    levels: list[list[dict]] = []
+    for row in rows:
+        while len(levels) <= row["level"]:
+            levels.append([])
+        open_pair = row["status"] not in gates._PAIR_SATISFIED
+        levels[row["level"]].append({
+            **row,
+            "spawn": (f"spawn-specialist.py --kind thinker --plan-brief --review-topo {row['pair']} "
+                      f"--plan {quoted}") if open_pair else None,
+            "record": (f"agentctl plan-review --session {state.session_id} --target {quoted} "
+                       f"--scope topo:{row['pair']} --reviewer thinker --verdict <pass|revise> "
+                       "--plan-digest <sha256 of the plan bytes read>") if open_pair else None,
+        })
+    walk = {
+        "plan_path": target,
+        "discharges": gates.pair_discharged_stages(state, doc, target),
+        "levels": levels,
+    }
+    if getattr(args, "format", "text") == "json":
+        return Directive(True, state.node, "inspect", json.dumps(walk, indent=2), data=walk)
+    lines = [f"review pairs of {target} (base before service; readiness is advisory):"]
+    for depth, level in enumerate(levels):
+        lines.append(f"level {depth}:")
+        for row in level:
+            waiting = f" waiting on {','.join(row['waiting'])}" if row["waiting"] else ""
+            lines.append(f"  {row['pair']}: {row['status']}, {'ready' if row['ready'] else 'not ready'}{waiting}")
+    if walk["discharges"]:
+        lines.append("discharged by pairs alone: " + ", ".join(walk["discharges"]))
+    return Directive(True, state.node, "inspect", "\n".join(lines), data=walk)
+
+
+def cmd_plan_review_compose(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Compose the pair records into one ordinary whole-plan pass, written only when
+    EVERY pair of `plan.review_pairs` is current or override against `--target` (the
+    session's plan by default). Readiness is not consulted. The record is not a
+    thinker verdict, so it never reaches the order ledger and never counts as the
+    first-thinker pass the autonomy boundary requires."""
+    state = _require(store, args.session)
+    target = _walk_target(args, state)
+    if not target:
+        return Directive(False, state.node, "noop", "no plan to compose: submit a plan first, or pass --target <plan.toml>")
+    try:
+        doc, _, live = load_plan_with_digest(target)
+        pairs = review_pairs(doc)
+    except (OSError, PlanError) as e:
+        return Directive(False, state.node, "noop", f"{target} cannot be composed: {e}")
+    status = {pid: gates.pair_status(state, doc, target, pid) for pid in pairs}
+    failing = {pid: s for pid, s in status.items() if s not in gates._PAIR_SATISFIED}
+    if failing:
+        listing = ", ".join(f"{pid} ({s})" for pid, s in failing.items())
+        return Directive(
+            False, state.node, "plan_review",
+            f"compose refused for {target}: every review pair must be current or override; "
+            f"failing: {listing}",
+            data={"plan_path": target, "failing": failing},
+        )
+    overridden = [pid for pid, s in status.items() if s == "override"]
+    review = PlanReview(
+        plan_path=target, verdict=gates._PLAN_REVIEW_PASS, reviewer=TOPOLOGICAL_COMPOSITION_REVIEWER,
+        note=f"composed from {len(pairs)} pair review(s): {','.join(pairs)}; overridden: {','.join(overridden)}",
+        plan_sha256=live,
+        reviewed_meta_digest=plan_meta_digest(doc),
+        reviewed_stage_keys={str(k): v for k, v in plan_stage_digests(doc).items()},
+    )
+    _stamp_whole_plan_baseline(state, review, doc)
+    state.plan_review = review
+    state.plan_review_passes[""] = review
+    _count_plan_review_round(state, target)
+    blockers = gates.plan_review_blockers(state, target)
+    _log_gate(state, "plan_review", blockers, passed=not blockers)
+    state.log("plan_review_compose", target=target, pairs=list(pairs), overridden=overridden,
+              plan_sha256=live)
+    store.save(state)
+    if blockers:
+        return Directive(
+            False, state.node, "plan_review",
+            "composed pass recorded but does not clear the gate",
+            data={"blockers": blockers, "plan_path": target},
+        )
+    return Directive(
+        True, state.node, "continue",
+        f"composed whole-plan pass recorded for {target} from {len(pairs)} pair review(s); "
+        "the plan-review gate is now satisfied for this plan version",
+        data={"plan_path": target, "pairs": list(pairs), "overridden": overridden},
     )
 
 
@@ -9743,6 +9885,8 @@ COMMANDS = {
     "confirm-delivery": cmd_confirm_delivery,
     "plan-review": cmd_plan_review,
     "plan-review-delta": cmd_plan_review_delta,
+    "plan-review-walk": cmd_plan_review_walk,
+    "plan-review-compose": cmd_plan_review_compose,
     "risk-accept": cmd_risk_accept,
     "stage-review": cmd_stage_review,
     "code-review": cmd_code_review,
@@ -9815,7 +9959,7 @@ _SESSION_COMMANDS = (
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
     "plan-render", "plan-grants", "plan-resources", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
-    "plan-review-delta", "risk-accept",
+    "plan-review-delta", "plan-review-walk", "plan-review-compose", "risk-accept",
     "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
     "record-result", "declare",
@@ -9883,7 +10027,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "claim / question / order-element id"),
     ("claim", ("ledger-dispose",), "id of the grounding claim, not its text"),
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
-    ("target", ("question-raise", "plan-review"), "plan element address or plan file path"),
+    ("target", ("question-raise", "plan-review", "plan-review-walk", "plan-review-compose"),
+     "plan element address or plan file path"),
     ("control", ("question-raise",),
      "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
      "grammar-bound name, never the prose --control of record-result/close"),
@@ -10319,6 +10464,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--plan", default=None,
                     help="plan file to diff against recorded reviews (defaults to the "
                          "session's current plan_path)")
+    sp = add("plan-review-walk"); sp.add_argument("--session", required=True)
+    sp.add_argument("--target", default=None,
+                    help="plan file to walk (defaults to the session's current plan_path); "
+                         "every digest, pair and depth is computed from it")
+    sp.add_argument("--format", choices=("text", "json"), default="text",
+                    help="'json' emits the walk as {plan_path, discharges, levels}")
+    sp = add("plan-review-compose"); sp.add_argument("--session", required=True)
+    sp.add_argument("--target", default=None,
+                    help="plan file to compose a whole-plan pass for (defaults to the "
+                         "session's current plan_path; pass the NEW plan at replan time)")
     sp = add("risk-accept"); sp.add_argument("--session", required=True)
     sp.add_argument("--scope", default=None,
                     help="'' or 'stage:<n>' — the review scope the accepted concern was "
