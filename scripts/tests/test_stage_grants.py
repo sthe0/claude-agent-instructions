@@ -1084,6 +1084,8 @@ SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
     "lib/dispatch_witness_snapshot.py": "mention",
     "lib/hook_wiring.py": "writer",
     "lib/host_llm.py": "reader",
+    "lib/instruction-sandbox-canon-snapshot.sh": "reader",
+    "lib/instruction-sandbox-project-check.sh": "reader",
     "lib/widening_targets.py": "reader",
     "lint-settings-base.py": "mention",
     "migrate-to-isolated.sh": "mention",
