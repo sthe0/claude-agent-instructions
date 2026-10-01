@@ -24,6 +24,7 @@ from agentctl.plan import (
     load_plan,
     pair_binding,
     review_pairs,
+    split_pair_id,
 )
 from agentctl.render import render_stage_brief, render_stage_interface
 from agentctl.state import (
@@ -122,6 +123,7 @@ class Env:
         self.store = store
         self.plan = _write(tmp_path / "plan.toml", data)
         self.ledger = tmp_path / "ledger.jsonl"
+        self.ledger.unlink(missing_ok=True)
         self.store.save(SessionState(
             session_id=SID, task_id="t", weight_class="SUBSTANTIVE", plan_verified=True,
             plan_path=str(self.plan),
@@ -791,7 +793,7 @@ def test_tr7_walk_orders_base_before_service_with_advisory_readiness(make_env):
     rows = _rows(env)
     depths = gates.pair_depths(doc)
     for pid, row in rows.items():
-        assert row["level"] == depths[gates.split_pair(pid)[0]]
+        assert row["level"] == depths[split_pair_id(pid)[0]]
         for prereq in gates.pair_prereqs(doc, pid):
             assert rows[prereq]["level"] < row["level"], (pid, prereq)
     assert rows["2-1"]["level"] > rows["4-2"]["level"]
@@ -801,7 +803,7 @@ def test_tr7_walk_orders_base_before_service_with_advisory_readiness(make_env):
 
     def ready() -> set[str]:
         return {pid for pid, row in _rows(env).items()
-                if row["ready"] and row["status"] not in gates._PAIR_SATISFIED}
+                if row["ready"] and row["status"] not in gates.PAIR_SATISFIED}
 
     assert ready() == {"base-plan"}
     assert env.record("topo:base-plan", "pass").ok

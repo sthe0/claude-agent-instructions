@@ -39,6 +39,7 @@ import os
 import re
 import shlex
 from pathlib import Path
+from typing import NamedTuple
 
 from lib import config_root
 from lib import hook_wiring
@@ -57,6 +58,7 @@ from .plan import (
     pair_binding,
     plan_has_any_grants,
     review_pairs,
+    split_pair_id,
     stage_question_key,
 )
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
@@ -702,7 +704,7 @@ def pair_status(state: SessionState, doc, plan_path: str, pair: str) -> str:
     return "current" if record.verdict == _PLAN_REVIEW_PASS else record.verdict
 
 
-_PAIR_SATISFIED = ("current", "override")
+PAIR_SATISFIED = ("current", "override")
 
 
 def pair_binding_hash(doc, pair: str) -> str:
@@ -717,19 +719,12 @@ def pair_baseline_bindings(doc) -> "dict[str, str]":
     return {pid: pair_binding_hash(doc, pid) for pid in review_pairs(doc)}
 
 
-def split_pair(pair: str) -> "tuple[int | str, int | str]":
-    """`(b, s)` of a pair id already known to be in `review_pairs`, with no
-    re-validation (`plan.parse_pair` re-enumerates every pair per call)."""
-    b, s = pair.split("-", 1)
-    return (int(b) if b.isdigit() else b, int(s) if s.isdigit() else s)
-
-
 def pair_depths(doc) -> "dict[int | str, int]":
     """Depth of every node in the graph whose edges are the review pairs (b -> s):
-    a node no pair serves is a root at 0, any other is 1 + the deepest base that
-    relies on it being served by. Raises PlanError naming the cycle when the
+    a node no pair serves is a root at 0, any other is 1 + the depth of the
+    deepest base that relies on it. Raises PlanError naming the cycle when the
     graph has one."""
-    edges = [split_pair(pid) for pid in review_pairs(doc)]
+    edges = [split_pair_id(pid) for pid in review_pairs(doc)]
     bases_of: "dict[int | str, list[int | str]]" = {}
     for b, s in edges:
         bases_of.setdefault(s, []).append(b)
@@ -754,16 +749,23 @@ def pair_depths(doc) -> "dict[int | str, int]":
     return depths
 
 
-def pair_prereqs(doc, pair: str, depths: "dict[int | str, int] | None" = None) -> "list[str]":
+def pair_prereqs(
+    doc, pair: str, depths: "dict[int | str, int] | None" = None,
+    pairs: "tuple[str, ...] | None" = None,
+) -> "list[str]":
     """Every shallower pair whose service is one of `pair`'s two endpoints, in
     `review_pairs` order — the pairs that settle what `pair`'s briefs are
-    relied on for."""
+    relied on for. A caller walking every pair passes `depths` and `pairs` so
+    neither is recomputed per call."""
     depths = depths if depths is not None else pair_depths(doc)
-    b, s = split_pair(pair)
-    return [
-        pid for pid in review_pairs(doc)
-        if split_pair(pid)[1] in (b, s) and depths[split_pair(pid)[0]] < depths[b]
-    ]
+    pairs = pairs if pairs is not None else review_pairs(doc)
+    b, s = split_pair_id(pair)
+    prereqs = []
+    for pid in pairs:
+        other_b, other_s = split_pair_id(pid)
+        if other_s in (b, s) and depths[other_b] < depths[b]:
+            prereqs.append(pid)
+    return prereqs
 
 
 def pair_walk(state: SessionState, doc, plan_path: str) -> "list[dict]":
@@ -775,8 +777,8 @@ def pair_walk(state: SessionState, doc, plan_path: str) -> "list[dict]":
     status = {pid: pair_status(state, doc, plan_path, pid) for pid in pairs}
     rows = []
     for pid in pairs:
-        b, s = split_pair(pid)
-        waiting = [p for p in pair_prereqs(doc, pid, depths) if status[p] not in _PAIR_SATISFIED]
+        b, s = split_pair_id(pid)
+        waiting = [p for p in pair_prereqs(doc, pid, depths, pairs) if status[p] not in PAIR_SATISFIED]
         rows.append({
             "pair": pid, "base": str(b), "service": str(s), "level": depths[b],
             "status": status[pid], "ready": not waiting, "waiting": waiting,
@@ -797,17 +799,17 @@ def walk_stale_pairs(state: SessionState, doc, plan_path: str, baseline) -> "lis
     is a revise written after the baseline, and pairs the baseline never knew of.
     A baseline with no recorded bindings makes W every pair."""
     pairs = review_pairs(doc)
-    recorded = getattr(baseline, "reviewed_pair_bindings", None)
-    if baseline is None or not recorded:
+    if baseline is None or not baseline.reviewed_pair_bindings:
         return list(pairs)
+    recorded = baseline.reviewed_pair_bindings
     _, moved = changed_parts(doc, _plan_review_baseline(baseline))
     stale = []
     for pid in pairs:
-        b, s = split_pair(pid)
+        b, s = split_pair_id(pid)
         if b in moved or s in moved or pid not in recorded:
             stale.append(pid)
             continue
-        if pair_status(state, doc, plan_path, pid) in _PAIR_SATISFIED:
+        if pair_status(state, doc, plan_path, pid) in PAIR_SATISFIED:
             continue
         record = state.plan_pair_reviews.get(pid)
         revised_since = (
@@ -911,6 +913,40 @@ def _remedy_tag_for_concern(concern: str) -> str:
     return m.group(1) if m else ""
 
 
+class _PairRoute(NamedTuple):
+    walk_stale: "list[str]"
+    status: "dict[str, str]"
+    discharged: bool
+    moved_stages: "frozenset | set"
+    error: str = ""
+
+
+def _pair_route(state: SessionState, doc, plan_path: "str | None") -> "_PairRoute | None":
+    """The pair-driven coverage route's one decision: the walk-stale set W, each
+    member's `pair_status`, whether the all-or-nothing rule holds (every member
+    current or override) and the stages that moved since the whole-plan baseline.
+    None when the route does not apply — no baseline, no pair record for
+    `plan_path`, a baseline that does not bind it, a moved meta/order or a
+    baseline verdict that still blocks; `error` is set (and nothing discharged)
+    when the pairs cannot be enumerated."""
+    whole = state.plan_review
+    if whole is None or not has_pair_records_for(state, plan_path):
+        return None
+    if whole.plan_path != plan_path and not _binds_across_path_change(whole, plan_path):
+        return None
+    meta_moved, moved_stages = changed_parts(doc, _plan_review_baseline(whole))
+    if meta_moved or _plan_review_verdict_blockers(whole, state=state, doc=doc):
+        return None
+    try:
+        walk_stale = walk_stale_pairs(state, doc, plan_path, whole)
+    except PlanError as exc:
+        return _PairRoute([], {}, False, moved_stages, str(exc))
+    status = {pid: pair_status(state, doc, plan_path, pid) for pid in walk_stale}
+    return _PairRoute(
+        walk_stale, status, all(s in PAIR_SATISFIED for s in status.values()), moved_stages,
+    )
+
+
 def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -> list[str]:
     """The whole-plan review covers everything it passed on the day its recorded
     keys still match; a moved stage owes its own stage-scoped pass at the CURRENT
@@ -950,25 +986,23 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
             if blockers:
                 return blockers
         return []
-    try:
-        walk_stale = walk_stale_pairs(state, doc, target_plan, whole)
-    except PlanError as exc:
-        return [f"review pairs cannot be enumerated for this plan: {exc}"]
-    status = {pid: pair_status(state, doc, target_plan, pid) for pid in walk_stale}
-    discharged_by_pairs = all(status[pid] in _PAIR_SATISFIED for pid in walk_stale)
-    direct = {index: _stage_route_gaps(state, target_plan, doc, index)
-              for index in sorted(moved_stages)}
+    route = _pair_route(state, doc, target_plan)
+    if route.error:
+        return [f"review pairs cannot be enumerated for this plan: {route.error}"]
+    # a stage's own stage:<n> pass covers the pairs touching that stage
+    stage_gaps = {index: _stage_route_gaps(state, target_plan, doc, index)
+                  for index in sorted(moved_stages)}
     blockers = []
-    if not discharged_by_pairs:
-        blockers = next((b for b in direct.values() if b), [])
-    for pid in walk_stale:
-        if status[pid] in _PAIR_SATISFIED:
+    if not route.discharged:
+        blockers = next((b for b in stage_gaps.values() if b), [])
+    for pid in route.walk_stale:
+        if route.status[pid] in PAIR_SATISFIED:
             continue
-        moved_ends = [x for x in split_pair(pid) if x in moved_stages]
-        if moved_ends and all(not direct[x] for x in moved_ends):
+        moved_ends = [x for x in split_pair_id(pid) if x in moved_stages]
+        if moved_ends and all(not stage_gaps[x] for x in moved_ends):
             continue
         blockers.append(
-            f"review pair {pid} is {status[pid]} and is not covered by a stage-scoped "
+            f"review pair {pid} is {route.status[pid]} and is not covered by a stage-scoped "
             f"pass — run: plan-review-topological.py --pairs {pid}"
         )
     return blockers
@@ -1004,22 +1038,11 @@ def pair_discharged_stages(state: SessionState, doc, plan_path: str) -> "list[st
     """The `stage:<n>` scopes that show no blocker only because every pair of the
     walk-stale set is current or override, not because of their own stage-scoped
     pass. Empty unless the coverage route is pair-driven and reachable."""
-    whole = state.plan_review
-    if whole is None or not has_pair_records_for(state, plan_path):
-        return []
-    if whole.plan_path != plan_path and not _binds_across_path_change(whole, plan_path):
-        return []
-    meta_moved, moved_stages = changed_parts(doc, _plan_review_baseline(whole))
-    if meta_moved or _plan_review_verdict_blockers(whole, state=state, doc=doc):
-        return []
-    try:
-        walk_stale = walk_stale_pairs(state, doc, plan_path, whole)
-    except PlanError:
-        return []
-    if any(pair_status(state, doc, plan_path, pid) not in _PAIR_SATISFIED for pid in walk_stale):
+    route = _pair_route(state, doc, plan_path)
+    if route is None or not route.discharged:
         return []
     return [
-        _plan_review_scope_for_stage(index) for index in sorted(moved_stages)
+        _plan_review_scope_for_stage(index) for index in sorted(route.moved_stages)
         if _stage_route_gaps(state, plan_path, doc, index)
     ]
 
@@ -1363,13 +1386,8 @@ def pairs_hint_for(state: SessionState, doc, plan_path: "str | None") -> "list[s
     """The walk-stale set W of `doc` in `review_pairs` order, for the scoped
     `plan-review-topological.py --pairs` rerun; [] when no whole-plan baseline or
     pair record exists to scope against, or the pairs cannot be enumerated."""
-    whole = state.plan_review
-    if whole is None or not has_pair_records_for(state, plan_path):
-        return []
-    try:
-        return walk_stale_pairs(state, doc, plan_path, whole)
-    except PlanError:
-        return []
+    route = _pair_route(state, doc, plan_path)
+    return route.walk_stale if route is not None else []
 
 
 def plan_presentation_active(state: SessionState) -> bool:

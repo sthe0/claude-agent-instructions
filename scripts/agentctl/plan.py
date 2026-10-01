@@ -2414,8 +2414,14 @@ def parse_pair(doc: PlanDoc, pair_id: str) -> tuple["int | str", "int | str"]:
             f"no review pair {pair_id!r} in plan {doc.meta.task_id!r} "
             f"(valid pairs: {', '.join(review_pairs(doc)) or 'none'})"
         )
+    return split_pair_id(pair_id)
+
+
+def split_pair_id(pair_id: str) -> tuple["int | str", "int | str"]:
+    """`(b, s)` of a pair id already known to be in `review_pairs`, with no
+    membership check (`parse_pair` re-enumerates every pair per call)."""
     b, s = pair_id.split("-", 1)
-    return (b if not b.isdigit() else int(b), s if not s.isdigit() else int(s))
+    return (int(b) if b.isdigit() else b, int(s) if s.isdigit() else s)
 
 
 def _sha256_hex(text: str) -> str:

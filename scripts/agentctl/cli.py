@@ -4872,7 +4872,7 @@ def cmd_plan_review_walk(args, *, store: StateStore, runner: Runner | None = Non
     for row in rows:
         while len(levels) <= row["level"]:
             levels.append([])
-        open_pair = row["status"] not in gates._PAIR_SATISFIED
+        open_pair = row["status"] not in gates.PAIR_SATISFIED
         levels[row["level"]].append({
             **row,
             "spawn": (f"spawn-specialist.py --kind thinker --plan-brief --review-topo {row['pair']} "
@@ -4915,7 +4915,7 @@ def cmd_plan_review_compose(args, *, store: StateStore, runner: Runner | None = 
     except (OSError, PlanError) as e:
         return Directive(False, state.node, "noop", f"{target} cannot be composed: {e}")
     status = {pid: gates.pair_status(state, doc, target, pid) for pid in pairs}
-    failing = {pid: s for pid, s in status.items() if s not in gates._PAIR_SATISFIED}
+    failing = {pid: s for pid, s in status.items() if s not in gates.PAIR_SATISFIED}
     if failing:
         listing = ", ".join(f"{pid} ({s})" for pid, s in failing.items())
         return Directive(
