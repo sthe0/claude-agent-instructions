@@ -1,6 +1,7 @@
 """Tests for scripts/instruction-sandbox.sh and its canon-snapshot helper."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -10,6 +11,8 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SANDBOX = REPO / "scripts" / "instruction-sandbox.sh"
+VERIFY = REPO / "scripts" / "instruction-sandbox-verify.sh"
+LIVE = REPO / "scripts" / "instruction-sandbox-live.py"
 SNAPSHOT = REPO / "scripts" / "lib" / "instruction-sandbox-canon-snapshot.sh"
 
 SCRUB_VARS = [
@@ -588,3 +591,270 @@ def test_compose_scrub_keeps_caller_overrides_away(tmp_path, fake_home):
 
     after = {v: _tree(d) for v, d in real_dirs.items()}
     assert_scrub_effective(root / "compose.env", SCRUB_VARS, before, after)
+
+
+def _load_live():
+    spec = importlib.util.spec_from_file_location("isb_live", LIVE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+AUTH_VARS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+             "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX")
+
+
+def _credentials(config_dir: Path, token: str) -> None:
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": token}}))
+
+
+def test_live_scrub_list_matches_the_other_scrub_lists():
+    live = _load_live()
+    assert set(live.SCRUB_VARS) | {"AGENTCTL_SAMPLE_VAR"} == set(SCRUB_VARS)
+    for source in (VERIFY, SANDBOX):
+        text = source.read_text()
+        for var in live.SCRUB_VARS:
+            assert var in text, f"{var} missing from {source.name}"
+
+
+def test_child_env_overrides_scrubs_and_lends_without_copying(tmp_path, monkeypatch):
+    live = _load_live()
+    real_cfg = tmp_path / "realcfg"
+    _credentials(real_cfg, "tok-lent")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(real_cfg))
+    for var in AUTH_VARS:
+        monkeypatch.delenv(var, raising=False)
+    caller = {var: "leak" for var in live.SCRUB_VARS}
+    caller.update(AGENTCTL_SAMPLE_VAR="leak", AGENTCTL_OTHER="leak", KEEP_ME="1",
+                  HOME="/real/home", XDG_STATE_HOME="/real/state")
+    root = tmp_path / "root"
+    (root / "home").mkdir(parents=True)
+
+    env, status = live.build_child_env(caller, root)
+
+    assert status == "borrowed"
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-lent"
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in caller
+    assert env["KEEP_ME"] == "1"
+    home = root / "home"
+    assert env["HOME"] == str(home)
+    assert env["CLAUDE_AGENT_HOME"] == env["CLAUDE_CONFIG_DIR"] == str(home / ".claude-agent")
+    assert env["CLAUDE_INSTRUCTIONS_REPO"] == str(root / "core")
+    for xdg in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"):
+        assert Path(env[xdg]).is_relative_to(home), xdg
+    for var in live.SCRUB_VARS:
+        assert var not in env, var
+    assert not [k for k in env if k.startswith("AGENTCTL_")]
+    assert not list(root.rglob(".credentials.json"))
+
+
+def test_child_env_keeps_caller_env_auth(tmp_path, monkeypatch):
+    live = _load_live()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "empty"))
+    root = tmp_path / "root"
+    (root / "home").mkdir(parents=True)
+    env, status = live.build_child_env({"CLAUDE_CODE_OAUTH_TOKEN": "tok-env"}, root)
+    assert status == "env_auth"
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-env"
+
+
+STUB_CLAUDE = """#!/usr/bin/env bash
+printf '%s\\0' "$@" > "$STUB_LOG.argv"
+printf 'HOME=%s\\nSESSION=%s\\nAGENTCTL=%s\\n' "$HOME" "${CLAUDE_CODE_SESSION_ID:-}" "${AGENTCTL_SAMPLE_VAR:-}" > "$STUB_LOG.env"
+cat > /dev/null
+case "$STUB_MODE" in
+  echo) grep -h '^SANDBOX-MARKER: ' "$HOME/.claude-agent/config.md" "$PWD/CLAUDE.md" 2>/dev/null | sed 's/^SANDBOX-MARKER: //'
+        printf 'TOKEN=%s\\n' "$CLAUDE_CODE_OAUTH_TOKEN" > "$STUB_LOG.token" ;;
+  miss) echo "I cannot see any marker" ;;
+  sleep) sleep 30 ;;
+  exit7) exit 7 ;;
+esac
+"""
+
+
+def _stub_dir(parent: Path) -> Path:
+    bin_dir = parent / "stubbin"
+    bin_dir.mkdir()
+    claude = bin_dir / "claude"
+    claude.write_text(STUB_CLAUDE)
+    claude.chmod(0o755)
+    return bin_dir
+
+
+def _stub_env(base: dict, bin_dir: Path, log: Path, mode: str) -> dict:
+    return {**base, "PATH": f"{bin_dir}:{base.get('PATH', '')}", "STUB_MODE": mode,
+            "STUB_LOG": str(log), "CLAUDE_CODE_OAUTH_TOKEN": "tok-stub"}
+
+
+@pytest.fixture
+def stub_claude(tmp_path):
+    bin_dir = _stub_dir(tmp_path)
+    log = tmp_path / "stublog"
+
+    def make(mode: str, base: dict | None = None) -> dict:
+        return _stub_env(dict(os.environ) if base is None else base, bin_dir, log, mode)
+    make.log = log
+    return make
+
+
+@pytest.fixture
+def live_root(tmp_path):
+    root = tmp_path / "liveroot"
+    (root / "home" / ".claude-agent").mkdir(parents=True)
+    (root / "home" / ".claude-agent" / "config.md").write_text("SANDBOX-MARKER: tok-abc\n")
+    return root
+
+
+def _live(root: Path, env: dict, *extra: str, expect=("tok-abc",)) -> subprocess.CompletedProcess:
+    args = ["python3", str(LIVE), "--root", str(root), "--cwd", str(root)]
+    for token in expect:
+        args += ["--expect", token]
+    return _run([*args, *extra], env)
+
+
+def test_live_exit_0_when_the_reply_carries_every_token(live_root, stub_claude):
+    res = _live(live_root, stub_claude("echo"))
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert res.stdout.splitlines() == ["found tok-abc"]
+    assert f"HOME={live_root / 'home'}" in Path(f"{stub_claude.log}.env").read_text()
+    assert Path(f"{stub_claude.log}.token").read_text() == "TOKEN=tok-stub\n"
+    argv = Path(f"{stub_claude.log}.argv").read_bytes().split(b"\0")
+    assert argv[argv.index(b"--tools") + 1] == b""
+
+
+def test_live_scrubs_caller_session_vars_from_the_launch(live_root, stub_claude):
+    env = stub_claude("echo")
+    env.update(CLAUDE_CODE_SESSION_ID="leak", AGENTCTL_SAMPLE_VAR="leak")
+    assert _live(live_root, env).returncode == 0
+    log = Path(f"{stub_claude.log}.env").read_text()
+    assert "SESSION=\n" in log and "AGENTCTL=\n" in log
+
+
+def test_live_exit_1_names_the_missing_token(live_root, stub_claude):
+    res = _live(live_root, stub_claude("miss"), expect=("tok-abc", "tok-two"))
+    assert res.returncode == 1
+    assert res.stdout.splitlines() == ["missing tok-abc", "missing tok-two"]
+
+
+def test_live_timeout_is_unavailable_not_missing(live_root, stub_claude):
+    res = _live(live_root, stub_claude("sleep"), "--timeout", "2")
+    assert res.returncode == 3
+    assert res.stdout.splitlines() == ["UNAVAILABLE timeout"]
+
+
+def test_live_launch_exit_is_unavailable_not_missing(live_root, stub_claude):
+    res = _live(live_root, stub_claude("exit7"))
+    assert res.returncode == 3
+    assert res.stdout.splitlines() == ["UNAVAILABLE launch-exit=7"]
+
+
+def test_live_without_a_lendable_credential_is_unavailable_auth(live_root, stub_claude, tmp_path):
+    env = {k: v for k, v in stub_claude("echo").items() if k not in AUTH_VARS}
+    env["CLAUDE_CONFIG_DIR"] = str(tmp_path / "no-credentials")
+    res = _live(live_root, env)
+    assert res.returncode == 3
+    assert res.stdout.splitlines() == ["UNAVAILABLE auth"]
+
+
+def test_live_with_no_expected_token_is_a_usage_error(live_root, stub_claude):
+    res = _live(live_root, stub_claude("echo"), expect=())
+    assert res.returncode == 2
+
+
+@pytest.fixture(scope="module")
+def verify_world(tmp_path_factory):
+    base = tmp_path_factory.mktemp("isb-verify")
+    home = base / "callerhome"
+    canon = home / "claude-agent-instructions"
+    (canon / "scripts").mkdir(parents=True)
+    (canon / "scripts" / "a.sh").write_text("x")
+    _git(canon, "init", "-q")
+    _git(canon, "add", "-A")
+    _git(canon, "commit", "-q", "-m", "init")
+    (home / ".claude-agent").mkdir()
+    env = _base_env(home)
+    env["CLAUDE_INSTRUCTIONS_CANON"] = str(canon)
+    return base, _stub_env(env, _stub_dir(base), base / "stublog", "echo")
+
+
+def _build_sandbox(base: Path, env: dict, name: str) -> Path:
+    root = base / name
+    res = _run([str(SANDBOX), "--source", str(REPO), "--core-ref", "HEAD", "--root", str(root)], env)
+    assert res.returncode == 0, res.stderr
+    return root
+
+
+@pytest.fixture(scope="module")
+def verify_root(verify_world):
+    base, env = verify_world
+    return _build_sandbox(base, env, "vroot")
+
+
+def _verify(root: Path, env: dict, *args: str, mode: str = "echo"):
+    res = _run([str(VERIFY), *args, str(root)], {**env, "STUB_MODE": mode})
+    checks = {}
+    for line in res.stdout.splitlines():
+        if line.startswith("CHECK "):
+            _, name, status, *detail = line.split(" ", 3)
+            checks[name] = (status, detail[0] if detail else "")
+    return res, checks
+
+
+def test_verify_passes_every_check_on_the_unmodified_candidate(verify_root, verify_world):
+    _, env = verify_world
+    res, checks = _verify(verify_root, env)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert res.stdout.splitlines()[-1] == "RESULT: PASS"
+    assert {name: status for name, (status, _) in checks.items()} == {
+        "static:lint-prose-length": "PASS",
+        "static:verify-layout-contract": "PASS",
+        "static:verify-instructions-sync": "PASS",
+        "static:lint-hooks-executable": "PASS",
+        "live:core-marker": "PASS",
+        "canon:unchanged": "PASS",
+    }
+
+
+def test_verify_maps_a_completed_launch_without_the_marker_to_fail(verify_root, verify_world):
+    _, env = verify_world
+    res, checks = _verify(verify_root, env, mode="miss")
+    assert res.returncode == 1
+    status, detail = checks["live:core-marker"]
+    assert status == "FAIL" and detail.startswith("marker-missing isb-core-")
+
+
+def test_verify_maps_timeout_and_launch_exit_to_unavailable(verify_root, verify_world):
+    _, env = verify_world
+    for mode, args, reason in (("sleep", ("--timeout", "2"), "timeout"), ("exit7", (), "launch-exit=7")):
+        res, checks = _verify(verify_root, env, *args, mode=mode)
+        assert checks["live:core-marker"] == ("UNAVAILABLE", reason)
+        assert res.returncode in (1, 3)
+
+
+def test_verify_no_live_skips_the_launch_and_writes_no_marker(verify_world):
+    base, env = verify_world
+    root = _build_sandbox(base, env, "vnolive")
+    _, checks = _verify(root, env, "--no-live")
+    assert not [name for name in checks if name.startswith("live:")]
+    assert "SANDBOX-MARKER" not in (root / "core" / "config.md").read_text()
+
+
+def test_verify_names_the_failing_check_for_a_broken_instruction_link(verify_world):
+    base, env = verify_world
+    root = _build_sandbox(base, env, "vbroken")
+    link = root / "home" / ".claude-agent" / "CLAUDE.md"
+    link.unlink()
+    link.symlink_to("/nonexistent-isb-target")
+    res, checks = _verify(root, env, "--no-live")
+    assert res.returncode == 1
+    assert checks["static:verify-instructions-sync"][0] == "FAIL"
+    assert checks["static:lint-hooks-executable"][0] == "PASS"
+    assert res.stdout.splitlines()[-1] == "RESULT: FAIL"
+
+
+def test_verify_replaces_an_earlier_marker_instead_of_stacking(verify_root, verify_world):
+    _, env = verify_world
+    _verify(verify_root, env)
+    _verify(verify_root, env)
+    assert (verify_root / "core" / "config.md").read_text().count("SANDBOX-MARKER: ") == 1
