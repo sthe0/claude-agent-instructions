@@ -987,6 +987,7 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
                 return blockers
         return []
     route = _pair_route(state, doc, target_plan)
+    assert route is not None, "the inline checks above are exactly _pair_route's applicability conditions"
     if route.error:
         return [f"review pairs cannot be enumerated for this plan: {route.error}"]
     # a stage's own stage:<n> pass covers the pairs touching that stage

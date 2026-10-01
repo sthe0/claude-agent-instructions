@@ -1074,6 +1074,14 @@ def test_tr14_delta_names_exactly_the_walk_stale_set(make_env):
     env.edit(_edit_b_drops_a)
     assert "plan-2" in _delta(env).data["pairs"]
 
+    # a moved meta stales the whole plan: no --pairs hint, however much of W is stale
+    env = _bounded_env(make_env)
+    env.edit(lambda d: d["meta"].update(goal="another goal"))
+    d = _delta(env)
+    assert d.data["whole_plan"] is True
+    assert d.data["pairs"] == []
+    assert "--pairs" not in d.detail
+
 
 def test_tr19_walk_discharges_lists_only_stages_clear_through_the_pairs(env):
     _record_pairs(env)
