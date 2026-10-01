@@ -266,7 +266,7 @@ def test_store_key_is_detector_ground_derived_and_accumulates_across_sessions(tm
         "detector": "delegation-misses", "functional_ground": shared_ground,
         "title": "t", "evidence_refs": ["sess-a"],
     }])
-    rows_a = scan.store_findings(findings_a, store_path=store)
+    rows_a = scan.store_findings(findings_a, kinds=frozenset([scan.sds.KIND_TELEMETRY_PATTERN]), store_path=store)
     row_a = next(r for r in rows_a if r["kind"] == scan.sds.KIND_TELEMETRY_PATTERN)
     assert row_a["times_surfaced"] == 1
 
@@ -274,7 +274,7 @@ def test_store_key_is_detector_ground_derived_and_accumulates_across_sessions(tm
         "detector": "delegation-misses", "functional_ground": shared_ground,
         "title": "t", "evidence_refs": ["sess-b"],
     }])
-    rows_b = scan.store_findings(findings_b, store_path=store)
+    rows_b = scan.store_findings(findings_b, kinds=frozenset([scan.sds.KIND_TELEMETRY_PATTERN]), store_path=store)
     row_b = next(r for r in rows_b if r["kind"] == scan.sds.KIND_TELEMETRY_PATTERN)
 
     assert row_b["path"] == row_a["path"]  # same detector+ground -> same store key

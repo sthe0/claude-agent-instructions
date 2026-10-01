@@ -300,6 +300,7 @@ def upsert_findings(
     path: "str | Path | None" = None,
     now: "datetime | None" = None,
     source: str = SOURCE_SELF_DIAGNOSE,
+    kinds: "frozenset[str] | None" = None,
 ) -> "list[dict]":
     """Merge one scan's findings into the store and return the resulting rows.
 
@@ -312,6 +313,11 @@ def upsert_findings(
     pass through untouched, because this scan never looked for their conditions
     and so cannot have observed them gone. Returned rows are foreign-first then
     this scan's, so the caller still sees the whole store.
+
+    When `kinds` is given the resolve-out narrows further to rows of those kinds:
+    two producers that share one `source` (improvement-scan's backlog and
+    telemetry halves) each own only their own kinds. `kinds=None` keeps the
+    whole-source behaviour.
 
     One scan may legitimately emit the same (kind, path) twice — `near-duplicate`
     keys on the first leaf of each pair, so A-vs-B and A-vs-C both key on A — so
@@ -327,8 +333,11 @@ def upsert_findings(
     if not findings and not store_path(path).exists():
         return []
     stored = load_rows(path, now)
-    existing = {r["key"]: r for r in stored if row_source(r) == source}
-    rows: "list[dict]" = [r for r in stored if row_source(r) != source]
+    def owned(r: dict) -> bool:
+        return row_source(r) == source and (kinds is None or r.get("kind") in kinds)
+
+    existing = {r["key"]: r for r in stored if owned(r)}
+    rows: "list[dict]" = [r for r in stored if not owned(r)]
     seen: "set[str]" = set()
     for finding in findings:
         kind, fpath, detail = _as_record(finding)

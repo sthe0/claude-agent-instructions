@@ -307,17 +307,23 @@ def _finding_record(finding: Finding) -> dict:
 
 
 def store_findings(
-    findings: Iterable[Finding], *, store_path: "str | Path | None" = None
+    findings: Iterable[Finding],
+    *,
+    kinds: "frozenset[str]",
+    store_path: "str | Path | None" = None,
 ) -> "list[dict]":
     """Upsert this scan's findings under the improvement-scan source.
 
     Delegates entirely to `self_diagnose_store.upsert_findings`, which
-    source-partitions its resolve-out — this call can only retire rows it
-    could itself have produced, so it can never resolve away self-diagnose's or
-    policy-scorecard's rows.
+    source- and kind-partitions its resolve-out — this call can only retire rows
+    of `kinds` it could itself have produced, so it can never resolve away
+    self-diagnose's, policy-scorecard's, or the other improvement-scan
+    producer's rows.
     """
     records = [_finding_record(f) for f in findings]
-    return sds.upsert_findings(records, path=store_path, source=sds.SOURCE_IMPROVEMENT_SCAN)
+    return sds.upsert_findings(
+        records, path=store_path, source=sds.SOURCE_IMPROVEMENT_SCAN, kinds=kinds
+    )
 
 
 # --- backlog resume seam: frozen-baseline-JSON delta -------------------------
@@ -1228,7 +1234,7 @@ def _run_backlog_phase_b(args: argparse.Namespace) -> int:
         return 2
 
     write_board(board, args.out)
-    store_findings(findings, store_path=args.store)
+    store_findings(findings, kinds=frozenset([sds.KIND_BACKLOG_ITEM]), store_path=args.store)
     print(
         f"improvement-scan backlog (phase B): {len(board.items)} item(s) on the board "
         f"({len(no_urgency_signal)} no-urgency-signal), {len(findings)} finding(s) stored -> {args.out}"
@@ -1296,7 +1302,9 @@ def _run_telemetry_grounds(args: argparse.Namespace) -> int:
 
     board = load_prior_board(args.board) if args.board else None
     findings, dedup_log = build_findings_from_grounds(grounds, board=board)
-    stored = [] if args.dry_run else store_findings(findings, store_path=args.store)
+    stored = [] if args.dry_run else store_findings(
+        findings, kinds=frozenset([sds.KIND_TELEMETRY_PATTERN]), store_path=args.store
+    )
 
     print(
         f"improvement-scan telemetry (grounds): {len(grounds)} ground(s) in, "
