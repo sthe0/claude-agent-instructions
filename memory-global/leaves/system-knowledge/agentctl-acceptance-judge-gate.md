@@ -244,8 +244,11 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
   `scripts/agentctl/advisor.py` were checked the same day and showed only two latency-ceiling
   WARNs, unrelated to verdict quality, so they stay on haiku. The separate `_JUDGE_MODEL = "haiku"`
   judges in `agentctl/procedure.py`, `conditions.py` and `result_image.py` were not checked and are
-  not changed. A session already running when this landed keeps the code it imported, so its
-  judge verdicts keep the old haiku behaviour and the `judge:haiku` tag until restarted.
+  not changed. Every `agentctl` call is a fresh process, so new code applies at once; what persists
+  is data: a `stage_review` written before this landed keeps its `judge:haiku` tag permanently
+  (verdicts are never relabeled), a historical marker rather than a sign of stale code.
+  `_record_stage_review` in `agentctl/cli.py` recognizes both tags as automated, so such a verdict
+  stays replaceable by a fresh judge verdict instead of being frozen as a protected human override.
   2026-10-01 is the cutover date: `acceptance_judge` latency records mix haiku samples before it
   with sonnet samples after it, and its 185 s last-resort ceiling is still derived from the haiku
   family. The untried "name >= N concrete facts" prompt-bounding mitigation above remains

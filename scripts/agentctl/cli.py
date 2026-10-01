@@ -243,6 +243,9 @@ def _normalize_reviewer_token(raw: str | None) -> str:
     return "other"
 
 
+_AUTOMATED_JUDGE_REVIEWERS = (advisor.JUDGE_REVIEWER, "judge:haiku")
+
+
 def _record_stage_review(state: SessionState, review: StageReview, *, from_judge: bool) -> None:
     """Store a StageReview, one per stage_index (last-wins). A judge verdict
     (from_judge=True) NEVER clobbers a human/manual review already present for the
@@ -250,7 +253,9 @@ def _record_stage_review(state: SessionState, review: StageReview, *, from_judge
     user's explicit escape. A manual record (from_judge=False, via cmd_stage_review)
     always replaces."""
     existing = [r for r in state.stage_reviews if r.stage_index == review.stage_index]
-    if from_judge and existing and any(r.reviewer != advisor.JUDGE_REVIEWER for r in existing):
+    # Not a bare `!= advisor.JUDGE_REVIEWER`: persisted reviews keep the tag they were
+    # written under, so a judge-tier rename would otherwise freeze old automated verdicts as "human".
+    if from_judge and existing and any(r.reviewer not in _AUTOMATED_JUDGE_REVIEWERS for r in existing):
         return
     state.stage_reviews = [r for r in state.stage_reviews if r.stage_index != review.stage_index]
     state.stage_reviews.append(review)

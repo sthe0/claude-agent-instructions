@@ -583,8 +583,8 @@ class StageReview:
     which requires a non-empty `reviewer` and `note`). `observation_sha256` binds the
     verdict to the exact observation bytes that were judged; empty on a record that
     declined to bind (degrades the gate to verdict-only, mirroring PlanReview's
-    path-only fallback). `reviewer` is the judge tag ("judge:haiku") for an
-    automated verdict or a human name for a manual/override record."""
+    path-only fallback). `reviewer` is the judge tag ("judge:acceptance"; older
+    records keep "judge:haiku") for an automated verdict or a human name for a manual/override record."""
     stage_index: int
     verdict: str
     reviewer: str
