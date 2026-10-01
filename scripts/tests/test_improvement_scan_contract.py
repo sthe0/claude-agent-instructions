@@ -87,6 +87,29 @@ def test_unknown_ref_exits_2(tmp_path, capsys):
     assert not out.exists()
 
 
+def test_unclassified_worklist_ref_exits_2(tmp_path, capsys):
+    rc, out = _run(
+        tmp_path, {"ref-1": dict(_JUDGMENT)},
+        worklist=[_worklist_item(), _worklist_item("ref-2")],
+    )
+    assert rc == 2
+    assert "ref-2" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_non_object_classifications_exits_2(tmp_path, capsys):
+    cls = tmp_path / "classifications.json"
+    cls.write_text("[]", encoding="utf-8")
+    out = tmp_path / "board.json"
+    args = argparse.Namespace(
+        prior=None, classifications=str(cls), worklist=None,
+        out=str(out), store=str(tmp_path / "store.jsonl"),
+    )
+    assert scan._run_backlog_phase_b(args) == 2
+    assert "not a JSON object" in capsys.readouterr().err
+    assert not out.exists()
+
+
 def test_missing_metadata_without_worklist_exits_2(tmp_path, capsys):
     rc, out = _run(tmp_path, {"ref-1": dict(_JUDGMENT)})
     assert rc == 2

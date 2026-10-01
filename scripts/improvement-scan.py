@@ -1311,7 +1311,7 @@ def _merge_worklist_metadata(
 ) -> "dict[str, dict]":
     """Overlay each classification on its worklist item (the classification wins for
     any field it names). Raises ValueError naming the ref (and field) on an unknown ref
-    or on required metadata still missing after the merge.
+    on required metadata still missing after the merge, or on a worklist ref left unclassified.
     """
     by_ref = (
         {w.get("item_ref"): w for w in worklist_items} if worklist_items is not None else None
@@ -1330,15 +1330,23 @@ def _merge_worklist_metadata(
                     f"item {ref!r} lacks {field!r} (supply it, or pass --worklist to merge it)"
                 )
         merged[ref] = item
+    if by_ref is not None:
+        unclassified = sorted(r for r in by_ref if r not in classified)
+        if unclassified:
+            raise ValueError("worklist ref(s) left unclassified: " + ", ".join(map(str, unclassified)))
     return merged
 
 
 def _read_json_object(path: str, what: str) -> "dict | None":
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         print(f"improvement-scan backlog (phase B): cannot read {what}: {exc}", file=sys.stderr)
         return None
+    if not isinstance(data, dict):
+        print(f"improvement-scan backlog (phase B): {what} is not a JSON object", file=sys.stderr)
+        return None
+    return data
 
 
 def _run_backlog_phase_b(args: argparse.Namespace) -> int:

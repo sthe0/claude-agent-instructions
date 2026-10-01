@@ -37,7 +37,8 @@ recommended_next_step, blocked_by?}}, "closed_refs": [...]}`) and merges each it
 (title, functional_ground, severity, severity_labeled, reporter, evidence, cost_estimate,
 source_digest) from `--worklist`; a field the classification names wins over the worklist's.
 Without `--worklist` the classification must carry title, functional_ground, severity and
-source_digest itself. An unknown ref or a missing field exits 2 naming the ref. It validates every field against its closed
+source_digest itself. An unknown ref, a missing field, or a worklist ref left unclassified
+exits 2 naming the ref. It validates every field against its closed
 vocabulary (rejecting the whole call on the first out-of-vocabulary value), scores and ranks via
 `score(item) = breadth_weight × recurrence_mass / cost_to_resolve`, applies the hard partial order
 from any explicit `blocked_by` edges, writes the new board JSON, and stores `Finding` rows.
