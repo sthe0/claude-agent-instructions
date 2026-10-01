@@ -567,12 +567,54 @@ def _detect_attention_burn(row: dict, spawn_rows: "list[dict]", *, config_path) 
     }
 
 
+CONDITION4_GAP_THRESHOLD_CONFIG_KEY = "principle-promotion-threshold"
+ESCALATION_LEDGER_ENV = "AGENTCTL_ESCALATION_LEDGER"
+DEFAULT_ESCALATION_LEDGER = Path.home() / ".local" / "log" / "claude-plan-review-escalations.jsonl"
+
+
+def _detect_condition4_gap_recurrence(row: dict, spawn_rows: "list[dict]", *, config_path) -> "dict | None":
+    threshold = _read_config_float(CONDITION4_GAP_THRESHOLD_CONFIG_KEY, config_path)
+    if threshold is None:
+        return None
+    path = Path(os.environ.get(ESCALATION_LEDGER_ENV) or DEFAULT_ESCALATION_LEDGER)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    last_outcome: "dict[tuple, str]" = {}
+    for line in text.splitlines():
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        key = tuple(entry.get(k) for k in ("session", "plan_path", "unit"))
+        outcome = entry.get("outcome")
+        if None in key or outcome is None:
+            continue
+        last_outcome[key] = outcome
+    confirmed = sum(1 for outcome in last_outcome.values() if outcome == "confirmed-gap")
+    if confirmed < threshold:
+        return None
+    return {
+        "detector": "condition4-gap-recurrence",
+        "measured": {"confirmed_pairs": confirmed, "threshold": threshold},
+        "description": (
+            f"{confirmed} net-confirmed condition-4 plan-review gap(s) across reviewed pairs "
+            f">= the {CONDITION4_GAP_THRESHOLD_CONFIG_KEY} threshold ({threshold:g}) "
+            "— planners keep leaving interfaces incomplete"
+        ),
+    }
+
+
 TELEMETRY_DETECTORS = (
     _detect_cost_concentration,
     _detect_replan_pressure,
     _detect_delegation_misses,
     _detect_spawn_process_failures,
     _detect_attention_burn,
+    _detect_condition4_gap_recurrence,
 )
 
 

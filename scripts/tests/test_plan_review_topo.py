@@ -1228,3 +1228,94 @@ def test_tr27_no_recurring_block_on_an_unrelated_edit_after_a_fresh_pass(env):
 def test_tr28_no_recurring_block_on_an_unrelated_edit_after_a_fresh_override(env):
     _unrelated_edit_after_a_fresh_baseline(
         env, lambda: env.record("", "override", reviewer="thinker", note="round budget spent", digest=None))
+
+
+LEDGER_KEYS = ("ts", "session", "plan_path", "task_id", "unit", "dependency_stage",
+               "condition", "concern", "concern_sha256", "outcome")
+
+
+def _load_scan():
+    import importlib.util
+    import sys
+
+    scripts = str(Path(__file__).resolve().parent.parent)
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    spec = importlib.util.spec_from_file_location("improvement_scan_tr9", Path(scripts) / "improvement-scan.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _ledger_line(session="s1", plan="/p.toml", unit="3-1", outcome="confirmed-gap", concern="gap") -> dict:
+    return dict(zip(LEDGER_KEYS, (
+        "2026-10-01T00:00:00+00:00", session, plan, "t", unit, 1, "C4", concern,
+        _text_sha(concern), outcome)))
+
+
+def _threshold_config(tmp_path: Path, threshold: int) -> Path:
+    p = tmp_path / f"config{threshold}.md"
+    p.write_text(f"| Key | Value |\n|---|---|\n| `principle-promotion-threshold` | `{threshold}` |\n",
+                 encoding="utf-8")
+    return p
+
+
+def test_tr9_condition4_gap_detector_counts_distinct_net_confirmed_pair_keys(make_env, tmp_path, monkeypatch):
+    scan = _load_scan()
+    ledger = tmp_path / "ledger.jsonl"
+
+    def write(lines: list[dict]) -> None:
+        ledger.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+
+    def fires(lines: list[dict], threshold: int = 3) -> bool:
+        write(lines)
+        result = scan._detect_condition4_gap_recurrence({}, [], config_path=_threshold_config(tmp_path, threshold))
+        assert result is None or result["detector"] == "condition4-gap-recurrence"
+        return result is not None
+
+    # (a) counting
+    three = [_ledger_line(unit=u) for u in ("3-1", "3-2", "plan-3")]
+    assert fires(three)
+    assert not fires(three[:2])
+    assert not fires(three + [_ledger_line(unit="3-1", outcome="false-alarm")])
+    assert not fires([_ledger_line(unit=u) for u in ("3-1", "3-1", "3-1", "3-2", "3-2")])
+    assert not fires([_ledger_line(concern=f"wording {i}") for i in range(3)])
+    assert fires(three[:2], threshold=2)
+
+    # (b) literal keys, against the real writer
+    env = make_env()
+    ledger.write_text("", encoding="utf-8")
+    for pair in ("3-1", "3-2", "plan-3"):
+        assert env.record(f"topo:{pair}", "revise", concerns=[f"{C4} gap at {pair}"]).ok
+    real = env.ledger_lines()
+    assert len(real) == 3
+    for line in real:
+        assert set(line) <= set(LEDGER_KEYS)
+        assert set(LEDGER_KEYS) - {"dependency_stage"} <= set(line)
+    result = scan._detect_condition4_gap_recurrence({}, [], config_path=_threshold_config(tmp_path, 3))
+    assert result is not None and result["measured"]["confirmed_pairs"] == 3
+
+    # (c) wiring through the real telemetry entry point
+    assert scan._detect_condition4_gap_recurrence in scan.TELEMETRY_DETECTORS
+    monkeypatch.setattr(scan.shell, "refresh_policy_ledger", lambda days, ledger_path=None: (True, ""))
+    policy = tmp_path / "policy.jsonl"
+    policy.write_text(json.dumps({"session_id": "x", "mtime": 1.0}) + "\n", encoding="utf-8")
+    spawn = tmp_path / "spawn.jsonl"
+    spawn.write_text("", encoding="utf-8")
+
+    def detectors(n_keys: int, tag: str) -> list[str]:
+        write([_ledger_line(unit=f"3-{i}") for i in range(n_keys)])
+        evidence = tmp_path / f"evidence-{tag}.json"
+        rc = scan.main(["telemetry", "--emit-evidence", str(evidence), "--ledger", str(policy),
+                        "--spawn-ledger", str(spawn), "--cursor", str(tmp_path / f"cursor-{tag}.json")])
+        assert rc == 0
+        return [item["detector"] for item in json.loads(evidence.read_text(encoding="utf-8"))["items"]]
+
+    assert "condition4-gap-recurrence" in detectors(3, "three")
+    assert "condition4-gap-recurrence" not in detectors(2, "two")
+
+    # (d) purity
+    from ast_purity import impure_names
+
+    assert impure_names(scan._detect_condition4_gap_recurrence) == set()
