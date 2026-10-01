@@ -18,18 +18,28 @@ difficulty, dispatches a specialist, or picks work; it only reports.
 Two phases, run in sequence with a classification step in between:
 
 ```
-python3 scripts/improvement-scan.py backlog --prior <prior-board.json> \
+python3 scripts/improvement-scan.py backlog \
   --emit-worklist <worklist.json> [--channel <name> ...]
 ```
 
 Phase A collects raw backlog records (from `--channel`, repeatable, or the configured default
-channels) and diffs them against `--prior` (a previously-published board JSON). Emits only
-new/changed items plus `closed_refs`, not a full re-derivation.
+channels) and diffs them against the board state file. Emits only new/changed items plus
+`closed_refs`, not a full re-derivation.
+
+The durable board is a **local state file** — `$IMPROVEMENT_SCAN_BOARD_STATE`, default
+`~/.local/state/improvement-scan/board.json` (`--board-state` overrides it). Phase B writes it
+atomically; phase A, `telemetry --board` and `report --board` read it by default. With no state
+file phase A cold-starts from an empty board and prints one stderr note. An explicit `--prior`
+or `--board` overrides the default; `--out` additionally writes a copy of the board.
+
+A published artifact is a view of that file, never an input: `Artifact action:"read"` returned
+HTTP 451 for an artifact minutes after the same session published it, so an artifact cannot be
+read back as the store.
 
 ```
-python3 scripts/improvement-scan.py backlog --prior <prior-board.json> \
+python3 scripts/improvement-scan.py backlog \
   --worklist <worklist.json> --classifications <classifications.json> \
-  --out <new-board.json> --store <store-path>
+  --store <store-path>
 ```
 
 Phase B takes a classifications file (`{"items": {<ref>: {breadth, cost_to_resolve, in_flight,
@@ -41,7 +51,7 @@ source_digest itself. An unknown ref, a missing field, or a worklist ref left un
 exits 2 naming the ref. It validates every field against its closed
 vocabulary (rejecting the whole call on the first out-of-vocabulary value), scores and ranks via
 `score(item) = breadth_weight × recurrence_mass / cost_to_resolve`, applies the hard partial order
-from any explicit `blocked_by` edges, writes the new board JSON, and stores `Finding` rows.
+from any explicit `blocked_by` edges, writes the new board JSON to the state file, and stores `Finding` rows.
 
 ## `telemetry` — session pattern detection
 
@@ -57,7 +67,7 @@ bundle of candidate friction patterns.
 
 ```
 python3 scripts/improvement-scan.py telemetry --grounds <grounds.json> \
-  --board <board.json> --store <store-path>
+  [--board <board.json>] --store <store-path>
 ```
 
 Grounds mode takes a list of ground records (`detector`, `functional_ground`, `title`,

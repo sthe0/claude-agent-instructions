@@ -27,18 +27,17 @@ the script's own closed vocabularies gate.
 
 ### The two producers
 
-- **`backlog` subcommand** — reconciles the Core+Org backlog against a
-  published "Triage Board" artifact (see
-  [[backlog-triage-practice]] § Reuse across runs). Two phases: phase A
-  (`--emit-worklist`) collects raw records and diffs them against a `--prior`
-  board JSON, emitting only new/changed items plus `closed_refs`; phase B
-  (`--worklist --classifications --out`) takes a live session's judgment
+- **`backlog` subcommand** — reconciles the Core+Org backlog against the local
+  board state file (see [[backlog-triage-practice]] § Reuse across runs).
+  Two phases: phase A (`--emit-worklist`) collects raw records and diffs them
+  against that file, emitting only new/changed items plus `closed_refs`; phase B
+  (`--worklist --classifications`) takes a live session's judgment
   (breadth, cost_to_resolve, in_flight, recommended_next_step — validated against
   closed vocabularies, rejecting the whole call on the first out-of-vocabulary
   value) and merges item metadata from `--worklist` (a gap exits 2 naming the ref),
   scores and ranks via
   `score(item) = breadth_weight × recurrence_mass / cost_to_resolve`, and
-  writes both a new board JSON and `Finding` rows to the durable store.
+  writes both the new board to the state file and `Finding` rows to the durable store.
 - **`telemetry` subcommand** — scans recent session ledgers for recurring
   friction patterns. Two modes: scan mode (`--emit-evidence`) reads the policy
   ledger and spawn rows since the last cursor position and emits an evidence

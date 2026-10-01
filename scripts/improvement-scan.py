@@ -375,6 +375,14 @@ class PriorBoard:
         return prior is not None and prior.source_digest == item_digest(text, status)
 
 
+def board_state_path() -> Path:
+    """The durable board: a local file the next run reads back. Resolved at call time."""
+    override = os.environ.get("IMPROVEMENT_SCAN_BOARD_STATE")
+    if override:
+        return Path(override)
+    return Path.home() / ".local" / "state" / "improvement-scan" / "board.json"
+
+
 def _empty_board(now: "datetime | None" = None) -> PriorBoard:
     now = now or datetime.now(timezone.utc)
     return PriorBoard(schema=BOARD_SCHEMA, generated_at=now.isoformat(), items={})
@@ -1285,8 +1293,22 @@ def _cmd_report(args: argparse.Namespace) -> int:
 
 # --- CLI ----------------------------------------------------------------
 
+def _board_state_arg(args: argparse.Namespace) -> Path:
+    return Path(getattr(args, "board_state", None) or board_state_path())
+
+
+def _load_prior(args: argparse.Namespace) -> PriorBoard:
+    if args.prior:
+        return load_prior_board(args.prior)
+    state = _board_state_arg(args)
+    if state.exists():
+        return load_prior_board(state)
+    print(f"improvement-scan backlog: cold start — no board state at {state}", file=sys.stderr)
+    return _empty_board()
+
+
 def _run_backlog_phase_a(args: argparse.Namespace) -> int:
-    prior = load_prior_board(args.prior) if args.prior else _empty_board()
+    prior = _load_prior(args)
     channels = args.channels or default_channels()
     records, coverage_gaps = collect_records(channels)
     new_items, changed_items, unchanged_refs, closed_refs = diff_backlog(records, prior)
@@ -1310,7 +1332,7 @@ def _merge_worklist_metadata(
     classified: "dict[str, dict]", worklist_items: "list[dict] | None"
 ) -> "dict[str, dict]":
     """Overlay each classification on its worklist item (the classification wins for
-    any field it names). Raises ValueError naming the ref (and field) on an unknown ref
+    any field it names). Raises ValueError naming the ref (and field) on an unknown ref,
     on required metadata still missing after the merge, or on a worklist ref left unclassified.
     """
     by_ref = (
@@ -1350,7 +1372,7 @@ def _read_json_object(path: str, what: str) -> "dict | None":
 
 
 def _run_backlog_phase_b(args: argparse.Namespace) -> int:
-    prior = load_prior_board(args.prior) if args.prior else _empty_board()
+    prior = _load_prior(args)
     payload = _read_json_object(args.classifications, "classifications")
     if payload is None:
         return 2
@@ -1375,11 +1397,14 @@ def _run_backlog_phase_b(args: argparse.Namespace) -> int:
         print(f"improvement-scan backlog (phase B): {exc}", file=sys.stderr)
         return 2
 
-    write_board(board, args.out)
+    state = _board_state_arg(args)
+    write_board(board, state)
+    if args.out:
+        write_board(board, args.out)
     store_findings(findings, kinds=frozenset([sds.KIND_BACKLOG_ITEM]), store_path=args.store)
     print(
         f"improvement-scan backlog (phase B): {len(board.items)} item(s) on the board "
-        f"({len(no_urgency_signal)} no-urgency-signal), {len(findings)} finding(s) stored -> {args.out}"
+        f"({len(no_urgency_signal)} no-urgency-signal), {len(findings)} finding(s) stored -> {state}"
     )
     if no_urgency_signal:
         print("  no urgency signal: " + ", ".join(sorted(no_urgency_signal)), file=sys.stderr)
@@ -1389,11 +1414,11 @@ def _run_backlog_phase_b(args: argparse.Namespace) -> int:
 def _cmd_backlog(args: argparse.Namespace) -> int:
     if args.emit_worklist:
         return _run_backlog_phase_a(args)
-    if args.classifications and args.out:
+    if args.classifications:
         return _run_backlog_phase_b(args)
     print(
         "improvement-scan backlog: pass either --emit-worklist (phase A) or "
-        "--classifications/--out (phase B)",
+        "--classifications (phase B)",
         file=sys.stderr,
     )
     return 2
@@ -1472,13 +1497,21 @@ def _cmd_telemetry(args: argparse.Namespace) -> int:
     return 2
 
 
-def main(argv: "list[str] | None" = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true", help="never write, only print")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_backlog = sub.add_parser("backlog", help="reconcile Core + Org backlog against the Triage Board")
-    p_backlog.add_argument("--prior", default=None, help="path to the existing board.json")
+    p_backlog.add_argument(
+        "--prior", default=None,
+        help="phase A: board to diff against (default: the board state file; absent = cold start)",
+    )
+    p_backlog.add_argument(
+        "--board-state", default=None,
+        help="the durable board state file (default: $IMPROVEMENT_SCAN_BOARD_STATE or "
+        "~/.local/state/improvement-scan/board.json)",
+    )
     p_backlog.add_argument(
         "--emit-worklist", default=None,
         help="phase A: collect + diff against --prior, write the new+changed worklist here",
@@ -1491,7 +1524,9 @@ def main(argv: "list[str] | None" = None) -> int:
         "--worklist", default=None,
         help="phase B: the phase-A worklist; its item metadata is merged under each classification",
     )
-    p_backlog.add_argument("--out", default=None, help="phase B: write the merged board here")
+    p_backlog.add_argument(
+        "--out", default=None, help="phase B: also write the merged board here (a view copy)"
+    )
     p_backlog.add_argument(
         "--channel", action="append", default=[], dest="channels",
         help="channel to pull from (repeatable); default: core-difficulty-digest's default_channels()",
@@ -1512,21 +1547,28 @@ def main(argv: "list[str] | None" = None) -> int:
         "--grounds", default=None,
         help="store mode: model-supplied functional-ground proposals (JSON list) for a prior evidence bundle",
     )
-    p_telemetry.add_argument("--board", default=None, help="store mode: backlog board.json to dedup grounds against")
+    p_telemetry.add_argument(
+        "--board", default=str(board_state_path()),
+        help="store mode: board to dedup grounds against (default: the board state file)",
+    )
     p_telemetry.add_argument("--store", default=None, help="store mode: findings store path")
     p_telemetry.set_defaults(func=_cmd_telemetry)
 
     p_report = sub.add_parser("report", help="render the unified ranked report from stored findings")
     p_report.add_argument("--store", default=None, help="findings store path to render")
     p_report.add_argument(
-        "--board", default=None,
-        help="backlog board.json (accepted for CLI-surface parity; unused — the store alone "
+        "--board", default=str(board_state_path()),
+        help="board state file (accepted for CLI-surface parity; unused — the store alone "
         "fully determines report content)",
     )
     p_report.add_argument("--format", choices=("md", "json"), default="md", help="output format")
     p_report.set_defaults(func=_cmd_report)
 
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    args = build_parser().parse_args(argv)
     return args.func(args)
 
 
