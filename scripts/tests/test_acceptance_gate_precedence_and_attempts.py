@@ -76,7 +76,7 @@ def test_gate_standing_revise_blocks_despite_later_fail_open_bypass(store, monke
     obs_sha = cli._observation_sha256(observation)
 
     state.stage_reviews.append(StageReview(
-        stage_index=stage.index, verdict="revise", reviewer="judge:haiku",
+        stage_index=stage.index, verdict="revise", reviewer="judge:acceptance",
         note="not enough detail", observation_sha256=obs_sha,
     ))
     state.judge_bypassed.append(JudgeBypass(

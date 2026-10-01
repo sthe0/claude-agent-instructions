@@ -97,30 +97,42 @@ def _positive_int_env(name: str, default: int) -> int:
 
 ENUMERATE_TIMEOUT_S = _positive_int_env(_ENUMERATE_TIMEOUT_ENV, _ENUMERATE_TIMEOUT_S_DEFAULT)
 
-# The acceptance judge is a SEPARATE, cheaper tier than the warn-only advisor: it
-# gates a real transition (via the pure acceptance-review guardian), so it runs on the
-# cheapest model and is fail-open (a missing verdict blocks at the gate, never passes).
+# The nine binary judges are a SEPARATE, cheaper tier than the warn-only advisor: each
+# makes a narrow yes/no read of one text fragment and is fail-open (a missing verdict
+# blocks at the gate, never passes), so they share the cheapest model.
 _JUDGE_COMPLEXITY = "low"
 _JUDGE_MODEL = model_for(HOST_CLAUDE, _JUDGE_COMPLEXITY)
-JUDGE_REVIEWER = "judge:haiku"
-# Last-resort ceiling for a judge call made outside any hook budget, by the rule
-# in lib/judge_latency.py::last_resort_ceiling_s — one second past the slowest
-# run this model has been seen to make on ANY judge prompt. Its row in that
-# module is UNMEASURED, so this default is the only number available to it; the
-# test-suite asserts the literal still equals what that rule computes.
+JUDGE_REVIEWER = "judge:acceptance"
+# The acceptance judge makes an open-ended qualitative adequacy judgment: five
+# occurrences of friction are logged in the acceptance-judge-gate leaf, while the
+# other nine judges, checked 2026-10-01, showed only two unrelated latency WARNs.
+# It therefore runs a tier up, with lean isolation kept explicit at its call.
+_ACCEPTANCE_JUDGE_COMPLEXITY = "medium"
+_ACCEPTANCE_JUDGE_MODEL = model_for(HOST_CLAUDE, _ACCEPTANCE_JUDGE_COMPLEXITY)
+# Last-resort ceiling for a judge call made outside any hook budget. The rule in
+# lib/judge_latency.py::last_resort_ceiling_s derives it from the haiku judge
+# family's slowest run on ANY judge prompt; sonnet latency is not yet measured
+# separately, and the acceptance row there is UNMEASURED, so this default is the
+# only number available to it. The test-suite asserts the literal still equals
+# what that rule computes.
 _ACCEPTANCE_JUDGE_TIMEOUT_S = 185
-def _prompt_argv(runtime_host: str, complexity: str) -> list[str]:
+def _prompt_argv(runtime_host: str, complexity: str, *, lean: bool | None = None) -> list[str]:
     """Launch argv for a judge/enumerate call, WITHOUT the prompt.
 
     Every caller below delivers the prompt via the runner's `stdin=` kwarg
     instead of embedding it in argv — see `host_llm.build_launch_argv`'s
     docstring for why: a whole-plan prompt can exceed Linux MAX_ARG_STRLEN
     and an argv-embedded prompt then raises E2BIG before the child starts.
+
+    `lean=None` derives lean isolation from the tier (the low judge tier is
+    lean, anything else is not). acceptance_judge leaves the low tier but must
+    stay lean, so it passes `lean=True` explicitly rather than inherit the
+    tier-derived value.
     """
     model = model_for(runtime_host, complexity)
-    return host_llm.build_launch_argv(
-        runtime_host, model, lean=(complexity == _JUDGE_COMPLEXITY)
-    )
+    if lean is None:
+        lean = complexity == _JUDGE_COMPLEXITY
+    return host_llm.build_launch_argv(runtime_host, model, lean=lean)
 
 _JUDGE_PASS = "pass"
 _JUDGE_REVISE = "revise"
@@ -418,7 +430,7 @@ def acceptance_judge(
             "On the SECOND line give a one-line reason."
         )
         result = runner(
-            _prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt
+            _prompt_argv(runtime_host, _ACCEPTANCE_JUDGE_COMPLEXITY, lean=True), timeout=timeout, stdin=prompt
         )
         verdict_bool, reason = _record_result(
             "acceptance_judge", result, duration=time.monotonic() - start,
