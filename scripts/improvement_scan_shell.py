@@ -24,7 +24,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 POLICY_SCORECARD = SCRIPT_DIR / "policy-scorecard.py"
 RECORD_EXPERIENCE = SCRIPT_DIR / "record-experience.py"
 
-_TIMEOUT_S = 60
+_SEARCH_TIMEOUT_S = 60
 _REFRESH_TIMEOUT_S = 900
 _REFRESH_TIMEOUT_ENV = "IMPROVEMENT_SCAN_REFRESH_TIMEOUT_S"
 
@@ -73,7 +73,7 @@ def search_experience(
     """
     cmd = [sys.executable, str(RECORD_EXPERIENCE), "search", "--scope", scope, " ".join(keywords)]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=_TIMEOUT_S)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=_SEARCH_TIMEOUT_S)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, False, f"record-experience search subprocess failed to run: {exc}"
     output = ((result.stdout or "") + (result.stderr or "")).strip()

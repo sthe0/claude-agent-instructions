@@ -6,7 +6,7 @@ Difficulty removed: two recurring pieces of self-improvement work are already
 DOCUMENTED but stay MANUAL every time. `memory-global/leaves/backlog-triage-
 practice.md` names its own gap #2 — no cross-source priority digest script
 exists, only a scratchpad `score-backlog.py` that was never committed — for
-reconciling the Core + Org backlog against the published Triage Board. Core
+reconciling the Core + Org backlog against the board state file. Core
 issue #144 is the filed form of the other half: nothing periodic reads the
 session transcripts, so "where does the quota go" is answered once and then
 decays. This module supplies the shared core two resumable producers build on:
@@ -393,13 +393,22 @@ def load_prior_board(path: "str | Path") -> PriorBoard:
     board that fails to load must never be read as "everything unchanged",
     since that would silently suppress every finding it should have surfaced.
     """
-    p = Path(path)
+    raw = _read_board_json(Path(path))
+    if raw is None:
+        return _empty_board()
+    return _prior_from_raw(raw)
+
+
+def _read_board_json(path: Path) -> "dict | None":
+    """The parsed board dict, or None when it is unreadable or of another schema."""
     try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return _empty_board()
-    if not isinstance(raw, dict) or raw.get("schema") != BOARD_SCHEMA:
-        return _empty_board()
+        return None
+    return raw if isinstance(raw, dict) and raw.get("schema") == BOARD_SCHEMA else None
+
+
+def _prior_from_raw(raw: dict) -> PriorBoard:
     items = {}
     for ref, entry in (raw.get("items") or {}).items():
         if not isinstance(entry, dict) or "source_digest" not in entry:
@@ -1347,7 +1356,8 @@ def _load_prior(args: argparse.Namespace) -> PriorBoard:
     if not state.exists():
         print(f"improvement-scan backlog: cold start — no board state at {state}", file=sys.stderr)
         return _empty_board()
-    if not _is_board_file(state):
+    raw = _read_board_json(state)
+    if raw is None:
         # The state file is the only durable copy: never let the next write clobber it unseen.
         note = f"improvement-scan backlog: board state at {state} is unreadable or of another schema"
         if not getattr(args, "dry_run", False):
@@ -1356,15 +1366,7 @@ def _load_prior(args: argparse.Namespace) -> PriorBoard:
             note += f"; moved to {backup}"
         print(note + " — starting from an empty board", file=sys.stderr)
         return _empty_board()
-    return load_prior_board(state)
-
-
-def _is_board_file(path: Path) -> bool:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return False
-    return isinstance(raw, dict) and raw.get("schema") == BOARD_SCHEMA
+    return _prior_from_raw(raw)
 
 
 def _run_backlog_phase_a(args: argparse.Namespace) -> int:
@@ -1442,9 +1444,16 @@ def _run_backlog_phase_b(args: argparse.Namespace) -> int:
         if worklist is None:
             return 2
     closed_refs = payload.get("closed_refs") or (worklist or {}).get("closed_refs") or []
+    items = payload.get("items") or {}
+    if not isinstance(items, dict):
+        print(
+            "improvement-scan backlog (phase B): classifications 'items' must be an object "
+            "keyed by item ref", file=sys.stderr,
+        )
+        return 2
     try:
         classified = _merge_worklist_metadata(
-            payload.get("items") or {},
+            items,
             (worklist.get("items") or []) if worklist is not None else None,
         )
     except ValueError as exc:
@@ -1568,7 +1577,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="never write, only print")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_backlog = sub.add_parser("backlog", help="reconcile Core + Org backlog against the Triage Board")
+    p_backlog = sub.add_parser("backlog", help="reconcile Core + Org backlog against the board state file")
     p_backlog.add_argument(
         "--prior", default=None,
         help="phase A: board to diff against (default: the board state file; absent = cold start)",

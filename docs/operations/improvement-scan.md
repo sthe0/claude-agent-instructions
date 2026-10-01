@@ -32,8 +32,8 @@ The durable board is a **local state file** — `$IMPROVEMENT_SCAN_BOARD_STATE`,
 `--dry-run`); phase A, `telemetry --board` and `report --board` read it by default. With no state
 file phase A cold-starts from an empty board and prints one stderr note; an unreadable or
 other-schema state file is moved to `board.json.bak` first, so the next write cannot clobber the
-only copy. An explicit `--prior` or `--board` overrides the default; `--out` additionally writes
-a copy of the board.
+only copy (one rotation: an earlier `.bak` is overwritten). An explicit `--prior` or `--board`
+overrides the default; `--out` additionally writes a copy of the board.
 
 A published artifact is a view of that file, never an input: `Artifact action:"read"` returned
 HTTP 451 for an artifact minutes after the same session published it, so an artifact cannot be
@@ -51,10 +51,12 @@ recommended_next_step, blocked_by?}}, "closed_refs": [...]}`) and merges each it
 source_digest) from `--worklist`; a field the classification names wins over the worklist's.
 Without `--worklist` the classification must carry title, functional_ground, severity and
 source_digest itself. An unknown ref, a missing field, or a worklist ref left unclassified
-exits 2 naming the ref. It validates every field against its closed
-vocabulary (rejecting the whole call on the first out-of-vocabulary value), scores and ranks via
-`score(item) = breadth_weight × recurrence_mass / cost_to_resolve`, applies the hard partial order
-from any explicit `blocked_by` edges, writes the new board JSON to the state file, and stores `Finding` rows.
+exits 2 naming the ref, as does an `items` that is not an object. `closed_refs` falls back to the
+worklist's list when the classifications file carries none. It validates every field against its
+closed vocabulary (rejecting the whole call on the first out-of-vocabulary value), scores and
+ranks via `score(item) = breadth_weight × recurrence_mass / cost_to_resolve`, applies the hard
+partial order from any explicit `blocked_by` edges, writes the new board JSON to the state file,
+and stores `Finding` rows.
 
 ## `telemetry` — session pattern detection
 
@@ -66,7 +68,11 @@ python3 scripts/improvement-scan.py telemetry --emit-evidence <evidence.json> --
 
 Scan mode reads the policy ledger and spawn rows since the last cursor position (an
 mtime-gated `LedgerCursor`, so a rerun only rescans sessions that grew) and emits an evidence
-bundle of candidate friction patterns. The ledger refresh that precedes the scan is bounded at 900 s (a catch-up refresh after a long gap rescans hundreds of sessions); set `IMPROVEMENT_SCAN_REFRESH_TIMEOUT_S` to a positive integer to override. A refresh that fails or exceeds the bound still makes the run DEGRADED (exit 1).
+bundle of candidate friction patterns. The ledger refresh that precedes the scan is bounded at
+900 s (a catch-up refresh after a long gap rescans hundreds of sessions); set
+`IMPROVEMENT_SCAN_REFRESH_TIMEOUT_S` to a positive integer to override. A refresh that fails or
+exceeds the bound still makes the run DEGRADED (exit 1). The `--emit-evidence` and report outputs
+are plain overwrites with no `.bak`; only the board state file is backed up.
 
 ```
 python3 scripts/improvement-scan.py telemetry --grounds <grounds.json> \

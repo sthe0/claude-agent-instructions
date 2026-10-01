@@ -64,4 +64,4 @@ def test_refresh_timeout_still_degrades(monkeypatch):
 
 
 def test_docs_name_the_env_var():
-    assert ENV in (REPO / "docs/operations/improvement-scan.md").read_text()
+    assert ENV in (REPO / "docs/operations/improvement-scan.md").read_text(encoding="utf-8")

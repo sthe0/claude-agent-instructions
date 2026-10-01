@@ -48,8 +48,8 @@ STAMP = Path.home() / ".local" / "state" / "claude-improvement-scan.stamp"
 # 7 days: matches every other weekly-scope due-hook (policy-scorecard,
 # budget-calibration, instruction-grooming, promote-scan, phase3) — the
 # improvement scan's findings accrue across sessions rather than per-session,
-# and the scan itself does live external reads (a backlog channel, a
-# published board artifact) too heavy to prompt for on every session start.
+# and the scan itself does live external reads (a backlog channel, the
+# board state file) too heavy to prompt for on every session start.
 THROTTLE_DAYS = 7.0
 
 

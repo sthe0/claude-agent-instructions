@@ -11,7 +11,7 @@ def test_iter_jsonl_skips_undecodable_line(tmp_path, capsys):
     p.write_bytes(b'{"a": 1}\n' + b'{"x": "\xd1\x28"}\n' + b'{"b": 2}\n')
     assert list(iter_jsonl(p)) == [{"a": 1}, {"b": 2}]
     err = capsys.readouterr().err
-    assert str(p) in err and "1" in err
+    assert f"iter_jsonl: skipped 1 undecodable line(s) in {p}" in err
 
 
 def test_iter_jsonl_valid_file_is_silent(tmp_path, capsys):
