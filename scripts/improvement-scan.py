@@ -949,7 +949,7 @@ def build_worklist(
                 {
                     "item_ref": ref,
                     "bucket": bucket,
-                    "title": record.target,
+                    "title": record.title or record.target,
                     "functional_ground": record.functional_ground,
                     "severity": record.severity.value,
                     "severity_labeled": record.severity_labeled,

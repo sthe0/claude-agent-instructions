@@ -59,6 +59,8 @@ class DifficultyRecord:
     severity_labeled: bool = False  # True only when a channel parsed an explicit severity,
                                     # so a defaulted severity stays distinguishable from a stated one
 
+    title: str = ""  # the channel's own headline for the difficulty; "" when it has none
+
     def __post_init__(self) -> None:
         # Validate/normalise the severity enum even if a raw string slipped in.
         object.__setattr__(self, "severity", Severity.parse(self.severity))
