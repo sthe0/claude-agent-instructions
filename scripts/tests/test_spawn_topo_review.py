@@ -1,4 +1,4 @@
-"""Spawn-level coverage of `--review-topo <n|order>`: refusal paths, the
+"""Spawn-level coverage of `--review-topo <pair>`: refusal paths, the
 `--dry-run` TOPO-VIEW line (and its no-write guarantee), a real materialized
 invocation's view directory and permission grants, and the ceiling-refusal
 message naming both the flag and the planned whole-plan driver.
@@ -6,7 +6,8 @@ message naming both the flag and the planned whole-plan driver.
 Pure-`PlanDoc`-level coverage of the underlying reliance/rendering helpers
 lives in `test_topo_review_bundle.py`; this file drives `spawn-specialist.py`
 end to end (module-loading/argv/DryRun pattern mirrors
-`test_spawn_stage2_image.py`).
+`test_spawn_stage2_image.py`). The two-stage fixture's stage 2 relies on
+stage 1, so its pairs are `plan-2` and `2-1`.
 """
 from __future__ import annotations
 
@@ -19,14 +20,14 @@ from pathlib import Path
 import pytest
 
 from agentctl.plan import load_plan_with_digest
-from agentctl.render import render_topo_review_bundle
+from agentctl.render import render_pair_review_bundle
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 SCRIPT = SCRIPTS_DIR / "spawn-specialist.py"
 TOPO_PLAN_LABEL = (
-    "## Working plan — topological review unit "
+    "## Working plan — topological review pair "
     "(projected; the full plan is never inlined for --review-topo — "
-    "see § File-access scope for the per-unit view directory)"
+    "see § File-access scope for the per-pair view directory)"
 )
 DONE_HEADING = "## Done criterion for this step"
 
@@ -156,14 +157,14 @@ def _stub_child_launch(monkeypatch, tmp_path, on_launch=lambda cmd: None) -> lis
 
 
 def test_ts5_refused_with_a_non_thinker_kind(capsys, topo_units_dir, two_stage_plan):
-    result = _dry_run(capsys, _base_argv("developer", two_stage_plan) + ["--review-topo", "1"])
+    result = _dry_run(capsys, _base_argv("developer", two_stage_plan) + ["--review-topo", "2-1"])
     assert result.rc == 2
     assert "--kind thinker" in result.err
 
 
 def test_ts5_refused_combined_with_stage_index(capsys, topo_units_dir, two_stage_plan):
     argv = _base_argv("thinker", two_stage_plan) + [
-        "--review-topo", "1", "--stage-index", "1",
+        "--review-topo", "2-1", "--stage-index", "1",
     ]
     result = _dry_run(capsys, argv)
     assert result.rc == 2
@@ -174,7 +175,7 @@ def test_ts5_accepted_combined_with_plan_brief(capsys, topo_units_dir, two_stage
     # --review-topo replaces the whole-plan/brief projection outright, so it
     # never checks --stage-index eligibility; --plan-brief is accordingly a
     # harmless no-op alongside it, not a refusal.
-    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2", "--plan-brief"]
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2-1", "--plan-brief"]
     result = _dry_run(capsys, argv)
     assert result.rc == 0
 
@@ -188,36 +189,41 @@ def test_ts5_argparse_error_on_review_stages(capsys, topo_units_dir, two_stage_p
     assert "unrecognized arguments" in captured.err
 
 
-def test_ts5_refused_on_an_unparseable_unit(capsys, topo_units_dir, two_stage_plan):
-    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "not-a-unit"]
+def test_ts5_refused_on_an_unparseable_pair(capsys, topo_units_dir, two_stage_plan):
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "not-a-pair"]
     result = _dry_run(capsys, argv)
     assert result.rc == 2
-    assert "must be an integer stage index or 'order'" in result.err
-
-
-def test_ts5_refused_on_a_comma_list_naming_units(capsys, topo_units_dir, two_stage_plan):
-    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "1,2"]
-    result = _dry_run(capsys, argv)
-    assert result.rc == 2
-    assert "--units" in result.err
+    assert "not-a-pair" in result.err
     assert not topo_units_dir.exists()
 
 
-def test_ts5_refused_on_an_unknown_stage_index(capsys, topo_units_dir, two_stage_plan):
-    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "99"]
+def test_ts5_refused_on_a_comma_list_naming_pairs(capsys, topo_units_dir, two_stage_plan):
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2-1,plan-2"]
     result = _dry_run(capsys, argv)
     assert result.rc == 2
-    assert "no such stage index" in result.err
+    assert "--pairs" in result.err
+    assert not topo_units_dir.exists()
 
 
-def test_ts5_refused_on_order_when_the_plan_declares_no_order_block(capsys, topo_units_dir, two_stage_plan):
-    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "order"]
+@pytest.mark.parametrize("pair", ["1-2", "plan-1", "9-1", "base-plan"])
+def test_ts5_refused_on_a_pair_the_plan_does_not_have(capsys, topo_units_dir, two_stage_plan, pair):
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", pair]
     result = _dry_run(capsys, argv)
     assert result.rc == 2
-    assert "declares no [order] block" in result.err
+    assert pair in result.err
+    assert not topo_units_dir.exists()
 
 
-def test_ts6_dry_run_order_unit_materializes_from_a_plan_with_an_order_block(capsys, topo_units_dir, tmp_path):
+@pytest.mark.parametrize("unit_form", ["2", "order"])
+def test_ts5_refused_on_a_unit_form_id(capsys, topo_units_dir, two_stage_plan, unit_form):
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", unit_form]
+    result = _dry_run(capsys, argv)
+    assert result.rc == 2
+    assert unit_form in result.err
+    assert not topo_units_dir.exists()
+
+
+def test_ts6_dry_run_base_plan_pair_materializes_from_a_plan_with_an_order_block(capsys, topo_units_dir, tmp_path):
     plan_path = tmp_path / "order_plan.toml"
     plan_path.write_text(
         '[meta]\n'
@@ -237,12 +243,12 @@ def test_ts6_dry_run_order_unit_materializes_from_a_plan_with_an_order_block(cap
         'means = "Edit"\nmethod = "do"\nverify_command = "true"\n',
         encoding="utf-8",
     )
-    argv = _base_argv("thinker", plan_path) + ["--review-topo", "order"]
+    argv = _base_argv("thinker", plan_path) + ["--review-topo", "base-plan"]
     result = _dry_run(capsys, argv)
     assert result.rc == 0
-    view_dir = topo_units_dir / _plan_sha(plan_path) / "view-order"
-    assert f"TOPO-VIEW: {view_dir} files=stage-1.md,stage-2.md" in result.out.splitlines()
-    assert "# Topological review unit: order" in result.prompt
+    view_dir = topo_units_dir / _plan_sha(plan_path) / "view-base-plan"
+    assert f"TOPO-VIEW: {view_dir} files=plan.md" in result.out.splitlines()
+    assert "# Topological review pair: base-plan" in result.prompt
     assert [d for d in result.add_dirs if d.startswith(str(topo_units_dir))] == [str(view_dir)]
 
 
@@ -250,7 +256,7 @@ def test_ts1_dry_run_plan_body_is_exactly_the_topo_bundle(capsys, topo_units_dir
     dossier = tmp_path / "dossier.md"
     dossier.write_text("dossier-sentinel", encoding="utf-8")
     argv = _base_argv("thinker", two_stage_plan) + [
-        "--review-topo", "2",
+        "--review-topo", "2-1",
         "--constraints", "constraint-sentinel",
         "--context-dossier", str(dossier),
     ]
@@ -258,8 +264,8 @@ def test_ts1_dry_run_plan_body_is_exactly_the_topo_bundle(capsys, topo_units_dir
     assert result.rc == 0
 
     doc, _, sha = load_plan_with_digest(two_stage_plan)
-    view_dir = topo_units_dir / sha / "view-2"
-    expected_bundle = render_topo_review_bundle(doc, 2, plan_sha256=sha, view_dir=view_dir)
+    view_dir = topo_units_dir / sha / "view-2-1"
+    expected_bundle = render_pair_review_bundle(doc, "2-1", plan_sha256=sha, view_dir=view_dir)
     body = result.prompt.split(f"\n{TOPO_PLAN_LABEL}\n\n", 1)[1]
     body = body.split(f"\n\n{DONE_HEADING}\n", 1)[0]
     assert body == expected_bundle
@@ -287,9 +293,9 @@ def test_ts1_envelope_is_unchanged_only_the_plan_section_is_replaced(two_stage_p
     kwargs = {
         "workdir": "/tmp/wd",
         "permission_mode": "default",
-        "add_dir_paths": ["/tmp/view-2"],
+        "add_dir_paths": ["/tmp/view-2-1"],
     }
-    bundle = "# Topological review unit: 2\n\nbundle-sentinel"
+    bundle = "# Topological review pair: 2-1\n\nbundle-sentinel"
     plain = MOD.assemble_prompt(args, 3, "perm-sentinel", **kwargs)
     topo = MOD.assemble_prompt(args, 3, "perm-sentinel", topo_bundle=bundle, **kwargs)
 
@@ -302,26 +308,26 @@ def test_ts1_envelope_is_unchanged_only_the_plan_section_is_replaced(two_stage_p
 
 
 def test_ts1_file_access_scope_names_the_view_directory_not_plans_dir(capsys, topo_units_dir, two_stage_plan, plans_dir_patch):
-    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2-1"]
     result = _dry_run(capsys, argv)
     scope_section = result.prompt.split("## File-access scope", 1)[1]
-    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2"
+    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2-1"
     assert str(plans_dir_patch) not in scope_section
     assert f"- Additional directory: `{view_dir}`" in scope_section.splitlines()
 
 
 def test_ts2_exactly_one_add_dir_is_the_view_directory_not_plans_directory(capsys, topo_units_dir, plans_dir_patch, two_stage_plan):
-    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2-1"]
     result = _dry_run(capsys, argv)
-    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2"
+    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2-1"
     assert str(plans_dir_patch) not in result.add_dirs
     assert [d for d in result.add_dirs if d.startswith(str(topo_units_dir))] == [str(view_dir)]
 
 
 def test_ts2_permissions_grant_read_only_view_directory_no_plans_rules(capsys, topo_units_dir, plans_dir_patch, two_stage_plan):
-    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2-1"]
     result = _dry_run(capsys, argv)
-    view_dir = str(topo_units_dir / _plan_sha(two_stage_plan) / "view-2")
+    view_dir = str(topo_units_dir / _plan_sha(two_stage_plan) / "view-2-1")
     assert any(view_dir in rule and rule.startswith("Read(") for rule in result.allow)
     assert any(view_dir in rule and rule.startswith("Edit(") for rule in result.deny)
     assert not any(str(plans_dir_patch) in rule for rule in result.allow)
@@ -332,17 +338,17 @@ def test_ts2_permissions_grant_read_only_view_directory_no_plans_rules(capsys, t
 
 
 def test_ts7_dry_run_prints_the_exact_topo_view_line(capsys, topo_units_dir, two_stage_plan):
-    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2-1"]
     result = _dry_run(capsys, argv)
     assert result.rc == 0
-    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2"
+    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2-1"
     assert [line for line in result.out.splitlines() if line.startswith("TOPO-VIEW:")] == [
         f"TOPO-VIEW: {view_dir} files=stage-1.md",
     ]
 
 
 def test_tb14_dry_run_writes_nothing(capsys, topo_units_dir, two_stage_plan, cost_log):
-    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2-1"]
     result = _dry_run(capsys, argv)
     assert result.rc == 0
     assert not topo_units_dir.exists()
@@ -350,7 +356,7 @@ def test_tb14_dry_run_writes_nothing(capsys, topo_units_dir, two_stage_plan, cos
 
 
 def test_ts7_view_directory_is_materialized_before_the_child_launches(capsys, topo_units_dir, two_stage_plan, monkeypatch, tmp_path):
-    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2"
+    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2-1"
     seen_at_launch: list[set[str]] = []
 
     def check_view_dir(cmd):
@@ -359,14 +365,14 @@ def test_ts7_view_directory_is_materialized_before_the_child_launches(capsys, to
 
     _stub_child_launch(monkeypatch, tmp_path, on_launch=check_view_dir)
     argv = [a for a in _base_argv("thinker", two_stage_plan) if a != "--dry-run"]
-    argv += ["--review-topo", "2"]
+    argv += ["--review-topo", "2-1"]
     assert MOD.main(argv) == 0
     assert seen_at_launch == [{"stage-1.md"}]
 
 
 def test_ts3_oversize_bundle_refused_pre_spawn_naming_split_and_override(capsys, topo_units_dir, two_stage_plan, monkeypatch):
     monkeypatch.setattr(MOD, "dispatch_prompt_ceiling_chars", lambda model: 1)
-    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2-1"]
     rc = MOD.main(argv)
     err = capsys.readouterr().err
     assert rc == 5
@@ -386,31 +392,34 @@ def test_ts9_whole_plan_ceiling_refusal_names_review_topo_and_the_planned_driver
     argv = _base_argv("thinker", two_stage_plan)  # no --review-topo at all
     result = _dry_run(capsys, argv)
     assert result.rc == 5
-    assert "--review-topo <n|order>" in result.err
+    assert "--review-topo <pair>" in result.err
     assert "scripts/plan-review-topological.py" in result.err
+    assert "planned" in result.err
 
 
-def test_ts9_review_topo_ceiling_refusal_log_row_carries_unit_and_digest(capsys, topo_units_dir, two_stage_plan, monkeypatch):
+def test_ts9_review_topo_ceiling_refusal_log_row_carries_pair_and_digest(capsys, topo_units_dir, two_stage_plan, monkeypatch):
     logged: list[dict] = []
     monkeypatch.setattr(MOD, "log_refused", lambda reason, fields: logged.append({"reason": reason, **fields}))
     monkeypatch.setattr(MOD, "dispatch_prompt_ceiling_chars", lambda model: 1)
-    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2"]
+    argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2-1"]
     result = _dry_run(capsys, argv)
     assert result.rc == 5
     rows = [row for row in logged if row["reason"] == "prompt-too-large"]
     assert len(rows) == 1
-    assert rows[0]["review_topo_unit"] == "2"
+    assert rows[0]["review_pair"] == "2-1"
     assert rows[0]["plan_sha256"] == _plan_sha(two_stage_plan)
+    assert "review_topo_unit" not in rows[0]
 
 
-def test_ts8_cost_log_row_carries_review_topo_unit_and_plan_sha256(capsys, topo_units_dir, two_stage_plan, monkeypatch, tmp_path):
+def test_ts8_cost_log_row_carries_review_pair_and_plan_sha256(capsys, topo_units_dir, two_stage_plan, monkeypatch, tmp_path):
     logged = _stub_child_launch(monkeypatch, tmp_path)
     argv = [a for a in _base_argv("thinker", two_stage_plan) if a != "--dry-run"]
-    argv += ["--review-topo", "2"]
+    argv += ["--review-topo", "2-1"]
     assert MOD.main(argv) == 0
     assert len(logged) == 1
-    assert logged[0]["review_topo_unit"] == "2"
+    assert logged[0]["review_pair"] == "2-1"
     assert logged[0]["plan_sha256"] == _plan_sha(two_stage_plan)
+    assert "review_topo_unit" not in logged[0]
 
 
 def test_ts8_ordinary_spawn_cost_log_row_carries_none_for_both_fields(capsys, topo_units_dir, two_stage_plan, monkeypatch, tmp_path):
@@ -418,5 +427,5 @@ def test_ts8_ordinary_spawn_cost_log_row_carries_none_for_both_fields(capsys, to
     argv = [a for a in _base_argv("developer", two_stage_plan) if a != "--dry-run"]
     assert MOD.main(argv) == 0
     assert len(logged) == 1
-    assert logged[0]["review_topo_unit"] is None
+    assert logged[0]["review_pair"] is None
     assert logged[0]["plan_sha256"] is None

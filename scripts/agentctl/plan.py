@@ -1577,7 +1577,7 @@ def load_plan_with_digest(
 
 
 # --- Topological-review protocol constants ------------------------------
-# Sourced by render.render_topo_review_bundle so the checklist/protocol text
+# Sourced by render.render_pair_review_bundle so the checklist/protocol text
 # rendered into a --review-topo starting prompt and the markers a reviewer's
 # own REVIEW: reply is parsed against never drift apart: render.py must
 # import these, never duplicate them as string literals.
@@ -2413,6 +2413,112 @@ def topo_unit_binding(doc: PlanDoc, unit: str) -> dict:
         "neighbor_file_digests": neighbor_file_digests,
         "interface_keys": interface_keys,
         "order_extra_digest": "",
+    }
+
+
+PAIR_PLAN_NODE = "plan"
+PAIR_BASE_NODE = "base"
+_COVERAGE_STAGE_FORMS = ("stage <n> verify_command", "stage <n> landed assertion")
+
+
+def plan_coverage_refs(doc: PlanDoc) -> dict[int, tuple[str, ...]]:
+    """`{stage index: requirement ids}` for every stage a `[meta.order.coverage]`
+    control names through one of the stage-addressed coverage grammars
+    (`controls.COVERAGE_GRAMMARS`), requirement ids in coverage order. Empty
+    when the plan declares no order. Imports `controls` locally: it imports
+    this module."""
+    from .controls import COVERAGE_GRAMMARS
+    order = doc.meta.order
+    if order is None:
+        return {}
+    grammars = [g for g in COVERAGE_GRAMMARS if g.form in _COVERAGE_STAGE_FORMS]
+    refs: dict[int, list[str]] = {}
+    for req_id, controls in order.coverage.items():
+        for control in controls:
+            for grammar in grammars:
+                match = grammar.pattern.match(control)
+                if match is None:
+                    continue
+                n = int(match.group(1))
+                if req_id not in refs.setdefault(n, []):
+                    refs[n].append(req_id)
+                break
+    return {n: tuple(ids) for n, ids in refs.items()}
+
+
+def plan_reliance_set(doc: PlanDoc) -> frozenset[int]:
+    """The stages the plan as a whole relies on to discharge the order: every
+    sink (a stage no other stage relies on) plus every stage a coverage
+    control names (`plan_coverage_refs`)."""
+    sinks = {s.index for s in doc.stages if not consumers(doc, s.index)}
+    valid = {s.index for s in doc.stages}
+    return frozenset(sinks | (set(plan_coverage_refs(doc)) & valid))
+
+
+def review_pairs(doc: PlanDoc) -> tuple[str, ...]:
+    """Every reliance edge of `doc` as a pair id `<b>-<s>` — `b` relies on
+    `s` — in review order: `base-plan` (only when an order is declared),
+    then `plan-<s>` by `s`, then `<n>-<s>` by `n` and then `s`."""
+    pairs: list[str] = []
+    if doc.meta.order is not None:
+        pairs.append(f"{PAIR_BASE_NODE}-{PAIR_PLAN_NODE}")
+    pairs.extend(f"{PAIR_PLAN_NODE}-{s}" for s in sorted(plan_reliance_set(doc)))
+    for stage in sorted(doc.stages, key=lambda st: st.index):
+        pairs.extend(f"{stage.index}-{s}" for s in sorted(reliance_set(doc, stage.index)))
+    return tuple(pairs)
+
+
+def parse_pair(doc: PlanDoc, pair_id: str) -> tuple["int | str", "int | str"]:
+    """`(b, s)` for a pair id `doc` has — stage nodes as ints, the synthetic
+    nodes as `PAIR_PLAN_NODE` / `PAIR_BASE_NODE`. Splits on the first `-`.
+    Raises ValueError for any id outside `review_pairs(doc)`, including the
+    unit-shaped ids (`3`, `order`)."""
+    if pair_id not in review_pairs(doc):
+        raise ValueError(
+            f"no review pair {pair_id!r} in plan {doc.meta.task_id!r} "
+            f"(valid pairs: {', '.join(review_pairs(doc)) or 'none'})"
+        )
+    b, s = pair_id.split("-", 1)
+    return (b if not b.isdigit() else int(b), s if not s.isdigit() else int(s))
+
+
+def _sha256_hex(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _pair_node_key(doc: PlanDoc, node: "int | str") -> str:
+    from .render import node_file_text
+    if node == PAIR_BASE_NODE:
+        return _sha256_hex(node_file_text(doc, node))
+    if node == PAIR_PLAN_NODE:
+        return _sha256_hex(repr((plan_meta_digest(doc), order_extra_digest(doc.meta))))
+    stage = _stage_by_index(doc, node)
+    return _sha256_hex(repr((
+        stage_element_keys(stage)[WHOLE_STAGE_ELEMENT],
+        stage_interface_digest(doc, stage),
+    )))
+
+
+def pair_binding(doc: PlanDoc, pair_id: str) -> dict:
+    """The seven digests a CURRENT review of `pair_id` must match against
+    `doc`, recomputed fresh on every call. Together they cover what the
+    reviewer was shown: the order context (`context_digest`, the base file's
+    sha256), both nodes' identity keys, both nodes' file bytes, the exact
+    service-interface and edge sections of the bundle. For `base-plan` the
+    context, base key and base file digests are the same value by
+    construction. Raises ValueError for an unknown pair, PlanError for a
+    dangling or cyclic reliance graph."""
+    from .render import node_file_text, pair_edge_text, pair_service_text
+    b, s = parse_pair(doc, pair_id)
+    base_text = node_file_text(doc, PAIR_BASE_NODE)
+    return {
+        "context_digest": _sha256_hex(base_text),
+        "base_key": _pair_node_key(doc, b),
+        "service_key": _pair_node_key(doc, s),
+        "base_file_digest": _sha256_hex(node_file_text(doc, b)),
+        "service_file_digest": _sha256_hex(node_file_text(doc, s)),
+        "service_interface_digest": _sha256_hex(pair_service_text(doc, b, s)),
+        "edge_digest": _sha256_hex(pair_edge_text(doc, b, s)),
     }
 
 
