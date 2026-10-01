@@ -139,10 +139,16 @@ def _obs_submit_plan(state, bag) -> list[PluginDirective]:
             f"spawn the `{specialist}` specialization with --workdir {venue} (never "
             f"--session -- a review spawn is not the plan's executor); feed it "
             f"`{delta['render_command']}` and `agentctl question-list "
-            f"--session {state.session_id} --format md`; the reviewer must compute the "
-            f"sha256 of {target_plan} from its OWN read and report it as a `Plan digest: "
-            f"<sha256-hex>` line in its REVIEW message -- it never calls `agentctl "
-            f"plan-review` itself. {record_instruction}"
+            f"--session {state.session_id} --format md`; on this inline route the "
+            f"reviewer must compute the sha256 of {target_plan} from its OWN read and "
+            f"report it as a `Plan digest: <sha256-hex>` line in its REVIEW message -- it "
+            f"never calls `agentctl plan-review` itself. {record_instruction}. Once the "
+            f"whole-plan spawn ceiling refuses this plan, run `scripts/plan-review-topological.py "
+            f"--session {state.session_id} --plan {target_plan}` instead: it spawns one "
+            f"pair reviewer per base-service pair (each echoes the spawner-rendered "
+            f"`Plan digest:` line rather than computing one), records every verdict and "
+            f"composes the pass; exit 0 composed pass, 1 blocked, 3 nothing to review, 2 a "
+            f"refused pair or a usage error"
         ),
         blocking=True,
         data={"slot": "plan_review", "specialist": specialist, "blockers": blockers,
