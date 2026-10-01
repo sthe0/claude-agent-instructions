@@ -156,6 +156,18 @@ def test_submit_plan_fires_blocking_thinker_directive(capsys, tmp_path, fixtures
     assert m["data"]["slot"] == "plan_review"
 
 
+def test_submit_plan_directive_names_topological_route_and_scopes_digest_to_inline(
+        capsys, tmp_path, fixtures_dir):
+    root = str(tmp_path / "state")
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _, d = _drive_to_plan_ready(capsys, root, "rd1t", plan)
+    detail = next(p["detail"] for p in d["data"]["plugin_directives"]
+                  if p["action"] == "spawn_thinker_review")
+    assert f"scripts/plan-review-topological.py --session rd1t --plan {plan}" in detail
+    assert "on this inline route the reviewer must compute the sha256" in detail
+    assert "echoes the spawner-rendered `Plan digest:` line" in detail
+
+
 def test_submit_plan_silent_once_bound_passing_review_exists(capsys, tmp_path, fixtures_dir):
     # A second submit-plan at PLAN_READY is a RESUBMISSION: cmd_submit_plan
     # unconditionally clears state.plan_review (the plan may have changed), so
