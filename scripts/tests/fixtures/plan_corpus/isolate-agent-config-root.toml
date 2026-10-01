@@ -1,6 +1,6 @@
 [meta]
 task_id = "isolate-agent-config-root"
-goal = "Isolate the agent-system into its own config root ~/.claude-agent via CLAUDE_CONFIG_DIR so that installing claude-agent-instructions never overwrites the user's personal ~/.claude and the user's personal config never interferes with the system. Bare `claude` = the user's personal config; `claude-agent`/`claude-task` = the system. Single shared login. The install root is a parameter (CLAUDE_AGENT_HOME) the Yandex junk/the0/agents overlay reuses."
+goal = "Isolate the agent-system into its own config root ~/.claude-agent via CLAUDE_CONFIG_DIR so that installing claude-agent-instructions never overwrites the user's personal ~/.claude and the user's personal config never interferes with the system. Bare `claude` = the user's personal config; `claude-agent`/`claude-task` = the system. Single shared login. The install root is a parameter (CLAUDE_AGENT_HOME) the Exampleorg junk/user/agents overlay reuses."
 done_criterion = "With CLAUDE_AGENT_HOME=<tmp-root>, setup-symlinks.sh completes and <tmp-root> holds all system symlinks; a byte snapshot of ~/.claude before and after is identical (install touched nothing there); doctor.sh reports ready against the isolated root; and a live `claude-agent -p` (or CLAUDE_CONFIG_DIR=<root> claude -p) session reads the system CLAUDE.md and is logged in without a separate /login (or one documented one-time login if Stage A finds shared auth infeasible)."
 criterion_type = "measurable"
 weight_class = "substantive"
@@ -105,7 +105,7 @@ refutation = "A migration run that removes or moves a personal (non-system) file
 index = 5
 title = "Documentation + end-to-end verification"
 executor = "spawn:developer"
-expected_result_image = "README Setup + setup.md + org-portability.md document the isolated-by-default model (system in ~/.claude-agent, bare claude = personal, claude-agent = system, CLAUDE_AGENT_HOME override, shared-auth note, migrate-to-isolated.sh) and the overlay contract for junk/the0/agents (reuse CLAUDE_AGENT_HOME via lib/config-root.sh); lint-prose-length.py passes; the Final verification block passes end-to-end."
+expected_result_image = "README Setup + setup.md + org-portability.md document the isolated-by-default model (system in ~/.claude-agent, bare claude = personal, claude-agent = system, CLAUDE_AGENT_HOME override, shared-auth note, migrate-to-isolated.sh) and the overlay contract for junk/user/agents (reuse CLAUDE_AGENT_HOME via lib/config-root.sh); lint-prose-length.py passes; the Final verification block passes end-to-end."
 criterion_type = "measurable"
 done_criterion = "Docs updated; lint-prose-length.py exits 0; the [[final_check]] block passes."
 verify_command = "python3 scripts/lint-prose-length.py"
@@ -114,13 +114,13 @@ depends_on = [2, 3, 4]
 output_artifacts = ["README.md", "docs/operations/setup.md", "docs/operations/org-portability.md"]
 material = "README.md (Setup section), docs/operations/setup.md, docs/operations/org-portability.md."
 means = "docs-accompany-architectural-change (an install-model change is not delivered until the read-first surface reflects it); the repo's doc-length lints (lint-prose-length.py, readme-max-lines)."
-method = "1) Update README Setup + setup.md + org-portability.md: isolated model, claude-agent, CLAUDE_AGENT_HOME, migration path, and the overlay contract (junk/the0/agents must source lib/config-root.sh and reuse CLAUDE_AGENT_HOME rather than re-hardcoding a root, so it inherits isolation with zero divergence). 2) Run the Final verification end-to-end; capture output."
+method = "1) Update README Setup + setup.md + org-portability.md: isolated model, claude-agent, CLAUDE_AGENT_HOME, migration path, and the overlay contract (junk/user/agents must source lib/config-root.sh and reuse CLAUDE_AGENT_HOME rather than re-hardcoding a root, so it inherits isolation with zero divergence). 2) Run the Final verification end-to-end; capture output."
 conditions = "Doc-length lints pass; no behavioral claim documented that verification did not actually exercise."
 invariants = "English docs (instruction-repo language rule); existing doc structure/links preserved."
 capability_required = "Technical writing in English + the repo's doc conventions (developer)."
 
 [stage.principle]
-statement = "An install-model change is not delivered until the read-first surface (README + operations docs) reflects it; document the downstream-overlay contract so the Yandex variant composes without divergence."
+statement = "An install-model change is not delivered until the read-first surface (README + operations docs) reflects it; document the downstream-overlay contract so the Exampleorg variant composes without divergence."
 source = "memory-global/leaves/docs-accompany-architectural-change.md."
 confidence = "high"
 refutation = "A green system with a README still describing in-place ~/.claude install refutes 'delivered'."
