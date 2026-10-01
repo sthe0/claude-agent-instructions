@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import errno
-import hashlib
 import json
 import os
 import shutil
@@ -36,6 +35,7 @@ from .plan import (
     PAIR_PLAN_NODE,
     PlanDoc,
     PlanError,
+    _sha256_hex,
     _venue_for,
     consumers,
     grants_sha256,
@@ -540,10 +540,10 @@ def render_plan_interface(doc: PlanDoc) -> str:
     else:
         lines.append("- **Output artifacts:** *(none declared)*")
     lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
+    return _lines_text(lines)
 
 
-def topo_unit_view_dirname(pair_id: str) -> str:
+def topo_pair_view_dirname(pair_id: str) -> str:
     """The view directory's bare name for `pair_id` — e.g. `view-3-1` or
     `view-plan-7`. Matches the exact `view-<pair>` shape
     `spawn-specialist.py --review-topo` grants `Read(//.../view-<pair>/**)`
@@ -570,10 +570,6 @@ def topo_node_files(doc: PlanDoc) -> dict[str, str]:
     if doc.meta.order is not None:
         files[node_file_name(PAIR_BASE_NODE)] = node_file_text(doc, PAIR_BASE_NODE)
     return files
-
-
-def _sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def materialize_topo_units(doc: PlanDoc, plan_sha256: str, root: "Path | str") -> Path:
@@ -610,15 +606,15 @@ def materialize_topo_units(doc: PlanDoc, plan_sha256: str, root: "Path | str") -
     try:
         for filename, content in node_files.items():
             (tmp_dir / filename).write_text(content, encoding="utf-8")
-            manifest[filename] = _sha256_text(content)
+            manifest[filename] = _sha256_hex(content)
         for pair in review_pairs(doc):
-            view_name = topo_unit_view_dirname(pair)
+            view_name = topo_pair_view_dirname(pair)
             view_dir = tmp_dir / view_name
             view_dir.mkdir()
             for filename in topo_pair_view(doc, pair):
                 content = node_files[filename]
                 (view_dir / filename).write_text(content, encoding="utf-8")
-                manifest[f"{view_name}/{filename}"] = _sha256_text(content)
+                manifest[f"{view_name}/{filename}"] = _sha256_hex(content)
         (tmp_dir / "MANIFEST.json").write_text(
             json.dumps(manifest, sort_keys=True, indent=2), encoding="utf-8"
         )
@@ -640,7 +636,7 @@ def _verify_topo_file(path: Path, expected_content: str, expected_sha256: str, r
     if not path.is_file():
         raise TopoUnitsCorrupt(f"{path} is missing; {remedy}")
     actual = path.read_text(encoding="utf-8")
-    if _sha256_text(actual) != expected_sha256 or actual != expected_content:
+    if _sha256_hex(actual) != expected_sha256 or actual != expected_content:
         raise TopoUnitsCorrupt(f"{path} content does not match its MANIFEST.json sha256; {remedy}")
 
 
@@ -663,15 +659,15 @@ def verify_topo_units(unit_dir: "Path | str", doc: PlanDoc) -> None:
 
     node_files = topo_node_files(doc)
     expected_manifest: dict[str, str] = {
-        filename: _sha256_text(content) for filename, content in node_files.items()
+        filename: _sha256_hex(content) for filename, content in node_files.items()
     }
     expected_view_files: dict[str, set[str]] = {}
     for pair in review_pairs(doc):
-        view_name = topo_unit_view_dirname(pair)
+        view_name = topo_pair_view_dirname(pair)
         names = set(topo_pair_view(doc, pair))
         expected_view_files[view_name] = names
         for filename in names:
-            expected_manifest[f"{view_name}/{filename}"] = _sha256_text(node_files[filename])
+            expected_manifest[f"{view_name}/{filename}"] = _sha256_hex(node_files[filename])
 
     manifest_path = unit_dir / "MANIFEST.json"
     if not manifest_path.is_file():
@@ -782,7 +778,7 @@ def _is_source_stage(doc: PlanDoc, node: "int | str") -> bool:
     return node not in (PAIR_PLAN_NODE, PAIR_BASE_NODE) and not reliance_set(doc, int(node))
 
 
-def pair_service_text(doc: PlanDoc, base: "int | str", service: "int | str") -> str:
+def pair_service_text(doc: PlanDoc, service: "int | str") -> str:
     """Section 3 of a pair bundle: the service's declared product. The plan
     service shows `render_plan_interface`; a stage service shows its
     contract interface — or, when it relies on nothing (a source stage), its
@@ -838,22 +834,21 @@ def _pair_conditions(doc: PlanDoc, base: "int | str", service: "int | str") -> l
     if base == PAIR_BASE_NODE:
         return [
             "the base is organized in a non-arbitrary way",
-            "the plan as a whole is a genuine derivation from the order",
+            "the requirements are genuinely derived from the functional place",
             "not applicable — the base activity delivers no product of its own for a "
             "consumer to rely on",
-            "the plan's declared product covers the order — the base's consumer "
-            "precondition holds",
+            "the goal and done criterion answer every requirement",
         ]
     if base == PAIR_PLAN_NODE:
         return [
-            "every need of the plan as a whole is attributed to a declared edge — it is "
-            "organized in a non-arbitrary way",
+            "the coverage map is total and non-arbitrary",
             "the plan as a whole is a genuine derivation from the order through this edge",
-            f"the plan as a whole delivers its FULL declared product — the part that "
-            f"depends on {service_label} measured against that stage's declared product, "
-            f"the rest standing on its own",
-            f"{service_label}'s declared product covers the part of the plan attributed "
-            f"to this edge (the requirements it covers and/or its sink role)",
+            f"the plan as a whole delivers its goal and done criterion — the part "
+            f"attributed to {service_label} measured against that stage's declared "
+            f"product, the rest (coverage map, final checks) standing on its own from "
+            f"the plan file",
+            f"{service_label}'s declared product decides the requirements the coverage "
+            f"map attributes to it",
         ]
     return [
         f"every need of {base_label} is attributed to a declared edge — it is organized "
@@ -912,7 +907,7 @@ def render_pair_review_bundle(doc: PlanDoc, pair_id: str, *, plan_sha256: str, v
             "construction is judged in this pair)*"
         )
         lines.append("")
-    lines.append(pair_service_text(doc, base, service).rstrip("\n"))
+    lines.append(pair_service_text(doc, service).rstrip("\n"))
     lines.append("")
 
     lines.append("## Edge")

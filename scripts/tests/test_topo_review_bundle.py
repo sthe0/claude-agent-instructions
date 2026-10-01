@@ -48,11 +48,12 @@ from agentctl.render import (
     render_order_md,
     render_pair_review_bundle,
     render_plan_interface,
+    render_plan_md,
     render_stage_brief,
     render_stage_interface,
     topo_node_files,
     topo_pair_view,
-    topo_unit_view_dirname,
+    topo_pair_view_dirname,
     verify_topo_units,
 )
 
@@ -207,6 +208,34 @@ def test_tb1_stage_pair_bundle_holds_order_base_brief_and_digest():
     assert bundle.startswith("# Topological review pair: 2-1\n")
 
 
+def test_tb1_third_stage_adjacent_to_neither_endpoint_is_absent():
+    doc = _doc([
+        _stage(1),
+        _stage(2, depends_on=[1]),
+        _stage(3, title="Unrelated third stage", depends_on=[]),
+    ])
+    bundle = _bundle(doc, "2-1")
+    assert "Unrelated third stage" not in bundle
+    assert _method_sentinel(3) not in bundle
+    assert "stage-3.md" not in bundle
+
+
+def test_tb1_checklist_states_c3_as_the_bases_full_delivery():
+    doc = _doc(
+        [_stage(1), _stage(2, depends_on=[1])],
+        order=_order(["R1"], {"R1": ["stage 2 verify_command"]}),
+    )
+    stage_c3 = _conditions(_bundle(doc, "2-1"))[2]
+    assert "delivers its FULL declared product" in stage_c3
+    assert "the part that depends on stage 1 (Stage 1)'s product measured against it" in stage_c3
+    assert "the rest standing on its own" in stage_c3
+
+    plan_c3 = _conditions(_bundle(doc, "plan-2"))[2]
+    assert "delivers its goal and done criterion" in plan_c3
+    assert "the rest (coverage map, final checks) standing on its own from the plan file" in plan_c3
+    assert "as far as that rests on this edge" not in plan_c3
+
+
 def test_tb2_edge_section_names_the_edge_the_reliance_set_and_the_ordering():
     doc = _doc([
         _stage(1, output_artifacts=["out/a.json"]),
@@ -240,6 +269,35 @@ def test_tb3_non_source_service_shows_interface_only_no_full_brief():
     assert render_stage_brief(doc, 2) not in bundle
     assert _method_sentinel(2) not in bundle
     assert _method_sentinel(3) in bundle
+
+
+def test_tb3_pair_binding_digests_are_the_sha256_of_the_bytes_the_reviewer_sees(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCTL_TOPO_UNITS_DIR", str(tmp_path))
+    doc = _doc(
+        [
+            _stage(1),
+            _stage(2, depends_on=[1], supplies=[{"on": 1, "element": "e1"}]),
+            _stage(3, depends_on=[2], supplies=[{"on": 2}]),
+        ],
+        order=_order(["R1"], {"R1": ["stage 3 verify_command"]}),
+    )
+    sha = lambda text: hashlib.sha256(text.encode("utf-8")).hexdigest()
+    version_root = materialize_topo_units(doc, "plansha", tmp_path)
+    for pair, base_file, service_file, service_text in (
+        ("3-2", "stage-3.md", "stage-2.md", render_stage_interface(doc, 2, contract=True)),
+        # Stage 1 relies on nothing, so it is shown by its full brief.
+        ("2-1", "stage-2.md", "stage-1.md", render_stage_brief(doc, 1)),
+        ("plan-3", "plan.md", "stage-3.md", render_stage_interface(doc, 3, contract=True)),
+        ("base-plan", "base.md", "plan.md", render_plan_interface(doc)),
+    ):
+        sections = _sections(_bundle(doc, pair))
+        binding = pair_binding(doc, pair)
+        assert binding["context_digest"] == sha((version_root / "base.md").read_text(encoding="utf-8"))
+        assert binding["base_file_digest"] == sha((version_root / base_file).read_text(encoding="utf-8"))
+        assert binding["service_file_digest"] == sha((version_root / service_file).read_text(encoding="utf-8"))
+        assert service_text.rstrip("\n") in sections["## Service declared product: "]
+        assert binding["service_interface_digest"] == sha(service_text)
+        assert binding["edge_digest"] == sha(sections["## Edge"] + "\n")
 
 
 def test_tb3_source_service_shows_its_full_brief_with_a_note():
@@ -321,12 +379,52 @@ def test_tb6_base_plan_pair_inlines_the_base_twice_and_marks_c3_not_applicable()
     ]
     assert _conditions(bundle) == [
         "- `C1:` the base is organized in a non-arbitrary way",
-        "- `C2:` the plan as a whole is a genuine derivation from the order",
+        "- `C2:` the requirements are genuinely derived from the functional place",
         "- `C3:` not applicable — the base activity delivers no product of its own for a "
         "consumer to rely on",
-        "- `C4:` the plan's declared product covers the order — the base's consumer "
-        "precondition holds",
+        "- `C4:` the goal and done criterion answer every requirement",
     ]
+
+
+def test_tb6_plan_stage_pair_conditions_read_the_coverage_map_and_the_plan_delivery():
+    doc = _order_doc()
+    assert _conditions(_bundle(doc, "plan-2")) == [
+        "- `C1:` the coverage map is total and non-arbitrary",
+        "- `C2:` the plan as a whole is a genuine derivation from the order through this edge",
+        "- `C3:` the plan as a whole delivers its goal and done criterion — the part "
+        "attributed to stage 2 (Stage 2) measured against that stage's declared product, "
+        "the rest (coverage map, final checks) standing on its own from the plan file",
+        "- `C4:` stage 2 (Stage 2)'s declared product decides the requirements the "
+        "coverage map attributes to it",
+    ]
+
+
+def test_tb6_synthetic_node_files_hold_no_stage_content_and_coverage_is_new_to_plan_md():
+    doc = _doc(
+        [_stage(1), _stage(2, depends_on=[1])],
+        order=_order(
+            ["R1"],
+            {"R1": ["stage 1 verify_command", "stage 2 verify_command"]},
+            requires_traceability=True,
+            customer="CUSTOMER-SENTINEL",
+            customer_id="cust-id",
+            functional_place="PLACE-SENTINEL",
+        ),
+    )
+    base_md = node_file_text(doc, "base")
+    plan_md = node_file_text(doc, "plan")
+    assert "CUSTOMER-SENTINEL" in base_md
+    assert "PLACE-SENTINEL" in base_md
+    assert "**R1**" in base_md
+    for stage_content in (_method_sentinel(1), _method_sentinel(2), "Stage 1", "Stage 2", "Expected result image"):
+        assert stage_content not in base_md
+        assert stage_content not in plan_md
+    assert "## Stage" not in plan_md
+    assert "R1: stage 1 verify_command, stage 2 verify_command" in plan_md
+    assert "- **Requires traceability:** True" in plan_md
+    whole_plan = render_plan_md(doc)
+    assert "R1: stage 1 verify_command, stage 2 verify_command" not in whole_plan
+    assert "Requires traceability" not in whole_plan
 
 
 def test_tb6_stage_pair_conditions_name_both_nodes_and_never_mark_c3_not_applicable():
@@ -439,6 +537,27 @@ def test_tb8_pair_binding_moves_with_the_part_of_the_plan_each_digest_covers():
     assert order_edit["context_digest"] != reference["context_digest"]
 
 
+def test_tb8_removing_a_raw_only_edge_moves_edge_digest_and_nothing_else():
+    def doc_with(raw_depends_on):
+        return _doc([
+            _stage(1),
+            _stage(2, depends_on=raw_depends_on, supplies=[{"on": 1, "element": "e1"}]),
+            _stage(3),
+        ])
+
+    with_edge = doc_with([1, 3])
+    without_edge = doc_with([1])
+    assert reliance_set(with_edge, 2) == {1, 3}
+    assert reliance_set(without_edge, 2) == {1}
+    # The supplies-derived edges, hence every node and interface digest, are untouched.
+    assert [s.depends_on for s in with_edge.stages] == [s.depends_on for s in without_edge.stages]
+
+    before = pair_binding(with_edge, "2-1")
+    after = pair_binding(without_edge, "2-1")
+    changed = {name for name in before if before[name] != after[name]}
+    assert changed == {"edge_digest"}
+
+
 def test_tb10_dangling_raw_edge_raises_planerror():
     # The dangling raw edge hides behind an explicit (valid) supplies list, so
     # parse_plan's own graph validation (derived, supplies-collapsed edges only)
@@ -466,6 +585,15 @@ def test_tb10_raw_union_cycle_hidden_behind_acyclic_derived_graph_raises_planerr
     assert list(stage3.depends_on) == [4]
     with pytest.raises(PlanError):
         reliance_closure(doc, 1)
+    # Every pair-level entry point refuses the plan; none reaches a closure of its own.
+    with pytest.raises(PlanError, match="reliance cycle"):
+        review_pairs(doc)
+    with pytest.raises(PlanError, match="reliance cycle"):
+        parse_pair(doc, "1-2")
+    with pytest.raises(PlanError, match="reliance cycle"):
+        _bundle(doc, "1-2")
+    with pytest.raises(PlanError, match="reliance cycle"):
+        pair_binding(doc, "1-2")
 
 
 def test_tb10_cycle_reached_through_an_already_visited_node_raises_planerror():
@@ -536,7 +664,7 @@ def test_tb13_one_pair_view_holds_only_the_service_file_copy(tmp_path):
     assert _method_sentinel(1) not in files["stage-2.md"]
 
     version_root = materialize_topo_units(doc, "shaV", tmp_path)
-    view_dir = version_root / topo_unit_view_dirname("3-2")
+    view_dir = version_root / topo_pair_view_dirname("3-2")
     assert sorted(p.name for p in view_dir.iterdir()) == ["stage-2.md"]
     assert (view_dir / "stage-2.md").read_bytes() == node_file_text(doc, 2).encode("utf-8")
     assert _method_sentinel(1) not in (view_dir / "stage-2.md").read_text(encoding="utf-8")
@@ -745,7 +873,7 @@ def test_tb20_concurrent_threads_all_return_one_verified_tree(tmp_path):
 def test_tb20_modified_view_file_fails_rematerialize_with_remedy(tmp_path):
     doc = _race_doc()
     version_root = materialize_topo_units(doc, "shaC", tmp_path)
-    victim = version_root / topo_unit_view_dirname("2-1") / "stage-1.md"
+    victim = version_root / topo_pair_view_dirname("2-1") / "stage-1.md"
     victim.write_text("tampered", encoding="utf-8")
     with pytest.raises(TopoUnitsCorrupt) as exc_info:
         materialize_topo_units(doc, "shaC", tmp_path)
@@ -756,7 +884,7 @@ def test_tb20_modified_view_file_fails_rematerialize_with_remedy(tmp_path):
 def test_tb20_extra_file_in_view_dir_fails_rematerialize_with_remedy(tmp_path):
     doc = _race_doc()
     version_root = materialize_topo_units(doc, "shaF", tmp_path)
-    extra = version_root / topo_unit_view_dirname("2-1") / "extra.md"
+    extra = version_root / topo_pair_view_dirname("2-1") / "extra.md"
     extra.write_text("x", encoding="utf-8")
     with pytest.raises(TopoUnitsCorrupt) as exc_info:
         materialize_topo_units(doc, "shaF", tmp_path)

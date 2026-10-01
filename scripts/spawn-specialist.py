@@ -44,7 +44,7 @@ from agentctl.render import (  # pure PlanDoc(+index) -> markdown; TopoUnitsCorr
     render_pair_review_bundle,
     render_stage_brief,
     topo_pair_view,
-    topo_unit_view_dirname,
+    topo_pair_view_dirname,
 )
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
@@ -1900,7 +1900,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         topo_units_override = os.environ.get("AGENTCTL_TOPO_UNITS_DIR")
         topo_root = Path(topo_units_override) if topo_units_override else agentctl_topo_units_dir()
-        topo_view_dir = topo_root / topo_plan_sha256 / topo_unit_view_dirname(topo_pair)
+        topo_view_dir = topo_root / topo_plan_sha256 / topo_pair_view_dirname(topo_pair)
         if not args.dry_run:
             # Materialization is real I/O (writes the whole plan-version topo
             # tree); --dry-run must write nothing, so it only computes the path

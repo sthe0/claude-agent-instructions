@@ -1630,16 +1630,13 @@ def consumers(doc: PlanDoc, n: int) -> frozenset[int]:
 
 def first_hop(doc: PlanDoc, n: int) -> frozenset[int]:
     """`n`'s direct neighbours in EITHER direction: what it relies on,
-    union what relies on it. This is the set of units a --review-topo
-    bundle inlines full interfaces for."""
+    union what relies on it."""
     return reliance_set(doc, n) | consumers(doc, n)
 
 
 def reliance_closure(doc: PlanDoc, n: int) -> frozenset[int]:
     """The transitive closure of `reliance_set` upstream from `n` (n's
-    reliances, their reliances, ...), excluding `n` itself. This is the
-    set of units a --review-topo bundle renders bare interfaces for,
-    beyond the first hop.
+    reliances, their reliances, ...), excluding `n` itself.
 
     Raises PlanError on a reliance cycle. The raw union graph
     `reliance_set` reads is not guaranteed acyclic even when the derived
@@ -1784,10 +1781,9 @@ def order_place(meta) -> tuple:
 
 
 def order_extra_digest(meta: PlanMeta) -> str:
-    """Digest of the order unit's own extra bits — `final_check`, `external_research`,
-    `task_id`, `delivery_worktree` — the four PlanMeta fields neither `plan_meta_digest`
-    nor any stage's `stage_interface_digest` covers, so a topo review of the order unit
-    has something to bind to beyond the meta digest it already shares with every stage."""
+    """Digest of the PlanMeta fields `plan_meta_digest` does not cover — `final_check`,
+    `external_research`, `task_id`, `delivery_worktree` — so the `plan` node's identity
+    key (`_pair_node_key`) moves when any of them is edited."""
     payload = repr((
         tuple(
             (fc.command, fc.expected_exit, fc.label, fc.venue, fc.kind)
@@ -2418,8 +2414,6 @@ def topo_unit_binding(doc: PlanDoc, unit: str) -> dict:
 
 PAIR_PLAN_NODE = "plan"
 PAIR_BASE_NODE = "base"
-_COVERAGE_STAGE_FORMS = ("stage <n> verify_command", "stage <n> landed assertion")
-
 
 def plan_coverage_refs(doc: PlanDoc) -> dict[int, tuple[str, ...]]:
     """`{stage index: requirement ids}` for every stage a `[meta.order.coverage]`
@@ -2427,11 +2421,11 @@ def plan_coverage_refs(doc: PlanDoc) -> dict[int, tuple[str, ...]]:
     (`controls.COVERAGE_GRAMMARS`), requirement ids in coverage order. Empty
     when the plan declares no order. Imports `controls` locally: it imports
     this module."""
-    from .controls import COVERAGE_GRAMMARS
+    from .controls import STAGE_LANDED_ASSERTION, STAGE_VERIFY_COMMAND
     order = doc.meta.order
     if order is None:
         return {}
-    grammars = [g for g in COVERAGE_GRAMMARS if g.form in _COVERAGE_STAGE_FORMS]
+    grammars = (STAGE_VERIFY_COMMAND, STAGE_LANDED_ASSERTION)
     refs: dict[int, list[str]] = {}
     for req_id, controls in order.coverage.items():
         for control in controls:
@@ -2458,7 +2452,15 @@ def plan_reliance_set(doc: PlanDoc) -> frozenset[int]:
 def review_pairs(doc: PlanDoc) -> tuple[str, ...]:
     """Every reliance edge of `doc` as a pair id `<b>-<s>` — `b` relies on
     `s` — in review order: `base-plan` (only when an order is declared),
-    then `plan-<s>` by `s`, then `<n>-<s>` by `n` and then `s`."""
+    then `plan-<s>` by `s`, then `<n>-<s>` by `n` and then `s`.
+
+    Raises PlanError for a dangling or cyclic raw reliance graph: the raw
+    union `reliance_set` reads can cycle while the supplies-derived graph
+    `_validate_graph` checked does not, so every stage is walked here and
+    each pair-level entry point (`parse_pair`, the bundle, `pair_binding`)
+    inherits the check."""
+    for stage in doc.stages:
+        reliance_closure(doc, stage.index)
     pairs: list[str] = []
     if doc.meta.order is not None:
         pairs.append(f"{PAIR_BASE_NODE}-{PAIR_PLAN_NODE}")
@@ -2517,7 +2519,7 @@ def pair_binding(doc: PlanDoc, pair_id: str) -> dict:
         "service_key": _pair_node_key(doc, s),
         "base_file_digest": _sha256_hex(node_file_text(doc, b)),
         "service_file_digest": _sha256_hex(node_file_text(doc, s)),
-        "service_interface_digest": _sha256_hex(pair_service_text(doc, b, s)),
+        "service_interface_digest": _sha256_hex(pair_service_text(doc, s)),
         "edge_digest": _sha256_hex(pair_edge_text(doc, b, s)),
     }
 
