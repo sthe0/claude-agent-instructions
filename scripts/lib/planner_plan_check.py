@@ -49,9 +49,17 @@ PLAN_PATH_RE = re.compile(r"^\s*Plan\s*:\s*(.+?)\s*$", re.MULTILINE)
 # blockquote/bullet marks a specialist's markdown terminal line can carry.
 _DECORATION_CHARS = " `*_#>-"
 
+# Concern-text VALUES keep their own underscores, hashes, angle brackets and
+# hyphens (identifiers, paths, `<pair>` placeholders); only emphasis, backticks
+# and whitespace are decoration around a value.
+CONCERN_VALUE_DECORATION_CHARS = " `*"
 
-def _strip_decoration(line: str) -> str:
+
+def strip_decoration(line: str) -> str:
     return line.strip(_DECORATION_CHARS)
+
+
+_strip_decoration = strip_decoration
 
 
 def extract_marker(result_text: str) -> str | None:
