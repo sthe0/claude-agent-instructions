@@ -8613,47 +8613,7 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
-id = "c887cee0d1f444fd"
-domain = "code"
-file = "scripts/tests/test_plan_review_topo.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "d953482d0eb6d7fb"
-domain = "code"
-file = "scripts/tests/test_plan_review_topo.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "d1b00619a8a1df35"
-domain = "code"
-file = "scripts/tests/test_plan_review_topo.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "eb0c64f31f8e806b"
-domain = "code"
-file = "scripts/tests/test_plan_review_topo.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "90735c6ce6283fe6"
-domain = "code"
-file = "scripts/tests/test_plan_review_topo.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "dc0195c1e34cf9eb"
+id = "c06a200f49157ea5"
 domain = "code"
 file = "scripts/tests/test_plan_review_topo.py"
 class = "not-a-gate"
