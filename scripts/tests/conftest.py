@@ -93,6 +93,12 @@ def _isolate_improvement_scan_board_state(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_correction_verdict_cache(tmp_path, monkeypatch):
+    """policy-scorecard caches correction-judge verdicts in a per-machine file; no test may touch the real one."""
+    monkeypatch.setenv("POLICY_CORRECTION_VERDICTS", str(tmp_path / "correction-verdicts.json"))
+
+
+@pytest.fixture(autouse=True)
 def _plan_review_gate_off_by_default(monkeypatch):
     """Default the thinker-review gate OFF for the suite at large.
 

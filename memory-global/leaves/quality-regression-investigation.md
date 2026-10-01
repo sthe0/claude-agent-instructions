@@ -61,7 +61,9 @@ three free-text AskUserQuestion answers accumulated this task → propose 3).
 Accumulated automatically per session by `scripts/policy-scorecard.py` (joined to
 task rows by session id):
 
-- `n_user_corrections` — user prompts matching `CORRECTION_RE` (behavior corrections).
+- `n_user_corrections` — human prompts (`origin.kind == "human"`) that the `si_feedback_detect`
+  prefilter nominates and the feedback judge confirms (behavior corrections); nominations the
+  judge did not answer are `attention.corrections_unjudged`, not counted.
 - `n_user_questions` — user prompts containing a question (confusion / missing info).
 - `n_freetext_askuser_answers` — AskUserQuestion answers matching no offered option
   label (the offered options missed the user's intent).

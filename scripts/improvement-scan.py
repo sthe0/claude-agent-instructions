@@ -577,16 +577,21 @@ def _detect_spawn_process_failures(row: dict, spawn_rows: "list[dict]", *, confi
 
 
 def _detect_attention_burn(row: dict, spawn_rows: "list[dict]", *, config_path) -> "dict | None":
-    corrections = (row.get("attention") or {}).get("corrections") or 0
+    attention = row.get("attention") or {}
+    corrections = attention.get("corrections") or 0
     if corrections < ATTENTION_BURN_MIN_CORRECTIONS:
         return None
+    unjudged = attention.get("corrections_unjudged") or 0
+    description = (
+        f"{corrections} user correction(s) >= threshold ({ATTENTION_BURN_MIN_CORRECTIONS}) "
+        "— CLAUDE.md's own overcome-difficulty trigger"
+    )
+    if unjudged:
+        description += f"; {unjudged} further flagged prompt(s) the judge did not decide"
     return {
         "detector": "attention-burn",
-        "measured": {"corrections": corrections},
-        "description": (
-            f"{corrections} user correction(s) >= threshold ({ATTENTION_BURN_MIN_CORRECTIONS}) "
-            "— CLAUDE.md's own overcome-difficulty trigger"
-        ),
+        "measured": {"corrections": corrections, "corrections_unjudged": unjudged},
+        "description": description,
     }
 
 

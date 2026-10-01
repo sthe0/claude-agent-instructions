@@ -18,11 +18,22 @@ lib/config_root.projects_roots — BOTH config roots, since a bare `claude` and 
 
 Fired flags are routed into the self-diagnose findings store, so a flag outlives
 the run that printed it and re-surfaces at the turn boundary until it is acked or
-stops firing. Rendering is unchanged by that routing, and no model is consulted:
-this script stays a pure reader.
+stops firing. Rendering is unchanged by that routing, and no model is consulted
+there: reporting stays a pure reader. The one model call lives in the ledger
+upsert, and only for `attention.corrections` (below); `--no-judge` removes it.
 The pricing / usage / attention helpers are imported from cost-report.py (no
 copy-paste): the per-model price table, token_cost(), parse_ts(), the JSONL
-iterator, the interrupt sentinel and the correction regex.
+iterator and the interrupt sentinel.
+
+Attention counters split WHO spoke from WHAT it meant. A user entry is a prompt
+only when the transcript stamps it origin.kind == "human" (structure: meta
+entries, compaction summaries, task notifications and spawn briefs are machine
+text). Whether a human prompt is a correction is a question of meaning: the
+si_feedback_detect prefilter only nominates, and advisor.judge_feedback_signal
+decides -- the same prefilter-then-judge pair the Stop hook uses. Verdicts are
+cached by the hash of the injection-stripped text; a nomination the judge did not
+answer counts in attention.corrections_unjudged, never as a correction, and the
+row is re-scanned on a later run that has a judge.
 
 A per-session ledger (~/.local/log/claude-policy-ledger.jsonl, one JSON row per
 session, upsert keyed by session_id) accumulates the measurements cheaply: a
@@ -34,6 +45,10 @@ Modes:
   policy-scorecard.py [--days N] [--project P]   upsert in-window rows, print
                                                  the markdown scorecard
   policy-scorecard.py --ledger-only [--days N]   upsert only (for the hook)
+  policy-scorecard.py [...] --no-judge           no correction-judge call: every
+                                                 prefilter hit without a cached
+                                                 verdict is counted unjudged
+                                                 (the background hook)
   policy-scorecard.py [...] --ledger PATH        override the ledger path
                                                  (tests / the cadence hook use
                                                  this so a run never touches
@@ -64,13 +79,16 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import importlib.util
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import NamedTuple
@@ -87,7 +105,6 @@ _iter_jsonl = cost_report._iter_jsonl
 _msg_text = cost_report._msg_text
 _is_tool_result = cost_report._is_tool_result
 INTERRUPT_SENTINEL = cost_report.INTERRUPT_SENTINEL
-CORRECTION_RE = cost_report.CORRECTION_RE
 PRICING = cost_report.PRICING_USD_PER_MTOK
 PRICING_SHA = cost_report.PRICING_SHA
 
@@ -106,6 +123,8 @@ from lib.config_root import agentctl_gate_log, legacy_home, projects_roots
 # two places to keep in step, and the ledger's attribution is already solved.
 import self_diagnose_store as findings_store
 from agentctl.cost import COST_LOG as SPAWN_LEDGER, read_rows as read_spawn_rows
+from agentctl import advisor
+from si_feedback_detect import find_signals, strip_injected_context
 LEDGER = Path.home() / ".local" / "log" / "claude-policy-ledger.jsonl"
 # Per-task quality ledger written by `agentctl resolve --quality` (agentctl/cli.py
 # TASK_QUALITY_LOG) -- same path, independent constant so this reader has no
@@ -149,6 +168,95 @@ RESOLUTION_RE = re.compile(
     r"реш(?:ен|ён|и)|так и оставим|подтвержда|готово|all good|"
     r"\bresolved\b|looks good|считаем",
     re.IGNORECASE)
+# --- correction judge ------------------------------------------------------
+# Bumped whenever the attention counting rule changes: upsert re-scans any row
+# stamped with an older version, so a new rule reaches every in-window session.
+SCAN_VERSION = 2
+VERDICTS_PATH = Path.home() / ".local" / "state" / "claude-correction-verdicts.json"
+_VERDICTS_ENV = "POLICY_CORRECTION_VERDICTS"
+_JUDGE_BUDGET_ENV = "POLICY_CORRECTION_JUDGE_BUDGET_S"
+_JUDGE_BUDGET_DEFAULT_S = 300.0
+_JUDGE_CALL_TIMEOUT_S = 60
+_JUDGE_KILLSWITCH_ENV = "CLAUDE_SI_FEEDBACK_SEMANTIC"  # same switch as the Stop hook
+# None = no judge: every prefilter hit is counted unjudged. Only the CLI path
+# installs the real runner; tests install a fake.
+_CORRECTION_JUDGE_RUNNER = None
+# Monotonic deadline of the current upsert's judge budget; None = unbounded
+# (a direct _scan_session call outside upsert).
+_judge_deadline: float | None = None
+
+
+def _verdicts_path() -> Path:
+    override = os.environ.get(_VERDICTS_ENV)
+    return Path(override) if override else VERDICTS_PATH
+
+
+def _load_verdicts() -> dict[str, bool]:
+    try:
+        data = json.loads(_verdicts_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, bool)}
+
+
+def _store_verdict(key: str, verdict: bool) -> None:
+    # Two concurrent refreshes can drop each other's verdict (read-modify-write);
+    # accepted: os.replace keeps the file whole, and a lost verdict only costs one re-ask.
+    cache = _load_verdicts()
+    cache[key] = verdict
+    path = _verdicts_path()
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(cache), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def _judge_budget_s() -> float:
+    try:
+        return float(os.environ[_JUDGE_BUDGET_ENV])
+    except (KeyError, ValueError):
+        return _JUDGE_BUDGET_DEFAULT_S
+
+
+def _judge_active() -> bool:
+    return (_CORRECTION_JUDGE_RUNNER is not None
+            and os.environ.get(_JUDGE_KILLSWITCH_ENV) != "0")
+
+
+def _correction_verdict(stripped: str) -> bool | None:
+    """The judge's verdict on an injection-stripped, prefilter-flagged prompt;
+    None when no genuine verdict is available (no runner, budget spent, fail-open).
+    Only genuine verdicts are cached, so an unanswered prompt is asked again later."""
+    key = hashlib.sha256(stripped.encode("utf-8")).hexdigest()
+    cached = _load_verdicts().get(key)
+    if cached is not None:
+        return cached
+    if not _judge_active():
+        return None
+    timeout = _JUDGE_CALL_TIMEOUT_S
+    if _judge_deadline is not None:
+        left = _judge_deadline - time.monotonic()
+        if left < 1:
+            return None
+        timeout = int(min(timeout, left))
+    verdict, reason = advisor.judge_feedback_signal(
+        stripped, _CORRECTION_JUDGE_RUNNER, timeout=timeout)
+    if reason:
+        return None
+    _store_verdict(key, verdict)
+    return verdict
+
+
+def _is_human_entry(entry: dict) -> bool:
+    origin = entry.get("origin")
+    return isinstance(origin, dict) and origin.get("kind") == "human"
+
+
 # Non-clean sub-agent return markers seen in a tool_result.
 SUBAGENT_FAIL_RE = re.compile(r"\b(?:MALFORMED|INCOMPLETE|ESCALATE):")
 # A real user prompt that asks something (crude but cheap: any "?").
@@ -437,7 +545,7 @@ def _scan_session(main_file: Path) -> dict | None:
     main_read_bash = 0
     clusters = 0
     run = 0                  # current consecutive-mechanical run length
-    askq = prompts = interrupts = corrections = 0
+    askq = prompts = interrupts = corrections = corrections_unjudged = 0
     user_questions = freetext_askuser_answers = 0
     replans = overcome_difficulty = subagent_failures = 0
     edits_per_path: Counter = Counter()
@@ -529,10 +637,15 @@ def _scan_session(main_file: Path) -> dict | None:
                 continue
             if INTERRUPT_SENTINEL in text:
                 interrupts += 1
-            else:
+            elif _is_human_entry(d):
                 prompts += 1
-                if CORRECTION_RE.search(text):
-                    corrections += 1
+                stripped = strip_injected_context(text)
+                if find_signals(stripped):
+                    verdict = _correction_verdict(stripped)
+                    if verdict is None:
+                        corrections_unjudged += 1
+                    elif verdict:
+                        corrections += 1
                 if QUESTION_RE.search(text):
                     user_questions += 1
                 if RESOLUTION_RE.search(text):
@@ -572,6 +685,7 @@ def _scan_session(main_file: Path) -> dict | None:
         "last_ts": last_ts.isoformat(),
         "instructions_head": _instructions_head_at(first_ts),
         "mtime": main_file.stat().st_mtime,
+        "scan_version": SCAN_VERSION,
         "model_tokens": model_tokens,
         "cost_usd": round(cost, 6),
         "cache_read_usd": round(_cache_read_cost(model_tokens), 6),
@@ -589,6 +703,7 @@ def _scan_session(main_file: Path) -> dict | None:
             "prompts": prompts,
             "interrupts": interrupts,
             "corrections": corrections,
+            "corrections_unjudged": corrections_unjudged,
         },
         "user_signals": {
             "n_user_corrections": corrections,
@@ -737,29 +852,46 @@ def in_window_files(days: int, project: str | None) -> list[Path]:
 
 
 def upsert(days: int, project: str | None) -> tuple[dict[str, dict], int, int]:
-    """Scan in-window files; (re)scan only when mtime grew. Returns (ledger, scanned, skipped)."""
+    """Scan in-window files; (re)scan when mtime grew, the row predates SCAN_VERSION,
+    or it holds unjudged corrections and a judge is available now.
+    Returns (ledger, scanned, skipped)."""
+    global _judge_deadline
     rows = load_ledger()
     scanned = skipped = 0
-    for f in in_window_files(days, project):
-        sid = f.stem
-        existing = rows.get(sid)
-        try:
-            mtime = f.stat().st_mtime
-        except OSError:
-            continue
-        if existing and existing.get("mtime") == mtime:
-            skipped += 1
-            continue
-        row = _scan_session(f)
-        if row is None:
-            continue
-        if existing:  # preserve manual rating across re-scans
-            row["quality_rating"] = existing.get("quality_rating")
-            row["quality_note"] = existing.get("quality_note")
-        rows[sid] = row
-        scanned += 1
+    _judge_deadline = (time.monotonic() + _judge_budget_s()
+                       if _judge_active() else None)
+    try:
+        for f in in_window_files(days, project):
+            sid = f.stem
+            existing = rows.get(sid)
+            try:
+                mtime = f.stat().st_mtime
+            except OSError:
+                continue
+            if existing and _row_is_current(existing, mtime):
+                skipped += 1
+                continue
+            row = _scan_session(f)
+            if row is None:
+                continue
+            if existing:  # preserve manual rating across re-scans
+                row["quality_rating"] = existing.get("quality_rating")
+                row["quality_note"] = existing.get("quality_note")
+            rows[sid] = row
+            scanned += 1
+    finally:
+        _judge_deadline = None
     write_ledger(rows)
     return rows, scanned, skipped
+
+
+def _row_is_current(existing: dict, mtime: float) -> bool:
+    if existing.get("mtime") != mtime:
+        return False
+    if (existing.get("scan_version") or 0) < SCAN_VERSION:
+        return False
+    unjudged = (existing.get("attention") or {}).get("corrections_unjudged") or 0
+    return not (unjudged and _judge_active())
 
 
 # ---------------------------------------------------------------- reporting
@@ -1957,6 +2089,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--days", type=int, default=7, help="window size in days (default 7)")
     p.add_argument("--project", help="restrict to one project dir name, looked up under every config root's projects/ (both are unioned)")
     p.add_argument("--ledger-only", action="store_true", help="upsert without printing (for the hook)")
+    p.add_argument("--no-judge", action="store_true",
+                   help="make no correction-judge call: prefilter hits without a cached "
+                        "verdict are counted as corrections_unjudged")
     p.add_argument("--ledger", type=Path,
                    help="override the ledger path (default: the real ~/.local/log ledger) — "
                         "tests and the cadence hook use this so a run never touches live state")
@@ -2009,6 +2144,9 @@ def main(argv: list[str] | None = None) -> int:
         print(calibrate_failure_rate(spawn_rows, a.days))
         return 0
 
+    global _CORRECTION_JUDGE_RUNNER
+    if not a.no_judge:
+        _CORRECTION_JUDGE_RUNNER = advisor.subprocess_runner
     rows, scanned, skipped = upsert(a.days, a.project)
     if a.ledger_only:
         print(f"policy-scorecard: ledger upsert — scanned {scanned}, "

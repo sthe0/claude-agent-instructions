@@ -109,6 +109,23 @@ def test_detector_threshold_boundaries(tmp_path, detector, row_under, row_at):
     assert "description" in fired
 
 
+def test_attention_burn_evidence_reports_what_the_judge_did_not_decide():
+    row = {"session_id": "s", "project": "p", "date": "d",
+           "attention": {"corrections": 2, "corrections_unjudged": 3}}
+
+    fired = scan._detect_attention_burn(row, [], config_path=scan.CONFIG_PATH)
+
+    assert fired["measured"] == {"corrections": 2, "corrections_unjudged": 3}
+    assert "3 further flagged" in fired["description"]
+
+
+def test_unjudged_corrections_alone_do_not_fire_attention_burn():
+    row = {"session_id": "s", "project": "p", "date": "d",
+           "attention": {"corrections": 1, "corrections_unjudged": 9}}
+
+    assert scan._detect_attention_burn(row, [], config_path=scan.CONFIG_PATH) is None
+
+
 def test_run_detectors_stamps_session_project_and_date_onto_every_firing_item(tmp_path):
     config_path = _write_config(tmp_path)
     row = {"session_id": "s", "project": "p", "date": "d", "cost_usd": 24.0}

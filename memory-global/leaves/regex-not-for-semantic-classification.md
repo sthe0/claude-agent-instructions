@@ -66,7 +66,15 @@ Lexical "same difficulty?" decisions still to convert to candidate-generation pl
 - `scripts/core-difficulty-digest.py` `cluster_records` — clusters difficulty records by the same ratio.
 - `scripts/sigma-sentinel.py` `measure_condition_a` / `measure_cheap_c` — join an experience leaf to a principle (and count near-duplicate pairs) by the same ratio.
 
-Converted: improvement-scan telemetry-ground dedup (above).
+Lexical classifications of a user prompt's meaning, also still to convert (they feed counters, not a hard outcome):
+
+- `scripts/cost-report.py` `CORRECTION_RE` (used by `parse_transcripts(classify=True)` for its "likely corrections (heuristic, approximate)" line) — a regex alone calls a prompt a correction, and it counts every non-tool-result entry, machine text included.
+- `scripts/policy-scorecard.py` `QUESTION_RE` (any `?`) and `RESOLUTION_RE` — now applied to human prompts only (see below), but still lexical decisions of meaning.
+
+Converted:
+
+- improvement-scan telemetry-ground dedup (above).
+- `scripts/policy-scorecard.py` correction count (`attention.corrections`, which `improvement-scan.py`'s attention-burn detector, the scorecard's correction-rate flag and `rule-salience-report.py`'s trigger proxy all read). Who spoke is structure: only entries stamped `origin.kind == "human"` are prompts (a 14-day sweep found 63% of the old "corrections" were machine text or regex noise). What the prompt means is the judge's: `si_feedback_detect.find_signals` on the injection-stripped text only nominates, `advisor.judge_feedback_signal` decides (the pair `hook-turn-end-gate.py` uses), and a nomination the judge did not answer is counted in `attention.corrections_unjudged`, never as a correction. Verdicts are cached by the hash of the stripped text. Accepted recall change: the prefilter is now `si_feedback_detect`'s, so a bare "that's wrong" with no reference to the agent no longer nominates.
 
 ## See also
 
