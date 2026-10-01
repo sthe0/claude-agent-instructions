@@ -1301,10 +1301,27 @@ def _load_prior(args: argparse.Namespace) -> PriorBoard:
     if args.prior:
         return load_prior_board(args.prior)
     state = _board_state_arg(args)
-    if state.exists():
-        return load_prior_board(state)
-    print(f"improvement-scan backlog: cold start — no board state at {state}", file=sys.stderr)
-    return _empty_board()
+    if not state.exists():
+        print(f"improvement-scan backlog: cold start — no board state at {state}", file=sys.stderr)
+        return _empty_board()
+    if not _is_board_file(state):
+        # The state file is the only durable copy: never let the next write clobber it unseen.
+        note = f"improvement-scan backlog: board state at {state} is unreadable or of another schema"
+        if not getattr(args, "dry_run", False):
+            backup = state.with_name(state.name + ".bak")
+            os.replace(state, backup)
+            note += f"; moved to {backup}"
+        print(note + " — starting from an empty board", file=sys.stderr)
+        return _empty_board()
+    return load_prior_board(state)
+
+
+def _is_board_file(path: Path) -> bool:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    return isinstance(raw, dict) and raw.get("schema") == BOARD_SCHEMA
 
 
 def _run_backlog_phase_a(args: argparse.Namespace) -> int:
@@ -1398,6 +1415,12 @@ def _run_backlog_phase_b(args: argparse.Namespace) -> int:
         return 2
 
     state = _board_state_arg(args)
+    if getattr(args, "dry_run", False):
+        print(
+            f"improvement-scan backlog (phase B, dry run): would write {len(board.items)} item(s) "
+            f"to {state} and store {len(findings)} finding(s)"
+        )
+        return 0
     write_board(board, state)
     if args.out:
         write_board(board, args.out)

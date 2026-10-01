@@ -27,10 +27,13 @@ channels) and diffs them against the board state file. Emits only new/changed it
 `closed_refs`, not a full re-derivation.
 
 The durable board is a **local state file** — `$IMPROVEMENT_SCAN_BOARD_STATE`, default
-`~/.local/state/improvement-scan/board.json` (`--board-state` overrides it). Phase B writes it
-atomically; phase A, `telemetry --board` and `report --board` read it by default. With no state
-file phase A cold-starts from an empty board and prints one stderr note. An explicit `--prior`
-or `--board` overrides the default; `--out` additionally writes a copy of the board.
+`~/.local/state/improvement-scan/board.json`; the env var moves it for all three subcommands,
+`backlog --board-state` for `backlog` only. Phase B writes it atomically (nothing under
+`--dry-run`); phase A, `telemetry --board` and `report --board` read it by default. With no state
+file phase A cold-starts from an empty board and prints one stderr note; an unreadable or
+other-schema state file is moved to `board.json.bak` first, so the next write cannot clobber the
+only copy. An explicit `--prior` or `--board` overrides the default; `--out` additionally writes
+a copy of the board.
 
 A published artifact is a view of that file, never an input: `Artifact action:"read"` returned
 HTTP 451 for an artifact minutes after the same session published it, so an artifact cannot be

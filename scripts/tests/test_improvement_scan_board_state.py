@@ -35,7 +35,7 @@ def _state(tmp_path, monkeypatch):
     return p
 
 
-def _classify(tmp_path, out=None):
+def _classify(tmp_path, out=None, dry_run=False):
     item = {
         "title": "t", "functional_ground": "g", "severity": "high", "source_digest": "d1",
         "breadth": "narrow", "cost_to_resolve": "small", "in_flight": "none",
@@ -45,7 +45,7 @@ def _classify(tmp_path, out=None):
     cls.write_text(json.dumps({"items": {"ref-1": item}, "closed_refs": []}), encoding="utf-8")
     args = argparse.Namespace(
         prior=None, classifications=str(cls), worklist=None,
-        out=str(out) if out else None, store=str(tmp_path / "store.jsonl"),
+        out=str(out) if out else None, store=str(tmp_path / "store.jsonl"), dry_run=dry_run,
     )
     return scan._run_backlog_phase_b(args)
 
@@ -112,3 +112,21 @@ def test_report_board_defaults_to_state_file(tmp_path, monkeypatch):
     assert parser.parse_args(["report"]).board == str(state)
     assert parser.parse_args(["telemetry", "--grounds", "g"]).board == str(state)
     assert parser.parse_args(["report", "--board", "x.json"]).board == "x.json"
+
+
+def test_dry_run_phase_b_writes_nothing(tmp_path, monkeypatch):
+    state = _state(tmp_path, monkeypatch)
+    assert _classify(tmp_path, dry_run=True) == 0
+    assert not state.exists()
+    assert not (tmp_path / "store.jsonl").exists()
+
+
+def test_corrupt_board_state_is_kept_as_backup_before_overwrite(tmp_path, monkeypatch, capsys):
+    state = _state(tmp_path, monkeypatch)
+    state.parent.mkdir(parents=True)
+    state.write_text("{not json", encoding="utf-8")
+    assert _classify(tmp_path) == 0
+    backup = state.with_name("board.json.bak")
+    assert backup.read_text(encoding="utf-8") == "{not json"
+    assert "unreadable" in capsys.readouterr().err
+    assert "ref-1" in json.loads(state.read_text(encoding="utf-8"))["items"]
