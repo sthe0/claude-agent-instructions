@@ -55,8 +55,11 @@ def search_experience(
     timeout, non-zero exit) — distinct from `found=False`, which means the
     search ran cleanly and reported "no analogous leaf found". Conflating the
     two would let a dedup check silently pass on a broken search subprocess.
+
+    `search` takes ONE keywords argument and tokenizes it itself, so the words
+    are joined here rather than passed as separate argv entries.
     """
-    cmd = [sys.executable, str(RECORD_EXPERIENCE), "search", "--scope", scope, *keywords]
+    cmd = [sys.executable, str(RECORD_EXPERIENCE), "search", "--scope", scope, " ".join(keywords)]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=_TIMEOUT_S)
     except (OSError, subprocess.TimeoutExpired) as exc:

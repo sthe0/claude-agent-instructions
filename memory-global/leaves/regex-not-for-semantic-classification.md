@@ -1,13 +1,15 @@
 ---
 name: regex-not-for-semantic-classification
-description: A regex that classifies free-text MEANING to drive a hard block determinizes a perception task at the wrong structural level and false-positives on paraphrase/meta-text; demote it to a high-recall prefilter and let a fail-open model judge decide, mirroring agentctl/advisor.py::judge_binary_ask.
+description: Any lexical matcher (regex, keyword list, token overlap, similarity ratio) that decides a question of free-text MEANING (a hard block, a classification, a dedup or clustering join) determinizes a perception task at the wrong structural level and false-positives on paraphrase/meta-text; demote it to a high-recall candidate generator and let a fail-open model judge decide, mirroring agentctl/advisor.py::judge_binary_ask.
 type: reference
 schema: leaf/v1
 created: 2026-07-22
-last_verified: 2026-07-29
+last_verified: 2026-10-01
 ---
 
 ## Difficulty
+
+The norm covers every decision of meaning, not only a hard block: a classification, a "same difficulty?" dedup, a clustering join. A word-overlap score decided that "zebra the of and quantum" matched an experience leaf (it scored 139); a regex cannot tell a paraphrase from a coincidence of vocabulary, and any overlap threshold is a regex in disguise. The sections below were written for the hard-block case and apply unchanged to the rest, with "hard block" read as "decision".
 
 A hard-enforcement gate (a Stop-hook block, a PreToolUse deny) that decides whether a piece of free text carries a given natural-language MEANING — "is this agent-behavior feedback?", "is this an un-diagnosed outage escalation?" — by matching a regex/keyword lexicon against the raw text is determinizing a **perception** task at the wrong structural level. A regex can recognize a token co-occurrence; it cannot tell a genuine correction from an analytical discussion that merely *mentions* the same words, or a live escalation from a meta-description of how the escalation gate works. Two such gates false-positived on the agent's own read-only analytical prose about `CLAUDE.md`: a self-improvement turn-guardian fired because its feedback-signal regex matched a corrective-sounding phrase co-occurring with a second-person pronoun in a passage that was analyzing, not receiving, feedback; an escalation-diagnosis guardian fired because its two-regex conjunction (failure words + a question frame) matched a **meta-description of how the hook itself works**, not a real outage escalation. Both blocks were false positives on paraphrase/meta-text — exactly the failure mode a regex cannot avoid because meaning, not shape, is what the classification actually turns on.
 
@@ -20,6 +22,10 @@ This is a sharpening of the system's own root principle ("separate rule from per
 **The worked template already in this repo:** `agentctl/advisor.py::judge_binary_ask` (the function backing `prose_binary_ask` in `hook-turn-end-gate.py`) already implements exactly this shape for one path — "is this assistant turn a binary confirm-style question?" — behind a cheap, language-independent punctuation prefilter, with the following fail-open contract: not enabled / no runner / empty text → `False`; runner exits non-zero / prints nothing / prints something unparseable / raises → `False`; only an explicit `YES` first line → `True`. Its own docstring cites the CLAUDE.md rule-vs-perception paragraph. Any new semantic classifier that must drive a hard block should mirror this function's body (model, timeout, YES/NO protocol, exception → `False`) rather than inventing a new contract, per the self-improvement tie-breaker "extend the existing mechanism that already implements the rule for one path".
 
 **Why fail-open is the safe direction here specifically.** The failure being removed in both exemplar cases was a FALSE hard block — the gate fired when it should not have. A judge that errs toward `False` (no block) on any ambiguity, timeout, or infra hiccup cannot re-introduce that false positive; it can only under-block. Whether that is acceptable depends on whether an independent recall backstop exists for the same signal outside the hard-block path — state this explicitly per classifier, don't assume it. (For the self-improvement feedback signal, the advisory `hook-self-improvement-reminder.py` — regex-driven, never blocks, only prints a nudge — remains the recall backstop if the Stop-hook judge fails open. For the outage-escalation signal there is no independent backstop once both its consumers share one judge; a judge `NO` on a genuine un-diagnosed outage is accepted recall loss, justified only by an explicit user preference for fail-open over disruptive false blocks and the low base rate of the scenario — this is a stated trade-off, not a free lunch.)
+
+### Joins and dedup
+
+A join over free-text grounds ("is this the same difficulty as that leaf?") is a decision of meaning like any other. The lexical half may only nominate: `record-experience.py search` ranks leaves by term overlap and its top hits are the *candidates*, taken in rank order with no score threshold, ratio or token-count cut-off; the model judge (`advisor.judge_same_difficulty`, the `judge_binary_ask` contract) alone decides each candidate. A judge that cannot answer (killswitch, timeout, unparseable, raised) is not a NO and not a YES: the item is kept and flagged `judge-unavailable`, because a duplicate costs a glance and a dropped finding costs the difficulty. The first instance is `improvement-scan.py telemetry --grounds` (outcomes `no-match` / `dedup-match` / `board-match` / `search-failed` / `judge-unavailable`, counted on its `dedup outcomes:` summary line); a ground that overlaps a leaf word for word is still `no-match` when the judge says the difficulty differs.
 
 ### The structural-vs-semantic boundary
 
@@ -50,6 +56,17 @@ A follow-on task replaced the hand audit with a mechanical enumerator (`scripts/
 As of the mechanical enumeration: **2042 sites total** (752 code + 166 code-file-rollup + 1124 prose — the prose count includes this leaf's own rewrite and its companion experience leaf, both self-registered by the loop that produced this text). **7 code sites are `semantic-guarded`** — a regex feeding a hard outcome with a fail-open judge on the same path, including the four sites that task classified semantic (three it fixed, one already judge-backed), now re-verified structurally rather than carried by memory — and **0 are `semantic-unguarded`**: the anti-pattern this leaf names does not currently exist anywhere in the enumerated domain, and the verifier fails the moment one is introduced. Three `decidable` prose rules in `CLAUDE.md` remain explicitly `defer`red, each with a named, dated reason (two blocked on the verifier's own landing, one judged not worth building yet relative to the size of the win) — the full deferral list is published in [docs/operations/crutch-registry.md](../../docs/operations/crutch-registry.md).
 
 **What this corrected claim is honestly built on, and what it is not.** The registry closes exactly the gap the original table's grep missed (hard behaviour, not only deny/block/exit) and adds a domain the original table never attempted (prose). It does not see dynamic pattern construction, a crutch expressed without a regex or a modal keyword, or cross-file semantic duplicates of the same rule — the full limits list is in the docs page above, restated there rather than here so the claim and its boundary do not drift apart. For the prose domain specifically, the honest word is "routed" (a new statement is surfaced and must be dispositioned by a model pass) — never "verified" (no mechanical judgement is made about whether a statement is genuine perception).
+
+### Open violations
+
+Lexical "same difficulty?" decisions still to convert to candidate-generation plus a model judge (the crutch registry above does not see them: they feed a join, not a hard outcome):
+
+- `scripts/record-experience.py` `cluster_by_ground` / `_similarity` — the word-overlap ratio (`JOIN_RATIO`) that clusters experience leaves for promotion.
+- `scripts/improvement-scan.py` `classify_and_score` — its backlog clustering calls `cluster_by_ground`, so it inherits that join.
+- `scripts/core-difficulty-digest.py` `cluster_records` — clusters difficulty records by the same ratio.
+- `scripts/sigma-sentinel.py` `measure_condition_a` / `measure_cheap_c` — join an experience leaf to a principle (and count near-duplicate pairs) by the same ratio.
+
+Converted: improvement-scan telemetry-ground dedup (above).
 
 ## See also
 

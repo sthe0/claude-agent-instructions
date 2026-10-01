@@ -692,6 +692,76 @@ def judge_binary_ask(
         judge_ledger.set_current_judge(None)
 
 
+_SAME_DIFFICULTY_PROMPT = (
+    "You are given two texts, each describing a recurring difficulty in how an "
+    "AI agent system works, written in any language. Decide whether they "
+    "describe the SAME underlying difficulty: the same cause producing the same "
+    "kind of divergence -- not merely the same words, the same area of the "
+    "system, or the same symptom with a different cause.\n\n"
+    "Answer YES only when fixing one would, in substance, fix the other. Answer "
+    "NO when they merely share vocabulary or topic, or when the causes differ.\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "TEXT A:\n{ground}\n\nTEXT B:\n{candidate}"
+)
+
+
+def judge_same_difficulty(
+    ground: str,
+    candidate: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
+) -> tuple[bool, str]:
+    """Semantic judge: do ``ground`` and ``candidate`` describe the same
+    underlying difficulty? The decision half of a dedup join whose candidate
+    half is lexical — word overlap only nominates ``candidate``; it never
+    decides.
+
+    Same three-valued fail-open contract as ``judge_binary_ask``: ``reason`` is
+    "" for a genuine YES/NO and a non-empty "...(fail-open)" string on every
+    path where the False is fabricated (disabled, no text, no runner, timeout,
+    non-zero exit, unparseable answer, exception). A caller that must not lose
+    a finding on a fabricated False keys on ``reason``, not on the verdict."""
+    if not enabled:
+        return _judge_unavailable(
+            "same_difficulty", _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if not ground or not candidate:
+        return _judge_unavailable(
+            "same_difficulty", _NO_TEXT_REASON, stage="no_text",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if runner is None:
+        return _judge_unavailable(
+            "same_difficulty", _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    judge_ledger.set_current_judge("same_difficulty")
+    start = time.monotonic()
+    prompt = None
+    try:
+        prompt = _SAME_DIFFICULTY_PROMPT.format(ground=ground, candidate=candidate)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
+        return _record_result(
+            "same_difficulty", result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+            prompt_chars=len(prompt),
+        )
+    except Exception:
+        return _record_raised(
+            "same_difficulty", duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+            prompt_chars=len(prompt) if isinstance(prompt, str) else None,
+        )
+    finally:
+        judge_ledger.set_current_judge(None)
+
+
 # LAST-RESORT default, HARDCODED rather than imported: lib/judge_latency.py
 # already imports this module (`from agentctl import advisor`), so a reverse
 # import of judge_latency.LAST_RESORT_CEILING_S here would be circular. Kept

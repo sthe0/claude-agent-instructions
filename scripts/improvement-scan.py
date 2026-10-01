@@ -94,6 +94,7 @@ cluster_by_ground = _rec_for_scan.cluster_by_ground
 # see improvement_scan_shell.py's docstring for why, and
 # test_module_never_shells_out_or_reaches_the_network for the invariant this preserves.
 import improvement_scan_shell as shell  # noqa: E402
+from agentctl import advisor  # noqa: E402
 from agentctl.cost import COST_LOG as SPAWN_LEDGER_DEFAULT, read_rows as read_spawn_rows  # noqa: E402
 
 BOARD_SCHEMA = 1
@@ -704,19 +705,66 @@ def _board_ground_match(board: "PriorBoard | None", functional_ground: str) -> "
     return None
 
 
+DEDUP_OUTCOMES = ("no-match", "dedup-match", "board-match", "search-failed", "judge-unavailable")
+
+
+def _default_judge_runner():
+    return advisor.subprocess_runner
+
+
+def _parse_search_hits(output: str) -> "list[tuple[str, str]]":
+    """The ranked hits `record-experience.py search` lists, as (leaf name, description)
+    in listing order. Each hit is a `  [score] name.md` line followed by its
+    description line; the `extend --leaf` helper line after it is not a hit."""
+    hits: "list[tuple[str, str]]" = []
+    lines = output.splitlines()
+    for i, line in enumerate(lines):
+        m = re.match(r"\s*\[\s*\d+\]\s+(\S+\.md)\s*$", line)
+        if m and i + 1 < len(lines):
+            hits.append((m.group(1), lines[i + 1].strip()))
+    return hits
+
+
+def _judge_ground_against_candidates(
+    ground_text: str, hits: "list[tuple[str, str]]", runner
+) -> "tuple[str, str]":
+    """(outcome, detail) for one ground against its lexically nominated candidates.
+    The candidates are only nominees: the judge alone decides "same difficulty?".
+    The walk stops at the first YES, and at the first fabricated answer — a judge
+    that is down is not asked again for every remaining candidate."""
+    enabled = os.environ.get("AGENTCTL_ADVISOR") != "0"
+    for name, description in hits:
+        verdict, reason = advisor.judge_same_difficulty(
+            ground_text, description, runner, enabled=enabled
+        )
+        if reason:
+            return "judge-unavailable", f"{name}: {reason}"
+        if verdict:
+            return "dedup-match", f"{name}: {description}"
+    return "no-match", f"{len(hits)} candidate(s) judged a different difficulty"
+
+
 def build_findings_from_grounds(
     grounds: "list[dict]",
     *,
     board: "PriorBoard | None" = None,
     scope: str = "global",
+    judge_runner=None,
 ) -> "tuple[list[Finding], list[dict]]":
     """For every model-supplied ground: dedup against the backlog board (if given)
     and existing experience leaves, recording every outcome — a dedup match is
     NEVER silently dropped, only excluded from the returned findings — then build
     survivors into Findings keyed by detector+ground, never by session id.
+
+    Whether a ground is "the same difficulty" as an existing leaf is a question of
+    meaning, so a model judge decides it (`advisor.judge_same_difficulty`); the
+    keyword search only nominates the leaves to ask about. A judge that cannot
+    answer keeps the finding (`judge-unavailable`): a duplicate costs a glance, a
+    dropped finding costs the difficulty.
     """
     findings: "list[Finding]" = []
     dedup_log: "list[dict]" = []
+    runner = judge_runner if judge_runner is not None else _default_judge_runner()
     for g in grounds:
         detector = g["detector"]
         ground_text = g["functional_ground"]
@@ -729,23 +777,21 @@ def build_findings_from_grounds(
             })
             continue
 
-        ok, found, output = shell.search_experience(ground_text.split(), scope=scope)
+        ok, _found, output = shell.search_experience(ground_text.split(), scope=scope)
         if not ok:
-            dedup_log.append({
-                "detector": detector, "functional_ground": ground_text,
-                "outcome": "search-failed", "detail": output,
-            })
-        elif found:
-            dedup_log.append({
-                "detector": detector, "functional_ground": ground_text,
-                "outcome": "dedup-match", "detail": output,
-            })
-            continue
+            outcome, detail = "search-failed", output
         else:
-            dedup_log.append({
-                "detector": detector, "functional_ground": ground_text,
-                "outcome": "no-match", "detail": output,
-            })
+            hits = _parse_search_hits(output)
+            if hits:
+                outcome, detail = _judge_ground_against_candidates(ground_text, hits, runner)
+            else:
+                outcome, detail = "no-match", output
+        dedup_log.append({
+            "detector": detector, "functional_ground": ground_text,
+            "outcome": outcome, "detail": detail,
+        })
+        if outcome == "dedup-match":
+            continue
 
         cost = g.get("cost_signal") or {}
         findings.append(
@@ -1310,6 +1356,8 @@ def _run_telemetry_grounds(args: argparse.Namespace) -> int:
         f"improvement-scan telemetry (grounds): {len(grounds)} ground(s) in, "
         f"{len(stored)} finding(s) stored, {len(dedup_log)} dedup outcome(s) logged"
     )
+    counts = {o: sum(1 for e in dedup_log if e["outcome"] == o) for o in DEDUP_OUTCOMES}
+    print("dedup outcomes: " + " ".join(f"{o}={n}" for o, n in counts.items()))
     for entry in dedup_log:
         if entry["outcome"] != "no-match":
             print(f"  {entry['outcome']}: {entry['detector']} — {entry['detail'][:120]}", file=sys.stderr)

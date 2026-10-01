@@ -204,17 +204,33 @@ def test_evidence_bundle_shape():
 
 # --- (5) a dedup match is recorded, never silently dropped ------------------
 
+class _YesJudge:
+    def __call__(self, argv, **kwargs):
+        from agentctl.dispatch import RunResult
+
+        return RunResult(0, stdout="YES", stderr="")
+
+
+def _never_called_judge(argv, **kwargs):
+    raise AssertionError("the judge must not be reached on this path")
+
+
 def test_dedup_match_against_experience_is_recorded_not_dropped(monkeypatch):
+    monkeypatch.delenv("AGENTCTL_ADVISOR", raising=False)
     monkeypatch.setattr(
         scan.shell, "search_experience",
-        lambda keywords, scope="global": (True, True, "matched: some-leaf.md"),
+        lambda keywords, scope="global": (
+            True, True,
+            "analogous experience leafs (extend one instead of duplicating):\n"
+            "  [ 12] some-leaf.md\n        the same recurring ground\n",
+        ),
     )
     grounds = [{
         "detector": "attention-burn",
         "functional_ground": "a recurring ground already tracked elsewhere",
         "title": "t",
     }]
-    findings, dedup_log = scan.build_findings_from_grounds(grounds)
+    findings, dedup_log = scan.build_findings_from_grounds(grounds, judge_runner=_YesJudge())
     assert findings == []
     assert len(dedup_log) == 1
     assert dedup_log[0]["outcome"] == "dedup-match"
@@ -235,7 +251,9 @@ def test_dedup_match_against_backlog_board_skips_the_subprocess_search(monkeypat
         )},
     )
     grounds = [{"detector": "attention-burn", "functional_ground": "already on the backlog board", "title": "t"}]
-    findings, dedup_log = scan.build_findings_from_grounds(grounds, board=board)
+    findings, dedup_log = scan.build_findings_from_grounds(
+        grounds, board=board, judge_runner=_never_called_judge
+    )
     assert findings == []
     assert dedup_log[0]["outcome"] == "board-match"
     assert calls == []  # the cheap board check pre-empted the subprocess search
@@ -247,7 +265,9 @@ def test_search_subprocess_failure_is_recorded_and_still_stores_the_finding(monk
         lambda keywords, scope="global": (False, False, "record-experience search exited 1"),
     )
     grounds = [{"detector": "attention-burn", "functional_ground": "ground text", "title": "t"}]
-    findings, dedup_log = scan.build_findings_from_grounds(grounds)
+    findings, dedup_log = scan.build_findings_from_grounds(
+        grounds, judge_runner=_never_called_judge
+    )
     assert len(findings) == 1  # a broken search must not silently suppress the finding
     assert dedup_log[0]["outcome"] == "search-failed"
 

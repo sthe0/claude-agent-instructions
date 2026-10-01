@@ -59,6 +59,14 @@ Grounds mode takes a list of ground records (`detector`, `functional_ground`, `t
 given board and against existing experience leaves, and stores survivors as `Finding` rows —
 logging every dedup outcome, not just the ones it keeps.
 
+The experience-leaf dedup is a two-step join. `record-experience.py search` only nominates
+candidate leaves (ranked by term overlap, no cut-off); a model judge
+(`agentctl/advisor.py::judge_same_difficulty`) alone decides whether a ground is the same
+difficulty as a candidate. The run prints one summary line, `dedup outcomes: no-match=N
+dedup-match=M board-match=B search-failed=K judge-unavailable=J`. `judge-unavailable` means no
+verdict was obtained (the `AGENTCTL_ADVISOR=0` killswitch, a timeout, an unparseable answer) and
+the finding is stored anyway; `search-failed` means the search subprocess itself failed.
+
 ## `report` — unified ranked output
 
 ```
