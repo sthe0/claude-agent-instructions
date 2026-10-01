@@ -66,7 +66,7 @@ python3 scripts/improvement-scan.py telemetry --emit-evidence <evidence.json> --
 
 Scan mode reads the policy ledger and spawn rows since the last cursor position (an
 mtime-gated `LedgerCursor`, so a rerun only rescans sessions that grew) and emits an evidence
-bundle of candidate friction patterns.
+bundle of candidate friction patterns. The ledger refresh that precedes the scan is bounded at 900 s (a catch-up refresh after a long gap rescans hundreds of sessions); set `IMPROVEMENT_SCAN_REFRESH_TIMEOUT_S` to a positive integer to override. A refresh that fails or exceeds the bound still makes the run DEGRADED (exit 1).
 
 ```
 python3 scripts/improvement-scan.py telemetry --grounds <grounds.json> \
