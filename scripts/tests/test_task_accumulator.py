@@ -214,6 +214,7 @@ def test_cli_task_reset_clears_accumulator_but_session_reset_does_not(tmp_path, 
     rc = cli.main([
         "--state-root", str(state_root),
         "task-reset", "--task", "cli-task", "--reason", "renegotiated scope",
+        "--by", "alice",
     ])
     payload = json.loads(capsys.readouterr().out)
     assert rc == 0

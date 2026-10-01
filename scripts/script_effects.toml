@@ -1,0 +1,18 @@
+# Digest-bound repo-script effects registry.
+#
+# Each [[script]] entry names a REVIEWED script, the exact sha256 of the
+# bytes reviewed, and the resolver (in scripts/agentctl/script_effects.py's
+# `_RESOLVERS`) that knows the script's argument grammar well enough to
+# compute its resources ahead of execution. A live file whose sha256 no
+# longer matches is untrusted (script-digest-mismatch) until this entry is
+# re-reviewed and re-pinned — an edit to the script never silently keeps the
+# old trust.
+#
+# `op = "land"` effects are never declared here (or anywhere else — see
+# tool_contracts.py / plan.py): landing is decided ONLY by the separately
+# checkpointed landed-spec resolver, not by this registry.
+
+[[script]]
+path = "scripts/land-branch.py"
+sha256 = "3862a70f519000771c42ab2192a1eff7bfb42a6b3920bc21574a0c94fded04e5"
+resolver = "land_branch"

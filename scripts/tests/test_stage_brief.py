@@ -31,6 +31,7 @@ from agentctl.dispatch import build_argv
 from agentctl.grants import AddDirGrant, RuleGrant, StageGrants
 from agentctl.plan import PlanDoc, PlanMeta, load_plan
 from agentctl.render import cmd_plan_render, render_stage_brief
+from agentctl.script_effects import StageEffectDeclaration
 from agentctl.state import (
     Actor,
     Criterion,
@@ -252,6 +253,9 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
             allow=[RuleGrant(rule="GRANTS_RULE_V", provenance="declared")],
             add_dirs=[AddDirGrant(path="GRANTS_ADDDIR_V", mode="read", provenance="declared")],
         ),
+        effects=[StageEffectDeclaration(
+            path="EFFECTS_PATH_V", sha256="EFFECTS_SHA256_V", resolver="EFFECTS_RESOLVER_V",
+        )],
     )
     meta = PlanMeta(
         task_id="TASK_ID_V",
@@ -276,6 +280,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         "MATERIAL_REF_V", "KNOWLEDGE_V", "KNOWLEDGE_REF_V", "PROCEDURE_V", "PRECONDITIONS_V",
         "OUTPUT_ARTIFACT_V", "EPHEMERAL_ARTIFACTS_WAIVER_V", "CONTROL_V", "on stage 7", "ELEMENT_V", "ARTIFACT_V",
         "GRANTS_RULE_V", "GRANTS_ADDDIR_V",
+        "EFFECTS_PATH_V", "EFFECTS_SHA256_V", "EFFECTS_RESOLVER_V",
         "TASK_ID_V", "GOAL_V", "OVERALL_DONE_CRITERION_V", "OVERALL_CRITERION_TYPE_V",
         "WEIGHT_CLASS_V", "EXTERNAL_RESEARCH_V", "REPO_ROOT_V", "DELIVERY_WORKTREE_V",
         "FC_LABEL_V",
@@ -301,7 +306,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (Stage, "ephemeral_artifacts_waiver"),
         (Stage, "outcome"),  # excluded: engine execution history
         (Stage, "control"), (Stage, "knowledge"), (Stage, "preconditions"),
-        (Stage, "grants"),
+        (Stage, "grants"), (Stage, "effects"),
         (Subject, "material"), (Subject, "result"), (Subject, "invariants"),
         (Subject, "material_refs"), (Subject, "knowledge_refs"),
         (Means, "means"), (Means, "method"), (Means, "procedure"),

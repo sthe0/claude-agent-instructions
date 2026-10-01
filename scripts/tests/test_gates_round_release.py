@@ -78,21 +78,21 @@ def test_inactive_when_every_axis_is_individually_below_and_sum_is_too():
 
 
 def test_active_on_the_sum_even_though_every_individual_axis_is_below_threshold():
-    """The done-criterion scenario: 2 plan-review rounds + 2 code-review rounds, each
-    individually under the threshold of 3, but the SUM (4) reaches it."""
-    s = _subst(plan_review_rounds=2, code_review_rounds=2)
+    """The done-criterion scenario: 3 plan-review rounds + 2 code-review rounds, each
+    individually under the threshold of 5, but the SUM (5) reaches it."""
+    s = _subst(plan_review_rounds=3, code_review_rounds=2)
     assert gates.plan_review_round_release_active(s) is False
     assert gates.code_review_round_release_active(s) is False
     assert gates.cross_axis_friction_release_active(s) is True
 
 
 def test_active_when_a_single_axis_alone_already_clears_it():
-    s = _subst(plan_review_rounds=3)
+    s = _subst(plan_review_rounds=5)
     assert gates.cross_axis_friction_release_active(s) is True
 
 
 def test_reads_the_plan_enumerate_axis_from_the_premise_plugin_bag():
-    s = _subst(plan_review_rounds=1, code_review_rounds=1,
+    s = _subst(plan_review_rounds=2, code_review_rounds=2,
                plugins={"premise": {"enumerate_pass": 1}})
     assert gates.cross_axis_friction_release_active(s) is True
 
@@ -121,8 +121,8 @@ def test_code_review_release_inactive_below_threshold(gates_on):
 
 
 def test_code_review_release_active_at_and_past_threshold(gates_on):
-    assert gates.code_review_round_release_active(_subst(code_review_rounds=3)) is True
-    assert gates.code_review_round_release_active(_subst(code_review_rounds=4)) is True
+    assert gates.code_review_round_release_active(_subst(code_review_rounds=5)) is True
+    assert gates.code_review_round_release_active(_subst(code_review_rounds=6)) is True
 
 
 def test_code_review_below_threshold_still_blocks_normally(gates_on):
@@ -132,11 +132,11 @@ def test_code_review_below_threshold_still_blocks_normally(gates_on):
 
 
 def test_code_review_at_threshold_collapses_to_one_routing_message(gates_on):
-    s = _subst(code_review_rounds=3, code_reviews=[_review("revise")])
+    s = _subst(code_review_rounds=5, code_reviews=[_review("revise")])
     b = gates.code_review_blockers(s, s.stages[0])
     assert len(b) == 1
     assert "no further code-reviewer pass is required" in b[0]
-    assert "round budget exhausted at round 3" in b[0]
+    assert "round budget exhausted at round 5" in b[0]
     assert "code-review --verdict override" in b[0]
 
 
@@ -152,7 +152,7 @@ def test_code_review_release_never_empties_the_blockers_list(gates_on):
 def test_code_review_release_wraps_the_missing_review_branch_too(gates_on):
     """Whichever sub-reason produced the blocker — no review at all here, a `revise`
     verdict elsewhere — collapses to the same one routing message once released."""
-    s = _subst(code_review_rounds=3)  # no CodeReview recorded at all
+    s = _subst(code_review_rounds=5)  # no CodeReview recorded at all
     b = gates.code_review_blockers(s, s.stages[0])
     assert len(b) == 1 and "round budget exhausted" in b[0]
 
@@ -171,31 +171,31 @@ def test_code_review_release_threshold_comes_from_config_not_a_literal(gates_on)
 # --- 3. the combined scenario, through the real gate functions ----------------
 
 def test_cross_axis_release_wraps_plan_review_blockers_even_though_solo_is_under(gates_on):
-    s = _subst(plan_review_rounds=2, code_review_rounds=2,
+    s = _subst(plan_review_rounds=3, code_review_rounds=2,
                plan_review=PlanReview("/plan.toml", "revise", "thinker"))
     assert gates.plan_review_round_release_active(s) is False
     b = gates.plan_review_blockers(s, s.plan_path)
     assert len(b) == 1
     assert "no further thinker review is required" in b[0]
     # The message names the LIVE plan-review count, not the cross-axis sum.
-    assert "round budget exhausted at round 2" in b[0]
+    assert "round budget exhausted at round 3" in b[0]
     assert "released by the COMBINED cross-axis friction ceiling" in b[0]
 
 
 def test_cross_axis_release_wraps_code_review_blockers_even_though_solo_is_under(gates_on):
-    s = _subst(plan_review_rounds=2, code_review_rounds=2, code_reviews=[_review("revise")])
+    s = _subst(plan_review_rounds=2, code_review_rounds=3, code_reviews=[_review("revise")])
     assert gates.code_review_round_release_active(s) is False
     b = gates.code_review_blockers(s, s.stages[0])
     assert len(b) == 1
     assert "no further code-reviewer pass is required" in b[0]
-    assert "round budget exhausted at round 2" in b[0]
+    assert "round budget exhausted at round 3" in b[0]
     assert "released by the COMBINED cross-axis friction ceiling" in b[0]
 
 
 def test_solo_axis_release_message_carries_no_cross_axis_footnote(gates_on):
     """When an axis's OWN count clears the threshold, the message must stay exactly
     what it was before the cross-axis ceiling existed — no footnote appended."""
-    s = _subst(plan_review_rounds=3, code_review_rounds=0,
+    s = _subst(plan_review_rounds=5, code_review_rounds=0,
                plan_review=PlanReview("/plan.toml", "revise", "thinker"))
     b = gates.plan_review_blockers(s, s.plan_path)
     assert len(b) == 1

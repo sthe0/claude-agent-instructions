@@ -163,6 +163,8 @@ _UNIT = {
 
 #: Keys inside `state.effort_actuals` — the two accumulators that are WRITTEN over time
 #: (the other two actuals are derived on read from history / user_prompt_count).
+ORDER_SPEND_KEY = "order_spend"
+ORDER_WALL_CLOCK_KEY = "order_wall_clock"
 ACTUAL_SPEND_KEY = "spend_usd"
 ACTUAL_MINUTES_KEY = "active_minutes"
 
@@ -392,9 +394,14 @@ def effective_deltas(state: SessionState, *, cross_session_totals: dict | None =
 
     `cross_session_totals=None` reproduces `deltas()` exactly."""
     delta = deltas(state)
-    cross_replans = float((cross_session_totals or {}).get("replan_count") or 0.0)
+    totals = cross_session_totals or {}
+    cross_replans = float(totals.get("replan_count") or 0.0)
     if cross_replans > delta[SCALE_REPLANS]:
         delta[SCALE_REPLANS] = cross_replans
+    for scale, key in ((SCALE_SPEND, ORDER_SPEND_KEY), (SCALE_WALL_CLOCK, ORDER_WALL_CLOCK_KEY)):
+        order_total = float(totals.get(key) or 0.0)
+        if order_total > delta[scale]:
+            delta[scale] = order_total
     return delta
 
 
@@ -559,7 +566,12 @@ def rederive(state: SessionState, thr: Thresholds | None = None) -> dict:
     """Recompute and STORE the estimate from the current stage list. The sole writer of
     `state.effort_estimate` — called at arming and on every replan branch, so a plan that
     grows or contracts is always compared against what it currently claims."""
-    state.effort_estimate = estimate(state, thr)
+    est = estimate(state, thr)
+    if state.order_effort_frozen:
+        for scale in RATIO_SCALES:
+            if scale in state.order_effort_frozen:
+                est[scale] = float(state.order_effort_frozen[scale])
+    state.effort_estimate = est
     return state.effort_estimate
 
 
@@ -634,8 +646,10 @@ def record_fire(state: SessionState, div: Divergence, *, now: float) -> dict:
     exactly that absence to refuse dispatch/replan/submit_plan until
     `agentctl fire-acknowledge` appends one (never replaces the record; the audit
     trail stays append-only)."""
+    replaced_baseline = dict(state.effort_baseline or {})
     state.effort_baseline = actual(state)
     record = {
+        "replaced_baseline": replaced_baseline,
         "scale": div.scale,
         "kind": div.kind,
         "actual": div.actual,

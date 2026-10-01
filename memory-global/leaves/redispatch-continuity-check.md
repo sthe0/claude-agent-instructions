@@ -38,12 +38,16 @@ trigger fired on the absolute replan count, four spawns too late.
 
 Two mechanical facts that turn a re-dispatch into a *guaranteed* dead end:
 
-- **`agentctl resolve-permission --decision granted` is cosmetic.** `cmd_resolve_permission`
-  clears engine state and returns a continuation string via
-  `continuations.permission_granted()`; it never writes to any permissions file and
-  never touches `spawn-specialist.py`'s static `DEVELOPER_SETTINGS_ALLOW` list. A
-  permission block is cleared only by editing that list. Granting and re-dispatching
-  reproduces the identical block, every time.
+- **`agentctl resolve-permission --decision granted` was cosmetic as of 2026-08-28 — no longer true for `--scope stage|once`.**
+  At the time this was observed, `cmd_resolve_permission` cleared engine state and returned a continuation
+  string via `continuations.permission_granted()` without writing to any permissions file or touching
+  `spawn-specialist.py`'s static `DEVELOPER_SETTINGS_ALLOW` list, so granting and re-dispatching reproduced
+  the identical block every time. The resource-model work since then closed that gap for `stage`/`once`
+  scope: `resolve-permission` now additionally **materializes** the grant onto the active stage as a runtime
+  `[stage.grants]` entry via `--rule <rule>` / `--add-dir <PATH:MODE>`, validated through the same
+  `grants.validate_rule`/`validate_add_dir` path every declared/derived grant passes — see
+  `scripts/agentctl/README.md` § Commands, `resolve-permission` row. Confirm via `stage-grants` before
+  re-dispatching rather than assuming either the old (cosmetic) or new (materializing) behavior.
 - **Claude Code Bash allow-patterns match the literal command string, not a resolved
   path.** `Bash(python3 samples/judge-latency/sample_x.py:*)` does **not** match
   `python3 sample_x.py` issued from inside that directory. Cover the bare-filename

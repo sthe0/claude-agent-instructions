@@ -65,6 +65,8 @@ or granted at runtime via `resolve-permission` and consumed once at
 dispatch) — see [[spawning-specialists]] § File-access scope for the
 provenance labels as they appear in a spawned child's own prompt.
 
+**Resource resolution vs. rule validation.** `grants.validate_rule` (above) is a shape check on rule TEXT at declaration time; it says nothing about what a `Rule:` covers at grant-check time. That is `scripts/agentctl/tool_contracts.toml` plus `tool_contracts.py`'s `resolve_command` / `plan_resources.py`'s `resolve_rule_grant`: a command or a stage's grant resolves to typed resources (file+mode, VCS ref+op, specialist role, service+op-class, dataset+locator), and a `Rule:` with a `:*` wildcard tail always resolves `unresolved` regardless of what the text otherwise names — the two checks are independent and both must pass.
+
 **Approval binding.** A derived grant is not free of review just because a
 human never typed it: `agentctl approve`/`replan` binds the plan's
 `grants_sha256` (the digest of every stage's effective grant set, declared

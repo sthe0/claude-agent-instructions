@@ -83,6 +83,19 @@ def _grants_lines(s, venue: str) -> list[str]:
     return out
 
 
+def _effects_lines(s) -> list[str]:
+    """The `- **Effects (trusted script identities):**` block for one
+    stage, or `[]` when the stage declares no `[[stage.effects]]` entries —
+    the stage's own claim about which scripts resolve its calls, distinct
+    from `_grants_lines`'s file-access scope."""
+    if not s.effects:
+        return []
+    out = ["- **Effects (trusted script identities):**"]
+    for e in s.effects:
+        out.append(f"  - {e.path} (resolver: {e.resolver}, sha256: {e.sha256})")
+    return out
+
+
 def _negative_control_lines(crit) -> list[str]:
     """The one-line rendering of a criterion's negative control or its waiver,
     shared between `render_plan_md` and `render_stage_brief` so the two views
@@ -389,6 +402,7 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
     if s.control:
         lines.append(f"- **Control (prior attestation):** {s.control}")
     lines.extend(_grants_lines(s, _venue_for(doc)))
+    lines.extend(_effects_lines(s))
     if s.principle is not None:
         p = s.principle
         lines.append(

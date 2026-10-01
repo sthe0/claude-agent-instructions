@@ -51,18 +51,18 @@ def _subst(**kw) -> SessionState:
 # --- 1. gates.py: the threshold predicate and the wrap -------------------------
 
 def test_below_threshold_review_still_required(gate_on):
-    s = _subst(plan_review_rounds=2)  # threshold (effort-replan-absolute) is 3
+    s = _subst(plan_review_rounds=4)  # threshold (effort-replan-absolute) is 5
     blockers = gates.plan_review_blockers(s, s.plan_path)
     assert blockers and "no thinker review" in blockers[0]
 
 
 def test_at_threshold_requirement_released_with_recorded_reason(gate_on):
-    s = _subst(plan_review_rounds=3,
+    s = _subst(plan_review_rounds=5,
                plan_review=PlanReview("/plan.toml", "revise", "thinker"))
     blockers = gates.plan_review_blockers(s, s.plan_path)
     assert len(blockers) == 1
     assert "no further thinker review is required" in blockers[0]
-    assert "round budget exhausted at round 3" in blockers[0]
+    assert "round budget exhausted at round 5" in blockers[0]
     assert "override" in blockers[0] and "cut scope" in blockers[0]
     # Pinned because this clause has been wrong twice: it must not claim the override is
     # the ONLY act that opens the gate — a fresh passing review clears it at any count,
@@ -76,7 +76,7 @@ def test_release_message_names_the_fresh_pass_exit(gate_on):
     omitted-but-valid exit reads as non-existent, and a coordinator recording an honest
     fresh pass with no other option in view has nowhere else to attribute it but
     override. See gates.py's design comment above _PLAN_REVIEW_ROUND_RELEASE_MESSAGE."""
-    s = _subst(plan_review_rounds=3,
+    s = _subst(plan_review_rounds=5,
                plan_review=PlanReview("/plan.toml", "revise", "thinker"))
     message = gates.plan_review_blockers(s, s.plan_path)[0]
     assert "plan-review --verdict pass" in message
@@ -88,7 +88,7 @@ def test_release_does_not_re_derive_that_a_review_happened(gate_on):
     file. The two diverge whenever a review is staled by the edit that answers it, and
     re-deriving would then read three spent rounds as none — so the release fires on the
     count alone, with no review record present."""
-    s = _subst(plan_review_rounds=3)
+    s = _subst(plan_review_rounds=5)
     assert gates.plan_review_round_release_active(s) is True
     blockers = gates.plan_review_blockers(s, s.plan_path)
     assert len(blockers) == 1 and "round budget exhausted" in blockers[0]
@@ -98,10 +98,10 @@ def test_release_wraps_every_blocking_sub_reason_uniformly(gate_on):
     """Whichever sub-reason a recorded review produced — a `revise` verdict here, a
     staleness blocker on the same record — collapses to the one routing message once
     the round threshold is met."""
-    s = _subst(plan_review_rounds=3,
+    s = _subst(plan_review_rounds=5,
                plan_review=PlanReview("/plan.toml", "revise", "thinker"))
     assert len(gates.plan_review_blockers(s, s.plan_path)) == 1
-    stale = _subst(plan_review_rounds=3,
+    stale = _subst(plan_review_rounds=5,
                    plan_review=PlanReview("/other.toml", "pass", "thinker", plan_sha256="ab12"))
     assert len(gates.plan_review_blockers(stale, stale.plan_path)) == 1
 
@@ -110,27 +110,27 @@ def test_release_never_empties_the_blockers_list(gate_on):
     """Never auto-approve: the release replaces the WORDING, not the fact that
     approve is still refused — a scope/risk question is the customer's to answer,
     so the gate must stay structurally blocking."""
-    s = _subst(plan_review_rounds=5,  # well past the threshold
+    s = _subst(plan_review_rounds=7,  # well past the threshold
                plan_review=PlanReview("/plan.toml", "revise", "thinker"))
     blockers = gates.plan_review_blockers(s, s.plan_path)
     assert blockers != []
-    assert "at round 5" in blockers[0]  # the live count, not a threshold-shaped literal
+    assert "at round 7" in blockers[0]  # the live count, not a threshold-shaped literal
 
 
 def test_round_release_inactive_below_threshold(gate_on):
     assert gates.plan_review_round_release_active(_subst(plan_review_rounds=0)) is False
-    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=2)) is False
+    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=4)) is False
 
 
 def test_round_release_active_at_and_past_threshold(gate_on):
-    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=3)) is True
-    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=4)) is True
+    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=5)) is True
+    assert gates.plan_review_round_release_active(_subst(plan_review_rounds=6)) is True
 
 
 def test_the_threshold_comes_from_config_not_a_literal(gate_on):
     """The stage's whole claim is that it REUSES effort-replan-absolute rather than
     minting a key, so the predicate must read the row. Every other test asserts against
-    the row's shipped value of 3, which a hardcoded 3 satisfies just as well."""
+    the row's shipped value of 5, which a hardcoded 5 satisfies just as well."""
     retuned = Thresholds({"effort-replan-absolute": "2"})
     assert gates.plan_review_round_release_active(_subst(plan_review_rounds=2), retuned) is True
     assert gates.plan_review_round_release_active(_subst(plan_review_rounds=1), retuned) is False
@@ -139,7 +139,7 @@ def test_the_threshold_comes_from_config_not_a_literal(gate_on):
 def test_a_recorded_pass_still_clears_regardless_of_rounds(gate_on):
     """The round count only matters while there IS a blocker; a clean pass at any
     round count clears exactly as before."""
-    s = _subst(plan_review_rounds=3,
+    s = _subst(plan_review_rounds=5,
                plan_review=PlanReview("/plan.toml", "pass", "thinker", plan_sha256="ab12"))
     assert gates.plan_review_blockers(s, "/plan.toml") == []
 
@@ -194,15 +194,15 @@ def test_drafting_resubmissions_before_any_review_are_not_rounds(store, fixtures
 
 
 def _to_round_budget_exhausted(store, sid, plan):
-    """One whole-plan revise verdict, then 3 resubmissions of the same bytes — the
-    cheapest state that sits exactly at the threshold. It is NOT the three-turn
+    """One whole-plan revise verdict, then 5 resubmissions of the same bytes — the
+    cheapest state that sits exactly at the threshold. It is NOT the five-turn
     negotiation the budget is named for; the review-edit-resubmit shape is exercised by
     test_a_stage_scoped_review_staled_by_its_own_answer_still_spends_a_round."""
     _to_plan_ready(store, sid, plan)
     _record_revise(store, sid, plan)
-    for _ in range(3):
+    for _ in range(5):
         cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
-    assert store.load(sid).plan_review_rounds == 3
+    assert store.load(sid).plan_review_rounds == 5
 
 
 def test_below_threshold_approve_payload_carries_no_release(store, fixtures_dir, gate_on):
@@ -210,7 +210,7 @@ def test_below_threshold_approve_payload_carries_no_release(store, fixtures_dir,
     plan = str(fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     _record_revise(store, sid, plan)
-    cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)  # rounds=1, still < 3
+    cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)  # rounds=1, still < 5
     d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert d.node == Node.PLAN_READY.value
     assert d.data["plan_review_round_release"] is None
@@ -223,13 +223,13 @@ def test_release_present_in_surfaced_payload_and_recorded(store, fixtures_dir, g
     _to_round_budget_exhausted(store, sid, plan)
     d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert d.node == Node.PLAN_READY.value  # still refused — never auto-approves
-    assert d.data["plan_review_round_release"] == {"rounds": 3}
+    assert d.data["plan_review_round_release"] == {"rounds": 5}
     events = [e for e in store.load(sid).history if e.get("event") == "plan_review_round_release"]
     assert len(events) == 1
-    assert events[0]["rounds"] == 3
+    assert events[0]["rounds"] == 5
     # a second blocked approve at the SAME round count must not duplicate the record
     d2 = cli.cmd_approve(ns(session=sid, by="user"), store=store)
-    assert d2.data["plan_review_round_release"] == {"rounds": 3}
+    assert d2.data["plan_review_round_release"] == {"rounds": 5}
     events = [e for e in store.load(sid).history if e.get("event") == "plan_review_round_release"]
     assert len(events) == 1
 
@@ -238,9 +238,9 @@ def test_release_present_in_surfaced_payload_and_recorded(store, fixtures_dir, g
     # every release after the first.
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
     d3 = cli.cmd_approve(ns(session=sid, by="user"), store=store)
-    assert d3.data["plan_review_round_release"] == {"rounds": 4}
+    assert d3.data["plan_review_round_release"] == {"rounds": 6}
     events = [e for e in store.load(sid).history if e.get("event") == "plan_review_round_release"]
-    assert [e["rounds"] for e in events] == [3, 4]
+    assert [e["rounds"] for e in events] == [5, 6]
 
 
 def test_the_released_directive_names_an_act_that_actually_opens_the_gate(store, fixtures_dir,
@@ -291,7 +291,7 @@ def test_a_stage_scoped_review_staled_by_its_own_answer_still_spends_a_round(
     plan = str(tmp_path / "p.toml")
     shutil.copy(fixtures_dir / "plan_two_stage.toml", plan)
     _to_plan_ready(store, sid, plan)
-    for n in range(3):
+    for n in range(5):
         cli.cmd_plan_review(ns(session=sid, verdict="revise", reviewer="thinker",
                                concerns=[f"stage 2 concern {n}"], note="", target=plan,
                                plan_digest=_sha256_file(plan), scope="stage:2"), store=store)
@@ -299,17 +299,17 @@ def test_a_stage_scoped_review_staled_by_its_own_answer_still_spends_a_round(
         cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
 
     s = store.load(sid)
-    assert s.plan_review_rounds == 3
+    assert s.plan_review_rounds == 5
     assert not s.plan_stage_reviews  # the reviews staled away, the spent rounds did not
     assert gates.plan_review_round_release_active(s) is True
     blockers = gates.plan_review_blockers(s, plan)
-    assert len(blockers) == 1 and "round budget exhausted at round 3" in blockers[0]
+    assert len(blockers) == 1 and "round budget exhausted at round 5" in blockers[0]
 
     # A bare resubmission from THIS state — rounds already spent, every record staled —
     # is still a redraft nobody has reviewed, so it must not advance the count. Reached
     # only here: the before-any-review test cannot, its count is zero by construction.
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
-    assert store.load(sid).plan_review_rounds == 3
+    assert store.load(sid).plan_review_rounds == 5
 
 
 def test_approval_resets_the_round_count(store, fixtures_dir, gate_on):
@@ -401,7 +401,7 @@ def test_post_approval_versions_count_and_release_lands_in_the_verdict_directive
     _to_executing(store, sid, plan)
     assert store.load(sid).plan_review_rounds == 0
 
-    for n in range(2):
+    for n in range(4):
         d = _revise_post(store, sid, plan)
         assert d.data["plan_review_round_release"] is None
         assert store.load(sid).plan_review_rounds == n + 1
@@ -409,11 +409,11 @@ def test_post_approval_versions_count_and_release_lands_in_the_verdict_directive
 
     d = _revise_post(store, sid, plan)
     s = store.load(sid)
-    assert s.plan_review_rounds == 3
+    assert s.plan_review_rounds == 5
     assert gates.plan_review_round_release_active(s) is True
-    assert d.data["plan_review_round_release"] == {"rounds": 3}
+    assert d.data["plan_review_round_release"] == {"rounds": 5}
     assert len(d.data["blockers"]) == 1
-    assert "round budget exhausted at round 3" in d.data["blockers"][0]
+    assert "round budget exhausted at round 5" in d.data["blockers"][0]
 
 
 def test_a_verdict_before_approval_does_not_touch_the_post_approval_counter(
@@ -464,21 +464,21 @@ def test_release_reaches_the_coordinator_on_the_replan_path(
     sid = "rr-replan-release"
     plan = _copy_fixture(fixtures_dir, tmp_path, "plan_two_stage.toml")
     _to_executing(store, sid, plan)
-    for n in range(3):
+    for n in range(5):
         _revise_post(store, sid, plan)
         _retitle_stage(plan, 2, f"Add tests, revision {n}")
-    assert store.load(sid).plan_review_rounds == 3
+    assert store.load(sid).plan_review_rounds == 5
 
     d = cli.cmd_replan(ns(session=sid, plan=plan), store=store)
     assert d.ok is False and d.action == "plan_review"
     assert "needs a thinker review" not in d.detail
-    assert d.data["plan_review_round_release"] == {"rounds": 3}
+    assert d.data["plan_review_round_release"] == {"rounds": 5}
     assert len(d.data["blockers"]) == 1
-    assert "round budget exhausted at round 3" in d.data["blockers"][0]
+    assert "round budget exhausted at round 5" in d.data["blockers"][0]
     # One event for the round, though two different commands surfaced it — the dedup is
     # per round count, so the history stays countable as a metric.
     events = [e for e in store.load(sid).history if e.get("event") == "plan_review_round_release"]
-    assert [e["rounds"] for e in events] == [3]
+    assert [e["rounds"] for e in events] == [5]
 
 
 def _parent_at_executing(store, sid, *, rounds, digest):

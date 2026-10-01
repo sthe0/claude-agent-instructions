@@ -1488,10 +1488,10 @@ class TestEnumerateRoundsExhaustedAdmissibility:
         return state, bag
 
     def test_refused_when_release_inactive(self, store, fixtures_dir):
-        """Below the threshold (passes=2 < 3) the reason is rejected with the
+        """Below the threshold (passes=4 < 5) the reason is rejected with the
         current pass count so the operator knows what is needed."""
         plan_path = str(fixtures_dir / "plan_two_stage.toml")
-        state, _ = self._stale_bag_state(plan_path, passes=2)
+        state, _ = self._stale_bag_state(plan_path, passes=4)
         store.save(state)
 
         d = cli.cmd_question_enumerate_escape(
@@ -1501,12 +1501,12 @@ class TestEnumerateRoundsExhaustedAdmissibility:
 
         assert not d.ok
         assert "admissible only once" in d.detail or "budget is exhausted" in d.detail
-        assert "2/3" in d.detail
+        assert "4/5" in d.detail
 
     def test_admitted_when_release_active(self, store, fixtures_dir):
         """At the threshold the reason is admitted and the escape is recorded."""
         plan_path = str(fixtures_dir / "plan_two_stage.toml")
-        state, _ = self._stale_bag_state(plan_path, passes=3)
+        state, _ = self._stale_bag_state(plan_path, passes=5)
         store.save(state)
 
         d = cli.cmd_question_enumerate_escape(

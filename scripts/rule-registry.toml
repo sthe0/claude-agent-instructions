@@ -443,14 +443,14 @@ delivery_marker = ""
 delivery_note = ""
 
 [[rule]]
-id = "substantive-plan-changes-require-approval"
-tier = 0
+id = "approved-order-plan-changes-self-approved-in-boundary"
+tier = 1
 locator_heading = "### Acting without asking"
-locator_phrase = "Substantive plan changes still require approval"
-kernel_reason = "NOT-NOTICING"
-delivery_kind = ""
-delivery_marker = ""
-delivery_note = ""
+locator_phrase = "plan changes are self-approved inside its boundary"
+kernel_reason = ""
+delivery_kind = "agentctl_construct"
+delivery_marker = "--by agent"
+delivery_note = "The engine computes gates.autonomy_boundary on every submit-plan/replan and returns action 'self_approve' only inside it; cmd_approve refuses --by agent outside it. '--by agent' is the observable CLI-invocation proxy; it also counts agent-authored fire-acknowledge and resolve-permission, which belong to the same autonomy boundary."
 
 [[rule]]
 id = "parallel-sessions-share-working-tree"
@@ -507,14 +507,14 @@ delivery_marker = "agentctl record-result"
 delivery_note = "agentctl.effort.divergence, evaluated at cmd_record_result and cmd_verify_final; a fire transitions VERIFYING -> DIAGNOSING and returns marker OVERCOME-DIFFICULTY with an effort_divergence payload. The marker is a COARSE proxy in the over-reading direction: record-result runs on every stage result, divergent or not, so an observed count is an upper bound on deliveries, not a firing count. A true firing signal lives in the directive's data payload (tool_use OUTPUT), which this report does not read. Env kill-switch AGENTCTL_EFFORT=0 suppresses evaluation entirely with no observable trace."
 
 [[rule]]
-id = "replans-scale-second-firing-ask-user"
+id = "replans-firing-agent-cycle-resolved-reentry-ask-user"
 tier = 0
 locator_heading = "### When the work is stuck"
-locator_phrase = "Two re-entry signals warrant a direct user question"
+locator_phrase = "Two re-entry signals"
 kernel_reason = "NOT-NOTICING"
 delivery_kind = ""
 delivery_marker = ""
-delivery_note = "Prose-only interim rule; the structural round-release valve for the replans scale is out of this plan's scope (sibling plan enumerate-round-budget). No engine delivery exists yet."
+delivery_note = "Tier 0: the ask-the-user-whether-the-order-still-stands question itself is prose. Engine-backed parts: a replans-scale fire on a user-approved order is closed by fire-acknowledge --by agent (gated on a post-fire difficulty record with a real normalize); a resolved re-entry at effort-replan-absolute reopens needs --reopen-user-decision (gates.resolved_reentry_blockers)."
 
 # ---------------------------------------------------------------------------
 # ### When the user corrects agent behavior

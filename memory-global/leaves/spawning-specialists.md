@@ -115,11 +115,11 @@ A `claude -p` spawn is a **one-shot batch process**, unlike the root/interactive
 Each specialist's first non-empty line carries one of these. The wrapper validates and prefixes the output with `MALFORMED:` if the marker is missing.
 
 - `COMPLETED:` — step done; summary + artifacts.
-- `PLAN-READY:` — **planner-only.** Plan ready; manager must obtain explicit user approval before next spawn. Hard gate.
+- `PLAN-READY:` — **planner-only.** Plan ready; manager must obtain explicit user approval before next spawn. Hard gate — except a later plan of a user-approved order, self-approved on the engine's `self_approve`.
 - `INCOMPLETE:` — partial; what's done, what's left, blocker.
 - `CLARIFY:` — specialist needs one specific fact (path, number, choice between named options) to continue. Manager answers, re-spawns with answer embedded.
 - `REPLAN:` — plan-level difficulty; specialist proposes a revision.
-- `PERMISSION-REQUEST:` — explicit permission needed for a specific external / irreversible action.
+- `PERMISSION-REQUEST:` — explicit permission needed for a specific external / irreversible action. Optionally carries a `Rule:` line and a `Resource:` line (the typed resource — file+mode, VCS ref+op, specialist role, service+op-class, dataset+locator — the manager expects `Rule:` to resolve to). A named `Rule:`/`Resource:` gets a `self_grant` pass before any user round-trip: the manager resolves `Rule:` and checks it against the union of the order-approvals ledger and the stage's own effective grants; a match self-grants, a `Resource:` that disagrees with `Rule:`'s own resolution is a `resource_disagreement` and falls through to the user, and no match also falls through.
 - `ESCALATE:` — other decision (manager or user) affecting plan / scope.
 
 `CLARIFY:` vs `ESCALATE:` — fact vs decision. Prefer `CLARIFY:` when work resumes immediately on the answer.

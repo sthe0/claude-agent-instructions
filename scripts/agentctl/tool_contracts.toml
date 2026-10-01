@@ -1,0 +1,274 @@
+# Reviewed per-tool effect contracts (REQ3).
+#
+# One [[program]] entry per program NAME (agentctl/tool_contracts.py's loader
+# refuses a duplicate name). `effect` is one of:
+#   "none"       - the program's own documented contract never writes to the
+#                  filesystem or an external resource. A shell output
+#                  redirect (`>`, `>>`, and every other form except the one
+#                  reviewed exception, the standalone token `2>&1`) is not
+#                  something this entry, or any entry, resolves at all:
+#                  agentctl/tool_contracts.py's `_check_command_shape` refuses
+#                  the WHOLE command outright whenever one is present, ahead
+#                  of any per-program dispatch. `lib/bash_write_targets` is
+#                  used only to split an already shape-clean command line
+#                  into `&&`/`;`/`|` segments for per-segment resolution, not
+#                  to resolve a redirect's write target.
+#   "unresolved" - the effect is not decidable from the command line alone
+#                  (an unbounded DSL, an argument-dependent target this table
+#                  does not attempt to resolve, or a form this plan
+#                  deliberately leaves unresolved e.g. a delete/force push).
+#   "resolver"   - argument-dependent; resolved by the matching Python
+#                  function in `agentctl/tool_contracts.py`'s
+#                  `_CUSTOM_RESOLVERS` table, cited per program below.
+#
+# `source` names where the contract was verified (man page / --help output /
+# an in-repo module this plan already reviews for the same lexing).
+
+# --- read-only (effect = "none") --------------------------------------------
+
+[[program]]
+name = "ls"
+effect = "none"
+safe_flags = ["*"]
+source = "GNU coreutils ls(1): lists directory entries; no write. safe_flags=[\"*\"]: no flag in ls(1) writes anywhere."
+
+[[program]]
+name = "cat"
+effect = "none"
+safe_flags = ["*"]
+source = "POSIX cat(1): concatenates and prints files; no write. safe_flags=[\"*\"]: no flag in cat(1) writes anywhere."
+
+[[program]]
+name = "head"
+effect = "none"
+safe_flags = ["*"]
+source = "GNU coreutils head(1): prints the first part of files; no write. safe_flags=[\"*\"]: no flag in head(1) writes anywhere."
+
+[[program]]
+name = "tail"
+effect = "none"
+safe_flags = ["*"]
+source = "GNU coreutils tail(1): prints the last part of files; no write. safe_flags=[\"*\"]: no flag in tail(1) writes anywhere."
+
+[[program]]
+name = "wc"
+effect = "none"
+safe_flags = ["*"]
+source = "GNU coreutils wc(1): counts lines/words/bytes; no write. safe_flags=[\"*\"]: no flag in wc(1) writes anywhere."
+
+[[program]]
+name = "grep"
+effect = "none"
+safe_flags = ["*"]
+source = "GNU grep(1): prints matching lines to stdout; no write. safe_flags=[\"*\"]: no flag in grep(1) writes anywhere."
+
+[[program]]
+name = "rg"
+effect = "none"
+safe_flags = ["-n", "--line-number", "-N", "--no-line-number", "-i", "--ignore-case", "-s", "--case-sensitive", "-S", "--smart-case", "-v", "--invert-match", "-w", "--word-regexp", "-x", "--line-regexp", "-c", "--count", "--count-matches", "-l", "--files-with-matches", "--files-without-match", "-o", "--only-matching", "-A", "-B", "-C", "--context", "--after-context", "--before-context", "-e", "--regexp", "-f", "--file", "-F", "--fixed-strings", "-g", "--glob", "--iglob", "-t", "--type", "-T", "--type-not", "--hidden", "--no-ignore", "-u", "--unrestricted", "-m", "--max-count", "-q", "--quiet", "-a", "--text", "-H", "--with-filename", "-I", "--no-filename", "--color", "--heading", "--no-heading", "-p", "--pretty"]
+source = "ripgrep --help: every flag in this list is read-only per its own doc; --pre/--pre-glob (runs an arbitrary preprocessor command per file) and --replace/-r (rewrites matched text, only meaningful combined with a write flag ripgrep does not have on its own but still excluded on principle) are deliberately absent. Residual this table does not resolve: the session environment variable RIPGREP_CONFIG_PATH can inject additional, unreviewed flags (including --pre) via an ambient config file."
+
+# --- unresolved: outside the reviewed read-only table, not git-related -----
+
+[[program]]
+name = "date"
+effect = "unresolved"
+reason = "date is outside the reviewed read-only program table, and -s/--set changes SYSTEM clock state, which this table does not review at any flag grammar."
+source = "GNU coreutils date(1): -s/--set changes system clock state; otherwise prints the date."
+
+# --- unresolved: write target is named by an operand this table does not
+# resolve --------------------------------------------------------------------
+
+[[program]]
+name = "sed"
+effect = "unresolved"
+reason = "sed's write target depends on -i's presence and its own script text (an embedded w/W/e command writes or executes regardless of -i); neither is decidable from a closed per-flag grammar alone, so every sed invocation is unresolved."
+source = "GNU sed(1): -i/--in-place rewrites its file operand(s) in place; absent -i, an embedded w/W/e command can still write or execute."
+
+[[program]]
+name = "tee"
+effect = "unresolved"
+reason = "tee writes each non-flag operand as a file; a target named by an arbitrary operand is outside the reviewed closed command grammar."
+source = "POSIX tee(1): writes each non-flag operand as a file."
+
+[[program]]
+name = "cp"
+effect = "unresolved"
+reason = "cp's destination -- and, under --parents, the source directory structure it preserves under that destination -- is outside the reviewed closed command grammar."
+source = "POSIX cp(1): writes its destination operand."
+
+[[program]]
+name = "mv"
+effect = "unresolved"
+reason = "mv writes its destination operand and removes its source operand(s); neither is in the reviewed closed command grammar."
+source = "POSIX mv(1): writes its destination operand and removes its source operand(s)."
+
+[[program]]
+name = "install"
+effect = "unresolved"
+reason = "install writes its destination operand in the ordinary case, or creates every positional as a directory under -d/--directory; neither is in the reviewed closed command grammar."
+source = "GNU coreutils install(1): writes its destination operand, or creates directories under -d/--directory."
+
+[[program]]
+name = "patch"
+effect = "unresolved"
+reason = "patch's actual write target is named inside the patch body/headers (or derived from -p's strip count against those headers), not decidable from the command line alone; a positional FILE operand or any of -o/-d/-r/-b/-B changes or adds to that target in ways this table does not attempt to resolve."
+source = "POSIX patch(1): writes the file(s) named by the patch body it is given."
+
+# --- always unresolved (effect not decidable from the command line) --------
+
+[[program]]
+name = "dd"
+effect = "unresolved"
+reason = "dd's of= target is not resolved by this table; treated as unresolved rather than silently missed."
+source = "GNU coreutils dd(1): writes its of= operand."
+
+[[program]]
+name = "rsync"
+effect = "unresolved"
+reason = "rsync's destination argument and --delete/-a semantics are not resolved by this table."
+source = "rsync(1): writes/deletes at its destination argument."
+
+[[program]]
+name = "ln"
+effect = "unresolved"
+reason = "ln's link-target semantics (and -f overwrite) are not resolved by this table."
+source = "POSIX ln(1): creates a link at its destination operand."
+
+[[program]]
+name = "truncate"
+effect = "unresolved"
+reason = "truncate's target argument is not resolved by this table."
+source = "GNU coreutils truncate(1): writes (truncates) its file operand."
+
+[[program]]
+name = "touch"
+effect = "unresolved"
+reason = "touch's operand(s) are not resolved by this table (also creates missing files, not only mtimes)."
+source = "POSIX touch(1): creates/updates its file operand(s)."
+
+[[program]]
+name = "curl"
+effect = "unresolved"
+reason = "curl's -o/-O/--upload-file targets and outbound network effect are not resolved by this table."
+source = "curl(1): can write a local file (-o/-O) and/or call an external service."
+
+[[program]]
+name = "wget"
+effect = "unresolved"
+reason = "wget's -O target and outbound network effect are not resolved by this table."
+source = "wget(1): can write a local file (-O) and/or call an external service."
+
+[[program]]
+name = "kill"
+effect = "unresolved"
+reason = "signals an external process; not a resource this table types."
+source = "POSIX kill(1): sends a signal to a process."
+
+[[program]]
+name = "rm"
+effect = "unresolved"
+reason = "rm deletes its file/directory operand(s); -r/-R/-f expand the blast radius to a whole subtree and skip confirmation, and neither the target nor the flag combination is in the reviewed closed command grammar."
+source = "POSIX rm(1): removes (unlinks) each file operand; -r/-R recurses into directories, -f suppresses prompts and nonexistent-file errors."
+
+[[program]]
+name = "bash"
+effect = "unresolved"
+reason = "bash executes either an arbitrary inline command (-c), an arbitrary script operand, or an interactive shell; none of the three is decidable from the command line without a script-effects registry entry, which this table does not yet provide for bash (unlike python3/python, whose script operand IS consulted against the registry via _resolve_interpreter)."
+source = "bash(1): -c runs its following argument as a command; a positional script operand is read and executed in full, including everything it in turn invokes."
+
+[[program]]
+name = "ssh"
+effect = "unresolved"
+reason = "ssh runs a command (or an interactive shell) on a REMOTE host; whatever that remote command does is a resource this table has no way to see or type from the local command line."
+source = "ssh(1): executes the given command on the specified remote host, or starts an interactive remote shell if none is given."
+
+[[program]]
+name = "launchctl"
+effect = "unresolved"
+reason = "launchctl's stateful subcommands (load/unload/bootstrap/bootout/kickstart/remove/submit/start/stop) install, remove, or signal a launchd job; unlike plutil below, launchctl's subcommand is a bare word, not a dash-prefixed flag, so the safe_flags mechanism (which only inspects tokens starting with '-') cannot gate it -- marking launchctl effect='none' would let a stateful bare-word subcommand straight through unreviewed."
+source = "launchctl(1) (macOS): list/print query running jobs (read-only); load/unload/bootstrap/bootout/kickstart/remove/submit install, remove, or signal a job."
+
+[[program]]
+name = "plutil"
+effect = "none"
+safe_flags = ["-lint", "-p"]
+source = "plutil(1) (macOS): -lint validates a property-list file's syntax and -p prints it; both read-only. -convert/-replace/-insert/-remove/-extract (each outside safe_flags, so unresolved) rewrite the file in place or write a new one under -o."
+
+[[program]]
+name = "pmset"
+effect = "unresolved"
+reason = "pmset's stateful forms include a bare-word subcommand (`pmset schedule wake ...`), not only dash-prefixed flags (-a/-b/-c/-u); like launchctl above, a bare-word subcommand carries no '-' prefix, so the safe_flags mechanism (which only inspects tokens starting with '-') cannot gate it."
+source = "pmset(1) (macOS): -g displays the current power-management settings (read-only); -a/-b/-c/-u and the bare `schedule` subcommand each change live power-management state."
+
+[[program]]
+name = "jq"
+effect = "none"
+safe_flags = ["*"]
+source = "jq manual (jqlang.github.io/jq/manual): jq reads its input (stdin, or a --rawfile/--slurpfile/-L operand -- each a READ) and writes its result to stdout only; no jq flag writes to a file. safe_flags=[\"*\"]: no flag in jq writes anywhere."
+
+[[program]]
+name = "cd"
+effect = "unresolved"
+reason = "cd moves the base every later relative operand, script path and implicit git repository is resolved against; this resolver joins them against the venue, so after a cd a later segment would be typed for the wrong directory (e.g. `cd ../other && git push origin HEAD:main` pushes another repository)."
+source = "POSIX cd(1p) / bash builtin: changes the shell's current working directory, which every subsequent relative path and cwd-discovered repository in the same shell uses."
+
+[[program]]
+name = "echo"
+effect = "none"
+safe_flags = ["*"]
+source = "POSIX echo(1p) / bash builtin: writes its arguments to stdout only; -n/-e/-E (where supported) affect trailing-newline and backslash-escape handling, never a file target. safe_flags=[\"*\"]: no flag in echo writes anywhere."
+
+[[program]]
+name = "exit"
+effect = "none"
+safe_flags = ["*"]
+source = "POSIX exit(1p) / bash builtin: terminates the current shell (or subshell) with the given status; takes no flags and has no filesystem effect."
+
+[[program]]
+name = "set"
+effect = "none"
+safe_flags = ["*"]
+source = "POSIX set(1p) / bash builtin: toggles the current shell's own options (-e/-u/-o pipefail/...) or sets its positional parameters; both are interpreter state local to the running shell, never a filesystem write. safe_flags=[\"*\"]: no flag or positional form of set writes anywhere."
+
+[[program]]
+name = "test"
+effect = "none"
+safe_flags = ["*"]
+source = "POSIX test(1p) / bash builtin (also invoked as '['): evaluates a conditional expression (file-attribute, string, or arithmetic predicates) and sets only its own exit status; no flag or form of test writes anywhere. safe_flags=[\"*\"]: no flag in test writes anywhere."
+
+# --- unresolved: an embedded DSL can write data the command line never shows
+
+[[program]]
+name = "awk"
+effect = "unresolved"
+reason = "`print > \"file\"` inside an awk program can write anywhere the script names, decided by data the command line does not show."
+source = "POSIX awk(1): `print > \"file\"` inside an awk program can write anywhere the script names."
+
+[[program]]
+name = "find"
+effect = "unresolved"
+reason = "-exec/-execdir/-ok/-okdir run an arbitrary command per matched file, and a plain listing invocation is outside the reviewed read-only program table."
+source = "POSIX find(1): -exec/-execdir/-ok/-okdir run an arbitrary command per matched file."
+
+# --- argument-dependent, resolved by a named Python resolver function ------
+
+[[program]]
+name = "git"
+effect = "resolver"
+source = "git-push(1) / git(1): a read-only subcommand (log, status, diff, show, rev-parse, ls-files, blame) resolves to `[]` only under its OWN closed, boolean-only flag set (agentctl/tool_contracts.py's _GIT_READONLY_SAFE_FLAGS) -- a flag outside that per-subcommand set (e.g. diff/show's --ext-diff/--textconv, or an abbreviated long option, since git supports unique-prefix abbreviation) is unresolved. Command-line parsing alone can NEVER fully close a read-only subcommand, though: git's own documented contract lets repo CONFIG -- not anything on the command line -- redirect execution regardless of which flags are passed (core.fsmonitor is consulted on plain `status`; diff.external or a configured filter driver's textconv fires on plain `diff`/`log -p`/`show`; log.showSignature triggers `gpg` on plain `log`/`show`). This table does not try to detect such config from the command line; instead resources.protected_permission_surfaces() makes the git common dir's config, config.worktree, every linked worktree's config.worktree, hooks/, info/attributes, and the venue's own .gitattributes PERMANENTLY unapprovable by any FileResource however broad, so a write to any of them always goes to the user regardless of what venue was approved -- the injection points are closed structurally, not by flag grammar. `branch` resolves to `[]` under its own closed boolean-flag set (any value-taking flag or positional branch name is unresolved, since each names a create/rename/delete or filters differently than plain listing) -- remote/config are excluded entirely since each can write (create/delete a remote, change repo config). `push` with a literal remote and literal, non-force, non-delete refspec(s), from an allowed flag set, with -C/--git-dir/--work-tree (if given) equal to the venue, resolves to a vcs_ref push resource per refspec destination -- the `push <remote> tag <name>` shorthand (a distinct grammar form, not two independent refspecs) is unresolved rather than misparsed; a force/delete/mirror-equivalent form, a `+`-prefixed refspec, a zero-refspec push, any flag outside the allowed set, or any other subcommand is unresolved. Named residuals this table does not resolve: plain `status` itself writes a refreshed index by design, regardless of flags; a configured `remote.<name>.push` refspec mapping and any pre-push hook can each change what a resolved push actually does on the remote; and ambient session environment variables (GIT_*, e.g. GIT_SSH_COMMAND, GIT_EXTERNAL_DIFF) can redirect the transport or diff execution outside anything the command line or the protected config surfaces show."
+
+[[program]]
+name = "pytest"
+effect = "resolver"
+source = "pytest writes cache/coverage artifacts under its invocation cwd (.pytest_cache, coverage files); resolved to a write on the whole venue subtree -- a known over-broad residual (a test could theoretically write further out via an absolute path in its own body, not decidable from the command line). This resolution also implicitly trusts EXECUTION, not only writes: pytest collects and runs whatever test modules and conftest.py files exist inside the approved venue, which is arbitrary code -- resolving that as a bounded write on the venue subtree is sound only because the code is already inside a venue the plan/actor already approved, so running it is not a further escalation beyond what approving the venue itself grants; this reasoning would NOT carry over to a resolver that let pytest name a path outside the venue. Further residuals this table does not resolve: tmp_path-based tests write under the system temp dir rather than the venue subtree; an ini file above the venue can move pytest's own rootdir/.pytest_cache location; an in-venue pytest.ini/pyproject.toml/setup.cfg `addopts` entry injects extra, unreviewed CLI flags from a file this table does not read (the same effect PYTEST_ADDOPTS has from the environment); an ancestor conftest.py outside the venue still executes; a symlink inside the venue whose target lies outside it can extend collection -- and therefore execution and cache writes -- beyond the venue subtree without the command line showing it; and session environment variables such as PYTEST_ADDOPTS inject extra, unreviewed CLI flags."
+
+[[program]]
+name = "python3"
+effect = "resolver"
+source = "An interpreter's effect is entirely a property of the script it runs, not decidable from the command line; resolved to 'unresolved' with a content-bound identity (REQ3) unless a script-effects registry entry (agentctl/script_effects.py, consulted from _resolve_interpreter) covers the exact script by digest."
+
+[[program]]
+name = "python"
+effect = "resolver"
+source = "Same as python3."

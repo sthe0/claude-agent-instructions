@@ -321,6 +321,19 @@ def agentctl_task_accumulator_dir() -> Path:
     return agentctl_dir() / "task-accumulators"
 
 
+def agentctl_order_approvals_dir() -> Path:
+    """Order-keyed permission-approvals ledger directory (``<root>/agentctl/
+    order-approvals`` — see agentctl/order_approvals.py). One file per
+    ``order_sha256`` (plan.order_digest), stamped only by a customer-authored
+    ``approve``/``resolve-permission`` and surviving `reset`/renegotiation —
+    a distinct ledger from the task accumulator (keyed by order, not by
+    task_id, since a reused task_id can carry a different order — K5).
+    Honors an ``$AGENTCTL_ORDER_APPROVALS_DIR`` override at the call site
+    (order_approvals.py's `_root()`), mirroring `agentctl_task_accumulator_
+    dir()`'s own override pattern."""
+    return agentctl_dir() / "order-approvals"
+
+
 def plans_dir() -> Path:
     """Coordination plan artifacts directory (``<root>/plans``)."""
     return agent_home() / "plans"

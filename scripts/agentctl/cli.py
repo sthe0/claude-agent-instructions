@@ -22,13 +22,13 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 import proc_tree
 from lib import argv_text, config_root, kind_baselines, transcript_stops, widening_targets
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grants as _grants, ledger, permissions, plugins, plugins_ledger, plugins_premise, premise, runtime_host, solved_marker, task_accumulator
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grants as _grants, ledger, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -52,6 +52,7 @@ from .plan import (
     grants_sha256,
     load_plan,
     load_plan_with_digest,
+    order_digest,
     plan_has_any_grants,
     plan_meta_digest,
     plan_meta_element_key,
@@ -81,6 +82,7 @@ from .state import (
     Actor,
     AcceptanceBypass,
     AcceptanceReview,
+    AGENT_ACTOR,
     AUTHORIZE_REPLAN_MARKER,
     CheckKind,
     CheckVenue,
@@ -426,6 +428,285 @@ def _replan_baseline_path(state: SessionState) -> str | None:
     path performs deliberately and the other two do not."""
     snap = state.plan_snapshot_path
     return snap if (snap and Path(snap).exists()) else state.plan_path
+
+
+_ORDER_EFFORT_SCALES = (
+    (effort.SCALE_SPEND, effort.ORDER_SPEND_KEY),
+    (effort.SCALE_WALL_CLOCK, effort.ORDER_WALL_CLOCK_KEY),
+)
+
+
+def _ledgered_order_key(state: SessionState) -> str | None:
+    """The order-approvals ledger key of this session's order, iff the order has a
+    user-approved version there — the condition every order-keyed effort and
+    autonomy path is gated on. None for an order-less or never-user-approved plan,
+    which keeps today's per-session behavior."""
+    path = _replan_baseline_path(state) if state.plan_path else None
+    if not path:
+        return None
+    try:
+        doc = load_plan(path, strict=False)
+    except (OSError, PlanError):
+        return None
+    key = order_digest(doc)
+    return key if order_approvals.latest_user_approved_record(key) is not None else None
+
+
+def _effort_cross_totals(state: SessionState) -> dict:
+    """`task_accumulator`'s per_axis_totals, plus — for a ledgered order — the order's
+    spend/wall-clock total since the last user approval (ledger window + this
+    session's unflushed delta, minus the total at this session's last fire), under the
+    keys `effort.effective_deltas` reads."""
+    totals = dict(task_accumulator.get(state.task_id)["per_axis_totals"])
+    key = _ledgered_order_key(state)
+    if key is None:
+        return totals
+    window = order_approvals.get(key)["effort_since_user_approval"]
+    flushed = state.order_effort_flushed or {}
+    actual = effort.actual(state)
+    base = state.order_effort_base or {}
+    for scale, total_key in _ORDER_EFFORT_SCALES:
+        unflushed = max(0.0, actual[scale] - float(flushed.get(scale, actual[scale])))
+        total = float(window.get(scale) or 0.0) + unflushed
+        floor = float(base.get(scale) or 0.0)
+        # The floor is subtracted only while the window has not been reset below it (a fresh user approval).
+        totals[total_key] = total - (floor if total >= floor else 0.0)
+    return totals
+
+
+def _flush_order_effort(state: SessionState, key: str | None = None) -> None:
+    """Move this session's unflushed spend/wall-clock into its order's ledger window."""
+    key = key or _ledgered_order_key(state)
+    if key is None:
+        return
+    actual = effort.actual(state)
+    flushed = state.order_effort_flushed
+    if flushed is not None:
+        spend = max(0.0, actual[effort.SCALE_SPEND] - float(flushed.get(effort.SCALE_SPEND) or 0.0))
+        wall = max(0.0, actual[effort.SCALE_WALL_CLOCK] - float(flushed.get(effort.SCALE_WALL_CLOCK) or 0.0))
+        if spend or wall:
+            order_approvals.flush_effort(key, spend_delta=spend, wall_clock_delta=wall)
+    state.order_effort_flushed = {
+        effort.SCALE_SPEND: actual[effort.SCALE_SPEND],
+        effort.SCALE_WALL_CLOCK: actual[effort.SCALE_WALL_CLOCK],
+    }
+
+
+def _order_customer_id(state: SessionState) -> str:
+    path = _replan_baseline_path(state) if state.plan_path else None
+    if not path:
+        return ""
+    try:
+        order = load_plan(path, strict=False).meta.order
+    except (OSError, PlanError):
+        return ""
+    return order.customer_id if order is not None else ""
+
+
+def _clear_open_fires_if_customer(state: SessionState, by: str) -> None:
+    """A customer-authored acknowledgement is the only act that discharges the open
+    user-owed fire marker of the order (an agent-authored one never does)."""
+    key = _ledgered_order_key(state)
+    customer_id = _order_customer_id(state)
+    if key is not None and customer_id and by.strip().casefold() == customer_id.casefold():
+        order_approvals.clear_effort_fires(key)
+
+
+def _open_effort_fire(state: SessionState) -> list[dict]:
+    """The open spend/wall-clock fire markers owed to the user for this session's order."""
+    key = _ledgered_order_key(state)
+    return list(order_approvals.get(key)["open_effort_fires"]) if key else []
+
+
+def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: float) -> dict:
+    """`effort.record_fire` plus, on a spend/wall-clock fire of a ledgered order, the
+    open user-owed marker and the order-level baseline rebase."""
+    fire = effort.record_fire(state, div, now=now)
+    fire["difficulty_id_at_fire"] = _difficulty_id(state.difficulty)
+    if div.scale in effort.RATIO_SCALES:
+        key = _ledgered_order_key(state)
+        if key is not None:
+            _flush_order_effort(state, key)
+            order_approvals.record_effort_fire(
+                key, scale=div.scale, detail={"actual": div.actual, "estimate": div.estimate,
+                                               "multiple": div.multiple},
+                at=dt.datetime.now(dt.timezone.utc).isoformat(),
+            )
+            window = order_approvals.get(key)["effort_since_user_approval"]
+            state.order_effort_base = {
+                scale: float(window.get(scale) or 0.0) for scale, _ in _ORDER_EFFORT_SCALES
+            }
+    return fire
+
+
+def _difficulty_id(difficulty) -> str | None:
+    """Content identity of a difficulty record's declared/investigated/critiqued sections
+    — None until it is declared. Two records with the same sections are one record, so an
+    agent cannot re-spend a consumed one under a fresh acknowledgement."""
+    if difficulty is None or difficulty.declaration is None:
+        return None
+    payload = {
+        "declaration": asdict(difficulty.declaration),
+        "investigation": asdict(difficulty.investigation) if difficulty.investigation else None,
+        "critique": asdict(difficulty.critique) if difficulty.critique else None,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def _agent_replans_fire_route(state: SessionState) -> dict | None:
+    """The agent's own route for an unacknowledged `replans`-scale fire of a ledgered
+    order: a planning-difficulty cycle, not a question to the user. None for every other
+    fire (spend/wall-clock stay the user's) and for a session with no user-approved order."""
+    if _ledgered_order_key(state) is None or not state.effort_fires:
+        return None
+    last = state.effort_fires[-1]
+    if last.get("ack") is not None or last.get("scale") != effort.SCALE_REPLANS:
+        return None
+    return {
+        "route": "agent_planning_difficulty_cycle",
+        "steps": ["declare", "investigate", "critique (differences_to_remove)", "normalize",
+                  "fire-acknowledge --decision revise --by agent", "replan"],
+    }
+
+
+def _agent_fire_ack_refusal(state: SessionState, last: dict, decision: str) -> str | None:
+    """Why an agent-authored fire-acknowledge is refused, or None when it may proceed."""
+    if _ledgered_order_key(state) is None:
+        return "the order has no user-approved version; the fire is the user's decision"
+    if last.get("scale") != effort.SCALE_REPLANS:
+        return "an open spend/wall-clock fire is owed to the user, not the agent"
+    if decision != "revise":
+        return f"decision {decision!r} on a fire is the user's; the agent may only revise"
+    diff = state.difficulty
+    did = _difficulty_id(diff)
+    if did is None or not diff.complete():
+        return "no complete planning-difficulty record (declare, investigate, critique) is open"
+    if did == last.get("difficulty_id_at_fire"):
+        return "the difficulty record predates the fire; declare one after it"
+    if did in state.agent_ack_difficulty_ids:
+        return "this difficulty record already discharged an earlier fire"
+    if not diff.critique.differences_to_remove:
+        return "the critique names no differences_to_remove"
+    if diff.normalization is None or not diff.normalization.factor.strip():
+        return "no real normalization record (a waiver does not discharge an agent fire)"
+    return None
+
+
+def _agent_renegotiation_refusal(state: SessionState, decision: str, doc) -> str | None:
+    """Why an agent-authored renegotiation at the diagnosing-replan ceiling is refused,
+    or None when a `continue` may proceed."""
+    if decision != "continue":
+        return f"{decision!r} changes the order's scope or ends it; that is the user's decision"
+    if doc is None or _ledgered_order_key(state) is None:
+        return "the order has no user-approved version to continue within"
+    diff = state.difficulty
+    did = _difficulty_id(diff)
+    if did is None or not diff.complete():
+        return "no complete planning-difficulty record (declare, investigate, critique) is open"
+    if state.renegotiation_ceiling_difficulty_id is None:
+        return "no ceiling refusal is recorded; run the replan without a decision first"
+    if did == state.renegotiation_ceiling_difficulty_id:
+        return "the difficulty record predates the ceiling event; declare one after it"
+    if did in state.agent_ack_difficulty_ids:
+        return "this difficulty record already discharged an earlier decision"
+    if not diff.critique.differences_to_remove:
+        return "the critique names no differences_to_remove"
+    if diff.normalization is None or not diff.normalization.factor.strip():
+        return "no real normalization record (a waiver does not discharge an agent decision)"
+    boundary = _autonomy_for(state, doc)
+    if not boundary["eligible"]:
+        return f"the plan is outside the approved boundary: {boundary['reason']}"
+    return None
+
+
+def _autonomy_for(state: SessionState, doc) -> dict:
+    """`gates.autonomy_boundary` for `doc`, against the ledger of the order this session
+    was user-approved under (the baseline plan's order key), so a changed order reads as
+    `order_changed` rather than as an empty ledger of its own."""
+    key = _ledgered_order_key(state) or order_digest(doc)
+    ledger = order_approvals.get(key)
+    protected = _resources.protected_permission_surfaces(
+        repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
+        ledger_dir=str(order_approvals._root(None)),
+    )
+    view = plan_resources.compute_boundary_view(doc, order_digest(doc), venue=_venue_for(doc))
+    return gates.autonomy_boundary(
+        ledger, view, ledger.get("first_thinker_verdicts"), protected=protected,
+    )
+
+
+def _record_customer_stage_grants(state: SessionState, by: str, scope: str, entries: list[dict]) -> None:
+    """A customer's `--scope stage` grant widens the order's approved set for later
+    replans; a `once` grant is a single re-launch and never does."""
+    customer_id = _order_customer_id(state)
+    if scope != "stage" or not customer_id or by.strip().casefold() != customer_id.casefold():
+        return
+    try:
+        doc = load_plan(state.plan_path)
+    except (OSError, PlanError):
+        return
+    venue = _venue_for(doc)
+    key = order_digest(doc)
+    for entry in entries:
+        if "rule" in entry:
+            resolution = plan_resources.resolve_rule_grant(entry["rule"], venue)
+        else:
+            resolution = plan_resources.resolve_add_dir_grant(entry["path"], entry["mode"])
+        if resolution.status != "resolved":
+            continue
+        for resource in resolution.resources:
+            order_approvals.record_customer_grant(
+                key, resource=resource, by=by, at=dt.datetime.now(dt.timezone.utc).isoformat(),
+            )
+
+
+def _agent_review_override(state: SessionState) -> dict | None:
+    """The coordinator's own plan-review override on record, which the user must see
+    named when the plan reaches them: the review was waived, not passed."""
+    for review in (state.plan_review, *state.plan_stage_reviews.values()):
+        if (review is not None and review.verdict == gates._PLAN_REVIEW_OVERRIDE
+                and (review.reviewer or "").strip().casefold() == AGENT_ACTOR):
+            return {"reviewer": review.reviewer, "scope": review.scope, "note": review.note,
+                    "plan_path": review.plan_path}
+    return None
+
+
+def _record_first_thinker_verdict(state: SessionState, doc, review, scope: str) -> None:
+    """Write the thinker's first whole-plan verdict on the changed unresolved commands
+    into the order's ledger, once per (approved version, changed identities) key. An
+    override, an unattested review or a stage-scoped one is never that verdict."""
+    if doc is None or scope or not review.plan_sha256:
+        return
+    if review.verdict not in (gates._PLAN_REVIEW_PASS, gates._PLAN_REVIEW_REVISE):
+        return
+    key = _ledgered_order_key(state)
+    if key is None:
+        return
+    verdict_key = _autonomy_for(state, doc)["first_verdict_key"]
+    if verdict_key is None:
+        return
+    order_approvals.record_first_thinker_verdict(key, verdict_key, {
+        "verdict": review.verdict, "plan_sha256": review.plan_sha256, "reviewer": review.reviewer,
+    })
+
+
+def _kind_within_boundary(state: SessionState, kind: str, doc) -> str:
+    """A refinement that moves the order digest or adds a resource beyond the user's
+    approved set is not a refinement: it re-enters the approval gate as substantive."""
+    if kind != "refinement" or _ledgered_order_key(state) is None:
+        return kind
+    verdict = _autonomy_for(state, doc)
+    if verdict["order_changed"] or verdict["extra_resources"]:
+        return "substantive"
+    return kind
+
+
+def _autonomy_directive_data(state: SessionState, doc) -> dict:
+    """The `data['autonomy']` block a plan-approval-bound Directive carries: the
+    boundary verdict plus the action it routes to (self_approve inside, the user's
+    approval outside)."""
+    verdict = _autonomy_for(state, doc)
+    return {**verdict, "action": "self_approve" if verdict["eligible"] else "await_user_approval"}
 
 
 _CRITERION_ENGINE_WRITTEN_FIELDS = frozenset({"observation"})
@@ -785,7 +1066,7 @@ def _verify_command_result(stage, runner: Runner | None, cwd: str | None = None)
     so the engine keeps its flag-only behaviour. Otherwise delegates to _run_check,
     which is also used for typed final_check entries at verify-final."""
     crit = stage.criterion
-    if not crit.verify_command or crit.criterion_type != CriterionType.MEASURABLE.value:
+    if not plan_resources.runs_verify_command(crit):
         return True, None
     return _run_check(crit.verify_command, crit.expected_exit, runner, cwd)
 
@@ -1020,7 +1301,7 @@ def _diagnose_venue_refusal(
     data = {}
     if div is not None and gates.effort_active(state):
         now = _utcnow()
-        data["effort_divergence"] = effort.record_fire(state, div, now=now)
+        data["effort_divergence"] = _record_effort_fire(state, div, now=now)
     store.save(state)
     return Directive(
         False, state.node, "declare", message,
@@ -1079,10 +1360,14 @@ def _diagnose_effort_divergence(
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
     state.difficulty = Difficulty()
     store.save(state)
+    data = {"effort_divergence": fire}
+    route = _agent_replans_fire_route(state)
+    if route is not None:
+        data["agent_route"] = route
     return Directive(
         False, state.node, "declare", div.framing,
         marker="OVERCOME-DIFFICULTY",
-        data={"effort_divergence": fire},
+        data=data,
     )
 
 
@@ -1103,6 +1388,27 @@ def _effort_fire_escalation_data(state: SessionState) -> dict:
         "multiple": fire.get("multiple"),
         "ts": fire.get("ts"),
     }
+
+
+def _effort_fire_refusal(state: SessionState, what: str, efblock: list[str]) -> Directive:
+    """The refusal `gates.effort_fire_blockers` produces at dispatch/replan/submit_plan.
+    A replans-scale fire of a ledgered order names the agent's planning-difficulty cycle;
+    every other fire is the user's decision."""
+    data = {"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)}
+    route = _agent_replans_fire_route(state)
+    if route is None:
+        return Directive(
+            False, state.node, "fire_acknowledge",
+            f"{what} blocked by an unacknowledged effort-divergence fire",
+            marker=DIRECTIVE_ESCALATE_TO_USER, data=data,
+        )
+    data["agent_route"] = route
+    return Directive(
+        False, state.node, "planning_difficulty",
+        f"{what} blocked by an unacknowledged replans-scale effort-divergence fire; "
+        "run the planning-difficulty cycle (" + " → ".join(route["steps"]) + ")",
+        marker="OVERCOME-DIFFICULTY", data=data,
+    )
 
 
 def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) -> None:
@@ -1271,6 +1577,9 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
             False, prior.node, "noop", "; ".join(reentry_blockers),
             data={"blockers": reentry_blockers, "resolved_reentry_count": reentry_count},
         )
+    if prior is not None:
+        effort.refresh_spend(prior, _cost_rows(args), prior.plan_path)
+        _flush_order_effort(prior)
     new = SessionState(
         session_id=args.session,
         task_id=args.task,
@@ -1325,11 +1634,20 @@ def cmd_task_reset(args, *, store: StateStore, runner: Runner | None = None) -> 
     `--renegotiation-decision continue|rescope` (see
     `task_accumulator.reset`'s own docstring) — that path folds the reset into
     an already-required customer decision instead of a separate command."""
+    by = (args.by or "").strip()
+    if not by or by.casefold() == AGENT_ACTOR:
+        return Directive(
+            False, "(task-scoped)", "noop",
+            f"task-reset is a user decision: --by must name the customer, not "
+            f"{AGENT_ACTOR!r}",
+            marker=DIRECTIVE_ESCALATE_TO_USER,
+            data={"task": args.task, "by": by},
+        )
     task_accumulator.reset(args.task)
     return Directive(
         True, "(task-scoped)", "noop",
-        f"cross-session task accumulator reset for task {args.task!r}: {args.reason}",
-        data={"task": args.task, "reason": args.reason},
+        f"cross-session task accumulator reset for task {args.task!r} by {by}: {args.reason}",
+        data={"task": args.task, "reason": args.reason, "by": by},
     )
 
 
@@ -3175,12 +3493,9 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     efblock = gates.effort_fire_blockers(state)
     _log_gate(state, "effort_fire", efblock, passed=not efblock)
     if efblock:
-        return Directive(
-            False, state.node, "fire_acknowledge",
-            "submit_plan blocked by an unacknowledged effort-divergence fire",
-            marker=DIRECTIVE_ESCALATE_TO_USER,
-            data={"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)},
-        )
+        return _effort_fire_refusal(state, "submit_plan", efblock)
+    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
+    _flush_order_effort(state)
     plan_path = args.plan
     # #15: a resubmission — the coordinator revised the plan at PLAN_READY (after a
     # thinker `revise` verdict, or the user's own pre-approval edit) and re-runs
@@ -3293,11 +3608,22 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     if bag is not None:
         _launch_enumeration(state, bag, doc, plan_path)
     store.save(state)
-    d = Directive(
-        True, state.node, "await_user_approval",
-        "plan ready; HARD GATE — get explicit user approval before approve",
-        marker="PLAN-READY",
-    )
+    autonomy = _autonomy_directive_data(state, doc)
+    override = _agent_review_override(state)
+    directive_data = {"autonomy": autonomy, **({"agent_review_override": override} if override else {})}
+    if autonomy["action"] == "self_approve":
+        d = Directive(
+            True, state.node, "self_approve",
+            "plan is inside the boundary the user approved for this order; run "
+            "`approve --by agent`",
+            data=directive_data,
+        )
+    else:
+        d = Directive(
+            True, state.node, "await_user_approval",
+            "plan ready; HARD GATE — get explicit user approval before approve",
+            marker="PLAN-READY", data=directive_data,
+        )
     _attach_advisories(d, "plan_completeness",
                        {"plan": plan_path, "stage_count": len(state.stages),
                         "titles": [s.title for s in state.stages]},
@@ -3680,6 +4006,9 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             "show_full_plan_marker": SHOW_FULL_PLAN_MARKER,
             "next_steps": next_steps,
         }
+        override = _agent_review_override(state)
+        if override is not None:
+            data["agent_review_override"] = override
         return Directive(True, state.node, "continue", detail, data=data)
 
     if kind == PLAN_PRESENTATION_KIND_REPLAN_DIFF:
@@ -3934,7 +4263,18 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         # pass-through (no check) when the plan has no [meta.order] or an empty
         # customer_id, same as cmd_accept.
         order = doc.meta.order if doc is not None else None
-        if order is not None and order.customer_id and new_reviewer != order.customer_id:
+        if new_reviewer.casefold() == AGENT_ACTOR:
+            # The coordinator may override only where the round/friction release names
+            # the decision as its own; the override never counts as a passing first
+            # verdict for the autonomy boundary (it is not written to the ledger).
+            if not (gates.plan_review_round_release_active(state)
+                    or gates.cross_axis_friction_release_active(state)):
+                return Directive(
+                    False, state.node, "noop",
+                    "an agent-authored override is refused: it is available only once the "
+                    "review-round or cross-axis friction release is active",
+                )
+        elif order is not None and order.customer_id and new_reviewer != order.customer_id:
             return Directive(
                 False, state.node, "noop",
                 f"override reviewer {new_reviewer!r} does not match order customer_id "
@@ -4099,6 +4439,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         # CONTRACT INVERSION note on the pass path of _plan_review_verdict_blockers),
         # so it must not become a terminal pass either.
         state.plan_review_passes[scope] = review
+    _record_first_thinker_verdict(state, doc, review, scope)
     # POST-APPROVAL round counting. cmd_submit_plan's increment covers only the
     # pre-approval resubmission loop; review cycles overwhelmingly recur AFTER
     # approval, on the `replan` path, where the same thinker review is demanded and
@@ -4635,15 +4976,37 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             # while `question-candidate-dispose --id qenum-meta-1` had nothing to find.
             store.save(state)
     review_blockers = gates.plan_review_blockers(state, state.plan_path)
+    by_agent = bool(args.by and args.by.strip().casefold() == AGENT_ACTOR)
     blockers = (
         gates.blockers(state, "plan_approval")
         + plugins.plugin_gate_blockers(state, "plan_approval")
         + review_blockers
-        + gates.plan_presentation_blockers(state, state.plan_path)
-        + gates.grants_approval_blockers(state, state.plan_path)
     )
+    if not by_agent:
+        blockers = (
+            blockers
+            + gates.plan_presentation_blockers(state, state.plan_path)
+            + gates.grants_approval_blockers(state, state.plan_path)
+        )
+    agent_autonomy: dict | None = None
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty approver: --by must name who approved"]
+    elif by_agent:
+        # The coordinator approves only inside the boundary the user approved for this
+        # order (a ledger entry and an eligible verdict on the CURRENT bytes); it never
+        # stamps the ledger, so its approval is never a later boundary.
+        if _approved_doc is not None and _ledgered_order_key(state) is not None:
+            agent_autonomy = _autonomy_for(state, _approved_doc)
+        if agent_autonomy is None:
+            blockers = blockers + [
+                f"--by {args.by!r}: {gates.AUTONOMY_REASON_NO_VERSION} -- approval must be "
+                "attributed to the customer"
+            ]
+        elif not agent_autonomy["eligible"]:
+            blockers = blockers + [
+                f"--by {args.by!r} refused: outside the approved boundary -- "
+                + "; ".join(agent_autonomy["reasons"])
+            ]
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
         # The escape counts ride the REFUSAL specifically: the coordinator reading it
@@ -4721,7 +5084,65 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         snap = _snapshot_approved_plan(store, state)
     if snap:
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
-    state.log("approve", by=args.by)
+    if agent_autonomy is not None:
+        approved = order_approvals.latest_user_approved_record(_ledgered_order_key(state))
+        frozen = (approved or {}).get("effort_estimate") or {}
+        if frozen:
+            state.order_effort_frozen = {scale: float(value) for scale, value in frozen.items()}
+            effort.rederive(state)
+        state.log(
+            "approve", by=args.by,
+            extra_resources=[e["name"] for e in agent_autonomy["extra_resources"]],
+            unresolved_changed_commands=[
+                c["source"] for c in agent_autonomy["unresolved_changed_commands"]],
+            active_overrides=[
+                f"{name}={os.environ[name]}"
+                for name in ("AGENTCTL_ORDER_APPROVALS_DIR", "AGENTCTL_TOOL_CONTRACTS")
+                if os.environ.get(name)
+            ],
+        )
+    else:
+        state.log("approve", by=args.by)
+    # REQ4: stamp the order-approvals ledger for the CUSTOMER only -- never
+    # AGENT_ACTOR (refused above, before this point is ever reached) and
+    # never a non-customer --by (a reviewer, a delegate) whose approval does
+    # not carry the customer's own authority to pre-grant resources. Gated on
+    # a non-empty customer_id: an order-less plan (customer_id == "") can
+    # never casefold-match any --by, so this is a no-op for every plan
+    # authored before [meta.order] existed.
+    if _approved_doc is not None:
+        order = _approved_doc.meta.order
+        customer_id = order.customer_id if order is not None else ""
+        if customer_id and args.by.strip().casefold() == customer_id.casefold():
+            order_key = order_digest(_approved_doc)
+            view = plan_resources.compute_boundary_view(_approved_doc, order_key)
+            all_resources = view.resources
+            all_unresolved = [item["identity"] for item in view.unresolved]
+            all_stage_effects: list = []
+            for sr in plan_resources.compute_plan_resources(_approved_doc):
+                all_stage_effects.extend(e.to_dict() for e in sr.stage_effects)
+            armed_estimate = {
+                scale: float((state.effort_estimate or {}).get(scale) or 0.0)
+                for scale in effort.RATIO_SCALES
+            }
+            order_approvals.record_approval(
+                order_digest(_approved_doc),
+                plan_sha256=_approved_digest or "",
+                resources=all_resources,
+                unresolved_identities=all_unresolved,
+                stage_effects=all_stage_effects,
+                by=args.by,
+                at=dt.datetime.now(dt.timezone.utc).isoformat(),
+                effort_estimate=armed_estimate,
+            )
+            state.order_effort_frozen = armed_estimate
+            actual_now = effort.actual(state)
+            state.order_effort_flushed = {
+                scale: actual_now[scale] for scale, _ in _ORDER_EFFORT_SCALES
+            }
+            state.order_effort_base = {}
+        else:
+            _flush_order_effort(state)
     store.save(state)
     return _with_advisories(Directive(
         True, state.node, "partition",
@@ -5107,12 +5528,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     efblock = gates.effort_fire_blockers(state)
     _log_gate(state, "effort_fire", efblock, passed=not efblock)
     if efblock:
-        return Directive(
-            False, state.node, "fire_acknowledge",
-            "dispatch blocked by an unacknowledged effort-divergence fire",
-            marker=DIRECTIVE_ESCALATE_TO_USER,
-            data={"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)},
-        )
+        return _effort_fire_refusal(state, "dispatch", efblock)
     try:
         host = runtime_host.require_bound_host(state)
     except runtime_host.HostAmbiguousError as exc:
@@ -5383,6 +5799,67 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                 state, store, stage, action=action,
                 evidence="transcript" if transcript_covered else "self-reported",
             )
+        # REQ5 (dispatch half): a Rule:-line request may resolve to a resource
+        # already approved for this order, or already covered by the stage's
+        # own effective grants under different-but-equivalent text -- self_grant
+        # instead of parking on the user. An optional advisory `Resource:` line
+        # is NEVER trusted to DECIDE this by itself -- self_grant is decided
+        # ONLY from the engine's own resolution of the `Rule:` line; a
+        # disagreeing `Resource:` line routes to the user with a reason naming
+        # BOTH, rather than silently preferring either.
+        resource_line = _parse_resource_line(result.stdout)
+        reported_resource = _parse_resource_spec(resource_line) if resource_line else None
+        self_grant_resources: list = []
+        self_grant_reason: str | None = None
+        if rule_line is not None:
+            try:
+                _grants.validate_rule(rule_line)
+            except _grants.GrantValidationError as exc:
+                self_grant_reason = f"refused rule grant: {exc}"
+            else:
+                self_grant_coverage = _effective_stage_grants_for_self_grant(state, stage.index)
+                self_grant_resources, self_grant_reason = _self_grant_resources_for_rule(
+                    state, self_grant_coverage, rule_line
+                )
+        resource_disagreement = None
+        if (
+            reported_resource is not None
+            and self_grant_resources
+            and not any(reported_resource == r for r in self_grant_resources)
+        ):
+            resource_disagreement = (
+                f"specialist-reported Resource: {resource_line!r} disagrees with the "
+                f"engine's own resolution of Rule: {rule_line!r} to "
+                f"{[plan_resources._resource_to_dict(r) for r in self_grant_resources]!r} "
+                "-- asking the user rather than trusting either alone"
+            )
+        if self_grant_resources and resource_disagreement is None:
+            # The self_grant directive's own message tells the caller to run
+            # `resolve-permission --by agent --scope stage --rule ...` next --
+            # that command requires a pending `state.permission_request`
+            # (checked first thing in cmd_resolve_permission), so it must be
+            # parked here exactly as the ask_user_permission path below does,
+            # or the directive's own instructions would fail when followed.
+            state.permission_request = PermissionRequest(
+                action=action, stage_index=stage.index, raw=body
+            )
+            state.log(
+                "permission_self_grant", stage=stage.index, action=action, rule=rule_line,
+                resources=[plan_resources._resource_to_dict(r) for r in self_grant_resources],
+            )
+            store.save(state)
+            return Directive(
+                True, state.node, "self_grant",
+                f"stage {stage.index} permission request for {rule_line!r} resolves to "
+                "resource(s) already approved for this order or already covered by the "
+                "stage's own effective grants -- self-grant (`resolve-permission --by "
+                f"agent --scope stage --rule {rule_line!r}`) and re-dispatch, no user ask needed",
+                marker="PERMISSION-REQUEST",
+                data={
+                    **base, "action": action, "rule": rule_line,
+                    "resources": [plan_resources._resource_to_dict(r) for r in self_grant_resources],
+                },
+            )
         state.permission_request = PermissionRequest(
             action=action, stage_index=stage.index, raw=body
         )
@@ -5430,6 +5907,11 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             })
         state.log("permission_request", stage=stage.index, action=action)
         store.save(state)
+        _ask_data = {**base, "action": action, "options": ["once", "stage", "project", "global", "deny"]}
+        if rule_line is not None:
+            _ask_data["reason_class"] = self_grant_reason
+        if resource_disagreement is not None:
+            _ask_data["resource_disagreement"] = resource_disagreement
         return Directive(
             True, state.node, "ask_user_permission",
             f"stage {stage.index} requests permission: {action}",
@@ -5437,7 +5919,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             # Finding S8: "stage" was materializable via --scope stage but
             # missing from this options list, so the root never saw it as an
             # offered choice.
-            data={**base, "action": action, "options": ["once", "stage", "project", "global", "deny"]},
+            data=_ask_data,
         )
     if marker == CHILD_INFRA_FAILURE:
         # A transient condition about the RUN, never a judgement about the
@@ -5547,6 +6029,105 @@ def _rule_line_to_call(rule: str) -> tuple[str, dict] | None:
     if tool in ("Edit", "Write", "Read", "NotebookEdit"):
         return tool, {"file_path": _grants.rule_file_path(arg)}
     return None
+
+
+_RESOURCE_LINE_RE = re.compile(r"^[-*]?\s*\*{0,2}Resource:\*{0,2}\s*(.*)$")
+_RESOURCE_SPEC_RE = re.compile(r"^(file|vcs_ref|specialist|service|dataset)\((.*)\)$")
+
+
+def _parse_resource_line(body: str) -> str | None:
+    """The optional trailing `Resource: <kind>(<args>)` line a specialist's
+    PERMISSION-REQUEST body may carry -- ADVISORY ONLY (REQ5 dispatch half):
+    it names what the specialist BELIEVES it needs, never what decides
+    self_grant on its own. Mirrors `_parse_rule_line`'s markdown-tolerance
+    (bullet/bold decoration, an inline-code-wrapped value) exactly, since a
+    specialist that decorates one line commonly decorates both."""
+    for line in reversed(body.splitlines()):
+        line = line.strip()
+        m = _RESOURCE_LINE_RE.match(line)
+        if not m:
+            continue
+        spec = m.group(1).strip()
+        if len(spec) >= 2 and spec.startswith("`") and spec.endswith("`"):
+            spec = spec[1:-1].strip()
+        if spec:
+            return spec
+    return None
+
+
+def _parse_resource_spec(text: str):
+    """Parse a `kind(arg, arg, ...)` resource spec into the matching
+    `resources.Resource` subclass, or `None` if it does not parse -- a
+    parse failure is never fatal (the line is advisory), it just means
+    there is nothing to cross-check the engine's own resolution against."""
+    m = _RESOURCE_SPEC_RE.match(text.strip())
+    if not m:
+        return None
+    kind, raw_args = m.group(1), m.group(2)
+    args = [a.strip() for a in raw_args.split(",")] if raw_args.strip() else []
+    try:
+        if kind == "file" and len(args) == 2:
+            return _resources.FileResource(args[0], args[1])
+        if kind == "vcs_ref" and len(args) == 3:
+            return _resources.VcsRefResource(args[0], args[1], args[2])
+        if kind == "specialist" and len(args) == 1:
+            return _resources.SpecialistResource(args[0])
+        if kind == "service" and len(args) == 2:
+            return _resources.ServiceResource(args[0], args[1])
+        if kind == "dataset" and len(args) == 2:
+            return _resources.DatasetResource(args[0], args[1])
+    except ValueError:
+        return None
+    return None
+
+
+def _self_grant_resources_for_rule(
+    state: "SessionState", coverage: "_grants.StageGrants", rule_line: str
+) -> tuple[list, str | None]:
+    """Resolve a PERMISSION-REQUEST's self-reported `Rule:` line to the
+    resource(s) it names, then check those resources against the UNION of
+    (a) `order_approvals.boundary_resources` -- the last user-approved
+    version's resources plus customer stage grants, keyed by
+    `plan.order_digest` -- the SAME resolution
+    `cmd_resolve_permission --by agent` uses, REQ5) and (b) the stage's own
+    EFFECTIVE (declared + derived) grants, each independently re-resolved to
+    resources rather than compared by rule TEXT -- a declared grant spelled
+    differently from the requested rule (e.g. a push rule naming a
+    different source ref for the same target) still counts, catching a case
+    the old string/rule-based `grants.grant_covers_call` would miss.
+
+    Returns `(resources, None)` when every resolved resource is covered
+    (dispatch may self_grant), or `([], reason_class)` otherwise --
+    `reason_class` names why, so a wildcard-tail rule and an out-of-scope
+    resource are both distinguishable in the returned Directive's data."""
+    if not state.plan_path:
+        return [], "no-plan"
+    if _open_effort_fire(state):
+        return [], "open-effort-fire"
+    try:
+        doc = load_plan(state.plan_path)
+    except (OSError, PlanError):
+        return [], "unloadable-plan"
+    venue = _venue_for(doc)
+    res = plan_resources.resolve_rule_grant(rule_line, venue)
+    if res.status != "resolved" or not res.resources:
+        return [], (res.reason_class or "contract-unresolved")
+    protected = _resources.protected_permission_surfaces(
+        repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
+        ledger_dir=str(order_approvals._root(None)),
+    )
+    approved: list = list(order_approvals.boundary_resources(order_digest(doc)))
+    for rule_grant in coverage.allow:
+        eff = plan_resources.resolve_rule_grant(rule_grant.rule, venue)
+        if eff.status == "resolved":
+            approved.extend(eff.resources)
+    for add_dir in coverage.add_dirs:
+        eff = plan_resources.resolve_add_dir_grant(add_dir.path, add_dir.mode)
+        approved.extend(eff.resources)
+    for requested in res.resources:
+        if not any(_covers_resource(appr, requested, protected) for appr in approved):
+            return [], "not-approved"
+    return res.resources, None
 
 
 def _stage_grant_entries(
@@ -5746,6 +6327,51 @@ def _effective_stage_grants(state: SessionState, stage_index: int) -> _grants.St
         # `delivery_worktree` and `repo_root` (falling back to `"."`, resolved
         # against the ENGINE's cwd rather than the child's) or had merely
         # drifted from the state fields `_sync_venue_from_plan` keeps current.
+        venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+        allow.extend(_kind_baseline_rule_grants(stage.spawn_kind(), workdir=venue))
+    return _grants.StageGrants(allow=allow, add_dirs=add_dirs)
+
+
+def _effective_stage_grants_for_self_grant(state: SessionState, stage_index: int) -> _grants.StageGrants:
+    """The NARROWER grant set an agent self-grant (`resolve-permission --by
+    agent`, either call site) may draw on -- declared + derived +
+    kind-baseline grants exactly as `_effective_stage_grants` computes them,
+    but excluding two runtime-grant shapes `_effective_stage_grants` itself
+    correctly counts for ORDINARY coverage/denial classification (finding
+    #4, root cause: both self-grant call sites reused that broader function
+    unmodified):
+
+    - `scope: "once"` runtime grants -- a single-launch bypass the user
+      granted to get ONE re-launch past a denial, not a standing approval a
+      self-grant should be able to lean on for a DIFFERENT rule later.
+    - runtime grants the AGENT itself materialized (`granted_by ==
+      AGENT_ACTOR`, recorded at materialization time in
+      `cmd_resolve_permission`) -- counting these would let a self-grant
+      bootstrap an ever-widening loop of self-approvals with no user
+      decision anywhere in the chain.
+
+    A runtime entry with no `granted_by` at all (materialized before this
+    field existed, or via a path this function does not know about) is
+    treated as NOT agent-granted -- fail-toward-inclusion here mirrors
+    `_effective_stage_grants`'s own bias for ordinary coverage; the
+    scope-"once" exclusion above already blocks the one shape this project
+    actually reviewed as attacker-reachable (REQ5's test scenario)."""
+    declared_entries, derived_entries, _dropped, _error, _note = _stage_grant_entries(state, stage_index)
+    runtime_entries = [
+        e for e in state.runtime_grants.get(str(stage_index), [])
+        if not e.get("consumed")
+        and e.get("scope") != "once"
+        and (e.get("granted_by") or "").strip().casefold() != AGENT_ACTOR
+    ]
+    allow: list[_grants.RuleGrant] = []
+    add_dirs: list[_grants.AddDirGrant] = []
+    for e in declared_entries + derived_entries + runtime_entries:
+        if "rule" in e:
+            allow.append(_grants.RuleGrant.from_dict(e))
+        elif "path" in e and "mode" in e:
+            add_dirs.append(_grants.AddDirGrant.from_dict(e))
+    stage = state.stage(stage_index)
+    if stage.is_spawn():
         venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
         allow.extend(_kind_baseline_rule_grants(stage.spawn_kind(), workdir=venue))
     return _grants.StageGrants(allow=allow, add_dirs=add_dirs)
@@ -5957,6 +6583,18 @@ def _diagnose_materialization_defect(
     )
 
 
+def _covers_resource(approved, requested, protected: list[str]) -> bool:
+    """`Resource.covers` dispatch that also threads `protected` through for a
+    `FileResource` pair -- the only kind whose `covers` accepts that kwarg
+    (resources.py's other four kinds have no path-containment notion to
+    protect). Kept here rather than in resources.py itself: `protected` is a
+    cli.py-computed, session-specific value (repo_root/delivery_worktree/
+    ledger dir), not a property of the resource pair alone."""
+    if isinstance(approved, _resources.FileResource):
+        return approved.covers(requested, protected=protected)
+    return approved.covers(requested)
+
+
 def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Resume a session parked on a PERMISSION-REQUEST once the manager has the
     user's decision. The user ask is cognitive; this only records the outcome,
@@ -5987,6 +6625,91 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
             f"--rule/--add-dir is not materialized for --scope {scope} (no persistence path exists); "
             "use --scope stage or --scope once, or omit --rule/--add-dir",
         )
+    by = (getattr(args, "by", None) or "").strip()
+    if by.casefold() == AGENT_ACTOR and args.decision == "granted":
+        # REQ5: an agent-authored --by gets no benefit of human judgment -- it
+        # must instead prove every --rule/--add-dir it wants materialized
+        # resolves (via the SAME plan_resources.py functions cmd_approve's own
+        # ledger-stamping uses -- one resolution story, never a second one
+        # trusted less) to a typed resource already covered by a resource the
+        # CUSTOMER approved for this plan's order (order_approvals.py's
+        # ledger, keyed by plan.order_digest). Unresolved or uncovered refuses
+        # the WHOLE call fail-closed, mirroring validate_rule's refusal below.
+        if scope not in ("once", "stage"):
+            return Directive(False, state.node, "noop",
+                              f"agent self-grant requires --scope once or stage, got {scope!r}")
+        if _open_effort_fire(state):
+            return Directive(False, state.node, "noop",
+                              f"agent self-grant refused: {gates.AUTONOMY_REASON_OPEN_FIRE}",
+                              data={"reason_class": "open-effort-fire"})
+        self_rules = getattr(args, "rules", None) or []
+        self_add_dirs = getattr(args, "add_dirs", None) or []
+        if not self_rules and not self_add_dirs:
+            return Directive(False, state.node, "noop",
+                              "agent self-grant requires --rule/--add-dir naming what to grant")
+        if not state.plan_path:
+            return Directive(False, state.node, "noop",
+                              "agent self-grant requires an approved plan (state.plan_path is empty)")
+        from .plan import PlanError, load_plan as _load
+        try:
+            self_doc = _load(state.plan_path)
+        except (OSError, PlanError) as exc:
+            return Directive(False, state.node, "noop", f"agent self-grant: cannot read plan: {exc}")
+        self_venue = _venue_for(self_doc)
+        # The SAME union `_self_grant_resources_for_rule` checks (REQ5/finding
+        # #4): the order-approvals ledger alone is not the whole coverage
+        # story -- a stage's own declared/derived [stage.grants] are already
+        # user-approved (as part of the plan approval) and must self-grant
+        # here too, or dispatch's self_grant directive (which DOES check this
+        # union) would tell the caller to run a command that then refuses.
+        self_approved = list(order_approvals.boundary_resources(order_digest(self_doc)))
+        self_active_stage = state.active_stage()
+        if self_active_stage is not None:
+            self_coverage = _effective_stage_grants_for_self_grant(state, self_active_stage.index)
+            for rule_grant in self_coverage.allow:
+                eff = plan_resources.resolve_rule_grant(rule_grant.rule, self_venue)
+                if eff.status == "resolved":
+                    self_approved.extend(eff.resources)
+            for add_dir in self_coverage.add_dirs:
+                eff = plan_resources.resolve_add_dir_grant(add_dir.path, add_dir.mode)
+                self_approved.extend(eff.resources)
+        self_protected = _resources.protected_permission_surfaces(
+            repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
+            ledger_dir=str(order_approvals._root(None)),
+        )
+        self_to_check: list = []
+        for rule in self_rules:
+            self_to_check.append((rule, plan_resources.resolve_rule_grant(rule, self_venue)))
+        for spec in self_add_dirs:
+            parsed = _parse_add_dir_spec(spec)
+            if parsed is None:
+                return Directive(False, state.node, "noop",
+                                  f"malformed --add-dir spec (want 'PATH:read|write'): {spec}")
+            path, mode = parsed
+            self_to_check.append((spec, plan_resources.resolve_add_dir_grant(path, mode)))
+        for label, res in self_to_check:
+            if res.status != "resolved" or not res.resources:
+                # Mirrors _self_grant_resources_for_rule's identical check
+                # (dispatch's own self_grant path) -- a "resolved" status
+                # with an EMPTY resource set (a readonly rule that resolves
+                # to nothing) must still refuse here, not vacuously pass the
+                # `for resource in res.resources` loop below with zero
+                # iterations and zero approvals actually checked.
+                reason_class = res.reason_class or "contract-unresolved"
+                detail = res.reason if res.status != "resolved" else "resolves to an empty resource set"
+                return Directive(
+                    False, state.node, "noop",
+                    f"agent self-grant refused: {label!r} is unresolved ({reason_class}): {detail}",
+                    data={"reason_class": reason_class},
+                )
+            for resource in res.resources:
+                if not any(_covers_resource(appr, resource, self_protected) for appr in self_approved):
+                    return Directive(
+                        False, state.node, "noop",
+                        f"agent self-grant refused: {label!r} resolves to a resource not "
+                        f"covered by any resource the customer approved for this order",
+                        data={"reason_class": "not-approved"},
+                    )
     new_entries: list[dict] = []
     # `once` materializes a runtime grant exactly like `stage` does -- the
     # difference is lifetime, not whether a --rule/--add-dir gets recorded at
@@ -6007,7 +6730,7 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
                 return Directive(False, state.node, "noop", f"refused rule grant: {exc}")
             new_entries.append({
                 "rule": rule, "provenance": "runtime", "consumed": False,
-                "stage_title": stage.title, "scope": scope,
+                "stage_title": stage.title, "scope": scope, "granted_by": by,
             })
         for spec in (getattr(args, "add_dirs", None) or []):
             parsed = _parse_add_dir_spec(spec)
@@ -6021,7 +6744,7 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
                 return Directive(False, state.node, "noop", f"refused add_dir grant: {exc}")
             new_entries.append({
                 "path": path, "mode": mode, "provenance": "runtime", "consumed": False,
-                "stage_title": stage.title, "scope": scope,
+                "stage_title": stage.title, "scope": scope, "granted_by": by,
             })
     if args.decision == "granted":
         cont = continuations.permission_granted(req.action, scope)
@@ -6032,8 +6755,17 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
     if new_entries:
         key = str(state.active_stage().index)
         state.runtime_grants.setdefault(key, []).extend(new_entries)
+        _record_customer_stage_grants(state, by, scope, new_entries)
     state.permission_request = None
-    state.log("resolve_permission", action=req.action, decision=args.decision)
+    # `by` + the two env overrides that steer WHICH ledger/contract-table a
+    # self-grant resolved against are recorded on every call, not only a
+    # self-grant one, so the audit trail is uniform regardless of who --by
+    # names -- a human-attributed resolution reads the same overrides.
+    state.log(
+        "resolve_permission", action=req.action, decision=args.decision, by=by,
+        order_approvals_dir_override=os.environ.get("AGENTCTL_ORDER_APPROVALS_DIR"),
+        tool_contracts_override=os.environ.get("AGENTCTL_TOOL_CONTRACTS"),
+    )
     store.save(state)
     return Directive(
         True, state.node, "continue_spawn", detail,
@@ -6574,11 +7306,10 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     # unconditionally — only ACTING on a fire is gated by gates.effort_active — see
     # effort.py's module docstring and gates.effort_active's docstring.
     effort.refresh_spend(state, _rows, state.plan_path)
-    div = effort.divergence(
-        state, cross_session_totals=task_accumulator.get(state.task_id)["per_axis_totals"],
-    )
+    _flush_order_effort(state)
+    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state))
     if effort.armed(state):
-        _cross = task_accumulator.get(state.task_id)["per_axis_totals"]
+        _cross = _effort_cross_totals(state)
         _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross)
         _ro_comparand = effort.comparands(state, Thresholds())
         for _ro_scale in effort.RECORD_ONLY_SCALES:
@@ -6598,7 +7329,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         state.log("record_result", stage=stage.index, status="passed")
         if div is not None and gates.effort_active(state):
             now = _utcnow()
-            fire = effort.record_fire(state, div, now=now)
+            fire = _record_effort_fire(state, div, now=now)
             return _diagnose_effort_divergence(state, store, div, fire)
         store.save(state)
         if state.all_stages_passed():
@@ -6641,7 +7372,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         # instead of re-transitioning or opening a second Difficulty, but still honor
         # divergence()'s CALLER OBLIGATION (record the fire so it doesn't re-trip).
         now = _utcnow()
-        data["effort_divergence"] = effort.record_fire(state, div, now=now)
+        data["effort_divergence"] = _record_effort_fire(state, div, now=now)
     store.save(state)
     return Directive(
         False, state.node, "declare",
@@ -6699,11 +7430,10 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # plan_path (including engine-mandated review spawns no stage attributes), the
     # rollup needs only what record-result already stamped onto each Outcome.
     effort.refresh_spend(state, _cost_rows(args), state.plan_path)
-    div = effort.divergence(
-        state, cross_session_totals=task_accumulator.get(state.task_id)["per_axis_totals"],
-    )
+    _flush_order_effort(state)
+    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state))
     if effort.armed(state):
-        _cross = task_accumulator.get(state.task_id)["per_axis_totals"]
+        _cross = _effort_cross_totals(state)
         _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross)
         _ro_comparand = effort.comparands(state, Thresholds())
         for _ro_scale in effort.RECORD_ONLY_SCALES:
@@ -6788,7 +7518,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             # record_result's failed branch (still honoring divergence()'s CALLER
             # OBLIGATION: record the fire so it doesn't re-trip).
             now = _utcnow()
-            data["effort_divergence"] = effort.record_fire(state, div, now=now)
+            data["effort_divergence"] = _record_effort_fire(state, div, now=now)
         store.save(state)
         return Directive(
             False, state.node, "declare",
@@ -6802,7 +7532,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # record-result to fire from).
     if div is not None and gates.effort_active(state):
         now = _utcnow()
-        fire = effort.record_fire(state, div, now=now)
+        fire = _record_effort_fire(state, div, now=now)
         return _diagnose_effort_divergence(state, store, div, fire)
 
     # Compute whole-plan cost rollup from already-attributed stage outcomes.
@@ -7407,12 +8137,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     efblock = gates.effort_fire_blockers(state)
     _log_gate(state, "effort_fire", efblock, passed=not efblock)
     if efblock:
-        return Directive(
-            False, state.node, "fire_acknowledge",
-            "replan blocked by an unacknowledged effort-divergence fire",
-            marker=DIRECTIVE_ESCALATE_TO_USER,
-            data={"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)},
-        )
+        return _effort_fire_refusal(state, "replan", efblock)
 
     # precondition: inside the DIAGNOSING cycle, the difficulty record must be
     # complete before a plan may be re-normed (variant (b) — internal command
@@ -7446,6 +8171,8 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     if rrblock:
         decision = getattr(args, "renegotiation_decision", None)
         if not decision:
+            state.renegotiation_ceiling_difficulty_id = _difficulty_id(state.difficulty)
+            store.save(state)
             return Directive(
                 False, state.node, "renegotiate", "replan blocked: " + rrblock[0],
                 marker=DIRECTIVE_ESCALATE_TO_USER,
@@ -7470,7 +8197,17 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         except (OSError, PlanError):
             order_doc = None
         order = order_doc.meta.order if order_doc is not None else None
-        if order is not None and order.customer_id and renegotiated_by != order.customer_id:
+        if renegotiated_by.casefold() == AGENT_ACTOR:
+            refusal = _agent_renegotiation_refusal(state, decision, order_doc)
+            if refusal is not None:
+                return Directive(
+                    False, state.node, "renegotiate",
+                    f"renegotiation by the agent refused: {refusal}",
+                    marker=DIRECTIVE_ESCALATE_TO_USER,
+                    data={"blockers": rrblock, "reason": refusal},
+                )
+            state.agent_ack_difficulty_ids.append(_difficulty_id(state.difficulty))
+        elif order is not None and order.customer_id and renegotiated_by != order.customer_id:
             return Directive(
                 False, state.node, "renegotiate",
                 f"renegotiation author {renegotiated_by!r} does not match order "
@@ -7533,6 +8270,19 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # `pending_factor` is this call's OWN still-unmutated --normalize-factor: the gate
     # judges it directly rather than reading state.difficulty.normalization, which this
     # command has deliberately not written yet (see the comment above).
+    agent_acked_difficulty = (
+        state.difficulty is not None
+        and _difficulty_id(state.difficulty) in state.agent_ack_difficulty_ids
+    )
+    if agent_acked_difficulty and getattr(args, "normalization_waiver", None) is not None:
+        _log_gate(state, "normalization_waiver", ["agent-acknowledged fire"], passed=False)
+        return Directive(
+            False, state.node, "normalize",
+            "replan refused: the agent-acknowledged fire's difficulty closes on its real "
+            "normalization record; a --normalization-waiver is not accepted",
+            marker=DIRECTIVE_ESCALATE_TO_USER,
+            data={"blockers": ["normalization waiver on an agent-acknowledged fire"]},
+        )
     nblock = gates.normalization_blockers(state, pending_factor=normalize_factor or None)
     if nblock:
         waiver = getattr(args, "normalization_waiver", None)
@@ -7584,7 +8334,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         if round_release:
             message = (
                 "replan blocked: the review-round budget is spent, so the decision is "
-                "yours — see blockers"
+                "the coordinator's — see blockers"
             )
             replan_data = {"blockers": prblock, "plan_review_round_release": round_release}
         else:
@@ -7653,7 +8403,8 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # block below, whose enumeration folding is destructive and PERSISTED —
     # nothing that may refuse can follow it; this command has still written
     # nothing to disk at this point.
-    auth_kind = diff_plans(_load(_replan_baseline_path(state), strict=False), new)
+    auth_kind = _kind_within_boundary(
+        state, diff_plans(_load(_replan_baseline_path(state), strict=False), new), new)
     arblock = gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)
     _log_gate(state, "replan_authorization", arblock, passed=not arblock)
     if arblock:
@@ -7787,6 +8538,15 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         _log_gate(state, "replan_coverage", cov, passed=not cov)
         if cov:
             waiver = getattr(args, "coverage_waiver", None)
+            if agent_acked_difficulty and waiver is not None:
+                _log_gate(state, "replan_coverage_waiver", ["agent-acknowledged fire"], passed=False)
+                return Directive(
+                    False, state.node, "declare",
+                    "replan refused: the agent-acknowledged fire's corrected plan must pass the "
+                    "critique coverage check; a --coverage-waiver is not accepted",
+                    marker=DIRECTIVE_ESCALATE_TO_USER,
+                    data={"coverage_blockers": cov, "blockers": ["coverage waiver on an agent-acknowledged fire"]},
+                )
             if waiver is None:
                 return Directive(False, state.node, "declare", "replan blocked: critique coverage",
                                  data={"coverage_blockers": cov})
@@ -7806,6 +8566,17 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # the event together here, rather than staging the record earlier, is what keeps
     # a refused-then-retried call from either double-counting the event or
     # persisting an orphaned record with no event to match it.
+    if agent_acked_difficulty and (
+        diff_plans(old, new) == "no_change"
+        or not any((d or "").strip() for d in state.difficulty.critique.differences_to_remove)
+    ):
+        return Directive(
+            False, state.node, "replan",
+            "replan refused: the agent-acknowledged fire's corrected plan must change the "
+            "operative surface against a critique that names a difference to remove",
+            marker=DIRECTIVE_ESCALATE_TO_USER,
+            data={"blockers": ["corrected plan changes no operative surface, or no difference to remove"]},
+        )
     if normalize_factor:
         if state.node == Node.DIAGNOSING.value:
             state.difficulty.normalization = Normalization(
@@ -7813,7 +8584,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         _log_normalize_event(state, factor=normalize_factor, level=normalize_level,
                              destination=None, in_diagnosis=(state.node == Node.DIAGNOSING.value))
 
-    kind = diff_plans(old, new)
+    kind = _kind_within_boundary(state, diff_plans(old, new), new)
     # The replan-loop counterpart of cmd_approve's reset: a replan that gets this far has
     # applied a corrected plan, so the rounds spent arguing about the previous one are
     # settled and the next loop starts from zero. Placed here — past every refusal of this
@@ -7913,6 +8684,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # is not lost by refreshing against the old path here — it is simply picked up by
     # the NEXT refresh against the new path, once a branch below rewrites plan_path.
     effort.refresh_spend(state, _cost_rows(args), state.plan_path)
+    _flush_order_effort(state)
 
     if kind == "no_change":
         # A legacy session with no approved-plan snapshot (plan_snapshot_path=None)
@@ -8075,10 +8847,20 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     )
     effort.rederive(state)  # re-derive AFTER logging so this replan is counted
     store.save(state)
+    autonomy = _autonomy_directive_data(state, new)
+    override = _agent_review_override(state)
+    directive_data = {"autonomy": autonomy, **({"agent_review_override": override} if override else {})}
+    if autonomy["action"] == "self_approve":
+        return _with_advisories(Directive(
+            True, state.node, "self_approve",
+            "substantive replan inside the boundary the user approved for this order; run "
+            "`approve --by agent`",
+            data=directive_data,
+        ), echo_advice)
     return _with_advisories(Directive(
         True, state.node, "await_user_approval",
         "substantive replan; HARD GATE — re-approval required",
-        marker="PLAN-READY",
+        marker="PLAN-READY", data=directive_data,
     ), echo_advice)
 
 
@@ -8117,6 +8899,23 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
                          "must be one of continue, abandon, revise")
     if not args.by or not args.by.strip():
         return Directive(False, state.node, "noop", "empty --by: must name who decided")
+    by_agent = args.by.strip().casefold() == AGENT_ACTOR
+    if by_agent:
+        refusal = _agent_fire_ack_refusal(state, last, decision)
+        if refusal is not None:
+            return Directive(
+                False, state.node, "fire_acknowledge",
+                f"fire-acknowledge by the agent refused: {refusal}",
+                marker=DIRECTIVE_ESCALATE_TO_USER,
+                data={"effort_fire": _effort_fire_escalation_data(state), "reason": refusal},
+            )
+        state.agent_ack_difficulty_ids.append(_difficulty_id(state.difficulty))
+        # The replans-scale fire rebased every scale's baseline; the spend / wall-clock
+        # progress it swallowed is still owed to the user's own fire.
+        replaced = last.get("replaced_baseline") or {}
+        for scale in effort.SCALE_ORDER:
+            if scale != effort.SCALE_REPLANS and scale in replaced:
+                state.effort_baseline[scale] = replaced[scale]
     last["ack"] = {
         "by": args.by,
         "decision": decision,
@@ -8124,6 +8923,7 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
         "note": getattr(args, "note", None),
     }
     state.log("fire_acknowledge", by=args.by, decision=decision)
+    _clear_open_fires_if_customer(state, args.by)
     if decision == "abandon":
         state.blocked_from = state.node
         state.node = Node.BLOCKED.value
@@ -8232,7 +9032,7 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
     # decided on the cross-session one is how a watch goes silent on exactly the case it
     # exists for: a resolved re-entry hands the fresh SessionState a replan count of 0
     # while the accumulator still holds the prior laps. See effort.effective_deltas.
-    cross_totals = task_accumulator.get(state.task_id)["per_axis_totals"]
+    cross_totals = _effort_cross_totals(state)
     local = effort.deltas(state)
     delta = effort.effective_deltas(state, cross_session_totals=cross_totals)
     comparand = effort.comparands(state, thr)
@@ -8618,11 +9418,22 @@ def cmd_drive(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     # --- the plan-approval GATE-STOP (at PLAN_READY) ---
     if node == Node.PLAN_READY.value:
         approver = getattr(args, "approved_by", None)
+        autonomy = None
+        if not (approver and approver.strip()) and state.plan_path:
+            try:
+                drive_doc = load_plan(state.plan_path)
+            except (OSError, PlanError):
+                drive_doc = None
+            if drive_doc is not None and _ledgered_order_key(state) is not None:
+                autonomy = _autonomy_directive_data(state, drive_doc)
+                if autonomy["action"] == "self_approve":
+                    approver = AGENT_ACTOR
         if not (approver and approver.strip()):
             return Directive(True, node, "await_user_approval",
                              "drive: plan ready — HARD GATE; get explicit user approval, then "
                              "re-run drive with --approved-by <who>",
-                             marker="PLAN-READY", data={"trace": trace})
+                             marker="PLAN-READY",
+                             data={"trace": trace, **({"autonomy": autonomy} if autonomy else {})})
         ap = argparse.Namespace(session=args.session, by=approver)
         d = _run_step(cmd_approve, ap, store=store, runner=runner, trace=trace)
         if not d.ok:
@@ -8776,6 +9587,7 @@ COMMANDS = {
     "plan": cmd_plan,
     "plan-render": cmd_plan_render,
     "plan-grants": cmd_plan_grants,
+    "plan-resources": plan_resources.cmd_plan_resources,
     "submit-plan": cmd_submit_plan,
     "present-plan": cmd_present_plan,
     "confirm-delivery": cmd_confirm_delivery,
@@ -8852,7 +9664,7 @@ _SESSION_COMMANDS = (
     "question-enumerate", "question-enumerate-worker", "question-enumerate-escape",
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
-    "plan-render", "plan-grants", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
+    "plan-render", "plan-grants", "plan-resources", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "risk-accept",
     "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
@@ -8925,11 +9737,15 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("control", ("question-raise",),
      "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
      "grammar-bound name, never the prose --control of record-result/close"),
-    ("plan", ("plan-render", "plan-grants", "plan-review-delta", "submit-plan", "replan", "drive",
+    ("plan", ("plan-render", "plan-grants", "plan-resources", "plan-review-delta", "submit-plan", "replan", "drive",
               "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
               "question-rebind", "question-raise", "present-plan", "order-dispose"),
      "plan file path"),
+    ("corpus", ("plan-resources",), "directory/ies to scan for *.toml plans — file paths, not narrative"),
+    ("commands_file", ("plan-resources",), "path to a file of literal command lines — a file path"),
+    ("dump_commands", ("plan-resources",), "output file path for the collected command list"),
+    ("report_json", ("plan-resources",), "output file path for the JSON resolution report"),
     ("digest", ("question-enumerate-worker",),
      "plan content digest the launcher computed — the sidecar's key, passed down "
      "verbatim rather than a narrative"),
@@ -8937,7 +9753,10 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "comma-separated stage indices the launcher narrowed the pass to"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
-    ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge"), "who acted — a name, not a narrative"),
+    ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge", "resolve-permission",
+            "task-reset"),
+     "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
+     "identity token like any other --by, not free text)"),
     # --decision is NOT listed here: argparse `choices=` already makes it a non-candidate
     # for the @<path> partition (test_argv_text_call_sites.py's _is_candidate excludes any
     # action with choices set), so classifying it would be a stale entry the moment it's added.
@@ -8957,7 +9776,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("verdict", ("accept",), "'|'-delimited requirement-verdict record"),
     ("budget", ("dispatch",), "budget tier name"),
     ("complexity", ("dispatch",), "complexity tier name"),
-    ("cost_log", ("record-result", "resolve", "verify-final", "replan", "effort-check"),
+    ("cost_log", ("record-result", "resolve", "verify-final", "replan", "effort-check", "submit-plan"),
      "cost log file path (test override)"),
     ("quality_by", ("resolve", "close"), "how the quality rating was obtained — a fixed token"),
     ("confirmed_by", ("close",), "who confirmed — a name, not a narrative"),
@@ -9250,7 +10069,28 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--format", choices=["compact", "full", "json"], default="compact")
     # Session-free read, same reason as plan-render's suppressed --session above.
     sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-resources"); sp.add_argument("--plan", required=False, default=None,
+        help="TOML plan whose per-stage typed resources (declared + derived rules, "
+             "add_dirs, spawn/landed shape) to resolve on demand -- plan mode")
+    sp.add_argument("--format", choices=["compact", "full", "json"], default="compact")
+    sp.add_argument("--corpus", nargs="+", default=None,
+        help="corpus mode: directory/ies to scan for *.toml plans, resolving every "
+             "declared+derived Bash rule found through tool_contracts.resolve_command")
+    sp.add_argument("--commands-file", default=None,
+        help="corpus mode: a file of literal command lines (one per line, '#'-comments "
+             "skipped) to resolve directly, in addition to any --corpus scan")
+    sp.add_argument("--dump-commands", default=None,
+        help="corpus mode: write every collected command line to this file")
+    sp.add_argument("--report-json", default=None,
+        help="corpus mode: write the full resolution report (JSON) to this file")
+    sp.add_argument("--require-no-unknown-program", action="store_true", default=False,
+        help="corpus mode: fail (non-ok Directive) if any command resolves to "
+             "reason_class=unknown-program")
+    # Session-free read, same reason as plan-render's suppressed --session above.
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
     sp = add("submit-plan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
+    sp.add_argument("--cost-log", dest="cost_log", default=None,
+                    help="override cost log path for tests (defaults to cost.COST_LOG)")
     sp = add("present-plan"); sp.add_argument("--session", required=True)
     sp.add_argument("--kind", choices=list(PLAN_PRESENTATION_KINDS), default=PLAN_PRESENTATION_KIND_ESSENCE,
                     help="essence = free-form summary, no completeness check; "
@@ -9426,6 +10266,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--re-attest", action="store_true")
     sp = add("resolve-permission"); sp.add_argument("--session", required=True)
     sp.add_argument("--decision", choices=["granted", "denied"], required=True)
+    sp.add_argument("--by", default=None,
+                    help="who is resolving this request; the reserved identity 'agent' "
+                         "(AGENT_ACTOR) attempts a self-grant against the order-approvals "
+                         "ledger (REQ5) instead of recording a human decision -- refused "
+                         "unless every --rule/--add-dir resolves to a typed resource ALREADY "
+                         "covered by a resource the customer approved for this plan's order")
     sp.add_argument("--scope", choices=["once", "project", "global", "stage"], default="once",
                     help="'stage' additionally materializes --rule/--add-dir as a RUNTIME "
                          "grant on the active stage (state.runtime_grants), validated through "
@@ -9643,6 +10489,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--task", required=True, help="task_id whose accumulator to zero")
     sp.add_argument("--reason", required=True,
                     help="why this task's accumulated cross-session friction is being forgiven")
+    sp.add_argument("--by", required=True,
+                    help="the customer authorizing the reset; the coordinator is refused")
     return p
 
 

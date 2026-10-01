@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user (Fedor Solovyev)"
 refs: [2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-09-gate-must-execute-what-it-attests, 2026-07-03-engine-replan-artifact-discipline]
 created: 2026-07-20
-last_verified: 2026-07-28
+last_verified: 2026-10-01
 ---
 
 # Premise gate blocks a verify_command-venue refinement replan — nudge plan_path + re-enumerate
@@ -59,6 +59,10 @@ Passable recipe: (1) nudge the gate-exempt state.plan_path to the corrected plan
 ### 2026-07-29 — agentctl-venue-propagation — the ROOT CAUSE of this whole family, FIXED (commit `7b3a624`)
 - Where it arose: Service sub-plan pushed mid-execution from parent task prune-dangling-hook-references-v7, whose stage 2 dispatched a developer into the READ-ONLY canonical checkout. Isolated worktree /Users/the0/claude-agent-instructions-venue-sync off origin/main 7d0b9e0.
 - Working plan: /Users/the0/.claude-agent/plans/agentctl-venue-propagation-v1.toml (3 stages; 4 paid thinker plan-review rounds, then a code-review pass)
+
+### 2026-10-01 — effort-replan-absolute 3->5 + autonomous in-boundary replanning (2026-10-01)
+- Where it arose: Core agentctl engine, session 7dd14604; defects filed as GitHub issue #276
+- Working plan: A one-line refinement of stage 7 (empty material_refs filled for a pure push stage) re-armed whole-plan question enumeration: 134 candidates, all dismissed by a script (question-candidate-dispose --as dismissed). The stage-scoped review had to be re-recorded after the edit. The plan-review round-release wrapper masked the real blocker (stale plan path); calling gates._plan_review_blockers_coverage directly exposed it. The acceptance judge's repeated 'revise' reasons were visible only as acceptance_judge_verdict events in state history, not in record-result output.
 ## Common core & variations
 **Common:** Same recipe as the 2026-07-20 head context: a refinement replan that touches a stage verify_command re-stales BOTH the premise digest (re-run question-enumerate) AND the plan-review (fresh thinker review bound to the NEW sha256). replan_coverage then requires every critique.invariants_to_preserve item to substring-land (casefold+collapsed-ws) in a stage conditions/invariants field. After replan: next-stage -> EXECUTING -> record-result, engine re-runs the check itself (exit 0). The 2026-07-23 spawn-cwd/pytest occurrence confirms the recipe holds verbatim even when the replan TARGET is a genuinely separate plan file (v2->v3 full file swap), not an in-place venue edit — re-point the gate-exempt state.plan_path to the target file via the store API, re-enumerate to stamp the new digest, and rely on plan_snapshot_path protecting the coverage baseline.
 

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -48,6 +49,7 @@ from .config import Thresholds
 from .plan import (
     PlanError,
     changed_parts,
+    effects_place,
     grants_place,
     grants_sha256,
     load_plan,
@@ -55,6 +57,7 @@ from .plan import (
     plan_has_any_grants,
     stage_question_key,
 )
+from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
 from .state import Node, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
@@ -842,9 +845,9 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
 #: an override — this message now says so explicitly rather than leaving that exit
 #: for the reader to infer from the code.
 _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
-    "review round budget exhausted at round {rounds} (Rule-of-Three — config.md's "
-    "effort-replan-absolute, reused) — no further thinker review is required, but the "
-    "decision is yours and must be recorded. Two exits, both executable from this "
+    "review round budget exhausted at round {rounds} (config.md's "
+    "effort-replan-absolute threshold, reused) — no further thinker review is required, but the "
+    "decision is the coordinator's and must be recorded. Two exits, both executable from this "
     "state: (1) run a fresh whole-plan thinker review and record plan-review --verdict "
     "pass — this clears the gate exactly as an on-budget pass always does, because it "
     "is an honest pass, not an override; or (2) go ahead with the plan as it stands, "
@@ -868,12 +871,12 @@ _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
 #: is fixed by spending a further review round; only override or a scope edit
 #: is.
 _PLAN_REVIEW_ROUND_RELEASE_MESSAGE_POST_PASS = (
-    "review round budget exhausted at round {rounds} (Rule-of-Three — config.md's "
-    "effort-replan-absolute, reused) — a whole-plan or stage thinker PASS was already "
+    "review round budget exhausted at round {rounds} (config.md's "
+    "effort-replan-absolute threshold, reused) — a whole-plan or stage thinker PASS was already "
     "recorded this approval cycle, and a recorded pass is terminal: 'run a fresh "
     "whole-plan thinker review' is no longer an exit, because an on-budget pass would have "
     "cleared the gate directly rather than reaching this message at all. The decision "
-    "is yours and must be recorded. Two exits, both executable from this state: (1) go "
+    "is the coordinator's and must be recorded. Two exits, both executable from this state: (1) go "
     "ahead with the plan as it stands, without a further review, by running "
     "plan-review --verdict override --reviewer <you> --note <why it is acceptable>; or "
     "(2) edit the plan as the concern proposes (cut or add) and re-apply it by the "
@@ -932,9 +935,9 @@ def plan_review_round_release_active(state: SessionState | None, thr: Thresholds
 #: escape --reason enumerate_rounds_exhausted` is the only one, because `approve`
 #: never clears a non-empty blockers list by itself.
 PLAN_ENUMERATE_ROUND_RELEASE_MESSAGE = (
-    "enumeration round budget exhausted at pass {passes} (Rule-of-Three — config.md's "
-    "effort-replan-absolute, reused) — no further re-run is required, but the decision is "
-    "yours and must be recorded: to proceed with the plan as it stands, run "
+    "enumeration round budget exhausted at pass {passes} (config.md's "
+    "effort-replan-absolute threshold, reused) — no further re-run is required, but the decision is "
+    "the coordinator's and must be recorded: to proceed with the plan as it stands, run "
     "question-enumerate-escape --reason enumerate_rounds_exhausted --note <why the current "
     "plan is acceptable>; to refine instead, edit the plan and re-run question-enumerate "
     "— the budget does not refill on an edit, so a re-run does not by itself open this gate; "
@@ -1788,9 +1791,9 @@ def acceptance_review_blockers(state: SessionState, stage: "_Stage") -> list[str
 #: unbounded. Names the one act executable from this state that both records the
 #: user's decision and opens the gate: `code-review --verdict override`.
 _CODE_REVIEW_ROUND_RELEASE_MESSAGE = (
-    "code review round budget exhausted at round {rounds} (Rule-of-Three — config.md's "
-    "effort-replan-absolute, reused) — no further code-reviewer pass is required, but the "
-    "decision is yours and must be recorded: to accept the code as it stands, run "
+    "code review round budget exhausted at round {rounds} (config.md's "
+    "effort-replan-absolute threshold, reused) — no further code-reviewer pass is required, but the "
+    "decision is the coordinator's and must be recorded: to accept the code as it stands, run "
     "code-review --verdict override --reviewer <you> --note <why it is acceptable>; "
     "to request changes instead, address them and re-run code-review — the budget does "
     "not refill, so a re-review does not by itself open this gate; record-result still "
@@ -2268,7 +2271,7 @@ def _renorm_stage_residual(stage) -> tuple:
     `plan.stage_question_key` is most of it, and would have been all of it but for its
     own scope: that key answers whether a disposed Question still targets the same
     bytes, and a Question.target may only name a stage field the plan's author writes
-    as an activity element. Four engine-consumed fields fall outside that and are
+    as an activity element. Five engine-consumed fields fall outside that and are
     spliced on here, because a renormalization is defined by what it does NOT touch:
 
     * `actor.cost_tier` — the dispatch budget label and the effort-divergence estimate's
@@ -2280,6 +2283,11 @@ def _renorm_stage_residual(stage) -> tuple:
       child is authorized to touch. Widening it under the light path would let an
       executor grant himself Bash/Edit/add_dir access the plan's own approval never
       saw, through a channel meant only for re-sequencing operations.
+    * `effects` (via `plan.effects_place`) — the stage's declared `[[stage.effects]]`
+      script-effect trust claims: which scripts, pinned to which bytes, resolve this
+      stage's calls. Same footing as `grants`: altering which script identities are
+      trusted under the light path would let an executor move that trust surface
+      through a channel meant only for re-sequencing operations.
     * `ephemeral_artifacts_waiver` — the submission-time waiver for a declared
       `output_artifacts` entry that legitimately resolves under a scratch root. Same
       footing as `actor.cost_tier`: no Question.target names it, but re-declaring it
@@ -2294,12 +2302,13 @@ def _renorm_stage_residual(stage) -> tuple:
 
     Hand-written, like every membership list of this family, and pinned the same way:
     `test_the_stage_residual_exhausts_the_stage_s_field_set` goes red when a field is
-    added to `Stage` and to neither the key nor the four splices above."""
+    added to `Stage` and to neither the key nor the five splices above."""
     return (
         stage_question_key(stage),
         stage.actor.cost_tier,
         tuple(stage.output_artifacts),
         *grants_place(stage),
+        *effects_place(stage),
         stage.ephemeral_artifacts_waiver,
     )
 
@@ -2366,3 +2375,100 @@ def blockers(state: SessionState, gate_name: str) -> list[str]:
     if guardian is None:
         return [f"unknown gate {gate_name!r}"]
     return guardian(state)
+
+
+# --- Unit 2: the autonomy boundary -------------------------------------------------
+
+AUTONOMY_REASON_NO_VERSION = "no user-approved version for this order"
+AUTONOMY_REASON_ORDER_CHANGED = "the order itself changed since the user's approval"
+AUTONOMY_REASON_OPEN_FIRE = "open spend/wall-clock fire owed to the user"
+
+
+def _identity_key(identity) -> str:
+    return json.dumps(list(identity), sort_keys=True)
+
+
+def _resource_name(data: dict) -> str:
+    if data["kind"] == "vcs_ref":
+        return f"vcs_ref({data['remote']}, {data['ref']}, {data['op']})"
+    fields = ", ".join(str(v) for k, v in data.items() if k != "kind")
+    return f"{data['kind']}({fields})"
+
+
+def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict | None = None,
+                      *, protected: list[str] | None = None) -> dict:
+    """Whether the coordinator may approve `resolved_plan` (a `plan_resources.
+    BoundaryView`) on the user's behalf, given the order's ledger snapshot: the same
+    order, no resource outside what the user approved for it, no changed command of
+    unknown effect without a first passing thinker review, no open fire owed to the
+    user. Pure: every input is a stored value; the reference is the last USER-approved
+    version, never the previous plan."""
+    from . import order_approvals as _oa
+
+    last = _oa.latest_user_approved_of(ledger_snapshot)
+    out = {
+        "eligible": False, "reason": AUTONOMY_REASON_NO_VERSION,
+        "reasons": [AUTONOMY_REASON_NO_VERSION],
+        "order_changed": False, "extra_resources": [], "unresolved_changed_commands": [],
+        "thinker_pass": None, "open_effort_fire": bool(ledger_snapshot.get("open_effort_fires")),
+        "first_verdict_key": None,
+    }
+    if last is None:
+        return out
+    reasons: list[str] = []
+    out["order_changed"] = resolved_plan.order_sha256 != ledger_snapshot.get("order_sha256")
+    if out["order_changed"]:
+        reasons.append(AUTONOMY_REASON_ORDER_CHANGED)
+    if out["open_effort_fire"]:
+        reasons.append(AUTONOMY_REASON_OPEN_FIRE)
+
+    approved = _oa.boundary_resources_of(ledger_snapshot)
+    seen: set[str] = set()
+    for requested in resolved_plan.resources:
+        if any(a.covers(requested, protected=protected) for a in approved):
+            continue
+        data = _oa.resource_to_dict(requested)
+        name = _resource_name(data)
+        if name in seen:
+            continue
+        seen.add(name)
+        out["extra_resources"].append({
+            **data, "name": name,
+            "reason": f"{name} is outside the resource set the user approved for this order",
+        })
+    if out["extra_resources"]:
+        reasons.append(
+            "resource outside the set the user approved for this order: "
+            + ", ".join(e["name"] for e in out["extra_resources"])
+        )
+
+    approved_ids = {_identity_key(i) for i in (last.get("unresolved_identities") or [])}
+    engine_changed = False
+    for item in resolved_plan.unresolved:
+        if _identity_key(item["identity"]) in approved_ids:
+            continue
+        needs_user = item["origin"] not in ENGINE_EXECUTED_ORIGINS
+        out["unresolved_changed_commands"].append({**item, "needs_user": needs_user})
+        engine_changed = engine_changed or not needs_user
+    user_owned = [c["source"] for c in out["unresolved_changed_commands"] if c["needs_user"]]
+    if user_owned:
+        reasons.append(
+            "a changed unresolved command outside the engine-executed fixed texts (a declared "
+            "rule or a derived output-artifact rule) goes to the user: " + ", ".join(user_owned)
+        )
+    if engine_changed:
+        key = _oa.first_thinker_verdict_key(
+            last["plan_sha256"], [c["identity"] for c in out["unresolved_changed_commands"]],
+        )
+        out["first_verdict_key"] = key
+        verdict = (first_verdicts or {}).get(key)
+        out["thinker_pass"] = bool(isinstance(verdict, dict) and verdict.get("verdict") == "pass")
+        if not out["thinker_pass"]:
+            reasons.append(
+                "a changed unresolved engine-executed command has no first passing thinker review: "
+                + ", ".join(c["source"] for c in out["unresolved_changed_commands"] if not c["needs_user"])
+            )
+    out["reasons"] = reasons
+    out["eligible"] = not reasons
+    out["reason"] = reasons[0] if reasons else "inside the boundary the user approved for this order"
+    return out

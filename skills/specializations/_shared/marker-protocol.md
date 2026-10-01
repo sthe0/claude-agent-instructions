@@ -23,7 +23,7 @@ End your output with the marker that names your outcome, written however reads n
 Two things do still matter. Do not present a marker you do not mean — the pass reads your message's declared disposition, and a marker written casually is read as your real verdict. And if you discuss markers in prose (weighing whether to `REPLAN:`, quoting this contract), make the marker you actually return unambiguous — a message that signals two markers with no clear terminal one is treated as markerless.
 
 - `COMPLETED:` — the step is done; include a summary, artifact paths (PR link, branch, files changed, test output), and any local plan revisions you applied.
-- `PLAN-READY:` — (planner) the plan is ready and the manager **must** obtain explicit user approval before spawning the next specialist. The planner's SKILL.md carries the enforced `Plan:` / `Summary:` format.
+- `PLAN-READY:` — (planner) the plan is ready and the manager **must** obtain explicit user approval before spawning the next specialist (a later plan of a user-approved order may instead be self-approved on the engine's `self_approve`). The planner's SKILL.md carries the enforced `Plan:` / `Summary:` format.
 - `INCOMPLETE:` — partial; what is done, what remains, what blocks completion.
 - `CLARIFY:` — you need a small, specific answer to continue: a file path, a value, a choice between named options, a confirmation about a corner case. Prefer this over `ESCALATE:` when the answer is short and work resumes immediately. Format:
 
@@ -43,9 +43,12 @@ Two things do still matter. Do not present a marker you do not mean — the pass
   Why: <why this action is needed for the step>
   Fallback if denied: <what you will do instead, or "stop the step">
   Rule: <the harness permission rule this action needs, e.g. Bash(python3 scripts/foo.py:*), if you can name one>
+  Resource: <the typed resource this action resolves to, if you can name one — a file+mode, a VCS ref+op, a specialist role, a service+op-class, a dataset+locator>
   ```
 
   The optional `Rule:` line lets the manager check your request against the stage's own effective grant set (`agentctl stage-grants`) before answering. **If the rule you name is already covered** — declared, derived, or a live unconsumed runtime grant — your request should never have hit a permission prompt at all: that is a **materialization defect** (a covered call denied anyway — stale cached settings, a hand-edited `--settings` payload, a drifted spawn), not a scope gap, and the manager routes it as such rather than granting it again. Omit the line when you cannot state the rule precisely; the manager still handles the request, just without that shortcut.
+
+  The optional `Resource:` line names what `Rule:` resolves to once the manager runs it through `tool_contracts.py`'s `resolve_command`. When present, it must agree with the `Rule:`'s own resolution — a mismatch is a `resource_disagreement`, not a grant, and falls through to asking the user.
 
   **A denial is not a routing problem.** Never route a denied command through another granted channel — return `PERMISSION-REQUEST:` with the `Rule:` line instead.
 

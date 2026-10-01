@@ -100,6 +100,14 @@ _UNCLAIMED_STAGE_LEAVES = {
                             "`grants.allow.rule`",
     "grants.add_dirs.provenance": "the grant's origin label, same exclusion as its "
                                   "sibling `grants.add_dirs.path`",
+    "effects.path": "a declared script-trust surface, not a place an answer can rest "
+                    "on — no target names it; covered instead by "
+                    "gates._renorm_stage_residual via plan.effects_place, on the same "
+                    "footing as grants.allow.rule above",
+    "effects.sha256": "the trusted script's pinned digest, same exclusion as its "
+                      "sibling `effects.path`",
+    "effects.resolver": "the resolver this trust claim binds, same exclusion as its "
+                        "sibling `effects.path`",
     "outcome.checked_tree_identity": "the mutable execution record, not the declaration",
     "outcome.checked_tree_ok": "the mutable execution record, not the declaration",
     "outcome.record_attempts": "the mutable execution record, not the declaration",

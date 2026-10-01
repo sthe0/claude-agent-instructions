@@ -192,7 +192,7 @@ def _climb(store, fixtures_dir, sid: str, task: str, n: int) -> None:
 def test_scenario_a_replan_count_climbs_then_refuses_then_renegotiates(store, fixtures_dir):
     sid, task = "sa", "renego-e2e-a"
     thr = Thresholds().effort_replan_absolute()
-    assert thr == 3
+    assert thr == 5
     _to_diagnosing(store, fixtures_dir, sid, task)
     assert _replan_count(task) == 0
 

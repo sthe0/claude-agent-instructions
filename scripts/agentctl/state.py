@@ -21,8 +21,9 @@ from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
 from .grants import StageGrants
+from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 40  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 42  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -36,7 +37,14 @@ SCHEMA_VERSION = 40  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # denial that becomes covered once rebased from a drifted transcript
                      # cwd back to the stage venue (a planning artifact, not a genuine
                      # grant-coverage gap; see `_classify_transcript_denials`)
-                     # 40: SessionState gains plan_topo_reviews -- topological per-unit
+                     # 40: Stage gains `effects` (declared [[stage.effects]] — resource
+                     # model, checkpoint c)
+                     # 41: SessionState gains order_effort_flushed/order_effort_base/
+                     # order_effort_frozen/agent_ack_difficulty_ids (autonomy boundary:
+                     # order-keyed spend/wall-clock accumulation, frozen user-approved
+                     # estimate, agent-acknowledged difficulty records,
+                     # renegotiation_ceiling_difficulty_id)
+                     # 42: SessionState gains plan_topo_reviews -- topological per-unit
                      # plan-review records (PlanTopoReview), a third record family
                      # alongside plan_review/plan_stage_reviews that binds to
                      # neighbour-file and interface digests instead of whole-plan
@@ -85,6 +93,19 @@ class Route(str, Enum):
     DIRECT = "DIRECT"        # chat: answer in-thread, terminal at ROUTED
     IN_THREAD = "IN_THREAD"  # small change: execute in-thread, no plan gate
     SPAWN = "SPAWN"          # substantive: planner/developer specialists
+
+
+# The reserved actor identity for engine-authored acts — `resolve-permission
+# --by agent`'s self-grant path (order_approvals.boundary_resources coverage
+# check, never a customer-authored write to the ledger itself) and nothing
+# else. Never a valid `cmd_approve --by` (an approval must be customer-
+# authored to mean anything — self-approval would let the engine stamp its
+# own permission) and never a valid `[meta.order].customer_id` (a plan
+# claiming the engine AS its own customer is the same defect from the order
+# side — submission.py's `_order_violations` refuses it). Compared
+# case-foldedly everywhere it is checked, so `Agent`/`AGENT`/`agent` are all
+# the same reserved identity.
+AGENT_ACTOR = "agent"
 
 
 class CriterionType(str, Enum):
@@ -1443,6 +1464,13 @@ class Stage:
     # spawned children keep receiving the same DERIVED grants they always did. See
     # grants.py's module docstring for why this is the sole validated entry point.
     grants: StageGrants | None = None
+    # Declared [[stage.effects]] (resource model, checkpoint c): the plan author's
+    # own claim that a specific, digest-pinned script resolves this stage's calls
+    # through a named resolver — trusted only while the live script's bytes still
+    # match the pinned digest (script_effects.resolve_script enforces that at
+    # resolve time; this field only carries the declaration). Empty on every plan
+    # authored before this field, byte-identical to "no declared effects".
+    effects: list[StageEffectDeclaration] = field(default_factory=list)
 
     @property
     def depends_on(self) -> list[int]:
@@ -1493,6 +1521,7 @@ class Stage:
                 outcome=Outcome(**d["outcome"]) if d.get("outcome") else Outcome(),
                 control=d.get("control"),
                 grants=StageGrants.from_dict(d.get("grants")),
+                effects=[StageEffectDeclaration.from_dict(e) for e in d.get("effects", [])],
             )
         # legacy FLAT shape -> nested groups (migration shim)
         return cls(
@@ -1531,6 +1560,7 @@ class Stage:
             ),
             control=d.get("control"),
             grants=StageGrants.from_dict(d.get("grants")),
+            effects=[StageEffectDeclaration.from_dict(e) for e in d.get("effects", [])],
         )
 
 
@@ -1764,6 +1794,23 @@ class SessionState:
     effort_spend_seen: dict = field(default_factory=dict)
     user_prompt_count: int = 0
     effort_crossings: list[dict] = field(default_factory=list)
+    # Order-keyed effort custody (autonomy boundary). Only meaningful for a session
+    # whose order has a user-approved version in order_approvals' ledger.
+    #   order_effort_flushed  the actual spend/wall_clock already moved into the ledger
+    #                         (None until the first approve of this session).
+    #   order_effort_base     the ledger's window total at this session's last spend/
+    #                         wall_clock fire — the order-level twin of effort_baseline.
+    #   order_effort_frozen   the user-approved spend/wall_clock estimate rederive keeps.
+    #   agent_ack_difficulty_ids  ids of difficulty records an agent-authored
+    #                         fire-acknowledge / renegotiation already consumed.
+    order_effort_flushed: dict | None = None
+    order_effort_base: dict = field(default_factory=dict)
+    order_effort_frozen: dict | None = None
+    agent_ack_difficulty_ids: list[str] = field(default_factory=list)
+    #   renegotiation_ceiling_difficulty_id  id of the difficulty record open when the
+    #                         diagnosing-replan ceiling last refused a replan; an agent
+    #                         `continue` needs a record declared after it.
+    renegotiation_ceiling_difficulty_id: str | None = None
     # DIAGNOSING-renegotiation audit trail (GitHub #177) — one record per customer
     # decision at the diagnosing_replan round-release gate, keyed by string (decision,
     # note, by, ts, task_replan_count_at_decision). Same plain list[dict] shape as

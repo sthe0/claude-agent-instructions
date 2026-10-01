@@ -709,6 +709,15 @@ _STAGE_RESIDUAL_COVERAGE = {
     "grants.add_dirs.mode": "the residual's own splice, same reason as `grants.allow.rule`",
     "grants.add_dirs.provenance": "the residual's own splice, same reason as its sibling "
                                   "`grants.add_dirs.path`",
+    "effects.path": "the residual's own splice — outside stage_question_key because "
+                    "no Question.target names it, inside here because a declared "
+                    "script-effect trust claim is part of what the stage's definition "
+                    "authorizes an executor to treat as trusted, same footing as "
+                    "grants.allow.rule above",
+    "effects.sha256": "the residual's own splice, same reason as its sibling "
+                      "`effects.path`",
+    "effects.resolver": "the residual's own splice, same reason as its sibling "
+                        "`effects.path`",
 }
 
 
