@@ -123,6 +123,7 @@ from .state import (
     PlanReview,
     plan_review_concern_ids,
     plan_review_pair_scope,
+    plan_review_scope_for_pair,
     plan_review_scope_for_stage,
     plan_review_scope_stage_index,
     ReattestStash,
@@ -671,11 +672,46 @@ def _record_customer_stage_grants(state: SessionState, by: str, scope: str, entr
 def _agent_review_override(state: SessionState) -> dict | None:
     """The coordinator's own plan-review override on record, which the user must see
     named when the plan reaches them: the review was waived, not passed."""
-    for review in (state.plan_review, *state.plan_stage_reviews.values()):
-        if (review is not None and review.verdict == gates._PLAN_REVIEW_OVERRIDE
+    reviews = [(review, review.scope)
+               for review in (state.plan_review, *state.plan_stage_reviews.values())
+               if review is not None]
+    reviews += [(review, plan_review_scope_for_pair(pair))
+                for pair, review in state.plan_pair_reviews.items()]
+    for review, scope in reviews:
+        if (review.verdict == gates._PLAN_REVIEW_OVERRIDE
                 and (review.reviewer or "").strip().casefold() == AGENT_ACTOR):
-            return {"reviewer": review.reviewer, "scope": review.scope, "note": review.note,
+            return {"reviewer": review.reviewer, "scope": scope, "note": review.note,
                     "plan_path": review.plan_path}
+    return None
+
+
+def _plan_review_override_refusal(state: SessionState, prev, reviewer: str, order) -> str | None:
+    """Why an override by `reviewer` is refused, or None. `prev` is the prior record
+    of the SAME scope and plan path (or None). An override is the customer's escape
+    from a reviewer's `revise` deadlock: never by that reviewer itself, by the
+    coordinator only while a round/friction release names the decision as its own,
+    and by the order's customer_id when one is declared."""
+    if (prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE
+            and reviewer and reviewer == (prev.reviewer or "").strip()):
+        return (
+            f"override must come from a distinct reviewer: {reviewer!r} is the "
+            "reviewer whose 'revise' verdict it would override (the user is the "
+            "expected override author)"
+        )
+    if reviewer.casefold() == AGENT_ACTOR:
+        # The override never counts as a passing first verdict for the autonomy
+        # boundary (it is not written to the ledger).
+        if not (gates.plan_review_round_release_active(state)
+                or gates.cross_axis_friction_release_active(state)):
+            return (
+                "an agent-authored override is refused: it is available only once the "
+                "review-round or cross-axis friction release is active"
+            )
+    elif order is not None and order.customer_id and reviewer != order.customer_id:
+        return (
+            f"override reviewer {reviewer!r} does not match order customer_id "
+            f"{order.customer_id!r}; record it as the customer of record, or correct --reviewer"
+        )
     return None
 
 
@@ -4243,6 +4279,16 @@ def _cmd_plan_review_pair(
     def refuse(msg: str) -> Directive:
         return Directive(False, state.node, "noop", msg)
 
+    unsupported = [flag for flag, dest in (("--concern-id", "concern_ids"),
+                                           ("--findings-blocking", "findings_blocking"),
+                                           ("--findings-nonblocking", "findings_nonblocking"))
+                   if getattr(args, dest, None) is not None]
+    if unsupported:
+        return refuse(
+            f"not recorded for a 'topo:' scope: {', '.join(unsupported)} — a pair "
+            "concern is identified by its condition marker, and risk-accept does not "
+            "take a pair scope"
+        )
     try:
         doc, _, live = load_plan_with_digest(target)
         parse_pair(doc, pair)
@@ -4269,18 +4315,9 @@ def _cmd_plan_review_pair(
     if verdict == gates._PLAN_REVIEW_OVERRIDE:
         if not reviewer or not note:
             return refuse("a pair override needs a non-empty --reviewer and --note")
-        if prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE and reviewer == (prev.reviewer or "").strip():
-            return refuse(
-                f"override must come from a distinct reviewer: {reviewer!r} is the "
-                "reviewer whose 'revise' verdict it would override (the user is the "
-                "expected override author)"
-            )
-        order = doc.meta.order
-        if order is not None and order.customer_id and reviewer != order.customer_id:
-            return refuse(
-                f"override reviewer {reviewer!r} does not match order customer_id "
-                f"{order.customer_id!r}; record it as the customer of record, or correct --reviewer"
-            )
+        refusal = _plan_review_override_refusal(state, prev, reviewer, doc.meta.order)
+        if refusal:
+            return refuse(refusal)
     regression_command = (getattr(args, "regression_command", "") or "").strip()
     regression_exit: int | None = None
     if verdict == gates._PLAN_REVIEW_REVISE and gates.pair_status(state, doc, target, pair) == "current":
@@ -4425,44 +4462,16 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     # review of that SAME scope, never against the whole-plan record.
     if args.verdict == gates._PLAN_REVIEW_OVERRIDE:
         prev = state.plan_stage_reviews.get(scope) if scope else state.plan_review
-        new_reviewer = (getattr(args, "reviewer", "") or "").strip()
-        if (
-            prev is not None
-            and prev.plan_path == target
-            and prev.verdict == gates._PLAN_REVIEW_REVISE
-            and new_reviewer
-            and new_reviewer == (prev.reviewer or "").strip()
-        ):
-            return Directive(
-                False, state.node, "noop",
-                f"override must come from a distinct reviewer: {new_reviewer!r} is the "
-                "reviewer whose 'revise' verdict it would override (the user is the "
-                "expected override author)",
-            )
-        # An override is the plan's CUSTOMER overruling a reviewer's blocking verdict —
-        # not an escape hatch for any caller to self-record one under an arbitrary
-        # --reviewer string. Mirrors cmd_accept's author/customer_id check: both records
-        # are only valid when authored by the customer of record. Degrades to a
-        # pass-through (no check) when the plan has no [meta.order] or an empty
-        # customer_id, same as cmd_accept.
-        order = doc.meta.order if doc is not None else None
-        if new_reviewer.casefold() == AGENT_ACTOR:
-            # The coordinator may override only where the round/friction release names
-            # the decision as its own; the override never counts as a passing first
-            # verdict for the autonomy boundary (it is not written to the ledger).
-            if not (gates.plan_review_round_release_active(state)
-                    or gates.cross_axis_friction_release_active(state)):
-                return Directive(
-                    False, state.node, "noop",
-                    "an agent-authored override is refused: it is available only once the "
-                    "review-round or cross-axis friction release is active",
-                )
-        elif order is not None and order.customer_id and new_reviewer != order.customer_id:
-            return Directive(
-                False, state.node, "noop",
-                f"override reviewer {new_reviewer!r} does not match order customer_id "
-                f"{order.customer_id!r}; record it as the customer of record, or correct --reviewer",
-            )
+        if prev is not None and prev.plan_path != target:
+            prev = None
+        # Mirrors cmd_accept's author/customer_id check; degrades to a pass-through
+        # when the plan has no [meta.order] or an empty customer_id, same as cmd_accept.
+        refusal = _plan_review_override_refusal(
+            state, prev, (getattr(args, "reviewer", "") or "").strip(),
+            doc.meta.order if doc is not None else None,
+        )
+        if refusal:
+            return Directive(False, state.node, "noop", refusal)
     # --plan-digest is the sha256 the REVIEWER computed from its OWN read of the
     # target plan file. Cross-check it against the engine's live digest and REFUSE
     # to record on mismatch (a reviewer that read a different/stale file must not

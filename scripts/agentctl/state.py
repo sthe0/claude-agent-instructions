@@ -552,6 +552,10 @@ PAIR_BINDING_KEYS = (
 )
 
 
+def plan_review_scope_for_pair(pair: str) -> str:
+    return f"{_PLAN_REVIEW_PAIR_SCOPE_PREFIX}{pair}"
+
+
 def plan_review_pair_scope(scope: str) -> "str | None":
     """The pair id a `topo:<pair>` scope names, or None when `scope` is not a
     topo scope at all -- callers still validate that the id is one of

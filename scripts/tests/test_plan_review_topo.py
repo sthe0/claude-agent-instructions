@@ -554,6 +554,37 @@ def test_tr21_pair_override_checks_and_storage(make_env):
     assert (confirmed["outcome"], netted["outcome"]) == ("confirmed-gap", "false-alarm")
     assert netted["concern_sha256"] == confirmed["concern_sha256"] == _text_sha(concern)
 
+    # No customer_id and no active release: the coordinator cannot self-override a
+    # pair, exactly as it cannot self-override the whole plan; once it records one
+    # under a release, the user surface names it.
+    env = make_env(_data())
+    assert env.record("topo:3-1", "revise", reviewer="thinker", concerns=[concern]).ok
+    d = env.record("topo:3-1", "override", reviewer="agent", note="self-waiver")
+    assert not d.ok and "agent-authored override is refused" in d.detail
+    whole = cli.cmd_plan_review(
+        Namespace(session=SID, target=None, scope=None, verdict="override", reviewer="agent",
+                  concerns=None, note="self-waiver", plan_digest=None, regression_command=None),
+        store=env.store)
+    assert not whole.ok and whole.detail == d.detail
+    assert env.state().plan_pair_reviews["3-1"].verdict == "revise"
+    state = env.state()
+    state.plan_pair_reviews["3-1"].verdict = "override"
+    state.plan_pair_reviews["3-1"].reviewer = "agent"
+    assert cli._agent_review_override(state) == {
+        "reviewer": "agent", "scope": "topo:3-1", "note": state.plan_pair_reviews["3-1"].note,
+        "plan_path": str(env.plan)}
+
+    # Flags a pair record has no field for are refused, never silently dropped.
+    for flag, dest, value in (("--concern-id", "concern_ids", ["k1"]),
+                              ("--findings-blocking", "findings_blocking", 1),
+                              ("--findings-nonblocking", "findings_nonblocking", 0)):
+        d = cli.cmd_plan_review(
+            Namespace(session=SID, target=None, scope="topo:3-1", verdict="revise",
+                      reviewer="thinker", concerns=[concern], note="", plan_digest=None,
+                      regression_command=None, **{dest: value}),
+            store=env.store)
+        assert not d.ok and flag in d.detail
+
 
 def _walk(env: Env, target: Path | None = None, fmt: str = "json"):
     return cli.cmd_plan_review_walk(
