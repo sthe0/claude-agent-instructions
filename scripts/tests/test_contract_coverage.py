@@ -714,6 +714,7 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "actor.executor": frozenset(_CD),
     "actor.capability_required": frozenset({"question_key"}),
     "actor.cost_tier": frozenset({"apply_refined", "diff_plans"}),
+    "actor.guard_exempt_paths": frozenset({"apply_refined", "diff_plans"}),
     "criterion.criterion_type": frozenset(_CD),
     "criterion.done_criterion": frozenset(_CD),
     "criterion.verify_command": frozenset(_CD),

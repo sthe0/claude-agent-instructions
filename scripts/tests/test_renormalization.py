@@ -679,6 +679,10 @@ _STAGE_RESIDUAL_COVERAGE = {
     "actor.cost_tier": "the residual's own splice — outside stage_question_key because "
                        "no Question.target names it, inside here because the dispatch "
                        "budget and the effort estimate read it as a norm",
+    "actor.guard_exempt_paths": "the residual's own splice — outside stage_question_key "
+                                "because no Question.target names it, inside here because "
+                                "it exempts files from the child's settings-guard deny, "
+                                "same footing as grants.allow.rule below",
     "criterion.criterion_type": "stage_question_key",
     "criterion.done_criterion": "stage_question_key",
     "criterion.verify_command": "stage_question_key",

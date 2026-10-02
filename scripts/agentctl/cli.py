@@ -755,6 +755,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
             setattr(cur.criterion, field.name, getattr(refined.criterion, field.name))
     cur.actor.executor = refined.actor.executor
     cur.actor.cost_tier = refined.actor.cost_tier
+    cur.actor.guard_exempt_paths = list(refined.actor.guard_exempt_paths)
     cur.supplies = list(refined.supplies)
 
 

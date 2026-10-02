@@ -755,6 +755,193 @@ def test_project_settings_deny_over_an_engine_allow_still_refuses(tmp_path, monk
         MOD.build_child_settings("developer", engine_grants=[{"rule": allow, "provenance": "runtime"}])
 
 
+# --- (G) point exemptions from the settings*.json guard ----------------------
+#
+# A caller may name files whose own `settings*.json` guard deny is lifted;
+# the one recursive glob is then decomposed over the real directory tree so
+# every OTHER match stays denied. Names avoid the `gs`/`gc` substrings for the
+# `-k` reason given above.
+
+
+def _literal_guards(base: str) -> list[str]:
+    return [
+        f"Edit({base}/**/.claude/**)",
+        f"Edit({base}/**/settings*.json)",
+        f"Edit({base}/**/.git/**)",
+        f"Edit({base}/**/.git)",
+    ]
+
+
+def _exempt_fixture(tmp_path) -> Path:
+    repo = tmp_path / "repo"
+    for rel in (
+        "settings.json",
+        "proj/settings.json",
+        "proj/presets/deep/settings.json",
+        "proj/presets/deep/settings.local.json",
+        "proj/presets/deep/README.md",
+        "proj/presets/other/settings.json",
+        "lib/x/settings.json",
+    ):
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text("{}")
+    return repo
+
+
+_EXEMPT_REL = "proj/presets/deep/settings.json"
+_STILL_DENIED_REL = (
+    "settings.json",
+    "proj/settings.json",
+    "proj/presets/deep/settings.local.json",
+    "proj/presets/other/settings.json",
+    "lib/x/settings.json",
+    "lib/x/y/settings.local.json",
+)
+
+
+def _file_rule(path: Path) -> str:
+    return f"Edit({GRANTS.rule_file_arg(str(path))})"
+
+
+def _denied(deny: list[str], path: Path) -> bool:
+    return any(MOD._edit_deny_covers_allow(rule, _file_rule(path)) for rule in deny)
+
+
+def test_guard_exempt_absent_leaves_every_guard_source_byte_identical(tmp_path, monkeypatch):
+    repo = _exempt_fixture(tmp_path)
+    base = GRANTS.rule_file_arg(str(repo))
+    outside = str(tmp_path / "elsewhere" / "settings.json")
+    assert MOD.write_guard_deny_rules(base) == _literal_guards(base)
+    assert MOD.write_guard_deny_rules(base, ()) == _literal_guards(base)
+
+    monkeypatch.setattr(MOD, "_vcs_root", lambda _cwd: str(repo))
+    assert MOD.repo_root_deny_rules("developer", str(repo)) == _literal_guards(base)
+    assert MOD.repo_root_deny_rules("developer", str(repo), [outside]) == _literal_guards(base)
+
+    entries = [{"path": str(repo), "mode": "write", "provenance": "declared"}]
+    for exempt in (None, [], [outside]):
+        assert MOD.stage_grant_rules(entries, exempt_abs_paths=exempt) == ([f"Edit({base}/**)"], _literal_guards(base))
+
+
+def test_guard_exempt_lifts_only_the_named_settings_file(tmp_path):
+    repo = _exempt_fixture(tmp_path)
+    base = GRANTS.rule_file_arg(str(repo))
+    allow = _file_rule(repo / _EXEMPT_REL)
+    with pytest.raises(MOD.GrantShadowError):
+        MOD._check_no_allow_fully_denied([allow], MOD.write_guard_deny_rules(base), {}, {})
+
+    deny = MOD.write_guard_deny_rules(base, [_EXEMPT_REL])
+    MOD._check_no_allow_fully_denied([allow], deny, {}, {})
+    assert f"Edit({base}/proj/presets/deep/settings.local.json)" in deny
+    assert f"Edit({base}/proj/presets/other/**/settings*.json)" in deny
+    for rel in _STILL_DENIED_REL:
+        assert _denied(deny, repo / rel), rel
+    assert not _denied(deny, repo / _EXEMPT_REL)
+    for guard in (f"Edit({base}/**/.claude/**)", f"Edit({base}/**/.git/**)", f"Edit({base}/**/.git)"):
+        assert guard in deny
+
+
+def test_guard_exempt_never_lifts_the_claude_or_git_guards(tmp_path):
+    repo = _exempt_fixture(tmp_path)
+    base = GRANTS.rule_file_arg(str(repo))
+    rel = "proj/.claude/settings.json"
+    with pytest.raises(MOD.GrantShadowError):
+        MOD._check_no_allow_fully_denied([_file_rule(repo / rel)], MOD.write_guard_deny_rules(base, [rel]), {}, {})
+
+
+def test_guard_exempt_two_paths_do_not_widen_each_other(tmp_path):
+    repo = _exempt_fixture(tmp_path)
+    (repo / "proj/presets/other/settings.local.json").write_text("{}")
+    base = GRANTS.rule_file_arg(str(repo))
+    exempts = [_EXEMPT_REL, "proj/presets/other/settings.json"]
+    deny = MOD.write_guard_deny_rules(base, exempts)
+    for rel in exempts:
+        assert not _denied(deny, repo / rel), rel
+    for rel in ("proj/presets/deep/settings.local.json", "proj/presets/other/settings.local.json",
+                "proj/settings.json", "lib/x/settings.json"):
+        assert _denied(deny, repo / rel), rel
+
+
+def test_guard_exempt_not_yet_created_path_degrades_to_nothing_to_list(tmp_path):
+    repo = _exempt_fixture(tmp_path)
+    base = GRANTS.rule_file_arg(str(repo))
+    rel = "proj/new/deeper/settings.json"
+    assert not (repo / "proj/new").exists()
+    deny = MOD.write_guard_deny_rules(base, [rel])
+    MOD._check_no_allow_fully_denied([_file_rule(repo / rel)], deny, {}, {})
+    assert not any("/proj/new/deeper/" in rule for rule in deny)
+    for rel_denied in ("proj/settings.json", "proj/presets/deep/settings.json", "proj/new/settings.json"):
+        assert _denied(deny, repo / rel_denied), rel_denied
+
+
+def test_guard_exempt_metachar_sibling_name_is_widened_not_emitted(tmp_path):
+    repo = _exempt_fixture(tmp_path)
+    (repo / "odd[1]{x}").mkdir()
+    base = GRANTS.rule_file_arg(str(repo))
+    deny = MOD.write_guard_deny_rules(base, [_EXEMPT_REL])
+    assert f"Edit({base}/odd*1*x*/**/settings*.json)" in deny
+    assert not any(ch in rule for rule in deny for ch in MOD._UNDECIDABLE_GLOB_CHARS)
+
+
+def test_guard_exempt_dotdot_segment_is_refused(tmp_path):
+    with pytest.raises(GrantValidationError):
+        MOD.write_guard_deny_rules(GRANTS.rule_file_arg(str(tmp_path)), ["a/../settings.json"])
+
+
+def test_build_child_settings_guard_exempt_admits_a_write_grant_onto_that_file(tmp_path, monkeypatch):
+    repo = _exempt_fixture(tmp_path)
+    target = repo / _EXEMPT_REL
+    monkeypatch.setattr(MOD, "_vcs_root", lambda _cwd: str(repo))
+    engine_grants = [
+        {"path": str(repo / "proj"), "mode": "write", "provenance": "declared"},
+        {"rule": _file_rule(target), "provenance": "derived:stage-3"},
+    ]
+    with pytest.raises(MOD.GrantShadowError):
+        MOD.build_child_settings("developer", engine_grants=engine_grants, workdir=str(repo))
+
+    settings = MOD.build_child_settings(
+        "developer", engine_grants=engine_grants, workdir=str(repo), guard_exempt_paths=[str(target)]
+    )
+    assert _file_rule(target) in settings["permissions"]["allow"]
+    deny = settings["permissions"]["deny"]
+    for rel in _STILL_DENIED_REL:
+        assert _denied(deny, repo / rel), rel
+
+
+def _main_guard_exempt_paths(tmp_path, monkeypatch, *flags: str):
+    plan = tmp_path / "plan.md"
+    plan.write_text("# Plan\n")
+    seen: dict = {}
+
+    def fake_build_child_settings(*_args, **kwargs):
+        seen.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(MOD, "build_child_settings", fake_build_child_settings)
+    monkeypatch.setattr(MOD, "log_refused", lambda *_args: None)
+    rc = MOD.main([
+        "--kind", "developer", "--plan", str(plan), "--done-criterion", "done",
+        "--criterion-type", "measurable", "--complexity", "low", "--effort", "low",
+        "--workdir", str(tmp_path), "--dry-run", *flags,
+    ])
+    return rc, seen.get("guard_exempt_paths")
+
+
+def test_guard_exempt_cli_flag_resolves_relative_paths_against_workdir(tmp_path, monkeypatch, capsys):
+    rc, paths = _main_guard_exempt_paths(
+        tmp_path, monkeypatch, "--guard-exempt", "a/./settings.json", "--guard-exempt", "/b/settings.json"
+    )
+    assert rc == 0
+    assert paths == [str(tmp_path / "a" / "settings.json"), "/b/settings.json"]
+    assert _main_guard_exempt_paths(tmp_path, monkeypatch)[1] == []
+
+
+def test_guard_exempt_cli_flag_refuses_a_dotdot_segment(tmp_path, monkeypatch, capsys):
+    rc, paths = _main_guard_exempt_paths(tmp_path, monkeypatch, "--guard-exempt", "a/../settings.json")
+    assert rc == 2
+    assert paths is None
+
+
 # --- (H) the mutation control runs as part of this suite ---------------------
 
 
