@@ -958,6 +958,10 @@ def render_pair_review_bundle(doc: PlanDoc, pair_id: str, *, plan_sha256: str, v
         f"- one concern per line, each prefixed by the marker of the condition it "
         f"concerns ({concern_markers}); a condition-4 gap is a `{gap_marker}` line."
     )
+    lines.append(
+        f"The {REVIEW_MARKER} block is the last thing in your reply, with no other "
+        f"marker (COMPLETED:, REPLAN:, etc.) after it."
+    )
     lines.append("")
     lines.append("Conditions:")
     for marker, text in zip(CONDITION_MARKERS, _pair_conditions(doc, base, service)):

@@ -173,7 +173,10 @@ def _classify(raw: str) -> tuple[str, str]:
         ("digest", plan.PLAN_DIGEST_MARKER),
     ):
         if cleaned.startswith(marker):
-            return kind, strip(cleaned[len(marker):])
+            value = strip(cleaned[len(marker):])
+            if kind == "review" and value not in ("pass", "revise", ""):
+                return "other", ""
+            return kind, value
     for marker in plan.CONDITION_MARKERS:
         if cleaned.startswith(marker):
             leading = _lead_clean(raw)
@@ -238,7 +241,9 @@ def _parse_concerns(region, verdict: str) -> list[str]:
             break
         if kind == "condition":
             concerns.append(value)
-        elif LIST_ITEM_RE.match(raw) or not concerns:
+        elif not concerns:
+            raise TopoRefused("unprefixed concern")
+        elif LIST_ITEM_RE.match(raw) and raw == raw.lstrip():
             raise TopoRefused("unprefixed concern")
         else:
             concerns[-1] = f"{concerns[-1]} {_clean_value(raw.strip())}"
