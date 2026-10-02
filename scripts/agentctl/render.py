@@ -436,9 +436,19 @@ def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:
     json` returns a machine-readable per-stage breakdown (declared/derived/dropped,
     each with provenance) plus the plan's `grants_sha256` — the same digest
     `present-plan`/`approve` bind — for a caller that wants to script against it
-    rather than read prose."""
+    rather than read prose.
+
+    A spawn stage whose child settings the spawn would refuse (see
+    `grant_shadow`) makes the projection not-ok — one line per problem,
+    worded as the spawn-time refusal — while a mixed-spelling advisory only
+    adds an `advisory:` line."""
+    from . import grant_shadow
+
     doc = load_plan(args.plan)
     fmt = getattr(args, "format", "compact") or "compact"
+    problems = grant_shadow.plan_grant_shadow_problems(doc)
+    advisories = grant_shadow.mixed_spelling_advisories(doc)
+    ok = not problems
     if fmt == "json":
         venue = _venue_for(doc)
         stages = {}
@@ -449,11 +459,22 @@ def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:
                 "derived": derived.to_dict(),
                 "dropped": dropped,
             }
-        data = {"grants_sha256": grants_sha256(doc), "stages": stages}
+        data = {
+            "grants_sha256": grants_sha256(doc),
+            "stages": stages,
+            "shadow_problems": problems,
+            "advisories": advisories,
+        }
         text = json.dumps(data, indent=2, sort_keys=True)
-        return Directive(True, "(render)", "inspect", text, data=data)
+        return Directive(ok, "(render)", "inspect", text, data=data)
     text = render_plan_grants(doc, fmt=fmt)
-    return Directive(True, "(render)", "inspect", text, data={"markdown": text})
+    tail = problems + [f"advisory: {a}" for a in advisories]
+    if tail:
+        text = "\n".join([text.rstrip("\n"), "", *tail])
+    return Directive(
+        ok, "(render)", "inspect", text,
+        data={"markdown": text, "shadow_problems": problems, "advisories": advisories},
+    )
 
 
 def plan_render_stage_arg_type(raw: str) -> str:

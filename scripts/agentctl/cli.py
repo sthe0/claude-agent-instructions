@@ -28,7 +28,7 @@ from pathlib import Path
 import proc_tree
 from lib import argv_text, config_root, kind_baselines, transcript_stops, widening_targets
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grants as _grants, ledger, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -3648,6 +3648,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     d.data.setdefault("advisories", []).extend(
         check_venue_warnings(doc.stages, doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
     )
+    d.data.setdefault("advisories", []).extend(grant_shadow.mixed_spelling_advisories(doc))
     # Submission seam (a)'s advice channel: a stage whose expected_result_image merely
     # restates its own check. Warn-only at all three seams — see submission.submission_advice.
     # Rides the same `run` resolved at the seam above (see its comment for why the fallback
@@ -8100,6 +8101,31 @@ def _replan_cause(state: SessionState, explicit_reason: str | None) -> dict:
 
 
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    d = _cmd_replan(args, store=store, runner=runner)
+    # Only on something to say: an unconditional setdefault would add an empty
+    # `advisories` key to every replan Directive, which test_history_capture's
+    # exact-equality pin reads as a changed contract.
+    advisories = _replan_spelling_advisories(args.plan)
+    if advisories:
+        d.data.setdefault("advisories", []).extend(advisories)
+    return d
+
+
+def _replan_spelling_advisories(plan_path: str) -> list[str]:
+    """The mixed-spelling lint over the NEW plan, on every Directive `replan`
+    returns — refused ones included, since the author is about to edit the plan
+    anyway. A plan that does not load has nothing to lint; the refusal the
+    replan already returned names why."""
+    from .plan import PlanError, load_plan as _load
+
+    try:
+        doc = _load(plan_path, strict=False)
+    except (OSError, PlanError):
+        return []
+    return grant_shadow.mixed_spelling_advisories(doc)
+
+
+def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load, stage_carry_key
 

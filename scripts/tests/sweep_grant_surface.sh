@@ -18,6 +18,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd -P)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd -P)"
 
 SWEEP_FILES=(
+    scripts/tests/test_authoring_grant_check.py
     scripts/tests/test_grant_derivation.py
     scripts/tests/test_grant_snapshot_refresh.py
     scripts/tests/test_pra_review_catalogue.py
