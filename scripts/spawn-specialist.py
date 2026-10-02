@@ -2151,6 +2151,11 @@ def main(argv: list[str] | None = None) -> int:
         # without a second resolve_child_session_id call.
         proc_tree.kill_tree(proc)
         child_session_id = resolve_child_session_id(stdout_str, transcript_path)
+        if transcript_path is None and child_session_id:
+            for candidate in _iter_workdir_transcripts(workdir):
+                if candidate.stem == child_session_id:
+                    transcript_path = candidate
+                    break
         deregister_child_scope(child_session_id)
     completed = subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout_str, stderr=stderr_str)
     duration_ms = int((time.monotonic() - started) * 1000)

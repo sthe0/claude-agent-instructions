@@ -1,0 +1,99 @@
+/home/the0/.venv/lib/python3.12/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.4.0) or chardet (7.4.3)/charset_normalizer (3.4.2) doesn't match a supported version!
+  warnings.warn(
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_______ test_finally_block_recovers_transcript_by_child_session_id_stem ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f21301fb6b0>
+tmp_path = PosixPath('/place/vartmp/pytest-of-the0/pytest-17647/test_finally_block_recovers_tr0')
+workdir = PosixPath('/place/vartmp/pytest-of-the0/pytest-17647/test_finally_block_recovers_tr0/workdir')
+cost_log = PosixPath('/place/vartmp/pytest-of-the0/pytest-17647/test_finally_block_recovers_tr0/spawn-costs.jsonl')
+
+    def test_finally_block_recovers_transcript_by_child_session_id_stem(
+        monkeypatch, tmp_path, workdir, cost_log
+    ):
+        transcripts_root = tmp_path / "projects-root"
+        transcript_file = _stub_slow_child(monkeypatch, workdir, transcripts_root)
+    
+        argv = [
+            "--kind", "developer",
+            "--plan", str(SCRIPTS_DIR / "tests" / "fixtures" / "plan_two_stage.toml"),
+            "--done-criterion", "tests green",
+            "--criterion-type", "measurable",
+            "--complexity", "medium",
+            "--effort", "medium",
+            "--workdir", str(workdir),
+        ]
+        rc = SPAWN_MOD.main(argv)
+        assert rc == 0
+    
+        rows = [json.loads(line) for line in cost_log.read_text().splitlines() if line.strip()]
+        assert len(rows) == 1
+        assert rows[0]["child_session_id"] == CHILD_SESSION_ID
+>       assert rows[0]["transcript_path"] == str(transcript_file)
+E       AssertionError: assert None == '/place/vartmp/pytest-of-the0/pytest-17647/test_finally_block_recovers_tr0/projects-root/-place-vartmp-pytest-of-the0-pytest-17647-test-finally-block-recovers-tr0-workdir/fake-child-session-id-0001.jsonl'
+E        +  where '/place/vartmp/pytest-of-the0/pytest-17647/test_finally_block_recovers_tr0/projects-root/-place-vartmp-pytest-of-the0-pytest-17647-test-finally-block-recovers-tr0-workdir/fake-child-session-id-0001.jsonl' = str(PosixPath('/place/vartmp/pytest-of-the0/pytest-17647/test_finally_block_recovers_tr0/projects-root/-place-vartmp-pytest-of-the0-pytest-17647-test-finally-block-recovers-tr0-workdir/fake-child-session-id-0001.jsonl'))
+
+scripts/tests/test_spawn_transcript_fallback.py:131: AssertionError
+----------------------------- Captured stdout call -----------------------------
+COMPLETED:
+Digest: Task completed successfully
+
+COMPLETED: ok
+----------------------------- Captured stderr call -----------------------------
+spawn-specialist: transcript=<not-found-within-10s>
+spawn-specialist: kind=developer budget=medium depth=1 duration_ms=0 marker=COMPLETED
+_ test_recovered_transcript_resolves_through_select_cost_row_window_match_and_pair_telemetry _
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f212fd66090>
+tmp_path = PosixPath('/place/vartmp/pytest-of-the0/pytest-17647/test_recovered_transcript_reso0')
+workdir = PosixPath('/place/vartmp/pytest-of-the0/pytest-17647/test_recovered_transcript_reso0/workdir')
+cost_log = PosixPath('/place/vartmp/pytest-of-the0/pytest-17647/test_recovered_transcript_reso0/spawn-costs.jsonl')
+
+    def test_recovered_transcript_resolves_through_select_cost_row_window_match_and_pair_telemetry(
+        monkeypatch, tmp_path, workdir, cost_log
+    ):
+        transcripts_root = tmp_path / "projects-root"
+        transcript_file = _stub_slow_child(monkeypatch, workdir, transcripts_root)
+    
+        two_stage_plan = SCRIPTS_DIR / "tests" / "fixtures" / "plan_two_stage.toml"
+        sha = _plan_sha(two_stage_plan)
+    
+        topo_units_dir = tmp_path / "topo-units"
+        monkeypatch.setenv("AGENTCTL_TOPO_UNITS_DIR", str(topo_units_dir))
+    
+        argv = [
+            "--kind", "thinker",
+            "--plan", str(two_stage_plan),
+            "--done-criterion", "tests green",
+            "--criterion-type", "measurable",
+            "--complexity", "medium",
+            "--effort", "medium",
+            "--workdir", str(workdir),
+            "--review-topo", "plan-2",
+        ]
+        rc = SPAWN_MOD.main(argv)
+        assert rc == 0
+    
+        rows = [json.loads(line) for line in cost_log.read_text().splitlines() if line.strip()]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["review_pair"] == "plan-2"
+        assert row["plan_sha256"] == sha
+>       assert row["transcript_path"] == str(transcript_file)
+E       AssertionError: assert None == '/place/vartmp/pytest-of-the0/pytest-17647/test_recovered_transcript_reso0/projects-root/-place-vartmp-pytest-of-the0-pytest-17647-test-recovered-transcript-reso0-workdir/fake-child-session-id-0001.jsonl'
+E        +  where '/place/vartmp/pytest-of-the0/pytest-17647/test_recovered_transcript_reso0/projects-root/-place-vartmp-pytest-of-the0-pytest-17647-test-recovered-transcript-reso0-workdir/fake-child-session-id-0001.jsonl' = str(PosixPath('/place/vartmp/pytest-of-the0/pytest-17647/test_recovered_transcript_reso0/projects-root/-place-vartmp-pytest-of-the0-pytest-17647-test-recovered-transcript-reso0-workdir/fake-child-session-id-0001.jsonl'))
+
+scripts/tests/test_spawn_transcript_fallback.py:164: AssertionError
+----------------------------- Captured stdout call -----------------------------
+COMPLETED:
+Digest: Operation completed successfully
+
+COMPLETED: ok
+----------------------------- Captured stderr call -----------------------------
+spawn-specialist: transcript=<not-found-within-10s>
+spawn-specialist: kind=thinker budget=medium depth=1 duration_ms=0 marker=COMPLETED
+=========================== short test summary info ============================
+FAILED scripts/tests/test_spawn_transcript_fallback.py::test_finally_block_recovers_transcript_by_child_session_id_stem
+FAILED scripts/tests/test_spawn_transcript_fallback.py::test_recovered_transcript_resolves_through_select_cost_row_window_match_and_pair_telemetry
+2 failed in 6.88s
