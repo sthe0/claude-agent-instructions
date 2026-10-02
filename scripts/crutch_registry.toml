@@ -4517,7 +4517,23 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "a936815be07b94a3"
+domain = "code"
+file = "scripts/tests/test_dispatch_project_settings.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "b0b23d708e6ef232"
+domain = "code"
+file = "scripts/tests/test_dispatch_project_settings.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "be1cedb30f42df11"
 domain = "code"
 file = "scripts/tests/test_dispatch_project_settings.py"
 class = "not-a-gate"
@@ -4550,6 +4566,22 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "ce09e67191961348"
+domain = "code"
+file = "scripts/tests/test_dispatch_project_settings.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "009bfb34a775f2ec"
+domain = "code"
+file = "scripts/tests/test_dispatch_project_settings.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "da0dc71b685313c8"
 domain = "code"
 file = "scripts/tests/test_dispatch_project_settings.py"
 class = "not-a-gate"

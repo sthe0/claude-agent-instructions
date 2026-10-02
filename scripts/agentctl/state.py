@@ -926,6 +926,11 @@ class Actor:
     # dataclass default via Stage.from_dict's Actor(**d["actor"]) splat), so a
     # stage that never declared a tier dispatches exactly as before.
     cost_tier: str | None = None
+    # Repo-relative paths forwarded to the spawned child as repeated
+    # `--guard-exempt` flags (dispatch mechanics, not a plan ontology element).
+    # Absent key -> empty list, so a stage that never declared it dispatches
+    # exactly as before.
+    guard_exempt_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1456,6 +1461,7 @@ class Stage:
             actor=Actor(
                 executor=d["executor"],
                 capability_required=d.get("capability_required"),
+                guard_exempt_paths=list(d.get("guard_exempt_paths", [])),
             ),
             criterion=Criterion(
                 criterion_type=d.get("criterion_type", CriterionType.MEASURABLE.value),

@@ -168,6 +168,7 @@ def build_argv(
     runtime_host: str = HOST_CLAUDE,
     project_settings: str | None = None,
     session_id: str | None = None,
+    guard_exempt_paths: list[str] | None = None,
 ) -> list[str]:
     kind = stage.spawn_kind()
     if not kind:
@@ -210,6 +211,8 @@ def build_argv(
     # site that might one day dispatch a non-developer spawn kind.
     if project_settings:
         argv.extend(["--project-settings", project_settings])
+    for exempt in guard_exempt_paths or ():
+        argv.extend(["--guard-exempt", exempt])
     if dry_run:
         argv.append("--dry-run")
     return argv
@@ -282,6 +285,7 @@ def dispatch_stage(
             constraints=norm_constraints, done_criterion=norm_done_criterion,
             runtime_host=runtime_host, project_settings=project_settings,
             session_id=session_id,
+            guard_exempt_paths=stage.actor.guard_exempt_paths,
         )
         run = runner or subprocess_runner
         # cwd is only threaded to the runner when set, so every pre-existing
