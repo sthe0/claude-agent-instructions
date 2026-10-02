@@ -51,7 +51,7 @@ def _subst(stage, *, reviews=(), weight="SUBSTANTIVE"):
                         stages=[stage], stage_reviews=list(reviews))
 
 
-def _review(observation, verdict, reviewer="judge:haiku", note="", bind=True):
+def _review(observation, verdict, reviewer="judge:acceptance", note="", bind=True):
     return StageReview(stage_index=1, verdict=verdict, reviewer=reviewer, note=note,
                        observation_sha256=_sha(observation) if bind else "")
 

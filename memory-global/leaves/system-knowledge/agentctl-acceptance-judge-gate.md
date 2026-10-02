@@ -1,6 +1,6 @@
 ---
 name: agentctl-acceptance-judge-gate
-description: "How agentctl's acceptance-judge gate on record-result --status passed actually works: a haiku model compares --observation against stage.subject.result, verdicts live in state.stage_reviews (not an 'advisor' key); the predicted short-observation mitigation is now falsified; a FOURTH occurrence measured 20 blocks on 7 of 8 stages of one plan; a FIFTH occurrence post-R4-fix converged via resubmission instead of needing an override, suggesting specific-clause gaps converge while qualitative-adequacy gaps still goalpost-move; revise verdicts are not kept in engine history"
+description: "How agentctl's acceptance-judge gate on record-result --status passed actually works: a sonnet model (medium tier, lean isolation kept, since 2026-10-01; haiku before) compares --observation against stage.subject.result, verdicts live in state.stage_reviews (not an 'advisor' key); the predicted short-observation mitigation is now falsified; a FOURTH occurrence measured 20 blocks on 7 of 8 stages of one plan; a FIFTH occurrence post-R4-fix converged via resubmission instead of needing an override, suggesting specific-clause gaps converge while qualitative-adequacy gaps still goalpost-move; revise verdicts are not kept in engine history; a mitigation moved the judge to sonnet on 2026-10-01"
 type: reference
 schema: leaf/v1
 created: 2026-08-26
@@ -30,7 +30,8 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
   observation is non-empty and differs from the expected image (`gates._normalize_string`).
 - If `gates.stage_review_active(state)`, it then runs
   `advisor.acceptance_judge(observation, stage.subject.result, judge_runner, enabled=True, timeout=advisor._ACCEPTANCE_JUDGE_TIMEOUT_S)`
-  — a **haiku-model judge** (shows as `reviewer: "judge:haiku"` in state) that compares the
+  — a **sonnet-model judge** (shows as `reviewer: "judge:acceptance"` in state; reviews recorded
+  before 2026-10-01 carry the old `judge:haiku` tag) that compares the
   submitted `--observation` text against the stage's **declared expected result**
   (`stage.subject.result`, i.e. the plan's per-stage expected-image text).
 - The verdict + reason are recorded via `_record_stage_review()` as a `StageReview`
@@ -46,7 +47,8 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
   previous `note` (verbatim test names, line numbers, exit codes, on-disk symbol existence —
   strictly more specific each round, never a rephrase), were rejected with a **different** stated
   gap each time (goalpost-moving) rather than converging on a stable, satisfiable criterion. The
-  single `haiku`-model YES/NO call has no consistency/majority-vote safeguard, so it is not
+  single-model YES/NO call (haiku at the time, sonnet since 2026-10-01) still has no
+  consistency/majority-vote safeguard, so it is not
   reliable on long, technically-dense payloads. Treat 2-3 genuinely-improving resubmissions with
   no convergence as the signal to stop and use the override escape below — not as evidence the
   next rephrase will finally work. **Root cause (confirmed 2026-08-26, stage 7: 5 more
@@ -227,6 +229,30 @@ Read from `agentctl/cli.py` directly (~lines 4080-4200):
   fresh `accept`, which — because `accept --author` must match `order.customer_id` — required a
   genuine new `AskUserQuestion` re-confirming the same R1-R6 verdicts rather than any self-granted
   bypass ([[resolve-by-user-needs-real-ask]]).
+
+- **Mitigation applied (2026-10-01)** — at the user's request, `advisor.acceptance_judge` moved
+  from the low tier (haiku) to the medium tier (sonnet), instead of leaving the open-ended
+  adequacy call on the cheapest model. **Regression risk, stated first:** `advisor._prompt_argv`
+  derived lean isolation from the tier (`lean = complexity == _JUDGE_COMPLEXITY`), so changing
+  the tier alone would have silently dropped lean isolation for this judge. `_prompt_argv` now
+  takes a keyword-only `lean` (default `None` keeps the tier-derived value for every other
+  caller) and `acceptance_judge` passes `lean=True` explicitly; the test
+  `test_acceptance_judge_dispatches_medium_complexity_with_lean_isolation` asserts model and lean
+  on the same launch and was shown RED against the pre-change tree and against a naive tier swap.
+  Mechanism: `_ACCEPTANCE_JUDGE_COMPLEXITY = "medium"`, and `JUDGE_REVIEWER` became the
+  model-neutral `"judge:acceptance"`. Scope was kept narrow: the other nine binary judges in
+  `scripts/agentctl/advisor.py` were checked the same day and showed only two latency-ceiling
+  WARNs, unrelated to verdict quality, so they stay on haiku. The separate `_JUDGE_MODEL = "haiku"`
+  judges in `agentctl/procedure.py`, `conditions.py` and `result_image.py` were not checked and are
+  not changed. Every `agentctl` call is a fresh process, so new code applies at once; what persists
+  is data: a `stage_review` written before this landed keeps its `judge:haiku` tag permanently
+  (verdicts are never relabeled), a historical marker rather than a sign of stale code.
+  `_record_stage_review` in `agentctl/cli.py` recognizes both tags as automated, so such a verdict
+  stays replaceable by a fresh judge verdict instead of being frozen as a protected human override.
+  2026-10-01 is the cutover date: `acceptance_judge` latency records mix haiku samples before it
+  with sonnet samples after it, and its 185 s last-resort ceiling is still derived from the haiku
+  family. The untried "name >= N concrete facts" prompt-bounding mitigation above remains
+  available and is not superseded by this change.
 
 ## See also
 

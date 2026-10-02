@@ -1073,6 +1073,26 @@ class TestRuntimeHostArgv:
         advisor.enumerate_claims("some deliverable text", self._recording_runner([], "claim one"))
         assert seen_lean == [False]
 
+    def test_acceptance_judge_dispatches_medium_complexity_with_lean_isolation(self, monkeypatch):
+        """acceptance_judge leaves the low tier but must stay lean: the model and
+        the lean flag are asserted on the same launch, so neither a tier change
+        alone (which would drop lean) nor a lean-only change (which would keep
+        haiku) passes."""
+        from lib import host_llm
+
+        seen_lean = []
+        seen = []
+        real_build = host_llm.build_launch_argv
+
+        def spy(*args, **kwargs):
+            seen_lean.append(kwargs.get("lean", False))
+            return real_build(*args, **kwargs)
+
+        monkeypatch.setattr(host_llm, "build_launch_argv", spy)
+        advisor.acceptance_judge("observation", "expected", self._recording_runner(seen), enabled=True)
+        assert seen_lean == [True]
+        assert seen[0][seen[0].index("--model") + 1] == "sonnet"
+
 
 # ── the prompt must never ride argv: E2BIG regression ─────────────────────────
 #
