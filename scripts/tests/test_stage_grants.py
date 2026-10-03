@@ -1072,6 +1072,7 @@ SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
     "agentctl/cli.py": "reader",
     "agentctl/classify.py": "mention",
     "agentctl/exempt_paths.py": "mention",
+    "agentctl/plan.py": "mention",
     "apply-mcp-local.sh": "writer",
     "apply-settings.sh": "writer",
     "doctor.sh": "reader",
