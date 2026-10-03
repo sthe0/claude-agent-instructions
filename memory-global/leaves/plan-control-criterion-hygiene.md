@@ -744,6 +744,22 @@ difficulty — the reactive repair norm 4 already prices in, not a new cost.
 > re-run, full-suite re-run) before a self-approved `replan` under the
 > autonomy-boundary rule (fixed-text-only change, no procedure or production
 > code touched).
+>
+> **Recurred a third time, same task.** The commit that landed this very
+> norm (`f6493d74`, still carrying `Task: acceptance-judge-sonnet`) itself
+> tripped the identical check one `verify-final` cycle later — the allow-list
+> fix in the paragraph above could only cover commits that existed *before*
+> it was written, and the commit writing the fix was not one of them. Fixed
+> the same way (fix (b), one more literal path, same autonomy-boundary
+> self-approved `replan`). Three occurrences inside one task's session, two
+> of them literally the leaf documenting the problem tripping over itself,
+> is no longer "an edge case fix (b) is cheaper for" — it is the predicted
+> steady-state of fix (b) on any plan whose own difficulty-handling loop
+> runs more than once. Standing self-improvement candidate, not yet
+> actioned: make fix (a) (categorical `memory-global/leaves/` exemption)
+> the planner's default authoring pattern for this clause, so a SUBSTANTIVE
+> plan's scope check stops needing a literal patch per self-produced
+> memory commit at all.
 
 ## See also
 
