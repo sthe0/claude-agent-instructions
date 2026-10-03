@@ -94,6 +94,18 @@ context blocks across each cluster's leaves (Σ occurrences), and flags every cl
 candidate. Induction itself stays a human step: author a `principle/v1` leaf at the appropriate
 generality level with `induced_from` pointing back to the member experience leaves.
 
+**Generalization check before induction (held-out sanity pass).** Promotion's recurrence signal (Σ
+context blocks ≥ `principle-promotion-threshold`) proves repetition, not generalization — a principle
+authored straight from the cluster that produced it can overfit to those incidents' own specifics.
+Before authoring the leaf, hold out one member context (or, absent a spare member, a dissimilar past
+task outside the cluster) and check whether the proposed `## Generality` level still holds for it
+without a special case. If it only holds by narrowing to exactly the contexts that produced it, state
+that narrower boundary in `## Generality` rather than inducing at the level the recurrence count alone
+would suggest, and record the outcome of the check as the opening line of `## Refutation`. *Difficulty
+removed: recurrence-only induction has no counterpart to a held-out/OOD split, so a principle can both
+over-generalize and ship unrefuted — the gap this adds is a cheap judgment pass, not a benchmark, since
+no automated evaluator exists for a principle's correctness.*
+
 ## See also
 
 - `docs/adr/0001-consensus-architecture.md` § *Principle as a concept with a generality gradient*.

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fnmatch
 import json
 import os
 import re
@@ -33,7 +34,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, Sequence
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from agentctl import grants  # the sole validator every materialized rule/add_dir passes through
@@ -521,6 +522,18 @@ def build_parser() -> argparse.ArgumentParser:
         "this process's own cwd when unset",
     )
     p.add_argument(
+        "--guard-exempt",
+        action="append",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="repeatable: one file whose own settings*.json guard deny is lifted (every "
+        "other settings*.json stays denied; the .claude/.git guards are untouched). A "
+        "relative PATH resolves against the child's working directory (--workdir, else "
+        "this process's cwd); compared lexically, so spell it under the same root the "
+        "repo-root/add_dir guards use. A '..' segment is refused",
+    )
+    p.add_argument(
         "--plan-brief",
         action="store_true",
         help="project only --stage-index's stage into the prompt (render_stage_brief) "
@@ -841,7 +854,7 @@ def repo_root_add_dir_args(kind: str, cwd: str) -> list[str]:
     return ["--add-dir", root]
 
 
-def repo_root_deny_rules(kind: str, cwd: str) -> list[str]:
+def repo_root_deny_rules(kind: str, cwd: str, exempt_abs_paths: "Sequence[str]" = ()) -> list[str]:
     """Guard `Edit` DENY rules for a `developer` spawn's VCS repo root
     (finding S10): under `acceptEdits`/`auto` permission modes a `developer`
     child's own cwd is already unguarded-writable with no `Edit` allow rule
@@ -850,6 +863,8 @@ def repo_root_deny_rules(kind: str, cwd: str) -> list[str]:
     `.claude/`, `settings*.json` and `.git/` anywhere under the repo root
     with no guard, the same surface `stage_grant_rules` already denies for a
     declared WRITE add_dir. Mirrors that function's four-glob shape exactly.
+    `exempt_abs_paths` are `write_guard_deny_rules` point exemptions, as
+    absolute file paths; only those lexically under the repo root apply.
 
     Round-2 should-fix (S10 deny gap): this used to return `[]` whenever
     `repo_root_add_dir_args` did, which included the `cwd == root` case —
@@ -863,22 +878,115 @@ def repo_root_deny_rules(kind: str, cwd: str) -> list[str]:
     root = _vcs_root(cwd)
     if not root:
         return []
-    return write_guard_deny_rules(grants.rule_file_arg(root.rstrip("/")))
+    base = grants.rule_file_arg(root.rstrip("/"))
+    return write_guard_deny_rules(base, _guard_exempt_rel_paths(base, exempt_abs_paths))
 
 
-def write_guard_deny_rules(base: str) -> list[str]:
+def write_guard_deny_rules(base: str, exempt_rel_paths: "Sequence[str]" = ()) -> list[str]:
     """The four guard `Edit` DENY globs — `.claude/`, `settings*.json`,
     `.git/` and `.git` anywhere below `base`, a `grants.rule_file_arg`
     prefix — that pair with every writable directory this module
     materializes: a declared WRITE add_dir (`stage_grant_rules`) and a
     `developer` spawn's VCS repo root (`repo_root_deny_rules`).
     The guard globs are spelled in this one function only.
-    """
+
+    `exempt_rel_paths` names files, relative to `base`, whose own
+    `settings*.json` guard is lifted — for a stage whose legitimate task is
+    editing that one file. The single `settings*.json` glob is then replaced
+    by the decomposition `_settings_guard_split` computes from the real
+    directory tree, which still denies every other existing match; the
+    other three guards are never affected."""
+    subtrees, levels, files = _settings_guard_split(base, exempt_rel_paths)
     return [
         f"Edit({base}/**/.claude/**)",
-        f"Edit({base}/**/settings*.json)",
+        *(f"Edit({prefix}/**/settings*.json)" for prefix in subtrees),
+        *(f"Edit({prefix}/settings*.json)" for prefix in levels),
+        *(f"Edit({path})" for path in files),
         f"Edit({base}/**/.git/**)",
         f"Edit({base}/**/.git)",
+    ]
+
+
+_SETTINGS_GUARD_NAME_GLOB = "settings*.json"
+
+
+class _ExemptNode(NamedTuple):
+    dirs: "dict[str, _ExemptNode]"
+    files: "set[str]"
+
+
+def _settings_guard_split(base: str, exempt_rel_paths: "Sequence[str]") -> "tuple[list[str], list[str], list[str]]":
+    """`(subtrees, levels, files)` rule prefixes that together deny Edit on
+    every `settings*.json` under `base` except the exempted files:
+    `subtrees` get the recursive glob, `levels` the same name glob within
+    that one directory, `files` a literal deny. With no exemption this is
+    `([base], [], [])`, the plain recursive glob.
+
+    No single glob in this module's dialect can say "all but this file", so
+    the exemptions are walked as a tree from `base`, listing each real
+    directory on the way: every subdirectory off the exempted paths gets a
+    recursive deny, every directory on them a same-level deny — or, in a
+    directory that holds an exempted file, a literal deny per existing
+    match. A directory that does not exist yet contributes no listing.
+    What the listing cannot see is not denied: a directory, or a match
+    beside an exempted file, created after the spawn starts. A listed name
+    carrying a glob metacharacter is emitted with `*` in its place — a
+    wider deny, never a narrower one, and one `_edit_deny_covers_allow`
+    can still decide."""
+    if not exempt_rel_paths:
+        return [base], [], []
+    root = _ExemptNode({}, set())
+    for rel in exempt_rel_paths:
+        parts = Path(rel).parts
+        if not parts or Path(rel).is_absolute() or ".." in parts:
+            raise grants.GrantValidationError(
+                f"guard exemption {rel!r} must be a relative path with no '..' segment — refused"
+            )
+        node = root
+        for part in parts[:-1]:
+            node = node.dirs.setdefault(part, _ExemptNode({}, set()))
+        node.files.add(parts[-1])
+
+    subtrees: list[str] = []
+    levels: list[str] = []
+    files: list[str] = []
+
+    def walk(prefix: str, node: _ExemptNode) -> None:
+        try:
+            entries = sorted(os.scandir(grants.rule_file_path(prefix)), key=lambda e: e.name)
+        except OSError:
+            entries = []
+        for entry in entries:
+            if entry.name not in node.dirs and entry.is_dir():
+                subtrees.append(f"{prefix}/{_glob_safe_segment(entry.name)}")
+        if node.files:
+            for entry in entries:
+                if entry.name in node.files or entry.is_dir():
+                    continue
+                if fnmatch.fnmatchcase(entry.name, _SETTINGS_GUARD_NAME_GLOB):
+                    files.append(f"{prefix}/{_glob_safe_segment(entry.name)}")
+        else:
+            levels.append(prefix)
+        for name in sorted(node.dirs):
+            walk(f"{prefix}/{name}", node.dirs[name])
+
+    walk(base, root)
+    return subtrees, levels, files
+
+
+def _glob_safe_segment(name: str) -> str:
+    metachars = re.escape("".join(sorted(_UNDECIDABLE_GLOB_CHARS | {"*"})))
+    return re.sub(f"[{metachars}]+", "*", name)
+
+
+def _guard_exempt_rel_paths(base: str, exempt_abs_paths: "Sequence[str]") -> list[str]:
+    """The `exempt_abs_paths` lexically under `base` (a
+    `grants.rule_file_arg` prefix), relative to it."""
+    base_path = grants.rule_file_path(base).rstrip("/")
+    return [
+        os.path.normpath(path)[len(base_path) + 1:]
+        for path in exempt_abs_paths
+        if os.path.normpath(path).startswith(base_path + "/")
     ]
 
 
@@ -946,6 +1054,7 @@ def stage_grant_rules(
     *,
     allow_provenance: "dict[str, str] | None" = None,
     deny_provenance: "dict[str, str] | None" = None,
+    exempt_abs_paths: "Sequence[str] | None" = None,
 ) -> tuple[list[str], list[str]]:
     """(allow, deny) rule strings materialized from a flat stage-grants list
     (agentctl `cmd_stage_grants`'s `.data["grants"]` shape: each entry
@@ -1003,7 +1112,11 @@ def stage_grant_rules(
     read DENY is never passed through `grants.validate_rule` (deny rules
     are outside its scope by design; `grants.validate_grants` itself
     iterates only `allow` and `add_dirs`), so the same glob shape that
-    would refuse an allow rule is fine here."""
+    would refuse an allow rule is fine here.
+
+    `exempt_abs_paths` are `write_guard_deny_rules` point exemptions, as
+    absolute file paths; each write's guards apply those lexically under
+    its base, and an exemption under no write's base is unused."""
     validated: list[str | _AddDir] = []
     provenances: list[str] = []
     for entry in entries:
@@ -1030,7 +1143,7 @@ def stage_grant_rules(
             allow.append(item)
         elif item.mode == "write":
             allow.append(f"Edit({item.base}/**)")
-            deny.extend(write_guard_deny_rules(item.base))
+            deny.extend(write_guard_deny_rules(item.base, _guard_exempt_rel_paths(item.base, exempt_abs_paths or ())))
         elif _read_add_dir_needs_deny(item, add_dirs):
             deny.append(f"Edit({item.base}/**)")
         if allow_provenance is not None:
@@ -1283,6 +1396,7 @@ def build_child_settings(
     engine_grants: "list[dict] | None" = None,
     workdir: "str | None" = None,
     evidence_dir: "str | None" = None,
+    guard_exempt_paths: "list[str] | None" = None,
 ) -> dict:
     """Child `--settings` payload: the auto-compaction window pin for every kind
     (both forms, mirroring settings/base.json — the env key wins in the client's
@@ -1317,6 +1431,11 @@ def build_child_settings(
     (see `main`'s call site) — this pairs that grant with the same guard
     DENYs a declared WRITE add_dir gets, so the widened filesystem surface
     doesn't reach `.claude/`, `settings*.json` or `.git/` unguarded.
+
+    `guard_exempt_paths` (absolute file paths) lift the `settings*.json`
+    guard off those files only, in both the engine grants' write guards and
+    the repo-root guards — see `write_guard_deny_rules`. The evidence
+    directory's guards never take them.
 
     `workdir` also feeds `write_grant_cwd_deny_rules` (round-2 should-fix
     S1): when a `mode="write"` engine grant forces `acceptEdits` on a kind
@@ -1369,7 +1488,10 @@ def build_child_settings(
         engine_allow_provenance: dict[str, str] = {}
         engine_deny_provenance: dict[str, str] = {}
         engine_allow, engine_deny = stage_grant_rules(
-            engine_grants, allow_provenance=engine_allow_provenance, deny_provenance=engine_deny_provenance
+            engine_grants,
+            allow_provenance=engine_allow_provenance,
+            deny_provenance=engine_deny_provenance,
+            exempt_abs_paths=guard_exempt_paths,
         )
         add_allow(engine_allow, "stage_grant_rules", engine_allow_provenance)
         add_deny(engine_deny, "stage_grant_rules", engine_deny_provenance)
@@ -1384,7 +1506,7 @@ def build_child_settings(
         add_allow(ev_allow, "stage_grant_rules", ev_allow_provenance)
         add_deny(ev_deny, "stage_grant_rules", ev_deny_provenance)
     if workdir is not None:
-        add_deny(repo_root_deny_rules(kind, workdir), "repo_root_deny_rules")
+        add_deny(repo_root_deny_rules(kind, workdir, guard_exempt_paths or ()), "repo_root_deny_rules")
     _check_no_allow_fully_denied(allow, deny, allow_source, deny_source)
     permissions: dict = {}
     if allow:
@@ -1847,6 +1969,13 @@ def main(argv: list[str] | None = None) -> int:
         log_refused("workdir-not-found", {"kind": args.kind, "workdir": str(args.workdir)})
         return 2
     workdir = str(args.workdir) if args.workdir is not None else os.getcwd()
+    guard_exempt_paths: list[str] = []
+    for exempt in args.guard_exempt or ():
+        if ".." in exempt.parts:
+            print(f"error: --guard-exempt {exempt} has a '..' segment — refused", file=sys.stderr)
+            log_refused("guard-exempt-path-shape", {"kind": args.kind})
+            return 2
+        guard_exempt_paths.append(os.path.normpath(Path(workdir) / exempt))
 
     plans_directory = plans_dir()
 
@@ -2029,6 +2158,7 @@ def main(argv: list[str] | None = None) -> int:
             engine_grants,
             workdir=workdir,
             evidence_dir=evidence_dir,
+            guard_exempt_paths=guard_exempt_paths,
         )
     except GrantShadowError as exc:
         print(f"error: {exc}", file=sys.stderr)

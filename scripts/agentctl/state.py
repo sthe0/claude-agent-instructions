@@ -687,8 +687,8 @@ class StageReview:
     which requires a non-empty `reviewer` and `note`). `observation_sha256` binds the
     verdict to the exact observation bytes that were judged; empty on a record that
     declined to bind (degrades the gate to verdict-only, mirroring PlanReview's
-    path-only fallback). `reviewer` is the judge tag ("judge:haiku") for an
-    automated verdict or a human name for a manual/override record."""
+    path-only fallback). `reviewer` is the judge tag ("judge:acceptance"; older
+    records keep "judge:haiku") for an automated verdict or a human name for a manual/override record."""
     stage_index: int
     verdict: str
     reviewer: str
@@ -1030,6 +1030,11 @@ class Actor:
     # dataclass default via Stage.from_dict's Actor(**d["actor"]) splat), so a
     # stage that never declared a tier dispatches exactly as before.
     cost_tier: str | None = None
+    # Repo-relative paths forwarded to the spawned child as repeated
+    # `--guard-exempt` flags (dispatch mechanics, not a plan ontology element).
+    # Absent key -> empty list, so a stage that never declared it dispatches
+    # exactly as before.
+    guard_exempt_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1560,6 +1565,7 @@ class Stage:
             actor=Actor(
                 executor=d["executor"],
                 capability_required=d.get("capability_required"),
+                guard_exempt_paths=list(d.get("guard_exempt_paths", [])),
             ),
             criterion=Criterion(
                 criterion_type=d.get("criterion_type", CriterionType.MEASURABLE.value),

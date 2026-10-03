@@ -47,6 +47,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -121,12 +122,17 @@ def iter_jsonl(path: Path | str) -> Iterator[dict]:
     """
     p = Path(path)
     try:
-        handle = p.open(encoding="utf-8")
+        handle = p.open("rb")
     except OSError:
         return
+    undecodable = 0
     with handle as fh:
-        for line in fh:
-            line = line.strip()
+        for raw in fh:
+            try:
+                line = raw.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                undecodable += 1
+                continue
             if not line:
                 continue
             try:
@@ -135,6 +141,8 @@ def iter_jsonl(path: Path | str) -> Iterator[dict]:
                 continue
             if isinstance(obj, dict):
                 yield obj
+    if undecodable:
+        print(f"iter_jsonl: skipped {undecodable} undecodable line(s) in {p}", file=sys.stderr)
 
 
 def parse_ts_or_none(value) -> dt.datetime | None:

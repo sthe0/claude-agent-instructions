@@ -1,0 +1,59 @@
+# The v37 shape, minimal: a developer stage spells one directory absolute in
+# knowledge_refs (DR-R: read add_dir -> Edit deny on the whole directory) and
+# venue-relative in material_refs (DR-E: Edit allow on one file inside it).
+# `agentctl plan-grants --plan <this file>` must exit non-zero and name both
+# derived:DR-E and derived:DR-R. Nothing reads or writes the paths it names.
+
+[meta]
+task_id = "known-bad-grant-collision"
+goal = "Refresh the relay health baseline"
+done_criterion = "baseline file rewritten"
+criterion_type = "measurable"
+weight_class = "substantive"
+external_research = "n/a"
+repo_root = "/home/the0"
+
+[meta.order]
+customer_id = "user"
+customer = "the authoring-time grant check's negative control"
+functional_place = "a plan whose own refs void its own write grant"
+
+[[meta.order.requirements]]
+id = "R1"
+text = "the baseline is rewritten"
+derivation = "fixture-derivation"
+
+[meta.order.coverage]
+R1 = ["stage 1 verify_command"]
+
+[[stage]]
+index = 1
+title = "Rewrite the relay health baseline"
+executor = "spawn:developer"
+expected_result_image = "the baseline file holds a fresh measurement"
+criterion_type = "measurable"
+done_criterion = "the baseline file parses as JSON"
+material = "the current baseline (traces to R1)"
+material_refs = [".ccgram/relay-health-baseline.json"]
+knowledge_refs = ["/home/the0/.ccgram/monitor_state.json"]
+knowledge = "the relay's monitor state"
+means = "a JSON writer"
+method = "read the monitor state, write the baseline"
+procedure = "1. read the monitor state. 2. write the baseline. 3. parse it back"
+invariants = "nothing outside the baseline file changes"
+capability_required = "write the baseline file"
+conditions = "the relay is idle"
+preconditions = "the monitor state exists"
+verify_command = "python3 -m json.tool .ccgram/relay-health-baseline.json"
+negative_control = "false"
+
+[stage.principle]
+statement = "a stage spells one directory one way"
+source = "the v37 dispatch refusal"
+derivation = "a mixed spelling derives an Edit allow under a read deny"
+confidence = "high"
+refutation = "a mixed-spelling stage that dispatches cleanly"
+
+[[final_check]]
+command = "true"
+expected_exit = 0

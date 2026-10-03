@@ -14,6 +14,7 @@ plus a check that only these two script names are ever invoked).
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -23,7 +24,18 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 POLICY_SCORECARD = SCRIPT_DIR / "policy-scorecard.py"
 RECORD_EXPERIENCE = SCRIPT_DIR / "record-experience.py"
 
-_TIMEOUT_S = 60
+_SEARCH_TIMEOUT_S = 60
+_REFRESH_TIMEOUT_S = 900
+_REFRESH_TIMEOUT_ENV = "IMPROVEMENT_SCAN_REFRESH_TIMEOUT_S"
+
+
+def _refresh_timeout() -> int:
+    raw = os.environ.get(_REFRESH_TIMEOUT_ENV, "")
+    try:
+        value = int(raw)
+    except ValueError:
+        return _REFRESH_TIMEOUT_S
+    return value if value > 0 else _REFRESH_TIMEOUT_S
 
 
 def refresh_policy_ledger(
@@ -38,7 +50,7 @@ def refresh_policy_ledger(
     if ledger_path is not None:
         cmd += ["--ledger", str(ledger_path)]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=_TIMEOUT_S)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=_refresh_timeout())
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, f"policy-scorecard subprocess failed to run: {exc}"
     if result.returncode != 0:
@@ -55,10 +67,13 @@ def search_experience(
     timeout, non-zero exit) — distinct from `found=False`, which means the
     search ran cleanly and reported "no analogous leaf found". Conflating the
     two would let a dedup check silently pass on a broken search subprocess.
+
+    `search` takes ONE keywords argument and tokenizes it itself, so the words
+    are joined here rather than passed as separate argv entries.
     """
-    cmd = [sys.executable, str(RECORD_EXPERIENCE), "search", "--scope", scope, *keywords]
+    cmd = [sys.executable, str(RECORD_EXPERIENCE), "search", "--scope", scope, " ".join(keywords)]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=_TIMEOUT_S)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=_SEARCH_TIMEOUT_S)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, False, f"record-experience search subprocess failed to run: {exc}"
     output = ((result.stdout or "") + (result.stderr or "")).strip()

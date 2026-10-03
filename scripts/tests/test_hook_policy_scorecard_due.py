@@ -183,8 +183,18 @@ def test_default_launch_uses_detached_supervised_popen(monkeypatch):
 def test_ledger_upsert_cmd_base_shape():
     assert hook.ledger_upsert_cmd() == [
         sys.executable, str(hook.POLICY_SCORECARD),
-        "--ledger-only", "--days", str(hook.SCORECARD_WINDOW_DAYS),
+        "--ledger-only", "--days", str(hook.SCORECARD_WINDOW_DAYS), "--no-judge",
     ]
+
+
+@pytest.mark.parametrize("ledger_override", [None, "/some/ledger.jsonl"])
+def test_ledger_upsert_cmd_passes_no_judge(monkeypatch, ledger_override):
+    if ledger_override is None:
+        monkeypatch.delenv("CLAUDE_POLICY_LEDGER", raising=False)
+    else:
+        monkeypatch.setenv("CLAUDE_POLICY_LEDGER", ledger_override)
+
+    assert "--no-judge" in hook.ledger_upsert_cmd()
 
 
 def test_scorecard_cli_honours_the_ledger_flag(tmp_path):
@@ -204,7 +214,7 @@ def test_scorecard_cli_honours_the_ledger_flag(tmp_path):
 
     proc = subprocess.run(
         [sys.executable, str(hook.POLICY_SCORECARD), "--ledger-only",
-         "--days", "7", "--ledger", str(override)],
+         "--days", "7", "--ledger", str(override), "--no-judge"],
         env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
              "HOME": str(home), "CLAUDE_AGENT_HOME": str(home)},
         capture_output=True, text=True, timeout=120,

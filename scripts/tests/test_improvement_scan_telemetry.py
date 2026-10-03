@@ -109,6 +109,23 @@ def test_detector_threshold_boundaries(tmp_path, detector, row_under, row_at):
     assert "description" in fired
 
 
+def test_attention_burn_evidence_reports_what_the_judge_did_not_decide():
+    row = {"session_id": "s", "project": "p", "date": "d",
+           "attention": {"corrections": 2, "corrections_unjudged": 3}}
+
+    fired = scan._detect_attention_burn(row, [], config_path=scan.CONFIG_PATH)
+
+    assert fired["measured"] == {"corrections": 2, "corrections_unjudged": 3}
+    assert "3 further flagged" in fired["description"]
+
+
+def test_unjudged_corrections_alone_do_not_fire_attention_burn():
+    row = {"session_id": "s", "project": "p", "date": "d",
+           "attention": {"corrections": 1, "corrections_unjudged": 9}}
+
+    assert scan._detect_attention_burn(row, [], config_path=scan.CONFIG_PATH) is None
+
+
 def test_run_detectors_stamps_session_project_and_date_onto_every_firing_item(tmp_path):
     config_path = _write_config(tmp_path)
     row = {"session_id": "s", "project": "p", "date": "d", "cost_usd": 24.0}
@@ -204,17 +221,33 @@ def test_evidence_bundle_shape():
 
 # --- (5) a dedup match is recorded, never silently dropped ------------------
 
+class _YesJudge:
+    def __call__(self, argv, **kwargs):
+        from agentctl.dispatch import RunResult
+
+        return RunResult(0, stdout="YES", stderr="")
+
+
+def _never_called_judge(argv, **kwargs):
+    raise AssertionError("the judge must not be reached on this path")
+
+
 def test_dedup_match_against_experience_is_recorded_not_dropped(monkeypatch):
+    monkeypatch.delenv("AGENTCTL_ADVISOR", raising=False)
     monkeypatch.setattr(
         scan.shell, "search_experience",
-        lambda keywords, scope="global": (True, True, "matched: some-leaf.md"),
+        lambda keywords, scope="global": (
+            True, True,
+            "analogous experience leafs (extend one instead of duplicating):\n"
+            "  [ 12] some-leaf.md\n        the same recurring ground\n",
+        ),
     )
     grounds = [{
         "detector": "attention-burn",
         "functional_ground": "a recurring ground already tracked elsewhere",
         "title": "t",
     }]
-    findings, dedup_log = scan.build_findings_from_grounds(grounds)
+    findings, dedup_log = scan.build_findings_from_grounds(grounds, judge_runner=_YesJudge())
     assert findings == []
     assert len(dedup_log) == 1
     assert dedup_log[0]["outcome"] == "dedup-match"
@@ -235,7 +268,9 @@ def test_dedup_match_against_backlog_board_skips_the_subprocess_search(monkeypat
         )},
     )
     grounds = [{"detector": "attention-burn", "functional_ground": "already on the backlog board", "title": "t"}]
-    findings, dedup_log = scan.build_findings_from_grounds(grounds, board=board)
+    findings, dedup_log = scan.build_findings_from_grounds(
+        grounds, board=board, judge_runner=_never_called_judge
+    )
     assert findings == []
     assert dedup_log[0]["outcome"] == "board-match"
     assert calls == []  # the cheap board check pre-empted the subprocess search
@@ -247,7 +282,9 @@ def test_search_subprocess_failure_is_recorded_and_still_stores_the_finding(monk
         lambda keywords, scope="global": (False, False, "record-experience search exited 1"),
     )
     grounds = [{"detector": "attention-burn", "functional_ground": "ground text", "title": "t"}]
-    findings, dedup_log = scan.build_findings_from_grounds(grounds)
+    findings, dedup_log = scan.build_findings_from_grounds(
+        grounds, judge_runner=_never_called_judge
+    )
     assert len(findings) == 1  # a broken search must not silently suppress the finding
     assert dedup_log[0]["outcome"] == "search-failed"
 
@@ -266,7 +303,7 @@ def test_store_key_is_detector_ground_derived_and_accumulates_across_sessions(tm
         "detector": "delegation-misses", "functional_ground": shared_ground,
         "title": "t", "evidence_refs": ["sess-a"],
     }])
-    rows_a = scan.store_findings(findings_a, store_path=store)
+    rows_a = scan.store_findings(findings_a, kinds=frozenset([scan.sds.KIND_TELEMETRY_PATTERN]), store_path=store)
     row_a = next(r for r in rows_a if r["kind"] == scan.sds.KIND_TELEMETRY_PATTERN)
     assert row_a["times_surfaced"] == 1
 
@@ -274,7 +311,7 @@ def test_store_key_is_detector_ground_derived_and_accumulates_across_sessions(tm
         "detector": "delegation-misses", "functional_ground": shared_ground,
         "title": "t", "evidence_refs": ["sess-b"],
     }])
-    rows_b = scan.store_findings(findings_b, store_path=store)
+    rows_b = scan.store_findings(findings_b, kinds=frozenset([scan.sds.KIND_TELEMETRY_PATTERN]), store_path=store)
     row_b = next(r for r in rows_b if r["kind"] == scan.sds.KIND_TELEMETRY_PATTERN)
 
     assert row_b["path"] == row_a["path"]  # same detector+ground -> same store key

@@ -69,6 +69,10 @@ _UNCLAIMED_STAGE_LEAVES = {
              "answer given against an element does not rest on what the stage is called",
     "actor.cost_tier": "an execution price, not a place an answer can rest on "
                        "(test_effort_declaration.py pins its exclusion from both forms)",
+    "actor.guard_exempt_paths": "dispatch mechanics, a declared permission surface and not "
+                                "a place an answer can rest on. Same footing as "
+                                "actor.cost_tier above — covered instead by "
+                                "gates._renorm_stage_residual and diff_plans' prose",
     "criterion.observation": "written at record-result time, not authored in the plan — "
                              "the criterion's declaration is what a question is answered "
                              "against, not the observation that later satisfied it",

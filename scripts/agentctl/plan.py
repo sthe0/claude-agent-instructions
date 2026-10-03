@@ -43,6 +43,10 @@ TOML shape (minimal):
                                           # "medium" at the point of use -- an inferred
                                           # default, not a norm anyone chose, so declare it
                                           # on any stage whose size is not typical.
+    guard_exempt_paths = ["a/settings.json"]  # optional; repo-relative to the dispatch
+                                          # --workdir. Dispatch forwards each as
+                                          # `--guard-exempt` to spawn-specialist.py,
+                                          # lifting that file's settings*.json guard deny.
     depends_on = []                       # optional
     output_artifacts = ["scripts/agentctl/"]  # optional; paths this stage produces.
                                               # Parsed onto Stage.output_artifacts and
@@ -1488,6 +1492,7 @@ def parse_plan(
                         str(s["capability_required"]) if s.get("capability_required") else None
                     ),
                     cost_tier=str(s["cost_tier"]) if s.get("cost_tier") else None,
+                    guard_exempt_paths=[str(p) for p in s.get("guard_exempt_paths", [])],
                 ),
                 criterion=Criterion(
                     criterion_type=crit_type,
@@ -2631,6 +2636,10 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
                  _normalize_string(s.criterion.verify_venue_at_final)),)
                if s.criterion.verify_venue_at_final else ()),
              *((("cost_tier", s.actor.cost_tier),) if s.actor.cost_tier else ()),
+             # Same footing as `cost_tier`: engine-consumed at dispatch, outside the
+             # structural signature, so an exemption-only edit must not diff as 'no_change'.
+             *((("guard_exempt_paths", tuple(s.actor.guard_exempt_paths)),)
+               if s.actor.guard_exempt_paths else ()),
              # Same footing as `cost_tier` above — engine-consumed (the ephemeral-
              # artifacts submission check reads it) but outside `_structural_signature`/
              # `stage_carry_key`/`stage_question_key` (no Question.target names it), so

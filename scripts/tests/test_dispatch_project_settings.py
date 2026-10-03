@@ -66,6 +66,49 @@ def test_dispatch_stage_threads_project_settings_to_build_argv():
     assert "--project-settings" in seen[0]
 
 
+# --- unit: guard-exempt forwarding ----------------------------------------------
+
+def test_build_argv_forwards_each_guard_exempt_path_in_order():
+    argv = build_argv(_make_spawn_stage(), "/tmp/plan.toml",
+                      guard_exempt_paths=["x/y.json", "x/z.json"])
+    pairs = [(argv[i], argv[i + 1]) for i, tok in enumerate(argv) if tok == "--guard-exempt"]
+    assert pairs == [("--guard-exempt", "x/y.json"), ("--guard-exempt", "x/z.json")]
+
+
+def test_build_argv_omits_guard_exempt_when_unset_or_empty():
+    stage = _make_spawn_stage()
+    assert "--guard-exempt" not in build_argv(stage, "/tmp/plan.toml")
+    assert "--guard-exempt" not in build_argv(stage, "/tmp/plan.toml", guard_exempt_paths=None)
+    assert "--guard-exempt" not in build_argv(stage, "/tmp/plan.toml", guard_exempt_paths=[])
+
+
+def test_dispatch_stage_forwards_the_stage_declared_guard_exempt_paths():
+    stage = _make_spawn_stage()
+    stage.actor.guard_exempt_paths = ["x/y.json", "x/z.json"]
+    seen = []
+
+    def runner(argv, cwd=None):
+        seen.append(argv)
+        return RunResult(0, stdout="COMPLETED: ok\n")
+
+    dispatch_stage(stage, "/tmp/plan.toml", runner=runner, cwd="/repo")
+    argv = seen[0]
+    assert [argv[i + 1] for i, tok in enumerate(argv) if tok == "--guard-exempt"] == [
+        "x/y.json", "x/z.json",
+    ]
+
+
+def test_dispatch_stage_omits_guard_exempt_for_an_undeclared_stage():
+    seen = []
+
+    def runner(argv, cwd=None):
+        seen.append(argv)
+        return RunResult(0, stdout="COMPLETED: ok\n")
+
+    dispatch_stage(_make_spawn_stage(), "/tmp/plan.toml", runner=runner, cwd="/repo")
+    assert "--guard-exempt" not in seen[0]
+
+
 # --- integration: cmd_dispatch resolving the path from session state -----------
 
 def _to_executing(store, sid, fixtures_dir):

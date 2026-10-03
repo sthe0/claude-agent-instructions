@@ -107,7 +107,7 @@ def test_store_findings_round_trips_through_the_store(tmp_path):
         _finding(kind=sds.KIND_BACKLOG_ITEM, signal="core-issue-144", title="quota drain"),
         _finding(kind=sds.KIND_TELEMETRY_PATTERN, signal="repeat-respawn", title="respawn loop"),
     ]
-    rows = scan.store_findings(findings, store_path=store)
+    rows = scan.store_findings(findings, kinds=sds.EXTERNAL_KINDS, store_path=store)
     assert {r["kind"] for r in rows} == {sds.KIND_BACKLOG_ITEM, sds.KIND_TELEMETRY_PATTERN}
     assert {r["source"] for r in rows} == {sds.SOURCE_IMPROVEMENT_SCAN}
     loaded = sds.load_rows(store)
@@ -127,9 +127,9 @@ def test_source_partitioned_resolve_out_leaves_other_producers_alone(tmp_path):
         store, T0, source=sds.SOURCE_POLICY_SCORECARD,
     )
 
-    scan.store_findings([_finding(signal="only-this-run")], store_path=store)
+    scan.store_findings([_finding(signal="only-this-run")], kinds=sds.EXTERNAL_KINDS, store_path=store)
     # a SECOND, empty improvement-scan run resolves out only its own prior row
-    scan.store_findings([], store_path=store)
+    scan.store_findings([], kinds=sds.EXTERNAL_KINDS, store_path=store)
 
     remaining = sds.load_rows(store, T0)
     assert {r["source"] for r in remaining} == {

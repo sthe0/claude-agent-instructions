@@ -11,11 +11,15 @@ is not a reliable trigger. So this hook now performs the upsert itself.
 
 The original abstention rested on two claims, both re-checked here and one
 of them false: "that would slow every session start and burn tokens
-unprompted". Verified by reading policy-scorecard.py: it makes ZERO model
-calls — its only subprocess calls are to `git` (repo-history lookups for the
-instructions-commit-range rendering). The token-burn half of the premise was
-simply wrong. The session-start-latency half is real for a *synchronous*
-call, so it is removed by detaching instead: the upsert runs via
+unprompted". The upsert is launched with `--no-judge`, so this background run
+makes ZERO model calls — its only subprocess calls are to `git` (repo-history
+lookups for the instructions-commit-range rendering). The token-burn half of
+the premise was simply wrong. policy-scorecard.py's correction judge (a model
+call per prefilter-flagged human prompt, see its module docstring) runs only on
+runs without `--no-judge` — the foreground improvement-scan ledger refresh, whose
+900 s bound covers the judge's 300 s budget, or a manual run — and the unjudged
+hits this run leaves drain there. The session-start-latency half is real for a
+*synchronous* call, so it is removed by detaching instead: the upsert runs via
 proc_tree.launch_supervised (start_new_session=True) and this hook never
 waits on it, so a slow or hung scan cannot delay the session.
 
@@ -83,7 +87,7 @@ def ledger_upsert_cmd() -> list[str]:
     """Command for the background `policy-scorecard.py --ledger-only` upsert.
     CLAUDE_POLICY_LEDGER, when set, is passed through as --ledger."""
     cmd = [sys.executable, str(POLICY_SCORECARD), "--ledger-only",
-           "--days", str(SCORECARD_WINDOW_DAYS)]
+           "--days", str(SCORECARD_WINDOW_DAYS), "--no-judge"]
     ledger_override = os.environ.get("CLAUDE_POLICY_LEDGER")
     if ledger_override:
         cmd += ["--ledger", ledger_override]

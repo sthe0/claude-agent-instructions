@@ -373,6 +373,8 @@ _JUDGE_CALLS = {
     ),
 }
 
+_EXPECTED_MODEL = {"acceptance_judge": advisor._ACCEPTANCE_JUDGE_MODEL}
+
 
 @pytest.mark.parametrize("name", sorted(_JUDGE_CALLS))
 def test_no_judge_call_rides_the_runners_own_default_timeout(name):
@@ -393,7 +395,8 @@ def test_no_judge_call_rides_the_runners_own_default_timeout(name):
         f"{name} must default to the family last-resort ceiling, not "
         f"{seen['timeout']}"
     )
-    assert seen["argv"][seen["argv"].index("--model") + 1] == advisor._JUDGE_MODEL
+    expected_model = _EXPECTED_MODEL.get(name, advisor._JUDGE_MODEL)
+    assert seen["argv"][seen["argv"].index("--model") + 1] == expected_model
 
 
 @pytest.mark.parametrize(

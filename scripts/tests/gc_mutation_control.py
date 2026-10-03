@@ -182,7 +182,7 @@ _READ_DENY_BRANCH = _READ_BRANCH + '''            deny.append(f"Edit({item.base}
 _WRITE_ALLOW_LINE = '''            allow.append(f"Edit({item.base}/**)")
 '''
 
-_WRITE_GUARD_DENIES_CALL = '''            deny.extend(write_guard_deny_rules(item.base))
+_WRITE_GUARD_DENIES_CALL = '''            deny.extend(write_guard_deny_rules(item.base, _guard_exempt_rel_paths(item.base, exempt_abs_paths or ())))
 '''
 
 _COVERAGE_TEST = '''    if any(read.base == w.base or _is_strictly_under(read.base, w.base) for w in writes):
@@ -196,14 +196,15 @@ _REFUSAL_TAIL = '''                f"the read's Edit deny would shadow part of t
     return True
 '''
 
-_REPO_ROOT_GUARDS_RETURN = '''    return write_guard_deny_rules(grants.rule_file_arg(root.rstrip("/")))
+_REPO_ROOT_GUARDS_RETURN = '''    base = grants.rule_file_arg(root.rstrip("/"))
+    return write_guard_deny_rules(base, _guard_exempt_rel_paths(base, exempt_abs_paths))
 '''
 
 _FINAL_CHECK_CALL = '''    _check_no_allow_fully_denied(allow, deny, allow_source, deny_source)
 '''
 
 _REPO_ROOT_DENY_EXTEND = '''    if workdir is not None:
-        add_deny(repo_root_deny_rules(kind, workdir), "repo_root_deny_rules")
+        add_deny(repo_root_deny_rules(kind, workdir, guard_exempt_paths or ()), "repo_root_deny_rules")
 '''
 
 _COVERAGE_BY_SHAPE = '''    if allow_path.endswith("/**"):

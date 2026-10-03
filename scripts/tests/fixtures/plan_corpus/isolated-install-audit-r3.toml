@@ -15,7 +15,7 @@
 [meta]
 task_id = "isolated-install-audit"
 goal = "A colleague's fresh install (and both existing machines) gets every symlink, settings file, and state directory under the isolated agent root; no installer silently writes to ~/.claude"
-done_criterion = "Fresh-install simulation (tmp HOME + CLAUDE_AGENT_HOME) creates zero entries under $HOME/.claude; doctor.sh green on this Mac; on the0.klg.yp-c.yandex.net project-memory symlinks resolve under ~/.claude-agent/projects and the arc-layer scripts carry no ~/.claude hardcode"
+done_criterion = "Fresh-install simulation (tmp HOME + CLAUDE_AGENT_HOME) creates zero entries under $HOME/.claude; doctor.sh green on this Mac; on the0.klg.yp-c.exampleorg.net project-memory symlinks resolve under ~/.claude-agent/projects and the arc-layer scripts carry no ~/.claude hardcode"
 criterion_type = "measurable"
 weight_class = "substantive"
 repo_root = "/Users/the0/claude-agent-instructions"
@@ -33,7 +33,7 @@ external_research = "Not warranted: all facts scouted directly (grep of installe
 #    this Mac; a colleague's install would re-create ~/.claude pollution.
 # F4 setup-ccgram.sh:208 detects the install via $HOME/.claude/settings.json.
 # F5 session-isolate.sh plugin dir defaults to $HOME/.claude/project-entry-plugins.
-# F6 arc layer (Arcadia junk/the0/agents, on the remote host):
+# F6 arc layer (Examplemonorepo junk/user/agents, on the remote host):
 #    sync-cursor-cli-permissions.sh hardcodes ~/.claude/projects/<hash>/memory/**
 #    in the generated cli.json; setup-local.sh prose references the old root.
 # F7 prose drift: CLAUDE.md / docs / instructions-repo-layout leaf still name
@@ -129,19 +129,19 @@ refutation = "Historical/changelog text describing the old layout as history is 
 
 [[stage]]
 index = 5
-title = "Arc project layer on the remote host (F6) + reconnect its project memory"
+title = "Xvcs project layer on the remote host (F6) + reconnect its project memory"
 executor = "in_thread"
-expected_result_image = "On the0.klg.yp-c.yandex.net: sync-cursor-cli-permissions.sh derives the memory glob from the resolved agent home instead of the hardcoded ~/.claude/projects/...; setup-local.sh prose updated; changes committed in Arcadia (junk/the0/agents) via arc from the main ~/arcadia mount; the fixed setup-project-memory.sh re-run for the live project working dirs so their memory symlinks live under ~/.claude-agent/projects/<hash>/; stale dangling symlinks under old ~/.claude/projects removed or migrated"
+expected_result_image = "On the0.klg.yp-c.exampleorg.net: sync-cursor-cli-permissions.sh derives the memory glob from the resolved agent home instead of the hardcoded ~/.claude/projects/...; setup-local.sh prose updated; changes committed in Examplemonorepo (junk/user/agents) via arc from the main ~/examplemonorepo mount; the fixed setup-project-memory.sh re-run for the live project working dirs so their memory symlinks live under ~/.claude-agent/projects/<hash>/; stale dangling symlinks under old ~/.claude/projects removed or migrated"
 criterion_type = "measurable"
 done_criterion = "Remote: grep finds no ~/.claude/projects hardcode in the arc-layer scripts; ls shows project memory symlinks under ~/.claude-agent/projects resolving to existing targets"
-verify_command = "bash -c 'ssh -o BatchMode=yes the0.klg.yp-c.yandex.net \"! grep -rn \\\"/.claude/projects\\\" ~/arcadia/junk/the0/agents/robot/deepagent/scripts/ && find ~/.claude-agent/projects -maxdepth 2 -name memory -type l | head -1 | grep -q memory\"'"
+verify_command = "bash -c 'ssh -o BatchMode=yes the0.klg.yp-c.exampleorg.net \"! grep -rn \\\"/.claude/projects\\\" ~/examplemonorepo/junk/user/agents/robot/exampleagent/scripts/ && find ~/.claude-agent/projects -maxdepth 2 -name memory -type l | head -1 | grep -q memory\"'"
 expected_exit = 0
-material = "remote ~/arcadia/junk/the0/agents/robot/deepagent/scripts/{setup-local.sh,link-skills.sh,sync-cursor-cli-permissions.sh}; remote ~/.claude/projects/* legacy symlinks; remote ~/claude-agent-instructions (pull stage-1/2/3 fixes first)"
-means = "ssh; arc (main ~/arcadia mount — ~/arcadia_claude_local is currently not mounted, storage is reachable in the main mount); the fixed core scripts pulled from origin"
-method = "pull instructions repo on remote; edit the two arc-layer scripts; arc commit in junk/the0/agents (commit to trunk gated on user confirmation); run fixed setup-project-memory.sh for each live project dir; migrate/remove dangling old-root project symlinks; re-verify"
-conditions = "arc commit/push to trunk requires explicit user confirmation (junk path, but trunk is shared); do NOT install the project layer on this Mac (user constraint); remote edits only via the main arc mount"
+material = "remote ~/examplemonorepo/junk/user/agents/robot/exampleagent/scripts/{setup-local.sh,link-skills.sh,sync-cursor-cli-permissions.sh}; remote ~/.claude/projects/* legacy symlinks; remote ~/claude-agent-instructions (pull stage-1/2/3 fixes first)"
+means = "ssh; arc (main ~/examplemonorepo mount — ~/examplemonorepo_claude_local is currently not mounted, storage is reachable in the main mount); the fixed core scripts pulled from origin"
+method = "pull instructions repo on remote; edit the two arc-layer scripts; xvcs commit in junk/user/agents (commit to trunk gated on user confirmation); run fixed setup-project-memory.sh for each live project dir; migrate/remove dangling old-root project symlinks; re-verify"
+conditions = "xvcs commit/push to trunk requires explicit user confirmation (junk path, but trunk is shared); do NOT install the project layer on this Mac (user constraint); remote edits only via the main xvcs mount"
 invariants = "No deletion of real (non-symlink) memory dirs — only symlinks are re-pointed; remote instructions repo is updated by pull, never edited in place"
-capability_required = "SSH to the0.klg.yp-c.yandex.net; arc on remote"
+capability_required = "SSH to the0.klg.yp-c.exampleorg.net; arc on remote"
 
 [stage.principle]
 statement = "An installer must resolve the config root through one shared resolver, never inline a home path: every literal ~/.claude default is a latent split-brain that surfaces only after the root moves."

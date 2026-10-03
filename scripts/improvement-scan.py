@@ -6,7 +6,7 @@ Difficulty removed: two recurring pieces of self-improvement work are already
 DOCUMENTED but stay MANUAL every time. `memory-global/leaves/backlog-triage-
 practice.md` names its own gap #2 — no cross-source priority digest script
 exists, only a scratchpad `score-backlog.py` that was never committed — for
-reconciling the Core + Org backlog against the published Triage Board. Core
+reconciling the Core + Org backlog against the board state file. Core
 issue #144 is the filed form of the other half: nothing periodic reads the
 session transcripts, so "where does the quota go" is answered once and then
 decays. This module supplies the shared core two resumable producers build on:
@@ -94,6 +94,7 @@ cluster_by_ground = _rec_for_scan.cluster_by_ground
 # see improvement_scan_shell.py's docstring for why, and
 # test_module_never_shells_out_or_reaches_the_network for the invariant this preserves.
 import improvement_scan_shell as shell  # noqa: E402
+from agentctl import advisor  # noqa: E402
 from agentctl.cost import COST_LOG as SPAWN_LEDGER_DEFAULT, read_rows as read_spawn_rows  # noqa: E402
 
 BOARD_SCHEMA = 1
@@ -307,17 +308,23 @@ def _finding_record(finding: Finding) -> dict:
 
 
 def store_findings(
-    findings: Iterable[Finding], *, store_path: "str | Path | None" = None
+    findings: Iterable[Finding],
+    *,
+    kinds: "frozenset[str]",
+    store_path: "str | Path | None" = None,
 ) -> "list[dict]":
     """Upsert this scan's findings under the improvement-scan source.
 
     Delegates entirely to `self_diagnose_store.upsert_findings`, which
-    source-partitions its resolve-out — this call can only retire rows it
-    could itself have produced, so it can never resolve away self-diagnose's or
-    policy-scorecard's rows.
+    source- and kind-partitions its resolve-out — this call can only retire rows
+    of `kinds` it could itself have produced, so it can never resolve away
+    self-diagnose's, policy-scorecard's, or the other improvement-scan
+    producer's rows.
     """
     records = [_finding_record(f) for f in findings]
-    return sds.upsert_findings(records, path=store_path, source=sds.SOURCE_IMPROVEMENT_SCAN)
+    return sds.upsert_findings(
+        records, path=store_path, source=sds.SOURCE_IMPROVEMENT_SCAN, kinds=kinds
+    )
 
 
 # --- backlog resume seam: frozen-baseline-JSON delta -------------------------
@@ -351,6 +358,10 @@ class PriorBoardItem:
     # CARRIED (unchanged) item can recompute its CostSignal via
     # `parse_backlog_cost_rate` without a fresh classifier call.
     cost_estimate: str = ""
+    # Whether the live record carried an explicit severity label when last classified (a
+    # labeled singleton is scorable), and the size of the cluster it was scored in.
+    severity_labeled: bool = False
+    cluster_size: int = 1
 
 
 @dataclass(frozen=True)
@@ -364,6 +375,14 @@ class PriorBoard:
         return prior is not None and prior.source_digest == item_digest(text, status)
 
 
+def board_state_path() -> Path:
+    """The durable board: a local file the next run reads back. Resolved at call time."""
+    override = os.environ.get("IMPROVEMENT_SCAN_BOARD_STATE")
+    if override:
+        return Path(override)
+    return Path.home() / ".local" / "state" / "improvement-scan" / "board.json"
+
+
 def _empty_board(now: "datetime | None" = None) -> PriorBoard:
     now = now or datetime.now(timezone.utc)
     return PriorBoard(schema=BOARD_SCHEMA, generated_at=now.isoformat(), items={})
@@ -374,13 +393,22 @@ def load_prior_board(path: "str | Path") -> PriorBoard:
     board that fails to load must never be read as "everything unchanged",
     since that would silently suppress every finding it should have surfaced.
     """
-    p = Path(path)
+    raw = _read_board_json(Path(path))
+    if raw is None:
+        return _empty_board()
+    return _prior_from_raw(raw)
+
+
+def _read_board_json(path: Path) -> "dict | None":
+    """The parsed board dict, or None when it is unreadable or of another schema."""
     try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return _empty_board()
-    if not isinstance(raw, dict) or raw.get("schema") != BOARD_SCHEMA:
-        return _empty_board()
+        return None
+    return raw if isinstance(raw, dict) and raw.get("schema") == BOARD_SCHEMA else None
+
+
+def _prior_from_raw(raw: dict) -> PriorBoard:
     items = {}
     for ref, entry in (raw.get("items") or {}).items():
         if not isinstance(entry, dict) or "source_digest" not in entry:
@@ -396,6 +424,8 @@ def load_prior_board(path: "str | Path") -> PriorBoard:
             recommended_next_step=str(entry.get("recommended_next_step", "planner")),
             blocked_by=tuple(entry.get("blocked_by") or ()),
             cost_estimate=str(entry.get("cost_estimate", "")),
+            severity_labeled=entry.get("severity_labeled") is True,
+            cluster_size=int(entry.get("cluster_size", 1)),
         )
     return PriorBoard(
         schema=BOARD_SCHEMA, generated_at=str(raw.get("generated_at", "")), items=items
@@ -421,6 +451,8 @@ def write_board(board: PriorBoard, path: "str | Path") -> None:
                 "recommended_next_step": item.recommended_next_step,
                 "blocked_by": list(item.blocked_by),
                 "cost_estimate": item.cost_estimate,
+                "severity_labeled": item.severity_labeled,
+                "cluster_size": item.cluster_size,
             }
             for ref, item in board.items.items()
         },
@@ -554,16 +586,21 @@ def _detect_spawn_process_failures(row: dict, spawn_rows: "list[dict]", *, confi
 
 
 def _detect_attention_burn(row: dict, spawn_rows: "list[dict]", *, config_path) -> "dict | None":
-    corrections = (row.get("attention") or {}).get("corrections") or 0
+    attention = row.get("attention") or {}
+    corrections = attention.get("corrections") or 0
     if corrections < ATTENTION_BURN_MIN_CORRECTIONS:
         return None
+    unjudged = attention.get("corrections_unjudged") or 0
+    description = (
+        f"{corrections} user correction(s) >= threshold ({ATTENTION_BURN_MIN_CORRECTIONS}) "
+        "— CLAUDE.md's own overcome-difficulty trigger"
+    )
+    if unjudged:
+        description += f"; {unjudged} further flagged prompt(s) the judge did not decide"
     return {
         "detector": "attention-burn",
-        "measured": {"corrections": corrections},
-        "description": (
-            f"{corrections} user correction(s) >= threshold ({ATTENTION_BURN_MIN_CORRECTIONS}) "
-            "— CLAUDE.md's own overcome-difficulty trigger"
-        ),
+        "measured": {"corrections": corrections, "corrections_unjudged": unjudged},
+        "description": description,
     }
 
 
@@ -740,19 +777,102 @@ def _board_ground_match(board: "PriorBoard | None", functional_ground: str) -> "
     return None
 
 
+DEDUP_OUTCOMES = ("no-match", "dedup-match", "board-match", "search-failed", "judge-unavailable")
+
+
+def _default_judge_runner():
+    return advisor.subprocess_runner
+
+
+def _parse_search_hits(output: str) -> "list[tuple[str, str]]":
+    """The ranked hits `record-experience.py search` lists, as (leaf name, description)
+    in listing order. Each hit is a `  [score] name.md` line followed by its
+    description line; the `extend --leaf` helper line after it is not a hit."""
+    hits: "list[tuple[str, str]]" = []
+    lines = output.splitlines()
+    for i, line in enumerate(lines):
+        m = re.match(r"\s*\[\s*\d+\]\s+(\S+\.md)\s*$", line)
+        if m and i + 1 < len(lines):
+            hits.append((m.group(1), lines[i + 1].strip()))
+    return hits
+
+
+_CANDIDATE_EXCERPT_CHARS = 2000
+
+
+def _parse_search_paths(output: str) -> "dict[str, str]":
+    """Leaf name -> absolute path, from the `extend --leaf <path>` line after each hit."""
+    paths: "dict[str, str]" = {}
+    name = None
+    for line in output.splitlines():
+        m = re.match(r"\s*\[\s*\d+\]\s+(\S+\.md)\s*$", line)
+        if m:
+            name = m.group(1)
+            continue
+        m = re.match(r"\s*extend --leaf (\S+)\s*$", line)
+        if m and name:
+            paths[name] = m.group(1)
+            name = None
+    return paths
+
+
+def _candidate_text(description: str, path: "str | None") -> str:
+    """The description plus the leaf's `## Difficulty` section (what the search scored
+    on), capped; an unreadable leaf gives the description alone."""
+    if not path:
+        return description
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return description
+    m = re.search(r"^## Difficulty[ \t]*\n(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
+    if not m:
+        return description
+    return f"{description}\n\n{m.group(1).strip()}"[:_CANDIDATE_EXCERPT_CHARS]
+
+
+def _judge_ground_against_candidates(
+    ground_text: str, hits: "list[tuple[str, str]]", runner,
+    paths: "dict[str, str] | None" = None,
+) -> "tuple[str, str]":
+    """(outcome, detail) for one ground against its lexically nominated candidates.
+    The candidates are only nominees: the judge alone decides "same difficulty?".
+    The walk stops at the first YES, and at the first fabricated answer — a judge
+    that is down is not asked again for every remaining candidate."""
+    enabled = os.environ.get("AGENTCTL_ADVISOR") != "0"
+    for name, description in hits:
+        verdict, reason = advisor.judge_same_difficulty(
+            ground_text, _candidate_text(description, (paths or {}).get(name)),
+            runner, enabled=enabled,
+        )
+        if reason:
+            return "judge-unavailable", f"{name}: {reason}"
+        if verdict:
+            return "dedup-match", f"{name}: {description}"
+    return "no-match", f"{len(hits)} candidate(s) judged a different difficulty"
+
+
 def build_findings_from_grounds(
     grounds: "list[dict]",
     *,
     board: "PriorBoard | None" = None,
     scope: str = "global",
+    judge_runner=None,
 ) -> "tuple[list[Finding], list[dict]]":
     """For every model-supplied ground: dedup against the backlog board (if given)
     and existing experience leaves, recording every outcome — a dedup match is
     NEVER silently dropped, only excluded from the returned findings — then build
     survivors into Findings keyed by detector+ground, never by session id.
+
+    Whether a ground is "the same difficulty" as an existing leaf is a question of
+    meaning, so a model judge decides it (`advisor.judge_same_difficulty`); the
+    keyword search only nominates the leaves to ask about. A judge that cannot
+    answer keeps the finding (`judge-unavailable`): a duplicate costs a glance, a
+    dropped finding costs the difficulty.
     """
     findings: "list[Finding]" = []
     dedup_log: "list[dict]" = []
+    runner = judge_runner if judge_runner is not None else _default_judge_runner()
     for g in grounds:
         detector = g["detector"]
         ground_text = g["functional_ground"]
@@ -765,23 +885,23 @@ def build_findings_from_grounds(
             })
             continue
 
-        ok, found, output = shell.search_experience(ground_text.split(), scope=scope)
+        ok, _found, output = shell.search_experience(ground_text.split(), scope=scope)
         if not ok:
-            dedup_log.append({
-                "detector": detector, "functional_ground": ground_text,
-                "outcome": "search-failed", "detail": output,
-            })
-        elif found:
-            dedup_log.append({
-                "detector": detector, "functional_ground": ground_text,
-                "outcome": "dedup-match", "detail": output,
-            })
-            continue
+            outcome, detail = "search-failed", output
         else:
-            dedup_log.append({
-                "detector": detector, "functional_ground": ground_text,
-                "outcome": "no-match", "detail": output,
-            })
+            hits = _parse_search_hits(output)
+            if hits:
+                outcome, detail = _judge_ground_against_candidates(
+                    ground_text, hits, runner, _parse_search_paths(output)
+                )
+            else:
+                outcome, detail = "no-match", output
+        dedup_log.append({
+            "detector": detector, "functional_ground": ground_text,
+            "outcome": outcome, "detail": detail,
+        })
+        if outcome == "dedup-match":
+            continue
 
         cost = g.get("cost_signal") or {}
         findings.append(
@@ -885,25 +1005,48 @@ def diff_backlog(
     return new_items, changed_items, unchanged_refs, closed_refs
 
 
+def rescore_candidates(
+    records: "list[DifficultyRecord]", prior: PriorBoard
+) -> "list[tuple[str, DifficultyRecord]]":
+    """Unchanged prior items parked as no-urgency-signal whose live record now carries an
+    explicit severity label — offered for classification again instead of carried verbatim."""
+    out = []
+    for record in records:
+        ref = _item_ref(record)
+        item = prior.items.get(ref)
+        if (
+            item is not None
+            and item.classification == "no-urgency-signal"
+            and record.severity_labeled
+            and prior.is_unchanged(ref, _backlog_text(record), "open")
+        ):
+            out.append((ref, record))
+    return out
+
+
 def build_worklist(
     new_items: "list[tuple[str, DifficultyRecord]]",
     changed_items: "list[tuple[str, DifficultyRecord]]",
     coverage_gaps: "list[dict]",
     closed_refs: "list[str]",
     *,
+    rescore_items: "list[tuple[str, DifficultyRecord]]" = (),
     now: "datetime | None" = None,
 ) -> dict:
     now = now or datetime.now(timezone.utc)
     items = []
-    for bucket, batch in (("new", new_items), ("changed", changed_items)):
+    for bucket, batch in (
+        ("new", new_items), ("changed", changed_items), ("rescore", rescore_items)
+    ):
         for ref, record in batch:
             items.append(
                 {
                     "item_ref": ref,
                     "bucket": bucket,
-                    "title": record.target,
+                    "title": record.title or record.target,
                     "functional_ground": record.functional_ground,
                     "severity": record.severity.value,
+                    "severity_labeled": record.severity_labeled,
                     "reporter": record.reporter,
                     "evidence": record.evidence,
                     "cost_estimate": record.cost_estimate,
@@ -1006,11 +1149,11 @@ def classify_and_score(
         other_cluster_count = cluster_size.get(ref, 1) - 1
         recurrence_mass = severity.mass + other_cluster_count
         evidence = tuple(e for e in (c.get("evidence"),) if e)
-        if other_cluster_count == 0:
-            # Operationalized "no severity signal AND no cluster" as a singleton cluster:
-            # every DifficultyRecord always carries a severity (the GitHub adapter
-            # defaults an unlabeled issue to MEDIUM), so "no signal" can't be observed
-            # post-parse — a lone item with no cluster-mates is the closest proxy.
+        severity_labeled = c.get("severity_labeled") is True
+        if other_cluster_count == 0 and not severity_labeled:
+            # "No severity signal AND no cluster": the adapter defaults an unlabeled issue
+            # to MEDIUM, so only the record's `severity_labeled` flag tells a stated
+            # severity from a defaulted one.
             no_urgency_signal.append(ref)
             fresh[ref] = PriorBoardItem(
                 classification="no-urgency-signal",
@@ -1023,6 +1166,8 @@ def classify_and_score(
                 recommended_next_step=c["recommended_next_step"],
                 blocked_by=tuple(c.get("blocked_by") or ()),
                 cost_estimate=c.get("cost_estimate", ""),
+                severity_labeled=severity_labeled,
+                cluster_size=cluster_size.get(ref, 1),
             )
             continue
         score = score_item(
@@ -1040,6 +1185,8 @@ def classify_and_score(
             recommended_next_step=c["recommended_next_step"],
             blocked_by=tuple(c.get("blocked_by") or ()),
             cost_estimate=c.get("cost_estimate", ""),
+            severity_labeled=severity_labeled,
+            cluster_size=cluster_size.get(ref, 1),
         )
 
     all_items = {**carried, **fresh}
@@ -1060,6 +1207,8 @@ def classify_and_score(
             recommended_next_step=item.recommended_next_step,
             blocked_by=item.blocked_by,
             cost_estimate=item.cost_estimate,
+            severity_labeled=item.severity_labeled,
+            cluster_size=item.cluster_size,
         )
         if final_items[ref].rank is not None:
             findings.append(
@@ -1238,30 +1387,120 @@ def _cmd_report(args: argparse.Namespace) -> int:
 
 # --- CLI ----------------------------------------------------------------
 
+def _board_state_arg(args: argparse.Namespace) -> Path:
+    return Path(getattr(args, "board_state", None) or board_state_path())
+
+
+def _load_prior(args: argparse.Namespace) -> PriorBoard:
+    if args.prior:
+        return load_prior_board(args.prior)
+    state = _board_state_arg(args)
+    if not state.exists():
+        print(f"improvement-scan backlog: cold start — no board state at {state}", file=sys.stderr)
+        return _empty_board()
+    raw = _read_board_json(state)
+    if raw is None:
+        # The state file is the only durable copy: never let the next write clobber it unseen.
+        note = f"improvement-scan backlog: board state at {state} is unreadable or of another schema"
+        if not getattr(args, "dry_run", False):
+            backup = state.with_name(state.name + ".bak")
+            os.replace(state, backup)
+            note += f"; moved to {backup}"
+        print(note + " — starting from an empty board", file=sys.stderr)
+        return _empty_board()
+    return _prior_from_raw(raw)
+
+
 def _run_backlog_phase_a(args: argparse.Namespace) -> int:
-    prior = load_prior_board(args.prior) if args.prior else _empty_board()
+    prior = _load_prior(args)
     channels = args.channels or default_channels()
     records, coverage_gaps = collect_records(channels)
     new_items, changed_items, unchanged_refs, closed_refs = diff_backlog(records, prior)
-    worklist = build_worklist(new_items, changed_items, coverage_gaps, closed_refs)
+    rescore_items = rescore_candidates(records, prior)
+    worklist = build_worklist(
+        new_items, changed_items, coverage_gaps, closed_refs, rescore_items=rescore_items
+    )
     write_worklist(worklist, args.emit_worklist)
     print(
         f"improvement-scan backlog (phase A): {len(new_items)} new, {len(changed_items)} changed, "
-        f"{len(unchanged_refs)} unchanged, {len(closed_refs)} closed, "
+        f"{len(rescore_items)} rescore, {len(unchanged_refs)} unchanged, {len(closed_refs)} closed, "
         f"{len(coverage_gaps)} coverage gap(s) -> {args.emit_worklist}"
     )
     return 0
 
 
-def _run_backlog_phase_b(args: argparse.Namespace) -> int:
-    prior = load_prior_board(args.prior) if args.prior else _empty_board()
+_REQUIRED_ITEM_METADATA = ("title", "functional_ground", "severity", "source_digest")
+
+
+def _merge_worklist_metadata(
+    classified: "dict[str, dict]", worklist_items: "list[dict] | None"
+) -> "dict[str, dict]":
+    """Overlay each classification on its worklist item (the classification wins for
+    any field it names). Raises ValueError naming the ref (and field) on an unknown ref,
+    on required metadata still missing after the merge, or on a worklist ref left unclassified.
+    """
+    by_ref = (
+        {w.get("item_ref"): w for w in worklist_items} if worklist_items is not None else None
+    )
+    merged: "dict[str, dict]" = {}
+    for ref, c in classified.items():
+        base: dict = {}
+        if by_ref is not None:
+            if ref not in by_ref:
+                raise ValueError(f"classified ref {ref!r} is not in the worklist")
+            base = {k: v for k, v in by_ref[ref].items() if k not in ("item_ref", "bucket")}
+        item = {**base, **c}
+        for field in _REQUIRED_ITEM_METADATA:
+            if not item.get(field):
+                raise ValueError(
+                    f"item {ref!r} lacks {field!r} (supply it, or pass --worklist to merge it)"
+                )
+        merged[ref] = item
+    if by_ref is not None:
+        unclassified = sorted(r for r in by_ref if r not in classified)
+        if unclassified:
+            raise ValueError("worklist ref(s) left unclassified: " + ", ".join(map(str, unclassified)))
+    return merged
+
+
+def _read_json_object(path: str, what: str) -> "dict | None":
     try:
-        payload = json.loads(Path(args.classifications).read_text(encoding="utf-8"))
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        print(f"improvement-scan backlog (phase B): cannot read classifications: {exc}", file=sys.stderr)
+        print(f"improvement-scan backlog (phase B): cannot read {what}: {exc}", file=sys.stderr)
+        return None
+    if not isinstance(data, dict):
+        print(f"improvement-scan backlog (phase B): {what} is not a JSON object", file=sys.stderr)
+        return None
+    return data
+
+
+def _run_backlog_phase_b(args: argparse.Namespace) -> int:
+    prior = _load_prior(args)
+    payload = _read_json_object(args.classifications, "classifications")
+    if payload is None:
         return 2
-    closed_refs = payload.get("closed_refs") or []
-    classified = payload.get("items") or {}
+    worklist = None
+    if args.worklist:
+        worklist = _read_json_object(args.worklist, "worklist")
+        if worklist is None:
+            return 2
+    closed_refs = payload.get("closed_refs") or (worklist or {}).get("closed_refs") or []
+    items = payload.get("items") or {}
+    if not isinstance(items, dict):
+        print(
+            "improvement-scan backlog (phase B): classifications 'items' must be an object "
+            "keyed by item ref", file=sys.stderr,
+        )
+        return 2
+    try:
+        classified = _merge_worklist_metadata(
+            items,
+            (worklist.get("items") or []) if worklist is not None else None,
+        )
+    except ValueError as exc:
+        print(f"improvement-scan backlog (phase B): {exc}", file=sys.stderr)
+        return 2
 
     try:
         board, findings, no_urgency_signal = classify_and_score(prior, classified, closed_refs)
@@ -1269,11 +1508,20 @@ def _run_backlog_phase_b(args: argparse.Namespace) -> int:
         print(f"improvement-scan backlog (phase B): {exc}", file=sys.stderr)
         return 2
 
-    write_board(board, args.out)
-    store_findings(findings, store_path=args.store)
+    state = _board_state_arg(args)
+    if getattr(args, "dry_run", False):
+        print(
+            f"improvement-scan backlog (phase B, dry run): would write {len(board.items)} item(s) "
+            f"to {state} and store {len(findings)} finding(s)"
+        )
+        return 0
+    write_board(board, state)
+    if args.out:
+        write_board(board, args.out)
+    store_findings(findings, kinds=frozenset([sds.KIND_BACKLOG_ITEM]), store_path=args.store)
     print(
         f"improvement-scan backlog (phase B): {len(board.items)} item(s) on the board "
-        f"({len(no_urgency_signal)} no-urgency-signal), {len(findings)} finding(s) stored -> {args.out}"
+        f"({len(no_urgency_signal)} no-urgency-signal), {len(findings)} finding(s) stored -> {state}"
     )
     if no_urgency_signal:
         print("  no urgency signal: " + ", ".join(sorted(no_urgency_signal)), file=sys.stderr)
@@ -1283,11 +1531,11 @@ def _run_backlog_phase_b(args: argparse.Namespace) -> int:
 def _cmd_backlog(args: argparse.Namespace) -> int:
     if args.emit_worklist:
         return _run_backlog_phase_a(args)
-    if args.classifications and args.out:
+    if args.classifications:
         return _run_backlog_phase_b(args)
     print(
         "improvement-scan backlog: pass either --emit-worklist (phase A) or "
-        "--classifications/--out (phase B)",
+        "--classifications (phase B)",
         file=sys.stderr,
     )
     return 2
@@ -1338,12 +1586,16 @@ def _run_telemetry_grounds(args: argparse.Namespace) -> int:
 
     board = load_prior_board(args.board) if args.board else None
     findings, dedup_log = build_findings_from_grounds(grounds, board=board)
-    stored = [] if args.dry_run else store_findings(findings, store_path=args.store)
+    stored = [] if args.dry_run else store_findings(
+        findings, kinds=frozenset([sds.KIND_TELEMETRY_PATTERN]), store_path=args.store
+    )
 
     print(
         f"improvement-scan telemetry (grounds): {len(grounds)} ground(s) in, "
         f"{len(stored)} finding(s) stored, {len(dedup_log)} dedup outcome(s) logged"
     )
+    counts = {o: sum(1 for e in dedup_log if e["outcome"] == o) for o in DEDUP_OUTCOMES}
+    print("dedup outcomes: " + " ".join(f"{o}={n}" for o, n in counts.items()))
     for entry in dedup_log:
         if entry["outcome"] != "no-match":
             print(f"  {entry['outcome']}: {entry['detector']} — {entry['detail'][:120]}", file=sys.stderr)
@@ -1362,13 +1614,21 @@ def _cmd_telemetry(args: argparse.Namespace) -> int:
     return 2
 
 
-def main(argv: "list[str] | None" = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true", help="never write, only print")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_backlog = sub.add_parser("backlog", help="reconcile Core + Org backlog against the Triage Board")
-    p_backlog.add_argument("--prior", default=None, help="path to the existing board.json")
+    p_backlog = sub.add_parser("backlog", help="reconcile Core + Org backlog against the board state file")
+    p_backlog.add_argument(
+        "--prior", default=None,
+        help="phase A: board to diff against (default: the board state file; absent = cold start)",
+    )
+    p_backlog.add_argument(
+        "--board-state", default=None,
+        help="the durable board state file (default: $IMPROVEMENT_SCAN_BOARD_STATE or "
+        "~/.local/state/improvement-scan/board.json)",
+    )
     p_backlog.add_argument(
         "--emit-worklist", default=None,
         help="phase A: collect + diff against --prior, write the new+changed worklist here",
@@ -1377,7 +1637,13 @@ def main(argv: "list[str] | None" = None) -> int:
         "--classifications", default=None,
         help="phase B: model-supplied classifications file (see --emit-worklist's output shape)",
     )
-    p_backlog.add_argument("--out", default=None, help="phase B: write the merged board here")
+    p_backlog.add_argument(
+        "--worklist", default=None,
+        help="phase B: the phase-A worklist; its item metadata is merged under each classification",
+    )
+    p_backlog.add_argument(
+        "--out", default=None, help="phase B: also write the merged board here (a view copy)"
+    )
     p_backlog.add_argument(
         "--channel", action="append", default=[], dest="channels",
         help="channel to pull from (repeatable); default: core-difficulty-digest's default_channels()",
@@ -1398,21 +1664,28 @@ def main(argv: "list[str] | None" = None) -> int:
         "--grounds", default=None,
         help="store mode: model-supplied functional-ground proposals (JSON list) for a prior evidence bundle",
     )
-    p_telemetry.add_argument("--board", default=None, help="store mode: backlog board.json to dedup grounds against")
+    p_telemetry.add_argument(
+        "--board", default=str(board_state_path()),
+        help="store mode: board to dedup grounds against (default: the board state file)",
+    )
     p_telemetry.add_argument("--store", default=None, help="store mode: findings store path")
     p_telemetry.set_defaults(func=_cmd_telemetry)
 
     p_report = sub.add_parser("report", help="render the unified ranked report from stored findings")
     p_report.add_argument("--store", default=None, help="findings store path to render")
     p_report.add_argument(
-        "--board", default=None,
-        help="backlog board.json (accepted for CLI-surface parity; unused — the store alone "
+        "--board", default=str(board_state_path()),
+        help="board state file (accepted for CLI-surface parity; unused — the store alone "
         "fully determines report content)",
     )
     p_report.add_argument("--format", choices=("md", "json"), default="md", help="output format")
     p_report.set_defaults(func=_cmd_report)
 
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    args = build_parser().parse_args(argv)
     return args.func(args)
 
 

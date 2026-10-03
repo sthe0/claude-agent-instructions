@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from argparse import Namespace
 
-from agentctl import cli, gates
+from agentctl import advisor, cli, gates
 from agentctl.dispatch import RunResult
 from agentctl.state import (
     Actor,
@@ -35,6 +35,7 @@ from agentctl.state import (
     Route,
     SessionState,
     Stage,
+    StageReview,
     StageStatus,
     Subject,
     WeightClass,
@@ -212,3 +213,32 @@ def test_fail_open_reason_reaches_the_log_and_pass_proceeds(store, monkeypatch):
         b.kind == "fail_open" and b.note == "judge returned no output (fail-open)"
         for b in state.judge_bypassed
     )
+
+
+# --- (f) a judge verdict replaces an older automated one, never a human's ------
+
+def _bare_state(*reviews):
+    return SessionState(session_id="s-f", task_id="t", goal="g", stage_reviews=list(reviews))
+
+
+def test_judge_verdict_replaces_review_persisted_under_old_haiku_tag():
+    state = _bare_state(StageReview(stage_index=1, verdict="revise", reviewer="judge:haiku"))
+    fresh = StageReview(stage_index=1, verdict="pass", reviewer=advisor.JUDGE_REVIEWER)
+
+    cli._record_stage_review(state, fresh, from_judge=True)
+
+    assert state.stage_reviews == [fresh]
+
+
+def test_judge_verdict_does_not_clobber_human_review():
+    for human in ("user", ""):
+        kept = StageReview(stage_index=1, verdict="override", reviewer=human, note="n")
+        state = _bare_state(kept)
+
+        cli._record_stage_review(
+            state,
+            StageReview(stage_index=1, verdict="pass", reviewer=advisor.JUDGE_REVIEWER),
+            from_judge=True,
+        )
+
+        assert state.stage_reviews == [kept]

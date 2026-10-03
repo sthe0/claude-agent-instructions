@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from agentctl.dispatch import RunResult
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 SCRIPT = SCRIPTS_DIR / "policy-scorecard.py"
 
@@ -93,6 +95,11 @@ def _user_text(ts: str, text: str) -> dict:
     return {"type": "user", "timestamp": ts, "message": {"content": text}}
 
 
+def _human_text(ts: str, text: str) -> dict:
+    return {"type": "user", "timestamp": ts, "origin": {"kind": "human"},
+            "message": {"content": text}}
+
+
 def _assistant_tool_use(ts: str, tool_use_id: str, name: str, input_: dict) -> dict:
     return {"type": "assistant", "timestamp": ts,
             "message": {"model": "claude-sonnet-5", "content": [
@@ -154,11 +161,16 @@ def _iso(delta: dt.timedelta) -> str:
 
 # ----------------------------------------------------- 1. per-counter tests
 
-def test_scan_session_counts_all_four_user_signals(tmp_path, ps):
+def test_scan_session_counts_all_four_user_signals(tmp_path, ps, monkeypatch):
+    correction = "Actually, that's wrong, you need to redo it."
+    assert ps.find_signals(correction) != []
+    monkeypatch.setattr(
+        ps, "_CORRECTION_JUDGE_RUNNER",
+        lambda argv, **kw: RunResult(0, stdout="YES", stderr=""))
     main_file = tmp_path / "projects" / "proj" / "sess-1.jsonl"
     _write_transcript(main_file, [
-        _user_text("2026-06-05T10:00:00Z", "Actually, that's wrong, let's redo it."),
-        _user_text("2026-06-05T10:01:00Z", "Why does this happen in prod?"),
+        _human_text("2026-06-05T10:00:00Z", correction),
+        _human_text("2026-06-05T10:01:00Z", "Why does this happen in prod?"),
         _assistant_tool_use("2026-06-05T10:02:00Z", "tu-1", "AskUserQuestion", {
             "questions": [{"question": "Apply the fix?",
                           "options": [{"label": "Yes"}, {"label": "No"}]}]
@@ -177,7 +189,8 @@ def test_scan_session_counts_all_four_user_signals(tmp_path, ps):
         "n_interrupts": 1,
     }
     # existing counters must still be computed the same way (additive-only invariant)
-    assert row["attention"] == {"askq": 1, "prompts": 2, "interrupts": 1, "corrections": 1}
+    assert row["attention"] == {"askq": 1, "prompts": 2, "interrupts": 1, "corrections": 1,
+                                "corrections_unjudged": 0}
 
 
 def test_scan_session_askuserquestion_matching_option_not_freetext(tmp_path, ps):

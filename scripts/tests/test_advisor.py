@@ -553,6 +553,48 @@ class TestJudgeBinaryAsk:
         assert advisor.judge_binary_ask("**Готово.**", _raising_runner)[0] is False
 
 
+class TestJudgeSameDifficulty:
+    def test_judge_same_difficulty_contract(self):
+        seen = {}
+
+        def recording_runner(argv, **kwargs):
+            seen["stdin"] = kwargs.get("stdin", "")
+            return RunResult(0, stdout="YES\nbecause", stderr="")
+
+        assert advisor.judge_same_difficulty(
+            "ground text GG", "candidate text CC", recording_runner
+        ) == (True, "")
+        assert "ground text GG" in seen["stdin"] and "candidate text CC" in seen["stdin"]
+
+        assert advisor.judge_same_difficulty("g", "c", _fake_runner("NO")) == (False, "")
+
+        def timing_out(argv, **kwargs):
+            return RunResult(1, stdout="", stderr="advisor timed out after 1s", timed_out=True)
+
+        for runner in (
+            timing_out,
+            _fake_runner("", code=1),
+            _fake_runner("perhaps"),
+            _fake_runner(""),
+            _raising_runner,
+            None,
+        ):
+            verdict, reason = advisor.judge_same_difficulty("g", "c", runner)
+            assert verdict is False
+            assert reason.endswith("(fail-open)")
+
+    def test_disabled_never_calls_the_runner(self):
+        verdict, reason = advisor.judge_same_difficulty(
+            "g", "c", _raising_runner, enabled=False
+        )
+        assert verdict is False and reason.endswith("(fail-open)")
+
+    def test_empty_text_fails_open_without_calling_runner(self):
+        for ground, candidate in (("", "c"), ("g", "")):
+            verdict, reason = advisor.judge_same_difficulty(ground, candidate, _raising_runner)
+            assert verdict is False and reason.endswith("(fail-open)")
+
+
 class TestJudgePublishedAttachment:
     def test_yes(self):
         result = advisor.judge_published_attachment(
@@ -875,6 +917,7 @@ class TestJudgeLandingDisciplineAsk:
 # hook's constant) is a NAMING defect, visible in the source and nowhere else.
 _JUDGE_TIMEOUT_CONSTANTS = {
     "judge_binary_ask": "_BINARY_ASK_TIMEOUT_S",
+    "judge_same_difficulty": "_BINARY_ASK_TIMEOUT_S",
     "judge_published_attachment": "_PUBLISHED_ATTACHMENT_TIMEOUT_S",
     "judge_feedback_signal": "_BINARY_ASK_TIMEOUT_S",
     "judge_outage_escalation": "_BINARY_ASK_TIMEOUT_S",
@@ -1029,6 +1072,26 @@ class TestRuntimeHostArgv:
         monkeypatch.setattr(host_llm, "build_launch_argv", spy)
         advisor.enumerate_claims("some deliverable text", self._recording_runner([], "claim one"))
         assert seen_lean == [False]
+
+    def test_acceptance_judge_dispatches_medium_complexity_with_lean_isolation(self, monkeypatch):
+        """acceptance_judge leaves the low tier but must stay lean: the model and
+        the lean flag are asserted on the same launch, so neither a tier change
+        alone (which would drop lean) nor a lean-only change (which would keep
+        haiku) passes."""
+        from lib import host_llm
+
+        seen_lean = []
+        seen = []
+        real_build = host_llm.build_launch_argv
+
+        def spy(*args, **kwargs):
+            seen_lean.append(kwargs.get("lean", False))
+            return real_build(*args, **kwargs)
+
+        monkeypatch.setattr(host_llm, "build_launch_argv", spy)
+        advisor.acceptance_judge("observation", "expected", self._recording_runner(seen), enabled=True)
+        assert seen_lean == [True]
+        assert seen[0][seen[0].index("--model") + 1] == "sonnet"
 
 
 # ── the prompt must never ride argv: E2BIG regression ─────────────────────────

@@ -206,6 +206,9 @@ _LEGACY_REF_ALLOWLIST = {
                                              "Keychain item — an identity test, not a fallback",
     "scripts/project_entry/task_mount_registry.py": "legacy task-mounts.d read fallback when "
                                              "no ~/.claude-agent exists",
+    "scripts/lib/instruction-sandbox-canon-snapshot.sh": "hashes the personal root's "
+                                             "settings.json to prove a sandbox build left it "
+                                             "untouched — a canon target, not a fallback",
 }
 
 

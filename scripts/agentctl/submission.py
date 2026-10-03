@@ -58,7 +58,7 @@ from __future__ import annotations
 
 import re
 
-from . import exempt_paths
+from . import exempt_paths, grant_shadow
 from .conditions import judge_restatement, restatement_prefilter
 from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
@@ -814,6 +814,8 @@ def submission_violations(
     undeclared = _undeclared_weight_class(doc, session_weight_class)
     if undeclared:
         out.append(_UNDECLARED)
+    # Whatever the weight class: the spawn refuses a grant collision for every plan.
+    out.extend(grant_shadow.plan_grant_shadow_problems(doc))
     # The field loop also runs for the UNDECLARED case, where the plan itself never claimed
     # to be substantive. That is not the seam arming on the session — the refusal is still
     # the missing declaration, and a plan that answers it with a non-substantive class keeps

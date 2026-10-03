@@ -509,7 +509,7 @@
   {
    "key": "isolated-install-audit-r3.toml:5",
    "label": "genuine",
-   "reason": "Describes the remote script change, the Arcadia commit and the relocated project-memory symlinks."
+   "reason": "Describes the remote script change, the trunk commit and the relocated project-memory symlinks."
   },
   {
    "key": "isolated-install-audit.toml:1",

@@ -1,6 +1,6 @@
 ---
 name: improvement-scan
-description: TRIGGER when the user asks you to proactively improve the agent system itself, review its own backlog, or look for recurring problems in its own recent work — WITHOUT a specific correction driving it (that's self-improvement's, reactive-only) — in any language, e.g. "scan yourself for improvements" / "what should we fix in the agent" / the Russian trigger «сделай себя лучше». Runs both standing producers (backlog reconciliation against the Triage Board, recent-session telemetry pattern detection) end to end, ranks findings cost-first in one report, and STOPS — never files a difficulty, dispatches a specialist, or auto-selects work. SKIP if the user names one specific item to act on (ordinary task routing, not a scan).
+description: TRIGGER when the user asks you to proactively improve the agent system itself, review its own backlog, or look for recurring problems in its own recent work — WITHOUT a specific correction driving it (that's self-improvement's, reactive-only) — in any language, e.g. "scan yourself for improvements" / "what should we fix in the agent" / the Russian trigger «сделай себя лучше». Runs both standing producers (backlog reconciliation against the local board state, recent-session telemetry pattern detection) end to end, ranks findings cost-first in one report, and STOPS — never files a difficulty, dispatches a specialist, or auto-selects work. SKIP if the user names one specific item to act on (ordinary task routing, not a scan).
 ---
 
 # Improvement scan
@@ -28,37 +28,46 @@ Procedure step 6).
 
 ## Procedure
 
-1. **Fetch the current board.** `Artifact action:"read"` on the "Triage Board"
-   artifact named in `backlog-triage-practice.md` § Reuse across runs. Write its
-   JSON body to a session-scratch path (e.g. `board-prior.json`) — this is the
-   `--prior` input to phase A, not a fresh derivation from nothing.
+1. **The prior board is the local state file** (`$IMPROVEMENT_SCAN_BOARD_STATE`,
+   default `~/.local/state/improvement-scan/board.json`), which phase B writes
+   and phase A reads automatically — nothing to fetch. No file means a cold
+   start (one stderr note, not an error). Never rebuild the prior from the
+   published artifact: that is a view, and `Artifact action:"read"` returned
+   HTTP 451 minutes after the same session published it.
 
-2. **Backlog producer, phase A** (collect + diff):
+2. **Backlog producer, phase A** (collect + diff against the state file):
    ```
-   python3 scripts/improvement-scan.py backlog --prior board-prior.json \
-     --emit-worklist worklist.json
+   python3 scripts/improvement-scan.py backlog --emit-worklist worklist.json
    ```
    Read the printed new/changed/closed/coverage-gap counts.
 
 3. **Classify** (the perception step). For every item in `worklist.json`'s
-   `items` (buckets `new`/`changed`), supply, per item ref:
-   `breadth` (`narrow`/`shared-mechanism`/`universal`), `cost_to_resolve`
-   (a budget tier key), `in_flight` (a readiness coefficient key), and
-   `recommended_next_step` (one of `self-improvement`/`planner`/
-   `file-difficulty`) — reasoning from the item's own text per
-   `backlog-triage-practice.md` § Priority rubric, never guessed. An item with
-   no severity label and no cluster-mate gets `no_urgency_signal: true` instead
-   of a guessed weight. Write the result plus `worklist.json`'s `closed_refs`
-   as `classifications.json` (shape: `{"items": {<ref>: {...}}, "closed_refs":
-   [...]}`).
+   `items` (buckets `new`/`changed`/`rescore` — `rescore` is a prior unscored
+   item whose record now carries a severity label), supply only the judgment,
+   per item ref: `breadth` (`narrow`/`shared-mechanism`/`universal`),
+   `cost_to_resolve` (a budget tier key), `in_flight` (a readiness coefficient
+   key), `recommended_next_step` (one of `self-improvement`/`planner`/
+   `file-difficulty`), and optionally `blocked_by`. Reason from the item's own
+   text per `backlog-triage-practice.md` § Priority rubric, never guessed.
+   Do not copy the item's title, ground, severity, `severity_labeled`, evidence
+   or digest: phase B merges them from the worklist. An item with no severity
+   label and no cluster-mate stays unscored as no-urgency-signal. Write
+   `classifications.json` as `{"items": {<ref>: {...}}, "closed_refs": [...]}`
+   with `worklist.json`'s `closed_refs`.
 
 4. **Backlog producer, phase B** (score + merge):
    ```
-   python3 scripts/improvement-scan.py backlog --prior board-prior.json \
-     --classifications classifications.json --out board-new.json --store <store>
+   python3 scripts/improvement-scan.py backlog \
+     --worklist worklist.json --classifications classifications.json \
+     --store <store>
    ```
-   An out-of-vocabulary value here is rejected before anything is written —
-   fix the classification and rerun rather than loosening the vocabulary.
+   The merged board replaces the state file atomically (`--out <path>` also
+   writes a copy). Without `--worklist`, each classification must itself carry
+   `title`, `functional_ground`, `severity` and `source_digest`. A ref missing
+   from the worklist, a worklist ref left unclassified, or a missing field exits
+   2 naming the ref; an out-of-vocabulary
+   value is rejected before anything is written — fix the classification and
+   rerun rather than loosening the vocabulary.
 
 5. **Telemetry producer, scan mode:**
    ```
@@ -81,7 +90,7 @@ Procedure step 6).
 7. **Telemetry producer, store mode** (dedup + persist):
    ```
    python3 scripts/improvement-scan.py telemetry --grounds grounds.json \
-     --board board-new.json --store <store>
+     --store <store>
    ```
    A ground that matches an existing board item or experience leaf is deduped,
    not double-counted — read the printed dedup outcomes, don't ignore them.
@@ -94,10 +103,10 @@ Procedure step 6).
    measured and unmeasured bands — present its output as-is, in the dialogue
    language, with the recommended next step already attached per finding.
 
-9. **Republish the SAME board artifact in place** (`Artifact action:"publish"`
-   with the existing `url:` from step 1 — never a new "Triage Board"-titled
-   artifact; see `backlog-triage-practice.md` § Reuse across runs for why a
-   second one is a standing anti-pattern).
+9. **Optionally republish the board as a human-readable view** rendered from
+   the state file (`Artifact action:"publish"`, the current `url:` named in
+   `backlog-triage-practice.md` § Reuse across runs). The artifact is output
+   only — never read it back as input.
 
 10. **Present the ranked report to the user**, in the dialogue language, and
     stop. Do not file, dispatch, or pre-select an item — that is a separate,

@@ -213,6 +213,47 @@ def test_replan_emits_publish_replan():
     assert [f["action"] for f in fired] == ["publish_replan"]
 
 
+@pytest.mark.parametrize("kind", ["refinement", "no_change"])
+def test_replan_folds_non_substantive_kind_instead_of_posting(kind):
+    # a refinement/no_change replan is an internal correction with no reader-visible
+    # scope change: the directive must tell the coordinator to fold it, not post it
+    # standalone, and to record the skip (tech-writer rule 12).
+    state = _new_state()
+    state.log("replan", kind=kind)
+    plugins.activate(state, "tracker")
+    d = Directive(True, state.node, "replan")
+    fired = plugins.fire("replan", state, d)
+    assert [f["action"] for f in fired] == ["publish_replan"]
+    detail = fired[0]["detail"]
+    assert "do not post" in detail.lower() or "fold" in detail.lower()
+    assert "--skipped" in detail
+    assert fired[0]["data"]["kind"] == kind
+
+
+def test_replan_posts_standalone_for_substantive_kind():
+    state = _new_state()
+    state.log("replan", kind="substantive")
+    plugins.activate(state, "tracker")
+    d = Directive(True, state.node, "replan")
+    fired = plugins.fire("replan", state, d)
+    assert [f["action"] for f in fired] == ["publish_replan"]
+    detail = fired[0]["detail"]
+    assert "what changed" in detail.lower()
+    assert "--skipped" not in detail
+    assert fired[0]["data"]["kind"] == "substantive"
+
+
+def test_replan_with_no_history_kind_posts_standalone():
+    # unknown kind (e.g. engine not driving / legacy history) defaults to the
+    # original "post what changed" behavior rather than silently folding.
+    state = _new_state()
+    plugins.activate(state, "tracker")
+    d = Directive(True, state.node, "replan")
+    fired = plugins.fire("replan", state, d)
+    assert fired[0]["data"]["kind"] is None
+    assert "what changed" in fired[0]["detail"].lower()
+
+
 def test_resolve_emits_publish_result_and_transition_status_until_recorded():
     state = _new_state(node=Node.RESOLUTION.value)
     plugins.activate(state, "tracker")

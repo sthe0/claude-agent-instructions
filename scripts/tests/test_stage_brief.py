@@ -311,6 +311,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (Subject, "material_refs"), (Subject, "knowledge_refs"),
         (Means, "means"), (Means, "method"), (Means, "procedure"),
         (Actor, "executor"), (Actor, "capability_required"), (Actor, "cost_tier"),
+            (Actor, "guard_exempt_paths"),  # excluded: dispatch mechanics, not briefed to the child
         (Criterion, "criterion_type"), (Criterion, "done_criterion"),
         (Criterion, "verify_command"), (Criterion, "expected_exit"),
         (Criterion, "observation"), (Criterion, "verify_venue"),

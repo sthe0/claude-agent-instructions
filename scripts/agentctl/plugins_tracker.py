@@ -153,7 +153,10 @@ def _observe_record_result(state, bag) -> list[PluginDirective]:
         detail = (
             "this stage declared output_artifacts: post a SUBSTANTIVE progress "
             "comment (figures, caveats, every artifact this stage produced — not "
-            "a one-liner), then `plugin-record --plugin tracker --phase progress "
+            "a one-liner, and never under an internal stage-number heading like "
+            "\"### Стадия N\" — tech-writer rule 3: name the result in plain "
+            "words, write the thread's next beat, not a status report), then "
+            "`plugin-record --plugin tracker --phase progress "
             f"--stage {stage_index}` — the resolution gate requires this exact "
             "per-stage entry before the task can resolve"
         )
@@ -170,11 +173,41 @@ def _observe_record_result(state, bag) -> list[PluginDirective]:
     )]
 
 
+def _last_replan_kind(state) -> str | None:
+    """Mirrors `_last_passed_stage_index`: the replan that just fired this
+    observer is always the newest `event == "replan"` entry in `state.history`,
+    so a backward scan recovers its `kind` ("no_change" / "refinement" /
+    "substantive", set by `cmd_replan`) without threading it through `bag`."""
+    for entry in reversed(getattr(state, "history", None) or []):
+        if entry.get("event") == "replan":
+            return entry.get("kind")
+    return None
+
+
 def _observe_replan(state, bag) -> list[PluginDirective]:
+    # The engine already classifies every replan by `kind`; a `refinement` or
+    # `no_change` replan is an internal correction with no reader-visible scope
+    # change, so an unconditional "post what changed" directive here produces
+    # exactly the bureaucratic planning-journal entries tech-writer rule 12
+    # forbids — fold these instead of nudging a standalone post.
+    kind = _last_replan_kind(state)
+    if kind in ("refinement", "no_change"):
+        detail = (
+            f"replan kind={kind}: an internal correction, no reader-visible "
+            "scope change. Do NOT post a standalone comment — fold one line "
+            "into the next substantive ticket entry (tech-writer rule 12), "
+            "then `plugin-record --plugin tracker --phase replan --skipped "
+            f"--note \"{kind} replan, folded into next entry\"`"
+        )
+    else:
+        detail = (
+            "replan kind=substantive: post what changed in the plan and why, "
+            "with a link to the revised plan, then `plugin-record --plugin "
+            "tracker --phase replan`"
+        )
     return [PluginDirective(
-        "tracker", "publish_replan",
-        "post what changed in the plan and why, with a link to the revised plan",
-        data={"tracker_key": _key(bag)},
+        "tracker", "publish_replan", detail,
+        data={"tracker_key": _key(bag), "kind": kind},
     )]
 
 

@@ -2516,6 +2516,9 @@ def _renorm_stage_residual(stage) -> tuple:
     * `actor.cost_tier` — the dispatch budget label and the effort-divergence estimate's
       input. Re-tiering a stage from `small` to `large` under the light path would move
       the norm the divergence trigger reads a stage's overrun against.
+    * `actor.guard_exempt_paths` — files whose settings-guard deny the spawned child
+      is exempted from at dispatch. Same footing as `grants`: declaring one under the
+      light path would widen the child's write surface past what the plan's approval saw.
     * `output_artifacts` — the paths the verify-command reachability lint reads as
       produced-by-this-plan. Re-declaring them changes which green a check can reach.
     * `grants` (via `plan.grants_place`) — the declared permission surface a spawned
@@ -2545,6 +2548,7 @@ def _renorm_stage_residual(stage) -> tuple:
     return (
         stage_question_key(stage),
         stage.actor.cost_tier,
+        tuple(stage.actor.guard_exempt_paths),
         tuple(stage.output_artifacts),
         *grants_place(stage),
         *effects_place(stage),

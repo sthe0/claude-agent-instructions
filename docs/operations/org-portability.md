@@ -16,7 +16,7 @@ This means a fresh clone in another org needs **zero edits** to Core.
 
 ## The seams, at a glance
 
-Every org-specific facility attaches to Core through one of five seams. Each is *mechanism in Core, data outside it* — Core ships the resolver, the neutral default and the contract; a higher layer (Personal, machine-local, or a project overlay) supplies the org half.
+Every org-specific facility attaches to Core through one of six seams. Each is *mechanism in Core, data outside it* — Core ships the resolver, the neutral default and the contract; a higher layer (Personal, machine-local, or a project overlay) supplies the org half.
 
 | Seam | Core ships | A higher layer installs | Where |
 |---|---|---|---|
@@ -25,8 +25,23 @@ Every org-specific facility attaches to Core through one of five seams. Each is 
 | Difficulty-channel **detect hook** | the probe interface and the org-neutral precedence | a `detect(...)` hook that recognizes org host signals | `${CLAUDE_DIFFICULTY_PLUGIN_DIR:-<config root>/difficulty-channel-plugins}/detect.py` |
 | Skills overlay | the catalog wiring and the two controls | org- or machine-specific skills, plus a manifest naming them | `<config root>/skills-local/`, named in `<config root>/extracted-skills.local` |
 | Term-lint ruleset | the matcher, the discovery order and the gates | the actual denylist of org-internal terms | `<config root>/term-rulesets/*.toml` (or `<project>/.claude/term-rulesets/`) |
+| Sandbox project composers | `scripts/instruction-sandbox.sh --project-mount`, the five-function contract and the generic project check | a composer that builds a project's `.claude/` into a sandbox-owned root | `${CLAUDE_INSTRUCTION_SANDBOX_PLUGIN_DIR:-<config root>/instruction-sandbox-plugins}/composers/<name>.sh` |
 
 The shape repeats: **built-in name first, machine-local plugin second**. `scripts/project_entry/registry.sh` (`_registry_resolve`) does it for shell backends and `scripts/lib/plugin_dir.py` (`resolve_plugin_dir` + `load_plugin_module`) for the Python seams, so a new plugin *name* attaches with zero edits to Core. The sections below cover each seam in turn.
+
+## Sandbox project composers
+
+`scripts/instruction-sandbox.sh --project-mount <dir>` composes a project's `.claude/` and `CLAUDE.md` from a candidate mount into `<root>/project`, next to the sandboxed Core revision. Core knows no project: a **composer** supplied by the project does the building, and is installed by that project's own setup script into `${CLAUDE_INSTRUCTION_SANDBOX_PLUGIN_DIR:-<config root>/instruction-sandbox-plugins}/composers/<name>.sh` — never committed to Core, which ships none (an empty directory makes `--project-mount` refuse, naming the directory searched). The directory is resolved in the caller's real environment; `--project-composer <name>` picks one, otherwise exactly one composer must accept the mount.
+
+A composer file defines five functions, each run in its own `bash` that sources the file:
+
+- `composer_detect <mount>` — exit 0 when it handles the mount.
+- `composer_protected_paths` — prints the paths the mount must never be or sit under, and that composed links and settings files must never point into.
+- `composer_validate <mount>` — extra refusals; message on stderr, nonzero refuses.
+- `composer_compose <mount>` — builds the project under `$ISB_PROJECT_ROOT` (other dirs only under `$ISB_ROOT`). It runs with the sandbox `HOME`, agent-root variables and a scrubbed environment; `$ISB_REAL_HOME` names the caller's home.
+- `composer_snapshot` — prints the project's own canon-snapshot lines; `scripts/lib/instruction-sandbox-canon-snapshot.sh --composer <file>` appends them prefixed `composer:<name> `.
+
+All refusals — no or ambiguous composer, failed validation, a mount equal to or under a protected path (compared after `readlink -f`, so a symlink alias is refused too), a mount inside the root — happen before `<root>` exists. After composing, Core asserts `project/.claude` is a real directory and `project/CLAUDE.md` a regular file, and `scripts/lib/instruction-sandbox-project-check.sh <root>` reports `CHECK project:structure PASS|FAIL`: no dangling link, no link leaving the mount and the root or entering a protected path, and no `settings*.json` naming a protected path (a hook wired there by absolute path would run the real project's hooks instead of the candidate's).
 
 ## Onboarding (three commands)
 
