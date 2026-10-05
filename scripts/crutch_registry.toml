@@ -8,6 +8,7 @@
 # partition                                                  | domain | default class
 # -----------------------------------------------------------|--------|----------------
 # scripts/tests/**                                           | code   | not-a-gate
+# scripts/lib/writer_rules.py (candidate generation)         | code   | semantic-guarded
 # scripts/agentctl/result_image.py (judge-guarded)           | code   | semantic-guarded
 # scripts/agentctl/conditions.py (judge-guarded)             | code   | semantic-guarded
 # scripts/agentctl/procedure.py (judge-guarded)              | code   | semantic-guarded
@@ -2307,6 +2308,38 @@ file = "scripts/lib/writer_pass.py"
 class = "structural"
 disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+
+[[entry]]
+id = "05cc285b70d2c95f"
+domain = "code"
+file = "scripts/lib/writer_rules.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Lexical candidate generation feeding a fail-open judge; never decides: the regexes compiled from publish-rules.toml only choose which published bodies are worth a model judge's time (a hit alone denies nothing), and the SKILL.md parsing is markdown structure (numbered items, headings)."
+
+[[entry]]
+id = "1365f781a66f938c"
+domain = "code"
+file = "scripts/lib/writer_rules.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Lexical candidate generation feeding a fail-open judge; never decides: the regexes compiled from publish-rules.toml only choose which published bodies are worth a model judge's time (a hit alone denies nothing), and the SKILL.md parsing is markdown structure (numbered items, headings)."
+
+[[entry]]
+id = "05dd996a6f80a66f"
+domain = "code"
+file = "scripts/lib/writer_rules.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Lexical candidate generation feeding a fail-open judge; never decides: the regexes compiled from publish-rules.toml only choose which published bodies are worth a model judge's time (a hit alone denies nothing), and the SKILL.md parsing is markdown structure (numbered items, headings)."
+
+[[entry]]
+id = "c822fa800948753e"
+domain = "code"
+file = "scripts/lib/writer_rules.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Lexical candidate generation feeding a fail-open judge; never decides: the regexes compiled from publish-rules.toml only choose which published bodies are worth a model judge's time (a hit alone denies nothing), and the SKILL.md parsing is markdown structure (numbered items, headings)."
 
 [[entry]]
 id = "c80bc195bfa4637a"
@@ -12779,6 +12812,14 @@ file = "scripts/lib/writer_pass.py"
 class = "structural"
 disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "48c6e79bc721d2af"
+domain = "code_file_rollup"
+file = "scripts/lib/writer_rules.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Lexical candidate generation feeding a fail-open judge; never decides: the regexes compiled from publish-rules.toml only choose which published bodies are worth a model judge's time (a hit alone denies nothing), and the SKILL.md parsing is markdown structure (numbered items, headings). (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "4fd49cf00d83425e"

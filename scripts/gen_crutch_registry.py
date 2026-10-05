@@ -77,6 +77,16 @@ CODE_PARTITIONS = [
         "controlled inputs (including deliberately adversarial ones) but are not "
         "themselves gates guarding production behaviour.",
     ),
+    (
+        "scripts/lib/writer_rules.py (candidate generation)",
+        lambda f: f == "scripts/lib/writer_rules.py",
+        "semantic-guarded",
+        "keep",
+        "Lexical candidate generation feeding a fail-open judge; never decides: the "
+        "regexes compiled from publish-rules.toml only choose which published bodies "
+        "are worth a model judge's time (a hit alone denies nothing), and the SKILL.md "
+        "parsing is markdown structure (numbered items, headings).",
+    ),
     # Mechanics of the two judge-guarded rows below, kept OUT of the emitted ground
     # (which wants the classification reason, not the generator's implementation):
     #   * It is a partition row, not a CODE_ID_OVERRIDES entry, because the override
