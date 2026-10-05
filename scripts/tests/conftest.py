@@ -99,6 +99,14 @@ def _isolate_correction_verdict_cache(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_judged_verdict_caches(tmp_path, monkeypatch):
+    """Same-difficulty and per-judge verdict caches live in per-machine files; no test may touch the real ones."""
+    monkeypatch.setenv("CLAUDE_SAME_DIFFICULTY_VERDICTS", str(tmp_path / "same-difficulty-verdicts.json"))
+    monkeypatch.setenv("POLICY_QUESTION_VERDICTS", str(tmp_path / "question-verdicts.json"))
+    monkeypatch.setenv("POLICY_RESOLUTION_VERDICTS", str(tmp_path / "resolution-verdicts.json"))
+
+
+@pytest.fixture(autouse=True)
 def _plan_review_gate_off_by_default(monkeypatch):
     """Default the thinker-review gate OFF for the suite at large.
 
