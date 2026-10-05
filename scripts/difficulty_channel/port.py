@@ -116,6 +116,28 @@ class DifficultyChannel(abc.ABC):
             f"{type(self).__name__} does not support stream {stream!r}"
         )
 
+    def list_open(self) -> list[DifficultyRecord]:
+        """Every record still open on this channel, for a pre-filing duplicate check.
+
+        Default: the report stream plus the backlog stream when the adapter supports it, so an
+        adapter that only implements ``pull`` keeps working. An adapter whose ``pull`` is
+        narrower than "all open items" (a label filter, a single page) overrides this.
+        """
+        records = list(self.pull())
+        try:
+            records.extend(self.pull_stream("backlog"))
+        except StreamUnsupported:
+            pass
+        return records
+
+    def add_comment(self, ref: str, body: str) -> None:
+        """Post ``body`` as a comment on the record ``ref`` (a ``DifficultyRecord.ref``).
+
+        Not every channel can comment; the default refuses, which the caller reports as a
+        failed comment rather than falling back to a duplicate filing.
+        """
+        raise NotImplementedError(f"{type(self).__name__} cannot comment on an existing record")
+
 
 class NullChannel(DifficultyChannel):
     """In-memory test double / no-op sink. Round-trips records without external I/O."""

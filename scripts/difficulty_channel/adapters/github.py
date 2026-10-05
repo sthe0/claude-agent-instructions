@@ -11,6 +11,7 @@ effect deferred to an explicit, separately-authorized run.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -64,7 +65,16 @@ def record_to_fields(record: DifficultyRecord, stream: str = "report") -> dict:
     }
 
 
+OFFLINE_ENV = "CLAUDE_DIFFICULTY_CHANNEL_OFFLINE"
+
+
+class ChannelOfflineError(RuntimeError):
+    """Raised by the default HTTP client while ``CLAUDE_DIFFICULTY_CHANNEL_OFFLINE`` is set."""
+
+
 def _default_http(method: str, url: str, headers: dict, body: bytes | None) -> object:
+    if os.environ.get(OFFLINE_ENV):
+        raise ChannelOfflineError(f"{OFFLINE_ENV} is set: refusing {method} {url}")
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     with urllib.request.urlopen(req) as resp:  # pragma: no cover - real network
         return json.loads(resp.read().decode("utf-8"))
@@ -184,6 +194,41 @@ def list_comments(
     return out
 
 
+def list_open_issues(
+    *,
+    repo: str | None = None,
+    http: Callable[[str, str, dict, bytes | None], object] | None = None,
+    token: str | None = None,
+) -> list[DifficultyRecord]:
+    """Every open issue of ``repo`` regardless of label, as records (paginated, read-only).
+
+    Pull requests are dropped. Each record's ``ref`` is ``owner/repo#N``, the form
+    ``add_comment`` takes.
+    """
+    target_repo = repo or REPO
+    tok = token or _read_token()
+    client = http or _default_http
+    headers = _gh_headers(tok)
+    records: list[DifficultyRecord] = []
+    page = 1
+    while True:
+        url = f"{API_BASE}/repos/{target_repo}/issues?state=open&per_page=100&page={page}"
+        batch = client("GET", url, headers, None)
+        if not isinstance(batch, list) or not batch:
+            break
+        for issue in batch:
+            if not isinstance(issue, dict) or "pull_request" in issue:
+                continue
+            record = _issue_to_record(issue)
+            if issue.get("number") is not None:
+                record = dataclasses.replace(record, ref=f"{target_repo}#{issue['number']}")
+            records.append(record)
+        if len(batch) < 100:
+            break
+        page += 1
+    return records
+
+
 class GitHubChannel(DifficultyChannel):
     """Submits difficulties as GitHub issues. HTTP client and stream are injectable for tests."""
 
@@ -231,6 +276,12 @@ class GitHubChannel(DifficultyChannel):
 
     def pull(self, since: str | None = None) -> list[DifficultyRecord]:
         return self._pull_by_label(DIFFICULTY_LABEL, since)
+
+    def list_open(self) -> list[DifficultyRecord]:
+        return list_open_issues(http=self._http, token=self._token)
+
+    def add_comment(self, ref: str, body: str) -> None:
+        add_comment(ref, body, http=self._http, token=self._token)
 
     def pull_stream(self, stream: str = "report", since: str | None = None) -> list[DifficultyRecord]:
         if stream not in STREAM_LABELS:

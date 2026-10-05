@@ -101,8 +101,21 @@ never be silently skipped.
 Add `--dry-run` to print the record without submitting. Add `--channel <name>` to override the
 machine default.
 
-The command prints the channel-native handle on success: a GitHub issue URL, or whatever handle a
-plugin channel returns (typically an issue key).
+Before filing, the command lists the channel's open records (GitHub: every open issue, paginated,
+no label filter) and asks the same-difficulty judge about the best lexical candidates. It prints
+one line, `dedup: <outcome> listed=<n> nominated=<k> judged=<j> cached=<c> unjudged=<u>[ ref=<ref>]`,
+with outcome `match`, `no-match`, `no-candidates`, `search-failed` or `judge-unavailable`; every
+outcome but `match` files as before (a lost report is worse than a duplicate). On a `match`
+nothing is filed: the command posts `--evidence` as a comment on the matched record (after the
+org-term gate), prints the matched title and then its ref as the last line, and exits 0; a failed
+comment prints `match-comment-failed` and exits 1. `--no-comment-on-match` prints the match and
+exits 3 without commenting. `--comment-on-issue N` comments on issue N only when the judged match
+is N, otherwise it exits 4 with a `comment-on-issue: no comment on N` line on stderr.
+`--dry-run --filing-preview PATH` (github channel only) also writes the exact issue title and
+body a real filing would POST. `CLAUDE_SAME_DIFFICULTY_JUDGE_BUDGET_S` bounds the judge time.
+
+On any other outcome the command prints the channel-native handle on success: a GitHub issue URL,
+or whatever handle a plugin channel returns (typically an issue key).
 
 ## Author-side digest
 

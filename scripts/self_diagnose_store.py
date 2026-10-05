@@ -564,6 +564,11 @@ def inside_core(finding_path: str, core_root: "Path | None" = None) -> bool:
         return False
 
 
+FILER_JUDGE_BUDGET_ENV = "CLAUDE_SAME_DIFFICULTY_JUDGE_BUDGET_S"
+FILER_JUDGE_BUDGET_S = "40"  # under the filer's 60 s timeout, leaving room to file after judging
+FILER_EXIT_MATCHED = 3  # file-difficulty found the difficulty already open and refused to comment
+
+
 def _default_filer(row: dict) -> "tuple[int, str]":
     """Invoke file-difficulty.py for one advisory row. Returns (returncode, ref)."""
     argv = [
@@ -580,7 +585,10 @@ def _default_filer(row: dict) -> "tuple[int, str]":
         "--cost-not-estimable", "machine-detected self-friction; not measured at detection time",
     ]
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, timeout=60,
+            env={**os.environ, FILER_JUDGE_BUDGET_ENV: FILER_JUDGE_BUDGET_S},
+        )
     except Exception:
         return 1, ""
     out = (proc.stdout or "").strip().splitlines()
@@ -606,7 +614,10 @@ def route_advisory(
         Publishing one is irrecoverable (the venue e-mails the body to watchers
         at creation), so the filter is mandatory even though nothing files today.
 
-      * A NON-ZERO filer exit means NOT FILED. The row keeps its unfiled state and
+      * Exit 3 means the difficulty is already open on the channel (its ref is the last
+        stdout line), so the row is recorded as covered by that ref.
+
+      * Any other NON-ZERO filer exit means NOT FILED. The row keeps its unfiled state and
         stays in the digest rather than being marked filed and disappearing — a
         channel that can silently swallow a finding is a drain wearing a
         channel's clothes.
@@ -625,7 +636,7 @@ def route_advisory(
             rc, ref = filer(row)
         except Exception:
             continue
-        if rc != 0:
+        if rc not in (0, FILER_EXIT_MATCHED):
             continue
         row["filed_ref"] = ref or "filed"
         filed.append(row)

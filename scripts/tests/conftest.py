@@ -107,6 +107,13 @@ def _isolate_judged_verdict_caches(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _difficulty_channel_offline(monkeypatch):
+    """The github adapter's default HTTP client refuses while this is set, so a test that forgets
+    to inject a fake client fails loudly instead of listing or posting on the public repo."""
+    monkeypatch.setenv("CLAUDE_DIFFICULTY_CHANNEL_OFFLINE", "1")
+
+
+@pytest.fixture(autouse=True)
 def _plan_review_gate_off_by_default(monkeypatch):
     """Default the thinker-review gate OFF for the suite at large.
 
