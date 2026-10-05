@@ -765,20 +765,25 @@ def _ground_signal(detector: str, functional_ground: str) -> str:
 
 
 def _board_ground_match(
-    board: "PriorBoard | None", functional_ground: str, judge=None
-) -> "str | None":
-    """Has the backlog board already got an item for this ground? Identical text joins
+    board: "PriorBoard | None", functional_ground: str, judge=None, budget=None
+) -> "tuple[str | None, bool]":
+    """(matched board ref | None, board undecided) for this ground. Identical text joins
     outright; otherwise word overlap nominates board items and a judge alone decides
     "same difficulty?". A match short-circuits the (costlier) record-experience
     subprocess search below — the two dedup against different stores, but either one
-    finding the ground already tracked is sufficient."""
+    finding the ground already tracked is sufficient. `undecided` is True when a
+    nominated board item went unjudged, so the caller can report the dedup as
+    incomplete rather than as a clean no-match."""
     if board is None:
-        return None
+        return None, False
     result = semantic_join.judged_match(
         functional_ground, list(board.items.items()),
-        lambda entry: entry[1].functional_ground, judge=judge, k=semantic_join.K_FILING,
+        lambda entry: entry[1].functional_ground, judge=judge, budget=budget,
+        k=semantic_join.K_FILING,
     )
-    return result.candidate[0] if result.outcome == "match" else None
+    if result.outcome == "match":
+        return result.candidate[0], False
+    return None, result.outcome == "unjudged"
 
 
 DEDUP_OUTCOMES = ("no-match", "dedup-match", "board-match", "search-failed", "judge-unavailable")
@@ -872,12 +877,15 @@ def build_findings_from_grounds(
     meaning, so a model judge decides it (`advisor.judge_same_difficulty`); the
     keyword search only nominates the leaves to ask about. A judge that cannot
     answer keeps the finding (`judge-unavailable`): a duplicate costs a glance, a
-    dropped finding costs the difficulty.
+    dropped finding costs the difficulty. A board item left unjudged makes an
+    otherwise clean no-match `judge-unavailable` too. One judge budget covers the
+    whole invocation.
     """
     findings: "list[Finding]" = []
     dedup_log: "list[dict]" = []
     runner = judge_runner if judge_runner is not None else _default_judge_runner()
     board_judge = None
+    budget = semantic_join.env_budget()
     if judge_runner is not None:
         def board_judge(a, b, timeout):
             return advisor.judge_same_difficulty(
@@ -887,7 +895,8 @@ def build_findings_from_grounds(
         detector = g["detector"]
         ground_text = g["functional_ground"]
 
-        board_ref = _board_ground_match(board, ground_text, board_judge)
+        board_ref, board_undecided = _board_ground_match(
+            board, ground_text, board_judge, budget)
         if board_ref is not None:
             dedup_log.append({
                 "detector": detector, "functional_ground": ground_text,
@@ -906,6 +915,8 @@ def build_findings_from_grounds(
                 )
             else:
                 outcome, detail = "no-match", output
+        if outcome == "no-match" and board_undecided:
+            outcome, detail = "judge-unavailable", "a nominated board item was not judged"
         dedup_log.append({
             "detector": detector, "functional_ground": ground_text,
             "outcome": outcome, "detail": detail,

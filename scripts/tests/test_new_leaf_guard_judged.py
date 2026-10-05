@@ -125,3 +125,13 @@ def test_new_guard_unjudged_creates_with_note(tmp_path, monkeypatch, capsys):
     assert rc == 0
     assert (_exp_dir(tmp_path) / "2026-06-27-unjudged.md").exists()
     assert "existing.md" in capsys.readouterr().err
+
+
+def test_unjudged_note_omits_leaves_already_judged_different(tmp_path, monkeypatch, capsys):
+    decided = _leaf(_exp_dir(tmp_path) / "decided.md", LEAF_DIFFICULTY)
+    _leaf(_exp_dir(tmp_path) / "pending.md", "the resolution gate is skipped when thanks arrives early")
+    _isolate(monkeypatch, tmp_path, False, pair=(decided, LEAF_DIFFICULTY))
+    rc = _new(tmp_path, "mixed", LEAF_DIFFICULTY)
+    err = capsys.readouterr().err
+    assert rc == 0
+    assert "pending.md" in err and "decided.md" not in err

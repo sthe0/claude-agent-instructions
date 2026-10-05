@@ -482,7 +482,10 @@ def cmd_new(a) -> int:
             f"or pass `--justify-new \"<reason>\"` for a genuinely distinct difficulty."
         )
     if result.outcome == "unjudged":
-        names = ", ".join(item[0].name for item in result.nominated)
+        cache = semantic_join.same_difficulty_cache()
+        names = ", ".join(
+            item[0].name for item in result.nominated
+            if cache.get(a.difficulty, item[1]) is not False)
         print(f"note: no judged verdict against nominated leaf(s) {names}; "
               f"creating the leaf unchecked", file=sys.stderr)
     path.write_text(standalone_body(a), encoding="utf-8")

@@ -58,6 +58,7 @@ def test_judged_match_yes_returns_match(monkeypatch, tmp_path):
     r = sj.judged_match("disk full error", ["disk full on node", "unrelated"], judge=j, budget=_live())
     assert r.outcome == "match" and r.candidate == "disk full on node"
     assert r.stats.judged_calls == 1
+    assert r.nominated == ["disk full on node"]
 
 
 def test_judged_match_no_returns_no_match(monkeypatch, tmp_path):
@@ -66,6 +67,7 @@ def test_judged_match_no_returns_no_match(monkeypatch, tmp_path):
     r = sj.judged_match("disk full error", ["disk full on node", "error on disk"], judge=j, budget=_live())
     assert r.outcome == "no-match" and r.candidate is None
     assert r.stats.judged_calls == 2 and r.stats.unjudged_items == 0
+    assert sorted(r.nominated) == ["disk full on node", "error on disk"]
 
 
 def test_judged_match_fabricated_verdict_is_unjudged(monkeypatch, tmp_path):
@@ -74,6 +76,7 @@ def test_judged_match_fabricated_verdict_is_unjudged(monkeypatch, tmp_path):
     r = sj.judged_match("disk full error", ["disk full on node"], judge=j, budget=_live())
     assert r.outcome == "unjudged" and r.candidate is None
     assert r.stats.judged_calls == 0 and r.stats.unjudged_items == 1
+    assert r.nominated == ["disk full on node"]
     assert not path.exists()
 
 
