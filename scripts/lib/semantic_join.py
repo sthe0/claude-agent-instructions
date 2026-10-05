@@ -251,6 +251,7 @@ class MatchResult:
     outcome: str  # "match" | "no-match" | "unjudged"
     candidate: object
     stats: JoinStats = field(default_factory=JoinStats)
+    nominated: list = field(default_factory=list)
 
 
 def judged_match(query, candidates, text_fn=None, *, judge=None, cache=None, budget=None,
@@ -269,17 +270,18 @@ def judged_match(query, candidates, text_fn=None, *, judge=None, cache=None, bud
             stats.identity_joins += 1
             return MatchResult("match", cand, stats)
     undecided = False
-    for cand in nominate(query=query, candidates=candidates, text_fn=text_fn, k=k):
+    nominated = nominate(query=query, candidates=candidates, text_fn=text_fn, k=k)
+    for cand in nominated:
         verdict = _decide_pair(query, text_fn(cand), judge=judge, cache=cache, budget=budget, stats=stats)
         if verdict is None:
             undecided = True
             stats.unjudged_pairs += 1
         elif verdict:
-            return MatchResult("match", cand, stats)
+            return MatchResult("match", cand, stats, nominated)
     if undecided:
         stats.unjudged_items = 1
-        return MatchResult("unjudged", None, stats)
-    return MatchResult("no-match", None, stats)
+        return MatchResult("unjudged", None, stats, nominated)
+    return MatchResult("no-match", None, stats, nominated)
 
 
 @dataclass

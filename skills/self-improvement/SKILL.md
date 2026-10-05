@@ -60,7 +60,7 @@ A bare reminder ("did you run self-improvement?") is **not** pre-approval — ru
 
 ### Non-author machines route Core difficulties to a channel (ADR-0001)
 
-Before proposing an edit to a **protected-Core** artifact, check authority with `difficulty_channel.authority.is_author()`. A **non-author** never authors a Core edit — it files the difficulty via `scripts/file-difficulty.py` (propose-not-execute / no-veto); an **author** runs the normal spine off `core-difficulty-digest.py`. Canonical rule, the exact command, and the tier/queue routing table: [policy.md](policy.md) § Authority before a Core edit + § Routing a difficulty to its queue by tier; the 3-tier queue model: [instruction-dev-queues.md](../../memory-global/leaves/instruction-dev-queues.md).
+Before proposing an edit to a **protected-Core** artifact, check authority with `difficulty_channel.authority.is_author()`. A **non-author** never authors a Core edit — it files the difficulty via `scripts/file-difficulty.py` (propose-not-execute / no-veto; it checks open records before filing — a judged match is commented on, not duplicated, or refused under `--no-comment-on-match`; `record-experience.py new` likewise asks a judge); an **author** runs the normal spine off `core-difficulty-digest.py`. Canonical rule, the exact command, and the tier/queue routing table: [policy.md](policy.md) § Authority before a Core edit + § Routing a difficulty to its queue by tier; the 3-tier queue model: [instruction-dev-queues.md](../../memory-global/leaves/instruction-dev-queues.md).
 
 ## Source of truth
 

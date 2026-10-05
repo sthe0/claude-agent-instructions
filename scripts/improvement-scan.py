@@ -63,6 +63,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import self_diagnose_store as sds  # noqa: E402
+from lib import semantic_join  # noqa: E402
 from difficulty_channel import DifficultyRecord, Severity, get_channel, is_registered  # noqa: E402
 from difficulty_channel.adapters import load_adapter  # noqa: E402
 from difficulty_channel.port import StreamUnsupported  # noqa: E402
@@ -763,18 +764,21 @@ def _ground_signal(detector: str, functional_ground: str) -> str:
     return "telemetry-" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
-def _board_ground_match(board: "PriorBoard | None", functional_ground: str) -> "str | None":
-    """A cheap, subprocess-free pre-check: has the backlog board already got an item
-    carrying this exact ground text? A match here short-circuits the (costlier)
-    record-experience subprocess search below — the two dedup against different
-    stores, but either one finding the ground already tracked is sufficient."""
+def _board_ground_match(
+    board: "PriorBoard | None", functional_ground: str, judge=None
+) -> "str | None":
+    """Has the backlog board already got an item for this ground? Identical text joins
+    outright; otherwise word overlap nominates board items and a judge alone decides
+    "same difficulty?". A match short-circuits the (costlier) record-experience
+    subprocess search below — the two dedup against different stores, but either one
+    finding the ground already tracked is sufficient."""
     if board is None:
         return None
-    normalized = " ".join(functional_ground.split())
-    for ref, item in board.items.items():
-        if " ".join(item.functional_ground.split()) == normalized:
-            return ref
-    return None
+    result = semantic_join.judged_match(
+        functional_ground, list(board.items.items()),
+        lambda entry: entry[1].functional_ground, judge=judge, k=semantic_join.K_FILING,
+    )
+    return result.candidate[0] if result.outcome == "match" else None
 
 
 DEDUP_OUTCOMES = ("no-match", "dedup-match", "board-match", "search-failed", "judge-unavailable")
@@ -839,7 +843,7 @@ def _judge_ground_against_candidates(
     The candidates are only nominees: the judge alone decides "same difficulty?".
     The walk stops at the first YES, and at the first fabricated answer — a judge
     that is down is not asked again for every remaining candidate."""
-    enabled = os.environ.get("AGENTCTL_ADVISOR") != "0"
+    enabled = semantic_join.judge_enabled()
     for name, description in hits:
         verdict, reason = advisor.judge_same_difficulty(
             ground_text, _candidate_text(description, (paths or {}).get(name)),
@@ -873,11 +877,17 @@ def build_findings_from_grounds(
     findings: "list[Finding]" = []
     dedup_log: "list[dict]" = []
     runner = judge_runner if judge_runner is not None else _default_judge_runner()
+    board_judge = None
+    if judge_runner is not None:
+        def board_judge(a, b, timeout):
+            return advisor.judge_same_difficulty(
+                a, b, judge_runner, enabled=semantic_join.judge_enabled(),
+                timeout=max(1, int(timeout)))
     for g in grounds:
         detector = g["detector"]
         ground_text = g["functional_ground"]
 
-        board_ref = _board_ground_match(board, ground_text)
+        board_ref = _board_ground_match(board, ground_text, board_judge)
         if board_ref is not None:
             dedup_log.append({
                 "detector": detector, "functional_ground": ground_text,

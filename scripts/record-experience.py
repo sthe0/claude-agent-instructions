@@ -40,6 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import edit_ledger  # noqa: E402
+from lib import semantic_join  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "config.md"
@@ -451,9 +452,10 @@ def cmd_new(a) -> int:
     path = exp_dir / filename
     if path.exists():
         sys.exit(f"refusing to overwrite existing leaf: {path}")
-    # Fragmentation guard: refuse silent duplication of an analogous difficulty.
+    # Fragmentation guard: a judge decides whether an existing leaf is the same
+    # difficulty; word overlap only nominates which leaves it is asked about.
     justify_new = getattr(a, "justify_new", None)
-    best_sim, best_leaf = 0.0, None
+    leaves = []
     for leaf in sorted(exp_dir.glob("*.md")):
         if leaf.name == "MEMORY.md" or leaf.name == filename:
             continue
@@ -465,20 +467,24 @@ def cmd_new(a) -> int:
             desc = dm.group(1).strip() if dm else ""
         diff_span = section_span(text, "Difficulty")
         diff_body = text[diff_span[0]:diff_span[1]] if diff_span else ""
-        existing_ground = desc + " " + diff_body
-        sim = _similarity(existing_ground, a.difficulty)
-        if sim > best_sim:
-            best_sim, best_leaf = sim, leaf
-    if best_sim >= JOIN_RATIO and not justify_new:
+        leaves.append((leaf, desc + " " + diff_body))
+    result = semantic_join.judged_match(
+        a.difficulty, leaves, lambda item: item[1], k=semantic_join.K_NEW_LEAF)
+    if result.outcome == "match" and not justify_new:
+        best_leaf = result.candidate[0]
         # The name stays where it is READ, the path goes where it is EXECUTED.
         # Resolved here rather than trusting the root: on --scope project the
         # root is caller-supplied via --project-dir and may be relative.
         sys.exit(
-            f"refusing to fragment: analogous leaf {best_leaf.name!r} already exists "
-            f"(similarity {best_sim:.2f} >= {JOIN_RATIO:.2f}). "
+            f"refusing to fragment: a judge found analogous leaf {best_leaf.name!r} "
+            f"to be the same difficulty. "
             f"Use `extend --leaf {best_leaf.resolve()}` to add a context, "
             f"or pass `--justify-new \"<reason>\"` for a genuinely distinct difficulty."
         )
+    if result.outcome == "unjudged":
+        names = ", ".join(item[0].name for item in result.nominated)
+        print(f"note: no judged verdict against nominated leaf(s) {names}; "
+              f"creating the leaf unchecked", file=sys.stderr)
     path.write_text(standalone_body(a), encoding="utf-8")
     edit_ledger.stamp(str(path), "record-experience:new", session=getattr(a, "session", None))
     update_subindex(exp_dir, a.date, a.title, filename, a.description,

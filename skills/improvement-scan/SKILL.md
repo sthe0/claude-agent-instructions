@@ -92,8 +92,11 @@ Procedure step 6).
    python3 scripts/improvement-scan.py telemetry --grounds grounds.json \
      --store <store>
    ```
-   A ground that matches an existing board item or experience leaf is deduped,
-   not double-counted — read the printed dedup outcomes, don't ignore them.
+   A ground that a judge finds the same as an existing board item or experience leaf is
+   deduped, not double-counted — read the printed dedup outcomes, don't ignore them.
+   The next step, `file-difficulty.py`, itself checks open records before filing: a judged
+   match is commented on (or refused with exit 3 under `--no-comment-on-match`), and
+   `record-experience.py new` asks a judge before creating a leaf.
 
 8. **Render the unified report:**
    ```

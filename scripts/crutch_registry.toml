@@ -27209,7 +27209,7 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
-id = "704b4229a940558b"
+id = "2fb4b2a186212366"
 domain = "prose"
 file = "skills/improvement-scan/SKILL.md"
 class = "perception"
@@ -27585,7 +27585,7 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
-id = "af2acf8e13d17f28"
+id = "147acbfb0715e678"
 domain = "prose"
 file = "skills/self-improvement/SKILL.md"
 class = "already-mechanized"

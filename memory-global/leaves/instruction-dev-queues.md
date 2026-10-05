@@ -20,7 +20,7 @@ To achieve **a planned destination for every instruction-development idea** — 
 The instruction system has three editable tiers (the `Core < Team < Personal` substrate of ADR-0001; "Org" and "Project" are org-specific instances of the editable middle/leaf — e.g. a company-wide tier and a single deployed project). **Each tier has two tracking flows:**
 
 - **Internal backlog** — what the tier's *editors* (those with edit authority over that tier's instructions) proactively plan to build. Author-created planning items.
-- **Report inbox** — difficulties filed by people *without* edit authority over that tier, surfaced during self-improvement and routed via the difficulty-channel (`file-difficulty.py`). Reactive.
+- **Report inbox** — difficulties filed by people *without* edit authority over that tier, surfaced during self-improvement and routed via the difficulty-channel (`file-difficulty.py`, which checks open records before filing: a judged match gets the evidence as a comment, or exit 3 under `--no-comment-on-match`; `record-experience.py new` asks a judge before creating a leaf). Reactive.
 
 **Collapse rule.** When the set of *filers* equals the set of *editors* for a tier, the two flows have the same population and merge into **one queue** — there is no "external report" because everyone who reports can also plan. This is why the Project tier uses a single queue: project participants edit project instructions directly.
 

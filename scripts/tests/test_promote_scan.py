@@ -172,21 +172,52 @@ def test_json_fragmented_flag_set_for_two_leaves(tmp_path: Path, capsys) -> None
 # cmd_new fragmentation guard tests
 # ---------------------------------------------------------------------------
 
-def test_cmd_new_refuses_analogous_without_justify(tmp_path: Path) -> None:
+def _seed_judged_yes(monkeypatch, tmp_path: Path, leaf: Path, difficulty: str) -> None:
+    """Cache a judged YES for (the leaf's ground as cmd_new compares it, `difficulty`)."""
+    import hashlib
+
+    from agentctl import advisor
+
+    class _Probe:
+        prompt = ""
+
+        def __call__(self, argv, **kwargs):
+            from agentctl.dispatch import RunResult
+
+            self.prompt = kwargs.get("stdin", "")
+            return RunResult(0, stdout="NO", stderr="")
+
+    probe = _Probe()
+    advisor.judge_same_difficulty("fixed ground one", "fixed ground two", probe)
+    salt = "same-difficulty@" + hashlib.sha256(probe.prompt.encode("utf-8")).hexdigest()
+    text = leaf.read_text(encoding="utf-8")
+    desc = rec.FRONTMATTER.match(text).group(1).split("description:", 1)[1].splitlines()[0].strip()
+    start, end = rec.section_span(text, "Difficulty")
+    ground = desc + " " + text[start:end]
+    joined = "\x00".join([salt] + sorted(" ".join(t.split()) for t in (ground, difficulty)))
+    cache = tmp_path / "verdicts.json"
+    cache.write_text(json.dumps({hashlib.sha256(joined.encode("utf-8")).hexdigest(): True}),
+                     encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_SAME_DIFFICULTY_VERDICTS", str(cache))
+
+
+def test_cmd_new_refuses_analogous_without_justify(tmp_path: Path, monkeypatch) -> None:
     """(v) cmd_new exits when an analogous leaf already exists and --justify-new is absent."""
     exp_dir = _exp_dir(tmp_path)
     difficulty = "the resolution gate is skipped after the user says thanks"
     _leaf(exp_dir / "existing.md", difficulty=difficulty, contexts=1)
+    _seed_judged_yes(monkeypatch, tmp_path, exp_dir / "existing.md", difficulty)
 
     with pytest.raises(SystemExit):
         rec.cmd_new(_new_args(tmp_path, "new-dup", difficulty))
 
 
-def test_cmd_new_succeeds_with_justify_new(tmp_path: Path, capsys) -> None:
+def test_cmd_new_succeeds_with_justify_new(tmp_path: Path, capsys, monkeypatch) -> None:
     """(vi) cmd_new writes despite a similar existing leaf when --justify-new is given."""
     exp_dir = _exp_dir(tmp_path)
     difficulty = "the resolution gate is skipped after the user says thanks"
     _leaf(exp_dir / "existing.md", difficulty=difficulty, contexts=1)
+    _seed_judged_yes(monkeypatch, tmp_path, exp_dir / "existing.md", difficulty)
 
     rc = rec.cmd_new(_new_args(tmp_path, "new-justified", difficulty,
                                justify_new="distinct trigger: silent session exit, not gratitude"))

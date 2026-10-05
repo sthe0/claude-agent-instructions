@@ -92,6 +92,13 @@ dedup-match=M board-match=B search-failed=K judge-unavailable=J`. `judge-unavail
 verdict was obtained (the `AGENTCTL_ADVISOR=0` killswitch, a timeout, an unparseable answer) and
 the finding is stored anyway; `search-failed` means the search subprocess itself failed.
 
+A ground is judged against the board's open items the same way (word overlap nominates, the
+judge decides; identical text joins outright), so a reworded ground is a `board-match`, not a
+new finding. `file-difficulty.py` — the step after the scan — checks open records before filing:
+on a judged match it files nothing and comments the evidence on the matched record (exit 0),
+or under `--no-comment-on-match` refuses naming the ref (exit 3).
+`record-experience.py new` likewise asks a judge before refusing in favour of `extend`.
+
 ## `report` — unified ranked output
 
 ```

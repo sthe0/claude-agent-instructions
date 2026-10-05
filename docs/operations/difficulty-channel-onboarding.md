@@ -101,7 +101,7 @@ never be silently skipped.
 Add `--dry-run` to print the record without submitting. Add `--channel <name>` to override the
 machine default.
 
-Before filing, the command lists the channel's open records (GitHub: every open issue, paginated,
+The command checks open records before filing: it lists the channel's open records (GitHub: every open issue, paginated,
 no label filter) and asks the same-difficulty judge about the best lexical candidates. It prints
 one line, `dedup: <outcome> listed=<n> nominated=<k> judged=<j> cached=<c> unjudged=<u>[ ref=<ref>]`,
 with outcome `match`, `no-match`, `no-candidates`, `search-failed` or `judge-unavailable`; every
