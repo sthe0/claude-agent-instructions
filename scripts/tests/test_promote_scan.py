@@ -189,7 +189,7 @@ def _seed_judged_yes(monkeypatch, tmp_path: Path, leaf: Path, difficulty: str) -
 
     probe = _Probe()
     advisor.judge_same_difficulty("fixed ground one", "fixed ground two", probe)
-    salt = "same-difficulty@" + hashlib.sha256(probe.prompt.encode("utf-8")).hexdigest()
+    salt = "same-difficulty@" + hashlib.sha256(probe.prompt.encode("utf-8")).hexdigest() + ":confirmed-yes"
     text = leaf.read_text(encoding="utf-8")
     desc = rec.FRONTMATTER.match(text).group(1).split("description:", 1)[1].splitlines()[0].strip()
     start, end = rec.section_span(text, "Difficulty")

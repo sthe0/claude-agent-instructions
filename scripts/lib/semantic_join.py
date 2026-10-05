@@ -7,7 +7,8 @@ contract, so it cannot drift per site:
 
 * ``nominate`` only ORDERS candidates (positive overlap score, top-k, no threshold);
 * byte-identical normalized texts join by identity, with no judge call;
-* otherwise only a genuine judge verdict joins or matches; a fabricated verdict
+* otherwise only a genuine judge verdict joins or matches, and a YES only when a second
+  call confirms it (a YES the second answer contradicts is not cached); a fabricated verdict
   (non-empty ``reason``) never does and is never cached (fail-open);
 * genuine verdicts are cached under a salted key, so a cached verdict is tied to the
   judge prompt that produced it;
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -29,7 +31,7 @@ from agentctl import advisor
 from lib.judge_budget import JudgeBudget
 
 SAME_DIFFICULTY_JUDGE_PROMPT_SHA256 = "5fefb6c30bf1c9cf53bc7e58e0b1109d6164466c7fd600ee181f0e536be54d71"
-SAME_DIFFICULTY_JUDGE_SALT = "same-difficulty@" + SAME_DIFFICULTY_JUDGE_PROMPT_SHA256
+SAME_DIFFICULTY_JUDGE_SALT = "same-difficulty@" + SAME_DIFFICULTY_JUDGE_PROMPT_SHA256 + ":confirmed-yes"
 
 VERDICTS_ENV = "CLAUDE_SAME_DIFFICULTY_VERDICTS"
 DEFAULT_VERDICTS_PATH = "~/.local/state/claude-same-difficulty-verdicts.json"
@@ -42,6 +44,18 @@ K_FILING = 5
 K_NEW_LEAF = 3
 
 _FABRICATED_RAISED = "judge raised (fail-open)"
+
+BM25_K1 = 1.2
+BM25_B = 0.75
+W_TITLE = 2.0
+W_BODY = 1.0
+MIN_WORD_LEN = 3
+STOPWORDS = frozenset(
+    "the and for are but not you all any can had her was one our out has his how its may new now "
+    "old see two who did get got let put say she too use that this with from have been were they "
+    "them then than there their what when which will would into over under about also such some "
+    "very just only more most other these those while where being does done each both".split()
+)
 
 
 def tokenize(text: str) -> list[str]:
@@ -199,12 +213,47 @@ def default_judge(a: str, b: str, timeout: float):
 # --------------------------------------------------------------------------
 # nomination, matching, clustering
 # --------------------------------------------------------------------------
+def bm25f_scores(query_tokens, docs) -> list:
+    """BM25F (Robertson & Zaragoza 2009) of ``query_tokens`` over ``docs``, a list of
+    ``(title_tokens, body_tokens)``; content words only, whole-token matches, idf over ``docs``."""
+    def content(tokens):
+        return [t for t in tokens if len(t) >= MIN_WORD_LEN and t not in STOPWORDS]
+
+    terms = sorted(set(content(query_tokens)))
+    fields = [(content(title), content(body)) for title, body in docs]
+    n = len(fields)
+    if not terms or n == 0:
+        return [0.0] * n
+    avg_title = sum(len(t) for t, _ in fields) / n
+    avg_body = sum(len(b) for _, b in fields) / n
+    df = {w: sum(1 for t, b in fields if w in t or w in b) for w in terms}
+    out = []
+    for title, body in fields:
+        score = 0.0
+        for w in terms:
+            if not df[w]:
+                continue
+            tf = 0.0
+            for weight, toks, avg in ((W_TITLE, title, avg_title), (W_BODY, body, avg_body)):
+                if avg > 0 and toks:
+                    tf += weight * toks.count(w) / (1 - BM25_B + BM25_B * len(toks) / avg)
+            idf = math.log(1 + (n - df[w] + 0.5) / (df[w] + 0.5))
+            score += idf * tf / (BM25_K1 + tf)
+        out.append(score)
+    return out
+
+
 def nominate(query, candidates, text_fn, k) -> list:
-    """Order candidates by overlap with ``query``: positive score only, top ``k``, no threshold."""
-    terms = tokenize(query)
+    """Order candidates by BM25F relevance to ``query``: positive score only, top ``k``, no threshold."""
+    candidates = list(candidates)
+    docs = []
+    for cand in candidates:
+        title, _, body = text_fn(cand).partition("\n")
+        docs.append((tokenize(title), tokenize(body)))
+    scores = bm25f_scores(tokenize(query), docs)
     scored = []
     for idx, cand in enumerate(candidates):
-        score = term_score(text_fn(cand), terms)
+        score = scores[idx]
         if _passes_nomination(score):
             scored.append((-score, idx, cand))
     scored.sort(key=lambda t: (t[0], t[1]))
@@ -242,6 +291,16 @@ def _decide_pair(a, b, *, judge, cache, budget, stats):
     if not _is_genuine(reason):
         return None
     stats.judged_calls += 1
+    if verdict:
+        if not _budget_allows(budget):
+            return None
+        timeout = min(advisor._BINARY_ASK_TIMEOUT_S, budget.remaining())
+        again, reason = _ask_judge(judge, a, b, timeout=timeout)
+        if not _is_genuine(reason):
+            return None
+        stats.judged_calls += 1
+        if not again:
+            return False
     cache.put(verdict, a, b)
     return verdict
 

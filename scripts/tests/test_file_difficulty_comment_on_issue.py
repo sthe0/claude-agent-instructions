@@ -98,7 +98,7 @@ def _salt():
         return advisor.RunResult(0, stdout="YES", stderr="")
 
     advisor.judge_same_difficulty("fixed ground one", "fixed ground two", runner)
-    return "same-difficulty@" + hashlib.sha256(seen[0].encode("utf-8")).hexdigest()
+    return "same-difficulty@" + hashlib.sha256(seen[0].encode("utf-8")).hexdigest() + ":confirmed-yes"
 
 
 def seed_verdicts(monkeypatch, tmp_path, verdicts):

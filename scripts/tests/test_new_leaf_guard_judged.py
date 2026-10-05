@@ -38,7 +38,7 @@ class _CapturingRunner:
 def _salt() -> str:
     runner = _CapturingRunner()
     advisor.judge_same_difficulty("fixed ground one", "fixed ground two", runner)
-    return "same-difficulty@" + hashlib.sha256(runner.prompt.encode("utf-8")).hexdigest()
+    return "same-difficulty@" + hashlib.sha256(runner.prompt.encode("utf-8")).hexdigest() + ":confirmed-yes"
 
 
 def _key(a: str, b: str) -> str:

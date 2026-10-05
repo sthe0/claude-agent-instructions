@@ -40,7 +40,7 @@ class _Runner:
 def _salt() -> str:
     probe = _Runner()
     advisor.judge_same_difficulty("fixed ground one", "fixed ground two", probe)
-    return "same-difficulty@" + hashlib.sha256(probe.calls[0].encode("utf-8")).hexdigest()
+    return "same-difficulty@" + hashlib.sha256(probe.calls[0].encode("utf-8")).hexdigest() + ":confirmed-yes"
 
 
 def _key(a: str, b: str) -> str:

@@ -57,7 +57,7 @@ def test_judged_match_yes_returns_match(monkeypatch, tmp_path):
     sj, j = _sj(), Judge(True)
     r = sj.judged_match("disk full error", ["disk full on node", "unrelated"], judge=j, budget=_live())
     assert r.outcome == "match" and r.candidate == "disk full on node"
-    assert r.stats.judged_calls == 1
+    assert r.stats.judged_calls == 2
     assert r.nominated == ["disk full on node"]
 
 
@@ -142,7 +142,7 @@ def test_identity_join_reaches_non_representative_member(monkeypatch, tmp_path):
     _cache_env(monkeypatch, tmp_path)
     sj = _sj()
     a, b = "disk full", "storage exhausted on disk"
-    d, e, f = ("storage exhausted storage exhausted " + s for s in "xyz")
+    d, e, f = ("storage exhausted disk storage exhausted disk " + s for s in "xyz")
     c = "storage  exhausted on  disk "
     sj.same_difficulty_cache().put(True, a, b)
     assert sj.nominate(query=c, candidates=[a, d, e, f], text_fn=lambda t: t, k=3) == [d, e, f]
@@ -245,7 +245,7 @@ def test_salt_pinned_to_judge_prompt():
     verdict, reason = advisor.judge_same_difficulty("fixed ground one", "fixed ground two", runner)
     assert (verdict, reason) == (True, "")
     assert hashlib.sha256(seen[0].encode("utf-8")).hexdigest() == sj.SAME_DIFFICULTY_JUDGE_PROMPT_SHA256
-    assert sj.SAME_DIFFICULTY_JUDGE_SALT == "same-difficulty@" + sj.SAME_DIFFICULTY_JUDGE_PROMPT_SHA256
+    assert sj.SAME_DIFFICULTY_JUDGE_SALT == "same-difficulty@" + sj.SAME_DIFFICULTY_JUDGE_PROMPT_SHA256 + ":confirmed-yes"
 
 
 def test_judge_enabled_follows_agentctl_advisor(monkeypatch):
@@ -279,15 +279,15 @@ def test_default_judge_wraps_advisor_subprocess_runner(monkeypatch, tmp_path):
 
     monkeypatch.setenv("AGENTCTL_ADVISOR", "1")
     r = sj.judged_match("disk full error", ["disk full on node"], budget=budget(7))
-    assert r.outcome == "match" and r.stats.judged_calls == 1
+    assert r.outcome == "match" and r.stats.judged_calls == 2
     assert json.loads(path.read_text()) == {_d1("disk full error", "disk full on node"): True}
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert "disk full error" in calls[0][1] and "disk full on node" in calls[0][1]
-    assert calls[0][0] == min(advisor._BINARY_ASK_TIMEOUT_S, 7.0) == 7
+    assert calls[0][0] == calls[1][0] == min(advisor._BINARY_ASK_TIMEOUT_S, 7.0) == 7
 
     r = sj.judged_match("lock timeout error", ["lock timeout on db"], budget=budget(500))
-    assert r.outcome == "match" and len(calls) == 2
-    assert calls[1][0] == min(advisor._BINARY_ASK_TIMEOUT_S, 500.0) == 185
+    assert r.outcome == "match" and len(calls) == 4
+    assert calls[2][0] == calls[3][0] == min(advisor._BINARY_ASK_TIMEOUT_S, 500.0) == 185
 
 
 def test_corrupt_cache_reads_empty(monkeypatch, tmp_path):
@@ -368,11 +368,19 @@ def test_overlap_helpers_exported_and_used_by_nominate(monkeypatch):
     assert sj.tokenize(text) == ref.tokenize(text)
     assert sj.term_score(text, ["disk", "node"]) == ref.term_score(text, ["disk", "node"])
     cands = ["disk", "disk disk node", "node node node node"]
-    expect = sorted(cands, key=lambda c: -sj.term_score(c, ["disk", "node"]))
-    assert sj.nominate(query="disk node", candidates=cands, text_fn=lambda t: t, k=5) == expect
-    real = sj.term_score
-    monkeypatch.setattr(sj, "term_score", lambda hay, terms: 100 - real(hay, terms))
-    assert sj.nominate(query="disk node", candidates=cands, text_fn=lambda t: t, k=5) == expect[::-1]
+    assert sj.nominate(query="disk node", candidates=cands, text_fn=lambda t: t, k=5)[0] == "disk disk node"
+    seen = []
+
+    def fixed(query_tokens, docs):
+        seen.append((query_tokens, docs))
+        return [1.0, 3.0, 2.0]
+
+    monkeypatch.setattr(sj, "bm25f_scores", fixed)
+    assert sj.nominate(query="disk node", candidates=cands, text_fn=lambda t: t, k=5) == [cands[1], cands[2], cands[0]]
+    assert seen[0] == (["disk", "node"], [(["disk"], []), (["disk", "disk", "node"], []),
+                                          (["node"] * 4, [])])
+    monkeypatch.setattr(sj, "bm25f_scores", lambda q, d: [3.0, 1.0, 2.0])
+    assert sj.nominate(query="disk node", candidates=cands, text_fn=lambda t: t, k=5) == [cands[0], cands[2], cands[1]]
 
 
 def test_unjudged_items_counts_items_not_pairs(monkeypatch, tmp_path):
