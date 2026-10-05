@@ -110,6 +110,21 @@ def test_confirmation_without_budget_is_unjudged(monkeypatch, tmp_path):
     assert cache.get("disk full error", "disk full on node") is None
 
 
+def test_non_genuine_confirmation_is_unjudged_and_uncached(monkeypatch, tmp_path):
+    _cache_env(monkeypatch, tmp_path)
+    sj = _sj()
+    answers = [(True, ""), (True, "judge unavailable")]
+
+    def judge(a, b, timeout=None):
+        return answers.pop(0)
+
+    cache = sj.same_difficulty_cache()
+    r = sj.judged_match("disk full error", ["disk full on node"], judge=judge, cache=cache,
+                        budget=JudgeBudget(100, 1))
+    assert r.outcome == "unjudged" and answers == []
+    assert cache.get("disk full error", "disk full on node") is None
+
+
 def test_single_call_cached_yes_is_not_served(monkeypatch, tmp_path):
     path = _cache_env(monkeypatch, tmp_path)
     sj = _sj()
