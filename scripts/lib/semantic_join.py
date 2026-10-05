@@ -64,7 +64,7 @@ def tokenize(text: str) -> list[str]:
 
 
 def term_score(haystack: str, terms: list[str]) -> int:
-    """Count of ``terms`` occurrences in ``haystack``; the one ranking engine behind ``nominate``."""
+    """Count of ``terms`` substring occurrences in ``haystack``; kept equal to record-experience's helper."""
     hay = haystack.lower()
     return sum(hay.count(t) for t in terms)
 
