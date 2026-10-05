@@ -45,13 +45,12 @@ _FABRICATED_RAISED = "judge raised (fail-open)"
 
 
 def tokenize(text: str) -> list[str]:
-    """The single tokenizer behind both search-before-record and difficulty clustering."""
+    """Lowercased word tokens; the query side of ``nominate``'s ranking."""
     return [t.lower() for t in re.findall(r"\w+", text)]
 
 
 def term_score(haystack: str, terms: list[str]) -> int:
-    """Count term occurrences — the identical ranking the digest reuses as its clustering join,
-    so there is exactly one ranking engine (ADR-0001: 'that search IS the clustering')."""
+    """Count of ``terms`` occurrences in ``haystack``; the one ranking engine behind ``nominate``."""
     hay = haystack.lower()
     return sum(hay.count(t) for t in terms)
 
@@ -65,7 +64,10 @@ def judge_enabled() -> bool:
 
 
 # --------------------------------------------------------------------------
-# mutation seams: each is called by its bare global name at call time
+# Test-only mutation seams. The stage-1 negative control redefines each of these
+# one-liners on a scratch copy of the module to prove its tests go red, so every
+# decision site must keep calling them by bare global name at call time. Do not
+# inline them, alias them or bind them as default arguments.
 # --------------------------------------------------------------------------
 def _is_genuine(reason) -> bool:
     return reason == ""
@@ -76,11 +78,11 @@ def _passes_nomination(score) -> bool:
 
 
 def _budget_allows(budget) -> bool:
-    return budget.remaining() > 0
+    return budget.remaining_and_timeout(advisor._BINARY_ASK_TIMEOUT_S)[1] is not None
 
 
 def _identity_join(a, b) -> bool:
-    return norm(a) == norm(b)
+    return bool(norm(a)) and norm(a) == norm(b)
 
 
 def _identity_scope(query, candidates, text_fn, k) -> list:
@@ -113,27 +115,48 @@ def _ask_judge(judge, *args, **kwargs):
 # verdict cache
 # --------------------------------------------------------------------------
 class VerdictCache:
-    """A flat JSON ``{key: bool}`` file, one per judge. Only genuine verdicts are stored."""
+    """A flat JSON ``{key: bool}`` file, one per judge. Only genuine verdicts are stored.
+
+    Limit: ``put`` is an unlocked read-modify-write, so two processes writing at once can
+    lose one verdict. The replace is atomic (no corrupt file) and a lost verdict only costs
+    a repeated judge call.
+    """
 
     def __init__(self, path, salt: str, key_fn: Callable[[tuple], str] | None = None) -> None:
         self.path = Path(path)
         self.salt = salt
         self.key_fn = key_fn
+        self._memo: tuple[tuple[int, int], dict] | None = None
 
     def key(self, *texts: str) -> str:
         return _resolve_key(key_fn=self.key_fn, salt=self.salt, texts=texts)
 
     def _load(self) -> dict:
+        # re-parsed only when the file's (mtime, size) changes, so a clustering pass over a
+        # large corpus does not re-read a growing cache once per lookup
         try:
+            st = self.path.stat()
+            sig = (st.st_mtime_ns, st.st_size)
+            if self._memo is not None and self._memo[0] == sig:
+                return dict(self._memo[1])
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
         if not isinstance(data, dict):
             return {}
-        return {k: v for k, v in data.items() if isinstance(v, bool)}
+        data = {k: v for k, v in data.items() if isinstance(v, bool)}
+        self._memo = (sig, data)
+        return dict(data)
 
     def get(self, *texts: str) -> bool | None:
-        return self._load().get(self.key(*texts))
+        key = self.key(*texts)
+        try:
+            st = self.path.stat()
+        except OSError:
+            return None
+        if self._memo is not None and self._memo[0] == (st.st_mtime_ns, st.st_size):
+            return self._memo[1].get(key)
+        return self._load().get(key)
 
     def put(self, verdict: bool, *texts: str) -> None:
         data = self._load()
@@ -238,6 +261,9 @@ def judged_match(query, candidates, text_fn=None, *, judge=None, cache=None, bud
     cache = cache if cache is not None else same_difficulty_cache()
     budget = budget if budget is not None else env_budget()
     stats = JoinStats()
+    if not norm(query):
+        stats.unjudged_items = 1
+        return MatchResult("unjudged", None, stats)
     for cand in _identity_scope(query=query, candidates=candidates, text_fn=text_fn, k=k):
         if _identity_join(query, text_fn(cand)):
             stats.identity_joins += 1
@@ -291,7 +317,9 @@ def judged_clusters(items, ground_fn, *, judge=None, cache=None, budget=None,
                 stats.identity_joins += 1
                 break
         pending = False
-        if joined < 0:
+        if joined < 0 and not norm(texts[i]):
+            pending = True
+        elif joined < 0:
             for j in nominate(query=texts[i], candidates=reps, text_fn=text_of, k=k):
                 verdict = _decide_pair(texts[i], texts[j], judge=judge, cache=cache,
                                        budget=budget, stats=stats)

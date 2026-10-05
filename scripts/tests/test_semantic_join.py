@@ -463,3 +463,67 @@ def test_verdict_cache_key_fn_overrides_key(monkeypatch, tmp_path):
     u = "another  text"
     p4.write_text(json.dumps({kf((u,)): True}), encoding="utf-8")
     assert sj.VerdictCache(path=p4, salt="", key_fn=kf).get(u) is True
+
+
+def test_budget_below_call_floor_issues_no_judge_call(monkeypatch, tmp_path):
+    _cache_env(monkeypatch, tmp_path)
+    sj, j = _sj(), Judge(True)
+    r = sj.judged_match("disk full", ["disk full on node"], judge=j, budget=JudgeBudget(0.5, 1.0))
+    assert r.outcome == "unjudged" and j.calls == []
+    assert r.stats.unjudged_pairs == 1 and r.stats.unjudged_items == 1
+
+
+def test_empty_texts_never_join_by_identity(monkeypatch, tmp_path):
+    _cache_env(monkeypatch, tmp_path)
+    sj, j = _sj(), Judge(True)
+    r = sj.judged_match("   ", ["", "  "], judge=j, budget=_live())
+    assert r.outcome == "unjudged" and r.candidate is None and j.calls == []
+    assert r.stats.identity_joins == 0 and r.stats.unjudged_items == 1
+    res = sj.judged_clusters(["", "  ", "disk full"], lambda t: t, judge=j, budget=_live())
+    assert len(res.groups) == 3 and j.calls == []
+    assert res.stats.identity_joins == 0
+    assert res.unjudged == [True, True, False] and res.stats.unjudged_items == 2
+
+
+def test_judged_match_yes_after_undecided_pair_is_a_match(monkeypatch, tmp_path):
+    _cache_env(monkeypatch, tmp_path)
+    sj = _sj()
+    seen = []
+
+    def judge(a, b, timeout=None):
+        seen.append(b)
+        return (True, "") if len(seen) > 1 else (False, "unavailable (fail-open)")
+
+    r = sj.judged_match("disk full error", ["disk full error on node", "disk full"],
+                        judge=judge, budget=_live())
+    assert r.outcome == "match" and r.candidate == "disk full"
+    assert r.stats.unjudged_pairs == 1 and r.stats.unjudged_items == 0
+
+
+def test_cached_no_is_served_as_no_match_without_judge(monkeypatch, tmp_path):
+    path = _cache_env(monkeypatch, tmp_path)
+    sj, j = _sj(), Judge(True)
+    path.write_text(json.dumps({_d1("disk full", "disk full on node"): False}), encoding="utf-8")
+    r = sj.judged_match("disk full", ["disk full on node"], judge=j, budget=_zero())
+    assert r.outcome == "no-match" and j.calls == []
+    assert r.stats.cached_hits == 1 and r.stats.unjudged_items == 0
+
+
+def test_k_bounds_judge_calls_in_judged_match(monkeypatch, tmp_path):
+    _cache_env(monkeypatch, tmp_path)
+    sj, j = _sj(), Judge(False)
+    cands = [f"disk full variant {w}" for w in "abcdef"]
+    r = sj.judged_match("disk full", cands, judge=j, budget=_live(), k=2)
+    assert r.outcome == "no-match" and len(j.calls) == 2
+
+
+def test_cache_get_sees_a_write_by_another_instance(monkeypatch, tmp_path):
+    _cache_env(monkeypatch, tmp_path)
+    sj = _sj()
+    p = tmp_path / "shared.json"
+    reader = sj.VerdictCache(path=p, salt="s@x")
+    assert reader.get("t") is None
+    sj.VerdictCache(path=p, salt="s@x").put(True, "t")
+    assert reader.get("t") is True
+    sj.VerdictCache(path=p, salt="s@x").put(False, "u")
+    assert reader.get("t") is True and reader.get("u") is False
