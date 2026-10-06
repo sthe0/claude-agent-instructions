@@ -1,0 +1,2257 @@
+[sites."cursor/scripts/lint-cursor-mirror-cochange.py::main::pattern.search"]
+class = "meaning-decision"
+ground = "CURSOR_RELEVANT.search over the staged CLAUDE.md diff: a keyword list (Cursor, AskUserQuestion, Hard gate, ...) alone decides whether the diff is cursor-relevant and so whether a mirror co-change is required, with no judge."
+hits = 1
+open_violation = "the CURSOR_RELEVANT keyword alternation alone decides a CLAUDE.md diff is Cursor-relevant"
+reviewed_by = "developer"
+
+[sites."cursor/scripts/lint-cursor-mirror-cochange.py::<module>::re.compile"]
+class = "meaning-decision"
+ground = "CURSOR_RELEVANT compiles the free-text keyword alternation (Cursor, Hard gate, Difficulty escape, ...) that by itself decides whether a CLAUDE.md diff concerns the Cursor mirror, which gates the commit lint."
+hits = 1
+open_violation = "the compiled CURSOR_RELEVANT keyword alternation that alone gates the mirror co-change lint"
+reviewed_by = "developer"
+
+[sites."cursor/scripts/lint-cursor-mirror.py::check_hook_caveat::pattern.search"]
+class = "meaning-decision"
+ground = "HOOK_GATE_RE.search (hook-*gate.py or the phrase 'blocks the turn') and HOOK_CAVEAT_RE.search (phrases like 'hooks do not run', 'prose-enforced') alone decide whether mirror prose carries a Cursor caveat and emit a lint error, with no judge."
+hits = 2
+hit_classes = ["meaning-decision", "meaning-decision"]
+open_violation = "HOOK_GATE_RE and HOOK_CAVEAT_RE phrase lists alone decide whether mirror prose claims a hook gate and carries a Cursor caveat"
+reviewed_by = "developer"
+
+[sites."cursor/scripts/lint-cursor-mirror.py::check_path_invariants::pattern.search"]
+class = "structural"
+ground = "FORBIDDEN_AGENT_SCRIPTS_RE.search finds the literal path string ~/.claude-agent/scripts in the mirror text, a fixed path syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."cursor/scripts/lint-cursor-mirror.py::<module>::re.compile"]
+class = "meaning-decision"
+ground = "Compiles: SKILL_HEADING_RE, SPEC_ROW_RE, SECTION_HEADING_RE are markdown heading/table syntax and FORBIDDEN_AGENT_SCRIPTS_RE is a literal path; HOOK_GATE_RE and HOOK_CAVEAT_RE are phrase lists deciding whether prose claims a hook gate or carries a Cursor caveat (meaning)."
+hits = 6
+hit_classes = ["structural", "structural", "structural", "structural", "meaning-decision", "meaning-decision"]
+open_violation = "the compiled HOOK_GATE_RE and HOOK_CAVEAT_RE phrase lists behind the caveat lint"
+reviewed_by = "developer"
+
+[sites."cursor/scripts/lint-cursor-mirror.py::parse_mirror::pattern.match"]
+class = "structural"
+ground = "SKILL_HEADING_RE.match reads a '### `name`' markdown heading and SPEC_ROW_RE.match reads a '| `name` |' markdown table row, both fixed markdown structure."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."cursor/scripts/lint-cursor-mirror.py::slice_section::pattern.match"]
+class = "structural"
+ground = "SECTION_HEADING_RE.match detects a '## ' markdown heading line to end a section."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/classify.py::classify::pattern.match"]
+class = "structural"
+ground = "TRACKER_KEY_RE.match checks that the tracker key has the ABC-123 shape."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/classify.py::<module>::re.compile"]
+class = "structural"
+ground = "TRACKER_KEY_RE compiles the ABC-123 tracker-key shape pattern."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::cmd_classify::pattern.match"]
+class = "structural"
+ground = "TRACKER_KEY_RE.match checks the ABC-123 key shape of the --tracker-key argument."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::cmd_present_plan::pattern.findall"]
+class = "structural"
+ground = "_PLAN_PRESENTATION_STAGE_ANCHOR_RE.findall extracts '[stage N]' anchors, the engine's own rendering syntax, to compare with the plan's stage indices."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: legacy id shape qenum-N, '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line and kind(args) resource spec, all fixed engine/markdown syntax."
+hits = 6
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_parse_resource_line::pattern.match"]
+class = "structural"
+ground = "_RESOURCE_LINE_RE.match reads the 'Resource:' label line of a marker body, a fixed label syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_parse_resource_spec::pattern.match"]
+class = "structural"
+ground = "_RESOURCE_SPEC_RE.match parses the kind(args) resource-spec syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_parse_rule_line::pattern.match"]
+class = "structural"
+ground = "_RULE_LINE_RE.match reads the 'Rule:' label line of a marker body, a fixed label syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_parse_transcript_path::pattern.match"]
+class = "structural"
+ground = "_TRANSCRIPT_PATH_RE.match reads the 'spawn-specialist: transcript=<path>' line the engine itself writes."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_upsert_candidate::pattern.match"]
+class = "structural"
+ground = "_LEGACY_ENUMERATION_ID.match tests an id for the qenum-N identifier shape."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/conditions.py::<module>::re.compile"]
+class = "candidate-generation"
+ground = "_INDEXED_STAGE ('stage N'), _RELATIVE_STAGE ('previous stage') and _COMPLETION (done/merged/landed ...) only nominate stage conditions that may restate depends_on for judge_restatement, which decides (fail-open) on the submission path."
+hits = 3
+hit_classes = ["candidate-generation", "candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/conditions.py::restatement_prefilter::pattern.findall"]
+class = "candidate-generation"
+ground = "_INDEXED_STAGE.findall nominates 'stage N' mentions already in depends_on as restatement candidates; judge_restatement (submission.py) decides."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/conditions.py::restatement_prefilter::pattern.search"]
+class = "candidate-generation"
+ground = "_RELATIVE_STAGE.search and _COMPLETION.search together nominate a 'previous stage ... done' wording as a restatement candidate; judge_restatement (submission.py) decides."
+hits = 2
+hit_classes = ["candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/config.py::<module>::re.compile"]
+class = "structural"
+ground = "CONFIG_KEY_RE compiles the config.md markdown table row syntax '| `key` | `value` |'."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/config.py::parse_config_md::pattern.match"]
+class = "structural"
+ground = "CONFIG_KEY_RE.match parses a config.md markdown table row."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/controls.py::control_text::pattern.match"]
+class = "structural"
+ground = "grammar.pattern.match checks a control name against the engine's own control-name grammars."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/controls.py::_match::pattern.match"]
+class = "structural"
+ground = "grammar.pattern.match checks a control name against the engine's own control-name grammars."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/controls.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles of the engine's own control-name grammars: 'stage N verify_command', 'final_check N', 'stage N landed assertion', 'stage N done_criterion', 'order requirement <id>'."
+hits = 5
+hit_classes = ["structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/dispatch.py::<module>::re.compile"]
+class = "structural"
+ground = "MARKER_RE compiles the '^MARKER:' return-marker prefix syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/dispatch.py::parse_marker::pattern.match"]
+class = "structural"
+ground = "MARKER_RE.match reads the fixed specialist return-marker prefix on a line."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/exempt_paths.py::is_production_file::pattern.search"]
+class = "structural"
+ground = "_PRODUCTION_FILE_RE.search tests a file path's extension."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/exempt_paths.py::<module>::re.compile"]
+class = "structural"
+ground = "_PRODUCTION_FILE_RE compiles a file-extension pattern."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/gates.py::_concern_names_part::pattern.match"]
+class = "structural"
+ground = "_PLAN_REVIEW_PART_TOKEN_RE.match reads a leading engine-defined 'meta:/order:/stage:N' part token in a concern string."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/gates.py::_concern_part_token::pattern.match"]
+class = "structural"
+ground = "_PLAN_REVIEW_PART_TOKEN_RE.match reads a leading engine-defined part token (meta:, order:, stage:N)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/gates.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: leading 'meta:/order:/stage:N' part-token prefix and leading 'cut:/add:' remedy-tag prefix, both engine-defined protocol syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/gates.py::_remedy_tag_for_concern::pattern.match"]
+class = "structural"
+ground = "_REMEDY_TAG_PREFIX_RE.match reads the leading 'cut:/add:' protocol prefix of a concern."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/grants.py::_is_unresolvable_segment::pattern.sub"]
+class = "structural"
+ground = "_REDIRECT_MERGE_RE.sub strips shell stream-merge redirects (2>&1, &>) before a structural '<'/'>' check."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/grants.py::<module>::re.compile"]
+class = "structural"
+ground = "_REDIRECT_MERGE_RE compiles the shell stream-merge redirect token pattern."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/grants.py::_validate_candidate_program::pattern.match"]
+class = "structural"
+ground = "INTERPRETER_RE.match tests whether a program token names an interpreter, a shell-command token check."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan.py::check_venue_warnings._first_cd_target::re.split"]
+class = "structural"
+ground = "re.split on '&&', ';' and '|' splits a shell command into segments."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan.py::_first_unscoped_subcommand::re.split"]
+class = "structural"
+ground = "re.split on '&&', ';' and '|' splits a shell command into segments."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: _LANDED_REF_RE (git ref name shape), _EXECUTOR_RE (in_thread|spawn:<kind> vocabulary), _HEREDOC_START (shell here-document introducer)."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan.py::_parse_landed_spec::pattern.match"]
+class = "structural"
+ground = "_LANDED_REF_RE.match validates that landed.target and landed.remote have a git-ref-name shape."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan.py::parse_plan::pattern.match"]
+class = "structural"
+ground = "_EXECUTOR_RE.match validates the executor field against the engine's in_thread|spawn:<kind> syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan.py::plan_coverage_refs::pattern.match"]
+class = "structural"
+ground = "grammar.pattern.match matches a coverage control name against the engine's own control-name grammars."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan.py::_strip_first_heredoc_body::pattern.match"]
+class = "structural"
+ground = "_HEREDOC_START.match recognises the shell here-document introducer '<<TAG' in a command."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/premise.py::dismissal_hash::pattern.sub"]
+class = "structural"
+ground = "_STATEMENT_TARGET_PREFIX_RE.sub strips the leading '[target]' address before hashing, a normalization step."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/premise.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: TARGET_RE for the 'stage:N.element' address syntax and _STATEMENT_TARGET_PREFIX_RE for a leading '[target]' prefix."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/premise.py::parse_target::pattern.match"]
+class = "structural"
+ground = "TARGET_RE.match parses the engine's 'stage:N.element' target address."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/procedure.py::<module>::re.compile"]
+class = "candidate-generation"
+ground = "_TOKEN compiles the word-token pattern behind the Jaccard overlap that nominates method/procedure pairs for judge_collapse (submission.py), which decides."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/procedure.py::_tokens::pattern.findall"]
+class = "candidate-generation"
+ground = "_TOKEN.findall tokenizes text for a word-overlap score that only nominates a method/procedure pair as a collapse candidate for judge_collapse (submission.py), which decides."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/result_image.py::_clauses::pattern.split"]
+class = "structural"
+ground = "_CLAUSE_BOUNDARY.split splits an image into clauses on punctuation/conjunctions, a text-splitting step for the later prefilter."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/result_image.py::echo_prefilter::pattern.search"]
+class = "candidate-generation"
+ground = "_VERDICT_MARKER.search (pass/fail/exit/green/red vocabulary) nominates images whose every clause reports a verdict as echo candidates for judge_echo (submission.py), which decides."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/result_image.py::_is_invocation::pattern.match"]
+class = "structural"
+ground = "_PROGRAM_TOKEN.match and _ARGUMENT_TOKEN.match test whether a code span has shell-command-token shape (program plus argument)."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/result_image.py::<module>::re.compile"]
+class = "candidate-generation"
+ground = "Compiles: _CLAUSE_BOUNDARY (clause splitter) and _PROGRAM_TOKEN/_ARGUMENT_TOKEN (shell token shape) are structural; _VERDICT_MARKER (check-outcome vocabulary) only nominates echo candidates for judge_echo."
+hits = 4
+hit_classes = ["structural", "candidate-generation", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/solved_marker.py::key_shape::pattern.match"]
+class = "structural"
+ground = "ISSUE_KEY_RE.match and GITHUB_REF_RE.match test the ABC-123 key shape and the owner/repo#N reference shape."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/solved_marker.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: ISSUE_KEY_RE (ABC-123 key shape) and GITHUB_REF_RE (owner/repo#N reference or URL shape)."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/submission.py::_names_requirement_id::re.search"]
+class = "structural"
+ground = "re.search finds a requirement-id identifier as a whole token inside normalized plan text, an identifier-presence check."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/tool_contracts.py::_check_command_shape::pattern.match"]
+class = "structural"
+ground = "_BARE_ASSIGNMENT_RE.match detects a leading NAME=value shell assignment token on a command segment."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/tool_contracts.py::_compute_identity::pattern.match"]
+class = "structural"
+ground = "INTERPRETER_RE.match tests whether a program token names an interpreter, a shell-command token check."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/tool_contracts.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: _BARE_ASSIGNMENT_RE (leading shell NAME= assignment) and _STANDALONE_REDIRECT_TO_STDOUT (the shell token 2>&1)."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/tool_contracts.py::_strip_standalone_stderr_merge::pattern.sub"]
+class = "structural"
+ground = "_STANDALONE_REDIRECT_TO_STDOUT.sub replaces the shell token 2>&1 with a space, a normalization step."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/check-exception-set-enumeration.py::_deselected_nodes::pattern.finditer"]
+class = "structural"
+ground = "_DESELECT_RE finditer extracts the node id after the literal `--deselect` flag in an already-masked shell command (command-line flag syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/check-exception-set-enumeration.py::_field_sentences::pattern.match"]
+class = "structural"
+ground = "_TABLE_HEADER_RE, _INDEX_LINE_RE and _FIELD_LINE_RE match TOML table headers, the `index = N` line and `key = \"value\"` lines of the plan file (TOML structure only)."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/check-exception-set-enumeration.py::_field_sentences::pattern.split"]
+class = "structural"
+ground = "_SENTENCE_SPLIT_RE only splits a field value into sentences (punctuation boundary) as input to the later report step; it decides nothing itself."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/check-exception-set-enumeration.py::_guarded_nodes::pattern.finditer"]
+class = "structural"
+ground = "_GUARD_INVOCATION_RE and _GUARD_COMPARISON_RE match the literal shell shapes `pytest <node> -q >/dev/null 2>&1; v=$?` and `test $v -eq N` (shell-command syntax)."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/check-exception-set-enumeration.py::_label_sort_key::pattern.match"]
+class = "structural"
+ground = "_LABEL_ORDER_RE parses the engine's own `stage N` / `final_check N` label for numeric sort order."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/check-exception-set-enumeration.py::<module>::re.compile"]
+class = "candidate-generation"
+ground = "Lines 82-94 compile shell-syntax patterns (--deselect, guard invocation and comparison, fd redirects, label order); _VOCAB_RE, _CARDINALITY_RE and _DEFINITE_SINGULAR_RE (360-369) are keyword sets that only nominate exception-set wording for the report-only semantic listing; the splitter (372) and the TOML line patterns (376-378) are structural."
+hits = 12
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "candidate-generation", "candidate-generation", "candidate-generation", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/check-exception-set-enumeration.py::semantic_report::pattern.search"]
+class = "candidate-generation"
+ground = "_VOCAB_RE, _CARDINALITY_RE and _DEFINITE_SINGULAR_RE only select sentences that talk about an exception set into a report-only listing for the reviewing model; nothing is blocked, counted or routed on the match."
+hits = 3
+hit_classes = ["candidate-generation", "candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/check-exception-set-enumeration.py::_top_level_separators::pattern.finditer"]
+class = "structural"
+ground = "_TOP_LEVEL_SCAN_RE finditer scans shell operators (&&, ||, ;, &, redirects) in a masked shell command (shell syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/check-live-run-evidence.py::_series::re.split"]
+class = "structural"
+ground = "re.split on `+` only splits a cited-sample spec string `file:series + file:series` into its parts (fixed format)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/consensus_eval/runner.py::_tokens::re.findall"]
+class = "meaning-decision"
+ground = "\\w+ tokenizer feeds Tenet.engaged_by, where word overlap with protected terms alone decides whether a candidate edit is \"about\" a tenet's behaviour and so whether the tenet is checked (no judge)."
+hits = 1
+open_violation = "word overlap with protected terms alone decides a tenet is engaged by a candidate edit"
+reviewed_by = "developer"
+
+[sites."scripts/consensus-synthesizer.py::induce_invariant::lexical.tokenize"]
+class = "meaning-decision"
+ground = "Both tokenize calls feed set intersection/difference of the two directives' words that alone defines the shared invariant (commonality) vs residue, i.e. word overlap decides what two edits have in common in meaning."
+hits = 2
+hit_classes = ["meaning-decision", "meaning-decision"]
+open_violation = "word-set intersection alone decides what two edits have in common"
+reviewed_by = "developer"
+
+[sites."scripts/consensus-synthesizer.py::_same_directive::lexical.tokenize"]
+class = "meaning-decision"
+ground = "Both tokenize calls feed a 0.6 word-overlap ratio that alone decides whether two edits assert the same directive and hence detect_conflict (A-vs-not-A); no judge follows."
+hits = 2
+hit_classes = ["meaning-decision", "meaning-decision"]
+open_violation = "a 0.6 word-overlap ratio alone decides two edits assert the same directive"
+reviewed_by = "developer"
+
+[sites."scripts/crutch-inventory.py::enumerate_prose_sites::pattern.search"]
+class = "candidate-generation"
+ground = "_MODAL_RE (must, never, always, should and the like) nominates the sentences emitted as prose inventory sites; the inventory only routes them and the later disposition pass dismisses or keeps each, so the match itself decides no outcome."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/crutch-inventory.py::_imports_detector_module::pattern.search"]
+class = "structural"
+ground = "_DETECTOR_IMPORT_RE (`detect`, case-insensitive) is searched in import module names from the AST, an identifier check on code syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/crutch-inventory.py::_iter_statement_units::pattern.match"]
+class = "structural"
+ground = "_FENCE_RE and _HEADING_RE match markdown code-fence and heading lines (markdown structure)."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/crutch-inventory.py::_iter_statement_units::pattern.split"]
+class = "structural"
+ground = "_SENTENCE_SPLIT_RE only splits a markdown line into sentence fragments for the later modal scan; it decides nothing."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/crutch-inventory.py::<module>::re.compile"]
+class = "candidate-generation"
+ground = "The detector-import name (398), heading (555), fence (556), list marker (557) and sentence split (558) are syntax patterns; _MODAL_RE (563) is the obligation-modal lexicon whose match only nominates a sentence for the later disposition pass."
+hits = 6
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/crutch-inventory.py::_strip_line_noise::pattern.sub"]
+class = "structural"
+ground = "_LIST_MARKER_RE.sub strips a markdown list marker from the line, normalization for the later split."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/difficulty_channel/adapters/github.py::<module>::re.compile"]
+class = "structural"
+ground = "_ISSUE_REF_RE compiles the fully-qualified GitHub issue reference / URL syntax (owner/repo#N)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/difficulty_channel/adapters/github.py::_parse_issue_ref::pattern.match"]
+class = "structural"
+ground = "_ISSUE_REF_RE.match parses an issue reference string (URL / owner/repo#N), a fixed identifier syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/file-difficulty.py::_run_dedup::lexical.nominate"]
+class = "candidate-generation"
+ground = "semantic_join.nominate only counts word-overlap candidates (the `nominated` stat); semantic_join.judged_match, a model judge, decides match/no-match immediately after on the same path."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/gen_crutch_registry.py::<module>::re.compile"]
+class = "meaning-decision"
+ground = "_ALREADY_MECHANIZED_RE (`.py`, hook-*, the word \"enforced\", `agentctl, gates.py) is a keyword set used to decide that a prose sentence points at an enforcing mechanism, with no judge."
+hits = 1
+open_violation = "the compiled _ALREADY_MECHANIZED_RE keyword set that decides a prose rule is already enforced"
+reviewed_by = "developer"
+
+[sites."scripts/gen_crutch_registry.py::_prose_disposition::pattern.search"]
+class = "meaning-decision"
+ground = "_ALREADY_MECHANIZED_RE.search on the prose sentence alone decides its class/disposition (already-mechanized/keep) written into the registry; it includes the word \"enforced\", i.e. meaning, and no judge decides."
+hits = 1
+open_violation = "_ALREADY_MECHANIZED_RE alone decides a prose sentence's registry disposition"
+reviewed_by = "developer"
+
+[sites."scripts/hook-deferring-disposition-gate.py::<module>::re.compile"]
+class = "candidate-generation"
+ground = "_DEFER_CUE_RE is a high-recall deferral-vocabulary prefilter that only nominates asks for the judge (see _prefilter and decide)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-deferring-disposition-gate.py::_prefilter::pattern.search"]
+class = "candidate-generation"
+ground = "_DEFER_CUE_RE.search nominates a menu's option text for advisor.judge_deferring_disposition, which alone decides the deny (fail-open) in decide()."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-engine-start.py::_task_slug::re.findall"]
+class = "structural"
+ground = "[a-z0-9]+ findall over the prompt only normalizes its first words into a slug identifier for the session name; it decides nothing about meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-guard-destructive-rm.py::<module>::re.compile"]
+class = "structural"
+ground = "_VAR_RE matches shell `$VAR` / `${VAR}` variable-reference syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-guard-destructive-rm.py::_worst_case_path::pattern.sub"]
+class = "structural"
+ground = "_VAR_RE.sub strips unresolved shell $VAR tokens from a path to simulate empty expansion (path normalization)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-guard-permission-surface.py::<module>::re.compile"]
+class = "structural"
+ground = "_PLUS_OPTION matches the shell-option token shape `+x` (command-line flag syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-guard-permission-surface.py::_shell_c_payloads::pattern.fullmatch"]
+class = "structural"
+ground = "_PLUS_OPTION.fullmatch tests whether a shell argv token is a `+opt` flag while scanning `bash -c` options (flag syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-instruction-grooming-due.py::<module>::re.compile"]
+class = "structural"
+ground = "WARN_RE matches the fixed output line format of lint-prose-length.py (`lint-prose-length: WARN — file: ... N% of limit`)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-instruction-grooming-due.py::parse_warnings::pattern.match"]
+class = "structural"
+ground = "WARN_RE.match parses the linter's structured WARN line into (file, percent)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-language-reminder.py::is_cyrillic_prompt::pattern.findall"]
+class = "structural"
+ground = "CYRILLIC_RE and LATIN_RE findall count characters of the Cyrillic Unicode block and Latin letters, a script-share ratio determinate from the characters themselves, not a meaning judgement."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/hook-language-reminder.py::<module>::re.compile"]
+class = "structural"
+ground = "CYRILLIC_RE is the Unicode block range U+0400-U+04FF and LATIN_RE is [A-Za-z]; both are character-class (script) checks."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/hook-memory-consistency.py::_check_frontmatter._get::re.search"]
+class = "structural"
+ground = "re.search extracts a `key: value` line from the YAML frontmatter body (frontmatter structure)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-memory-consistency.py::_check_frontmatter::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER_RE.match detects the `---` delimited frontmatter block at the start of a memory leaf."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-memory-consistency.py::<module>::re.compile"]
+class = "structural"
+ground = "FRONTMATTER_RE is the `---` frontmatter block pattern and _ISO_DATE_RE the YYYY-MM-DD date shape."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/hook-memory-consistency.py::_parse_date::pattern.match"]
+class = "structural"
+ground = "_ISO_DATE_RE.match checks a date string has the YYYY-MM-DD shape before fromisoformat."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-multi-mount-search-guard.py::fuse_mounts_from_text::re.sub"]
+class = "structural"
+ground = "re.sub decodes octal `\\NNN` escapes in a /proc/self/mounts mount-point field (fixed mounts-file format)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-prewrite-plan-check.py::main::pattern.search"]
+class = "structural"
+ground = "PLAN_PATH_RE.search tests whether the edited file path lies under a `.claude[-agent]/plans/` directory (file path syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-prewrite-plan-check.py::<module>::re.compile"]
+class = "structural"
+ground = "PLAN_PATH_RE compiles the `.claude(-agent)/plans/` path-component pattern."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-published-text-writer-gate.py::<module>::re.compile"]
+class = "structural"
+ground = "_UNIFIED_DIFF_RE compiles the three-line unified-diff anchor (--- / +++ / @@ hunk header), a file-format structure check."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-published-text-writer-gate.py::_recognized_artifact_kind::pattern.search"]
+class = "structural"
+ground = "_UNIFIED_DIFF_RE.search recognizes a unified-diff artifact by its header structure so it is excluded from the judge; syntax-only, not meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-push-confirmation-reminder.py::detect::pattern.search"]
+class = "structural"
+ground = "PUSH_PATTERNS search the Bash command for the tokens `git push` / `sync-instructions-repo.sh push|sync` (shell-command tokens)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-push-confirmation-reminder.py::<module>::re.compile"]
+class = "structural"
+ground = "Both patterns compile shell-command tokens (`git push`, `sync-instructions-repo.sh push|sync`)."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/hook-readme-currency-reminder.py::build_commit_re::re.compile"]
+class = "structural"
+ground = "Compiles `\\b(git|<vcs verbs>)\\s+commit` for the Bash command token sequence."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-readme-currency-reminder.py::_commit_verbs::re.split"]
+class = "structural"
+ground = "re.split on commas/whitespace splits the configured commit_command_verbs value into tool names (config syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-readme-currency-reminder.py::_expand_braces::re.search"]
+class = "structural"
+ground = "re.search finds a `{a,b}` brace group in a glob pattern for expansion (glob syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-readme-currency-reminder.py::_is_readme::pattern.match"]
+class = "structural"
+ground = "README_RE.match tests whether a file basename is README[.ext] (file name)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-readme-currency-reminder.py::main::pattern.search"]
+class = "structural"
+ground = "COMMIT_RE.search detects a `git commit` command token and GIT_ALL_RE.search detects `--all` / `-a` flags on it (command-line flags)."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/hook-readme-currency-reminder.py::<module>::re.compile"]
+class = "structural"
+ground = "GIT_ALL_RE matches the commit `--all`/`-a` flag and README_RE matches README file names."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/hook-readme-currency-reminder.py::_nearest_readme::pattern.match"]
+class = "structural"
+ground = "README_RE.match tests directory entry names for README[.ext] (file name)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-resolution-reminder.py::is_brief_gratitude::pattern.findall"]
+class = "structural"
+ground = "WORD_RE.findall only counts words to enforce the brevity cap; the meaning is decided by the separate GRATITUDE_RE search."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-resolution-reminder.py::is_brief_gratitude::pattern.search"]
+class = "meaning-decision"
+ground = "GRATITUDE_RE keyword set (thanks, спасибо, perfect, отлично, emoji...) alone decides the prompt is gratitude, which triggers a resolution-gate nudge in main() with no judge."
+hits = 1
+open_violation = "GRATITUDE_RE keywords alone decide a prompt is gratitude and trigger the resolution nudge"
+reviewed_by = "developer"
+
+[sites."scripts/hook-resolution-reminder.py::is_resolution_meta_question::pattern.findall"]
+class = "structural"
+ground = "WORD_RE.findall only counts words for the length cap on the meta-question check."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-resolution-reminder.py::is_resolution_meta_question::pattern.search"]
+class = "meaning-decision"
+ground = "GRATITUDE_RE and META_RE keyword searches together alone decide the prompt is a question about the resolution gate (\"why didn't you ask\", \"resolved\", \"готово\"), which triggers a nudge; no judge."
+hits = 2
+hit_classes = ["meaning-decision", "meaning-decision"]
+open_violation = "GRATITUDE_RE and META_RE keywords alone decide a prompt is a question about the resolution gate"
+reviewed_by = "developer"
+
+[sites."scripts/hook-resolution-reminder.py::merged_leftover_hint::pattern.match"]
+class = "structural"
+ground = "SHARED_BRANCH_RE.match tests a git branch name against trunk/shared name prefixes (identifier)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-resolution-reminder.py::<module>::re.compile"]
+class = "meaning-decision"
+ground = "102 SHARED_BRANCH_RE is a branch-name pattern; 185 GRATITUDE_RE and 195 META_RE are multilingual keyword sets deciding gratitude / resolution-meta-question meaning; 202 WORD_RE is a word-count tokenizer."
+hits = 4
+hit_classes = ["structural", "meaning-decision", "meaning-decision", "structural"]
+open_violation = "the compiled GRATITUDE_RE and META_RE multilingual keyword sets behind the resolution nudge"
+reviewed_by = "developer"
+
+[sites."scripts/hook-resolution-reminder.py::unpushed_branch_hint::pattern.match"]
+class = "structural"
+ground = "SHARED_BRANCH_RE.match tests the current git branch name against trunk/shared name prefixes (identifier)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-retry-detector.py::build_allowlist_re::re.compile"]
+class = "structural"
+ground = "Compiles an anchored alternation of literal shell-command prefixes (ls, git status, ...) for the retry-allowlist; matches command tokens only."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-retry-detector.py::_extra_allowlist::re.split"]
+class = "structural"
+ground = "Splits a comma-separated config value into literal command-prefix entries; pure text splitting."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-retry-detector.py::main::pattern.match"]
+class = "structural"
+ground = "ALLOWLIST_RE.match tests whether a Bash command starts with a known shell-command prefix; decides on command tokens, not meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-retry-detector.py::<module>::re.compile"]
+class = "structural"
+ground = "NOISE_RE matches trailing shell noise ('; exit 0', '; true') and WHITESPACE_RE matches whitespace runs; both only normalize a command string."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/hook-retry-detector.py::normalize::pattern.sub"]
+class = "structural"
+ground = "Both subs only strip trailing shell noise and collapse whitespace so identical commands hash equal; normalization for a later structural step."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/hook-run-url-surfaced-reminder.py::_identity::pattern.search"]
+class = "structural"
+ground = "_RUN_SEGMENT_RE.search tests whether a URL path contains a run/job/pipeline segment; fixed URL path syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-run-url-surfaced-reminder.py::_identity::pattern.sub"]
+class = "structural"
+ground = "_VIEW_SUFFIX_RE.sub strips a trailing /graph|/status|/view URL segment to normalize a run identity; URL normalization."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-run-url-surfaced-reminder.py::_identity::re.match"]
+class = "structural"
+ground = "Both re.match calls split an http(s) URL into its scheme+host+path core and its path part; URL syntax only."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/hook-run-url-surfaced-reminder.py::<module>::re.compile"]
+class = "structural"
+ground = "_RUN_SEGMENT_RE matches run/job/graph path segments in a URL and _VIEW_SUFFIX_RE matches a trailing view-suffix URL segment; URL path syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/hook-self-critique-reminder.py::find_self_critique::pattern.search"]
+class = "structural"
+ground = "SELF_CRITIQUE_HEADING_RE.search finds a markdown '## ... Self-critique' heading line in a leaf; markdown structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-self-critique-reminder.py::main::pattern.search"]
+class = "structural"
+ground = "EXPERIENCE_PATH_RE.search tests whether a written file path is an experience/*.md leaf; file-path shape."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-self-critique-reminder.py::<module>::re.compile"]
+class = "structural"
+ground = "EXPERIENCE_PATH_RE matches an experience/*.md path, SELF_CRITIQUE_HEADING_RE a markdown self-critique heading, HEADING_RE any markdown heading start; all fixed file/markdown structure."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/hook-self-critique-reminder.py::section_after::pattern.search"]
+class = "structural"
+ground = "HEADING_RE.search finds the next markdown heading to delimit a section; markdown structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-si-freetext-answer.py::free_text_questions::pattern.findall"]
+class = "structural"
+ground = "PAIR_RE.findall extracts '\"question\"=\"answer\"' pairs from the AskUserQuestion tool response, then compares answers to offered labels by set membership; tool-response syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-si-freetext-answer.py::<module>::re.compile"]
+class = "structural"
+ground = "PAIR_RE matches the quoted question=answer pair format of the AskUserQuestion tool response; fixed structured syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-skill-first.py::_build_tracker_re::re.compile"]
+class = "structural"
+ground = "Compiles a pattern matching a curl command line targeting a tracker REST host/path fragment; shell-command token plus URL shape."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-skill-first.py::detect::pattern.search"]
+class = "structural"
+ground = "Searches a Bash command for machine-configured command/URL signatures (curl to a tracker API etc.) to nudge a skill; shell command-line shape, not free-text meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-skill-first.py::_local_classes::re.compile"]
+class = "structural"
+ground = "Compiles operator-supplied command-signature patterns from a JSON config file; fail-open compile only, patterns target shell commands."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-skill-first.py::_tracker_hosts::re.split"]
+class = "structural"
+ground = "Splits a config value into host/path fragments on commas/whitespace; pure splitting."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-ticket-plan-sync.py::mentions_tracker::pattern.findall"]
+class = "structural"
+ground = "TICKET_KEY_RE.findall extracts ABC-123-shaped ticket keys and filters a fixed false-positive set; ticket-key syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-ticket-plan-sync.py::mentions_tracker::pattern.search"]
+class = "meaning-decision"
+ground = "KEYWORDS_RE.search on the user prompt for the words ticket/issue/tracker/тикет/тред alone decides whether the prompt mentions a tracker, which gates the plan-sync nudge, with no judge."
+hits = 1
+open_violation = "KEYWORDS_RE alone decides a prompt mentions a tracker and gates the plan-sync nudge"
+reviewed_by = "developer"
+
+[sites."scripts/hook-ticket-plan-sync.py::<module>::re.compile"]
+class = "meaning-decision"
+ground = "TICKET_KEY_RE matches the ABC-123 ticket-key shape (structural); KEYWORDS_RE is a keyword list (ticket/issue/tracker/тикет/тред) that by itself decides whether a prompt mentions a ticket (meaning)."
+hits = 2
+hit_classes = ["structural", "meaning-decision"]
+open_violation = "the compiled KEYWORDS_RE tracker keyword list behind the plan-sync nudge"
+reviewed_by = "developer"
+
+[sites."scripts/hook-tracker-reminder.py::find_signals::pattern.finditer"]
+class = "meaning-decision"
+ground = "KEYWORDS_RE.finditer collects ticket/issue/tracker/тикет/тред words from the user prompt and alone decides a 'keyword' tracker signal that triggers the reminder, no judge."
+hits = 1
+open_violation = "KEYWORDS_RE alone decides a prompt carries a tracker signal and triggers the reminder"
+reviewed_by = "developer"
+
+[sites."scripts/hook-tracker-reminder.py::find_ticket_keys::pattern.findall"]
+class = "structural"
+ground = "TICKET_KEY_RE.findall extracts ABC-123-shaped ticket keys minus a fixed false-positive list; ticket-key syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-tracker-reminder.py::<module>::re.compile"]
+class = "meaning-decision"
+ground = "TICKET_KEY_RE matches the ABC-123 ticket-key shape (structural); KEYWORDS_RE is a keyword list that by itself decides whether free-text prompt mentions a ticket/tracker (meaning)."
+hits = 2
+hit_classes = ["structural", "meaning-decision"]
+open_violation = "the compiled KEYWORDS_RE tracker keyword list behind the tracker reminder"
+reviewed_by = "developer"
+
+[sites."scripts/improvement-scan.py::_candidate_text::re.search"]
+class = "structural"
+ground = "Extracts the '## Difficulty' markdown section from a leaf file to build candidate text; markdown structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/improvement-scan.py::<module>::re.compile"]
+class = "structural"
+ground = "_USD_RATE_RE and _TOKEN_RATE_RE match exact rate formats like '$40/week' or '120 tokens/week' in a cost_estimate field; fixed value syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/improvement-scan.py::parse_backlog_cost_rate::pattern.match"]
+class = "structural"
+ground = "Matches cost_estimate against the two exact rate-format regexes and converts to weekly USD/tokens; anything else is unmeasured; fixed format parse."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/improvement-scan.py::_parse_search_hits::re.match"]
+class = "structural"
+ground = "Parses '[score] name.md' hit lines of record-experience.py search output; the tool's own output syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/improvement-scan.py::_parse_search_paths::re.match"]
+class = "structural"
+ground = "Both match lines of record-experience.py search output: the '[score] name.md' hit line and the 'extend --leaf <path>' line; tool-output syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lexical-meaning-inventory.py::open_violation_bullets::re.search"]
+class = "structural"
+ground = "Finds the '### Open violations' markdown section in a doc to read its bullets; markdown structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/permission_entry_match.py::_has_unresolved_separator::pattern.finditer"]
+class = "structural"
+ground = "_SEP_PATTERN.finditer locates Bash separator tokens (&&, ;, |) in a command and checks surrounding whitespace; shell syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/permission_entry_match.py::<module>::re.compile"]
+class = "structural"
+ground = "_ENTRY_RE matches the 'Tool(spec)' permission-entry shape and _SEP_PATTERN matches shell separator tokens; fixed syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/permission_entry_match.py::_parse_entry::pattern.match"]
+class = "structural"
+ground = "_ENTRY_RE.match parses a permission entry into tool and spec; fixed entry syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/planner_plan_check.py::extract_marker::pattern.match"]
+class = "structural"
+ground = "MARKER_RE.match tests whether a decoration-stripped line starts with a known return marker word followed by ':'; marker/prefix syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/planner_plan_check.py::<module>::re.compile"]
+class = "structural"
+ground = "MARKER_RE matches the fixed '^MARKER:' return-marker prefix and PLAN_PATH_RE matches a 'Plan: <path>' labelled line; marker/path syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/planner_plan_check.py::validate_planner_plan::pattern.search"]
+class = "structural"
+ground = "PLAN_PATH_RE.search recovers the path from a 'Plan: <path>' line, which is then validated by the TOML loader; labelled-path syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/prompt_judges.py::<module>::re.compile"]
+class = "candidate-generation"
+ground = "_QUESTION_NOMINATION ('?' marks) and _RESOLUTION_NOMINATION (resolution phrases like 'looks good', 'решено') only nominate prompts; advisor.judge_user_question / judge_resolution via prompt_verdict decide."
+hits = 2
+hit_classes = ["candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/prompt_judges.py::question_prefilter::pattern.search"]
+class = "candidate-generation"
+ground = "_QUESTION_NOMINATION.search nominates a prompt as a possible question; policy-scorecard then calls the fail-open judge via prompt_verdict, which decides."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/prompt_judges.py::resolution_prefilter::pattern.search"]
+class = "candidate-generation"
+ground = "_RESOLUTION_NOMINATION.search nominates a prompt as a possible resolution confirmation; policy-scorecard then calls the fail-open judge via prompt_verdict, which decides."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/published_body.py::artifact_syntax_hint::pattern.findall"]
+class = "structural"
+ground = "_TOML_KV_RE.findall counts TOML 'key = value' lines in a body for a deny-message hint; TOML syntax, never gates."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/published_body.py::artifact_syntax_hint::pattern.search"]
+class = "structural"
+ground = "_TOML_SECTION_RE finds a TOML [section] header and _PLAN_FIELD_RE finds '**Field:**' plan-render labels; markup syntax, hint text only."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/published_body.py::_classify_value::pattern.match"]
+class = "structural"
+ground = "_INLINE_CAT_RE and _INLINE_READ_RE match 'cat <path>' and '< path' shell substitution forms in a flag value; shell syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/published_body.py::is_publication::pattern.search"]
+class = "structural"
+ground = "_GH_VERB_FALLBACK_RE.search detects a 'gh issue|pr comment|create|edit' command in raw shell text; command-token shape."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/published_body.py::_match_seam_http_endpoint::pattern.search"]
+class = "structural"
+ground = "_HTTP_WRITE_METHOD_RE.search detects an HTTP POST/PATCH/PUT method token in a raw command; HTTP verb syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/published_body.py::<module>::re.compile"]
+class = "structural"
+ground = "_INLINE_CAT_RE, _INLINE_READ_RE, _GH_VERB_FALLBACK_RE, _HTTP_WRITE_METHOD_RE, _PATH_LITERAL_RE, _TOML_SECTION_RE, _PLAN_FIELD_RE, _TOML_KV_RE match shell/HTTP/path/TOML/markdown syntax only."
+hits = 8
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/published_body.py::resolve::pattern.search"]
+class = "structural"
+ground = "_GH_VERB_FALLBACK_RE.search detects a gh verb command in raw shell text when shlex failed; command-token shape."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/published_body.py::_resolve_referenced_text_file::pattern.finditer"]
+class = "structural"
+ground = "_PATH_LITERAL_RE.finditer extracts path-shaped literals ending in text suffixes from a command; file-path syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/published_body.py::_resolve_var_assignment::pattern.search"]
+class = "structural"
+ground = "Searches the command for a 'VAR=$(cat <path>)' assignment; shell syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/published_body.py::_resolve_var_assignment::re.compile"]
+class = "structural"
+ground = "Compiles a pattern for a 'VAR=$(cat path)' shell assignment with the escaped variable name; shell syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/semantic_join.py::judged_clusters::lexical.nominate"]
+class = "candidate-generation"
+ground = "nominate (BM25F word overlap) picks top-k cluster representatives per item, and _decide_pair calls the same-difficulty judge on each, which alone decides the join."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/semantic_join.py::judged_match::lexical.nominate"]
+class = "candidate-generation"
+ground = "nominate (BM25F word overlap) picks top-k candidates for a query, and _decide_pair calls the same-difficulty judge on each, which alone decides the match."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/semantic_join.py::nominate::lexical.tokenize"]
+class = "candidate-generation"
+ground = "The three tokenize calls (title, body, query) only feed nominate's BM25F ranking, which nominates candidates for the same-difficulty judge to decide."
+hits = 3
+hit_classes = ["candidate-generation", "candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/semantic_join.py::tokenize::re.findall"]
+class = "structural"
+ground = "re.findall(r\"\\w+\") only splits text into lowercased word tokens for the nomination ranking; decides nothing."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/shell_tokens.py::_consumer_ok::pattern.fullmatch"]
+class = "structural"
+ground = "_ASSIGNMENT_PREFIX.fullmatch tests whether a shell word is a VAR=value assignment; shell syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/shell_tokens.py::first_heredoc_body_shell_inert::pattern.match"]
+class = "structural"
+ground = "_DELIMITER_WORD.match parses a heredoc delimiter word after '<<'; shell syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/shell_tokens.py::first_heredoc_consumes_entire_tail::pattern.match"]
+class = "structural"
+ground = "_DELIMITER_WORD.match parses a heredoc delimiter word after '<<'; shell syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/shell_tokens.py::<module>::re.compile"]
+class = "structural"
+ground = "_ASSIGNMENT_PREFIX matches a VAR=value shell assignment, _DELIMITER_WORD a heredoc delimiter word, _DEFINITION a shell function/alias definition; shell syntax."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/shell_tokens.py::_recognized::pattern.search"]
+class = "structural"
+ground = "_DEFINITION.search detects a shell function or alias definition in a command; shell syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/shell_tokens.py::_removal_regions::pattern.match"]
+class = "structural"
+ground = "_DELIMITER_WORD.match parses a heredoc delimiter word after '<<'; shell syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/shell_tokens.py::_skip_heredoc_span::pattern.match"]
+class = "structural"
+ground = "_DELIMITER_WORD.match parses a heredoc delimiter word after '<<'; shell syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/term_ruleset.py::_compile::re.compile"]
+class = "structural"
+ground = "Compiles an operator-supplied term-denylist/exempt pattern case-insensitively and wraps a bad regex in RulesetError; it classifies no free-text meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/term_ruleset.py::_deny_hits::pattern.finditer"]
+class = "structural"
+ground = "Finds occurrences of operator-listed literal deny terms/patterns (org names, identifiers) in text; the result is a term-lint hit, a lexical denylist rather than a meaning judgement."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/term_ruleset.py::_exempt_spans::pattern.finditer"]
+class = "structural"
+ground = "Finds spans of operator-listed exempt patterns (fixed identifiers/terms) to mask deny hits; a span-containment step with no natural-language meaning decision."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/widening_targets.py::agentctl_invocation_verb::pattern.match"]
+class = "structural"
+ground = "INTERPRETER_RE matches a shell program token against ^python[0-9.]*$ to recognise an interpreter in a command line."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/widening_targets.py::is_live_settings::pattern.match"]
+class = "structural"
+ground = "_SETTINGS_BASENAME_RE matches a path basename against settings*.json (filename shape)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/widening_targets.py::is_settings_channel_program::pattern.match"]
+class = "structural"
+ground = "INTERPRETER_RE matches a shell program token (python[0-9.]*) to find the script operand in a command."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/widening_targets.py::<module>::re.compile"]
+class = "structural"
+ground = "Four compiled patterns of fixed syntax: settings*.json basename, shell redirection operator token, python interpreter name, bare KEY=VALUE env-assignment token."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/widening_targets.py::strip_wrappers::pattern.match"]
+class = "structural"
+ground = "_BARE_ENV_ASSIGNMENT_RE matches a leading KEY=VALUE shell token (env-assignment syntax) to strip it."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/widening_targets.py::strip_wrappers::re.match"]
+class = "structural"
+ground = "Matches a timeout duration operand (^[0-9.]+[smhd]?$), a shell-token syntax check."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/widening_targets.py::_without_redirections::pattern.match"]
+class = "structural"
+ground = "Both calls test whether a shell token is a redirection operator (_REDIRECT_OPERATOR) in order to drop redirections from operands."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/widening_targets.py::_without_redirections::re.search"]
+class = "structural"
+ground = "Checks whether a redirection token ends in a digit (fd syntax) to decide how many tokens to skip."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/widening_targets.py::write_add_dir_surface_denied::pattern.match"]
+class = "structural"
+ground = "_SETTINGS_BASENAME_RE matches a path's last component against settings*.json (filename shape)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/writer_pass.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles a --kind tech-writer command-line flag pattern and a skills/.../tech-writer SKILL.md path pattern, both fixed command/path syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/writer_pass.py::_witness_shape::pattern.search"]
+class = "structural"
+ground = "Detect a spawn-specialist --kind tech-writer flag and a tech-writer skill path inside a Bash tool_use command; command-line flag and path tokens."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lint-prose-length.py::extract_frontmatter_description::pattern.search"]
+class = "structural"
+ground = "FRONTMATTER_DESC_RE extracts the description: line from YAML frontmatter, markdown/frontmatter structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lint-prose-length.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles patterns for a config.md key table row and a frontmatter description: line; fixed markdown/frontmatter structure."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lint-prose-length.py::parse_config_md::pattern.match"]
+class = "structural"
+ground = "CONFIG_KEY_RE matches a config.md markdown table row of constants (key and value columns)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lint-settings-base.py::entry_ok::re.fullmatch"]
+class = "structural"
+ground = "Matches a settings permission entry against Bash(...) to extract the command inside; permission-entry syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/long_job_detect.py::_build_tool_re::re.compile"]
+class = "structural"
+ground = "Builds a never-match pattern and an alternation of operator-configured orchestrator program names for detecting shell command tokens."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/long_job_detect.py::detect::pattern.search"]
+class = "structural"
+ground = "Search a Bash command for the nohup token, the configured orchestrator program name and a launch-verb token (start/submit/run); shell command-token matching, not free-text meaning."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/long_job_detect.py::<module>::re.compile"]
+class = "structural"
+ground = "Compile the nohup shell-token pattern and the launch-verb command-word pattern used on Bash commands."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/long_job_detect.py::_orchestrator_names::re.split"]
+class = "structural"
+ground = "Splits the configured orchestrator name list on commas/whitespace; config parsing."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/memory-audit.py::indexed_targets::pattern.finditer"]
+class = "structural"
+ground = "LINK_RE extracts markdown link targets from MEMORY.md; markdown structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/memory-audit.py::<module>::re.compile"]
+class = "structural"
+ground = "Compile a markdown link pattern and a leading ---frontmatter block pattern."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/memory-audit.py::parse_frontmatter::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER_RE matches the leading --- frontmatter block; file structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/memory_dates.py::<module>::re.compile"]
+class = "structural"
+ground = "ISO_DATE_RE compiles the strict YYYY-MM-DD date shape."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/memory_dates.py::parse_iso::pattern.match"]
+class = "structural"
+ground = "ISO_DATE_RE checks that a value is a strict YYYY-MM-DD date."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/memory_dates.py::top_level_value::re.match"]
+class = "structural"
+ground = "Matches a column-0 frontmatter key: value line for a given key; frontmatter structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/outage_escalation_detect.py::detect::pattern.search"]
+class = "candidate-generation"
+ground = "_FAILURE_RE (outage cue) and _ESCALATION_RE (escalation frame) nominate a text as an undiagnosed outage escalation; the callers (hook-escalation-diagnosis-gate, hook-turn-end-gate) then call advisor.judge_outage_escalation, a fail-open judge, to decide."
+hits = 2
+hit_classes = ["candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/outage_escalation_detect.py::<module>::re.compile"]
+class = "candidate-generation"
+ground = "Compiles the RU/EN outage-failure-cue and escalation-frame word patterns, which are only a prefilter whose hits go to advisor.judge_outage_escalation (fail-open model judge) in both consuming hooks."
+hits = 2
+hit_classes = ["candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/plan-review-topological.py::_classify::pattern.sub"]
+class = "structural"
+ground = "NUMBERING_RE strips a leading list numbering (1. / 2)) before comparing to the engine's fixed REVIEW/VERDICT/DIGEST markers."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/plan-review-topological.py::_clean_value::re.sub"]
+class = "structural"
+ground = "Removes asterisk markdown emphasis from a concern value; normalization for later parsing."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/plan-review-topological.py::Driver.dry_run::pattern.search"]
+class = "structural"
+ground = "DRY_CHARS_RE and DRY_VIEW_RE extract the prompt-chars and TOPO-VIEW files fields from the spawner's structured --dry-run output."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/plan-review-topological.py::_lead_clean::pattern.sub"]
+class = "structural"
+ground = "NUMBERING_RE strips a leading list numbering from a review line; normalization before marker parsing."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/plan-review-topological.py::<module>::re.compile"]
+class = "structural"
+ground = "Eight patterns of fixed syntax: 64-hex digest, leading list numbering, list-item bullet, spawner summary fields marker=/cost_usd=/duration_ms=, and dry-run # stdin and TOPO-VIEW lines."
+hits = 8
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/plan-review-topological.py::_names::re.search"]
+class = "structural"
+ground = "Checks whether a directory path appears as a path token in a tool-call string, with path-character boundaries."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/plan-review-topological.py::pair_telemetry::pattern.search"]
+class = "structural"
+ground = "SUMMARY_COST_RE and SUMMARY_DURATION_RE extract cost_usd= and duration_ms= fields from the spawner summary line."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/plan-review-topological.py::_parse_concerns::pattern.match"]
+class = "structural"
+ground = "LIST_ITEM_RE detects a markdown bullet/numbered-list line to enforce the engine's condition-prefix output format."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/plan-review-topological.py::parse_review_output::pattern.fullmatch"]
+class = "structural"
+ground = "DIGEST_RE.fullmatch checks that the digest is 64 lowercase hex characters."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/plan-review-topological.py::read_spawn_result::pattern.search"]
+class = "structural"
+ground = "SUMMARY_MARKER_RE extracts the marker= field from the spawner's structured summary line."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/policy-scorecard.py::<module>::re.compile"]
+class = "structural"
+ground = "The three module-level compiles: _MECH_BASH_FIRST (first token of a Bash command: cat, grep, rg and the like), _CURL_POLL (a curl poll command shape) and SUBAGENT_FAIL_RE (the MALFORMED:/INCOMPLETE:/ESCALATE: return markers); each reads command or marker syntax, none a user prompt's meaning."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/policy-scorecard.py::_scan_session::pattern.search"]
+class = "structural"
+ground = "_MECH_BASH_FIRST and _CURL_POLL search a Bash command for a retrieval-or-poll shape and SUBAGENT_FAIL_RE searches a tool_result for a return marker; these count missed-delegation and sub-agent-failure flags from tool invocation and marker syntax, not from what a human prompt means (prompts go through prompt_judges)."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/project_entry/opening.py::<module>::re.compile"]
+class = "structural"
+ground = "_COMMENT_RE compiles the rendered tracker-comment header line shape '--- comment N by LOGIN at'."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/project_entry/opening.py::probe_tracker_comments::pattern.match"]
+class = "structural"
+ground = "_COMMENT_RE matches the rendered comment header line to extract the author login, compared to the agent's login."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/project_entry/projects.py::<module>::re.compile"]
+class = "structural"
+ground = "_BACKEND_QUALIFIER_RE compiles the backend: selector-prefix shape."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/project_entry/projects.py::split_backend_qualifier::pattern.match"]
+class = "structural"
+ground = "Matches a leading lowercase backend: qualifier on a project selector string (identifier syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/project_entry/task_mount_registry.py::<module>::re.compile"]
+class = "structural"
+ground = "_SAFE_KEY compiles the set of characters unsafe in a filename."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/project_entry/task_mount_registry.py::_record_path::pattern.sub"]
+class = "structural"
+ground = "Replaces filename-unsafe characters in a ticket key to build a registry path."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_extend::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER (`---` block) match and the `^created:` frontmatter-key match decide only whether a leaf has frontmatter / a created field to backfill."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_extend::re.findall"]
+class = "structural"
+ground = "Counts `### ` markdown headings in the Contexts section to number contexts; pure markdown structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_extend::re.search"]
+class = "structural"
+ground = "Matches the `created:` frontmatter key line to decide whether to backfill the field; fixed frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_new::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER block match extracts the frontmatter text of an existing leaf; the same-difficulty decision is made later by semantic_join.judged_match, not here."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_new::re.search"]
+class = "structural"
+ground = "Extracts the `description:` frontmatter line of an existing leaf as comparison text; the same-difficulty verdict is a judge's (judged_match), not this regex's."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_promote_scan::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER block match to read the description field; clustering by ground is done by semantic_join.judged_clusters."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_promote_scan::re.findall"]
+class = "structural"
+ground = "Counts `### ` context headings in the Contexts section as an occurrence number; markdown structure only."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_promote_scan::re.search"]
+class = "structural"
+ground = "Extracts the `description:` frontmatter line as clustering input text; the grouping itself is judged by semantic_join."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_search::lexical.term_score"]
+class = "candidate-generation"
+ground = "term_score ranks leaves by word overlap with the search keywords and prints the top eight as candidates; the reading agent, a model, alone decides whether to extend a leaf or record a new one, and no write is gated or routed on the score."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_search::lexical.tokenize"]
+class = "candidate-generation"
+ground = "tokenize normalizes the search keywords into the term set that feeds the candidate ranking printed for the reading agent; it decides nothing by itself."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_search::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER block match to read description/domain fields of a leaf; fixed frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_search::re.search"]
+class = "structural"
+ground = "Match the `description:` and `domain:` frontmatter key lines to read fields (the domain value only filters principles by exact string equality)."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_set_last_verified::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER block match decides whether the leaf has a YAML frontmatter at all."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::<module>::re.compile"]
+class = "structural"
+ground = "Compile H2 (`## ` heading) and FRONTMATTER (`---` block) markdown patterns."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::section_span::pattern.search"]
+class = "structural"
+ground = "H2 pattern finds the next `## ` heading to bound a markdown section."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::section_span::re.search"]
+class = "structural"
+ground = "Finds the `## <heading>` line of a named markdown section."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::set_fm_field::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER block match locates the frontmatter text to edit."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::set_fm_field::pattern.search"]
+class = "structural"
+ground = "Finds an existing top-level `key:` frontmatter line to decide replace vs append."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::set_fm_field::pattern.sub"]
+class = "structural"
+ground = "Replaces the matched `key: ...` frontmatter line with the new value."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::set_fm_field::re.compile"]
+class = "structural"
+ground = "Compiles a `^key\\s*:.*$` frontmatter-line pattern from an escaped key."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::update_subindex::re.search"]
+class = "structural"
+ground = "Find the `## YYYY-MM` month heading (exact month) and the first `## YYYY-MM` heading in the experience index to place a pointer line; markdown/date structure."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/replay-permission-guard.py::_extract_classification_tsv::pattern.search"]
+class = "structural"
+ground = "Finds the fixed ```classification fenced block in an assistant message to extract the TSV payload; marker/markup syntax only."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/replay-permission-guard.py::<module>::re.compile"]
+class = "structural"
+ground = "Compile the ```classification fence pattern and a JSON `\"key\":` name pattern; fixed syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/replay-permission-guard.py::_normalize_target::re.sub"]
+class = "structural"
+ground = "Replaces UUID-shaped strings with `<uuid>` to normalize a target path for grouping."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/replay-permission-guard.py::_touched_keys::pattern.findall"]
+class = "structural"
+ground = "Extracts JSON `\"key\":` names from edit text by syntax; list of touched keys, no meaning judgement."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/review_open_detect.py::<module>::re.compile"]
+class = "structural"
+ground = "Compile a review-URL path-segment pattern (/pull/<id> etc.) and a bare-digits token pattern; URL and token syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/review_open_detect.py::opens_review::pattern.search"]
+class = "structural"
+ground = "Matches whole-token review-create CLI verb phrases (e.g. `pr create`) in a shell command; command-token syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/review_open_detect.py::reads_review::pattern.search"]
+class = "structural"
+ground = "Matches whole-token review-read CLI verb phrases (e.g. `pr view`) in a shell command; command-token syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/review_open_detect.py::referenced_ids::pattern.finditer"]
+class = "structural"
+ground = "Iterates occurrences of review-create verb tokens in a shell command to find the argument that follows."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/review_open_detect.py::referenced_ids::pattern.match"]
+class = "structural"
+ground = "Tests whether the argument after a create verb is all digits (a review id)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/review_open_detect.py::review_identity::pattern.search"]
+class = "structural"
+ground = "Finds the /review|pull|merge_requests/<id> segment in a URL path to build a review identity; URL syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/review_open_detect.py::review_identity::re.match"]
+class = "structural"
+ground = "Split a URL into its http(s) core and host/path parts; URL syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/review_open_detect.py::_verb_pattern::re.compile"]
+class = "structural"
+ground = "Compiles a whole-token alternation of configured CLI verb phrases with token boundaries; shell-command tokens."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/rule-salience-report.py::enumerate_rule_units::pattern.match"]
+class = "structural"
+ground = "Bullet-marker regex (`- `, `* `, `N. `) detects markdown list items to enumerate CLAUDE.md rule units; markdown structure."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/rule-salience-report.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles the markdown bullet-marker pattern."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/self-diagnose.py::_build_name_index::pattern.search"]
+class = "structural"
+ground = "Extracts the `name:` frontmatter field to map slug to path for wikilink resolution."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/self-diagnose.py::_frontmatter_tokens::pattern.search"]
+class = "structural"
+ground = "Extract the `name:` and `description:` frontmatter fields (fixed frontmatter syntax) as input text for tokenization."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/self-diagnose.py::_frontmatter_tokens::re.split"]
+class = "candidate-generation"
+ground = "Splits a leaf's name and description into word tokens whose Jaccard overlap only flags leaf pairs as near-duplicate candidates in a report; whether to merge or generalize them stays the model's call (scan_near_duplicates docstring)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/self-diagnose.py::_hook_script_path::pattern.match"]
+class = "structural"
+ground = "Match `VAR=value` shell assignment tokens in a hook command to skip them; shell-command syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/self-diagnose.py::_hook_script_path::re.search"]
+class = "structural"
+ground = "Detects whitespace in a command token (quoted payload) to exclude it as a script path; shell-token syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/self-diagnose.py::<module>::re.compile"]
+class = "structural"
+ground = "Compile markdown link, wikilink, HTML-comment, frontmatter name/description and shell VAR= assignment patterns; all fixed syntax."
+hits = 6
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/self-diagnose.py::scan_dangling_pointers::pattern.finditer"]
+class = "structural"
+ground = "Iterates markdown `](target)` links in an index; link syntax for a path-existence check."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/self-diagnose.py::scan_dangling_pointers::pattern.sub"]
+class = "structural"
+ground = "Strips HTML comment blocks before link scanning; normalization."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/self-diagnose.py::scan_orphans::pattern.finditer"]
+class = "structural"
+ground = "Iterate markdown links and [[wikilinks]] in index files to build the reachability graph; link syntax and path resolution."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/self-diagnose.py::scan_orphans::pattern.sub"]
+class = "structural"
+ground = "Strips HTML comment blocks from an index before link scanning; normalization."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/si_feedback_detect.py::find_signals::pattern.search"]
+class = "candidate-generation"
+ground = "The self-improvement mention (149), strong correction (153), second-person pronoun gate (158) and weak correction (159) patterns only nominate a prompt as agent-behavior feedback: the advisory hook-self-improvement-reminder nudges the model, which decides, and the blocking use in hook-turn-end-gate and the scorecard goes through advisor.judge_feedback_signal."
+hits = 4
+hit_classes = ["candidate-generation", "candidate-generation", "candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/si_feedback_detect.py::<module>::re.compile"]
+class = "candidate-generation"
+ground = "Lines 44, 63, 66 and 70 compile harness-injected markup span patterns (structural); 91 the self-improvement mention, 94 strong and 105 weak correction phrases and 130 the you/ty pronoun gate are the nomination patterns whose blocking use is decided by advisor.judge_feedback_signal and whose advisory use only nudges the model."
+hits = 8
+hit_classes = ["structural", "structural", "structural", "structural", "candidate-generation", "candidate-generation", "candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/si_feedback_detect.py::strip_injected_context::pattern.sub"]
+class = "structural"
+ground = "Four subs excise harness-injected markup spans (system-reminder, task-notification tags and the two trailing post-compaction injection markers); fixed markers, normalization only."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/sigma-sentinel.py::_read_leaf::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER block match to read the leaf's description/tier fields."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/sigma-sentinel.py::_read_leaf::re.search"]
+class = "structural"
+ground = "Match the `description:` and `tier:` (digits) frontmatter key lines to read fields."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/silent_closure_detect.py::detect::pattern.search"]
+class = "candidate-generation"
+ground = "Decision-commitment (95) and completion (98) keyword regexes only nominate a turn; the sole consumer hook-turn-end-gate gates them with advisor.judge_silent_closure, which decides."
+hits = 2
+hit_classes = ["candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/silent_closure_detect.py::<module>::re.compile"]
+class = "candidate-generation"
+ground = "Compile the decision-commitment (EN/RU) and completion-cue keyword sets whose matches only nominate candidates for the fail-open judge_silent_closure in hook-turn-end-gate."
+hits = 2
+hit_classes = ["candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/skill-usage-audit.py::extract_skills_from_catalog::pattern.findall"]
+class = "structural"
+ground = "Extracts `- slug:` lines from the skills catalog block of a transcript; fixed listing syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/skill-usage-audit.py::<module>::re.compile"]
+class = "structural"
+ground = "Compile the skill-catalog line pattern and an identifier-token pattern used for exact slug equality tests."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/skill-usage-audit.py::scan_session::pattern.findall"]
+class = "structural"
+ground = "Extract skill-slug lines from a skill_listing attachment and identifier tokens from tool inputs for exact slug equality counts; identifier matching."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/spawn-cursor-escape.py::<module>::re.compile"]
+class = "structural"
+ground = "MARKER_RE compiles the fixed return-marker prefix syntax (RESOLVED:/INVESTIGATION:/LOOP_DETECTED:) and CONFIG_KEY_RE compiles the config.md markdown table-row syntax; both are fixed-format structural patterns."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/spawn-cursor-escape.py::parse_config_md::pattern.match"]
+class = "structural"
+ground = "CONFIG_KEY_RE.match parses a config.md markdown table row into key/value, a fixed markdown-table syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/spawn-cursor-escape.py::validate_marker::pattern.match"]
+class = "structural"
+ground = "MARKER_RE.match checks whether the first output line starts with a known return marker prefix, a fixed marker syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/spawn-cursor-specialist.py::<module>::re.compile"]
+class = "structural"
+ground = "CONFIG_KEY_RE compiles the fixed config.md markdown table-row syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/spawn-cursor-specialist.py::parse_config_md::pattern.match"]
+class = "structural"
+ground = "CONFIG_KEY_RE.match parses a config.md markdown table row into key/value, a fixed markdown-table syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/spawn-specialist.py::_edit_deny_covers_allow::pattern.fullmatch"]
+class = "structural"
+ground = "pattern.fullmatch tests an allow path against a regex built from a deny-rule glob; a file-path/glob syntax question."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/spawn-specialist.py::_edit_glob_regex::re.compile"]
+class = "structural"
+ground = "re.compile builds a regex from a path glob (** and * segments) over absolute file paths, a fixed path/glob syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/spawn-specialist.py::_glob_safe_segment::re.sub"]
+class = "structural"
+ground = "re.sub replaces glob metacharacters in a path segment with '*', a path-syntax normalization."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/spawn-specialist.py::<module>::re.compile"]
+class = "structural"
+ground = "CONFIG_KEY_RE compiles the fixed config.md markdown table-row syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/spawn-specialist.py::parse_config_md::pattern.match"]
+class = "structural"
+ground = "CONFIG_KEY_RE.match parses a config.md markdown table row into key/value, a fixed markdown-table syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/spawn-specialist.py::_project_dir_name::re.sub"]
+class = "structural"
+ground = "re.sub replaces every non-alphanumeric byte of a cwd path with '-' to mirror the harness's directory-name encoding, a path-format normalization."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/spawn-specialist.py::_spawn_tags::re.search"]
+class = "structural"
+ground = "re.search finds a ticket-key shape (ABC-123) in the cwd path string for a cost-log tag; a fixed key syntax in a file path, not meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/stamp-memory-dates.py::derive_created::pattern.match"]
+class = "structural"
+ground = "FILENAME_DATE_RE.match extracts a leading YYYY-MM-DD date from a file name, a date syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/stamp-memory-dates.py::_derive_name_desc::pattern.search"]
+class = "structural"
+ground = "HEADING_RE.search finds the first markdown heading in a memory leaf body to use as a description, markdown structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/stamp-memory-dates.py::_derive_name_desc::re.split"]
+class = "structural"
+ground = "re.split cuts the first body line at the first sentence-ending punctuation to truncate a fallback description; text splitting only, no decision about meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/stamp-memory-dates.py::<module>::re.compile"]
+class = "structural"
+ground = "FRONTMATTER_RE (YAML frontmatter block), FILENAME_DATE_RE (leading date in a file name) and HEADING_RE (markdown heading) are fixed-format structural patterns."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/stamp-memory-dates.py::stamp_text::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER_RE.match detects/extracts the YAML frontmatter block at the start of a file, markdown/frontmatter structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/stamp-memory-dates.py::stamp_text::re.search"]
+class = "structural"
+ground = "Two re.search calls test whether frontmatter already has a 'created:' / 'last_verified:' key line, frontmatter key syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/timer_arm_detect.py::<module>::re.compile"]
+class = "structural"
+ground = "_SLEEP_RE compiles a word-boundary match for the shell token 'sleep' in a Bash command, a shell-command token."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/timer_arm_detect.py::timer_armed::pattern.search"]
+class = "structural"
+ground = "_SLEEP_RE.search tests whether a Bash tool_use command contains the shell token 'sleep' (plus run_in_background flag) to detect an armed timer; shell-command token, not natural-language meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/url_scan.py::iter_urls::pattern.finditer"]
+class = "structural"
+ground = "URL_RE.finditer enumerates http(s) URLs in text, a fixed URL syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/url_scan.py::<module>::re.compile"]
+class = "structural"
+ground = "URL_RE compiles the fixed http(s) URL syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-agentctl.py::parse_desired_hooks::re.finditer"]
+class = "structural"
+ground = "re.finditer extracts quoted *.py hook file names from a line of the DESIRED block of an install script, code/config syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-agentctl.py::parse_desired_hooks::re.match"]
+class = "structural"
+ground = "re.match detects the 'DESIRED = [' opening line of a block in an install script, code syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-config-root-refs.py::find_occurrences::pattern.search"]
+class = "structural"
+ground = "TILDE_RE and HOME_RE search each doc line for the literal legacy config-root path prefixes, a fixed path-prefix syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-config-root-refs.py::find_ungoverned::pattern.search"]
+class = "structural"
+ground = "TILDE_RE and HOME_RE search file text for the literal legacy config-root path prefixes, a fixed path-prefix syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-config-root-refs.py::<module>::re.compile"]
+class = "structural"
+ground = "TILDE_RE and HOME_RE match literal legacy config-root path prefixes; ANCHORED_PIN_RE and BARE_PIN_RE parse allowlist 'file:line[:sha8]' pin syntax; all fixed path/format syntax."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-config-root-refs.py::parse_allowlist::pattern.match"]
+class = "structural"
+ground = "ANCHORED_PIN_RE and BARE_PIN_RE match the allowlist entry spec 'path:line[:sha8]', a fixed pin format."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-cross-refs.py::check_inline_paths::pattern.finditer"]
+class = "structural"
+ground = "INLINE_PATH_RE.finditer extracts backticked repo-relative paths under known top dirs from markdown lines, whose existence is then checked on disk; file-path syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-cross-refs.py::check_markdown_links::pattern.finditer"]
+class = "structural"
+ground = "LINK_RE.finditer extracts markdown link targets from lines, whose existence is then checked on disk; markdown structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-cross-refs.py::<module>::re.compile"]
+class = "structural"
+ground = "LINK_RE compiles the markdown link/image syntax and INLINE_PATH_RE compiles backticked repo-relative path syntax; fixed structural patterns."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-doc-concepts.py::_check_section::pattern.finditer"]
+class = "structural"
+ground = "_HEADING_RE.finditer enumerates markdown headings to test whether an exact heading title exists, markdown structure with exact string equality."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-doc-concepts.py::<module>::re.compile"]
+class = "structural"
+ground = "_HEADING_RE compiles the fixed markdown heading syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-experience-leaf.py::check_content::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER_RE matches the leading YAML frontmatter block (fixed --- syntax) to extract fields."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-experience-leaf.py::check_content::pattern.search"]
+class = "structural"
+ground = "V1_SECTIONS heading regexes check that required '## ' markdown headings exist in the body (fixed markdown structure)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-experience-leaf.py::check_content::re.search"]
+class = "structural"
+ground = "\\bTODO\\b detects the literal TODO placeholder token the record tool emits in the ## Cost section; a fixed marker, not meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-experience-leaf.py::cmd_hook::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER_RE matches the leaf's frontmatter block to read the resolution_confirmed_by_user field (fixed syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-experience-leaf.py::_fm_field::pattern.search"]
+class = "structural"
+ground = "Caller-supplied frontmatter key regex (schema/ticket/resolution field line) extracts a 'key: value' field from YAML frontmatter."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-experience-leaf.py::is_experience_leaf::pattern.search"]
+class = "structural"
+ground = "EXPERIENCE_PATH_RE matches the file path shape experience/<name>.md; path syntax only."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-experience-leaf.py::<module>::re.compile"]
+class = "meaning-decision"
+ground = "Lines 60-75 and 86 compile path/frontmatter/field/heading/[[slug]] patterns (structural); line 82 SIDE_DIFFICULTY_MARKER is a keyword set (side/sub/child difficult, Russian equivalents) deciding prose names sub-difficulties, used to block with no judge."
+hits = 11
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "meaning-decision", "structural"]
+open_violation = "the compiled SIDE_DIFFICULTY_MARKER keyword set behind the side-difficulty violation"
+reviewed_by = "developer"
+
+[sites."scripts/verify-experience-leaf.py::_normalize::re.sub"]
+class = "structural"
+ground = "Collapses whitespace runs and lowercases so a quote can be substring-compared with transcript text; normalization only."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-experience-leaf.py::_section_body::pattern.search"]
+class = "structural"
+ground = "The caller's section-heading regex locates a markdown '## ' heading to slice that section's body."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-experience-leaf.py::_section_body::re.search"]
+class = "structural"
+ground = "Finds the next '## ' markdown heading to delimit the section end."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-experience-leaf.py::side_difficulty_issue::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER_RE matches the frontmatter block so the schema/ticket fields can be read (fixed syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-experience-leaf.py::side_difficulty_issue::pattern.search"]
+class = "meaning-decision"
+ground = "Line 236 SIDE_DIFFICULTY_MARKER keyword-matches free-text mentions of side/sub/child difficulty (EN/RU) and by itself yields a violation with no judge; line 238 INLINE_LINK_RE matches the fixed [[slug]] link syntax."
+hits = 2
+hit_classes = ["meaning-decision", "structural"]
+open_violation = "SIDE_DIFFICULTY_MARKER keywords alone decide prose names a side difficulty and yield a violation"
+reviewed_by = "developer"
+
+[sites."scripts/verify-judge-prose-numbers.py::find_occurrences::pattern.search"]
+class = "structural"
+ground = "_DURATION_RE (N seconds) and _STAT_RE (n/K/p90/median/min/max = N) match fixed numeric-with-unit spellings on prose lines to list occurrences for a human-reviewed allowlist; no meaning is decided."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-judge-prose-numbers.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles _DURATION_RE (a number followed by a seconds unit) and _STAT_RE (named statistic with a value), both fixed numeric syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-language.py::check_file::pattern.search"]
+class = "structural"
+ground = "CYRILLIC matches Cyrillic script characters (a character-set test) before and after stripping quoted regions; script detection, not meaning."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-language.py::has_adjacent_exception::pattern.search"]
+class = "structural"
+ground = "EXCEPTION_PATTERNS match the fixed literal 'Language exception' marker note on adjacent lines."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-language.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles the Cyrillic character class, the double-quote/guillemet/backtick span patterns, and the fixed 'Language exception' marker patterns; all fixed syntax."
+hits = 6
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-language.py::strip_inline_quotes::pattern.sub"]
+class = "structural"
+ground = "Removes quoted/backticked spans from a line before the Cyrillic check; text stripping for a later structural step."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-leaf-structure.py::check_content::pattern.finditer"]
+class = "structural"
+ground = "SECTION_RE finds markdown '## ' headings to locate the end of the lead block."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-leaf-structure.py::check_content::pattern.match"]
+class = "structural"
+ground = "FRONTMATTER_RE matches the leading YAML frontmatter block (fixed syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-leaf-structure.py::check_content::pattern.search"]
+class = "structural"
+ground = "Schema field (103), required section headings (107), description field (116), the DESC_MARKER_RE required-label check (118), H1 heading (120) and the difficulty blockquote prefix (127) are fixed leaf/v1 syntax; DESC_MARKER_RE looks for the schema's required marker label, not for what the description means."
+hits = 6
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-leaf-structure.py::is_sk_leaf::pattern.search"]
+class = "structural"
+ground = "SK_PATH_RE matches the system-knowledge/<name>.md path shape."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-leaf-structure.py::<module>::re.compile"]
+class = "structural"
+ground = "Frontmatter, schema, section-heading, path, description-field, blockquote-prefix and heading patterns are fixed leaf/v1 syntax; DESC_MARKER_RE (62) is the schema's required marker label, a fixed phrase, not a reading of the description's meaning."
+hits = 11
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-memory-index.py::_fm_field::re.search"]
+class = "structural"
+ground = "Builds a 'key: value' line regex for a named frontmatter key to read a YAML field."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-memory-index.py::_frontmatter_body::pattern.match"]
+class = "structural"
+ground = "_FRONTMATTER_RE matches the leading YAML frontmatter block (fixed syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-memory-index.py::_frontmatter_type::pattern.search"]
+class = "structural"
+ground = "_TOP_TYPE_RE extracts the top-level 'type:' frontmatter field."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-memory-index.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles markdown link, frontmatter block, 'type:' field and ISO-date patterns; all fixed syntax."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-memory-index.py::_parse_date::pattern.match"]
+class = "structural"
+ground = "_ISO_DATE_RE checks a string has the YYYY-MM-DD date shape."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-memory-index.py::_referenced_leaves::pattern.finditer"]
+class = "structural"
+ground = "_LINK_RE extracts markdown link targets from index files to resolve referenced leaf paths."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-no-conflict-markers.py::check_content::pattern.match"]
+class = "structural"
+ground = "OURS/THEIRS/BASE/SEP regexes match the fixed seven-character git conflict marker lines (angle brackets, pipes, equals)."
+hits = 5
+hit_classes = ["structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-no-conflict-markers.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles the four fixed git conflict-marker line patterns."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-onboarding-entrypoint.py::check_file::pattern.search"]
+class = "structural"
+ground = "_BARE_CLAUDE_RE detects a shell command that is a bare 'claude' token ending a command line inside a fenced code block; shell-command syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-onboarding-entrypoint.py::check_file::pattern.sub"]
+class = "structural"
+ground = "_COMMENT_RE strips a trailing shell '#' comment and _PROMPT_RE strips a leading '$ ' prompt, normalizing a command line for the structural bare-claude check."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-onboarding-entrypoint.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles shell comment, '$ ' prompt and bare-'claude' command patterns; shell syntax only."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-readme.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles markdown link [text](target) and backtick-span patterns used to extract table identifiers."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-readme.py::_parse_region::pattern.search"]
+class = "structural"
+ground = "_LINK_RE and _TICK_RE extract the markdown link target / backticked identifier from the first column of an inventory table row."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/verify-tests-accompany-code.py::evaluate::pattern.search"]
+class = "structural"
+ground = "ESCAPE_RE detects the literal '[skip-test-guard:' trailer marker in the commit message."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-tests-accompany-code.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles the literal '[skip-test-guard:' commit-trailer marker pattern."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-ticket-plan-sync.py::extract_marker::pattern.finditer"]
+class = "structural"
+ground = "MARKER_RE finds the engine's own agent-plan-sync marker comments to read the plan sha256 hash."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-ticket-plan-sync.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles the engine's agent-plan-sync marker pattern with a 64-hex sha256 and plan name."
+hits = 1
+reviewed_by = "developer"
+

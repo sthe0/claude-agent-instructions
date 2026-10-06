@@ -59,22 +59,41 @@ As of the mechanical enumeration: **2042 sites total** (752 code + 166 code-file
 
 ### Open violations
 
-Lexical "same difficulty?" decisions still to convert to candidate-generation plus a model judge (the crutch registry above does not see them: they feed a join, not a hard outcome):
+Each bullet below is one `meaning-decision` key of the live inventory ([docs/operations/lexical-meaning-inventory.toml](../../docs/operations/lexical-meaning-inventory.toml), checked by `scripts/lexical-meaning-inventory.py --check`): a lexical measure that by itself decides a question of free-text meaning with no model judge on the path, still to convert to candidate-generation plus a judge. The crutch registry above does not see them: they feed a nudge, a lint, a counter or a join, not a deny/block/exit.
 
-- `scripts/record-experience.py` `cluster_by_ground` / `_similarity` — the word-overlap ratio (`JOIN_RATIO`) that clusters experience leaves for promotion.
-- `scripts/improvement-scan.py` `classify_and_score` — its backlog clustering calls `cluster_by_ground`, so it inherits that join.
-- `scripts/core-difficulty-digest.py` `cluster_records` — clusters difficulty records by the same ratio.
-- `scripts/sigma-sentinel.py` `measure_condition_a` / `measure_cheap_c` — join an experience leaf to a principle (and count near-duplicate pairs) by the same ratio.
+- `scripts/hook-resolution-reminder.py` `is_brief_gratitude`: GRATITUDE_RE keywords alone decide a prompt is gratitude and trigger the resolution nudge.
+- `scripts/hook-resolution-reminder.py` `is_resolution_meta_question`: GRATITUDE_RE and META_RE keywords alone decide a prompt is a question about the resolution gate.
+- `scripts/hook-resolution-reminder.py` `<module>`: the compiled GRATITUDE_RE and META_RE multilingual keyword sets behind the resolution nudge.
+- `scripts/hook-ticket-plan-sync.py` `mentions_tracker`: KEYWORDS_RE alone decides a prompt mentions a tracker and gates the plan-sync nudge.
+- `scripts/hook-ticket-plan-sync.py` `<module>`: the compiled KEYWORDS_RE tracker keyword list behind the plan-sync nudge.
+- `scripts/hook-tracker-reminder.py` `find_signals`: KEYWORDS_RE alone decides a prompt carries a tracker signal and triggers the reminder.
+- `scripts/hook-tracker-reminder.py` `<module>`: the compiled KEYWORDS_RE tracker keyword list behind the tracker reminder.
+- `scripts/consensus-synthesizer.py` `_same_directive`: a 0.6 word-overlap ratio alone decides two edits assert the same directive, and so whether `detect_conflict` fires.
+- `scripts/consensus-synthesizer.py` `induce_invariant`: word-set intersection alone decides what two edits have in common.
+- `scripts/consensus_eval/runner.py` `_tokens`: word overlap with protected terms alone decides a tenet is engaged by a candidate edit.
+- `scripts/gen_crutch_registry.py` `_prose_disposition`: _ALREADY_MECHANIZED_RE alone decides a prose sentence's registry disposition.
+- `scripts/gen_crutch_registry.py` `<module>`: the compiled _ALREADY_MECHANIZED_RE keyword set that decides a prose rule is already enforced.
+- `scripts/verify-experience-leaf.py` `side_difficulty_issue`: SIDE_DIFFICULTY_MARKER keywords alone decide prose names a side difficulty and yield a violation.
+- `scripts/verify-experience-leaf.py` `<module>`: the compiled SIDE_DIFFICULTY_MARKER keyword set behind the side-difficulty violation.
+- `cursor/scripts/lint-cursor-mirror-cochange.py` `main`: the CURSOR_RELEVANT keyword alternation alone decides a CLAUDE.md diff is Cursor-relevant.
+- `cursor/scripts/lint-cursor-mirror-cochange.py` `<module>`: the compiled CURSOR_RELEVANT keyword alternation that alone gates the mirror co-change lint.
+- `cursor/scripts/lint-cursor-mirror.py` `check_hook_caveat`: HOOK_GATE_RE and HOOK_CAVEAT_RE phrase lists alone decide whether mirror prose claims a hook gate and carries a Cursor caveat.
+- `cursor/scripts/lint-cursor-mirror.py` `<module>`: the compiled HOOK_GATE_RE and HOOK_CAVEAT_RE phrase lists behind the caveat lint.
 
-Lexical classifications of a user prompt's meaning, also still to convert (they feed counters, not a hard outcome):
+### Converted
 
-- `scripts/cost-report.py` `CORRECTION_RE` (used by `parse_transcripts(classify=True)` for its "likely corrections (heuristic, approximate)" line) — a regex alone calls a prompt a correction, and it counts every non-tool-result entry, machine text included.
-- `scripts/policy-scorecard.py` `QUESTION_RE` (any `?`) and `RESOLUTION_RE` — now applied to human prompts only (see below), but still lexical decisions of meaning.
-
-Converted:
+The "same difficulty?" joins and the user-prompt classifiers that this section used to list as open are now candidate-generation behind a judge, or gone: `cluster_by_ground`, `classify_and_score`, `cluster_records`, `measure_condition_a`, `measure_cheap_c`, `CORRECTION_RE`, `QUESTION_RE`, `RESOLUTION_RE`, `cmd_new` and `_board_ground_match`. The inventory's converted-sites test pins that none of them is a `meaning-decision` key again.
 
 - improvement-scan telemetry-ground dedup (above).
-- `scripts/policy-scorecard.py` correction count (`attention.corrections`, which `improvement-scan.py`'s attention-burn detector, the scorecard's correction-rate flag and `rule-salience-report.py`'s trigger proxy all read). Who spoke is structure: only entries stamped `origin.kind == "human"` are prompts (a 14-day sweep found 63% of the old "corrections" were machine text or regex noise). What the prompt means is the judge's: `si_feedback_detect.find_signals` on the injection-stripped text only nominates, `advisor.judge_feedback_signal` decides (the pair `hook-turn-end-gate.py` uses), and a nomination the judge did not answer is counted in `attention.corrections_unjudged`, never as a correction. Verdicts are cached by the hash of the stripped text. Accepted recall change: the prefilter is now `si_feedback_detect`'s, so a bare "that's wrong" with no reference to the agent no longer nominates.
+- `scripts/policy-scorecard.py` correction count (`attention.corrections`, which `improvement-scan.py`'s attention-burn detector, the scorecard's correction-rate flag and `rule-salience-report.py`'s trigger proxy all read). Who spoke is structure: only entries stamped `origin.kind == "human"` are prompts (a 14-day sweep found 63% of the old "corrections" were machine text or regex noise). What the prompt means is the judge's: `si_feedback_detect.find_signals` on the injection-stripped text only nominates, `advisor.judge_feedback_signal` decides (the pair `hook-turn-end-gate.py` uses), and a nomination the judge did not answer is counted in `attention.corrections_unjudged`, never as a correction. Verdicts are cached by the hash of the stripped text. Accepted recall change: the prefilter is now `si_feedback_detect`'s, so a bare "that's wrong" with no reference to the agent no longer nominates. `rule-salience-report.py` reads two trigger proxies from the scorecard: `attention.corrections` (`rule-registry.toml:552`) and, as the second, `effectiveness.resolution_confirmed` (`rule-registry.toml:653`), which is counted the same way (human prompt, `prompt_judges.resolution_prefilter` nominates, the judge decides, the verdict is cached). Stage 9's named limit stands: a session whose resolution nomination the judge did not answer still reads `resolution_confirmed=False`, i.e. "trigger-absent", although `effectiveness.resolution_unjudged` records that the answer is unknown.
+
+Follow-up: the second reader of `effectiveness.resolution_confirmed` (the rule-salience trigger proxy) should treat `resolution_unjudged` rows as unknown rather than as trigger-absent.
+
+### What the inventory covers, and its blind spot
+
+`scripts/lexical-meaning-inventory.py` enumerates every git-tracked non-test Python file's calls to the `re` module (aliases resolved), pattern methods, `difflib` and the word-overlap helpers `nominate` / `term_score` / `tokenize`, and the record classifies each key `structural`, `candidate-generation` or `meaning-decision` (strictest of its hits; one class per hit in `hit_classes`). `--check` fails on an unclassified, stale or recount site, and on a `meaning-decision` key that no bullet under Open violations names. That makes "no further site remains in this domain" a checked claim over a complete list.
+
+The honest bound is a blind spot, stated in the tool's `--help` as well: a keyword list, a substring (`in`) test and a set overlap have no call shape to key on, the shell scripts (the `.sh` files, e.g. a grep over push output) are never read, and a dynamic pattern built through `getattr(re, name)`, `eval`/`exec` or a matcher passed around as a value is not named by syntax. A lexical decision of meaning written in any of those forms is invisible to the inventory and to this section's "no other site" claim; the claim holds for the enumerated shapes only. Classification of each key was a model pass reviewed by the developer who wrote the record, not a mechanical verdict.
 
 ## See also
 
