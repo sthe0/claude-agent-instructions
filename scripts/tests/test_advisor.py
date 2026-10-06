@@ -687,6 +687,49 @@ class TestJudgeFeedbackSignal:
         assert seen["argv"][:4] == ["claude", "-p", "--model", "haiku"]
 
 
+@pytest.mark.parametrize("judge_name", ["judge_user_question", "judge_resolution_confirmation"])
+class TestJudgeUserText:
+    def test_yes(self, judge_name):
+        assert getattr(advisor, judge_name)("some words", _fake_runner("YES")) == (True, "")
+
+    def test_no(self, judge_name):
+        assert getattr(advisor, judge_name)("some words", _fake_runner("NO")) == (False, "")
+
+    def test_disabled_is_fail_open(self, judge_name):
+        verdict, reason = getattr(advisor, judge_name)("some words", _fake_runner("YES"), enabled=False)
+        assert verdict is False and reason
+
+    def test_no_runner_is_fail_open(self, judge_name):
+        verdict, reason = getattr(advisor, judge_name)("some words", None)
+        assert verdict is False and reason
+
+    def test_empty_text_skips_runner(self, judge_name):
+        verdict, reason = getattr(advisor, judge_name)("", _raising_runner)
+        assert verdict is False and reason
+
+    def test_non_zero_exit_is_fail_open(self, judge_name):
+        verdict, reason = getattr(advisor, judge_name)("some words", _fake_runner("YES", code=1))
+        assert verdict is False and reason
+
+    def test_unparseable_answer_is_fail_open(self, judge_name):
+        verdict, reason = getattr(advisor, judge_name)("some words", _fake_runner("maybe"))
+        assert verdict is False and reason
+
+    def test_raising_runner_is_fail_open(self, judge_name):
+        verdict, reason = getattr(advisor, judge_name)("some words", _raising_runner)
+        assert verdict is False and reason
+
+    def test_prompt_carries_the_message_with_braces_intact(self, judge_name):
+        seen = {}
+
+        def recording_runner(argv, **kwargs):
+            seen["stdin"] = kwargs.get("stdin")
+            return RunResult(0, stdout="NO", stderr="")
+
+        getattr(advisor, judge_name)("fix {this} {0}", recording_runner)
+        assert seen["stdin"].endswith("MESSAGE:\nfix {this} {0}")
+
+
 class TestJudgeOutageEscalation:
     def test_yes(self):
         assert advisor.judge_outage_escalation("The deploy is failing, how should I proceed?", _fake_runner("YES"))[0] is True
@@ -920,6 +963,8 @@ _JUDGE_TIMEOUT_CONSTANTS = {
     "judge_same_difficulty": "_BINARY_ASK_TIMEOUT_S",
     "judge_published_attachment": "_PUBLISHED_ATTACHMENT_TIMEOUT_S",
     "judge_feedback_signal": "_BINARY_ASK_TIMEOUT_S",
+    "judge_user_question": "_BINARY_ASK_TIMEOUT_S",
+    "judge_resolution_confirmation": "_BINARY_ASK_TIMEOUT_S",
     "judge_outage_escalation": "_BINARY_ASK_TIMEOUT_S",
     "judge_silent_closure": "_SILENT_CLOSURE_TIMEOUT_S",
     "judge_deferring_disposition": "_DEFERRING_DISPOSITION_TIMEOUT_S",

@@ -2069,6 +2069,30 @@ disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
 
 [[entry]]
+id = "5f918c26ca61952d"
+domain = "code"
+file = "scripts/lib/prompt_judges.py"
+class = "structural"
+disposition = "keep"
+ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+
+[[entry]]
+id = "d1eab11c0898ede3"
+domain = "code"
+file = "scripts/lib/prompt_judges.py"
+class = "structural"
+disposition = "keep"
+ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+
+[[entry]]
+id = "c6d551f0b78b2863"
+domain = "code"
+file = "scripts/lib/prompt_judges.py"
+class = "structural"
+disposition = "keep"
+ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+
+[[entry]]
 id = "7ec54b573414af80"
 domain = "code"
 file = "scripts/lib/published_body.py"
@@ -9461,6 +9485,38 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "abcfaa0e6f935563"
+domain = "code"
+file = "scripts/tests/test_policy_scorecard_question_resolution.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "2f28507f5bd110a3"
+domain = "code"
+file = "scripts/tests/test_policy_scorecard_question_resolution.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "183eaabd5bd57ca3"
+domain = "code"
+file = "scripts/tests/test_policy_scorecard_question_resolution.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "22fb6207333d8710"
+domain = "code"
+file = "scripts/tests/test_policy_scorecard_question_resolution.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "9ee2f1ee044d2be2"
 domain = "code"
 file = "scripts/tests/test_pra_review_catalogue.py"
@@ -12725,6 +12781,14 @@ disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "d7c90058638379bf"
+domain = "code_file_rollup"
+file = "scripts/lib/prompt_judges.py"
+class = "structural"
+disposition = "keep"
+ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "1b33b7d8afa707ab"
 domain = "code_file_rollup"
 file = "scripts/lib/published_body.py"
@@ -13880,6 +13944,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "68fd4bdcf5b7fd37"
 domain = "code_file_rollup"
 file = "scripts/tests/test_policy_scorecard_model_buckets.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "b4bd12573f0d2725"
+domain = "code_file_rollup"
+file = "scripts/tests/test_policy_scorecard_question_resolution.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

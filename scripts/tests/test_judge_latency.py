@@ -363,6 +363,10 @@ def test_required_budget_covers_the_preceding_medians_and_the_last_floor():
 _JUDGE_CALLS = {
     "judge_binary_ask": (lambda run: advisor.judge_binary_ask("Продолжаем?", run, enabled=True)),
     "judge_feedback_signal": (lambda run: advisor.judge_feedback_signal("не так", run, enabled=True)),
+    "judge_user_question": (lambda run: advisor.judge_user_question("а это безопасно?", run, enabled=True)),
+    "judge_resolution_confirmation": (
+        lambda run: advisor.judge_resolution_confirmation("всё, считаем решённым", run, enabled=True)
+    ),
     "judge_outage_escalation": (lambda run: advisor.judge_outage_escalation("500 от API", run, enabled=True)),
     "judge_silent_closure": (lambda run: advisor.judge_silent_closure("готово", run, enabled=True)),
     "judge_deferring_disposition": (lambda run: advisor.judge_deferring_disposition("меню", run, enabled=True)),

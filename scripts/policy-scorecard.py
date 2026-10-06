@@ -33,7 +33,11 @@ si_feedback_detect prefilter only nominates, and advisor.judge_feedback_signal
 decides -- the same prefilter-then-judge pair the Stop hook uses. Verdicts are
 cached by the hash of the injection-stripped text; a nomination the judge did not
 answer counts in attention.corrections_unjudged, never as a correction, and the
-row is re-scanned on a later run that has a judge.
+row is re-scanned on a later run that has a judge. Whether a prompt asks a question
+(user_signals.n_user_questions_unjudged) and whether it confirms the task resolved
+(effectiveness.resolution_unjudged) follow the same prefilter -> judge -> cached
+verdict path; a session whose resolution stays unknown leaves the resolution-rate
+denominator, and a window with no decided session reports the rate as undecided.
 
 A per-session ledger (~/.local/log/claude-policy-ledger.jsonl, one JSON row per
 session, upsert keyed by session_id) accumulates the measurements cheaply: a
@@ -122,6 +126,7 @@ import self_diagnose_store as findings_store
 from agentctl.cost import COST_LOG as SPAWN_LEDGER, read_rows as read_spawn_rows
 from agentctl import advisor
 import lib.prompt_judges as prompt_judges
+from lib import semantic_join
 from si_feedback_detect import find_signals, strip_injected_context
 LEDGER = Path.home() / ".local" / "log" / "claude-policy-ledger.jsonl"
 # Per-task quality ledger written by `agentctl resolve --quality` (agentctl/cli.py
@@ -161,15 +166,12 @@ MECH_TOOLS = {"Read", "Grep", "Glob"}
 AGENT_TOOLS = {"Agent", "Task"}
 CLUSTER_MIN = 8  # >= this many consecutive mechanical main-thread calls
 
-# A user prompt that confirms the task is resolved (effectiveness proxy).
-RESOLUTION_RE = re.compile(
-    r"реш(?:ен|ён|и)|так и оставим|подтвержда|готово|all good|"
-    r"\bresolved\b|looks good|считаем",
-    re.IGNORECASE)
-# --- correction judge ------------------------------------------------------
-# Bumped whenever the attention counting rule changes: upsert re-scans any row
-# stamped with an older version, so a new rule reaches every in-window session.
-SCAN_VERSION = 2
+# --- prompt judges ---------------------------------------------------------
+# Corrections, questions and resolution confirmations are each decided by a
+# fail-open judge behind a prefilter (lib/prompt_judges.py).
+# Bumped whenever a counting rule changes: upsert re-scans any row stamped with an
+# older version, so a new rule reaches every in-window session.
+SCAN_VERSION = 3
 # None = no judge: every prefilter hit is counted unjudged. Only the CLI path
 # installs the real runner; tests install a fake.
 _CORRECTION_JUDGE_RUNNER = None
@@ -182,10 +184,18 @@ def _judge_active() -> bool:
     return prompt_judges.runner_active(_CORRECTION_JUDGE_RUNNER)
 
 
+def _question_cache() -> semantic_join.VerdictCache:
+    return semantic_join.VerdictCache(
+        prompt_judges.question_verdicts_path(), prompt_judges.USER_QUESTION_JUDGE_SALT)
+
+
+def _resolution_cache() -> semantic_join.VerdictCache:
+    return semantic_join.VerdictCache(
+        prompt_judges.resolution_verdicts_path(), prompt_judges.RESOLUTION_JUDGE_SALT)
+
+
 # Non-clean sub-agent return markers seen in a tool_result.
 SUBAGENT_FAIL_RE = re.compile(r"\b(?:MALFORMED|INCOMPLETE|ESCALATE):")
-# A real user prompt that asks something (crude but cheap: any "?").
-QUESTION_RE = re.compile(r"\?")
 
 # --- spend rate (burn rate) ------------------------------------------------
 # Every other metric here is normalised per session or per prompt. In the
@@ -471,10 +481,10 @@ def _scan_session(main_file: Path) -> dict | None:
     clusters = 0
     run = 0                  # current consecutive-mechanical run length
     askq = prompts = interrupts = corrections = corrections_unjudged = 0
-    user_questions = freetext_askuser_answers = 0
+    user_questions = user_questions_unjudged = freetext_askuser_answers = 0
     replans = overcome_difficulty = subagent_failures = 0
     edits_per_path: Counter = Counter()
-    resolution_confirmed = 0
+    resolution_confirmed = resolution_unjudged = 0
     timestamps: list[dt.datetime] = []
     pending_askq: dict[str, dict] = {}  # tool_use id -> AskUserQuestion input, awaiting its answer
 
@@ -573,10 +583,24 @@ def _scan_session(main_file: Path) -> dict | None:
                         corrections_unjudged += 1
                     elif verdict:
                         corrections += 1
-                if QUESTION_RE.search(text):
-                    user_questions += 1
-                if RESOLUTION_RE.search(text):
-                    resolution_confirmed = 1
+                if prompt_judges.question_prefilter(stripped):
+                    verdict = prompt_judges.prompt_verdict(
+                        stripped, judge=advisor.judge_user_question,
+                        cache=_question_cache(),
+                        runner=_CORRECTION_JUDGE_RUNNER, deadline=_judge_deadline)
+                    if verdict is None:
+                        user_questions_unjudged += 1
+                    elif verdict:
+                        user_questions += 1
+                if not resolution_confirmed and prompt_judges.resolution_prefilter(stripped):
+                    verdict = prompt_judges.prompt_verdict(
+                        stripped, judge=advisor.judge_resolution_confirmation,
+                        cache=_resolution_cache(),
+                        runner=_CORRECTION_JUDGE_RUNNER, deadline=_judge_deadline)
+                    if verdict is None:
+                        resolution_unjudged += 1
+                    elif verdict:
+                        resolution_confirmed = 1
         # REPLAN can appear in assistant text or tool_result text
         if typ in ("assistant", "user"):
             if "REPLAN:" in _msg_text(msg.get("content")):
@@ -635,11 +659,13 @@ def _scan_session(main_file: Path) -> dict | None:
         "user_signals": {
             "n_user_corrections": corrections,
             "n_user_questions": user_questions,
+            "n_user_questions_unjudged": user_questions_unjudged,
             "n_freetext_askuser_answers": freetext_askuser_answers,
             "n_interrupts": interrupts,
         },
         "effectiveness": {
             "resolution_confirmed": resolution_confirmed,
+            "resolution_unjudged": 0 if resolution_confirmed else resolution_unjudged,
             "replans": replans,
             "overcome_difficulty": overcome_difficulty,
             "subagent_failures": subagent_failures,
@@ -816,7 +842,9 @@ def _row_is_current(existing: dict, mtime: float) -> bool:
         return False
     if (existing.get("scan_version") or 0) < SCAN_VERSION:
         return False
-    unjudged = (existing.get("attention") or {}).get("corrections_unjudged") or 0
+    unjudged = ((existing.get("attention") or {}).get("corrections_unjudged") or 0
+                or (existing.get("user_signals") or {}).get("n_user_questions_unjudged") or 0
+                or (existing.get("effectiveness") or {}).get("resolution_unjudged") or 0)
     return not (unjudged and _judge_active())
 
 
@@ -923,6 +951,12 @@ def _window_span_days(lo: dt.datetime, hi: dt.datetime) -> int:
     return ((hi - dt.timedelta(microseconds=1)).date() - lo.date()).days + 1
 
 
+def _resolution_undecided(row: dict) -> int:
+    """1 when the session's resolution is unknown: unconfirmed, with a prefilter hit no judge decided."""
+    eff = row["effectiveness"]
+    return 1 if (eff.get("resolution_unjudged") or 0) and not eff["resolution_confirmed"] else 0
+
+
 def _aggregate(window: list[dict],
                lo: dt.datetime | None = None,
                hi: dt.datetime | None = None) -> dict:
@@ -946,6 +980,9 @@ def _aggregate(window: list[dict],
         "interrupts": sum(r["attention"]["interrupts"] for r in window),
         "corrections": sum(r["attention"]["corrections"] for r in window),
         "resolution_confirmed": sum(r["effectiveness"]["resolution_confirmed"] for r in window),
+        "resolution_unjudged": sum(_resolution_undecided(r) for r in window),
+        "questions_unjudged": sum(
+            (r.get("user_signals") or {}).get("n_user_questions_unjudged", 0) for r in window),
         "replans": sum(r["effectiveness"]["replans"] for r in window),
         "overcome_difficulty": sum(r["effectiveness"]["overcome_difficulty"] for r in window),
         "subagent_failures": sum(r["effectiveness"]["subagent_failures"] for r in window),
@@ -957,7 +994,9 @@ def _aggregate(window: list[dict],
     a["cost_per_session"] = a["cost_usd"] / a["sessions"] if a["sessions"] else 0.0
     a["inherit_opus_rate"] = a["inherit_opus"] / a["spawns_total"] if a["spawns_total"] else 0.0
     a["clusters_per_session"] = a["clusters"] / a["sessions"] if a["sessions"] else 0.0
-    a["resolution_rate"] = a["resolution_confirmed"] / a["sessions"] if a["sessions"] else 0.0
+    decided = a["sessions"] - a["resolution_unjudged"]
+    a["resolution_decided"] = decided
+    a["resolution_rate"] = a["resolution_confirmed"] / decided if decided else None
     a["cache_read_share"] = a["cache_read_usd"] / a["cost_usd"] if a["cost_usd"] else 0.0
     tok = _empty_model_tokens()
     for r in window:
@@ -1362,7 +1401,9 @@ def _flags(cur: dict, prev: dict, cur_q: dict | None = None, prev_q: dict | None
         flags.append(Flag("cost-per-session" + w,
             f"$/session up {(cur['cost_per_session']/prev['cost_per_session']-1)*100:.0f}% "
             f"(${prev['cost_per_session']:.2f}→${cur['cost_per_session']:.2f})."))
-    if prev["sessions"] and cur["resolution_rate"] < prev["resolution_rate"] - 0.1:
+    if (prev["sessions"] and cur["resolution_rate"] is not None
+            and prev["resolution_rate"] is not None
+            and cur["resolution_rate"] < prev["resolution_rate"] - 0.1):
         flags.append(Flag("resolution-rate" + w,
             f"resolution-confirmed rate down {prev['resolution_rate']:.0%}→{cur['resolution_rate']:.0%} "
             "(proxy: user-side confirmation phrase present)."))
@@ -1544,11 +1585,18 @@ def scorecard(rows: dict[str, dict], days: int, project: str | None,
     L.append("")
     L.append("## Attention (agent ↔ user)")
     L.append(f"- AskUserQuestion: **{cur['askq']}**  ·  your prompts: **{cur['prompts']}**  "
-             f"·  interrupts: **{cur['interrupts']}**  ·  likely corrections: **{cur['corrections']}**")
+             f"·  interrupts: **{cur['interrupts']}**  ·  likely corrections: **{cur['corrections']}**"
+             f"  ·  questions_unjudged: **{cur['questions_unjudged']}**")
     L.append("")
     L.append("## Effectiveness (proxies)")
+    cur_rate, prev_rate = cur["resolution_rate"], prev["resolution_rate"]
+    rate_txt = f"{cur_rate:.0%}" if cur_rate is not None else "undecided"
+    trend_txt = ("undecided" if cur_rate is None or prev_rate is None
+                 else _arrow(cur_rate, prev_rate, higher_is_worse=False))
+    unjudged_txt = (f"  ·  resolution_unjudged **{cur['resolution_unjudged']}**"
+                    if cur["resolution_unjudged"] else "")
     L.append(f"- Resolution-confirmed sessions: **{cur['resolution_confirmed']}/{cur['sessions']}**  "
-             f"({cur['resolution_rate']:.0%})  {_arrow(cur['resolution_rate'], prev['resolution_rate'], higher_is_worse=False)}")
+             f"({rate_txt})  {trend_txt}{unjudged_txt}")
     L.append(f"- REPLAN: **{cur['replans']}**  ·  overcome-difficulty: **{cur['overcome_difficulty']}**  "
              f"·  rework edits: **{cur['rework_edits']}**")
     # The old `subagent_failures` used to render here as "sub-agent failures",
@@ -2016,8 +2064,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--project", help="restrict to one project dir name, looked up under every config root's projects/ (both are unioned)")
     p.add_argument("--ledger-only", action="store_true", help="upsert without printing (for the hook)")
     p.add_argument("--no-judge", action="store_true",
-                   help="make no correction-judge call: prefilter hits without a cached "
-                        "verdict are counted as corrections_unjudged")
+                   help="make no judge call: prefilter hits without a cached verdict "
+                        "are counted as corrections_unjudged / n_user_questions_unjudged / "
+                        "resolution_unjudged")
     p.add_argument("--ledger", type=Path,
                    help="override the ledger path (default: the real ~/.local/log ledger) — "
                         "tests and the cadence hook use this so a run never touches live state")

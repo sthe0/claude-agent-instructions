@@ -185,6 +185,7 @@ def test_scan_session_counts_all_four_user_signals(tmp_path, ps, monkeypatch):
     assert row["user_signals"] == {
         "n_user_corrections": 1,
         "n_user_questions": 1,
+        "n_user_questions_unjudged": 0,
         "n_freetext_askuser_answers": 1,
         "n_interrupts": 1,
     }
@@ -218,7 +219,7 @@ def test_scan_session_zero_signals_when_no_events(tmp_path, ps):
     row = ps._scan_session(main_file)
 
     assert row["user_signals"] == {
-        "n_user_corrections": 0, "n_user_questions": 0,
+        "n_user_corrections": 0, "n_user_questions": 0, "n_user_questions_unjudged": 0,
         "n_freetext_askuser_answers": 0, "n_interrupts": 0,
     }
 

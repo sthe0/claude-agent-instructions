@@ -1031,6 +1031,123 @@ def judge_feedback_signal(
         judge_ledger.set_current_judge(None)
 
 
+_USER_QUESTION_JUDGE_PROMPT = (
+    "You are given a user's message to an AI coding assistant, written in any "
+    "language. Decide whether the message ASKS the assistant a question -- it "
+    "seeks an answer, an explanation, a status or a decision from the assistant.\n\n"
+    "Answer YES only when the user is genuinely asking, for example (any "
+    "language): \"why did the test fail?\", \"а это точно безопасно?\", \"which "
+    "option do you recommend?\".\n\n"
+    "Answer NO for: pasted text or a quoted log, a URL or query string, a "
+    "rhetorical remark, a plain instruction, or a statement that merely contains "
+    "a question mark without seeking an answer.\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "MESSAGE:\n{text}"
+)
+
+_RESOLUTION_CONFIRMATION_JUDGE_PROMPT = (
+    "You are given a user's message to an AI coding assistant, written in any "
+    "language. Decide whether the message CONFIRMS that the task is resolved: the "
+    "user states that the result is done, accepted, working or good enough, so "
+    "the work can be closed.\n\n"
+    "Answer YES only when the user accepts the outcome, for example (any "
+    "language): \"looks good, we're done\", \"всё, считаем решённым\", \"yes, "
+    "that fixed it\".\n\n"
+    "Answer NO for: a message that merely uses such words in another sense "
+    "(\"is it resolved?\", \"not resolved yet\", \"решение не подходит\"), a "
+    "report of a defect, a request for more work, a partial approval of one step "
+    "while the task continues, or a neutral instruction.\n\n"
+    "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
+    "MESSAGE:\n{text}"
+)
+
+
+def _judge_user_text(
+    name: str, prompt_template: str, user_text, runner, *, enabled, timeout,
+    remaining, ceiling, runtime_host,
+) -> tuple[bool, str]:
+    """The shared body of the pure-model judges over one injection-stripped user
+    message: killswitch, no-text and no-runner short-circuits, then one model call
+    recorded in the judge ledger under ``name``."""
+    if not enabled:
+        return _judge_unavailable(
+            name, _KILLSWITCH_REASON, stage="killswitch",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if not isinstance(user_text, str) or not user_text:
+        return _judge_unavailable(
+            name, _NO_TEXT_REASON, stage="no_text",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    if runner is None:
+        return _judge_unavailable(
+            name, _NO_RUNNER_REASON, stage="no_runner",
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+        )
+    judge_ledger.set_current_judge(name)
+    start = time.monotonic()
+    prompt = None
+    try:
+        prompt = prompt_template.format(text=user_text)
+        result = runner(_prompt_argv(runtime_host, _JUDGE_COMPLEXITY), timeout=timeout, stdin=prompt)
+        return _record_result(
+            name, result, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+            prompt_chars=len(prompt),
+        )
+    except Exception:
+        return _record_raised(
+            name, duration=time.monotonic() - start,
+            timeout=timeout, remaining=remaining, ceiling=ceiling,
+            prompt_chars=len(prompt) if isinstance(prompt, str) else None,
+        )
+    finally:
+        judge_ledger.set_current_judge(None)
+
+
+def judge_user_question(
+    user_text: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
+) -> tuple[bool, str]:
+    """Semantic judge behind policy-scorecard's question prefilter: does the
+    injection-stripped human prompt ``user_text`` ask the assistant a question?
+    A '?' only nominates; this decides. Same three-valued fail-open contract as
+    ``judge_feedback_signal``: ``reason`` is "" for a genuine verdict and a
+    non-empty "...(fail-open)" string where the False is fabricated."""
+    return _judge_user_text(
+        "user_question", _USER_QUESTION_JUDGE_PROMPT, user_text, runner,
+        enabled=enabled, timeout=timeout, remaining=remaining, ceiling=ceiling,
+        runtime_host=runtime_host,
+    )
+
+
+def judge_resolution_confirmation(
+    user_text: str,
+    runner,
+    *,
+    enabled: bool = True,
+    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    remaining: float | None = None,
+    ceiling: float | None = None,
+    runtime_host: str = HOST_CLAUDE,
+) -> tuple[bool, str]:
+    """Semantic judge behind policy-scorecard's resolution prefilter: does the
+    injection-stripped human prompt ``user_text`` confirm the task is resolved?
+    A keyword only nominates; this decides. Same fail-open contract as
+    ``judge_user_question``."""
+    return _judge_user_text(
+        "resolution_confirmation", _RESOLUTION_CONFIRMATION_JUDGE_PROMPT, user_text, runner,
+        enabled=enabled, timeout=timeout, remaining=remaining, ceiling=ceiling,
+        runtime_host=runtime_host,
+    )
+
+
 def judge_outage_escalation(
     assistant_text: str,
     runner,
