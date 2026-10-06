@@ -77,6 +77,16 @@ CODE_PARTITIONS = [
         "controlled inputs (including deliberately adversarial ones) but are not "
         "themselves gates guarding production behaviour.",
     ),
+    (
+        "scripts/lib/writer_rules.py (candidate generation)",
+        lambda f: f == "scripts/lib/writer_rules.py",
+        "semantic-guarded",
+        "keep",
+        "Lexical candidate generation feeding a fail-open judge; never decides: the "
+        "regexes compiled from publish-rules.toml only choose which published bodies "
+        "are worth a model judge's time (a hit alone denies nothing), and the SKILL.md "
+        "parsing is markdown structure (numbered items, headings).",
+    ),
     # Mechanics of the two judge-guarded rows below, kept OUT of the emitted ground
     # (which wants the classification reason, not the generator's implementation):
     #   * It is a partition row, not a CODE_ID_OVERRIDES entry, because the override
@@ -315,22 +325,28 @@ CODE_PARTITIONS = [
 # be individually named, not hidden in a partition").
 CODE_ID_OVERRIDES = {
     # hook-published-text-writer-gate.py's deny_with is reached from decide()'s
-    # two branches, only one of which is a semantic judge call: _decide_text's
-    # deny is a structural fact-check (writer_pass.bind against the harness's
-    # own transcript -- did the tech-writer pass actually run on these exact
-    # bytes, no free-text classification involved), while _decide_attachment's
-    # deny is gated by agentctl.advisor.judge_published_attachment (fail-open,
-    # UNMEASURED by design per lib/judge_latency.py) behind a structural
-    # _recognized_artifact_kind prefilter. Neither path reaches deny_with via
-    # an unguarded regex on free-text meaning -- confirmed by reading decide(),
-    # _decide_text(), and _decide_attachment() at source. Mirrors
-    # hook-escalation-diagnosis-gate.py's identical deny_with shape below.
+    # two branches, both of which end in a semantic judge call or a structural
+    # fact-check: _decide_text's unbound deny is a structural fact-check
+    # (writer_pass.bind against the harness's own transcript -- did the
+    # tech-writer pass actually run on these exact bytes), and its content
+    # deny for a bound body is gated by agentctl.advisor.judge_published_text_rules
+    # (fail-open, UNMEASURED per lib/judge_latency.py) behind the lexical
+    # writer_rules.find_candidates prefilter, which only nominates rules for the
+    # judge and never denies. _decide_attachment's deny is gated by
+    # agentctl.advisor.judge_published_attachment (fail-open, UNMEASURED) behind
+    # a structural _recognized_artifact_kind prefilter. No path reaches deny_with
+    # via an unguarded regex on free-text meaning -- confirmed by reading
+    # decide(), _decide_text(), _check_text_rules() and _decide_attachment() at
+    # source. Mirrors hook-escalation-diagnosis-gate.py's identical deny_with
+    # shape below.
     ("scripts/hook-published-text-writer-gate.py", "deny_with"): (
         "semantic-guarded", "keep",
         "decide() dispatches to _decide_text (structural transcript-witness "
-        "check) or _decide_attachment (judge_published_attachment behind a "
-        "structural prefilter); deny_with only emits the reason either branch "
-        "already decided -- no regex-classified free text reaches this sink.",
+        "check, then judge_published_text_rules behind a candidate-only "
+        "lexical prefilter) or _decide_attachment (judge_published_attachment "
+        "behind a structural prefilter); deny_with only emits the reason either "
+        "branch already decided -- no regex-classified free text reaches this "
+        "sink.",
     ),
     # hook-turn-end-gate.py: per-scope split against the prior audit's row
     # granularity (regex-not-for-semantic-classification.md lists 5 of this

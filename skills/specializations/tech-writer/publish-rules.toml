@@ -1,0 +1,257 @@
+# Classification of the numbered rules in SKILL.md for the published-text gate.
+# Wording stays in SKILL.md only; scripts/lib/writer_rules.py reads it at runtime
+# and scripts/tests/test_writer_rules.py fails on any drift between the two.
+#
+# status = "judge":      a model judge may be asked whether a draft violates the rule,
+#                        but only when a candidate below hits the body.
+#   literals  strings that must occur verbatim in the rule's SKILL.md text
+#             (for how-7 also in the calque table section); matched as whole
+#             words where they begin/end with a word character.
+#   patterns  regex sources that cannot be verbatim; each carries a
+#             justification naming the SKILL.md phrase it operationalizes.
+# status = "perception": needs whole-document structure, thread history, the
+#                        message being answered, or what was actually tested --
+#                        none of which the hook sees.
+
+[[rule]]
+id = "say-1"
+section = "say"
+number = 1
+fingerprint = "Exposition order: base → particular"
+status = "perception"
+reason = "Judging order needs the whole document and its core task, not a lexical handle."
+
+[[rule]]
+id = "say-2"
+section = "say"
+number = 2
+fingerprint = "Term density (PRIMARY): introduce before you rely on"
+status = "perception"
+reason = "Whether a term is unfamiliar depends on the reader and on the order of definitions across the whole text."
+
+[[rule]]
+id = "say-3"
+section = "say"
+number = 3
+fingerprint = "Internal codes stay out of the reader-facing body"
+status = "perception"
+reason = "Recognizing an internal code needs an org codename list, which the shared core cannot carry."
+
+[[rule]]
+id = "say-4"
+section = "say"
+number = 4
+fingerprint = "Concision is not amputation — and it applies evenly"
+status = "perception"
+reason = "Over-compression and repetition are judged against the whole deliverable and the earlier thread."
+
+[[rule]]
+id = "say-5"
+section = "say"
+number = 5
+fingerprint = "Level consistency in an enumeration"
+status = "perception"
+reason = "Whether list items are peers is a structural judgement over the whole list."
+
+[[rule]]
+id = "say-6"
+section = "say"
+number = 6
+fingerprint = "Cut speculative water, but never cut a real risk"
+status = "judge"
+literals = ["может пригодиться", "держим наготове", "на будущее", "на случай если"]
+
+[[rule]]
+id = "say-7"
+section = "say"
+number = 7
+fingerprint = "Ground every checkable claim so the reader can verify it themselves"
+status = "judge"
+literals = ["/home/", "~/"]
+[[rule.patterns]]
+source = '(?<![\w.])/Users/\w'
+justification = "The rule's author-machine example `/home/…` has a macOS twin; the rule says a path on the author's own machine is not a link."
+[[rule.patterns]]
+source = '(?<![\w/])[A-Za-z]:\\\w'
+justification = "The rule names a Windows drive letter as a local path that is not a link."
+
+[[rule]]
+id = "say-8"
+section = "say"
+number = 8
+fingerprint = "Explain a designed thing by its functional grounds, not by an inventory of its parts"
+status = "perception"
+reason = "Whether a text leads with concepts or with a parts inventory is a structural judgement."
+
+[[rule]]
+id = "say-9"
+section = "say"
+number = 9
+fingerprint = "When the deliverable replies to a specific message, anchor to what was actually said"
+status = "perception"
+reason = "Needs the message being answered, which the hook does not see."
+
+[[rule]]
+id = "say-10"
+section = "say"
+number = 10
+fingerprint = "A heading must not imply a choice or plurality that doesn't structurally exist"
+status = "perception"
+reason = "Needs knowledge of how many alternatives the document actually covers."
+
+[[rule]]
+id = "say-11"
+section = "say"
+number = 11
+fingerprint = "Present a confidence interval on the quantity you actually measured, not only on a derived difference"
+status = "perception"
+reason = "Needs knowledge of what was measured and how the table is laid out."
+
+[[rule]]
+id = "say-12"
+section = "say"
+number = 12
+fingerprint = "Decide whether an update deserves its own entry BEFORE composing it — thread discipline for multi-entry venues"
+status = "perception"
+reason = "Needs the thread history; a single body cannot show whether it deserved its own entry."
+
+[[rule]]
+id = "say-13"
+section = "say"
+number = 13
+fingerprint = "A ticket comment addresses the ticket's readers, not the person you're chatting with"
+status = "judge"
+literals = ["вы", "вам", "вас", "you", "your"]
+[[rule.patterns]]
+source = '(?<!\w)(ваш(?:е(?:го|му|м|й|ю)?|а|у|ой|ою|ую|и|их|им|ими|ы|ей)?|вами)(?!\w)'
+justification = "The mechanical self-check lists `ваш*` (the inflected forms of one possessive, not any word starting with ваш) and the instrumental `вами`, which are not whole-word literals."
+
+[[rule]]
+id = "say-14"
+section = "say"
+number = 14
+fingerprint = "An artifact whose job is to get a decision opens with the ask, on its own labelled line — and every figure behind it is checkable by an outsider"
+status = "perception"
+reason = "Needs to know that the artifact asks for a decision and which figure is load-bearing."
+
+[[rule]]
+id = "how-1"
+section = "how"
+number = 1
+fingerprint = "Verbs over noun-stacks"
+status = "judge"
+literals = ["осуществить проверку", "принять решение по"]
+[[rule.patterns]]
+source = '(?<!\w)осуществ\w*'
+justification = "The rule's nominalization example `осуществить проверку` generalizes to the `осуществ-` stem."
+
+[[rule]]
+id = "how-2"
+section = "how"
+number = 2
+fingerprint = "Active voice over passive"
+status = "perception"
+reason = "Voice is grammatical, with no reliable lexical handle across sentences."
+
+[[rule]]
+id = "how-3"
+section = "how"
+number = 3
+fingerprint = "Short sentences — but connected, not telegraphic"
+status = "perception"
+reason = "Rhythm and telegraphic density are judged over the whole text."
+
+[[rule]]
+id = "how-4"
+section = "how"
+number = 4
+fingerprint = "Name the thing, then drop the qualifier"
+status = "perception"
+reason = "Needs to track first use of a term across the text."
+
+[[rule]]
+id = "how-5"
+section = "how"
+number = 5
+fingerprint = "Cut filler"
+status = "judge"
+literals = ["является", "в рамках", "с точки зрения того, что", "как известно", "стоит отметить", "и вот почему"]
+
+[[rule]]
+id = "how-6"
+section = "how"
+number = 6
+fingerprint = "Concrete over abstract"
+status = "perception"
+reason = "No lexical handle; a matter of taste about examples."
+
+[[rule]]
+id = "how-7"
+section = "how"
+number = 7
+fingerprint = "No English calques"
+status = "judge"
+literals = ["запушить", "закоммитить", "смёрджить", "задеплоить", "деплой", "фикс", "фича", "пайплайн", "флоу", "юзкейс", "перформанс", "консистентный", "валидный", "невалидный", "имплементировать", "конфигурировать", "саппортить", "абьюзить", "чекнуть", "апрувнуть"]
+[[rule.patterns]]
+source = '(?<!\w)(запуш|закоммит|смёрдж|задеплои|деплой|пайплайн|юзкейс|перформанс|консистентн|имплементир|конфигурир|саппорт|абьюз|чекн|апрувн|фич|фикс|флоу)\w*'
+justification = "Inflected forms of the rows in the calque and jargon table that how-7 refers to."
+
+[[rule]]
+id = "how-8"
+section = "how"
+number = 8
+fingerprint = "Unpack a self-coined compound"
+status = "perception"
+reason = "Telling a self-coined compound from an established term needs domain knowledge."
+
+[[rule]]
+id = "how-9"
+section = "how"
+number = 9
+fingerprint = "Format a code reference by what it is"
+status = "judge"
+literals = []
+[[rule.patterns]]
+source = '\[`[^`\]]+`[^\]]*\]\('
+justification = "The rule says a link wrapped in backticks renders as plain monospace; this is backticks inside the link text."
+[[rule.patterns]]
+source = '`\[[^\]`]+\]\([^)`]+\)`'
+justification = "The same defect from the other side: a whole markdown link wrapped in backticks."
+
+[[rule]]
+id = "how-10"
+section = "how"
+number = 10
+fingerprint = "Verify every cited artifact is actually reachable by the reader"
+status = "judge"
+literals = ["/tmp"]
+[[rule.patterns]]
+source = '(?<![\w.])(?:/home/\w|~/)'
+justification = "The rule's working-copy path example: a local home-directory path is not reachable by an outside reader."
+[[rule.patterns]]
+source = '(?<![\w.])/Users/\w'
+justification = "The rule's working-copy path example has a macOS twin."
+
+[[rule]]
+id = "how-11"
+section = "how"
+number = 11
+fingerprint = "Give an abstract noun a subject it can actually bear"
+status = "perception"
+reason = "Needs semantic judgement of which subject can bear the verb."
+
+[[rule]]
+id = "how-12"
+section = "how"
+number = 12
+fingerprint = "Give every clause an explicit, natural subject"
+status = "perception"
+reason = "Subjectless infinitive openers need syntactic parsing."
+
+[[rule]]
+id = "how-13"
+section = "how"
+number = 13
+fingerprint = "State a claim at the scope you actually tested, not a scope you generalized to"
+status = "perception"
+reason = "Needs knowledge of what was actually tested."

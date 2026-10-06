@@ -94,7 +94,8 @@ _KNOWN_UNGUARDED_HARD_SINKS = {
     "a0ce40334c52b3b1": (
         "scripts/hook-published-text-writer-gate.py", "deny_with",
         "semantic-guarded per the registry: decide() dispatches to "
-        "_decide_text (structural transcript-witness check, no judge) or "
+        "_decide_text (structural transcript-witness check, then "
+        "judge_published_text_rules behind a candidate-only prefilter) or "
         "_decide_attachment (judge_published_attachment behind a structural "
         "prefilter) one scope up — the same scope-local severing as the "
         "hook-escalation-diagnosis-gate.py row above; confirmed by reading "

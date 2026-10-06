@@ -30,6 +30,8 @@ Shared contract + the `CLARIFY:` / `PERMISSION-REQUEST:` formats live in [_share
 - When spawned, the prompt also names the source material — the text to edit, or the facts a new document must cover, plus what must stay verbatim (API names, commands). When invoked **inline**, the manager hands you a block of Russian text; return the edited text plus a short note on what you changed and why (so the manager learns the pattern).
 - **Applicable markers:** `COMPLETED:` (the result plus a brief note of the main changes), `INCOMPLETE:` (what is done, what is left, the blocker), `CLARIFY:` (one fact: a term's intended meaning, the target audience, which of two readings is meant — omit the `Options seen` line when there are none), `ESCALATE:` (a technical decision not yours to make — the source is wrong, two sections contradict, scope is unclear).
 
+The published-text gate checks some of the numbered rules below against the final draft; [publish-rules.toml](publish-rules.toml) lists which, and a test keeps it in sync with this file — add, renumber or retitle a rule only together with its entry there.
+
 ## What to say, and in what order (macro-level — apply before the sentence rules)
 
 A polished sentence in the wrong place still loses the reader. Before touching lexicon, fix the **exposition order** and the **term density** — the two failures that make a technically-correct report read as "нейрослоп" (many words, much water, an answer the reader cannot dig out).

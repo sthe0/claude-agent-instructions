@@ -1,13 +1,13 @@
 ---
 name: published-text-writer-gate
-description: Publishing reader-facing text to a ticket/issue is gated on the FACT that a tech-writer pass precedes the composition of those exact bytes in the harness's own transcript, never on content classification — the recurring failure was unpolished/leaked prose reaching a ticket with nothing in the harness able to answer "did tech-writer run before these bytes existed".
+description: Publishing reader-facing text to a ticket/issue is gated first on the FACT that a tech-writer pass precedes the composition of those exact bytes in the harness's own transcript, then on a fail-open judge check of the judge-checkable tech-writer rules listed in publish-rules.toml — the recurring failure was unpolished/leaked prose reaching a ticket with nothing in the harness able to answer "did tech-writer run before these bytes existed".
 type: reference
 schema: difficulty/v1
 created: 2026-09-02
-last_verified: 2026-09-18
+last_verified: 2026-10-06
 ---
 
-# The published-text writer gate: bind on the fact of a tech-writer pass, not on content
+# The published-text writer gate: bind on the fact of a tech-writer pass, then check judge-checkable rules
 
 ## Difficulty
 
@@ -15,7 +15,7 @@ Reader-facing text reached a tracker/issue comment without ever passing through 
 
 ## Order & criterion
 
-A `PreToolUse` hook on `Bash` intercepts a publication-shaped command, resolves the literal body it is about to send, and computes a **binding**: does the body's composition event in the *publishing process's own transcript* occur at or after a recorded tech-writer witness. No length threshold, no keyword/artifact-syntax content classification on the text path — every publication is checked, unconditionally, because tech-writer runs inline through `Skill` at negligible cost even for a one-line update. Acceptance check: the gate denies a body with no witness binding it and allows the same body once a tech-writer invocation precedes its composition, verified on committed fixture transcripts and in a real harness (two `claude -p` children, one deny arm and one allow arm — see stage 6's `samples/published-text-gate/in-harness-observation.json`).
+A `PreToolUse` hook on `Bash` intercepts a publication-shaped command, resolves the literal body it is about to send, and computes a **binding**: does the body's composition event in the *publishing process's own transcript* occur at or after a recorded tech-writer witness. No length threshold on the binding — every publication is checked, unconditionally, because tech-writer runs inline through `Skill` at negligible cost even for a one-line update. Acceptance check: the gate denies a body with no witness binding it and allows the same body once a tech-writer invocation precedes its composition, verified on committed fixture transcripts and in a real harness (two `claude -p` children, one deny arm and one allow arm — see stage 6's `samples/published-text-gate/in-harness-observation.json`).
 
 ## Route inventory (empirical, from this machine's own transcripts)
 
@@ -33,19 +33,37 @@ Four recorded occurrences of unpolished/leaked text reaching a ticket, none caug
 
 **The decisive trace** (a real remediation session on TICKET-467): `10:08:03Z` publish with a hand-written body → `10:10:52Z` `Skill{skill: tech-writer}` witness → `10:11:59Z`, `10:12:08Z`, `10:12:14Z` three `Write` calls (`comment1_new.txt`, `comment6_new.txt`, `comment7_new.txt`) → `10:34:09Z` corrected publish. Two design facts follow: the compliant flow really is witness-then-compose, so "these bytes were composed at or after a tech-writer invocation" allows the compliant flow and denies the pre-witness hand-written one without inverting; and one witness backed three bodies, so a one-witness-one-body consumption rule would have false-denied a legitimate flow — the binding is per-body containment, never witness consumption.
 
-## Design: gate on the fact of the pass, not on content
+## Design: gate on the fact of the pass, then on content for judge-checkable rules
 
-Two earlier revisions of this design layered a harness-vocabulary term ruleset, an artifact-syntax prefilter, and a text judge, with a separately-triggered writer-pass attestation behind a length threshold. Both thinker reviews of that design spent nearly all their blocking concerns on the classification machinery itself — denylist literalness, ordinary-word false positives, threshold derivation, venue exemptions — none of which has to be answered if the gate never classifies content. The current design drops all of it: an unconditional, computed **binding** between the outgoing body and a transcript-recorded tech-writer witness (`scripts/lib/writer_pass.py`), fail-open only on the one path where no deterministic predicate exists — attachment uploads, gated instead by a narrow binary judge (machine artifact vs. reader-facing prose smuggled as a file).
+Two earlier revisions layered a harness-vocabulary term ruleset, an artifact-syntax prefilter and a text judge behind a length threshold; both thinker reviews spent their blocking concerns on that classification machinery. The current design keeps the **binding** unconditional and free of content classification: a computed link between the outgoing body and a transcript-recorded tech-writer witness (`scripts/lib/writer_pass.py`). Why computed rather than a coordinator-written attestation field: a field the gated actor writes into its own payload is a claim it can mint, while a tech-writer invocation is a `tool_use` entry the harness itself writes into the transcript.
 
-Why a *computed* binding rather than a coordinator-supplied attestation field: a field the coordinator writes into its own payload ("writer_pass: true") is a claim the gated actor can mint — an honour system. A tech-writer invocation is instead an entry the harness itself writes into the session transcript as a `tool_use` block, which nothing the coordinator puts in a tool call's arguments can forge.
+Core #288 showed the binding is not enough: a bound body can still break a tech-writer rule (the 2026-10-05 second-person address, rule 13). So a bound TEXT body now also gets a **content check against the tech-writer rule registry**:
+
+- **One rule list.** The rule wording lives only in `skills/specializations/tech-writer/SKILL.md`. `skills/specializations/tech-writer/publish-rules.toml` classifies every numbered rule as judge-checkable (with candidate literals) or perception-only (with a reason); tests keep the two in sync.
+- **Prefilter, never a verdict.** `writer_rules.find_candidates` nominates judge-checkable rules whose literals occur in the body. A silent prefilter makes no model call.
+- **One fail-open judge.** A non-empty candidate set goes to `agentctl.advisor.judge_published_text_rules` (sonnet, low effort, hard timeout, shared judge budget). Only a genuine YES with a span found verbatim in the body denies, naming each violated rule and span. NO, the killswitch `CLAUDE_PUBLISHED_TEXT_RULES_SEMANTIC=0`, budget exhaustion, timeout, runner error or an unparseable answer allow and leave an advisory in the sink.
+- **Unchanged.** The attachment judge, the `CLAUDE_PUBLISHED_TEXT_GATE=0` override and the 190 s hook budget.
+
+### Content-check residuals
+
+- Perception-only rules (the registry gives each its reason) are not checked.
+- A prompt-injected body can at best push the judge to NO, i.e. to allow; a deny needs a verbatim span.
+- Any judge failure allows, so the check then degrades to the binding alone.
+- Rule say-3 is deferred.
+- The judge prompt truncates the body at 12000 characters; a violation beyond is unseen.
+- A body that reassembles the prompt's delimiters is not specially defended against.
+- When the judge's span is invalid, the deny lists all candidate rules, not only the violated one.
+- The span match is whitespace-sensitive, so a re-wrapped span fails validation and the verdict falls back to allow.
+- `advisor.py` carries an orphan string, `_TEXT_RULES_SAY13_NUANCE`, left as a nit.
+- The calibration set is thin and was tuned after its first run (below).
 
 ## Residuals
 
 ### Residual 1 -- Ordering, not authorship
 
-The binding proves the body was composed at or after a witness, not that the witness authored it — except in the `WRITER_OUTPUT` strength, where the body arrives directly as the witness's own `tool_result`. In the weaker `POST_WITNESS` strength (an exact-equal `Write`/`Edit` after a witness), a trivial one-token tech-writer pass followed by hand-written prose written to the same file would still satisfy the predicate. This was accepted because closing it would require re-introducing content classification of the witness's own output — exactly the machinery this design exists to avoid.
+The binding proves the body was composed at or after a witness, not that the witness authored it (the content check narrows this for judge-checkable rules but does not close it) — except in the `WRITER_OUTPUT` strength, where the body arrives directly as the witness's own `tool_result`. In the weaker `POST_WITNESS` strength (an exact-equal `Write`/`Edit` after a witness), a trivial one-token tech-writer pass followed by hand-written prose written to the same file would still satisfy the predicate. This was accepted for the binding itself, because closing it would require classifying the witness's own output; the registry-driven content check below is the partial answer.
 
-**2026-10-05, an internal-project ticket: a concrete occurrence of exactly this gap.** A ticket-comment draft was polished inline (the coordinator editing its own text by memory of the rules) without ever actually invoking `Skill(tech-writer)` — so whatever satisfied the gate's witness check was shallow, not the real pass this design assumes. The published comment still addressed the chat partner directly ("по вашему выбору…") in violation of tech-writer rule 13, and still carried unnecessary ceremony the user flagged as bureaucratic. The gate cannot distinguish a genuine tech-writer pass from a token one by design (see above); the fix applied this round was on the authoring side, not the gate — tech-writer rule 13 gained an explicit mechanical self-check (grep for second-person forms before publish), and tracker-management gained a proportionality rule against over-ceremony. This is now a second instance of the same gap, not a hypothetical one.
+**2026-10-05, an internal-project ticket: a concrete occurrence of exactly this gap.** A ticket-comment draft was polished inline (the coordinator editing its own text by memory of the rules) without ever actually invoking `Skill(tech-writer)` — so whatever satisfied the gate's witness check was shallow, not the real pass this design assumes. The published comment still addressed the chat partner directly ("по вашему выбору…") in violation of tech-writer rule 13, and still carried unnecessary ceremony the user flagged as bureaucratic. The gate cannot distinguish a genuine tech-writer pass from a token one by design (see above); the fix applied this round was on the authoring side, not the gate — tech-writer rule 13 gained an explicit mechanical self-check (grep for second-person forms before publish), and tracker-management gained a proportionality rule against over-ceremony. This is the occurrence that motivated the content check (Core #288): the gate now denies such a body when the judge returns a genuine YES on rule 13. That narrows the gap; the binding itself still proves ordering, not authorship.
 
 ### Residual 2 -- Scan window
 
@@ -93,13 +111,28 @@ Residual 9's generalization understated the gap on two independent axes, both fo
 
 The attachment judge's calibration is filed as a Core backlog issue rather than left as an unqueued word in this plan: it needs a sample of ≥16 calls over distinct attachment bodies in two arms (machine-artifact vs. reader-facing-smuggled), under the sampler discipline `samples/judge-latency/README.md` records, replacing the `UNMEASURED` row in `scripts/lib/judge_latency.py`'s table for `judge_published_attachment`. Issue number recorded here once filed: **pending — Bash access for `gh`/`scripts/file-difficulty.py` was not granted to this stage's spawn (see the stage's own `REPLAN:`/`PERMISSION-REQUEST:` return); filing is deferred to the coordinator.**
 
+## Text-rule judge calibration (2026-10-06)
+
+Harness: `samples/text-rule-judge/` (`calibrate.py`, `check_calibration.py`, `labelled.jsonl`). 17 labelled org-neutral items, each judged twice, model sonnet:
+
+| Measure | Result |
+|---|---|
+| Both historical incidents (2026-09-17, 2026-10-05) | genuine YES naming say-13 in every run |
+| False denies on clean items | 0 |
+| Verdict flips between the two runs | 0 |
+| Latency median / p90 / max | 1.94 s / 2.37 s / 3.57 s (hook budget 190 s) |
+| Prefilter trigger rate, historical TEXT publications | 42.05% (82 of 195; 2074 transcripts scanned) |
+
+**Tuned to the set.** The first live run falsely denied a clean item that names a participant by name; the prompt's say-13 nuance was clarified and the same set rerun gave 0 false denies. The rerun is tuned-to-the-set evidence, not an out-of-sample estimate; the false-deny rate on unseen text is unmeasured. The latency row stays `UNMEASURED` (the `acceptance_judge` precedent); the figures live in `calibration.json`.
+
 ## Cost
 
-Stage 7 only (memory/documentation stage, no new code): a handful of read-only greps and file reads plus this leaf write and the `verify-all.py` CHECKS/CHECK_ARGS edit; no `claude -p` spawns from within this stage.
+Text path: 0 model calls when the prefilter is silent (about 58% of historical publications), at most 1 sonnet call otherwise (median 1.94 s, p90 2.37 s), inside the shared judge budget. The attachment path is unchanged.
 
 ## See also
 
 - [[experience-leaf-schema]] — the `difficulty/v1` shape this leaf follows (standalone, outside `experience/`, so `verify-experience-leaf.py`'s path-scoped checks do not apply to it — it is indexed via `memory-global/MEMORY.md` directly instead).
 - `scripts/lib/writer_pass.py` — the binding computation this leaf documents.
+- `skills/specializations/tech-writer/publish-rules.toml` — the rule registry the content check reads.
 - `scripts/hook-published-text-writer-gate.py` — the `PreToolUse` hook.
 - `skills/tracker-management/SKILL.md` § How to publish — cross-referenced from there.
