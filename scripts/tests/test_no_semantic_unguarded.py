@@ -108,6 +108,15 @@ _KNOWN_UNGUARDED_HARD_SINKS = {
         "shell-token-syntax regexes (assignment-prefix / delimiter-word / "
         "definition patterns), never natural-language meaning.",
     ),
+    "6fd054ca18985f63": (
+        "scripts/hook-guard-bash-source-edit.py", "main",
+        "structural per the registry: the verdict is a function of shell "
+        "syntax (write-verb shape, redirect target) and filesystem facts "
+        "(git work tree, `.arc` marker, allowlist roots) only; the one regex "
+        "is the `NAME=value` assignment-prefix shape, and one-hop import "
+        "lib.shell_tokens carries only shell-token-syntax regexes, never "
+        "natural-language meaning.",
+    ),
     "943098c19a6861d7": (
         "scripts/hook-guard-destructive-rm.py", "main",
         "structural per the registry: only regex is shell-variable syntax "

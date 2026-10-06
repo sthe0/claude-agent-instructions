@@ -542,6 +542,18 @@ ground = "[a-z0-9]+ findall over the prompt only normalizes its first words into
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/hook-guard-bash-source-edit.py::<module>::re.compile"]
+class = "structural"
+ground = "_ASSIGNMENT matches the shell `NAME=value` assignment-prefix token shape so the command verb behind it can be read (command syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-guard-bash-source-edit.py::_command_and_rest::pattern.match"]
+class = "structural"
+ground = "_ASSIGNMENT.match skips leading `NAME=value` env-assignment tokens before the command verb (command syntax)."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/hook-guard-destructive-rm.py::<module>::re.compile"]
 class = "structural"
 ground = "_VAR_RE matches shell `$VAR` / `${VAR}` variable-reference syntax."

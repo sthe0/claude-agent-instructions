@@ -411,6 +411,14 @@ CODE_ID_OVERRIDES = {
         "contains the token \"block\") builds a text string, it does not gate "
         "anything.",
     ),
+    ("scripts/hook-guard-bash-source-edit.py", "main"): (
+        "structural", "keep",
+        "False pairing: main()'s deny is driven by write-verb shape (sed -i, "
+        "perl -i, a redirect from a literal producer, tee) and the target's "
+        "location (git work tree / `.arc` marker, minus the allowlist roots); "
+        "the one local regex is the `NAME=value` assignment-prefix shape, and "
+        "nothing in the verdict reads the written text's meaning.",
+    ),
     ("scripts/spawn-specialist.py", "_spawn_tags"): (
         "structural", "keep",
         "False pairing: the regex `[A-Z][A-Z0-9]+-\\d+` matches ticket-key "

@@ -409,6 +409,7 @@ def test_determinism_on_real_tree():
 _AUDITED_ROWS = [
     ("hook-guard-destructive-rm.py (deny)", "hook-guard-destructive-rm.py", None, False),
     ("hook-guard-canon-readonly.py (deny)", "hook-guard-canon-readonly.py", None, False),
+    ("hook-guard-bash-source-edit.py (deny)", "hook-guard-bash-source-edit.py", None, False),
     ("hook-multi-mount-search-guard.py (deny)", "hook-multi-mount-search-guard.py", None, False),
     ("hook-state-gate.py (deny)", "hook-state-gate.py", None, False),
     ("hook-scope-conflict.py (deny + Stop block)", "hook-scope-conflict.py", None, False),
@@ -421,7 +422,7 @@ _AUDITED_ROWS = [
     ("hook-turn-end-gate.py -> long_job_autowake_blockers", "hook-turn-end-gate.py", "long_job_autowake_blockers", False),
 ]
 
-assert len(_AUDITED_ROWS) == 12
+assert len(_AUDITED_ROWS) == 13
 
 
 @pytest.fixture(scope="module")
@@ -463,7 +464,7 @@ def test_regression_recall_audited_site(real_code_sites, real_file_rollups, row_
         )
 
 
-def test_regression_recall_covers_all_twelve_rows(real_code_sites, real_file_rollups):
+def test_regression_recall_covers_all_audited_rows(real_code_sites, real_file_rollups):
     """A negative end-state check alongside the parametrized positive checks
     above: no audited row is silently absent from BOTH the scope-level and
     file-rollup output."""

@@ -181,6 +181,10 @@ DESIRED = [
     # stay deterministic. Fail-open otherwise.
     ("PreToolUse",       "Edit|Write", "hook-guard-canon-readonly.py", 5),
     ("PreToolUse",       "Bash",  "hook-guard-canon-readonly.py", 5),
+    # Hard gate: deny a Bash write of literal text (sed -i, perl -i, echo/printf/
+    # heredoc redirect, tee) into a tracked source tree -- the edit must go through
+    # Edit/Write so the state and scope gates see it. Fail-open otherwise.
+    ("PreToolUse",       "Bash",  "hook-guard-bash-source-edit.py", 5),
     # Hard gate: deny a Bash publication call (gh/tracker-cli.sh comment, PR
     # create, issue edit, or a machine-local seam verb) whose text body has no
     # tech-writer witness bound to it in the transcript -- see

@@ -747,6 +747,17 @@ delivery_marker = ""
 delivery_note = ""
 
 [[rule]]
+id = "limits-edit-tools-only-for-source-edits"
+tier = 1
+locator_heading = "### Limits"
+locator_phrase = "Edit tools only for source edits"
+kernel_reason = ""
+delivery_kind = "structured_hook"
+delivery_marker = ""
+delivery_note = "hook-guard-bash-source-edit.py (PreToolUse Bash): denies sed -i / perl -i / a literal-producer redirect / tee aimed at a tracked source tree (git work tree or .arc-marker directory), scratch and memory roots exempt; interpreter one-liners (python3 -c, awk -i, dd, xargs, find -exec) stay with the prose norm."
+uninstrumented_reason = "The guard's deny is a structured PreToolUse decision with no bracket tag or firing log; the allow path logs nothing."
+
+[[rule]]
 id = "limits-no-domain-runbooks-no-instruction-changes"
 tier = 0
 locator_heading = "### Limits"

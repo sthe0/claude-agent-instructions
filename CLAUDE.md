@@ -160,6 +160,7 @@ Then record per [recording-experience.md](memory-global/leaves/recording-experie
 ### Limits
 
 - **Substantive** production code → spawn `developer`, never write it yourself; the *small change* class (§ Classify task weight) you may do in-thread, following the developer code-quality rules (`skills/specializations/developer/SKILL.md` § While developing).
+- **Edit tools only for source edits**, post-review fixes included — never `sed -i`/redirect/heredoc/`tee` from Bash (`hook-guard-bash-source-edit.py` denies it).
 - **No** domain runbooks (pipeline stages, relaunches, prod names) in this or other generic prompts — they belong in memory; **no** instruction changes without `self-improvement` (or an explicit user edit request).
 - **Destructive commands built from variables** (`rm -rf`, `git clean -fdx`, `find … -delete`, truncate/overwrite): guard every interpolated path variable for non-emptiness (`[[ -n "$VAR" ]]`) — an empty `$VAR` collapses the path to its parent and can wipe the agent's own memory. Prefer deleting **literal** paths, or `trap`-cleanup on the exact `mktemp` path captured at creation. The protected-path denylist (`$HOME`, `~/.claude`, `~/.claude-agent`, the instruction repo) is mechanically enforced by `hook-guard-destructive-rm.py` — but that gate fires post-generation, so guarding the variable is still yours.
 

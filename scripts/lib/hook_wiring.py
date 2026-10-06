@@ -119,6 +119,9 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
     ("hook-guard-canon-readonly.py",
      "denies Edit/Write and git commit inside a canonical checkout; absent, "
      "canon looks protected but is writable"),
+    ("hook-guard-bash-source-edit.py",
+     "denies a Bash write of literal text into a tracked source tree; absent, "
+     "the Edit/Write gates are bypassable by a sed -i or a heredoc redirect"),
     ("hook-guard-destructive-rm.py",
      "denies a recursive rm that could target $HOME, either config root, or "
      "the instruction repo"),
