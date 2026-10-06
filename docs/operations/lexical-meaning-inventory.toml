@@ -406,7 +406,7 @@ reviewed_by = "developer"
 
 [sites."scripts/check-exception-set-enumeration.py::<module>::re.compile"]
 class = "candidate-generation"
-ground = "Lines 82-94 compile shell-syntax patterns (--deselect, guard invocation and comparison, fd redirects, label order); _VOCAB_RE, _CARDINALITY_RE and _DEFINITE_SINGULAR_RE (360-369) are keyword sets that only nominate exception-set wording for the report-only semantic listing; the splitter (372) and the TOML line patterns (376-378) are structural."
+ground = "The module-level compiles are shell-syntax patterns (--deselect, guard invocation and comparison, fd redirects, label order); _VOCAB_RE, _CARDINALITY_RE and _DEFINITE_SINGULAR_RE are keyword sets that only nominate exception-set wording for the report-only semantic listing; the splitter and the TOML line patterns are structural."
 hits = 12
 hit_classes = ["structural", "structural", "structural", "structural", "structural", "candidate-generation", "candidate-generation", "candidate-generation", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
@@ -481,7 +481,7 @@ reviewed_by = "developer"
 
 [sites."scripts/crutch-inventory.py::<module>::re.compile"]
 class = "candidate-generation"
-ground = "The detector-import name (398), heading (555), fence (556), list marker (557) and sentence split (558) are syntax patterns; _MODAL_RE (563) is the obligation-modal lexicon whose match only nominates a sentence for the later disposition pass."
+ground = "The detector-import name, heading, fence, list marker and sentence split are syntax patterns; _MODAL_RE is the obligation-modal lexicon whose match only nominates a sentence for the later disposition pass."
 hits = 6
 hit_classes = ["structural", "structural", "structural", "structural", "structural", "candidate-generation"]
 reviewed_by = "developer"
@@ -739,7 +739,7 @@ reviewed_by = "developer"
 
 [sites."scripts/hook-resolution-reminder.py::<module>::re.compile"]
 class = "meaning-decision"
-ground = "102 SHARED_BRANCH_RE is a branch-name pattern; 185 GRATITUDE_RE and 195 META_RE are multilingual keyword sets deciding gratitude / resolution-meta-question meaning; 202 WORD_RE is a word-count tokenizer."
+ground = "SHARED_BRANCH_RE is a branch-name pattern; GRATITUDE_RE and META_RE are multilingual keyword sets deciding gratitude / resolution-meta-question meaning; WORD_RE is a word-count tokenizer."
 hits = 4
 hit_classes = ["structural", "meaning-decision", "meaning-decision", "structural"]
 open_violation = "the compiled GRATITUDE_RE and META_RE multilingual keyword sets behind the resolution nudge"
@@ -1726,14 +1726,14 @@ reviewed_by = "developer"
 
 [sites."scripts/si_feedback_detect.py::find_signals::pattern.search"]
 class = "candidate-generation"
-ground = "The self-improvement mention (149), strong correction (153), second-person pronoun gate (158) and weak correction (159) patterns only nominate a prompt as agent-behavior feedback: the advisory hook-self-improvement-reminder nudges the model, which decides, and the blocking use in hook-turn-end-gate and the scorecard goes through advisor.judge_feedback_signal."
+ground = "The self-improvement mention, strong correction, second-person pronoun gate and weak correction patterns only nominate a prompt as agent-behavior feedback: the advisory hook-self-improvement-reminder nudges the model, which decides, and the blocking use in hook-turn-end-gate and the scorecard goes through advisor.judge_feedback_signal."
 hits = 4
 hit_classes = ["candidate-generation", "candidate-generation", "candidate-generation", "candidate-generation"]
 reviewed_by = "developer"
 
 [sites."scripts/si_feedback_detect.py::<module>::re.compile"]
 class = "candidate-generation"
-ground = "Lines 44, 63, 66 and 70 compile harness-injected markup span patterns (structural); 91 the self-improvement mention, 94 strong and 105 weak correction phrases and 130 the you/ty pronoun gate are the nomination patterns whose blocking use is decided by advisor.judge_feedback_signal and whose advisory use only nudges the model."
+ground = "The harness-injected markup span patterns are structural; the self-improvement mention, the strong and weak correction phrases and the you/ty pronoun gate are the nomination patterns whose blocking use is decided by advisor.judge_feedback_signal and whose advisory use only nudges the model."
 hits = 8
 hit_classes = ["structural", "structural", "structural", "structural", "candidate-generation", "candidate-generation", "candidate-generation", "candidate-generation"]
 reviewed_by = "developer"
@@ -1760,7 +1760,7 @@ reviewed_by = "developer"
 
 [sites."scripts/silent_closure_detect.py::detect::pattern.search"]
 class = "candidate-generation"
-ground = "Decision-commitment (95) and completion (98) keyword regexes only nominate a turn; the sole consumer hook-turn-end-gate gates them with advisor.judge_silent_closure, which decides."
+ground = "Decision-commitment and completion keyword regexes only nominate a turn; the sole consumer hook-turn-end-gate gates them with advisor.judge_silent_closure, which decides."
 hits = 2
 hit_classes = ["candidate-generation", "candidate-generation"]
 reviewed_by = "developer"
@@ -2036,7 +2036,7 @@ reviewed_by = "developer"
 
 [sites."scripts/verify-experience-leaf.py::<module>::re.compile"]
 class = "meaning-decision"
-ground = "Lines 60-75 and 86 compile path/frontmatter/field/heading/[[slug]] patterns (structural); line 82 SIDE_DIFFICULTY_MARKER is a keyword set (side/sub/child difficult, Russian equivalents) deciding prose names sub-difficulties, used to block with no judge."
+ground = "The path/frontmatter/field/heading/[[slug]] compiles are structural; SIDE_DIFFICULTY_MARKER is a keyword set (side/sub/child difficult, Russian equivalents) deciding prose names sub-difficulties, used to block with no judge."
 hits = 11
 hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "meaning-decision", "structural"]
 open_violation = "the compiled SIDE_DIFFICULTY_MARKER keyword set behind the side-difficulty violation"
@@ -2068,7 +2068,7 @@ reviewed_by = "developer"
 
 [sites."scripts/verify-experience-leaf.py::side_difficulty_issue::pattern.search"]
 class = "meaning-decision"
-ground = "Line 236 SIDE_DIFFICULTY_MARKER keyword-matches free-text mentions of side/sub/child difficulty (EN/RU) and by itself yields a violation with no judge; line 238 INLINE_LINK_RE matches the fixed [[slug]] link syntax."
+ground = "SIDE_DIFFICULTY_MARKER keyword-matches free-text mentions of side/sub/child difficulty (EN/RU) and by itself yields a violation with no judge; INLINE_LINK_RE matches the fixed [[slug]] link syntax."
 hits = 2
 hit_classes = ["meaning-decision", "structural"]
 open_violation = "SIDE_DIFFICULTY_MARKER keywords alone decide prose names a side difficulty and yield a violation"
@@ -2128,7 +2128,7 @@ reviewed_by = "developer"
 
 [sites."scripts/verify-leaf-structure.py::check_content::pattern.search"]
 class = "structural"
-ground = "Schema field (103), required section headings (107), description field (116), the DESC_MARKER_RE required-label check (118), H1 heading (120) and the difficulty blockquote prefix (127) are fixed leaf/v1 syntax; DESC_MARKER_RE looks for the schema's required marker label, not for what the description means."
+ground = "Schema field, required section headings, description field, the DESC_MARKER_RE required-label check, H1 heading and the difficulty blockquote prefix are fixed leaf/v1 syntax; DESC_MARKER_RE looks for the schema's required marker label, not for what the description means."
 hits = 6
 hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
@@ -2141,7 +2141,7 @@ reviewed_by = "developer"
 
 [sites."scripts/verify-leaf-structure.py::<module>::re.compile"]
 class = "structural"
-ground = "Frontmatter, schema, section-heading, path, description-field, blockquote-prefix and heading patterns are fixed leaf/v1 syntax; DESC_MARKER_RE (62) is the schema's required marker label, a fixed phrase, not a reading of the description's meaning."
+ground = "Frontmatter, schema, section-heading, path, description-field, blockquote-prefix and heading patterns are fixed leaf/v1 syntax; DESC_MARKER_RE is the schema's required marker label, a fixed phrase, not a reading of the description's meaning."
 hits = 11
 hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"

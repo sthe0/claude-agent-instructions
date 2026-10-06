@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
 import subprocess
 import sys
 import tomllib
@@ -170,6 +171,24 @@ def test_meaning_decision_needs_open_violation(tmp_path):
     )
     assert f"meaning-decision-without-open-violation: {key}" in inv.check(wrong)
 
+    prefix_key = "scripts/a.py::frob::re.search"
+    prefix_source = {"scripts/a.py": "import re\n\ndef frob(x):\n    return re.search('thanks', x)\n"}
+    longer = _tree(
+        tmp_path / "prefix",
+        prefix_source,
+        _entry(prefix_key, "meaning-decision", extra=ref),
+        LEAF_HEAD + "- `scripts/a.py` `frob_ground`: decides gratitude by keyword.\n",
+    )
+    assert f"meaning-decision-without-open-violation: {prefix_key}" in inv.check(longer)
+
+    other_dir = _tree(
+        tmp_path / "other-dir",
+        source,
+        _entry(key, "meaning-decision", extra=ref),
+        LEAF_HEAD + "- `cursor/scripts/a.py` `f`: decides gratitude by keyword.\n",
+    )
+    assert f"meaning-decision-without-open-violation: {key}" in inv.check(other_dir)
+
 
 def test_mixed_hit_key_takes_strictest_class(tmp_path):
     key = "scripts/a.py::f::re.search"
@@ -223,9 +242,48 @@ def test_nested_non_test_file_enumerated_and_tests_excluded(tmp_path):
 
 
 def test_python_file_outside_scripts_is_enumerated(tmp_path):
-    root = _tree(tmp_path, {"tools/x.py": "import re\nre.fullmatch('x', 'y')\n"})
+    root = _tree(tmp_path / "plain", {"tools/x.py": "import re\nre.fullmatch('x', 'y')\n"})
     sites, _ = inv.enumerate_sites(root)
     assert "tools/x.py::<module>::re.fullmatch" in sites
+
+    body = "import re\n\ndef g(x):\n    return re.search('a', x)\n"
+    root = _tree(tmp_path / "no-git", {"cursor/scripts/c.py": body})
+    sites, _ = inv.enumerate_sites(root)
+    assert "cursor/scripts/c.py::g::re.search" in sites
+
+    root = _tree(
+        tmp_path / "git", {"cursor/scripts/c.py": body, "cursor/scripts/u.py": body}
+    )
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    for argv in (["init", "-q"], ["add", "cursor/scripts/c.py"]):
+        subprocess.run(["git", "-C", str(root), *argv], check=True, capture_output=True, env=env)
+    sites, _ = inv.enumerate_sites(root)
+    assert "cursor/scripts/c.py::g::re.search" in sites
+    assert not [k for k in sites if k.startswith("cursor/scripts/u.py::")]
+
+
+def test_qualnames_scope_methods_nested_functions_decorators_and_defaults(tmp_path):
+    sites = _sites(
+        tmp_path,
+        "import re\n"
+        "\n"
+        "@decorate(re.compile('d'))\n"
+        "def outer(x=re.compile('e')):\n"
+        "    def inner():\n"
+        "        return re.search('i', 'y')\n"
+        "    return inner\n"
+        "\n"
+        "class C:\n"
+        "    @decorate(re.compile('k'))\n"
+        "    def m(self, y=re.compile('l')):\n"
+        "        return re.search('m', 'y')\n",
+    )
+    assert sites == {
+        "scripts/a.py::<module>::re.compile": [3, 4],
+        "scripts/a.py::outer.inner::re.search": [6],
+        "scripts/a.py::C::re.compile": [10, 11],
+        "scripts/a.py::C.m::re.search": [12],
+    }
 
 
 def test_every_entry_has_class_and_non_empty_ground():
@@ -306,11 +364,13 @@ def test_converted_sites_are_not_meaning_decisions():
 
 
 def _base_registry() -> list[dict]:
-    raw = subprocess.run(
+    shown = subprocess.run(
         ["git", "-C", str(ROOT), "show", f"{BASE_REV}:scripts/crutch_registry.toml"],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    data = tomllib.loads(raw)
+        capture_output=True, text=True,
+    )
+    if shown.returncode != 0:
+        pytest.skip(f"base revision {BASE_REV} is not available (shallow clone)")
+    data = tomllib.loads(shown.stdout)
     for value in data.values():
         if isinstance(value, list):
             return value

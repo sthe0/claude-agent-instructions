@@ -283,7 +283,8 @@ def _reference_resolves(key: str, ref, bullets: list[str]) -> bool:
     qual = rest.rpartition("::")[0]
     want = _squash(ref)
     return any(
-        want in _squash(b) and path in b and "`" + qual + "`" in b for b in bullets
+        want in _squash(b) and "`" + path + "`" in b and "`" + qual + "`" in b
+        for b in bullets
     )
 
 
