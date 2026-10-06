@@ -910,8 +910,10 @@ _TEXT_RULES_PROMPT = (
 _TEXT_RULES_SAY13_NUANCE = (
     "Note on say-13: second-person address is a violation only when its addressee "
     "is the person chatting with the author and is NOT identified in the body. "
-    "A named ticket participant, an @login, or a quoted message being answered "
-    "(see say-9) makes the address legitimate; so are quotations, UI labels and "
+    "A named ticket participant (the body addresses them by name, e.g. a first "
+    "name or surname followed by 'вы'), an @login, or a quoted message being "
+    "answered (see say-9) makes the address legitimate; so are quotations, UI "
+    "labels and "
     "generic 'you' meaning anyone. Flag second person only when no such addressee "
     "is identifiable from the body itself.\n\n"
 )

@@ -48,8 +48,9 @@ def _good_calibration() -> dict:
             "flips": 0, "prefilter": {"publications": 10, "fired": 3, "rate": 0.3}}
 
 
-GOOD_E2E = {"positive": {"decision": "deny", "reason": "- say-13 (...)", "returncode": 0, "latency_s": 25.0},
-            "negative": {"decision": "allow", "reason": "", "returncode": 0, "latency_s": 20.0}}
+GOOD_E2E = {"positive": {"decision": "deny", "reason": "- say-13 (...)", "returncode": 0, "latency_s": 25.0,
+                         "advisories": ["TEXT_RULE_JUDGE_DENY"]},
+            "negative": {"decision": "allow", "reason": "", "returncode": 0, "latency_s": 20.0, "advisories": []}}
 
 
 def test_labelled_set_is_well_formed():
@@ -130,3 +131,34 @@ def test_hook_e2e_decisions_are_checked():
     deny_negative["negative"]["decision"] = "deny"
     assert any("positive" in f for f in checker.check(_good_calibration(), allow_positive))
     assert any("negative" in f for f in checker.check(_good_calibration(), deny_negative))
+
+
+def test_e2e_deny_without_judge_deny_advisory_is_rejected():
+    bad = copy.deepcopy(GOOD_E2E)
+    bad["positive"]["advisories"] = []
+    assert any("TEXT_RULE_JUDGE_DENY" in f for f in checker.check(_good_calibration(), bad))
+
+
+def test_e2e_negative_allowed_through_fail_open_is_rejected():
+    bad = copy.deepcopy(GOOD_E2E)
+    bad["negative"]["advisories"] = ["TEXT_RULE_JUDGE_FAIL_OPEN"]
+    assert any("fail-open" in f for f in checker.check(_good_calibration(), bad))
+
+
+def test_items_not_matching_labelled_jsonl_are_rejected():
+    calibration = _good_calibration()
+    labelled = {item["id"]: item["label"] for item in calibration["items"]}
+    assert checker.check(calibration, GOOD_E2E, labelled) == []
+    dropped = dict(labelled)
+    dropped.pop(next(i for i, label in labelled.items() if label == "clean"))
+    assert any("differ from labelled.jsonl" in f for f in checker.check(calibration, GOOD_E2E, dropped))
+    flipped = dict(labelled)
+    cid = next(i for i, label in labelled.items() if label == "clean")
+    flipped[cid] = "violation"
+    assert any("differ from labelled.jsonl" in f for f in checker.check(calibration, GOOD_E2E, flipped))
+
+
+def test_duplicate_item_id_is_rejected():
+    calibration = _good_calibration()
+    calibration["items"].append(copy.deepcopy(calibration["items"][0]))
+    assert any("duplicate item id" in f for f in checker.check(calibration, GOOD_E2E))

@@ -31,12 +31,13 @@ model calls (about 2 per item); nothing is published and the hook's command is n
 ## What the check asserts
 
 - n >= 16 items, each judged twice, every run a JSON-bool `verdict` and `genuine`.
-- Both incident items: every run is a genuine YES naming `say-13` with a quoted span present in the body.
+- Both incident items: every run is a genuine YES naming `say-13`. (The quoted span is validated by the hook when it denies; the checker does not recompute it.)
 - Zero false denies: no clean item has a run with `verdict` and `genuine` both true.
 - At most one item whose two runs disagree (more than that means one pass is not evidence).
 - Maximum latency over all attempts, retries included, is at most 184 s, one second under the 185 s
   family ceiling that every judge timeout is pinned to.
-- The hook end-to-end run denies the violating body naming `say-13` and allows the clean one.
+- Items and labels match `labelled.jsonl` exactly, with no duplicate ids.
+- The hook end-to-end run denies the violating body naming `say-13` with a `TEXT_RULE_JUDGE_DENY` advisory, and allows the clean one without any fail-open or budget advisory.
 
 ## Limits
 
@@ -48,3 +49,11 @@ model calls (about 2 per item); nothing is published and the hook's command is n
   figures live in `calibration.json` and the published-text-writer-gate leaf only.
 - The prefilter trigger rate comes from historical publications whose body could still be resolved;
   bodies that were files since deleted are counted as `unresolved`.
+- Recall on non-incident violations (calque, filler, and so on) is observed in the run but not asserted.
+- The trigger rate counts TEXT publications only; attachment publications are excluded.
+- The first live run falsely denied `clean-named-by-name` ("Иван, вы просили…") in both runs: the
+  judge prompt's say-13 nuance did not say that a first name followed by «вы» identifies the
+  addressee. The label was left as `clean` (it matches the rule's own say-9 exception), the nuance
+  was clarified in `scripts/agentctl/advisor.py`, and the unchanged set was re-run: 0 false denies,
+  0 flips. That is a prompt fix made after seeing one item's result, on a 17-item set, so treat the
+  clean result as tuned-to-the-set evidence, not an independent estimate.

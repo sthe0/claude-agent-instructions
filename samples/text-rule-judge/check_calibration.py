@@ -47,7 +47,7 @@ def _valid_run(run) -> str | None:
     return None
 
 
-def check(calibration: dict, e2e: dict) -> list[str]:
+def check(calibration: dict, e2e: dict, labelled: dict[str, str] | None = None) -> list[str]:
     failures: list[str] = []
     items = calibration.get("items")
     if not isinstance(items, list):
@@ -62,6 +62,8 @@ def check(calibration: dict, e2e: dict) -> list[str]:
         if not isinstance(item, dict) or item.get("label") not in LABELS or not isinstance(item.get("runs"), list):
             failures.append(f"malformed item {item.get('id') if isinstance(item, dict) else item!r}")
             continue
+        if item["id"] in by_id:
+            failures.append(f"{item['id']}: duplicate item id")
         by_id[item["id"]] = item
         if len(item["runs"]) != runs_per_item or len(item["runs"]) < 2:
             failures.append(f"{item['id']}: {len(item['runs'])} runs, expected runs_per_item={runs_per_item} >= 2")
@@ -77,6 +79,12 @@ def check(calibration: dict, e2e: dict) -> list[str]:
         verdicts = {run["verdict"] for run in item["runs"] if isinstance(run, dict) and _is_bool(run.get("verdict"))}
         if len(verdicts) > 1:
             flips += 1
+
+    if labelled is not None:
+        got = {i: it.get("label") for i, it in by_id.items()}
+        if got != labelled:
+            drift = sorted(k for k in set(got) | set(labelled) if got.get(k) != labelled.get(k))
+            failures.append(f"items/labels differ from labelled.jsonl: {drift}")
 
     n = len(items)
     if n < MIN_ITEMS:
@@ -129,6 +137,12 @@ def check(calibration: dict, e2e: dict) -> list[str]:
         failures.append(f"hook e2e positive: expected deny naming {INCIDENT_RULE}")
     if not (isinstance(negative, dict) and negative.get("decision") == "allow"):
         failures.append("hook e2e negative: expected allow")
+    if isinstance(positive, dict) and "TEXT_RULE_JUDGE_DENY" not in (positive.get("advisories") or []):
+        failures.append("hook e2e positive: no TEXT_RULE_JUDGE_DENY advisory (deny not from a judged YES with a span)")
+    if isinstance(negative, dict):
+        bad = {"TEXT_RULE_JUDGE_FAIL_OPEN", "TEXT_RULE_JUDGE_BUDGET_EXHAUSTED"} & set(negative.get("advisories") or [])
+        if bad:
+            failures.append(f"hook e2e negative: allow came from a fail-open path {sorted(bad)}")
     for name, side in (("positive", positive), ("negative", negative)):
         if isinstance(side, dict) and side.get("returncode") != 0:
             failures.append(f"hook e2e {name}: returncode {side.get('returncode')!r}")
@@ -147,7 +161,14 @@ def main(argv: list[str]) -> int:
     except (OSError, ValueError) as exc:
         print(f"FAIL: cannot read inputs: {exc}")
         return 1
-    failures = check(calibration, e2e)
+    labelled_path = Path(__file__).with_name("labelled.jsonl")
+    try:
+        rows = [json.loads(line) for line in labelled_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        labelled = {row["id"]: row["label"] for row in rows}
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"FAIL: cannot read labelled.jsonl: {exc}")
+        return 1
+    failures = check(calibration, e2e, labelled)
     for failure in failures:
         print(f"FAIL: {failure}")
     if not failures:
