@@ -95,14 +95,15 @@ def sandbox():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def run_hook(command: str, cwd: "Path | str", tool: str = "Bash") -> subprocess.CompletedProcess:
+def run_hook(command: str, cwd: "Path | str", tool: str = "Bash",
+             env: "dict | None" = None) -> subprocess.CompletedProcess:
     payload = {"tool_name": tool, "tool_input": {"command": command}, "cwd": str(cwd)}
-    return run_raw(json.dumps(payload))
+    return run_raw(json.dumps(payload), env)
 
 
-def run_raw(stdin: str) -> subprocess.CompletedProcess:
+def run_raw(stdin: str, env: "dict | None" = None) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(HOOK_SCRIPT)], input=stdin,
-                          env=_hook_env(), capture_output=True, text=True)
+                          env=env or _hook_env(), capture_output=True, text=True)
 
 
 def denied(proc: subprocess.CompletedProcess) -> bool:
@@ -160,6 +161,16 @@ def test_deny_echo_git_tree(sandbox):
     assert_denied("echo text > tracked.py", sandbox.repo)
     assert_denied("echo text >> tracked.py", sandbox.repo)
     assert_denied(f"echo text > {sandbox.repo}/tracked.py", sandbox.plain)
+
+
+def test_deny_printf_append_git_tree(sandbox):
+    assert_denied("printf 'x' >> tracked.py", sandbox.repo)
+
+
+def test_deny_echo_chained_git_tree(sandbox):
+    assert_denied("true && echo text > tracked.py", sandbox.repo)
+    assert_denied("echo ok; echo text > tracked.py", sandbox.repo)
+    assert_denied('echo "> a quote" && echo text > tracked.py', sandbox.repo)
 
 
 def test_deny_echo_fd_dup_git_tree(sandbox):
@@ -251,13 +262,8 @@ def test_allow_home_arc_state_dir(sandbox):
     (fake_home / "mount" / ".arc").mkdir(parents=True)
     env = {**_hook_env(), "HOME": str(fake_home)}
 
-    def verdict(command: str, cwd: Path) -> subprocess.CompletedProcess:
-        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)}
-        return subprocess.run([sys.executable, str(HOOK_SCRIPT)], input=json.dumps(payload),
-                              env=env, capture_output=True, text=True)
-
-    assert allowed(verdict("echo text > f.txt", fake_home / "notes"))
-    assert denied(verdict("echo text > f.txt", fake_home / "mount"))
+    assert allowed(run_hook("echo text > f.txt", fake_home / "notes", env=env))
+    assert denied(run_hook("echo text > f.txt", fake_home / "mount", env=env))
 
 
 def test_allow_tmp_git_tree(tmp_path):
@@ -274,6 +280,11 @@ def test_allow_unreadable_target_shapes(sandbox):
     assert_allowed("diff <(echo a) <(echo b) | tee /tmp/hook-guard-bash-source-edit-probe.txt", sandbox.repo)
 
 
+def test_allow_quoted_redirect_lookalike(sandbox):
+    assert_allowed('echo "> a quote" > /tmp/probe', sandbox.repo)
+    assert_allowed("printf '> %s' x | tee /tmp/x", sandbox.repo)
+
+
 def test_allow_other_tools_and_empty(sandbox):
     assert allowed(run_hook("echo text > tracked.py", sandbox.repo, tool="Edit"))
     assert_allowed("", sandbox.repo)
@@ -282,6 +293,8 @@ def test_allow_other_tools_and_empty(sandbox):
 def test_payload_invariant_quoted_mention(sandbox):
     assert_allowed("git commit -m 'fix sed -i usage'", sandbox.repo)
     assert_allowed('git commit -m "fix sed -i usage"', sandbox.repo)
+    assert_allowed("git commit -m 'fix sed -i tracked.py'", sandbox.repo)
+    assert_allowed('git commit -m "fix sed -i tracked.py"', sandbox.repo)
     assert_allowed("echo 'fix sed -i usage' > /tmp/hook-guard-bash-source-edit-probe.txt", sandbox.repo)
     assert_allowed('echo "fix sed -i usage" > /tmp/hook-guard-bash-source-edit-probe.txt', sandbox.repo)
 

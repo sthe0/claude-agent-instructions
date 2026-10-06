@@ -6240,6 +6240,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "cd3c14085362cf9d"
+domain = "code"
+file = "scripts/tests/test_hook_guard_bash_source_edit.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "603708af93054de3"
 domain = "code"
 file = "scripts/tests/test_hook_guard_bash_source_edit.py"
@@ -6281,6 +6289,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "b30f4f87b795e265"
+domain = "code"
+file = "scripts/tests/test_hook_guard_bash_source_edit.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "12092e92e2abc3a2"
 domain = "code"
 file = "scripts/tests/test_hook_guard_bash_source_edit.py"
 class = "not-a-gate"

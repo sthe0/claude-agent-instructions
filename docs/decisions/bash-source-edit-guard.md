@@ -54,9 +54,16 @@ empty command, an unreadable target path, and any git error or timeout.
   `find -exec`, and any interpreter that writes a file itself.
 - **Walker false positives / negatives #298, #299** (sed script operand, `$VAR`, env-var and process
   substitution shapes) are out of scope here; the hook stays fail-open on all four.
-- `shlex` loses quote information, so a quoted argument that begins with `>` is read as a redirect
-  token — inherited from the shared tokenizer.
+- `shlex` loses quote information, so a quoted argument that begins with `>` looks like a glued
+  redirect token. The hook drops such a token when it contains whitespace (an unquoted redirect
+  word cannot), which covers `echo "> a quote"` and `printf '> %s'`; a whitespace-free quoted
+  argument (`echo '>x'`) is still read as a redirect to `x` — a false deny only when `x` lies in a
+  tracked tree. The payload-invariance claim holds for the written text of heredoc bodies and
+  commit messages; it is not absolute for a quoted word shaped exactly like a glued redirect.
 - A redirect glued to a preceding word (`x>foo`) follows `lib/bash_write_targets` behaviour.
+- Follow-up (not in this change): the hook duplicates `_abs`, `_operands_until_redirect` and a git
+  wrapper that also live in the walker; fold them into `lib/bash_write_targets` once the walker's
+  own shapes (#298, #299) are settled.
 
 ## Registration
 

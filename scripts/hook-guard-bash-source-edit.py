@@ -40,10 +40,12 @@ NAMED RESIDUAL — shell-invisible writes: `python3 -c "open(p,'w')"`, `awk -i
 inplace`, `dd of=f`, `find -exec sed -i`, `xargs sed -i`, `>|f`, `&>f`, and a
 redirect glued to a word carry no token this hook reads; the prose norm
 ("Edit tools only for source edits", developer SKILL.md and CLAUDE.md § Limits)
-covers them and post-review fixes alike. A quoted argument that begins with `>`
-(`echo '>x'`) is read as a redirect, because the shared lexer drops quote
-information. This guard raises the cost of an accidental bypass; it is not an
-evasion-proof boundary.
+covers them and post-review fixes alike. The shared lexer drops quote
+information, so a quoted argument that begins with `>` looks like a glued
+redirect: when it contains whitespace (`echo "> a quote"`) the hook proves it
+quoted and drops it; a whitespace-free one (`echo '>x'`) is still read as a
+redirect to `x` — a false deny only when `x` lands in a tracked tree. This guard
+raises the cost of an accidental bypass; it is not an evasion-proof boundary.
 
 DENY is signaled with the PreToolUse permissionDecision JSON on stdout (the
 shape hook-guard-canon-readonly.py prints).
@@ -203,6 +205,14 @@ def _absolute(token: str, cwd: str) -> str:
     return token if os.path.isabs(token) else os.path.join(cwd, token)
 
 
+def _drop_quoted_redirect_lookalikes(seg: list[str]) -> list[str]:
+    """The shared lexer drops quote information, so a quoted argument such as
+    `"> a quote"` arrives as a glued redirect word. An unquoted glued redirect
+    word cannot hold whitespace, so whitespace proves the token was a quoted
+    argument; remove it before the walker reads redirects."""
+    return [t for t in seg if not (t.startswith(">") and any(c.isspace() for c in t))]
+
+
 def _segment_targets(seg: list[str], literal_pipeline: bool, eff_cwd: str) -> list[str]:
     verb, rest = _command_and_rest(seg)
     if verb in ("sed", "gsed"):
@@ -213,7 +223,7 @@ def _segment_targets(seg: list[str], literal_pipeline: bool, eff_cwd: str) -> li
         files = _file_operands(rest)
     elif verb in _LITERAL_PRODUCERS or (
             verb == "cat" and literal_pipeline and _cat_reads_only_stdin(rest)):
-        return bash_write_targets.redirect_targets(seg, eff_cwd)
+        return bash_write_targets.redirect_targets(_drop_quoted_redirect_lookalikes(seg), eff_cwd)
     else:
         return []
     return [_absolute(t, eff_cwd) for t in files]
