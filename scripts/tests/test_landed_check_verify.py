@@ -204,6 +204,16 @@ def test_render_command_shape(tmp_path):
 
 # --- self-reference: freeze precedes verification in cmd_record_result ------
 
+def test_cherry_fallback_command_shape(tmp_path):
+    stage = _landed_stage(1, target="main", remote="origin", delivered_stage=1)
+    stage.outcome.delivered_head = "deadbeefcafe"
+    state = _verifying("u4c", [stage], repo_root=str(tmp_path))
+    command, _ = state.render_landed_command(stage.criterion.landed)
+    assert "rev-list --merges" in command
+    assert "cherry" in command
+    assert "fetch" not in command
+
+
 def test_self_referencing_stage_finds_frozen_head_present(tmp_path):
     """A stage whose OWN criterion is landed, self-referencing its own index,
     must find its own delivered head already frozen — proving freeze runs
@@ -475,21 +485,43 @@ def test_rebase_landing_is_green_on_both_refs(tmp_path):
     assert landed_exit(work, delivered) == 0
 
 
-def test_cherry_failure_is_a_git_error_not_a_stage_failure(tmp_path):
-    work = make_repo_with_remote(tmp_path)
-    delivered = deliver_on_feature_then_advance_trunk(work)
-    land_by_rebase(work)
+def _git_shim(tmp_path, fail_on: str) -> dict:
+    """PATH shim that records every sub-command it saw in `seen` and exits 2 on `fail_on`."""
+    real_git = shutil.which("git")
+    assert real_git is not None
     shim_dir = tmp_path / "shim"
     shim_dir.mkdir()
+    seen = shim_dir / "seen"
     shim = shim_dir / "git"
     shim.write_text(
         "#!/bin/sh\n"
-        'for a in "$@"; do [ "$a" = cherry ] && exit 2; done\n'
-        f'exec {shutil.which("git")} "$@"\n'
+        f'for a in "$@"; do echo "$a" >> {seen}; [ "$a" = {fail_on} ] && exit 2; done\n'
+        f'exec {real_git} "$@"\n'
     )
     shim.chmod(0o755)
-    env = {"PATH": f"{shim_dir}{os.pathsep}{os.environ['PATH']}"}
-    assert landed_exit(work, delivered, env=env) == LANDED_GIT_ERROR_EXIT
+    return {"env": {"PATH": f"{shim_dir}{os.pathsep}{os.environ['PATH']}"}, "seen": seen}
+
+
+def _rebase_landed(tmp_path) -> tuple[Path, str]:
+    work = make_repo_with_remote(tmp_path)
+    delivered = deliver_on_feature_then_advance_trunk(work)
+    land_by_rebase(work)
+    assert landed_exit(work, delivered) == 0  # green without the shim
+    return work, delivered
+
+
+def test_cherry_failure_is_a_git_error_not_a_stage_failure(tmp_path):
+    work, delivered = _rebase_landed(tmp_path)
+    shim = _git_shim(tmp_path, "cherry")
+    assert landed_exit(work, delivered, env=shim["env"]) == LANDED_GIT_ERROR_EXIT
+    assert "cherry" in shim["seen"].read_text().split()  # the fallback was actually reached
+
+
+def test_cherry_path_merges_listing_failure_is_a_git_error(tmp_path):
+    work, delivered = _rebase_landed(tmp_path)
+    shim = _git_shim(tmp_path, "--merges")
+    assert landed_exit(work, delivered, env=shim["env"]) == LANDED_GIT_ERROR_EXIT
+    assert "--merges" in shim["seen"].read_text().split()
 
 
 def test_squash_of_two_commits_stays_red(tmp_path):
