@@ -6,6 +6,10 @@ Sub-index of `memory-global/leaves/experience/`. Pointed at from `memory-global/
 
 Most recent first. (Migrated 2026-06-11 from the older task-centric format — the prior 12 leaves were merged into these 7 by recurring difficulty.)
 
+## 2026-10
+
+- [2026-10-06 — Tuning the agent's own instructions to an external productivity metric (AI Profile Season II)](2026-10-06-season2-metric-instruction-tuning.md) — The org's AI-productivity score changed to count distinct sessions, distinct MCP servers plus skills, and merged PRs edited only through Edit/Write/MultiEdit, while the agent's norms defaulted to sequential plan review, CLI-over-MCP dispatch and shell writes; fixed on the agentctl spine with a parallel-review default that continues past a revise level, MCP-first dispatch at every site, an Edit-only norm backed by a PreToolUse hook, and responsiveness norms - and paid for by 14 review rounds driven with early stop, a borrowed round-5 threshold the user rejected, a leading-cd-only hook limitation, a stale local trunk ref in the org VCS and an ENOSPC incident at the end.
+
 ## 2026-09
 
 - [2026-09-29 — Tracker publish gate covered only whole-task phases, missed per-stage artifact-declaring work](2026-09-29-tracker-publish-gate-missed-per-stage-artifacts.md) — The tracker plugin's resolution gate required plan/result/status to be published but had no notion of per-stage progress, so a stage that declared output_artifacts could pass silently unjournaled; a third-party ticket reader (quota approver) had to dig a buried figure out of a wall of calculations and publicly criticized the ticket's readability before the gap was even seen.
