@@ -11574,6 +11574,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "3628aba1a3ef3b77"
+domain = "code"
+file = "scripts/tests/test_text_rule_judge_fixtures.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "a4d12e17e4a3c91e"
 domain = "code"
 file = "scripts/tests/test_text_rule_judge_mutations.py"
@@ -14345,6 +14353,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "10fdaf23b6480f37"
 domain = "code_file_rollup"
 file = "scripts/tests/test_term_ruleset.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "0c305960cc360e14"
+domain = "code_file_rollup"
+file = "scripts/tests/test_text_rule_judge_fixtures.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
