@@ -14,15 +14,17 @@ non-recursive commands and `fuser -m <path>` (lists holders without walking the 
 
 Bash detection: find, rg, fd, du (any form), grep-family with -r/-R/--recursive,
 ls -R, and lsof +D (plain or glued `+D<dir>`). The command is split into segments on
-&& || ; | & with a running cwd (`cd X && ...`), redirections are stripped, and each
+&& || ; | & and unquoted newlines with a running cwd (a bare `cd` goes to ~) (`cd X && ...`), redirections are stripped, and each
 recursive segment's roots are taken from its own positional arguments (the grep/rg/fd
 pattern is never a root); with no root the segment's cwd is the root.
 
 Known residuals (accepted): unexpanded globs, `(cd X && ...)` and `bash -c '...'`
 are not segmented, `$(...)`, `grep -d recurse`, other walkers (tree, tar, rsync,
-cp -r, git grep). Accepted false positives: bounded-depth walks at a mount root, a
-command name appearing as an argument (`which du`), `rg --files robot`, Glob without
-a path at a mount-root cwd.
+cp -r, git grep), rg-only value options missing from the grep arity table (`-j`,
+`-M`). Accepted false positives: bounded-depth walks at a mount root, a command name
+or a path ending in one appearing as an argument (`which du`, `src/find`), heredoc
+bodies tokenised as arguments, `rg --files robot`, Glob without a path at a mount-root
+cwd.
 
 Always exits 0 -- a hook crash must never wedge the workflow. Any unexpected error,
 missing key, or non-matching tool falls through to allow.
@@ -107,9 +109,18 @@ def _deny_msg(root: str, n: int) -> str:
 
 
 def _tokenize(command: str) -> list[str]:
-    lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+    # An unquoted newline separates commands, so it is punctuation, not whitespace.
+    lex = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n")
+    lex.whitespace = " \t\r"
     lex.whitespace_split = True
     return list(lex)
+
+
+def _is_separator(tok: str) -> bool:
+    if tok in _SEGMENT_OPS:
+        return True
+    rest = tok.replace("\n", "")
+    return "\n" in tok and (not rest or rest in _SEGMENT_OPS)
 
 
 def _is_redirect(tok: str) -> bool:
@@ -144,10 +155,10 @@ def _after_cd(tokens: list[str], cwd: str) -> str:
     if not tokens or tokens[0] != "cd":
         return cwd
     args = [a for a in tokens[1:] if a == "-" or not a.startswith("-")]
-    if not args or args[0] == "-":
+    if args and args[0] == "-":
         return cwd
     try:
-        return _resolve(args[0], cwd)
+        return _resolve(args[0] if args else "~", cwd)
     except Exception:
         return cwd
 
@@ -157,7 +168,7 @@ def _segments(command: str, cwd: str) -> list[tuple[list[str], str]]:
     cur: list[str] = []
     seg_cwd = cwd
     for t in _tokenize(command) + [_END]:
-        if t == _END or t in _SEGMENT_OPS:
+        if t == _END or _is_separator(t):
             if cur:
                 out.append((_strip_redirects(cur), seg_cwd))
                 seg_cwd = _after_cd(cur, seg_cwd)

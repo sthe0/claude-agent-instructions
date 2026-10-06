@@ -242,6 +242,14 @@ DENY_CASES = [
     ("rg foo 2>/dev/null", MR, MOUNTS_5),
     ("grep -r x > /tmp/out", MR, MOUNTS_5),
     ("rg -- robot", MR, MOUNTS_5),
+    (f"cd {MR}\nfind . -name x", OUT, MOUNTS_5),
+    (f"cd {MR} &&\nfind .", OUT, MOUNTS_5),
+    ("cd && find .", OUT, MOUNTS_5),
+    ("cd; du -sh .", OUT, MOUNTS_5),
+]
+
+# Documented false positives: pinned so a change in them is noticed, not required.
+ACCEPTED_FALSE_POSITIVES = [
     ("which du", MR, MOUNTS_5),
 ]
 
@@ -282,6 +290,11 @@ def test_bash_deny(cmd, cwd, mounts):
 @pytest.mark.parametrize("cmd,cwd,mounts", ALLOW_CASES)
 def test_bash_allow(cmd, cwd, mounts):
     _allow(_mod, cmd, cwd, mounts)
+
+
+@pytest.mark.parametrize("cmd,cwd,mounts", ACCEPTED_FALSE_POSITIVES)
+def test_bash_accepted_false_positive(cmd, cwd, mounts):
+    _deny(_mod, cmd, cwd, mounts)
 
 
 def test_grep_glob_tools_mount_root_and_ancestor_deny():
@@ -378,7 +391,7 @@ def test_m5_fuser_recursive():
 
 
 def test_m6_no_segmentation():
-    m = _mutant("t == _END or t in _SEGMENT_OPS", "t == _END")
+    m = _mutant("t == _END or _is_separator(t)", "t == _END")
     _flips(_allow, m, f"du -sh sub; ls {MR}")
 
 
