@@ -129,8 +129,8 @@ class CheckVenue(str, Enum):
 # The check-kind discriminator for a stage Criterion or a FinalCheck (schema 23).
 # SHELL (default) is today's free-text verify_command/command executed literally.
 # LANDED synthesizes the ONE durable check the engine trusts for a point-in-time
-# "did this commit reach trunk" assertion — monotone `git merge-base --is-ancestor`
-# containment against a commit FROZEN at record-result time — from a declared
+# "did this commit reach trunk" assertion — monotone containment (ancestry, else
+# `git cherry` patch equivalence, merges failing closed) against a commit FROZEN at record-result time — from a declared
 # LandedSpec, so SHA equality, a literal commit range, or a live-resolved head
 # (the shapes behind 20 recorded false-fail incidents, experience leaf
 # 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md) become
@@ -1984,11 +1984,19 @@ class SessionState:
     # --- landed check synthesis --------------------------------------------
     def render_landed_command(self, spec: "LandedSpec") -> tuple[str | None, str | None]:
         """Render the ONE durable shell script for a `kind = "landed"` check:
-        monotone `git merge-base --is-ancestor` containment of the commit
-        `spec.delivered_stage` delivered (the LITERAL string frozen on that
+        monotone containment of the commit `spec.delivered_stage` delivered (the LITERAL string frozen on that
         stage's Outcome.delivered_head, never re-resolved here) against both
         the local `target` ref and its local `remote/target` remote-tracking
-        ref. Returns (command, refusal): `command` is the exact string a
+        ref. Containment is ancestry (`git merge-base --is-ancestor`, the fast
+        path) or, when that answers "not an ancestor", patch equivalence: no
+        merge commit in `<ref>..<delivered>` (git cherry skips merges, so
+        they fail closed) and `git cherry <ref> <delivered>` printing no `+`
+        line. The fallback lets a rebase landing go green (land-branch.py is
+        fast-forward only, so a moved trunk forces a rebase beforehand).
+        Known reds: a squash landing of 2+ commits, a rebase whose diff text
+        changed (conflict resolution, context drift), a delivered range
+        containing a merge; an empty delivered commit is not distinguished
+        by cherry. Returns (command, refusal): `command` is the exact string a
         caller passes as `bash -c <command>` — it carries its own
         `git -C <repo_root>`, so it needs no cwd/`cd`; `refusal` is set
         instead when the check cannot even be attempted (no repo_root, an
@@ -1996,9 +2004,11 @@ class SessionState:
         commit) — the caller must surface this as a legible refusal, never a
         stage failure.
 
-        No network call, no SHA equality, no live `rev-parse`: ancestry is
-        monotone in a shared trunk (which only ever gains commits) and in this
-        frozen commit (which never changes once stamped), so a check that goes
+        No network call, no SHA equality, no live `rev-parse`: both ancestry
+        and patch equivalence are monotone in a shared trunk (which only ever
+        gains commits) and in this frozen commit (which never changes once
+        stamped; if it is pruned and gc'd a re-check refuses with exit 97
+        rather than answering), so a check that goes
         green cannot later go red without a history rewrite — see CheckKind's
         module comment for the 20-incident background this replaces."""
         if not self.repo_root:
@@ -2025,11 +2035,18 @@ class SessionState:
         commit = shlex.quote(delivered)
         target = shlex.quote(spec.target)
         remote_target = shlex.quote(f"{spec.remote}/{spec.target}")
+        git = f"git -C {repo_root}"
         command = (
             f"for R in {target} {remote_target}; do "
-            f'git -C {repo_root} merge-base --is-ancestor {commit} "$R"; s=$?; '
+            f'{git} merge-base --is-ancestor {commit} "$R"; s=$?; '
             f'[ "$s" -eq 0 ] && continue; '
-            f'[ "$s" -eq 1 ] && exit 1; '
+            f'[ "$s" -eq 1 ] || exit {LANDED_GIT_ERROR_EXIT}; '
+            f'm=$({git} rev-list --merges "$R"..{commit}) || exit {LANDED_GIT_ERROR_EXIT}; '
+            f'[ -z "$m" ] || exit 1; '
+            f'c=$({git} cherry "$R" {commit}) || exit {LANDED_GIT_ERROR_EXIT}; '
+            f"printf '%s\\n' \"$c\" | grep -q '^+'; s=$?; "
+            f'[ "$s" -eq 1 ] && continue; '
+            f'[ "$s" -eq 0 ] && exit 1; '
             f"exit {LANDED_GIT_ERROR_EXIT}; "
             "done; exit 0"
         )
