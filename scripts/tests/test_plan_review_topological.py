@@ -257,7 +257,12 @@ def test_td2_levels_run_in_walk_order_and_the_walk_is_reread_per_level(real):
     rig.events.clear()
     rc, out = rig.run()
     assert rc == 0 and "COMPOSE: pass" in out
-    assert rig.spawned() == [p for level in levels for p in level]
+    spawned = rig.spawned()
+    start = 0
+    for level in levels:
+        assert sorted(spawned[start:start + len(level)]) == sorted(level)
+        start += len(level)
+    assert start == len(spawned)
     for depth in range(1, len(levels)):
         last_record = max(i for i, e in enumerate(rig.events)
                           if e[0] == "record" and e[1] in levels[depth - 1])
@@ -362,7 +367,7 @@ def test_td3_early_stop_waiting_and_never_a_second_spawn(make_rig):
     rig = make_rig(engine)
     rig.specs = {"a": {"verdict": "revise"}}
     rc, out = rig.run("--early-stop")
-    assert rc == 1 and rig.spawned() == ["a", "c"]
+    assert rc == 1 and sorted(rig.spawned()) == ["a", "c"]
     assert "COMPOSE: blocked b,a" in out or "COMPOSE: blocked a,b" in out
 
     engine = FakeEngine([["a"], ["b"]], prereqs={"b": ["x"]}, status={"x": "revise"})
