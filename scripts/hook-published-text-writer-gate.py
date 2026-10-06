@@ -17,17 +17,34 @@ gated process puts in its own tool call.
 TWO PATHS, one classifier, one structural check:
 
   TEXT (a comment/PR/issue body resolved to literal bytes by
-  `lib.published_body.resolve`): gated STRUCTURALLY via
-  `writer_pass.bind` -- no model judgment anywhere on this path. A binding of
-  NONE_STRENGTH or NO_WITNESS_IN_WINDOW denies; WRITER_OUTPUT or POST_WITNESS
-  allows. Both denying strengths read identically to a caller (see
-  `writer_pass`'s own docstring) -- the split exists only so the deny message
-  can name which is true: NO_WITNESS_IN_WINDOW is an honestly-uncertain deny
-  (the scanned tail was truncated, so an earlier witness cannot be ruled
-  out), never a claim the transcript is witnessless.
+  `lib.published_body.resolve`): gated first STRUCTURALLY via
+  `writer_pass.bind`. A binding of NONE_STRENGTH or NO_WITNESS_IN_WINDOW
+  denies, with no model call; WRITER_OUTPUT or POST_WITNESS allows the bind
+  and proceeds to the content check below. Both denying strengths read
+  identically to a caller (see `writer_pass`'s own docstring) -- the split
+  exists only so the deny message can name which is true:
+  NO_WITNESS_IN_WINDOW is an honestly-uncertain deny (the scanned tail was
+  truncated, so an earlier witness cannot be ruled out), never a claim the
+  transcript is witnessless.
+
+  CONTENT CHECK (TEXT only, after the bind allowed): a tech-writer pass having
+  happened does not mean the draft satisfies the tech-writer rules, so a bound
+  body gets a content check against the tech-writer rule registry
+  (`skills/specializations/tech-writer/publish-rules.toml`, read by
+  `lib.writer_rules`). A lexical prefilter (`writer_rules.find_candidates`)
+  only nominates judge-checkable rules whose handle occurs in the body -- it
+  never denies -- and a silent prefilter makes no model call. A non-empty
+  candidate set goes to ONE fail-open judge,
+  `agentctl.advisor.judge_published_text_rules`; only a genuine YES denies,
+  naming each violated rule and quoting the offending span. NO, the killswitch
+  `CLAUDE_PUBLISHED_TEXT_RULES_SEMANTIC=0`, budget exhaustion, timeout, a
+  non-zero or unparseable answer and an exception all allow, the failures
+  recorded to the advisory sink (TEXT_RULE_JUDGE_*). `CLAUDE_PUBLISHED_TEXT_GATE=0`
+  also skips this check. TEXT and ATTACHMENT are mutually exclusive per
+  invocation, so the hook still makes at most one judge call.
 
   ATTACHMENT (a file about to be uploaded rather than posted as the body):
-  the ONE place this gate uses a model judgment, because "is this genuinely
+  a model judgment, because "is this genuinely
   a raw artifact, or reader-facing prose smuggled past the TEXT gate as a
   file" is a content-shape question no structural rule answers. The content
   is first sniffed and PARSED as its own declared kind (JSON via
@@ -69,7 +86,7 @@ the ordinary "this call is not gated at all" outcome, the overwhelming
 majority of Bash calls this hook ever sees, and it returns in well under
 2 seconds: `published_body.is_publication`/`resolve` are pure Python (shlex
 tokenizing plus a handful of dict lookups, no subprocess, no model call), and
-this hook imports `writer_pass`/`agentctl.advisor`/`judge_budget`/
+this hook imports `writer_pass`/`writer_rules`/`agentctl.advisor`/`judge_budget`/
 `judge_latency` LAZILY -- only once resolution.kind is actually TEXT or
 ATTACHMENT -- so a NOT_A_PUBLICATION command (the common case on every other
 Bash call in a session) never pays for any of those imports.
@@ -145,6 +162,10 @@ _PUBLISHED_TEXT_JUDGE_BUDGET_S = 190
 # other semantic judge's env convention (CLAUDE_<JUDGE>_SEMANTIC).
 _PUBLISHED_ATTACHMENT_KILLSWITCH_ENV = "CLAUDE_PUBLISHED_ATTACHMENT_SEMANTIC"
 
+# Same convention for the TEXT-path rule judge: "0" turns the model call off and
+# the bound body is allowed exactly as before the content check existed.
+_TEXT_RULES_KILLSWITCH_ENV = "CLAUDE_PUBLISHED_TEXT_RULES_SEMANTIC"
+
 # Structural (non-judge) escape for the TEXT path, mirroring
 # agentctl.gates.plan_presentation_active's AGENTCTL_PLAN_PRESENTATION=0 —
 # another MANDATORY structural gate with an env-only, human-operated force-off.
@@ -152,7 +173,8 @@ _PUBLISHED_ATTACHMENT_KILLSWITCH_ENV = "CLAUDE_PUBLISHED_ATTACHMENT_SEMANTIC"
 # on" half, since this gate is mandatory by default and has nothing to force
 # on. Named without "_SEMANTIC" (unlike _PUBLISHED_ATTACHMENT_KILLSWITCH_ENV
 # above) because that suffix is reserved for judge-calling paths in this
-# repo's convention, and the TEXT path calls no model at all. Named in the
+# repo's convention, and this switch is the structural force-off; it also skips
+# the content-check judge on a bound body. Named in the
 # deny reason itself so a legitimately-blocked caller can see the escape
 # hatch without reading this file; every use is recorded to the advisory
 # sink (TEXT_GATE_OVERRIDE_USED), the same way every other fail-open path is.
@@ -193,6 +215,13 @@ _ATTACHMENT_DENY_REASON = (
     "tech-writer pass and publish it as the comment/PR body TEXT instead of "
     "an attachment, or, if it genuinely is a raw artifact, reshape it so its "
     "content actually parses as the kind its name declares"
+)
+_TEXT_RULES_DENY_REASON = (
+    "this published body went through tech-writer but still breaks "
+    "tech-writer rule(s):\n{violations}\n"
+    "-- re-run tech-writer on the draft, recompose the body file, and publish "
+    "again (rules: skills/specializations/tech-writer/SKILL.md; model-check "
+    "off switch, human use only: {killswitch_env}=0)"
 )
 
 
@@ -260,6 +289,75 @@ def _recognized_artifact_kind(content: str) -> str | None:
     return None
 
 
+def _text_rules_violations(findings: list, candidates: list) -> str:
+    from lib import writer_rules  # lazy: only reached once a rule candidate fired
+
+    fingerprints = {rule.id: rule.fingerprint for rule in writer_rules.load_registry()}
+    fired = {rule_id for rule_id, _ in candidates}
+    spans: dict[str, list[str]] = {}
+    for rule_id, span in findings:
+        if rule_id in fired:
+            spans.setdefault(rule_id, []).append(span)
+    if not spans:
+        return "\n".join(
+            f"- {rule_id} ({fingerprints[rule_id]}): the judge named no span"
+            for rule_id, _ in candidates
+        )
+    return "\n".join(
+        f'- {rule_id} ({fingerprints[rule_id]}): "{span}"'
+        for rule_id, found in spans.items()
+        for span in found
+    )
+
+
+def _check_text_rules(resolution: "published_body.Resolution", command: str) -> tuple[str, str]:
+    """Content check against the tech-writer rule registry, run on a body the
+    binding already allowed. The lexical prefilter only nominates rules for the
+    judge; a silent prefilter makes no model call. Everything but a genuine YES
+    allows, so the check can only tighten the existing gate."""
+    from lib import writer_rules  # lazy: only reached for a bound TEXT body
+
+    body = resolution.body or ""
+    candidates = writer_rules.find_candidates(body)
+    judge_ledger.entered("published_text_rules", prefilter_fired=bool(candidates))
+    if not candidates:
+        return "allow", ""
+
+    from agentctl import advisor as _advisor  # lazy: only reached when a candidate fired
+    from lib import judge_budget  # noqa: E402
+    from lib import judge_latency  # noqa: E402
+
+    budget = judge_budget.JudgeBudget(
+        _PUBLISHED_TEXT_JUDGE_BUDGET_S, judge_latency.LAST_RESORT_CEILING_S, clock=time.monotonic
+    )
+    remaining_before_call, call_timeout = budget.remaining_and_timeout(_PUBLISHED_TEXT_JUDGE_BUDGET_S)
+    if call_timeout is None:
+        judge_ledger.decided(
+            "published_text_rules", stage="budget", verdict=False,
+            reason="budget exhausted before call (fail-open)",
+            remaining=remaining_before_call, threshold=None,
+            ceiling=_PUBLISHED_TEXT_JUDGE_BUDGET_S,
+        )
+        published_body.record_advisory("TEXT_RULE_JUDGE_BUDGET_EXHAUSTED", resolution.shape, command)
+        return "allow", ""
+
+    violated, reason, findings = _advisor.judge_published_text_rules(
+        body, candidates, _advisor.subprocess_runner,
+        enabled=os.environ.get(_TEXT_RULES_KILLSWITCH_ENV) != "0",
+        timeout=call_timeout, remaining=remaining_before_call,
+        ceiling=_PUBLISHED_TEXT_JUDGE_BUDGET_S,
+    )
+    if violated and not reason:
+        published_body.record_advisory("TEXT_RULE_JUDGE_DENY", resolution.shape, command)
+        return "deny", _TEXT_RULES_DENY_REASON.format(
+            violations=_text_rules_violations(findings, candidates),
+            killswitch_env=_TEXT_RULES_KILLSWITCH_ENV,
+        )
+    if reason:
+        published_body.record_advisory("TEXT_RULE_JUDGE_FAIL_OPEN", resolution.shape, command)
+    return "allow", ""
+
+
 def _decide_text(resolution: "published_body.Resolution", command: str, payload: dict) -> tuple[str, str]:
     from lib import writer_pass  # lazy: only needed once resolution.kind == TEXT
 
@@ -277,7 +375,9 @@ def _decide_text(resolution: "published_body.Resolution", command: str, payload:
     if binding.strength in (writer_pass.WRITER_OUTPUT, writer_pass.POST_WITNESS):
         if published_body.artifact_syntax_hint(resolution.body or ""):
             published_body.record_advisory("ALLOWED_WITH_ARTIFACT_HINT", resolution.shape, command)
-        return "allow", ""
+        if os.environ.get(_TEXT_GATE_OVERRIDE_ENV) == "0":
+            return "allow", ""
+        return _check_text_rules(resolution, command)
 
     if os.environ.get(_TEXT_GATE_OVERRIDE_ENV) == "0":
         published_body.record_advisory("TEXT_GATE_OVERRIDE_USED", resolution.shape, command)

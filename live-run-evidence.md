@@ -124,6 +124,7 @@ a detail: four standard estimators on the n=18 deferring sample give 29.94 /
 | — | `acceptance_judge` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
 | — | `question_materiality` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
 | `hook-published-text-writer-gate.py` | `published_attachment` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
+| `hook-published-text-writer-gate.py` | `published_text_rules` | `haiku` | UNMEASURED — no latency sample exists | — | — | — | — | — | — | — | — | — |
 
 `acceptance_judge` and `question_materiality` are listed because leaving them out
 would be the quieter lie: the `MEASURED` table carries a row for each, and a reader
@@ -134,6 +135,12 @@ is sized by evidence.
 `published_attachment` is listed for the same reason, and its single live deny
 above (Section 1) is liveness evidence, not a latency sample — one call cannot
 seed `n`, `p90`, or a ceiling estimate, so the row stays UNMEASURED.
+
+`published_text_rules` is the hook's other judge: it runs on a bound text body
+only when a lexical candidate fired, on the sonnet tier
+(`advisor._TEXT_RULES_JUDGE_MODEL`) while the table keys it under the shared haiku
+key, as `acceptance_judge` is keyed. It has no live sample, so the row is
+UNMEASURED and the call rides the whole-invocation budget.
 
 ### The zero rule
 

@@ -371,9 +371,17 @@ _JUDGE_CALLS = {
     "judge_published_attachment": (
         lambda run: advisor.judge_published_attachment("notes.md", "some prose", run, enabled=True)
     ),
+    "judge_published_text_rules": (
+        lambda run: advisor.judge_published_text_rules(
+            "Done — you asked for the registry.", [("say-13", ["you"])], run, enabled=True,
+        )
+    ),
 }
 
-_EXPECTED_MODEL = {"acceptance_judge": advisor._ACCEPTANCE_JUDGE_MODEL}
+_EXPECTED_MODEL = {
+    "acceptance_judge": advisor._ACCEPTANCE_JUDGE_MODEL,
+    "judge_published_text_rules": advisor._TEXT_RULES_JUDGE_MODEL,
+}
 
 
 @pytest.mark.parametrize("name", sorted(_JUDGE_CALLS))

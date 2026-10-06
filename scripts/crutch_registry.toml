@@ -46,6 +46,22 @@
 #    from its partition default to already-mechanized (see _ALREADY_MECHANIZED_RE).
 
 [[entry]]
+id = "75e012af36807cad"
+domain = "code"
+file = "scripts/agentctl/advisor.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "621e1327da874bb0"
+domain = "code"
+file = "scripts/agentctl/advisor.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "d70053628ce8666b"
 domain = "code"
 file = "scripts/agentctl/classify.py"
@@ -1595,7 +1611,7 @@ domain = "code"
 file = "scripts/hook-published-text-writer-gate.py"
 class = "semantic-guarded"
 disposition = "keep"
-ground = "decide() dispatches to _decide_text (structural transcript-witness check) or _decide_attachment (judge_published_attachment behind a structural prefilter); deny_with only emits the reason either branch already decided -- no regex-classified free text reaches this sink."
+ground = "decide() dispatches to _decide_text (structural transcript-witness check, then judge_published_text_rules behind a candidate-only lexical prefilter) or _decide_attachment (judge_published_attachment behind a structural prefilter); deny_with only emits the reason either branch already decided -- no regex-classified free text reaches this sink."
 
 [[entry]]
 id = "dd45eb8cef7a1481"
@@ -6399,6 +6415,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "f608431fbe1d0610"
+domain = "code"
+file = "scripts/tests/test_hook_published_text_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "a9e7961d07592ddc"
 domain = "code"
 file = "scripts/tests/test_hook_published_text_gate.py"
 class = "not-a-gate"
@@ -11550,6 +11574,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "a4d12e17e4a3c91e"
+domain = "code"
+file = "scripts/tests/test_text_rule_judge_mutations.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "28570c609f94c307"
 domain = "code"
 file = "scripts/tests/test_tracker_plugin.py"
@@ -12244,6 +12276,14 @@ file = "scripts/verify-ticket-plan-sync.py"
 class = "structural"
 disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "ff26ca6099f3dbf8"
+domain = "code_file_rollup"
+file = "scripts/agentctl/advisor.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "3c24736d3cbce274"
@@ -14305,6 +14345,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "10fdaf23b6480f37"
 domain = "code_file_rollup"
 file = "scripts/tests/test_term_ruleset.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "7c2406eaf92079c9"
+domain = "code_file_rollup"
+file = "scripts/tests/test_text_rule_judge_mutations.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

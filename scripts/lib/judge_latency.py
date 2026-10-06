@@ -268,6 +268,11 @@ MEASURED: "dict[str, dict[str, Row]]" = {
             n=0, min_s=None, median_s=None, p90_s=None, max_s=None,
             provenance=(), note=UNMEASURED_NOTE,
         ),
+        "published_text_rules": Row(
+            judge="published_text_rules",
+            n=0, min_s=None, median_s=None, p90_s=None, max_s=None,
+            provenance=(), note=UNMEASURED_NOTE,
+        ),
     },
 }
 

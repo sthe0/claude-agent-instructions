@@ -526,3 +526,159 @@ def test_raw_http_read_of_the_same_endpoint_is_not_gated(tmp_path):
     assert proc.returncode == 0
     assert not _is_deny(proc)
     assert _advisory_rows(tmp_path) == []
+
+
+# --- content check of a bound TEXT body against the tech-writer rules -------
+
+def _runner(stdout: str, *, timed_out: bool = False, calls: "list | None" = None):
+    def run(argv, *, timeout, stdin=""):
+        if calls is not None:
+            calls.append((argv, timeout, stdin))
+        return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="", timed_out=timed_out)
+    return run
+
+
+def _bound_text_decision(monkeypatch, tmp_path, body, runner, env=None):
+    """Run _decide_text on a body whose binding is WRITER_OUTPUT, with the
+    advisory sink redirected so the test can read the fail-open trace."""
+    from lib import writer_pass
+
+    mod = _load_module()
+    sink = tmp_path / "advisories.jsonl"
+    monkeypatch.setenv(published_body.ADVISORY_SINK_ENV, str(sink))
+    for key, value in (env or {}).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(
+        writer_pass, "bind",
+        lambda body_arg, path: writer_pass.Binding(strength=writer_pass.WRITER_OUTPUT),
+    )
+    monkeypatch.setattr(advisor, "subprocess_runner", runner)
+    resolution = published_body.Resolution(kind=published_body.TEXT, body=body, shape=1)
+    decision = mod._decide_text(resolution, "cmd", {"transcript_path": "/unused"})
+    lines = sink.read_text(encoding="utf-8").splitlines() if sink.exists() else []
+    return decision, [json.loads(line)["kind"] for line in lines]
+
+
+YOU_BODY = "Done — you asked for the registry, it is in place."
+CLEAN_BODY = "The published-text-gate project has completed stage 6 of its rollout."
+
+
+def test_text_rule_judge_yes_denies_with_rule_and_span(monkeypatch, tmp_path):
+    calls: list = []
+    (decision, reason), kinds = _bound_text_decision(
+        monkeypatch, tmp_path, YOU_BODY, _runner('YES\nRULE say-13: "you asked"\n', calls=calls),
+    )
+    assert decision == "deny"
+    assert "say-13" in reason and '"you asked"' in reason
+    assert "CLAUDE_PUBLISHED_TEXT_RULES_SEMANTIC" in reason
+    assert len(calls) == 1
+    assert kinds == ["TEXT_RULE_JUDGE_DENY"]
+
+
+def test_text_rule_judge_no_allows(monkeypatch, tmp_path):
+    calls: list = []
+    result, kinds = _bound_text_decision(monkeypatch, tmp_path, YOU_BODY, _runner("NO\n", calls=calls))
+    assert result == ("allow", "")
+    assert len(calls) == 1
+    assert kinds == []
+
+
+def test_text_rule_judge_timeout_fails_open_with_advisory(monkeypatch, tmp_path):
+    result, kinds = _bound_text_decision(monkeypatch, tmp_path, YOU_BODY, _runner("", timed_out=True))
+    assert result == ("allow", "")
+    assert kinds == ["TEXT_RULE_JUDGE_FAIL_OPEN"]
+
+
+def test_text_rule_judge_unparseable_answer_fails_open(monkeypatch, tmp_path):
+    result, kinds = _bound_text_decision(monkeypatch, tmp_path, YOU_BODY, _runner("maybe, hard to say\n"))
+    assert result == ("allow", "")
+    assert kinds == ["TEXT_RULE_JUDGE_FAIL_OPEN"]
+
+
+def test_text_rule_judge_not_called_when_prefilter_silent(monkeypatch, tmp_path):
+    calls: list = []
+    result, kinds = _bound_text_decision(monkeypatch, tmp_path, CLEAN_BODY, _runner("YES\n", calls=calls))
+    assert result == ("allow", "")
+    assert calls == []
+    assert kinds == []
+
+
+def test_prefilter_silent_on_in_harness_allow_body():
+    from lib import writer_rules
+
+    assert writer_rules.find_candidates(CLEAN_BODY) == []
+
+
+def test_text_rule_judge_not_called_on_unbound_body(monkeypatch, tmp_path):
+    from lib import writer_pass
+
+    mod = _load_module()
+    calls: list = []
+    monkeypatch.setenv(published_body.ADVISORY_SINK_ENV, str(tmp_path / "advisories.jsonl"))
+    monkeypatch.setattr(
+        writer_pass, "bind",
+        lambda body_arg, path: writer_pass.Binding(strength=writer_pass.NONE_STRENGTH),
+    )
+    monkeypatch.setattr(advisor, "subprocess_runner", _runner("YES\n", calls=calls))
+    resolution = published_body.Resolution(kind=published_body.TEXT, body=YOU_BODY, shape=1)
+    decision, reason = mod._decide_text(resolution, "cmd", {"transcript_path": "/unused"})
+    assert decision == "deny"
+    assert reason == mod._text_deny_reason(1, writer_pass.NONE_STRENGTH)
+    assert calls == []
+
+
+def test_text_rule_judge_not_called_under_text_gate_override(monkeypatch, tmp_path):
+    calls: list = []
+    result, _ = _bound_text_decision(
+        monkeypatch, tmp_path, YOU_BODY, _runner('YES\nRULE say-13: "you"\n', calls=calls),
+        env={"CLAUDE_PUBLISHED_TEXT_GATE": "0"},
+    )
+    assert result == ("allow", "")
+    assert calls == []
+
+
+def test_text_rule_judge_killswitch_allows(monkeypatch, tmp_path):
+    calls: list = []
+    result, kinds = _bound_text_decision(
+        monkeypatch, tmp_path, YOU_BODY, _runner("YES\n", calls=calls),
+        env={"CLAUDE_PUBLISHED_TEXT_RULES_SEMANTIC": "0"},
+    )
+    assert result == ("allow", "")
+    assert calls == []
+    assert kinds == ["TEXT_RULE_JUDGE_FAIL_OPEN"]
+
+
+def test_text_rule_judge_budget_exhausted_fails_open(monkeypatch, tmp_path):
+    calls: list = []
+    reads = iter([0.0, 1000.0])
+    monkeypatch.setattr(time, "monotonic", lambda: next(reads))
+    result, kinds = _bound_text_decision(monkeypatch, tmp_path, YOU_BODY, _runner("YES\n", calls=calls))
+    assert result == ("allow", "")
+    assert calls == []
+    assert kinds == ["TEXT_RULE_JUDGE_BUDGET_EXHAUSTED"]
+
+
+def test_text_rule_judge_yes_without_rule_lines_denies_naming_candidates(monkeypatch, tmp_path):
+    (decision, reason), _ = _bound_text_decision(monkeypatch, tmp_path, YOU_BODY, _runner("YES\n"))
+    assert decision == "deny"
+    assert "say-13" in reason and "named no span" in reason
+
+
+def test_text_rule_judge_ignores_rule_id_outside_candidates(monkeypatch, tmp_path):
+    (decision, reason), _ = _bound_text_decision(
+        monkeypatch, tmp_path, YOU_BODY, _runner('YES\nRULE say-1: "Done"\nRULE say-13: "you asked"\n'),
+    )
+    assert decision == "deny"
+    assert "say-1 " not in reason and "say-13" in reason
+
+
+def test_attachment_path_unchanged_by_text_rule_judge(monkeypatch, tmp_path):
+    mod = _load_module()
+    calls: list = []
+    monkeypatch.setattr(advisor, "subprocess_runner", _runner("NO\n", calls=calls))
+    resolution = published_body.Resolution(
+        kind=published_body.ATTACHMENT, path=str(FIXTURES / "reader-facing.md"), shape=5,
+    )
+    assert mod._decide_attachment(resolution, "cmd") == ("allow", "")
+    assert len(calls) == 1
+    assert "published_text_rules" not in calls[0][2]

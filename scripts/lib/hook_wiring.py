@@ -189,7 +189,8 @@ TIMEOUT_REQUIREMENTS: "tuple[tuple[str, int, str], ...]" = (
      "binds BOTH this hook's registrations (PreToolUse/AskUserQuestion and "
      "UserPromptSubmit), since this table is keyed by bare basename"),
     ("hook-published-text-writer-gate.py", 190,
-     "one published_attachment judge, UNMEASURED (lib/judge_latency.py "
+     "one published_attachment or published_text_rules judge per invocation "
+     "(never both), UNMEASURED (lib/judge_latency.py "
      "MEASURED row n=0), under a 190s whole-invocation budget — at or above "
      "LAST_RESORT_CEILING_S + SIZE_HEADROOM_S since no per-judge floor exists "
      "to size against"),
