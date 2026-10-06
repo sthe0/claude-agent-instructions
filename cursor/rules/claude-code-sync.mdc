@@ -59,6 +59,8 @@ Carve-outs that minimize per-action confirmation (full policy: `~/.claude-agent/
 2. **After plan approval** — every action **declared in the approved plan** (paths under `Reference files`, stage outputs, named verify steps, declared VCS ops, listed external calls) proceeds **without per-step re-ask**.
 3. **Unknown tool** — budget **1 lookup** (`--help`, tool schema, SKILL.md). If still unclear → `PERMISSION-REQUEST:` (see below); do not burn extra lookups.
 
+**MCP-first dispatch** for a known domain operation: an MCP tool that can do it, else the matching skill, else raw CLI; a read-only MCP server is not a write path (`memory-global/leaves/skill-first-dispatch.md`).
+
 **Substantive plan changes** of a user-approved order are **self-approved** (`approve --by agent`) when the engine returns `self_approve` (same order, resources within the last user-approved version plus the customer's grants); outside that boundary (changed order or done criterion, new resource or external action, a changed declared rule) they need explicit user approval. A `replans`-scale effort fire is your own planning difficulty — declare it after the fire, run overcome-difficulty, and continue if the corrected plan stays in the boundary; spend/wall-clock fires go to the user. In-plan refinement (tighten Expected image, add a missed read, typos) — apply in-thread without re-approval.
 
 **Do not** ask the user to confirm individual actions already covered above — structured confirms are for decisions the user has not already made (plan approval, irreversible ops, substantive replan).

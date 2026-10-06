@@ -108,7 +108,7 @@ memory-global/leaves/system-knowledge/harness-read-dedup.md:26:6a58668a  # keep:
 memory-global/leaves/system-knowledge/harness-read-dedup.md:45:f4985350  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 memory-global/leaves/system-knowledge/instructions-repo-layout.md:106:66a3e851  # keep:legacy-fallback — legacy ~/.claude described as the personal/legacy-fallback location
 memory-global/leaves/token-economy-plan.md:30:bfc84cba  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
-memory-global/leaves/token-economy-plan.md:66:84c7ad27  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
+memory-global/leaves/token-economy-plan.md:66:e1990571  # keep:harness-owned — harness-owned artifact (~/.claude.json / session transcript / plugins-cache / credentials)
 scripts/README.md:39:ed324f81  # keep:protected-path — hook-guard-destructive-rm.py row lists ~/.claude among the protected paths it guards
 scripts/README.md:87:20e9417b  # keep:legacy-fallback — migrate-to-isolated.sh relocates the in-place/legacy ~/.claude system install
 scripts/README.md:123:21690c45  # keep:enumerator-self-ref — verify-config-root-refs.py documents this enumerator; quotes the very pattern it searches

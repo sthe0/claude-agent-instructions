@@ -117,6 +117,7 @@ def test_fires_once_per_class(monkeypatch, capsys, tmp_path):
     )
     rc, out, sid = _run(monkeypatch, capsys, "widgetctl apply -f x.yaml")
     assert rc == 0 and "skill-first" in out and "widgetry" in out
+    assert "MCP tool or a skill" in out and "over an mcp__* tool" not in out
     # same class again -> silent
     rc2, out2, _ = _run(monkeypatch, capsys, "widgetctl destroy prod", session=sid)
     assert rc2 == 0 and out2 == ""

@@ -136,7 +136,7 @@ If the need exists but isn't stated, name it and propose delegation. Too small f
 
 **Invariants.** Invoke a specialist **only per a plan step** — never autonomously mid-task (that's a difficulty signal → `overcome-difficulty`). **`PLAN-READY:` is a hard gate** — explicit user approval (or engine `self_approve`) before any further spawn, never inferred from silence **nor from a plan-correction directive**: a correction at the gate is refinement, not "go" — apply it, re-present, wait for affirmative approval (engine holds at `PLAN_READY`). **`COMPLETED:`** — diff the delivery against the user's approved *intent*, not just "tests pass". Spawn mechanics + the return markers → [spawning-specialists.md](memory-global/leaves/spawning-specialists.md); per-marker handling (`agentctl dispatch` routes them) → [handling-escalations.md](memory-global/leaves/handling-escalations.md). Project-local subagents may live in `<cwd>/.claude/agents/`.
 
-**Skill-first over direct CLI.** Before a Bash sequence for a known domain operation (VCS, secrets, build, ticket workflow, code/log search, paste-sharing, PR review), prefer a matching skill over hand-rolled commands **and over an `mcp__*` tool** (MCP is a read / no-skill fallback). See [skill-first-dispatch.md](memory-global/leaves/skill-first-dispatch.md).
+**MCP-first over direct CLI.** Before Bash for a known domain operation (VCS, secrets, ticket, search, paste, PR review), use an MCP tool if it can, else the matching skill, else raw CLI (read-only MCP: no writes); inline Skill is the default for specialists that fit the carve-out. See [skill-first-dispatch.md](memory-global/leaves/skill-first-dispatch.md).
 
 ### On task resolution (record experience)
 

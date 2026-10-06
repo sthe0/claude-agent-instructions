@@ -1,14 +1,16 @@
 ---
 name: skill_first_dispatch
-description: Discipline for picking a skill before hand-rolling Bash for known domain operations — and the fewer-permission-prompts audit habit
+description: MCP-first dispatch order (MCP tool > skill > raw CLI) before hand-rolling Bash for known domain operations — and the fewer-permission-prompts audit habit
 type: feedback
 created: 2026-05-27
 last_verified: 2026-06-04
 ---
 
-Before issuing a `Bash` sequence for a **known domain operation**, scan the system-reminder skill list for a matching skill and prefer it over raw CLI. The Skill tool is the cheaper, more auditable path; raw CLI is the fallback.
+**MCP-first dispatch order: MCP tool > skill > raw CLI.** Before issuing a `Bash` sequence for a **known domain operation**, check whether a loaded `mcp__<server>__*` tool can do the task; if so, use it. Otherwise scan the system-reminder skill list for a matching skill. Raw CLI is the last resort.
 
-**The same preference applies to MCP tools.** For an operation a skill covers, prefer the **Skill** over calling an `mcp__<server>__*` tool directly: a skill is usually write-capable (many MCP servers are read-only), is a single auditable call, and bundles its own auth — whereas a loaded MCP server adds tool-schema/name overhead to context. Use MCP tools as a **fallback**: quick reads, or operations no skill covers. The concrete skill↔MCP mapping for a given environment (which local skill replaces which `mcp__*` server) is **environment-specific** and belongs in project memory, not here.
+**Write-capability caveat.** Many MCP servers are read-only. A read-only server is not a write path: for a write, use the MCP tool only if its server is write-capable, else fall to the skill (usually write-capable, a single auditable call, bundles its own auth). The concrete MCP↔skill mapping for a given environment (which `mcp__*` server covers which operation, which local skill covers the rest) is **environment-specific** and belongs in project memory, not here.
+
+**Inline Skill is the default for specialists** when the work fits the in-context carve-out (CLAUDE.md § Classify task weight); spawn only when it does not.
 
 **Also applies to Python API calls via Bash** (`python3 -c "from <system>.api import ..."` / `python3 -c "from <system>.async_api import ..."`). Same rule: scan the skill list for a `<system>` namespace before composing raw Python — a recurring miss pattern is grinding through several iterations of a raw client library before noticing a packaged skill covers the same calls with documentation, or falling back to a raw client for a case the packaged skill's flow genuinely doesn't cover (e.g. a client method that can't return a needed error detail) — that fallback is a correct one, not a violation of this rule. A concrete worked incident (which workflow, which client, which log-retrieval gap) is environment-specific and lives in project memory, not here.
 

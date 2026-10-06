@@ -2,12 +2,12 @@
 """PreToolUse(Bash) hook: nudge to prefer a domain Skill when a Bash command
 hand-rolls a known domain operation.
 
-Rule (CLAUDE.md § Skill-first dispatch + memory leaf skill-first-dispatch):
+Rule (CLAUDE.md § MCP-first dispatch + memory leaf skill-first-dispatch):
 before issuing Bash for a known domain operation (VCS, secrets, tracker REST,
-monorepo code search, …) scan the skill list and prefer the Skill — it is the
-cheaper, single-call, auditable, write-capable path. Passive listing is not a
-trigger; this hook makes the scan mechanical by matching operation-class
-signatures in the raw command.
+monorepo code search, …) prefer an MCP tool that can do it, else the Skill from
+the skill list — never raw CLI first. Passive listing is not a trigger; this
+hook makes the check mechanical by matching operation-class signatures in the
+raw command.
 
 Each matched class fires once per session (state file) so a repeated operation
 does not flood context. Advisory only: stdout, exit 0, never blocks.
@@ -143,9 +143,9 @@ def main() -> int:
     print(
         "[skill-first] This Bash command hand-rolls a known domain operation:\n"
         f"{lines}\n"
-        "Per CLAUDE.md § Skill-first dispatch: a Skill is the cheaper, single-call,\n"
-        "auditable, write-capable path. Scan the system-reminder skill list and prefer\n"
-        "the Skill over raw CLI (and over an mcp__* tool for the same op)."
+        "Per CLAUDE.md § MCP-first dispatch: use an MCP tool or a skill, not raw CLI.\n"
+        "Prefer a loaded mcp__* tool when it can do the op (writes only if its server\n"
+        "is write-capable); else scan the system-reminder skill list for the Skill."
     )
     return 0
 
