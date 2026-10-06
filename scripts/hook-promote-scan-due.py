@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -35,6 +36,7 @@ STAMP = Path.home() / ".local" / "state" / "claude-promote-scan.stamp"
 THROTTLE_DAYS = 7
 SCAN_TIMEOUT_S = 20
 MAX_PRINTED_CLUSTERS = 10
+JUDGE_BUDGET_ENV = "CLAUDE_SAME_DIFFICULTY_JUDGE_BUDGET_S"
 
 
 def last_run() -> "float | None":
@@ -52,12 +54,15 @@ def record_run(now_ts: float) -> None:
         pass
 
 
-def run_scanner() -> "list[dict] | None":
-    """Run promote-scan --scope global --json and return clusters.
+def run_scanner() -> "dict | None":
+    """Run promote-scan --scope global --json cache-only and return its
+    ``{"clusters": [...], "stats": {...}}`` object.
 
     Returns None on any failure (missing script, timeout, crash, bad JSON) — distinct
-    from a clean empty list, which means no experience leaves exist yet. The two must
-    not share an encoding so a failed scan never silently suppresses a real candidate."""
+    from a clean empty ``clusters`` list, which means no experience leaves exist yet. The two
+    must not share an encoding so a failed scan never silently suppresses a real candidate.
+    The judge budget is 0: a session start never waits on a model, so pairs the verdict
+    cache has not decided are counted as unjudged instead."""
     if not RECORD_EXPERIENCE.is_file():
         return None
     try:
@@ -65,21 +70,29 @@ def run_scanner() -> "list[dict] | None":
             [sys.executable, str(RECORD_EXPERIENCE),
              "promote-scan", "--scope", "global", "--json"],
             capture_output=True, text=True, timeout=SCAN_TIMEOUT_S,
+            env={**os.environ, JUDGE_BUDGET_ENV: "0"},
         )
     except Exception:
         return None
     if out.returncode != 0 or not (out.stdout or "").strip():
         return None
     try:
-        clusters = json.loads(out.stdout)
+        scan = json.loads(out.stdout)
     except json.JSONDecodeError:
         return None
-    if not isinstance(clusters, list):
+    if not isinstance(scan, dict) or not isinstance(scan.get("clusters"), list):
         return None
-    return clusters
+    return scan
 
 
-def report(clusters: "list[dict]") -> None:
+def report(clusters: "list[dict]", unjudged_items: int = 0) -> None:
+    if unjudged_items:
+        print(
+            f"promote-scan: {unjudged_items} experience leaf(s) unjudged (cache-only run) — "
+            "clusters may be under-merged; run `scripts/record-experience.py promote-scan` "
+            "for a judged pass.",
+            file=sys.stderr,
+        )
     flagged = [c for c in clusters if c.get("flagged")]
     if not flagged:
         return
@@ -101,6 +114,13 @@ def report(clusters: "list[dict]") -> None:
         )
 
 
+def report_scan(scan: "dict | None") -> None:
+    scan = scan or {"clusters": []}
+    stats = scan.get("stats") or {}
+    unjudged = stats.get("unjudged_items")
+    report(scan["clusters"], unjudged if isinstance(unjudged, int) else 0)
+
+
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -116,7 +136,7 @@ def main(argv: "list[str] | None" = None) -> int:
     now_ts = time.time()
 
     if args.dry_run:
-        report(run_scanner() or [])
+        report_scan(run_scanner())
         return 0
 
     if not args.force_run:
@@ -124,9 +144,9 @@ def main(argv: "list[str] | None" = None) -> int:
         if prev is not None and (now_ts - prev) < THROTTLE_DAYS * 86400.0:
             return 0
 
-    clusters = run_scanner()
-    if clusters is not None:
-        report(clusters)
+    scan = run_scanner()
+    if scan is not None:
+        report_scan(scan)
 
     if not args.force_run:
         record_run(now_ts)

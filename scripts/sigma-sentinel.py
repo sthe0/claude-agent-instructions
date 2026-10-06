@@ -146,7 +146,7 @@ def measure_cheap_c(experience: list[Leaf], join_ratio: float = JOIN_RATIO) -> C
         for j in range(i + 1, len(experience)):
             if _similarity(experience[i].ground, experience[j].ground) >= join_ratio:
                 pairs += 1
-    groups = cluster_by_ground(experience, lambda lf: lf.ground, join_ratio)
+    groups = cluster_by_ground(experience, lambda lf: lf.ground)
     largest = max((len(g) for g in groups), default=0)
     return CheapC(corpus_size=len(experience), near_duplicate_pairs=pairs, largest_cluster=largest)
 

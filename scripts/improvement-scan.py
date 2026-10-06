@@ -88,7 +88,8 @@ _REC_SPEC = importlib.util.spec_from_file_location(
 _rec_for_scan = importlib.util.module_from_spec(_REC_SPEC)
 sys.modules[_REC_SPEC.name] = _rec_for_scan
 _REC_SPEC.loader.exec_module(_rec_for_scan)
-cluster_by_ground = _rec_for_scan.cluster_by_ground
+cluster_by_ground_result = _rec_for_scan.cluster_by_ground_result
+cluster_judge_line = _rec_for_scan.cluster_judge_line
 
 # The telemetry producer's only two subprocess reaches (policy-scorecard.py's ledger
 # upsert, record-experience.py's dedup search) live in this sibling module, never here —
@@ -363,6 +364,9 @@ class PriorBoardItem:
     # labeled singleton is scorable), and the size of the cluster it was scored in.
     severity_labeled: bool = False
     cluster_size: int = 1
+    # True when a nominated clustering pair involving this item got no genuine judge verdict,
+    # so its cluster_size is a lower bound, not a confirmed count.
+    unjudged: bool = False
 
 
 @dataclass(frozen=True)
@@ -427,6 +431,7 @@ def _prior_from_raw(raw: dict) -> PriorBoard:
             cost_estimate=str(entry.get("cost_estimate", "")),
             severity_labeled=entry.get("severity_labeled") is True,
             cluster_size=int(entry.get("cluster_size", 1)),
+            unjudged=entry.get("unjudged") is True,
         )
     return PriorBoard(
         schema=BOARD_SCHEMA, generated_at=str(raw.get("generated_at", "")), items=items
@@ -454,6 +459,7 @@ def write_board(board: PriorBoard, path: "str | Path") -> None:
                 "cost_estimate": item.cost_estimate,
                 "severity_labeled": item.severity_labeled,
                 "cluster_size": item.cluster_size,
+                "unjudged": item.unjudged,
             }
             for ref, item in board.items.items()
         },
@@ -1130,9 +1136,11 @@ def classify_and_score(
     *,
     config_path: "str | Path" = CONFIG_PATH,
     now: "datetime | None" = None,
+    join_stats: "dict | None" = None,
 ) -> "tuple[PriorBoard, list[Finding], list[str]]":
     """Phase B: validate, cluster, score, rank, and merge. Returns (board, findings,
-    no_urgency_signal_refs).
+    no_urgency_signal_refs). When `join_stats` is a dict it is filled with the clustering
+    judge's counts (judged_calls, cached_hits, identity_joins, unjudged_items).
 
     Every classification vocabulary field is validated up front (test case: an
     out-of-vocabulary value is rejected) before any item is scored, so a single bad
@@ -1157,10 +1165,14 @@ def classify_and_score(
         if ref not in closed and ref not in classified
     }
 
-    clusters = cluster_by_ground(
-        list(classified.items()), lambda kv: kv[1].get("functional_ground", "")
+    entries = list(classified.items())
+    clustering = cluster_by_ground_result(
+        entries, lambda kv: kv[1].get("functional_ground", "")
     )
-    cluster_size = {ref: len(group) for group in clusters for ref, _c in group}
+    if join_stats is not None:
+        join_stats.update(clustering.stats.as_dict())
+    cluster_size = {ref: len(group) for group in clustering.groups for ref, _c in group}
+    unjudged_refs = {ref for (ref, _c), flag in zip(entries, clustering.undecided) if flag}
 
     no_urgency_signal: "list[str]" = []
     fresh: "dict[str, PriorBoardItem]" = {}
@@ -1171,6 +1183,26 @@ def classify_and_score(
         recurrence_mass = severity.mass + other_cluster_count
         evidence = tuple(e for e in (c.get("evidence"),) if e)
         severity_labeled = c.get("severity_labeled") is True
+        unjudged = ref in unjudged_refs
+        if other_cluster_count == 0 and not severity_labeled and unjudged:
+            # An undecided nominated pair leaves "no cluster" unconfirmed: park the item as
+            # unjudged, not as a confirmed no-urgency singleton.
+            fresh[ref] = PriorBoardItem(
+                classification="unjudged",
+                score=None,
+                rank=None,
+                source_digest=c.get("source_digest", ""),
+                title=c.get("title", ref),
+                functional_ground=c.get("functional_ground", ""),
+                evidence=evidence,
+                recommended_next_step=c["recommended_next_step"],
+                blocked_by=tuple(c.get("blocked_by") or ()),
+                cost_estimate=c.get("cost_estimate", ""),
+                severity_labeled=severity_labeled,
+                cluster_size=cluster_size.get(ref, 1),
+                unjudged=True,
+            )
+            continue
         if other_cluster_count == 0 and not severity_labeled:
             # "No severity signal AND no cluster": the adapter defaults an unlabeled issue
             # to MEDIUM, so only the record's `severity_labeled` flag tells a stated
@@ -1208,6 +1240,7 @@ def classify_and_score(
             cost_estimate=c.get("cost_estimate", ""),
             severity_labeled=severity_labeled,
             cluster_size=cluster_size.get(ref, 1),
+            unjudged=unjudged,
         )
 
     all_items = {**carried, **fresh}
@@ -1230,6 +1263,7 @@ def classify_and_score(
             cost_estimate=item.cost_estimate,
             severity_labeled=item.severity_labeled,
             cluster_size=item.cluster_size,
+            unjudged=item.unjudged,
         )
         if final_items[ref].rank is not None:
             findings.append(
@@ -1524,7 +1558,9 @@ def _run_backlog_phase_b(args: argparse.Namespace) -> int:
         return 2
 
     try:
-        board, findings, no_urgency_signal = classify_and_score(prior, classified, closed_refs)
+        join_stats: dict = {}
+        board, findings, no_urgency_signal = classify_and_score(
+            prior, classified, closed_refs, join_stats=join_stats)
     except ValueError as exc:
         print(f"improvement-scan backlog (phase B): {exc}", file=sys.stderr)
         return 2
@@ -1544,6 +1580,7 @@ def _run_backlog_phase_b(args: argparse.Namespace) -> int:
         f"improvement-scan backlog (phase B): {len(board.items)} item(s) on the board "
         f"({len(no_urgency_signal)} no-urgency-signal), {len(findings)} finding(s) stored -> {state}"
     )
+    print(cluster_judge_line(join_stats))
     if no_urgency_signal:
         print("  no urgency signal: " + ", ".join(sorted(no_urgency_signal)), file=sys.stderr)
     return 0

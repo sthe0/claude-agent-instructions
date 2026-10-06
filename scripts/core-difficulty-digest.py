@@ -82,7 +82,7 @@ class Cluster:
 def cluster_records(records: list[DifficultyRecord], join_ratio: float = JOIN_RATIO) -> list[Cluster]:
     """Group records by functional ground. A record joins the best-matching existing cluster
     when overlap ≥ join_ratio, else opens a new one. Same ground from two channels → one cluster."""
-    groups = cluster_by_ground(records, lambda r: r.functional_ground, join_ratio)
+    groups = cluster_by_ground(records, lambda r: r.functional_ground)
     return [Cluster(functional_ground=g[0].functional_ground, items=g) for g in groups]
 
 

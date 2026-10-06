@@ -42,16 +42,20 @@ _UNFLAGGED_CLUSTER = {
 }
 
 
+def _scan(clusters, unjudged_items=0):
+    return {"clusters": clusters, "stats": {"unjudged_items": unjudged_items}}
+
+
 # ── run_scanner ───────────────────────────────────────────────────────────────
 
 def test_run_scanner_returns_clusters(tmp_path, monkeypatch):
-    clusters = [_FLAGGED_CLUSTER]
+    scan = _scan([_FLAGGED_CLUSTER])
     script = _make_script(
         tmp_path, "fake.py",
-        f"import json, sys; print(json.dumps({clusters!r})); sys.exit(0)",
+        f"import json, sys; print(json.dumps({scan!r})); sys.exit(0)",
     )
     monkeypatch.setattr(hook, "RECORD_EXPERIENCE", script)
-    assert hook.run_scanner() == clusters
+    assert hook.run_scanner() == scan
 
 
 def test_run_scanner_missing_script_fails_open(tmp_path, monkeypatch):
@@ -78,10 +82,42 @@ def test_run_scanner_bad_json_fails_open(tmp_path, monkeypatch):
     assert hook.run_scanner() is None
 
 
-def test_run_scanner_non_list_json_fails_open(tmp_path, monkeypatch):
+def test_run_scanner_non_object_json_fails_open(tmp_path, monkeypatch):
+    script = _make_script(tmp_path, "bad.py", "print('[{\"flagged\": true}]')")
+    monkeypatch.setattr(hook, "RECORD_EXPERIENCE", script)
+    assert hook.run_scanner() is None
+
+
+def test_run_scanner_object_without_clusters_list_fails_open(tmp_path, monkeypatch):
     script = _make_script(tmp_path, "bad.py", "print('{\"flagged\": true}')")
     monkeypatch.setattr(hook, "RECORD_EXPERIENCE", script)
     assert hook.run_scanner() is None
+
+
+def test_hook_runs_cache_only(tmp_path, monkeypatch):
+    script = _make_script(
+        tmp_path, "env.py",
+        "import json, os, sys\n"
+        "print(json.dumps({'clusters': [], 'stats': {'unjudged_items': 0},"
+        " 'budget': os.environ.get('CLAUDE_SAME_DIFFICULTY_JUDGE_BUDGET_S')}))",
+    )
+    monkeypatch.setattr(hook, "RECORD_EXPERIENCE", script)
+    monkeypatch.setenv("CLAUDE_SAME_DIFFICULTY_JUDGE_BUDGET_S", "300")
+    scan = hook.run_scanner()
+    assert scan is not None
+    assert scan.get("budget") == "0"
+
+
+def test_hook_prints_unjudged_count(tmp_path, monkeypatch, capsys):
+    scan = {"clusters": [_FLAGGED_CLUSTER], "stats": {"unjudged_items": 4}}
+    script = _make_script(
+        tmp_path, "fake.py", f"import json; print(json.dumps({scan!r}))")
+    monkeypatch.setattr(hook, "RECORD_EXPERIENCE", script)
+    monkeypatch.setattr(hook, "STAMP", tmp_path / "stamp")
+    assert hook.main(["--dry-run"]) == 0
+    captured = capsys.readouterr()
+    assert "4 experience leaf(s) unjudged" in captured.err
+    assert "2026-08-11-loop.md" in captured.err
 
 
 def test_run_scanner_nonzero_exit_fails_open(tmp_path, monkeypatch):
@@ -118,7 +154,7 @@ def test_main_throttled_within_7_days_skips_scan(tmp_path, monkeypatch):
 def test_main_past_throttle_window_scans_and_restamps(tmp_path, monkeypatch):
     monkeypatch.setattr(hook, "STAMP", tmp_path / "stamp")
     hook.record_run(time.time() - hook.THROTTLE_DAYS * 86400.0 - 1.0)
-    monkeypatch.setattr(hook, "run_scanner", lambda: [])
+    monkeypatch.setattr(hook, "run_scanner", lambda: _scan([]))
     before = hook.last_run()
     assert hook.main([]) == 0
     assert hook.last_run() > before
@@ -128,7 +164,7 @@ def test_main_force_run_bypasses_throttle_without_consuming(tmp_path, monkeypatc
     monkeypatch.setattr(hook, "STAMP", tmp_path / "stamp")
     hook.record_run(time.time())
     before = hook.last_run()
-    monkeypatch.setattr(hook, "run_scanner", lambda: [_FLAGGED_CLUSTER])
+    monkeypatch.setattr(hook, "run_scanner", lambda: _scan([_FLAGGED_CLUSTER]))
     assert hook.main(["--force-run"]) == 0
     assert hook.last_run() == before
 
@@ -136,14 +172,14 @@ def test_main_force_run_bypasses_throttle_without_consuming(tmp_path, monkeypatc
 def test_main_dry_run_never_touches_stamp(tmp_path, monkeypatch):
     stamp = tmp_path / "stamp"
     monkeypatch.setattr(hook, "STAMP", stamp)
-    monkeypatch.setattr(hook, "run_scanner", lambda: [])
+    monkeypatch.setattr(hook, "run_scanner", lambda: _scan([]))
     assert hook.main(["--dry-run"]) == 0
     assert not stamp.exists()
 
 
 def test_main_reports_flagged_cluster_to_stderr(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(hook, "STAMP", tmp_path / "stamp")
-    monkeypatch.setattr(hook, "run_scanner", lambda: [_FLAGGED_CLUSTER])
+    monkeypatch.setattr(hook, "run_scanner", lambda: _scan([_FLAGGED_CLUSTER]))
     assert hook.main(["--dry-run"]) == 0
     err = capsys.readouterr().err
     assert "1 principle-induction candidate(s)" in err
@@ -152,7 +188,7 @@ def test_main_reports_flagged_cluster_to_stderr(tmp_path, monkeypatch, capsys):
 
 def test_main_unflagged_only_result_prints_nothing(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(hook, "STAMP", tmp_path / "stamp")
-    monkeypatch.setattr(hook, "run_scanner", lambda: [_UNFLAGGED_CLUSTER])
+    monkeypatch.setattr(hook, "run_scanner", lambda: _scan([_UNFLAGGED_CLUSTER]))
     assert hook.main(["--dry-run"]) == 0
     assert capsys.readouterr().err == ""
 

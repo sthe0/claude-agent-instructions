@@ -144,7 +144,7 @@ def test_json_shape(tmp_path: Path, capsys) -> None:
 
     rc = rec.cmd_promote_scan(_scan_args(tmp_path, threshold=3, json_out=True))
     assert rc == 0
-    data = json.loads(capsys.readouterr().out)
+    data = json.loads(capsys.readouterr().out)["clusters"]
     assert isinstance(data, list)
     assert len(data) >= 1
     c = data[0]
@@ -163,7 +163,7 @@ def test_json_fragmented_flag_set_for_two_leaves(tmp_path: Path, capsys) -> None
 
     rc = rec.cmd_promote_scan(_scan_args(tmp_path, threshold=10, json_out=True))
     assert rc == 0
-    data = json.loads(capsys.readouterr().out)
+    data = json.loads(capsys.readouterr().out)["clusters"]
     cluster = next(c for c in data if len(c["members"]) >= 2)
     assert cluster["fragmented"] is True
 

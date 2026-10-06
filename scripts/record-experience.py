@@ -246,55 +246,33 @@ def update_subindex(exp_dir: Path, date: str, title: str, filename: str,
 # --------------------------------------------------------------------------
 # ranking primitive (the search-before-record scorer)
 # --------------------------------------------------------------------------
-def tokenize(text: str) -> list[str]:
-    """The single tokenizer behind both search-before-record and difficulty clustering."""
-    return [t.lower() for t in re.findall(r"\w+", text)]
+tokenize = semantic_join.tokenize
+term_score = semantic_join.term_score
 
-
-def term_score(haystack: str, terms: list[str]) -> int:
-    """Count term occurrences — the identical ranking the digest reuses as its clustering join,
-    so there is exactly one ranking engine (ADR-0001: 'that search IS the clustering')."""
-    hay = haystack.lower()
-    return sum(hay.count(t) for t in terms)
-
-
-# Join ratio: shared-term overlap above which two functional grounds are the same cluster.
-# Consumed by core-difficulty-digest (channel records) and promote-scan (experience leaves).
 JOIN_RATIO = 0.6
 
 
 def _similarity(ground_a: str, ground_b: str) -> float:
-    """Symmetric term-overlap ratio using the reused ranking scorer. 1.0 == identical terms."""
+    """Symmetric term-overlap ratio. 1.0 == identical terms."""
     terms_b = tokenize(ground_b)
     if not terms_b:
         return 0.0
-    # term_score counts occurrences; normalise by the smaller token count for a 0..1 ratio.
     matched = sum(1 for t in set(terms_b) if term_score(ground_a, [t]) > 0)
-    denom = max(len(set(tokenize(ground_a))), len(set(terms_b))) or 1  # larger (union) set size
+    denom = max(len(set(tokenize(ground_a))), len(set(terms_b))) or 1
     return matched / denom
 
 
-def cluster_by_ground(items, ground_fn, join_ratio=JOIN_RATIO) -> list[list]:
-    """Group items by functional ground using the shared ranking engine.
+def cluster_by_ground_result(items, ground_fn):
+    """Group items by functional ground: lexical overlap only nominates, a judge decides.
 
-    An item joins the best-matching existing group when _similarity >= join_ratio,
-    else opens a new group. ground_fn(item) -> str yields the comparison ground.
-    Returns list[list]; the first item in each group is the representative."""
-    groups: list[list] = []
-    grounds: list[str] = []
-    for item in items:
-        g = ground_fn(item)
-        best_idx, best_sim = -1, 0.0
-        for i, rep in enumerate(grounds):
-            sim = _similarity(rep, g)
-            if sim > best_sim:
-                best_idx, best_sim = i, sim
-        if best_idx >= 0 and best_sim >= join_ratio:
-            groups[best_idx].append(item)
-        else:
-            groups.append([item])
-            grounds.append(g)
-    return groups
+    Returns semantic_join's ClusterResult (groups, stats, per-item unjudged/undecided flags)."""
+    return semantic_join.judged_clusters(items, ground_fn, k=semantic_join.K_CLUSTER)
+
+
+def cluster_by_ground(items, ground_fn) -> list[list]:
+    """Group items by functional ground; the first item in each group is the representative.
+    ground_fn(item) -> str yields the comparison ground."""
+    return cluster_by_ground_result(items, ground_fn).groups
 
 
 DEFAULT_PRINCIPLE_PROMOTION_THRESHOLD = 3
@@ -369,6 +347,13 @@ def cmd_search(a) -> int:
     return 0
 
 
+def cluster_judge_line(stats: dict) -> str:
+    return (
+        f"cluster judge: judged_calls={stats['judged_calls']} cached_hits={stats['cached_hits']} "
+        f"identity_joins={stats['identity_joins']} unjudged_items={stats['unjudged_items']}"
+    )
+
+
 def cmd_promote_scan(a) -> int:
     """Cluster the experience corpus by functional ground; flag clusters >= threshold."""
     import json as _json
@@ -417,9 +402,10 @@ def cmd_promote_scan(a) -> int:
         print("no experience leaves found")
         return 0
 
-    groups = cluster_by_ground(records, lambda r: r.ground)
+    result = cluster_by_ground_result(records, lambda r: r.ground)
+    stats = result.stats.as_dict()
     clusters = []
-    for group in groups:
+    for group in result.groups:
         total = sum(r.occurrences for r in group)
         members = [r.name for r in group]
         clusters.append({
@@ -431,7 +417,7 @@ def cmd_promote_scan(a) -> int:
     clusters.sort(key=lambda c: -c["occurrences_total"])
 
     if getattr(a, "json_out", False):
-        print(_json.dumps(clusters, indent=2))
+        print(_json.dumps({"clusters": clusters, "stats": stats}, indent=2))
         return 0
 
     for c in clusters:
@@ -442,6 +428,7 @@ def cmd_promote_scan(a) -> int:
         if c["fragmented"]:
             print(f"  → fragmented across {len(c['members'])} leaves "
                   f"— consider merging via extend")
+    print(cluster_judge_line(stats))
     return 0
 
 
