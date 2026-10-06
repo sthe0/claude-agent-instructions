@@ -24730,7 +24730,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "7cc98d7663b1be33"
+id = "fbc2b5ddcc55e443"
 domain = "prose"
 file = "memory-global/leaves/published-text-writer-gate.md"
 class = "perception"
@@ -24738,7 +24738,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "639ab729192033a4"
+id = "3f58b3f93fa76bf1"
 domain = "prose"
 file = "memory-global/leaves/published-text-writer-gate.md"
 class = "perception"
@@ -24746,7 +24746,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "d17a607b0f3c4dc5"
+id = "c80c528ff9987d47"
 domain = "prose"
 file = "memory-global/leaves/published-text-writer-gate.md"
 class = "perception"
@@ -24754,7 +24754,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "a86a25952e23133d"
+id = "ec3f21b1cf974aea"
 domain = "prose"
 file = "memory-global/leaves/published-text-writer-gate.md"
 class = "perception"
@@ -24762,7 +24762,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "8a8e14e45fb38088"
+id = "fa7b81de016d1911"
 domain = "prose"
 file = "memory-global/leaves/published-text-writer-gate.md"
 class = "perception"
@@ -24770,15 +24770,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "325114a0e414785b"
-domain = "prose"
-file = "memory-global/leaves/published-text-writer-gate.md"
-class = "perception"
-disposition = "keep"
-ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
-
-[[entry]]
-id = "3d391e5bf1c81fe1"
+id = "fab3f77ad93e3469"
 domain = "prose"
 file = "memory-global/leaves/published-text-writer-gate.md"
 class = "already-mechanized"
@@ -24786,7 +24778,7 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "04b4dafc21ee717a"
+id = "58c7596415f91021"
 domain = "prose"
 file = "memory-global/leaves/published-text-writer-gate.md"
 class = "perception"
@@ -24794,7 +24786,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "5b4c9956ef7819de"
+id = "4c75d5aced129804"
 domain = "prose"
 file = "memory-global/leaves/published-text-writer-gate.md"
 class = "perception"
@@ -24802,7 +24794,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "f580af56c58cfa49"
+id = "c6405e29c666b996"
 domain = "prose"
 file = "memory-global/leaves/published-text-writer-gate.md"
 class = "perception"
@@ -24810,7 +24802,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "f61e2fe8a63cde7b"
+id = "283df16b1eddb9e6"
 domain = "prose"
 file = "memory-global/leaves/published-text-writer-gate.md"
 class = "already-mechanized"
