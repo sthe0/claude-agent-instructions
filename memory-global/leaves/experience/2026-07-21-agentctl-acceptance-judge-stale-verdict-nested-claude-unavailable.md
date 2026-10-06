@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "fedor.solovyev@gmail.com"
 refs: [gates.py:420-461, cli.py:1924-1954]
 created: 2026-07-21
-last_verified: 2026-10-04
+last_verified: 2026-10-06
 ---
 
 # Acceptance-judge stale-verdict deadlock when nested claude -p is unavailable — escape via byte-identical stage-review binding
@@ -35,6 +35,10 @@ record-result --status passed --observation X (judge runs, fails open, no verdic
 ### 2026-10-04 — judge revise on shifting/non-converging grounds across 6 stages, cleared only by human override
 - Where it arose: an Org-tier ticket-driven agentctl session (quality/cost/latency benchmark of an internal agent product across model backends), advisor-mode=substantive, 13-stage plan. Across the full run, advisor.acceptance_judge returned revise on SIX separate stages (4, 5, 7, 8, 12, 13) — each time the judge ran successfully (not the nested-claude-unavailable/stale-verdict failure mode above) and raised a genuine, non-trivial concern, but on grounds that shifted between re-submissions and were sometimes mutually exclusive: e.g. on one stage the judge first objected that a measured figure lacked a confidence interval, then after a CI was added objected instead that the CI method itself was unstated, then after the method was named objected that the stated method did not match a different adjacent figure's method -- a moving target where satisfying the previous round's objection opened a new, unrelated one rather than converging. Each of the six was ultimately cleared only via 'agentctl stage-review --verdict override' after a human (the root/customer) read the actual evidence and judged it sufficient -- not by ever producing an observation the judge itself accepted.
 - Working plan: No single mechanical escape existed (unlike the sha-binding escape above, which works because the failure mode is a STALE comparison against literal bytes). The working resolution each time was: (1) treat a second 'revise' with a DIFFERENT concern than the first as a signal the artifact/evidence is probably fine and the judge's criterion is underspecified, rather than iterating further on the artifact; (2) have the accountable human (root coordinator, with the task's actual customer where the concern was substantive) read the raw evidence directly and record an explicit 'agentctl stage-review --verdict override' with the override reasoning; (3) do NOT loop re-submitting record-result against the same judge call hoping for a different draw -- each retry cost a full sonnet call and, 6/6 times in this session, did not converge. A related, smaller finding surfaced at the SAME gate: 'agentctl record-result' only ever reports ONE blocking gate per call (code-review gate, then the acceptance-judge gate, on separate calls) even when both are failing simultaneously on the same stage -- so clearing them took twice as many round-trips as necessary; a caller cannot tell from one failed call whether a second gate is also going to block next.
+
+### 2026-10-06 — 2026-10-06 — judge revise x5 on a green stage, user-sanctioned override (#292)
+- Where it arose: Core ticket #292 (landed check after rebase landing), substantive session, 2-stage plan; stage 1 revise 5x on shifting grounds, stage 2 once
+- Working plan: Asked the user via AskUserQuestion, then stage-review --verdict override --reviewer user with the observation bytes identical to record-result; posted the precedent to #204. Stage 2 passed on retry with raw command output in the observation.
 ## Common core & variations
 **Common:** The acceptance gate binds to the --observation bytes alone. Whatever goes into --actual is invisible to the judge, so a rich --actual plus a thin --observation reads to the judge exactly like an unverified claim.
 
