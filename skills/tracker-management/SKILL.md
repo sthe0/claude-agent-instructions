@@ -75,7 +75,7 @@ For ticket-driven work the **ticket is the single source of truth for the resolv
 
 ## How to publish
 
-Every publication that travels as a shell command is gated on a preceding tech-writer pass — see [published-text-writer-gate.md](../../memory-global/leaves/published-text-writer-gate.md) — so route reader-facing text through `tech-writer` before posting rather than typing it directly into a publish call.
+Every publication that travels as a shell command is gated on a preceding tech-writer pass — see [published-text-writer-gate.md](../../memory-global/leaves/published-text-writer-gate.md) — so route reader-facing text through `tech-writer` before posting rather than typing it directly into a publish call. A bound body is also checked against the tech-writer rules (for example, no second-person address of the chat partner) by a fail-open judge; escape: `CLAUDE_PUBLISHED_TEXT_RULES_SEMANTIC=0`.
 
 In priority order:
 
