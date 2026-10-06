@@ -27,7 +27,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from agentctl import advisor  # noqa: E402
-from lib import published_body, writer_pass  # noqa: E402
+from lib import published_body, writer_pass, writer_rules  # noqa: E402
 
 HOOK_PATH = SCRIPTS_DIR / "hook-published-text-writer-gate.py"
 ADVISOR_PATH = SCRIPTS_DIR / "agentctl" / "advisor.py"
@@ -79,6 +79,9 @@ HOOK_SCENARIOS = {
                       {"CLAUDE_PUBLISHED_TEXT_GATE": "0"}, False),
     "killswitch": (YOU_BODY, writer_pass.WRITER_OUTPUT, "YES\n", False,
                    {"CLAUDE_PUBLISHED_TEXT_RULES_SEMANTIC": "0"}, False),
+    "yes_invented_span": (YOU_BODY, writer_pass.WRITER_OUTPUT,
+                          'YES\nRULE say-13: "absent from the body"\n', False, {}, False),
+    "registry_broken": (YOU_BODY, writer_pass.WRITER_OUTPUT, "YES\n", False, {}, False),
     "budget_exhausted": (YOU_BODY, writer_pass.WRITER_OUTPUT, "YES\n", False, {}, True),
 }
 
@@ -96,6 +99,10 @@ def _hook_observations(mod, monkeypatch, tmp_path) -> dict:
             patch.setenv(published_body.ADVISORY_SINK_ENV, str(sink))
             for key, value in env.items():
                 patch.setenv(key, value)
+            if name == "registry_broken":
+                def _boom(_body):
+                    raise ValueError("registry drifted")
+                patch.setattr(writer_rules, "find_candidates", _boom)
             patch.setattr(writer_pass, "bind", lambda body_arg, path, s=strength: writer_pass.Binding(strength=s))
             patch.setattr(advisor, "subprocess_runner", _runner(stdout, calls, timed_out=timed_out))
             if exhausted:
@@ -155,9 +162,20 @@ HOOK_MUTATIONS = {
         'candidates = writer_rules.find_candidates(body) or [("say-13", ["you"])]'),
     "unbound_body_reaches_content_check": (
         "if binding.strength in (writer_pass.WRITER_OUTPUT, writer_pass.POST_WITNESS):", "if True:"),
-    "findings_outside_candidates_not_filtered": ("if rule_id in fired:", "if True:"),
-    "fail_open_advisory_dropped": ('"TEXT_RULE_JUDGE_FAIL_OPEN"', '"X"'),
+    "findings_outside_candidates_not_filtered": ("if rule_id in fired and span.strip()", "if span.strip()"),
+    "fail_open_advisory_dropped": (
+        'if reason:\n        published_body.record_advisory("TEXT_RULE_JUDGE_FAIL_OPEN"',
+        'if reason:\n        published_body.record_advisory("X"'),
     "deny_advisory_dropped": ('"TEXT_RULE_JUDGE_DENY"', '"X"'),
+    "deny_reason_without_rule_id": (
+        "f'- {rule_id} ({fingerprints[rule_id]}): \"{span}\"'", "f'- ({fingerprints[rule_id]}): \"{span}\"'"),
+    "deny_reason_without_span": (
+        "f'- {rule_id} ({fingerprints[rule_id]}): \"{span}\"'", "f'- {rule_id} ({fingerprints[rule_id]})'"),
+    "invented_span_quoted": (" and span.lower() in lowered", ""),
+    "prefilter_failure_not_failopen": (
+        "    except Exception:  # a drifted registry must surface as an advisory, never as a block\n"
+        "        published_body.record_advisory(\"TEXT_RULE_JUDGE_FAIL_OPEN\", resolution.shape, command)\n"
+        "        return \"allow\", \"\"\n", "    except ZeroDivisionError:\n        raise\n"),
     "budget_advisory_dropped": ('"TEXT_RULE_JUDGE_BUDGET_EXHAUSTED"', '"X"'),
 }
 
@@ -213,3 +231,27 @@ def test_the_battery_exercises_a_real_deny_and_a_real_allow(monkeypatch, tmp_pat
     assert observed["yes_with_spans"][0][0] == "deny"
     assert observed["no"][0] == ("allow", "")
     assert observed["prefilter_silent"][2] == 0
+
+
+MUTATIONS_EXPECTED = 16 + 9
+
+
+def test_catalogue_size_is_pinned():
+    assert len(HOOK_MUTATIONS) + len(ADVISOR_MUTATIONS) == MUTATIONS_EXPECTED
+
+
+def test_every_catalogued_mutation_is_caught(monkeypatch, tmp_path):
+    baseline = _hook_observations(_load_hook(HOOK_PATH.read_text(encoding="utf-8")), monkeypatch, tmp_path)
+    for name, (old, new) in HOOK_MUTATIONS.items():
+        mutant = _hook_observations(_load_hook(_patched(HOOK_PATH, old, new)), monkeypatch, tmp_path)
+        assert mutant != baseline, f"hook mutation {name!r} survived"
+    advisor_baseline = _advisor_observations(_load_advisor(ADVISOR_PATH.read_text(encoding="utf-8")))
+    for name, (old, new) in ADVISOR_MUTATIONS.items():
+        mutant = _advisor_observations(_load_advisor(_patched(ADVISOR_PATH, old, new)))
+        assert mutant != advisor_baseline, f"advisor mutation {name!r} survived"
+
+
+def test_mutation_module_performs_no_write():
+    head = Path(__file__).read_text(encoding="utf-8").partition("def test_mutation_module_performs_no_write")[0]
+    forbidden = ("write_text(", "write_bytes(", ".unlink(", "shutil.", "os.remove(")
+    assert not [token for token in forbidden if token in head]

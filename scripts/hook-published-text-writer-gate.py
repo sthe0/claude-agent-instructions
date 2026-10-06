@@ -289,14 +289,15 @@ def _recognized_artifact_kind(content: str) -> str | None:
     return None
 
 
-def _text_rules_violations(findings: list, candidates: list) -> str:
+def _text_rules_violations(findings: list, candidates: list, body: str) -> str:
     from lib import writer_rules  # lazy: only reached once a rule candidate fired
 
     fingerprints = {rule.id: rule.fingerprint for rule in writer_rules.load_registry()}
     fired = {rule_id for rule_id, _ in candidates}
+    lowered = body.lower()
     spans: dict[str, list[str]] = {}
     for rule_id, span in findings:
-        if rule_id in fired:
+        if rule_id in fired and span.strip() and span.lower() in lowered:
             spans.setdefault(rule_id, []).append(span)
     if not spans:
         return "\n".join(
@@ -318,7 +319,11 @@ def _check_text_rules(resolution: "published_body.Resolution", command: str) -> 
     from lib import writer_rules  # lazy: only reached for a bound TEXT body
 
     body = resolution.body or ""
-    candidates = writer_rules.find_candidates(body)
+    try:
+        candidates = writer_rules.find_candidates(body)
+    except Exception:  # a drifted registry must surface as an advisory, never as a block
+        published_body.record_advisory("TEXT_RULE_JUDGE_FAIL_OPEN", resolution.shape, command)
+        return "allow", ""
     judge_ledger.entered("published_text_rules", prefilter_fired=bool(candidates))
     if not candidates:
         return "allow", ""
@@ -348,10 +353,14 @@ def _check_text_rules(resolution: "published_body.Resolution", command: str) -> 
         ceiling=_PUBLISHED_TEXT_JUDGE_BUDGET_S,
     )
     if violated and not reason:
+        try:
+            violations = _text_rules_violations(findings, candidates, body)
+        except Exception:
+            published_body.record_advisory("TEXT_RULE_JUDGE_FAIL_OPEN", resolution.shape, command)
+            return "allow", ""
         published_body.record_advisory("TEXT_RULE_JUDGE_DENY", resolution.shape, command)
         return "deny", _TEXT_RULES_DENY_REASON.format(
-            violations=_text_rules_violations(findings, candidates),
-            killswitch_env=_TEXT_RULES_KILLSWITCH_ENV,
+            violations=violations, killswitch_env=_TEXT_RULES_KILLSWITCH_ENV,
         )
     if reason:
         published_body.record_advisory("TEXT_RULE_JUDGE_FAIL_OPEN", resolution.shape, command)
