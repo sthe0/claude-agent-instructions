@@ -238,21 +238,26 @@ def test_converted_sites_are_not_meaning_decisions():
     record = _record()
     sites, _ = inv.enumerate_sites(ROOT)
 
+    keys = set(sites) | set(record)
+
     def under(qualname: str):
-        return [k for k in sites if k.split("::")[1].split(".")[0] == qualname]
+        return [k for k in keys if k.split("::")[1].split(".")[0] == qualname]
 
     base_keys = {
-        "scripts/cost-report.py::_is_correction::pattern.search",
         "scripts/cost-report.py::<module>::re.compile",
+        "scripts/cost-report.py::parse_transcripts::pattern.search",
+        "scripts/record-experience.py::_similarity::lexical.term_score",
+        "scripts/record-experience.py::_similarity::lexical.tokenize",
     }
-    assert not base_keys & set(sites)
+    assert not base_keys & keys
     for qual in (
         "cluster_by_ground", "classify_and_score", "cluster_records",
         "measure_condition_a", "measure_cheap_c", "_board_ground_match",
     ):
         assert under(qual) == [], qual
     assert not [
-        k for k in sites if k.split("::")[1] == "cmd_new" and "::lexical." in k
+        k for k in keys
+        if k.startswith("scripts/record-experience.py::cmd_new::") and "::lexical." in k
     ]
 
     def cls(key):
