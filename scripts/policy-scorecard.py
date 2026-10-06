@@ -79,7 +79,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import hashlib
 import importlib.util
 import json
 import math
@@ -124,6 +123,7 @@ from lib.config_root import agentctl_gate_log, legacy_home, projects_roots
 import self_diagnose_store as findings_store
 from agentctl.cost import COST_LOG as SPAWN_LEDGER, read_rows as read_spawn_rows
 from agentctl import advisor
+import lib.prompt_judges as prompt_judges
 from si_feedback_detect import find_signals, strip_injected_context
 LEDGER = Path.home() / ".local" / "log" / "claude-policy-ledger.jsonl"
 # Per-task quality ledger written by `agentctl resolve --quality` (agentctl/cli.py
@@ -172,12 +172,6 @@ RESOLUTION_RE = re.compile(
 # Bumped whenever the attention counting rule changes: upsert re-scans any row
 # stamped with an older version, so a new rule reaches every in-window session.
 SCAN_VERSION = 2
-VERDICTS_PATH = Path.home() / ".local" / "state" / "claude-correction-verdicts.json"
-_VERDICTS_ENV = "POLICY_CORRECTION_VERDICTS"
-_JUDGE_BUDGET_ENV = "POLICY_CORRECTION_JUDGE_BUDGET_S"
-_JUDGE_BUDGET_DEFAULT_S = 300.0
-_JUDGE_CALL_TIMEOUT_S = 60
-_JUDGE_KILLSWITCH_ENV = "CLAUDE_SI_FEEDBACK_SEMANTIC"  # same switch as the Stop hook
 # None = no judge: every prefilter hit is counted unjudged. Only the CLI path
 # installs the real runner; tests install a fake.
 _CORRECTION_JUDGE_RUNNER = None
@@ -186,70 +180,8 @@ _CORRECTION_JUDGE_RUNNER = None
 _judge_deadline: float | None = None
 
 
-def _verdicts_path() -> Path:
-    override = os.environ.get(_VERDICTS_ENV)
-    return Path(override) if override else VERDICTS_PATH
-
-
-def _load_verdicts() -> dict[str, bool]:
-    try:
-        data = json.loads(_verdicts_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {k: v for k, v in data.items() if isinstance(v, bool)}
-
-
-def _store_verdict(key: str, verdict: bool) -> None:
-    # Two concurrent refreshes can drop each other's verdict (read-modify-write);
-    # accepted: os.replace keeps the file whole, and a lost verdict only costs one re-ask.
-    cache = _load_verdicts()
-    cache[key] = verdict
-    path = _verdicts_path()
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(cache), encoding="utf-8")
-        os.replace(tmp, path)
-    except OSError:
-        pass
-
-
-def _judge_budget_s() -> float:
-    try:
-        return float(os.environ[_JUDGE_BUDGET_ENV])
-    except (KeyError, ValueError):
-        return _JUDGE_BUDGET_DEFAULT_S
-
-
 def _judge_active() -> bool:
-    return (_CORRECTION_JUDGE_RUNNER is not None
-            and os.environ.get(_JUDGE_KILLSWITCH_ENV) != "0")
-
-
-def _correction_verdict(stripped: str) -> bool | None:
-    """The judge's verdict on an injection-stripped, prefilter-flagged prompt;
-    None when no genuine verdict is available (no runner, budget spent, fail-open).
-    Only genuine verdicts are cached, so an unanswered prompt is asked again later."""
-    key = hashlib.sha256(stripped.encode("utf-8")).hexdigest()
-    cached = _load_verdicts().get(key)
-    if cached is not None:
-        return cached
-    if not _judge_active():
-        return None
-    timeout = _JUDGE_CALL_TIMEOUT_S
-    if _judge_deadline is not None:
-        left = _judge_deadline - time.monotonic()
-        if left < 1:
-            return None
-        timeout = int(min(timeout, left))
-    verdict, reason = advisor.judge_feedback_signal(
-        stripped, _CORRECTION_JUDGE_RUNNER, timeout=timeout)
-    if reason:
-        return None
-    _store_verdict(key, verdict)
-    return verdict
+    return prompt_judges.runner_active(_CORRECTION_JUDGE_RUNNER)
 
 
 def _is_human_entry(entry: dict) -> bool:
@@ -641,7 +573,9 @@ def _scan_session(main_file: Path) -> dict | None:
                 prompts += 1
                 stripped = strip_injected_context(text)
                 if find_signals(stripped):
-                    verdict = _correction_verdict(stripped)
+                    verdict = prompt_judges.correction_verdict(
+                        stripped, runner=_CORRECTION_JUDGE_RUNNER,
+                        deadline=_judge_deadline)
                     if verdict is None:
                         corrections_unjudged += 1
                     elif verdict:
@@ -858,8 +792,7 @@ def upsert(days: int, project: str | None) -> tuple[dict[str, dict], int, int]:
     global _judge_deadline
     rows = load_ledger()
     scanned = skipped = 0
-    _judge_deadline = (time.monotonic() + _judge_budget_s()
-                       if _judge_active() else None)
+    _judge_deadline = prompt_judges.open_deadline(_CORRECTION_JUDGE_RUNNER)
     try:
         for f in in_window_files(days, project):
             sid = f.stem

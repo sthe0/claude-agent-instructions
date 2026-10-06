@@ -18,7 +18,7 @@ import argparse
 import csv
 import datetime as dt
 import json
-import re
+import os
 import statistics
 import sys
 from collections import Counter, defaultdict
@@ -27,6 +27,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.config_root import projects_roots
 from lib import transcript_cost
+import lib.prompt_judges as prompt_judges
+from agentctl import advisor
+from si_feedback_detect import find_signals, strip_injected_context
 
 COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
 
@@ -201,11 +204,12 @@ def csv_out(spawns: list[dict], refused: list[dict]) -> str:
 
 
 INTERRUPT_SENTINEL = "[Request interrupted by user]"
-CORRECTION_RE = re.compile(
-    r"нет\b|не так|неправильн|неверн|поправ|по-русски|шире|только\b|"
-    r"wrong|actually|instead|not just|don't|почему (?:только|ты)|не нужно|не надо",
-    re.IGNORECASE,
-)
+
+# None = no judge: every prefilter hit without a cached verdict is counted unjudged.
+# Only the CLI path installs the real runner; tests install a fake.
+_CORRECTION_JUDGE_RUNNER = None
+# Monotonic deadline of the whole --classify-corrections run; None = unbounded.
+_judge_deadline: float | None = None
 
 
 # Same tolerant JSONL read, one implementation. transcript_cost's also survives a
@@ -223,6 +227,11 @@ def _msg_text(content) -> str:
     return ""
 
 
+def _is_human_entry(entry: dict) -> bool:
+    origin = entry.get("origin")
+    return isinstance(origin, dict) and origin.get("kind") == "human"
+
+
 def _is_tool_result(content) -> bool:
     return isinstance(content, list) and any(
         isinstance(c, dict) and c.get("type") == "tool_result" for c in content
@@ -238,6 +247,7 @@ def parse_transcripts(files: list[Path], classify: bool = False) -> dict:
     by_model_tokens: dict[str, Counter] = defaultdict(Counter)
     interactive_usd = 0.0
     user_prompts = interrupts = asks = corrections = 0
+    corrections_unjudged = human_prompts = 0
     timestamps: list[str] = []
     for path in files:
         for d in _iter_jsonl(path):
@@ -270,8 +280,17 @@ def parse_transcripts(files: list[Path], classify: bool = False) -> dict:
                     interrupts += 1
                 else:
                     user_prompts += 1
-                    if classify and CORRECTION_RE.search(text):
-                        corrections += 1
+                    if classify and _is_human_entry(d):
+                        human_prompts += 1
+                        stripped = strip_injected_context(text)
+                        if find_signals(stripped):
+                            verdict = prompt_judges.correction_verdict(
+                                stripped, runner=_CORRECTION_JUDGE_RUNNER,
+                                deadline=_judge_deadline)
+                            if verdict is None:
+                                corrections_unjudged += 1
+                            elif verdict:
+                                corrections += 1
     return {
         "by_model_tokens": by_model_tokens,
         "interactive_usd": interactive_usd,
@@ -279,6 +298,8 @@ def parse_transcripts(files: list[Path], classify: bool = False) -> dict:
         "interrupts": interrupts,
         "asks": asks,
         "corrections": corrections,
+        "corrections_unjudged": corrections_unjudged,
+        "human_prompts": human_prompts,
         "classify": classify,
         "span": (min(timestamps), max(timestamps)) if timestamps else None,
         "n_files": len(files),
@@ -315,7 +336,9 @@ def budget_report(tr: dict, spawn_cost: float, spawn_note: str) -> str:
     L.append(f"  your interrupts:                  {tr['interrupts']}")
     L.append(f"  agent->you asks (AskUserQuestion): {tr['asks']}")
     if tr["classify"]:
-        L.append(f"  likely corrections (heuristic, approximate): {tr['corrections']}")
+        L.append(f"  judged corrections:               {tr['corrections']}")
+        L.append(f"  unjudged correction hits:         {tr['corrections_unjudged']}")
+        L.append(f"  human prompts:                    {tr['human_prompts']}")
     if tr["span"]:
         L.append(f"\n  span: {tr['span'][0]} ... {tr['span'][1]}")
     return "\n".join(L)
@@ -331,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--csv", action="store_true", help="emit CSV (with all fields)")
     p.add_argument("--project", help="project dir, or a cwd-hash looked up under every config root's projects/ (both are unioned): full-budget interval + interaction cost from session transcripts")
     p.add_argument("--session", help="a single session transcript .jsonl (instead of a whole project)")
-    p.add_argument("--classify-corrections", action="store_true", help="heuristically flag likely correction prompts (approximate)")
+    p.add_argument("--classify-corrections", action="store_true", help="count corrections among human prompts: si_feedback_detect nominates, the judge decides (verdicts cached, shared with policy-scorecard)")
     args = p.parse_args(argv)
 
     entries = parse_entries(args.log)
@@ -341,7 +364,15 @@ def main(argv: list[str] | None = None) -> int:
         if not files:
             print(f"(no transcripts found for {args.session or args.project})")
             return 0
-        tr = parse_transcripts(files, classify=args.classify_corrections)
+        global _CORRECTION_JUDGE_RUNNER, _judge_deadline
+        if args.classify_corrections and os.environ.get("AGENTCTL_ADVISOR") != "0":
+            _CORRECTION_JUDGE_RUNNER = advisor.subprocess_runner
+        _judge_deadline = (prompt_judges.open_deadline(_CORRECTION_JUDGE_RUNNER)
+                           if args.classify_corrections else None)
+        try:
+            tr = parse_transcripts(files, classify=args.classify_corrections)
+        finally:
+            _judge_deadline = None
         spawn_cost, note = 0.0, "spawn log empty"
         spawns_all = split_events(entries)[0]
         if tr["span"] and spawns_all:
