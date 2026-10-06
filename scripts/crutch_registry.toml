@@ -1536,6 +1536,14 @@ disposition = "keep"
 ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
 
 [[entry]]
+id = "4c318993ddc97c55"
+domain = "code"
+file = "scripts/hook-multi-mount-search-guard.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
 id = "8cacdcfa40cac001"
 domain = "code"
 file = "scripts/hook-multi-mount-search-guard.py"
@@ -1545,14 +1553,6 @@ ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-comm
 
 [[entry]]
 id = "9c7b2e863d896b93"
-domain = "code"
-file = "scripts/hook-multi-mount-search-guard.py"
-class = "structural"
-disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
-
-[[entry]]
-id = "47508b590a381f20"
 domain = "code"
 file = "scripts/hook-multi-mount-search-guard.py"
 class = "structural"
@@ -7464,7 +7464,23 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "1ea1f1357e4998d8"
+domain = "code"
+file = "scripts/tests/test_multi_mount_search_guard.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "2063aea5ce995719"
+domain = "code"
+file = "scripts/tests/test_multi_mount_search_guard.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "d1c82075c597a249"
 domain = "code"
 file = "scripts/tests/test_multi_mount_search_guard.py"
 class = "not-a-gate"
@@ -7496,7 +7512,23 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "9cc20b79f128c2e2"
+domain = "code"
+file = "scripts/tests/test_multi_mount_search_guard.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "60d584808bf85ec6"
+domain = "code"
+file = "scripts/tests/test_multi_mount_search_guard.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "4a5a00bf89a0090b"
 domain = "code"
 file = "scripts/tests/test_multi_mount_search_guard.py"
 class = "not-a-gate"

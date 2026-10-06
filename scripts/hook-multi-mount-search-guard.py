@@ -1,15 +1,30 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: deny recursive filesystem searches that span ≥2 FUSE mounts.
+"""PreToolUse hook: deny recursive filesystem traversal rooted at, or above, a FUSE mount.
 
-Some machines carry several network-backed FUSE mountpoints under the user's home
-directory (a VCS virtual filesystem, a remote share). A recursive search rooted at
-the home directory, ~, $HOME, or any ancestor of those mounts fans out across all of
-them and is pathologically slow / hammers the network mount. The rule keys off the
+Some machines carry network-backed FUSE mountpoints under the user's home directory
+(a VCS virtual filesystem, a remote share). Such a filesystem fetches lazily and caches
+what it reads into a local backing store, so a whole-tree walk -- not only a write --
+can exhaust the local disk, and it hammers the network mount. The rule keys off the
 `fuse.*` fstype alone, so it is VCS- and vendor-neutral: any FUSE mount counts.
-This hook intercepts Bash (find/grep -r/rg/fd/ls -R), Grep, and Glob tool calls,
-detects multi-mount fan-out, and DENY-signals any call that would cross ≥2 mounts.
 
-Always exits 0 — a hook crash must never wedge the workflow. Any unexpected error,
+The hook intercepts Bash, Grep and Glob calls and DENY-signals a traversal whose root
+is a mount point itself, or a directory above one or more mounts (the home directory,
+~, $HOME, a parent of a mount). A root strictly inside a mount is allowed, as are
+non-recursive commands and `fuser -m <path>` (lists holders without walking the tree).
+
+Bash detection: find, rg, fd, du (any form), grep-family with -r/-R/--recursive,
+ls -R, and lsof +D (plain or glued `+D<dir>`). The command is split into segments on
+&& || ; | & with a running cwd (`cd X && ...`), redirections are stripped, and each
+recursive segment's roots are taken from its own positional arguments (the grep/rg/fd
+pattern is never a root); with no root the segment's cwd is the root.
+
+Known residuals (accepted): unexpanded globs, `(cd X && ...)` and `bash -c '...'`
+are not segmented, `$(...)`, `grep -d recurse`, other walkers (tree, tar, rsync,
+cp -r, git grep). Accepted false positives: bounded-depth walks at a mount root, a
+command name appearing as an argument (`which du`), `rg --files robot`, Glob without
+a path at a mount-root cwd.
+
+Always exits 0 -- a hook crash must never wedge the workflow. Any unexpected error,
 missing key, or non-matching tool falls through to allow.
 
 DENY is signaled with the PreToolUse permissionDecision JSON on stdout:
@@ -24,8 +39,20 @@ import re
 import shlex
 import sys
 
-_RECURSIVE_ALWAYS = frozenset(["find", "rg", "fd"])
+_RECURSIVE_ALWAYS = frozenset(["find", "rg", "fd", "du"])
 _GREP_VARIANTS = frozenset(["grep", "egrep", "fgrep", "zgrep"])
+_SEGMENT_OPS = frozenset(["&&", "||", ";", ";;", "|", "|&", "&"])
+_END = "\0"
+_FAMILY = {"grep": "grep", "egrep": "grep", "fgrep": "grep", "zgrep": "grep",
+           "rg": "grep", "fd": "fd"}
+_PATTERN_FIRST = frozenset(["grep", "fd"])
+_VALUE_SHORT = {"grep": frozenset("efgtTABCmd"), "fd": frozenset("etEd")}
+_VALUE_LONG = {
+    "grep": frozenset(["--regexp", "--file", "--glob", "--type", "--type-not",
+                       "--max-count", "--max-depth", "--include", "--exclude"]),
+    "fd": frozenset(["--extension", "--type", "--exclude", "--max-depth"]),
+}
+_FIND_GLOBALS = frozenset(["-L", "-H", "-P"])
 
 
 def fuse_mounts_from_text(text: str) -> list[str]:
@@ -64,60 +91,170 @@ def spans(root: str, mounts: list[str]) -> int:
 
 
 def _deny_msg(root: str, n: int) -> str:
+    if n >= 2:
+        return (
+            f"This search is rooted at {root!r}, which spans {n} FUSE mounts under /home "
+            f"(network-backed filesystems — recursive traversal is pathologically slow and hammers "
+            f"the mount). Re-scope the search root to the specific repository or directory you "
+            f"need (e.g. a path inside one project), not the home directory / ~ / $HOME."
+        )
     return (
-        f"This search is rooted at {root!r}, which spans {n} FUSE mounts under /home "
-        f"(network-backed filesystems — recursive traversal is pathologically slow and hammers "
-        f"the mount). Re-scope the search root to the specific repository or directory you "
-        f"need (e.g. a path inside one project), not the home directory / ~ / $HOME."
+        f"This recursive traversal is rooted at {root!r}, which is (or contains) a FUSE mount "
+        f"under /home. Walking a lazily-fetched filesystem materialises data into the local "
+        f"backing store and can exhaust the disk. Re-scope to a subdirectory inside the mount; "
+        f"to see which processes hold the mount use `fuser -m {root}`."
     )
 
 
-def _has_recursive_search(command: str) -> bool:
-    try:
-        tokens = shlex.split(command)
-    except Exception:
-        tokens = command.split()
-
-    basenames = [os.path.basename(t) for t in tokens]
-
-    if any(b in _RECURSIVE_ALWAYS for b in basenames):
-        return True
-
-    if any(b in _GREP_VARIANTS for b in basenames):
-        for t in tokens:
-            if t == "--recursive":
-                return True
-            if t.startswith("-") and not t.startswith("--"):
-                flags = t.lstrip("-")
-                if "r" in flags or "R" in flags:
-                    return True
-
-    if "ls" in basenames:
-        for t in tokens:
-            if t.startswith("-") and not t.startswith("--") and "R" in t.lstrip("-"):
-                return True
-
-    return False
+def _tokenize(command: str) -> list[str]:
+    lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    return list(lex)
 
 
-def _extract_roots(command: str, cwd: str) -> list[str]:
-    try:
-        tokens = shlex.split(command)
-    except Exception:
-        tokens = command.split()
+def _is_redirect(tok: str) -> bool:
+    return (bool(tok) and set(tok) <= set("<>&|")
+            and ("<" in tok or ">" in tok))
 
-    roots = []
+
+def _strip_redirects(tokens: list[str]) -> list[str]:
+    out: list[str] = []
+    skip = False
     for t in tokens:
-        if t.startswith("/") or t.startswith("~") or t.startswith("$") or t == ".":
-            expanded = os.path.expandvars(os.path.expanduser(t))
-            if not os.path.isabs(expanded):
-                expanded = os.path.join(cwd, expanded)
-            try:
-                roots.append(os.path.realpath(expanded))
-            except Exception:
-                roots.append(expanded)
+        if skip:
+            skip = False
+            continue
+        if _is_redirect(t):
+            if out and out[-1].isdigit():
+                out.pop()
+            skip = True
+            continue
+        out.append(t)
+    return out
 
-    return roots if roots else [os.path.realpath(cwd)]
+
+def _resolve(tok: str, cwd: str) -> str:
+    p = os.path.expandvars(os.path.expanduser(tok))
+    if not os.path.isabs(p):
+        p = os.path.join(cwd, p)
+    return os.path.realpath(os.path.abspath(p))
+
+
+def _after_cd(tokens: list[str], cwd: str) -> str:
+    if not tokens or tokens[0] != "cd":
+        return cwd
+    args = [a for a in tokens[1:] if a == "-" or not a.startswith("-")]
+    if not args or args[0] == "-":
+        return cwd
+    try:
+        return _resolve(args[0], cwd)
+    except Exception:
+        return cwd
+
+
+def _segments(command: str, cwd: str) -> list[tuple[list[str], str]]:
+    out: list[tuple[list[str], str]] = []
+    cur: list[str] = []
+    seg_cwd = cwd
+    for t in _tokenize(command) + [_END]:
+        if t == _END or t in _SEGMENT_OPS:
+            if cur:
+                out.append((_strip_redirects(cur), seg_cwd))
+                seg_cwd = _after_cd(cur, seg_cwd)
+            cur = []
+        else:
+            cur.append(t)
+    return out
+
+
+def _recursive_command(tokens: list[str]) -> tuple[str, int] | None:
+    for i, t in enumerate(tokens):
+        b = os.path.basename(t)
+        rest = tokens[i + 1:]
+        if b in _RECURSIVE_ALWAYS:
+            return b, i
+        if b == "lsof" and any(a.startswith("+D") for a in rest):
+            return b, i
+        if b in _GREP_VARIANTS:
+            for a in rest:
+                if a == "--recursive":
+                    return b, i
+                if a.startswith("-") and not a.startswith("--"):
+                    flags = a.lstrip("-")
+                    if "r" in flags or "R" in flags:
+                        return b, i
+        if b == "ls":
+            for a in rest:
+                if a.startswith("-") and not a.startswith("--") and "R" in a.lstrip("-"):
+                    return b, i
+    return None
+
+
+def _takes_value(cmd: str, tok: str) -> bool:
+    if cmd not in _VALUE_SHORT:
+        return False
+    if tok.startswith("--"):
+        return tok in _VALUE_LONG[cmd]
+    return tok[-1] in _VALUE_SHORT[cmd]
+
+
+def _supplies_pattern(cmd: str, tok: str) -> bool:
+    if cmd != "grep":
+        return False
+    if tok.startswith("--"):
+        return tok.split("=")[0] in ("--regexp", "--file")
+    return tok[-1] in "ef"
+
+
+def _positionals(cmd: str, args: list[str]) -> list[str]:
+    if cmd == "find":
+        i = 0
+        while i < len(args) and args[i] in _FIND_GLOBALS:
+            i += 1
+        out = []
+        for t in args[i:]:
+            if t.startswith(("-", "(", "!", ",")):
+                break
+            out.append(t)
+        return out
+
+    positionals: list[str] = []
+    pattern_given = False
+    opts_done = False
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        i += 1
+        if opts_done or tok == "-" or not tok.startswith(("-", "+")):
+            positionals.append(tok)
+            continue
+        if tok == "--":
+            opts_done = True
+            continue
+        if tok.startswith("+D") and len(tok) > 2:
+            positionals.append(tok[2:])
+            continue
+        if _supplies_pattern(cmd, tok):
+            pattern_given = True
+        if _takes_value(cmd, tok):
+            i += 1
+    if cmd in _PATTERN_FIRST and not pattern_given:
+        positionals = positionals[1:]
+    return positionals
+
+
+def _is_root_candidate(tok: str, cwd: str) -> bool:
+    if tok.startswith(("/", "~", "$")) or tok in (".", ".."):
+        return True
+    return os.path.exists(os.path.join(cwd, tok))
+
+
+def _extract_roots(tokens: list[str], found: tuple[str, int], cwd: str) -> list[str]:
+    name, idx = found
+    cmd = _FAMILY.get(name, name)
+    roots = [_resolve(t, cwd) for t in _positionals(cmd, tokens[idx + 1:])
+             if _is_root_candidate(t, cwd)]
+    return roots if roots else [_resolve(cwd, cwd)]
 
 
 def decide(tool_name: str, tool_input: dict, cwd: str, mounts: list[str]) -> str | None:
@@ -127,7 +264,7 @@ def decide(tool_name: str, tool_input: dict, cwd: str, mounts: list[str]) -> str
     if tool_name in ("Grep", "Glob"):
         raw = tool_input.get("path") or cwd
         n = spans(raw, mounts)
-        if n >= 2:
+        if n >= 1:
             resolved = os.path.realpath(
                 os.path.abspath(os.path.expandvars(os.path.expanduser(raw)))
             )
@@ -136,22 +273,27 @@ def decide(tool_name: str, tool_input: dict, cwd: str, mounts: list[str]) -> str
 
     if tool_name == "Bash":
         command = (tool_input.get("command") or "").strip()
-        if not command or not _has_recursive_search(command):
+        if not command:
             return None
-        for root in _extract_roots(command, cwd):
-            n = spans(root, mounts)
-            if n >= 2:
-                return _deny_msg(root, n)
+        try:
+            segments = _segments(command, cwd)
+        except Exception:
+            segments = [(command.split(), cwd)]
+        for tokens, seg_cwd in segments:
+            found = _recursive_command(tokens)
+            if not found:
+                continue
+            for root in _extract_roots(tokens, found, seg_cwd):
+                n = spans(root, mounts)
+                if n >= 1:
+                    return _deny_msg(root, n)
         return None
 
     return None
 
 
-def main() -> int:
-    try:
-        payload = json.load(sys.stdin)
-    except Exception:
-        return 0
+def _run() -> int:
+    payload = json.load(sys.stdin)
 
     tool_name = payload.get("tool_name", "")
     if tool_name not in ("Bash", "Grep", "Glob"):
@@ -171,6 +313,13 @@ def main() -> int:
         }))
 
     return 0
+
+
+def main() -> int:
+    try:
+        return _run()
+    except Exception:
+        return 0
 
 
 if __name__ == "__main__":

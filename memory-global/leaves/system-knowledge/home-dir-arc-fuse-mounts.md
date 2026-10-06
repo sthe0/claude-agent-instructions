@@ -21,7 +21,7 @@ Each mount is a network-backed virtual FS where `stat`/`readdir` over the full t
 
 **Rule:** scope every recursive search to the specific repository or subdirectory you need — e.g. `~/claude-agent-instructions/` or a single project dir — never the home root. This is especially easy to violate when the session cwd is itself under one of these mounts (e.g. a second working copy several path components deep) and you need files that live elsewhere under `~`: pin the absolute repo path, don't let the search default to `~`/cwd-parent.
 
-A machine-local guard enforces this: `scripts/hook-multi-mount-search-guard.py` (PreToolUse `Bash|Grep|Glob`) reads the live mount table and **denies** a recursive search whose resolved root spans ≥2 mounts of that VCS tool, with a message to re-scope.
+A machine-local guard enforces this: `scripts/hook-multi-mount-search-guard.py` (PreToolUse `Bash|Grep|Glob`) reads the live mount table and **denies** a recursive traversal (`find`, `grep -r`, `rg`, `fd`, `ls -R`, `du`, `lsof +D`, Grep/Glob) whose resolved root is a mount point itself or lies above one or more mounts, with a message to re-scope to a subdirectory inside the mount (a root strictly inside a mount is allowed; for holder lookup use `fuser -m <path>`).
 
 > verified by: a `mount` listing filtered to that VCS tool's FUSE type on 2026-06-23 (5 mounts under /home/the0); the guard hook lives in the instructions repo.
 
