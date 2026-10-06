@@ -16,6 +16,7 @@ via the REAL subprocess runner (runner=None -> agentctl.dispatch.subprocess_runn
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from argparse import Namespace
 from pathlib import Path
@@ -29,6 +30,7 @@ from agentctl.state import (
     CriterionType,
     FinalCheck,
     GateRecord,
+    LANDED_GIT_ERROR_EXIT,
     LandedSpec,
     Means,
     Node,
@@ -201,6 +203,16 @@ def test_render_command_shape(tmp_path):
 
 
 # --- self-reference: freeze precedes verification in cmd_record_result ------
+
+def test_cherry_fallback_command_shape(tmp_path):
+    stage = _landed_stage(1, target="main", remote="origin", delivered_stage=1)
+    stage.outcome.delivered_head = "deadbeefcafe"
+    state = _verifying("u4c", [stage], repo_root=str(tmp_path))
+    command, _ = state.render_landed_command(stage.criterion.landed)
+    assert "rev-list --merges" in command
+    assert "cherry" in command
+    assert "fetch" not in command
+
 
 def test_self_referencing_stage_finds_frozen_head_present(tmp_path):
     """A stage whose OWN criterion is landed, self-referencing its own index,
@@ -422,6 +434,136 @@ def test_fixture_plan_landed_example_synthesizes_end_to_end(tmp_path, fixtures_d
     assert refusal2 is None
     result2 = cli.subprocess_runner(["bash", "-c", command2])
     assert result2.returncode == 0
+
+
+# --- patch-equivalence fallback: landings that do not preserve the SHA -------
+# Every fixture commit carries a real diff: empty commits share git's null
+# patch-id and would match each other vacuously.
+
+def commit_file(work: Path, name: str, text: str) -> str:
+    (work / name).write_text(text)
+    git("add", name, cwd=work)
+    git("commit", "--quiet", "-m", f"add {name}", cwd=work)
+    return rev_parse(work)
+
+
+def landed_exit(work: Path, delivered: str, env=None) -> int:
+    stage = _landed_stage(1, delivered_stage=1)
+    stage.outcome.delivered_head = delivered
+    state = _verifying("pe", [stage], repo_root=str(work))
+    command, refusal = state.render_landed_command(stage.criterion.landed)
+    assert refusal is None
+    return subprocess.run(
+        ["bash", "-c", command], env={**os.environ, **(env or {})},
+        capture_output=True, text=True,
+    ).returncode
+
+
+def deliver_on_feature_then_advance_trunk(work: Path) -> str:
+    git("checkout", "--quiet", "-b", "feature", cwd=work)
+    delivered = commit_file(work, "f.txt", "feature\n")
+    git("checkout", "--quiet", "main", cwd=work)
+    commit_file(work, "m.txt", "trunk moved\n")
+    push_main(work)
+    return delivered
+
+
+def land_by_rebase(work: Path, push: bool = True) -> None:
+    git("checkout", "--quiet", "feature", cwd=work)
+    git("rebase", "--quiet", "main", cwd=work)
+    git("checkout", "--quiet", "main", cwd=work)
+    git("merge", "--quiet", "--ff-only", "feature", cwd=work)
+    if push:
+        push_main(work)
+
+
+def test_rebase_landing_is_green_on_both_refs(tmp_path):
+    work = make_repo_with_remote(tmp_path)
+    delivered = deliver_on_feature_then_advance_trunk(work)
+    land_by_rebase(work)
+    assert git("merge-base", "--is-ancestor", delivered, "main", cwd=work, check=False).returncode == 1
+    assert landed_exit(work, delivered) == 0
+
+
+def _git_shim(tmp_path, fail_on: str) -> dict:
+    """PATH shim that records every sub-command it saw in `seen` and exits 2 on `fail_on`."""
+    real_git = shutil.which("git")
+    assert real_git is not None
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    seen = shim_dir / "seen"
+    shim = shim_dir / "git"
+    shim.write_text(
+        "#!/bin/sh\n"
+        f'for a in "$@"; do echo "$a" >> {seen}; [ "$a" = {fail_on} ] && exit 2; done\n'
+        f'exec {real_git} "$@"\n'
+    )
+    shim.chmod(0o755)
+    return {"env": {"PATH": f"{shim_dir}{os.pathsep}{os.environ['PATH']}"}, "seen": seen}
+
+
+def _rebase_landed(tmp_path) -> tuple[Path, str]:
+    work = make_repo_with_remote(tmp_path)
+    delivered = deliver_on_feature_then_advance_trunk(work)
+    land_by_rebase(work)
+    assert landed_exit(work, delivered) == 0  # green without the shim
+    return work, delivered
+
+
+def test_cherry_failure_is_a_git_error_not_a_stage_failure(tmp_path):
+    work, delivered = _rebase_landed(tmp_path)
+    shim = _git_shim(tmp_path, "cherry")
+    assert landed_exit(work, delivered, env=shim["env"]) == LANDED_GIT_ERROR_EXIT
+    assert "cherry" in shim["seen"].read_text().split()  # the fallback was actually reached
+
+
+def test_cherry_path_merges_listing_failure_is_a_git_error(tmp_path):
+    work, delivered = _rebase_landed(tmp_path)
+    shim = _git_shim(tmp_path, "--merges")
+    assert landed_exit(work, delivered, env=shim["env"]) == LANDED_GIT_ERROR_EXIT
+    assert "--merges" in shim["seen"].read_text().split()
+
+
+def test_squash_of_two_commits_stays_red(tmp_path):
+    work = make_repo_with_remote(tmp_path)
+    git("checkout", "--quiet", "-b", "feature", cwd=work)
+    commit_file(work, "a.txt", "a\n")
+    delivered = commit_file(work, "b.txt", "b\n")
+    git("checkout", "--quiet", "main", cwd=work)
+    git("merge", "--quiet", "--squash", "feature", cwd=work)
+    git("commit", "--quiet", "-m", "squashed", cwd=work)
+    push_main(work)
+    assert landed_exit(work, delivered) == 1
+
+
+def test_merge_in_range_stays_red_though_every_patch_is_on_trunk(tmp_path):
+    work = make_repo_with_remote(tmp_path)
+    git("checkout", "--quiet", "-b", "feature", cwd=work)
+    a = commit_file(work, "a.txt", "a\n")
+    git("checkout", "--quiet", "-b", "side", "main", cwd=work)
+    b = commit_file(work, "b.txt", "b\n")
+    git("checkout", "--quiet", "feature", cwd=work)
+    git("merge", "--quiet", "--no-ff", "-m", "merge side", "side", cwd=work)
+    delivered = rev_parse(work)
+    git("checkout", "--quiet", "main", cwd=work)
+    git("cherry-pick", a, b, cwd=work)
+    push_main(work)
+    out = git("cherry", "main", delivered, cwd=work).stdout
+    assert "+" not in out
+    assert landed_exit(work, delivered) == 1
+
+
+def test_unmerged_delivery_stays_red_with_trunk_advanced(tmp_path):
+    work = make_repo_with_remote(tmp_path)
+    delivered = deliver_on_feature_then_advance_trunk(work)
+    assert landed_exit(work, delivered) == 1
+
+
+def test_local_target_has_delivery_but_remote_tracking_ref_lacks_it(tmp_path):
+    work = make_repo_with_remote(tmp_path)
+    delivered = deliver_on_feature_then_advance_trunk(work)
+    land_by_rebase(work, push=False)
+    assert landed_exit(work, delivered) == 1
 
 
 # --- minimal in-memory StateStore (avoids FileStateStore/tmp_path plumbing) --
