@@ -64,3 +64,13 @@ user's daily VPN traffic through a NAT table neither of us had read). The princi
 **Cost:** an inline exploration/monitoring stretch on opus costs ~5× the same work on sonnet and ~15–20× on haiku, and inflates the parent's retained context (cache read/write on every subsequent turn) — the dominant spend per [[token-economy-plan]]. See also [[log-reading-discipline]], [[large-tool-output-discipline]], [[spawning-specialists]].
 
 **Tracked, not just exhorted:** the metrics this leaf names (spawn model mix, inherit→opus rate, missed-delegation clusters of ≥8 consecutive mechanical main-thread calls) are now measured per session by `scripts/policy-scorecard.py` — see [[policy-effectiveness-tracking]] for the ledger, weekly nudge, and the Flags-fire → self-improvement loop that turns a regression in these numbers into an actual policy adjustment.
+
+## Root responsiveness
+
+*Difficulty removed:* a root that blocks itself in a long foreground call, or goes quiet while work is in flight, forfeits the controllability it exists to provide — the user cannot reach it and a stuck spawn is indistinguishable from slow progress.
+
+- **(i) Long calls go to the background.** A Bash call that needs an explicit timeout above `root-bash-call-max-min` (config.md) runs with `run_in_background`; the call's own need for a longer timeout is the signal. The harness kills a foreground call at its ceiling, so the bound must sit below it. Watch the result with the detached-poller + `ScheduleWakeup` pattern of [[long-job-monitoring]].
+- **(ii) No long silence while spawns are in flight.** While spawned specialists or jobs are in flight, the root reports to the user at least every `root-silent-max-min` (config.md): one line naming what is running and what it waits on. Silence longer than that is indistinguishable from a hang.
+- **(iii) Specialist work is a separate process.** Work that is specialist-shaped or a plan step runs through `claude -p` (`scripts/spawn-specialist.py`), not an in-process `Agent`: the spawn gets its own runaway budget ceiling, materialized grants and an engine-visible transcript, whereas an in-process `Agent` shares the parent's session and budget and escapes those controls. This does not touch the cheap-Agent row above: short retrieval and polling stay on Agent.
+
+See [[spawning-specialists]].
