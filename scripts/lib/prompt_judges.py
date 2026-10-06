@@ -132,17 +132,6 @@ def correction_verdict(stripped: str, *, runner, deadline: float | None) -> bool
     """The judge's verdict on an injection-stripped, prefilter-flagged prompt;
     None when no genuine verdict is available (no runner, budget spent, fail-open).
     Only genuine verdicts are cached, so an unanswered prompt is asked again later."""
-    cache = correction_cache()
-    cached = cache.get(stripped)
-    if cached is not None:
-        return cached
-    if not runner_active(runner):
-        return None
-    timeout = _call_timeout(deadline)
-    if timeout is None:
-        return None
-    verdict, reason = advisor.judge_feedback_signal(stripped, runner, timeout=timeout)
-    if reason:
-        return None
-    cache.put(verdict, stripped)
-    return verdict
+    return prompt_verdict(
+        stripped, judge=advisor.judge_feedback_signal, cache=correction_cache(),
+        runner=runner, deadline=deadline)

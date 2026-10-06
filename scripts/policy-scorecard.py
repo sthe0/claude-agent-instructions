@@ -487,6 +487,8 @@ def _scan_session(main_file: Path) -> dict | None:
     resolution_confirmed = resolution_unjudged = 0
     timestamps: list[dt.datetime] = []
     pending_askq: dict[str, dict] = {}  # tool_use id -> AskUserQuestion input, awaiting its answer
+    question_cache = _question_cache()
+    resolution_cache = _resolution_cache()
 
     for d in _iter_jsonl(main_file):
         ts = d.get("timestamp") or (d.get("message") or {}).get("ts")
@@ -586,7 +588,7 @@ def _scan_session(main_file: Path) -> dict | None:
                 if prompt_judges.question_prefilter(stripped):
                     verdict = prompt_judges.prompt_verdict(
                         stripped, judge=advisor.judge_user_question,
-                        cache=_question_cache(),
+                        cache=question_cache,
                         runner=_CORRECTION_JUDGE_RUNNER, deadline=_judge_deadline)
                     if verdict is None:
                         user_questions_unjudged += 1
@@ -595,7 +597,7 @@ def _scan_session(main_file: Path) -> dict | None:
                 if not resolution_confirmed and prompt_judges.resolution_prefilter(stripped):
                     verdict = prompt_judges.prompt_verdict(
                         stripped, judge=advisor.judge_resolution_confirmation,
-                        cache=_resolution_cache(),
+                        cache=resolution_cache,
                         runner=_CORRECTION_JUDGE_RUNNER, deadline=_judge_deadline)
                     if verdict is None:
                         resolution_unjudged += 1

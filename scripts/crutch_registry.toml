@@ -16,6 +16,8 @@
 # scripts/hook-deferring-disposition-gate.py (judge-guarded) | code   | semantic-guarded
 # scripts/hook-resolution-reminder.py (judge-guarded)        | code   | semantic-guarded
 # scripts/hook-*.py (other guardian hooks)                   | code   | structural
+# scripts/lib/prompt_judges.py (judge-guarded)               | code   | semantic-guarded
+# scripts/lib/semantic_join.py (judge-guarded)               | code   | semantic-guarded
 # scripts/lib/** (incl. term_ruleset.py, published_body.py)  | code   | structural
 # scripts/crutch-inventory.py (self)                         | code   | not-a-gate
 # scripts/gen_crutch_registry.py (self)                      | code   | not-a-gate
@@ -2072,25 +2074,25 @@ ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_r
 id = "5f918c26ca61952d"
 domain = "code"
 file = "scripts/lib/prompt_judges.py"
-class = "structural"
+class = "semantic-guarded"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "Whether a human prompt asks a question or confirms a resolution is free-text meaning, and this file never decides it with a pattern: `_QUESTION_NOMINATION` and `_RESOLUTION_NOMINATION` are high-recall PREFILTERS that only nominate a prompt, and every consumer takes the verdict from the advisor's `judge_user_question` / `judge_resolution_confirmation` (and `judge_feedback_signal` for corrections) through `prompt_verdict`. That path is fail-open: a failed or out-of-budget judge call yields no verdict, is never cached, and is counted as `unjudged` separately — the prefilter alone counts nothing. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and command syntax, misdescribes this file."
 
 [[entry]]
 id = "d1eab11c0898ede3"
 domain = "code"
 file = "scripts/lib/prompt_judges.py"
-class = "structural"
+class = "semantic-guarded"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "Whether a human prompt asks a question or confirms a resolution is free-text meaning, and this file never decides it with a pattern: `_QUESTION_NOMINATION` and `_RESOLUTION_NOMINATION` are high-recall PREFILTERS that only nominate a prompt, and every consumer takes the verdict from the advisor's `judge_user_question` / `judge_resolution_confirmation` (and `judge_feedback_signal` for corrections) through `prompt_verdict`. That path is fail-open: a failed or out-of-budget judge call yields no verdict, is never cached, and is counted as `unjudged` separately — the prefilter alone counts nothing. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and command syntax, misdescribes this file."
 
 [[entry]]
 id = "c6d551f0b78b2863"
 domain = "code"
 file = "scripts/lib/prompt_judges.py"
-class = "structural"
+class = "semantic-guarded"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "Whether a human prompt asks a question or confirms a resolution is free-text meaning, and this file never decides it with a pattern: `_QUESTION_NOMINATION` and `_RESOLUTION_NOMINATION` are high-recall PREFILTERS that only nominate a prompt, and every consumer takes the verdict from the advisor's `judge_user_question` / `judge_resolution_confirmation` (and `judge_feedback_signal` for corrections) through `prompt_verdict`. That path is fail-open: a failed or out-of-budget judge call yields no verdict, is never cached, and is counted as `unjudged` separately — the prefilter alone counts nothing. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and command syntax, misdescribes this file."
 
 [[entry]]
 id = "7ec54b573414af80"
@@ -2160,9 +2162,9 @@ ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_r
 id = "464715fd8ffd4a9c"
 domain = "code"
 file = "scripts/lib/semantic_join.py"
-class = "structural"
+class = "semantic-guarded"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "The shared 'are these two texts the same thing' primitive. Its only lexical matching (`tokenize`'s word split, `nominate`'s BM25F ranking) picks CANDIDATE pairs; every join, match and cluster membership is a genuine judge verdict (`_decide_pair`, requiring a confirming second ask for a YES), fail-open answers are never cached, and pairs left undecided are counted as unjudged instead of joined. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and command syntax, misdescribes this file."
 
 [[entry]]
 id = "a5b6daa3bdedad0c"
@@ -12784,9 +12786,9 @@ ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_r
 id = "d7c90058638379bf"
 domain = "code_file_rollup"
 file = "scripts/lib/prompt_judges.py"
-class = "structural"
+class = "semantic-guarded"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow. (file-level rollup of the file's scopes.)"
+ground = "Whether a human prompt asks a question or confirms a resolution is free-text meaning, and this file never decides it with a pattern: `_QUESTION_NOMINATION` and `_RESOLUTION_NOMINATION` are high-recall PREFILTERS that only nominate a prompt, and every consumer takes the verdict from the advisor's `judge_user_question` / `judge_resolution_confirmation` (and `judge_feedback_signal` for corrections) through `prompt_verdict`. That path is fail-open: a failed or out-of-budget judge call yields no verdict, is never cached, and is counted as `unjudged` separately — the prefilter alone counts nothing. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and command syntax, misdescribes this file. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "1b33b7d8afa707ab"
@@ -12800,9 +12802,9 @@ ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_r
 id = "eaf4a7a8c0c520e3"
 domain = "code_file_rollup"
 file = "scripts/lib/semantic_join.py"
-class = "structural"
+class = "semantic-guarded"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow. (file-level rollup of the file's scopes.)"
+ground = "The shared 'are these two texts the same thing' primitive. Its only lexical matching (`tokenize`'s word split, `nominate`'s BM25F ranking) picks CANDIDATE pairs; every join, match and cluster membership is a genuine judge verdict (`_decide_pair`, requiring a confirming second ask for a YES), fail-open answers are never cached, and pairs left undecided are counted as unjudged instead of joined. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and command syntax, misdescribes this file. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "8ae0d0962c4ae1a7"

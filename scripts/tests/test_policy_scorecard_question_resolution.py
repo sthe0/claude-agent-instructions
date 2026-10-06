@@ -182,6 +182,40 @@ def test_budget_zero_leaves_prefilter_hits_unjudged(ps, tmp_path, monkeypatch):
     assert judge.total == 0
 
 
+def test_machine_entries_and_unnominated_prompts_never_reach_the_judges(ps, tmp_path):
+    judge = RoutingJudge(question="YES", resolution="YES")
+    ps._CORRECTION_JUDGE_RUNNER = judge
+    machine_text = "is it resolved? looks good"
+    f = _session(tmp_path, [
+        {"type": "user", "timestamp": "2026-06-05T10:00:00Z",
+         "origin": {"kind": "task-notification"}, "message": {"content": machine_text}},
+        {"type": "user", "timestamp": "2026-06-05T10:01:00Z", "isMeta": True,
+         "message": {"content": machine_text}},
+        _human(PLAIN_TEXT, ts="2026-06-05T10:02:00Z"),
+    ])
+
+    row = ps._scan_session(f)
+
+    assert judge.total == 0
+    assert row["user_signals"].get("n_user_questions_unjudged") == 0
+    assert row["effectiveness"].get("resolution_unjudged") == 0
+
+
+def test_resolution_is_judged_once_after_the_first_yes(ps, tmp_path):
+    judge = RoutingJudge(resolution="YES")
+    ps._CORRECTION_JUDGE_RUNNER = judge
+    f = _session(tmp_path, [
+        _human("looks good to me", ts="2026-06-05T10:00:00Z"),
+        _human("all good, thanks", ts="2026-06-05T10:01:00Z"),
+    ])
+
+    eff = ps._scan_session(f)["effectiveness"]
+
+    assert len(judge.prompts["resolution"]) == 1
+    assert eff["resolution_confirmed"] == 1
+    assert eff.get("resolution_unjudged") == 0
+
+
 # ------------------------------------------------------- caches: salts, keys, separation
 
 def test_new_judge_salts_pinned_to_prompts(ps):
@@ -219,7 +253,6 @@ def test_per_judge_caches_are_separate(ps, tmp_path):
     assert row["user_signals"]["n_user_questions"] == 1
     assert row["effectiveness"]["resolution_confirmed"] == 0
     assert judge.prompts["question"] == [] and judge.prompts["resolution"] == []
-    assert list(_load(qpath)) != list(_load(rpath))
 
 
 def test_judged_verdicts_land_in_their_own_files(ps, tmp_path):

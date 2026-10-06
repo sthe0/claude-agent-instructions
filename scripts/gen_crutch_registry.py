@@ -200,6 +200,36 @@ CODE_PARTITIONS = [
         "content.",
     ),
     (
+        "scripts/lib/prompt_judges.py (judge-guarded)",
+        lambda f: f == "scripts/lib/prompt_judges.py",
+        "semantic-guarded",
+        "keep",
+        "Whether a human prompt asks a question or confirms a resolution is free-text "
+        "meaning, and this file never decides it with a pattern: `_QUESTION_NOMINATION` "
+        "and `_RESOLUTION_NOMINATION` are high-recall PREFILTERS that only nominate a "
+        "prompt, and every consumer takes the verdict from the advisor's "
+        "`judge_user_question` / `judge_resolution_confirmation` (and "
+        "`judge_feedback_signal` for corrections) through `prompt_verdict`. That path is "
+        "fail-open: a failed or out-of-budget judge call yields no verdict, is never "
+        "cached, and is counted as `unjudged` separately — the prefilter alone counts "
+        "nothing. So the `scripts/lib/**` row below, which grounds its structural "
+        "verdict on literal denylists and command syntax, misdescribes this file.",
+    ),
+    (
+        "scripts/lib/semantic_join.py (judge-guarded)",
+        lambda f: f == "scripts/lib/semantic_join.py",
+        "semantic-guarded",
+        "keep",
+        "The shared 'are these two texts the same thing' primitive. Its only lexical "
+        "matching (`tokenize`'s word split, `nominate`'s BM25F ranking) picks CANDIDATE "
+        "pairs; every join, match and cluster membership is a genuine judge verdict "
+        "(`_decide_pair`, requiring a confirming second ask for a YES), fail-open "
+        "answers are never cached, and pairs left undecided are counted as unjudged "
+        "instead of joined. So the `scripts/lib/**` row below, which grounds its "
+        "structural verdict on literal denylists and command syntax, misdescribes this "
+        "file.",
+    ),
+    (
         "scripts/lib/** (incl. term_ruleset.py, published_body.py)",
         lambda f: f.startswith("scripts/lib/"),
         "structural",
