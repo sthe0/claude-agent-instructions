@@ -82,12 +82,10 @@ import datetime as dt
 import importlib.util
 import json
 import math
-import os
 import re
 import shutil
 import subprocess
 import sys
-import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import NamedTuple
@@ -182,11 +180,6 @@ _judge_deadline: float | None = None
 
 def _judge_active() -> bool:
     return prompt_judges.runner_active(_CORRECTION_JUDGE_RUNNER)
-
-
-def _is_human_entry(entry: dict) -> bool:
-    origin = entry.get("origin")
-    return isinstance(origin, dict) and origin.get("kind") == "human"
 
 
 # Non-clean sub-agent return markers seen in a tool_result.
@@ -569,7 +562,7 @@ def _scan_session(main_file: Path) -> dict | None:
                 continue
             if INTERRUPT_SENTINEL in text:
                 interrupts += 1
-            elif _is_human_entry(d):
+            elif prompt_judges.is_human_entry(d):
                 prompts += 1
                 stripped = strip_injected_context(text)
                 if find_signals(stripped):

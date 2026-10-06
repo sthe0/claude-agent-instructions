@@ -42,6 +42,11 @@ def judge_budget_s() -> float:
         return JUDGE_BUDGET_DEFAULT_S
 
 
+def is_human_entry(entry: dict) -> bool:
+    origin = entry.get("origin")
+    return isinstance(origin, dict) and origin.get("kind") == "human"
+
+
 def runner_active(runner) -> bool:
     return runner is not None and os.environ.get(JUDGE_KILLSWITCH_ENV) != "0"
 

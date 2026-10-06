@@ -227,11 +227,6 @@ def _msg_text(content) -> str:
     return ""
 
 
-def _is_human_entry(entry: dict) -> bool:
-    origin = entry.get("origin")
-    return isinstance(origin, dict) and origin.get("kind") == "human"
-
-
 def _is_tool_result(content) -> bool:
     return isinstance(content, list) and any(
         isinstance(c, dict) and c.get("type") == "tool_result" for c in content
@@ -280,7 +275,7 @@ def parse_transcripts(files: list[Path], classify: bool = False) -> dict:
                     interrupts += 1
                 else:
                     user_prompts += 1
-                    if classify and _is_human_entry(d):
+                    if classify and prompt_judges.is_human_entry(d):
                         human_prompts += 1
                         stripped = strip_injected_context(text)
                         if find_signals(stripped):
