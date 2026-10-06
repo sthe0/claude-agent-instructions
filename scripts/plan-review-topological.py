@@ -467,6 +467,7 @@ class Driver:
 
     def run_level(self, rows: list[dict]) -> None:
         batch: list[dict] = []
+        review_unready = not self.args.early_stop
         for row in rows:
             pair = row["pair"]
             if self.named is not None and pair not in self.named:
@@ -475,7 +476,7 @@ class Driver:
                 continue
             if row["status"] in SATISFIED:
                 emit(f"TOPO-CURRENT: pair={pair}")
-            elif row["ready"] or self.named is not None and pair in self.named or not self.args.early_stop:
+            elif review_unready or row["ready"] or self.named is not None:
                 batch.append(row)
             else:
                 emit(f"TOPO-WAITING: pair={pair} waiting={','.join(row['waiting'])}")
@@ -596,9 +597,10 @@ def build_parser() -> argparse.ArgumentParser:
     selector.add_argument("--model", default=None, help="explicit reviewer model alias")
     p.add_argument("--dry-run", action="store_true",
                    help="list per-level commands and each pair's prompt size; spawn nothing")
-    p.add_argument("--early-stop", action="store_true",
-                   help="stop after a level containing a revise or a refusal (default: review every open pair)")
-    p.add_argument("--no-early-stop", action="store_true",
+    stop = p.add_mutually_exclusive_group()
+    stop.add_argument("--early-stop", action="store_true",
+                      help="stop after a level containing a revise or a refusal (default: review every open pair)")
+    stop.add_argument("--no-early-stop", action="store_true",
                    help="accepted no-op alias: reviewing every open pair is the default")
     p.add_argument("--parallel", type=int, default=None,
                    help="concurrent spawns within one level (default: the level's batch width, "

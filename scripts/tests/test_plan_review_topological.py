@@ -271,6 +271,23 @@ def test_td2_levels_run_in_walk_order_and_the_walk_is_reread_per_level(real):
         assert any(e == ("walk",) for e in rig.events[last_record:first_spawn]), depth
 
 
+def test_td2_parallel_one_keeps_exact_walk_order(real):
+    env, rig = real
+    first = rig.engine.run(["plan-review-walk", "--session", SID, "--target", str(env.plan),
+                            "--format", "json"], {})
+    levels = [[row["pair"] for row in level] for level in first["data"]["levels"]]
+    rig.events.clear()
+    rc, out = rig.run("--parallel", "1")
+    assert rc == 0 and "COMPOSE: pass" in out
+    assert rig.spawned() == [p for level in levels for p in level]
+
+
+def test_early_stop_flags_exclusive(drv):
+    with pytest.raises(SystemExit) as exc:
+        drv.main(["--session", SID, "--plan", "x", "--early-stop", "--no-early-stop"])
+    assert exc.value.code == 2
+
+
 def test_td2_parallel_never_starts_a_level_before_the_previous_one_returned(make_rig):
     engine = FakeEngine([["a", "b"], ["c", "d"]])
     rig = make_rig(engine)
