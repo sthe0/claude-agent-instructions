@@ -1035,15 +1035,15 @@ def diff_backlog(
 def rescore_candidates(
     records: "list[DifficultyRecord]", prior: PriorBoard
 ) -> "list[tuple[str, DifficultyRecord]]":
-    """Unchanged prior items parked as no-urgency-signal whose live record now carries an
-    explicit severity label — offered for classification again instead of carried verbatim."""
+    """Unchanged prior items parked as no-urgency-signal or unjudged whose live record now
+    carries an explicit severity label — offered for classification again instead of carried verbatim."""
     out = []
     for record in records:
         ref = _item_ref(record)
         item = prior.items.get(ref)
         if (
             item is not None
-            and item.classification == "no-urgency-signal"
+            and item.classification in ("no-urgency-signal", "unjudged")
             and record.severity_labeled
             and prior.is_unchanged(ref, _backlog_text(record), "open")
         ):

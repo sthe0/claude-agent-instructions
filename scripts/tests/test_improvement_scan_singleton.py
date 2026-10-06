@@ -124,6 +124,15 @@ def test_prior_unscored_labeled_item_is_rescored():
     assert wl["items"][0]["severity_labeled"] is True
 
 
+
+def test_prior_unjudged_item_is_rescored_once_labeled():
+    rec = _rec("ref-j", True)
+    prior = scan.PriorBoard(
+        schema=scan.BOARD_SCHEMA, generated_at="x",
+        items={"ref-j": _prior_item(rec, classification="unjudged")},
+    )
+    assert [ref for ref, _r in scan.rescore_candidates([rec], prior)] == ["ref-j"]
+
 def test_worklist_items_carry_severity_labeled():
     wl = scan.build_worklist([("ref-n", _rec("ref-n", True))], [], [], [])
     assert wl["items"][0]["severity_labeled"] is True
