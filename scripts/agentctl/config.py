@@ -90,6 +90,10 @@ class Thresholds:
         trigger fires regardless of the multiple."""
         return self._int("effort-replan-absolute")
 
+    def review_parallel_max(self) -> int:
+        """Cap on concurrent pair-reviewer spawns within one topological level."""
+        return self._int("review-parallel-max")
+
     def effort_absolute_interactions(self) -> int:
         """Absolute threshold on user-interaction count for the interactions scale;
         `0` means the scale is accounting-only / disabled (see config.md row for

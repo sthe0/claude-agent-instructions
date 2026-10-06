@@ -13,7 +13,7 @@ only text it parses is the fixed protocol tokens of a pair review. Cost, duratio
 pull counts are printed as telemetry; nothing is gated on them.
 
   plan-review-topological.py --session <sid> --plan <plan.toml>
-      [--complexity low|medium|high | --model <m>] [--dry-run] [--no-early-stop]
+      [--complexity low|medium|high | --model <m>] [--dry-run] [--early-stop]
       [--parallel <k>] [--pairs <p,...>] [--ledger <path>]
 
 Output lines: TOPO-PAIR, TOPO-REFUSED, TOPO-CURRENT, TOPO-WAITING, TOPO-DRY,
@@ -40,6 +40,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from agentctl import plan  # noqa: E402 - protocol tokens are read as plan.X at call time
+from agentctl.config import Thresholds, parse_config_md  # noqa: E402
 from agentctl.render import topo_pair_view_dirname  # noqa: E402
 from lib import planner_plan_check  # noqa: E402
 from lib.config_root import agentctl_topo_units_dir  # noqa: E402
@@ -391,6 +392,18 @@ def pair_telemetry(launched: Launched, pair: str) -> tuple["float | None", "int 
 # --- the walk ------------------------------------------------------------------
 
 
+def resolve_parallel(requested: "int | None", batch_width: int) -> int:
+    """Workers for one level: an explicit request wins, else the level's batch width
+    capped by config.md `review-parallel-max` (missing or unparsable -> sequential)."""
+    if requested is not None:
+        return requested
+    try:
+        cap = Thresholds(parse_config_md()).review_parallel_max()
+    except (KeyError, ValueError, OSError):
+        return 1
+    return max(1, min(batch_width, cap))
+
+
 class Driver:
     def __init__(self, args, plan_path: str, env: dict):
         self.args = args
@@ -462,15 +475,16 @@ class Driver:
                 continue
             if row["status"] in SATISFIED:
                 emit(f"TOPO-CURRENT: pair={pair}")
-            elif row["ready"] or self.named is not None and pair in self.named or self.args.no_early_stop:
+            elif row["ready"] or self.named is not None and pair in self.named or not self.args.early_stop:
                 batch.append(row)
             else:
                 emit(f"TOPO-WAITING: pair={pair} waiting={','.join(row['waiting'])}")
-        if self.args.parallel <= 1:
+        width = resolve_parallel(self.args.parallel, len(batch))
+        if width <= 1:
             for row in batch:
                 self.settle(row["pair"], self.launch(row["pair"]))
             return
-        with ThreadPoolExecutor(max_workers=self.args.parallel) as pool:
+        with ThreadPoolExecutor(max_workers=width) as pool:
             launched = list(pool.map(lambda row: self.launch(row["pair"]), batch))
         for row, outcome in zip(batch, launched):
             self.settle(row["pair"], outcome)
@@ -539,7 +553,7 @@ class Driver:
                     walk = self.read_walk()
                 self.level_revise = self.level_refused = False
                 self.run_level(walk["levels"][depth] if depth < len(walk["levels"]) else [])
-                if (self.level_revise or self.level_refused) and not self.args.no_early_stop:
+                if (self.level_revise or self.level_refused) and self.args.early_stop:
                     stopped_by_refusal = self.level_refused
                     break
             composed = self.finish(stopped_by_refusal)
@@ -582,10 +596,13 @@ def build_parser() -> argparse.ArgumentParser:
     selector.add_argument("--model", default=None, help="explicit reviewer model alias")
     p.add_argument("--dry-run", action="store_true",
                    help="list per-level commands and each pair's prompt size; spawn nothing")
+    p.add_argument("--early-stop", action="store_true",
+                   help="stop after a level containing a revise or a refusal (default: review every open pair)")
     p.add_argument("--no-early-stop", action="store_true",
-                   help="review every pair even after a revise or a refusal (measurement runs)")
-    p.add_argument("--parallel", type=int, default=1,
-                   help="concurrent spawns within one level (default 1: sequential)")
+                   help="accepted no-op alias: reviewing every open pair is the default")
+    p.add_argument("--parallel", type=int, default=None,
+                   help="concurrent spawns within one level (default: the level's batch width, "
+                        "capped by review-parallel-max; 1 is sequential)")
     p.add_argument("--pairs", default=None, help="comma list of pair ids to review, in walk order")
     p.add_argument("--ledger", default=None,
                    help="condition-4 gap ledger path (sets AGENTCTL_ESCALATION_LEDGER)")
@@ -595,7 +612,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: "list[str] | None" = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.parallel < 1:
+    if args.parallel is not None and args.parallel < 1:
         parser.error("--parallel must be at least 1")
     plan_path = Path(args.plan).resolve()
     if not plan_path.is_file():

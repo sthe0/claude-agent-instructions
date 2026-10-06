@@ -280,17 +280,94 @@ def test_td2_parallel_never_starts_a_level_before_the_previous_one_returned(make
     assert [e[1] for e in ev if e[0] == "record"] == ["a", "b", "c", "d"]
 
 
+def max_concurrency(events) -> int:
+    running = peak = 0
+    for kind, *_ in events:
+        if kind == "spawn-start":
+            running += 1
+            peak = max(peak, running)
+        elif kind == "spawn-end":
+            running -= 1
+    return peak
+
+
+def run_level_with_cap(make_rig, monkeypatch, drv, cap, pairs, *extra):
+    constants = {} if cap is None else {"review-parallel-max": str(cap)}
+    monkeypatch.setattr(drv, "parse_config_md", lambda: constants, raising=False)
+    rig = make_rig(FakeEngine([list(pairs)]))
+    rig.specs = {p: {"delay": 0.05} for p in pairs}
+    rc, _ = rig.run(*extra)
+    assert rc == 0
+    return rig
+
+
+def test_default_parallel_level_width(make_rig, drv, monkeypatch):
+    rig = run_level_with_cap(make_rig, monkeypatch, drv, 6, "abc")
+    assert max_concurrency(rig.events) == 3
+
+
+def test_default_parallel_cap_binds(make_rig, drv, monkeypatch):
+    rig = run_level_with_cap(make_rig, monkeypatch, drv, 2, "abcd")
+    assert max_concurrency(rig.events) == 2
+
+
+def test_default_parallel_explicit_override(make_rig, drv, monkeypatch):
+    rig = run_level_with_cap(make_rig, monkeypatch, drv, 3, "abc")
+    assert max_concurrency(rig.events) == 3
+    rig = run_level_with_cap(make_rig, monkeypatch, drv, 3, "abc", "--parallel", "2")
+    assert max_concurrency(rig.events) == 2
+    rig = run_level_with_cap(make_rig, monkeypatch, drv, 3, "abc", "--parallel", "1")
+    assert max_concurrency(rig.events) == 1
+
+
+def test_default_parallel_missing_key(make_rig, drv, monkeypatch):
+    rig = run_level_with_cap(make_rig, monkeypatch, drv, 3, "ab")
+    assert max_concurrency(rig.events) == 2
+    rig = run_level_with_cap(make_rig, monkeypatch, drv, None, "ab")
+    assert max_concurrency(rig.events) == 1
+
+
+def test_default_parallel_same_level(make_rig, drv, monkeypatch):
+    def recorded(extra):
+        monkeypatch.setattr(drv, "parse_config_md", lambda: {"review-parallel-max": "4"}, raising=False)
+        rig = make_rig(FakeEngine([["a", "b", "c"]]))
+        rig.specs = {"a": {"delay": 0.05}, "b": {"delay": 0.05, "verdict": "revise"}, "c": {"delay": 0.05}}
+        rig.run(*extra)
+        return rig, [(argv[argv.index("--scope") + 1], argv[argv.index("--verdict") + 1])
+                     for argv in rig.engine.verbs("plan-review")], dict(rig.engine.status)
+
+    default_rig, default_records, default_status = recorded([])
+    assert max_concurrency(default_rig.events) == 3
+    sequential_rig, sequential_records, sequential_status = recorded(["--parallel", "1"])
+    assert max_concurrency(sequential_rig.events) == 1
+    assert default_records == sequential_records
+    assert default_status == sequential_status == {"a": "current", "b": "revise", "c": "current"}
+
+
+def test_default_continue_past_revise(make_rig):
+    rig = make_rig(FakeEngine([["a"], ["b"]]))
+    rig.specs = {"a": {"verdict": "revise"}}
+    rc, out = rig.run()
+    assert rig.spawned() == ["a", "b"] and not any(ln.startswith("TOPO-WAITING") for ln in out)
+    assert rc == 1
+
+    rig = make_rig(FakeEngine([["a"], ["b"]], prereqs={"b": ["a"]}))
+    rig.specs = {"a": {"verdict": "revise"}}
+    rc, out = rig.run()
+    assert rig.spawned() == ["a", "b"] and not any(ln.startswith("TOPO-WAITING") for ln in out)
+
+
 def test_td3_early_stop_waiting_and_never_a_second_spawn(make_rig):
     engine = FakeEngine([["a", "c"], ["b"]])
     rig = make_rig(engine)
     rig.specs = {"a": {"verdict": "revise"}}
-    rc, out = rig.run()
+    rc, out = rig.run("--early-stop")
     assert rc == 1 and rig.spawned() == ["a", "c"]
     assert "COMPOSE: blocked b,a" in out or "COMPOSE: blocked a,b" in out
 
     engine = FakeEngine([["a"], ["b"]], prereqs={"b": ["x"]}, status={"x": "revise"})
     rig = make_rig(engine)
-    rc, out = rig.run()
+    rc, out = rig.run("--early-stop")
     assert "TOPO-WAITING: pair=b waiting=x" in out and rig.spawned() == ["a"]
     assert rc == 1
 
@@ -657,13 +734,13 @@ def test_td15_exit_codes(make_rig):
 
     rig = make_rig(FakeEngine([["a"], ["b"]]))
     rig.specs = {"a": {"verdict": "revise"}}
-    rc, out = rig.run()
+    rc, out = rig.run("--early-stop")
     assert rc == 1 and rig.spawned() == ["a"]
     assert any(ln.startswith("COMPOSE: blocked") for ln in out)
 
     rig = make_rig(FakeEngine([["a"], ["b"]]))
     rig.specs = {"a": {"stdout": "prose only\n"}}
-    rc, out = rig.run()
+    rc, out = rig.run("--early-stop")
     assert rc == 2 and rig.spawned() == ["a"]
     assert not any(ln.startswith("COMPOSE") for ln in out)
     assert rig.engine.verbs("plan-review-compose") == []
@@ -681,14 +758,14 @@ def test_td15_a_refusal_and_a_revise_in_one_run_exit_2(make_rig):
     for no_early_stop in (False, True):
         rig = make_rig(FakeEngine([["a", "b"], ["c"]]))
         rig.specs = {"a": {"stdout": "prose only\n"}, "b": {"verdict": "revise"}}
-        rc, out = rig.run(*(["--no-early-stop"] if no_early_stop else []))
+        rc, out = rig.run(*([] if no_early_stop else ["--early-stop"]))
         assert rc == 2
         compose_calls = len(rig.engine.verbs("plan-review-compose"))
         if no_early_stop:
-            assert compose_calls == 1 and rig.spawned() == ["a", "b", "c"]
+            assert compose_calls == 1 and sorted(rig.spawned()) == ["a", "b", "c"]
             assert any(ln.startswith("COMPOSE: blocked") for ln in out)
         else:
-            assert compose_calls == 0 and rig.spawned() == ["a", "b"]
+            assert compose_calls == 0 and sorted(rig.spawned()) == ["a", "b"]
 
 
 def test_td16_the_parse_reads_protocol_tokens_from_the_plan_module_at_call_time(drv, monkeypatch):
@@ -744,7 +821,7 @@ def test_td17_a_refused_pair_stops_the_run_after_its_level_unless_told_otherwise
     for no_early_stop, expected in ((False, ["a"]), (True, ["a", "b"])):
         rig = make_rig(FakeEngine([["a"], ["b"]]))
         rig.specs = {"a": {"stdout": "prose only\n"}}
-        rc, out = rig.run(*(["--no-early-stop"] if no_early_stop else []))
+        rc, out = rig.run(*([] if no_early_stop else ["--early-stop"]))
         assert rig.spawned() == expected and rc == 2
 
 
