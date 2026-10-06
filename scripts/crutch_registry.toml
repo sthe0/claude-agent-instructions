@@ -26348,6 +26348,14 @@ disposition = "keep"
 ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
 
 [[entry]]
+id = "b4db237d435b7c27"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/MEMORY.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
 id = "ea4b3962b3a24b08"
 domain = "prose"
 file = "memory-global/leaves/system-knowledge/agentctl-acceptance-judge-gate.md"
@@ -26495,6 +26503,54 @@ ground = "System-knowledge leaves document durable FACTS about how an external s
 id = "b75e6429458a54b8"
 domain = "prose"
 file = "memory-global/leaves/system-knowledge/agentctl-ledger-gate-statement-text.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "b7d3afef352f991a"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/agentctl-plan-review-coverage-checks-whole-record-first.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "ed55a26c9a4cd671"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/agentctl-plan-review-coverage-checks-whole-record-first.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "6e617650d6f70a59"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/agentctl-plan-review-coverage-checks-whole-record-first.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "16573f681668340b"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/agentctl-plan-review-coverage-checks-whole-record-first.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "40be549b681eaaad"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/agentctl-plan-review-coverage-checks-whole-record-first.md"
+class = "not-normative"
+disposition = "keep"
+ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
+
+[[entry]]
+id = "60dba7af1fd08a6c"
+domain = "prose"
+file = "memory-global/leaves/system-knowledge/agentctl-plan-review-coverage-checks-whole-record-first.md"
 class = "not-normative"
 disposition = "keep"
 ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
