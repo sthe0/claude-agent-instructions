@@ -431,19 +431,22 @@ def test_report_prints_unjudged_counts(ps, tmp_path, monkeypatch):
 
 # ------------------------------------------------------------------------- upsert
 
-@pytest.mark.parametrize("field,section", [("n_user_questions_unjudged", "user_signals"),
-                                           ("resolution_unjudged", "effectiveness")])
 def test_row_with_question_or_resolution_unjudged_rescanned_while_judge_active(
-        ps, tmp_path, monkeypatch, field, section):
+        ps, tmp_path, monkeypatch):
     f = _session(tmp_path, [_human(PLAIN_TEXT)])
-    existing = ps._scan_session(f)
-    existing[section][field] = 1
+    observed = {}
+    for field, section in (("n_user_questions_unjudged", "user_signals"),
+                           ("resolution_unjudged", "effectiveness")):
+        existing = ps._scan_session(f)
+        existing[section][field] = 1
 
-    _, scanned_without_judge, _ = _upsert_with(ps, monkeypatch, f, existing)
-    ps._CORRECTION_JUDGE_RUNNER = RoutingJudge()
-    _, scanned_with_judge, _ = _upsert_with(ps, monkeypatch, f, existing)
+        ps._CORRECTION_JUDGE_RUNNER = None
+        _, scanned_without_judge, _ = _upsert_with(ps, monkeypatch, f, existing)
+        ps._CORRECTION_JUDGE_RUNNER = RoutingJudge()
+        _, scanned_with_judge, _ = _upsert_with(ps, monkeypatch, f, existing)
+        observed[field] = (scanned_without_judge, scanned_with_judge)
 
-    assert (scanned_without_judge, scanned_with_judge) == (0, 1)
+    assert observed == {"n_user_questions_unjudged": (0, 1), "resolution_unjudged": (0, 1)}
 
 
 def test_scan_version_three_rescans_old_rows(ps, tmp_path, monkeypatch):
