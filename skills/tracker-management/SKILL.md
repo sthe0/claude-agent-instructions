@@ -82,7 +82,7 @@ In priority order:
 1. **MCP tracker tools** (MCP-first) for every operation the server supports — e.g. `mcp__tracker__GetIssue`, `mcp__tracker__*`. Reads always; writes only when the server is write-capable (the server is often **read-only**, which is not a write path — then fall to 2).
 2. **A local / project-wired tracker skill** — a CLI-backed skill (in the session skill list, or symlinked under `<project_cwd>/.claude/skills/`) that can read *and write* and carries its own write-scoped auth (token auto-fetch, kerberos). **The write path when MCP is read-only.** Enumerate with `ls <project_cwd>/.claude/skills/` and scan the session skill list; do not assume your shell `$*_TOKEN` env vars have write scope.
 3. **Project-specific CLI / scripts** documented in `<project_cwd>/.claude/agent-memory/` runbooks (a "Tooling" / "Write operations" section in the tracker leaf).
-4. **Direct API call** via `Bash` + `curl` only after 1–3 are exhausted. A 401/403 on write is a credential-scope problem — re-check 1–2 for a CLI with proper auth before escalating.
+4. **Direct API call** via `Bash` + `curl` only after 1–3 are exhausted. A 401/403 on write is a credential-scope problem — re-check 2 for a CLI with proper auth before escalating.
 5. **Ask the user to post on your behalf** only as a last resort — provide the exact text to paste.
 
 ## Loading ticket context

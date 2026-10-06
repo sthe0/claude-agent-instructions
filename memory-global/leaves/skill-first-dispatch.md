@@ -12,13 +12,13 @@ last_verified: 2026-06-04
 
 **Inline Skill is the default for specialists** when the work fits the in-context carve-out (CLAUDE.md § Classify task weight); spawn only when it does not.
 
-**Also applies to Python API calls via Bash** (`python3 -c "from <system>.api import ..."` / `python3 -c "from <system>.async_api import ..."`). Same rule: scan the skill list for a `<system>` namespace before composing raw Python — a recurring miss pattern is grinding through several iterations of a raw client library before noticing a packaged skill covers the same calls with documentation, or falling back to a raw client for a case the packaged skill's flow genuinely doesn't cover (e.g. a client method that can't return a needed error detail) — that fallback is a correct one, not a violation of this rule. A concrete worked incident (which workflow, which client, which log-retrieval gap) is environment-specific and lives in project memory, not here.
+**Also applies to Python API calls via Bash** (`python3 -c "from <system>.api import ..."` / `python3 -c "from <system>.async_api import ..."`). Same rule: scan the loaded MCP tools, then the skill list, for a `<system>` namespace before composing raw Python — a recurring miss pattern is grinding through several iterations of a raw client library before noticing a packaged skill covers the same calls with documentation, or falling back to a raw client for a case the packaged skill's flow genuinely doesn't cover (e.g. a client method that can't return a needed error detail) — that fallback is a correct one, not a violation of this rule. A concrete worked incident (which workflow, which client, which log-retrieval gap) is environment-specific and lives in project memory, not here.
 
 **Why:** An audit of a batch of recent transcripts in one deployment found heavy Bash usage and near-zero `Agent`-tool usage despite a large library of available skills, with only a handful of unique skills ever invoked. Hand-rolled VCS commands, secrets-vault commands, tracker REST calls, and manual PR creation all had matching skills in the system-reminder list that were never opened. The skill descriptions are there at session start, but **passive listing is not a trigger** — without active scanning the default is whatever Bash command comes to mind first.
 
 **How to apply:**
 
-When you're about to issue Bash for any of these *classes* of operation, **pause and check the skill list** for a match before composing the command:
+When you're about to issue Bash for any of these *classes* of operation, **pause and check the loaded MCP tools, then the skill list** for a match before composing the command:
 
 | Operation class | Look for skills like |
 |---|---|
