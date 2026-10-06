@@ -47,11 +47,9 @@ _rec = importlib.util.module_from_spec(_REC_SPEC)
 _REC_SPEC.loader.exec_module(_rec)
 FRONTMATTER = _rec.FRONTMATTER
 section_span = _rec.section_span
-_similarity = _rec._similarity
-cluster_by_ground = _rec.cluster_by_ground
 read_threshold = _rec.read_threshold
 experience_dir = _rec.experience_dir
-JOIN_RATIO = _rec.JOIN_RATIO
+semantic_join = _rec.semantic_join
 DEFAULT_PRINCIPLE_PROMOTION_THRESHOLD = _rec.DEFAULT_PRINCIPLE_PROMOTION_THRESHOLD
 
 
@@ -104,26 +102,37 @@ class PrincipleHits:
         return len(self.refutations)
 
 
+class ConditionAHits(list):
+    """Per-principle hit tallies that also carry ``unjudged_pairs``: nominated
+    (leaf, principle) pairs the judge could not decide, which therefore counted as no hit."""
+
+    unjudged_pairs: int = 0
+
+
 def measure_condition_a(
-    experience: list[Leaf], principles: list[Leaf], threshold: int,
-    join_ratio: float = JOIN_RATIO,
-) -> list[PrincipleHits]:
-    """For every tier-1 experience leaf, find the best-matching promoted principle (overlap
-    ≥ join_ratio) and record it as a re-refutation. Returns per-principle hit tallies, heaviest
-    first. A principle with ≥ threshold re-refutations is the (A) firing condition."""
+    experience: list[Leaf], principles: list[Leaf], threshold: int, budget=None,
+) -> ConditionAHits:
+    """For every tier-1 experience leaf, ask the judge about its nominated promoted principles
+    and record a re-refutation of the first one judged the same difficulty. Returns
+    per-principle hit tallies, heaviest first. A principle with ≥ threshold re-refutations is
+    the (A) firing condition."""
     hits: dict[str, PrincipleHits] = {p.name: PrincipleHits(principle=p.name) for p in principles}
+    cache = semantic_join.same_difficulty_cache()
+    budget = budget if budget is not None else semantic_join.env_budget()
+    unjudged_pairs = 0
     for leaf in experience:
         if leaf.tier < 1:
             continue  # only tier-1 difficulties are σ-fuel
-        best_name, best_sim = None, 0.0
-        for p in principles:
-            sim = _similarity(p.ground, leaf.ground)
-            if sim > best_sim:
-                best_name, best_sim = p.name, sim
-        if best_name is not None and best_sim >= join_ratio:
-            hits[best_name].refutations.append(leaf.name)
-    tallied = [h for h in hits.values() if h.count > 0]
+        result = semantic_join.judged_match(
+            leaf.ground, principles, lambda p: p.ground,
+            cache=cache, budget=budget, k=semantic_join.K_CLUSTER,
+        )
+        unjudged_pairs += result.stats.unjudged_pairs
+        if result.outcome == "match":
+            hits[result.candidate.name].refutations.append(leaf.name)
+    tallied = ConditionAHits(h for h in hits.values() if h.count > 0)
     tallied.sort(key=lambda h: -h.count)
+    tallied.unjudged_pairs = unjudged_pairs
     return tallied
 
 
@@ -135,20 +144,32 @@ class CheapC:
     corpus_size: int
     near_duplicate_pairs: int
     largest_cluster: int
+    stats: dict = field(default_factory=dict)  # semantic_join's JoinStats.as_dict()
+
+    @property
+    def unjudged_pairs(self) -> int:
+        return self.stats.get("unjudged_pairs", 0)
 
 
-def measure_cheap_c(experience: list[Leaf], join_ratio: float = JOIN_RATIO) -> CheapC:
+def measure_cheap_c(experience: list[Leaf], budget=None) -> CheapC:
     """Cheap proliferation proxy: how many leaves, how many near-duplicate pairs, and the
-    biggest same-ground cluster. Plain numbers — the discriminating clause ('growth WITHOUT
-    reformulation') is the dear-(C) discriminator, which is DEFERRED (see digest footer)."""
-    pairs = 0
-    for i in range(len(experience)):
-        for j in range(i + 1, len(experience)):
-            if _similarity(experience[i].ground, experience[j].ground) >= join_ratio:
-                pairs += 1
-    groups = cluster_by_ground(experience, lambda lf: lf.ground)
-    largest = max((len(g) for g in groups), default=0)
-    return CheapC(corpus_size=len(experience), near_duplicate_pairs=pairs, largest_cluster=largest)
+    biggest same-ground cluster. A near-duplicate pair is a leaf the judge placed in an earlier
+    leaf's group (one per joined leaf, so a group of n counts n-1). Plain numbers — the
+    discriminating clause ('growth WITHOUT reformulation') is the dear-(C) discriminator,
+    which is DEFERRED (see digest footer)."""
+    result = semantic_join.judged_clusters(
+        experience, lambda lf: lf.ground,
+        cache=semantic_join.same_difficulty_cache(),
+        budget=budget if budget is not None else semantic_join.env_budget(),
+        k=semantic_join.K_CLUSTER,
+    )
+    largest = max((len(g) for g in result.groups), default=0)
+    return CheapC(
+        corpus_size=len(experience),
+        near_duplicate_pairs=len(experience) - len(result.groups),
+        largest_cluster=largest,
+        stats=result.stats.as_dict(),
+    )
 
 
 # The deferred signals, named with their activation observable (no silent cap — ADR-0002).
@@ -176,8 +197,9 @@ def build_digest(scope: str, project_dir: str | None, threshold: int | None) -> 
     )
     experience = _load_dir(experience_dir(scope, project_dir), "Difficulty")
     principles = _load_dir(PRINCIPLES_DIR, "Principle")
-    a_hits = measure_condition_a(experience, principles, thr)
-    cheap_c = measure_cheap_c(experience)
+    budget = semantic_join.env_budget()
+    a_hits = measure_condition_a(experience, principles, thr, budget=budget)
+    cheap_c = measure_cheap_c(experience, budget=budget)
     flagged = [h for h in a_hits if h.count >= thr]
     return {
         "threshold": thr,
@@ -195,6 +217,7 @@ def build_digest(scope: str, project_dir: str | None, threshold: int | None) -> 
             "largest_cluster": cheap_c.largest_cluster,
             "note": "report-only; never flags on its own",
         },
+        "unjudged_pairs": a_hits.unjudged_pairs + cheap_c.unjudged_pairs,
         "deferred": DEFERRED,
         "decides": False,
         "builds": False,
@@ -226,6 +249,7 @@ def _format(d: dict) -> str:
     lines.append("  deferred (out of scope; scheduled, not dropped):")
     for item in d["deferred"]:
         lines.append(f"      • {item['signal']} — activates when: {item['activates_when']}")
+    lines.append(f"unjudged={d['unjudged_pairs']}")
     return "\n".join(lines)
 
 

@@ -249,19 +249,6 @@ def update_subindex(exp_dir: Path, date: str, title: str, filename: str,
 tokenize = semantic_join.tokenize
 term_score = semantic_join.term_score
 
-JOIN_RATIO = 0.6
-
-
-def _similarity(ground_a: str, ground_b: str) -> float:
-    """Symmetric term-overlap ratio. 1.0 == identical terms."""
-    terms_b = tokenize(ground_b)
-    if not terms_b:
-        return 0.0
-    matched = sum(1 for t in set(terms_b) if term_score(ground_a, [t]) > 0)
-    denom = max(len(set(tokenize(ground_a))), len(set(terms_b))) or 1
-    return matched / denom
-
-
 def cluster_by_ground_result(items, ground_fn):
     """Group items by functional ground: lexical overlap only nominates, a judge decides.
 

@@ -41,9 +41,7 @@ _rec = importlib.util.module_from_spec(_REC_SPEC)
 _REC_SPEC.loader.exec_module(_rec)
 tokenize = _rec.tokenize
 term_score = _rec.term_score
-JOIN_RATIO = _rec.JOIN_RATIO
-_similarity = _rec._similarity
-cluster_by_ground = _rec.cluster_by_ground
+cluster_by_ground_result = _rec.cluster_by_ground_result
 
 
 @dataclass
@@ -79,11 +77,22 @@ class Cluster:
         return sum(1 for r in self.items if not r.cost_estimate)
 
 
-def cluster_records(records: list[DifficultyRecord], join_ratio: float = JOIN_RATIO) -> list[Cluster]:
-    """Group records by functional ground. A record joins the best-matching existing cluster
-    when overlap ≥ join_ratio, else opens a new one. Same ground from two channels → one cluster."""
-    groups = cluster_by_ground(records, lambda r: r.functional_ground)
-    return [Cluster(functional_ground=g[0].functional_ground, items=g) for g in groups]
+class ClusterList(list):
+    """A list of clusters that also carries ``unjudged_pairs``: nominated record pairs the
+    judge could not decide (no budget, judge unavailable), which therefore did not join."""
+
+    unjudged_pairs: int = 0
+
+
+def cluster_records(records: list[DifficultyRecord]) -> ClusterList:
+    """Group records by functional ground: a record joins an existing cluster only when the
+    judge says it is the same difficulty. Same ground from two channels → one cluster."""
+    result = cluster_by_ground_result(records, lambda r: r.functional_ground)
+    clusters = ClusterList(
+        Cluster(functional_ground=g[0].functional_ground, items=g) for g in result.groups
+    )
+    clusters.unjudged_pairs = result.stats.unjudged_pairs
+    return clusters
 
 
 def is_flagged(cluster: Cluster, threshold: int) -> bool:
@@ -142,10 +151,11 @@ def pull_all(channel_names: list[str], since: str | None = None) -> list[Difficu
     return records
 
 
-def digest(records: list[DifficultyRecord], threshold: int) -> list[Cluster]:
+def digest(records: list[DifficultyRecord], threshold: int) -> ClusterList:
     """Cluster + return only the flagged clusters, heaviest first."""
     clusters = cluster_records(records)
-    flagged = [c for c in clusters if is_flagged(c, threshold)]
+    flagged = ClusterList(c for c in clusters if is_flagged(c, threshold))
+    flagged.unjudged_pairs = clusters.unjudged_pairs
     flagged.sort(key=lambda c: (-int(c.has_critical), -c.mass))
     return flagged
 
@@ -183,7 +193,9 @@ def main(argv: list[str] | None = None) -> int:
     channels = a.channels or default_channels()
     threshold = read_mass_threshold(override=a.threshold)
     records = pull_all(channels, since=a.since)
-    print(_format(digest(records, threshold)))
+    flagged = digest(records, threshold)
+    print(_format(flagged))
+    print(f"unjudged={flagged.unjudged_pairs}")
     return 0
 
 

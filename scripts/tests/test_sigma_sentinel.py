@@ -143,6 +143,7 @@ def test_format_mentions_deferred_and_readonly() -> None:
                         "flagged": [], "fired": False},
         "cheap_c": {"corpus_size": 0, "near_duplicate_pairs": 0, "largest_cluster": 0,
                     "note": "report-only; never flags on its own"},
+        "unjudged_pairs": 0,
         "deferred": td.DEFERRED, "decides": False, "builds": False,
     }
     out = td._format(d)
