@@ -2255,3 +2255,51 @@ ground = "Compiles the engine's agent-plan-sync marker pattern with a 64-hex sha
 hits = 1
 reviewed_by = "developer"
 
+
+[sites."scripts/agentctl/advisor.py::<module>::re.compile"]
+class = "structural"
+ground = "_TEXT_RULES_RULE_LINE_RE compiles the fixed 'RULE <id>: <span>' line format the text-rule judge is instructed to answer in."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/agentctl/advisor.py::_parse_text_rule_findings::pattern.match"]
+class = "structural"
+ground = "_TEXT_RULES_RULE_LINE_RE.match parses the judge's own 'RULE <id>: <span>' answer lines; the model, not the regex, decided each finding."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/lib/writer_rules.py::<module>::re.compile"]
+class = "structural"
+ground = "_ITEM_RE compiles the '<n>. **title**' numbered-bold markdown item shape of tech-writer SKILL.md rules."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/lib/writer_rules.py::parse_skill::pattern.match"]
+class = "structural"
+ground = "_ITEM_RE.match reads a '<n>. **title**' numbered markdown item to split SKILL.md into rules, a fixed markdown structure."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/lib/writer_rules.py::_literal_regex::re.match"]
+class = "structural"
+ground = "re.match(r'\\w', literal) tests whether a registry literal starts with a word character, to decide whether to add a word-boundary lookbehind; character syntax, not meaning."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/lib/writer_rules.py::_literal_regex::re.search"]
+class = "structural"
+ground = "re.search(r'\\w$', literal) tests whether a registry literal ends with a word character, to decide whether to add a word-boundary lookahead; character syntax, not meaning."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/lib/writer_rules.py::_compiled::re.compile"]
+class = "candidate-generation"
+ground = "Compiles each judge-status rule's literals and patterns into the prefilter find_candidates uses; a hit only nominates a rule for judge_published_text_rules (advisor.py), which decides fail-open."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/lib/writer_rules.py::find_candidates::pattern.search"]
+class = "candidate-generation"
+ground = "rx.search over draft lines nominates rules (with hit lines) for judge_published_text_rules, the fail-open model judge in hook-published-text-writer-gate.py; a hit is never a violation by itself."
+hits = 1
+reviewed_by = "coordinator"
