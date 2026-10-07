@@ -43,6 +43,11 @@ def gate_on(monkeypatch):
     monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
 
 
+@pytest.fixture(autouse=True)
+def private_escalation_ledger(monkeypatch, tmp_path):
+    monkeypatch.setenv(cli.ESCALATION_LEDGER_ENV, str(tmp_path / "escalations.jsonl"))
+
+
 @pytest.fixture
 def drv():
     spec = importlib.util.spec_from_file_location(
@@ -409,6 +414,77 @@ def test_note_beside_an_out_of_scope_blocker_does_not_block_a_stage_review(store
     state = store.load("o4")
     review = state.plan_stage_reviews["stage:1"]
     assert gates._plan_review_verdict_blockers(review, state=state, doc=load_plan(str(plan))) == []
+
+
+def test_out_of_scope_blocker_never_opens_and_holds_no_later_stage_review(store, fixtures_dir, tmp_path):
+    plan = _session(store, fixtures_dir, tmp_path, "o4b")
+    d = _review(store, "o4b", plan, "revise",
+                ["blocking: stage:2: someone else's stage", "note: stage:1: aside about mine"],
+                scope="stage:1")
+    (stray_id, _) = d.data["concern_ids"]
+    assert store.load("o4b").concern_ledger[stray_id].status == "recorded"
+
+    again = _review(store, "o4b", plan, "revise", ["note: stage:1: another aside"], scope="stage:1")
+    state = store.load("o4b")
+    review = state.plan_stage_reviews["stage:1"]
+    assert review.verdict == "pass" and review.raw_verdict == "revise"
+    assert gates._open_prior_concerns(review, state, load_plan(str(plan))) == []
+
+
+def test_unevidenced_post_pass_revise_neither_opens_nor_fixes_ledger_entries(
+        store, fixtures_dir, tmp_path):
+    plan = _session(store, fixtures_dir, tmp_path, "o8")
+    assert _review(store, "o8", plan, "pass").ok
+    _retitle(plan, "Scaffold module")
+    evidenced = _review(store, "o8", plan, "revise", ["blocking: stage:1: scaffold regressed"],
+                        regression="repro", runner=RED)
+    (held_id,) = evidenced.data["concern_ids"]
+    assert store.load("o8").concern_ledger[held_id].status == "open"
+
+    _retitle(plan, "Scaffold module")
+    _retitle(plan, "Add tests")
+    late = _review(store, "o8", plan, "revise", ["blocking: stage:2: late worry"])
+    (late_id,) = late.data["concern_ids"]
+    ledger = store.load("o8").concern_ledger
+    assert ledger[late_id].effective == "blocking"
+    assert ledger[late_id].status == "recorded"
+    assert ledger[held_id].status == "open"
+
+
+def test_held_blocker_is_named_in_the_gate_text(store, fixtures_dir, tmp_path):
+    plan = _session(store, fixtures_dir, tmp_path, "o9")
+    first = _review(store, "o9", plan, "revise", ["blocking: stage:1: scaffold is wrong"])
+    (first_id,) = first.data["concern_ids"]
+    _review(store, "o9", plan, "revise", ["blocking: stage:2: frozen remark"])
+
+    blockers = gates.plan_review_blockers(store.load("o9"), str(plan))
+    assert blockers and any(first_id in b for b in blockers)
+
+
+def test_risk_accept_by_ledger_id_discharges_the_held_blocker(store, fixtures_dir, tmp_path):
+    plan = _session(store, fixtures_dir, tmp_path, "o10")
+    first = _review(store, "o10", plan, "revise", ["blocking: stage:1: scaffold is wrong"])
+    (first_id,) = first.data["concern_ids"]
+    _review(store, "o10", plan, "revise", ["blocking: stage:2: frozen remark"])
+    assert gates.plan_review_blockers(store.load("o10"), str(plan))
+
+    accepted = cli.cmd_risk_accept(
+        ns(session="o10", scope=None, concern_id=first_id, basis="the team accepts the gap",
+           risk="a regression ships", author="fedor"), store=store)
+    assert accepted.ok, accepted.detail
+    assert gates.plan_review_blockers(store.load("o10"), str(plan)) == []
+
+
+def test_risk_accept_refuses_a_ledger_id_that_is_not_open(store, fixtures_dir, tmp_path):
+    plan = _session(store, fixtures_dir, tmp_path, "o11")
+    first = _review(store, "o11", plan, "revise", ["blocking: stage:1: scaffold is wrong"])
+    (first_id,) = first.data["concern_ids"]
+    assert _review(store, "o11", plan, "pass").ok
+
+    refused = cli.cmd_risk_accept(
+        ns(session="o11", scope=None, concern_id=first_id, basis="the team accepts the gap",
+           risk="a regression ships", author="fedor"), store=store)
+    assert refused.ok is False and "not open" in refused.detail
 
 
 def test_stage_review_stores_its_record_seq_and_the_ids_match(store, fixtures_dir, tmp_path):

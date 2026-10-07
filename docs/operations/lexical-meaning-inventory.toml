@@ -240,9 +240,15 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/plan.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: _LANDED_REF_RE (git ref name shape), _EXECUTOR_RE (in_thread|spawn:<kind> vocabulary), _HEREDOC_START (shell here-document introducer)."
-hits = 3
-hit_classes = ["structural", "structural", "structural"]
+ground = "Compiles: _LANDED_REF_RE (git ref name shape), _EXECUTOR_RE (in_thread|spawn:<kind> vocabulary), _HEREDOC_START (shell here-document introducer), _CONCERN_RE (the engine's own `blocking:`/`note:` severity tag and `re:<id>` restatement reference)."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan.py::parse_concern::pattern.match"]
+class = "structural"
+ground = "_CONCERN_RE.match splits a `--concern` into its severity tag, optional `re:<concern-id>` and body: a protocol token the engine itself defines. An untagged concern is refused, never classified by what it says."
+hits = 1
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/plan.py::_parse_landed_spec::pattern.match"]
@@ -1082,6 +1088,54 @@ ground = "Compiles a pattern for a 'VAR=$(cat path)' shell assignment with the e
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/lib/review_block.py::<module>::re.compile"]
+class = "structural"
+ground = "NUMBERING_RE matches a leading list numbering (1. / 2)) so a REVIEW line is compared to the engine's fixed REVIEW/Verdict/Plan digest markers without it."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/review_block.py::_tagged_condition_re::re.compile"]
+class = "structural"
+ground = "Compiles the grammar of a tagged concern line: severity tag, optional `re:<id>`, then the engine's C1:..C4: condition marker; fixed protocol tokens, not free-text meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/review_block.py::_carries_other_marker::pattern.match"]
+class = "structural"
+ground = "MARKER_RE.match reads whether a line starts with one of the engine's fixed return markers; protocol syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/review_block.py::classify_line::pattern.match"]
+class = "structural"
+ground = "The tagged-concern grammar's .match decides only whether a line has the severity-tag + condition-marker shape; it never reads what the concern says."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/review_block.py::classify_line::pattern.sub"]
+class = "structural"
+ground = "NUMBERING_RE.sub strips a leading list numbering before matching the fixed REVIEW/Verdict/Plan digest markers."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/review_block.py::classify_line::re.sub"]
+class = "structural"
+ground = "Removes markdown emphasis characters around the `re:<id>` token; normalization before the id is read."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/review_block.py::clean_value::re.sub"]
+class = "structural"
+ground = "Removes asterisk markdown emphasis from a concern value; normalization for later parsing."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/review_block.py::lead_clean::pattern.sub"]
+class = "structural"
+ground = "NUMBERING_RE.sub strips a leading list numbering from a review line; normalization before marker parsing."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/lib/semantic_join.py::judged_clusters::lexical.nominate"]
 class = "candidate-generation"
 ground = "nominate (BM25F word overlap) picks top-k cluster representatives per item, and _decide_pair calls the same-difficulty judge on each, which alone decides the join."
@@ -1341,18 +1395,6 @@ hits = 2
 hit_classes = ["candidate-generation", "candidate-generation"]
 reviewed_by = "developer"
 
-[sites."scripts/plan-review-topological.py::_classify::pattern.sub"]
-class = "structural"
-ground = "NUMBERING_RE strips a leading list numbering (1. / 2)) before comparing to the engine's fixed REVIEW/VERDICT/DIGEST markers."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/plan-review-topological.py::_clean_value::re.sub"]
-class = "structural"
-ground = "Removes asterisk markdown emphasis from a concern value; normalization for later parsing."
-hits = 1
-reviewed_by = "developer"
-
 [sites."scripts/plan-review-topological.py::Driver.dry_run::pattern.search"]
 class = "structural"
 ground = "DRY_CHARS_RE and DRY_VIEW_RE extract the prompt-chars and TOPO-VIEW files fields from the spawner's structured --dry-run output."
@@ -1360,17 +1402,11 @@ hits = 2
 hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
-[sites."scripts/plan-review-topological.py::_lead_clean::pattern.sub"]
-class = "structural"
-ground = "NUMBERING_RE strips a leading list numbering from a review line; normalization before marker parsing."
-hits = 1
-reviewed_by = "developer"
-
 [sites."scripts/plan-review-topological.py::<module>::re.compile"]
 class = "structural"
-ground = "Eight patterns of fixed syntax: 64-hex digest, leading list numbering, list-item bullet, spawner summary fields marker=/cost_usd=/duration_ms=, and dry-run # stdin and TOPO-VIEW lines."
-hits = 8
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Seven patterns of fixed syntax: 64-hex digest, list-item bullet, spawner summary fields marker=/cost_usd=/duration_ms=, and dry-run # stdin and TOPO-VIEW lines."
+hits = 7
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/plan-review-topological.py::_names::re.search"]

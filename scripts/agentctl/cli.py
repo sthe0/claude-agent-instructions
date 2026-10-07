@@ -5020,48 +5020,59 @@ def cmd_risk_accept(args, *, store: StateStore, runner: Runner | None = None) ->
             False, state.node, "noop",
             f"cannot record a risk acceptance: {target} failed to load: {e}",
         )
-    if scope:
-        stage_index = plan_review_scope_stage_index(scope)
-        if stage_index is None:
+    held = state.concern_ledger.get(concern_id)
+    if held is not None:
+        if held.status != CONCERN_OPEN:
             return Directive(
                 False, state.node, "noop",
-                f"--scope {scope!r} is not a recognized scope (expected 'stage:<n>')",
+                f"concern {concern_id!r} is {held.status}, not open — nothing there to accept",
             )
-        if not any(s.index == stage_index for s in doc.stages):
+        accepted_scope, accepted_id, accepted_text = held.scope, held.local_id, held.text
+    else:
+        if scope:
+            stage_index = plan_review_scope_stage_index(scope)
+            if stage_index is None:
+                return Directive(
+                    False, state.node, "noop",
+                    f"--scope {scope!r} is not a recognized scope (expected 'stage:<n>')",
+                )
+            if not any(s.index == stage_index for s in doc.stages):
+                return Directive(
+                    False, state.node, "noop",
+                    f"--scope {scope!r}: no stage {stage_index} in {target}",
+                )
+        review = state.plan_stage_reviews.get(scope) if scope else state.plan_review
+        if review is None:
             return Directive(
                 False, state.node, "noop",
-                f"--scope {scope!r}: no stage {stage_index} in {target}",
+                f"no thinker review recorded at scope {scope!r} — nothing there to accept a concern from",
             )
-    review = state.plan_stage_reviews.get(scope) if scope else state.plan_review
-    if review is None:
-        return Directive(
-            False, state.node, "noop",
-            f"no thinker review recorded at scope {scope!r} — nothing there to accept a concern from",
-        )
-    valid_ids = plan_review_concern_ids(review)
-    if concern_id not in valid_ids:
-        return Directive(
-            False, state.node, "noop",
-            f"concern {concern_id!r} is not among scope {scope!r}'s recorded concerns "
-            f"{valid_ids!r} — check --concern-id against the review",
-        )
-    if valid_ids.count(concern_id) > 1:
-        return Directive(
-            False, state.node, "noop",
-            f"concern {concern_id!r} appears {valid_ids.count(concern_id)} times in scope "
-            f"{scope!r}'s recorded concerns {valid_ids!r} — ambiguous which one this "
-            "acceptance binds to; the review must give each concern a distinct --concern-id",
-        )
+        valid_ids = plan_review_concern_ids(review)
+        if concern_id not in valid_ids:
+            return Directive(
+                False, state.node, "noop",
+                f"concern {concern_id!r} is not among scope {scope!r}'s recorded concerns "
+                f"{valid_ids!r} — check --concern-id against the review",
+            )
+        if valid_ids.count(concern_id) > 1:
+            return Directive(
+                False, state.node, "noop",
+                f"concern {concern_id!r} appears {valid_ids.count(concern_id)} times in scope "
+                f"{scope!r}'s recorded concerns {valid_ids!r} — ambiguous which one this "
+                "acceptance binds to; the review must give each concern a distinct --concern-id",
+            )
+        accepted_scope, accepted_id = scope, concern_id
+        accepted_text = review.concerns[valid_ids.index(concern_id)]
     acceptance = RiskAcceptance(
-        scope=scope,
-        concern_id=concern_id,
+        scope=accepted_scope,
+        concern_id=accepted_id,
         plan_path=target,
         basis=basis,
         risk=risk,
         author=author,
         meta_digest=plan_meta_digest(doc),
         stage_keys={str(k): v for k, v in plan_stage_digests(doc).items()},
-        concern_text=review.concerns[valid_ids.index(concern_id)],
+        concern_text=accepted_text,
     )
     state.risk_acceptances.append(acceptance)
     blockers = gates.plan_review_blockers(state, target)

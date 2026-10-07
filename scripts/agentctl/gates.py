@@ -515,7 +515,13 @@ def _plan_review_verdict_blockers(pr, *, state: SessionState | None = None, doc=
     blocking_ids = set(pr.in_scope_concern_ids) if classified else set(ids)
     relevant = [(cid, text, i) for i, (cid, text) in enumerate(zip(ids, pr.concerns))
                 if cid in blocking_ids]
-    unfinished = _open_prior_blockers(pr, state, doc)
+    unfinished = _open_prior_concerns(pr, state, doc)
+    if unfinished:
+        held = ", ".join(e.id for e in unfinished)
+        default = [
+            f"{default[0]}; earlier blocking concern(s) still open: {held} — fix the part "
+            "each names, or `risk-accept --concern-id <id>` one you accept"
+        ]
     if not relevant:
         return default if unfinished else []
     relevant = [r for r in relevant if concern_is_blocking(pr, r[2])]
@@ -528,8 +534,8 @@ def _plan_review_verdict_blockers(pr, *, state: SessionState | None = None, doc=
     return default
 
 
-def _open_prior_blockers(pr, state: SessionState, doc) -> list:
-    """Blocking concerns an EARLIER record on `pr`'s scope raised that nothing has
+def _open_prior_concerns(pr, state: SessionState, doc) -> list:
+    """Ledger entries for blocking concerns an EARLIER record on `pr`'s scope raised that nothing has
     discharged. Each scope keeps only its latest record, so a later revise whose own
     concerns are all advisory must not make the gate forget a blocker it never
     answered: the ledger is where such a blocker is still found."""
