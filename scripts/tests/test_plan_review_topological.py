@@ -121,6 +121,9 @@ class FakeEngine:
             self.events.append(("record", pair))
             self.status[pair] = "current" if flag(argv, "--verdict") == "pass" else "revise"
             return {"ok": True, "data": {"pair": pair}}
+        if verb == "plan-review-pair-history":
+            pair = flag(argv, "--pair")
+            return {"ok": True, "data": {"pair": pair, "records": [], "changed_parts_since_last": []}}
         if verb == "plan-review-compose":
             failing = {p: s for p, s in self.status.items() if s not in SATISFIED}
             if failing:

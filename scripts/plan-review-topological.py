@@ -9,8 +9,10 @@ nor whether the reviewers ever pulled the service file.
 
 The driver orchestrates and never judges. Order and readiness come from
 `agentctl plan-review-walk`, verdicts are recorded and composed by `agentctl`, and the
-only text it parses is the fixed protocol tokens of a pair review. Cost, duration and
-pull counts are printed as telemetry; nothing is gated on them.
+only text it parses is the fixed protocol tokens of a pair review. A pair that already
+has a record is re-reviewed with `agentctl plan-review-pair-history` handed to the
+spawner (`--review-topo-history`). Cost, duration and pull counts are printed as
+telemetry; nothing is gated on them.
 
   plan-review-topological.py --session <sid> --plan <plan.toml>
       [--complexity low|medium|high | --model <m>] [--dry-run] [--early-stop]
@@ -29,8 +31,11 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -125,13 +130,16 @@ def done_criterion(pair: str) -> str:
     )
 
 
-def build_spawn_argv(args, pair: str, plan_path: str, *, dry_run: bool) -> list[str]:
+def build_spawn_argv(args, pair: str, plan_path: str, *, dry_run: bool,
+                     history_path: "str | None" = None) -> list[str]:
     selector = ["--model", args.model] if args.model else ["--complexity", args.complexity or "high"]
     argv = [
         "--kind", "thinker", *selector, "--effort", "high", "--plan-brief",
         "--review-topo", pair, "--plan", plan_path,
         "--done-criterion", done_criterion(pair), "--criterion-type", "acceptance-review",
     ]
+    if history_path is not None:
+        argv += ["--review-topo-history", history_path]
     if dry_run:
         argv.append("--dry-run")
     return argv
@@ -400,9 +408,31 @@ class Driver:
         self.refused = False
         self.level_revise = False
         self.level_refused = False
+        self.history_dir: "str | None" = None
+        self.history_lock = threading.Lock()
 
     def agentctl(self, verb: str, *extra: str) -> dict:
         return run_agentctl([verb, "--session", self.sid, "--target", self.plan_path, *extra], self.env)
+
+    def history_file(self, row: dict) -> "str | None":
+        """Path of a JSON file holding the pair's recorded reviews, or None for a first review."""
+        if row["status"] == "missing":
+            return None
+        directive = self.agentctl("plan-review-pair-history", "--pair", row["pair"])
+        data = directive.get("data") or {}
+        if not directive.get("ok") or not data.get("records"):
+            return None
+        with self.history_lock:
+            if self.history_dir is None:
+                self.history_dir = tempfile.mkdtemp(prefix="topo-history-")
+        path = Path(self.history_dir) / f"{row['pair']}.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return str(path)
+
+    def cleanup_history(self) -> None:
+        if self.history_dir is not None:
+            shutil.rmtree(self.history_dir, ignore_errors=True)
+            self.history_dir = None
 
     def read_walk(self) -> dict:
         directive = self.agentctl("plan-review-walk", "--format", "json")
@@ -415,11 +445,14 @@ class Driver:
         self.level_refused = True
         emit(f"TOPO-REFUSED: pair={pair} {' '.join(reason.split())}")
 
-    def launch(self, pair: str) -> Launched:
+    def launch(self, row: dict) -> Launched:
+        pair = row["pair"]
         self.spawned.add(pair)
         sha = hashlib.sha256(Path(self.plan_path).read_bytes()).hexdigest()
         offset = cost_log_size()
-        rc, out, err = spawn_pair(build_spawn_argv(self.args, pair, self.plan_path, dry_run=False))
+        argv = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
+                                history_path=self.history_file(row))
+        rc, out, err = spawn_pair(argv)
         return Launched(rc, out, err, offset, sha)
 
     def settle(self, pair: str, launched: Launched) -> None:
@@ -467,10 +500,10 @@ class Driver:
         width = resolve_parallel(self.args.parallel, len(batch))
         if width <= 1:
             for row in batch:
-                self.settle(row["pair"], self.launch(row["pair"]))
+                self.settle(row["pair"], self.launch(row))
             return
         with ThreadPoolExecutor(max_workers=width) as pool:
-            launched = list(pool.map(lambda row: self.launch(row["pair"]), batch))
+            launched = list(pool.map(self.launch, batch))
         for row, outcome in zip(batch, launched):
             self.settle(row["pair"], outcome)
 
@@ -484,12 +517,15 @@ class Driver:
                 if row["status"] in SATISFIED:
                     emit(f"TOPO-CURRENT: pair={pair}")
                     continue
-                spawn_cmd = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False)
+                history_path = self.history_file(row)
+                spawn_cmd = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
+                                             history_path=history_path)
                 emit("  spawn: " + shlex.join([sys.executable, str(SPAWNER), *spawn_cmd]))
                 emit("  record: " + shlex.join(
                     [sys.executable, str(AGENTCTL_CLI),
                      *record_argv(self.sid, self.plan_path, pair, "<pass|revise>", "<sha256>", [])]))
-                rc, out, err = spawn_pair(build_spawn_argv(self.args, pair, self.plan_path, dry_run=True))
+                rc, out, err = spawn_pair(build_spawn_argv(self.args, pair, self.plan_path, dry_run=True,
+                                                           history_path=history_path))
                 chars, files = DRY_CHARS_RE.search(out), DRY_VIEW_RE.search(out)
                 if rc != 0 or chars is None or files is None:
                     emit(f"TOPO-REFUSED: pair={pair} spawner --dry-run exited {rc} ({CEILING_HINT})")
@@ -517,6 +553,12 @@ class Driver:
         )
 
     def run(self, parser: argparse.ArgumentParser) -> int:
+        try:
+            return self._run(parser)
+        finally:
+            self.cleanup_history()
+
+    def _run(self, parser: argparse.ArgumentParser) -> int:
         try:
             walk = self.read_walk()
         except RuntimeError as exc:

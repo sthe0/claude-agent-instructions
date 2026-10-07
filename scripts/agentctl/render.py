@@ -864,12 +864,45 @@ def _pair_conditions(doc: PlanDoc, base: "int | str", service: "int | str") -> l
     ]
 
 
-def render_pair_review_bundle(doc: PlanDoc, pair_id: str, *, plan_sha256: str, view_dir: "Path | str") -> str:
+def _prior_review_section(history: dict) -> list[str]:
+    """The `## Prior review of this pair` and `## Changed since the prior verdict`
+    sections of a re-review bundle, from the `plan-review-pair-history` payload."""
+    lines = ["## Prior review of this pair", ""]
+    for position, record in enumerate(history["records"], start=1):
+        reviewer, recorded = record["reviewer_verdict"], record["effective_verdict"]
+        verdicts = f"`{reviewer}`" if reviewer == recorded else f"`{reviewer}` (recorded as `{recorded}`)"
+        lines.append(f"Review {position} (record {record['record_seq']}): verdict {verdicts}")
+        for concern in record["concerns"]:
+            marks = f"{concern['severity']} (effective: {concern['effective_severity']})"
+            if concern["unresolved"]:
+                marks += " — UNRESOLVED BLOCKER"
+            lines.append(f"- `{concern['id']}` — {marks} — parts: {', '.join(concern['parts'])}")
+            lines.append(f"  {concern['text']}")
+        if not record["concerns"]:
+            lines.append("- no concerns")
+        lines.append("")
+    lines.append("## Changed since the prior verdict")
+    lines.append("")
+    changed = history["changed_parts_since_last"]
+    lines.append(
+        "Parts of this pair changed since the last review: " + ", ".join(f"`{p}`" for p in changed)
+        if changed else "Nothing changed since the prior verdict."
+    )
+    lines.append("")
+    return lines
+
+
+def render_pair_review_bundle(
+    doc: PlanDoc, pair_id: str, *, plan_sha256: str, view_dir: "Path | str",
+    history: "dict | None" = None,
+) -> str:
     """The `--review-topo` starting prompt for one reliance edge: the order
     context, the base's full node file, the service's declared product
     (`pair_service_text`), the edge (`pair_edge_text`), the one service
-    file in `view_dir`, the per-pair procedure, the plan digest line and
-    the review protocol/checklist.
+    file in `view_dir`, the per-pair procedure, (for a re-review) the prior
+    review and the parts changed since it, the plan digest line and the
+    review protocol/checklist. `history` is the `plan-review-pair-history`
+    data payload; without it the bundle is the first-review rendering.
 
     Every marker string in the protocol section is sourced from
     `plan.REVIEW_MARKER` / `plan.VERDICT_MARKER` / `plan.PLAN_DIGEST_MARKER`
@@ -945,6 +978,9 @@ def render_pair_review_bundle(doc: PlanDoc, pair_id: str, *, plan_sha256: str, v
     )
     lines.append("")
 
+    if history is not None:
+        lines.extend(_prior_review_section(history))
+
     lines.append(f"{PLAN_DIGEST_MARKER} {plan_sha256}")
     lines.append("")
 
@@ -973,6 +1009,14 @@ def render_pair_review_bundle(doc: PlanDoc, pair_id: str, *, plan_sha256: str, v
         f"`{RESTATES_PREFIX}<concern-id>` (the stable id of the earlier concern). A blocking "
         f"concern on an unchanged part is recorded as advisory."
     )
+    if history is not None:
+        lines.append(
+            f"  - This is a re-review. Block only on a part listed under `## Changed since the "
+            f"prior verdict`, or on a part that still carries an unresolved blocker listed "
+            f"under `## Prior review of this pair` — raise such a blocker again, if it is still "
+            f"unfixed, as `{RESTATES_PREFIX}<concern-id>`. Raise any other prior concern again "
+            f"only as `{RESTATES_PREFIX}<concern-id>`; do not restate a settled concern as new."
+        )
     lines.append(
         f"The {REVIEW_MARKER} block is the last thing in your reply, with no other "
         f"marker (COMPLETED:, REPLAN:, etc.) after it."

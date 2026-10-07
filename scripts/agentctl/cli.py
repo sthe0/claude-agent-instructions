@@ -4590,7 +4590,8 @@ def _cmd_plan_review_pair(
         _count_review_round(state, live)
     _log_concerns_downgraded(state, cp, ledger_scope, verdict)
     state.log("plan_pair_review", target=target, pair=pair, verdict=review.verdict,
-              raw_verdict=verdict, reviewer=reviewer,
+              raw_verdict=verdict, reviewer=reviewer, record_seq=review.record_seq,
+              concern_ids=review.concern_ids,
               plan_sha256=attested, concerns=concerns, note=note,
               regression_command=regression_command, regression_exit=regression_exit,
               ledger_lines=len(ledger))
@@ -5134,6 +5135,67 @@ def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = No
     return Directive(
         True, state.node, "inspect", detail,
         data={"markdown": md, "whole_plan": whole_plan_needed, "stages": stages, "pairs": pairs},
+    )
+
+
+def cmd_plan_review_pair_history(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Read-only: what an earlier review of one pair said, for the next reviewer of it.
+
+    `data.records` lists every pair record taken against the target plan, oldest first,
+    each with the reviewer's own verdict, the engine's effective one and its concerns
+    (stable id, raw and effective severity, parts, and `unresolved` — still an open
+    blocker no risk acceptance discharges). `data.changed_parts_since_last` names the
+    pair's own parts (`pair_part_tokens`) whose digest differs from the one the latest
+    record stored — every own part when that record stored none. No timestamp is emitted:
+    the output feeds a spawn prompt, which must not vary with wall-clock time."""
+    state = _require(store, args.session)
+    target = getattr(args, "target", None) or state.plan_path
+    if not target:
+        return Directive(
+            False, state.node, "noop",
+            "no plan to read pair history for: submit a plan first, or pass --target <plan.toml>",
+        )
+    pair = args.pair
+    try:
+        doc = load_plan(target)
+        parse_pair(doc, pair)
+    except (OSError, PlanError, ValueError) as e:
+        return Directive(False, state.node, "noop", f"pair history for {pair!r} in {target}: {e}")
+    records = []
+    for event in state.history:
+        if (event.get("event") != "plan_pair_review" or event.get("pair") != pair
+                or event.get("target") != target):
+            continue
+        concerns = []
+        for cid in event.get("concern_ids") or []:
+            entry = state.concern_ledger.get(cid)
+            if entry is None:
+                continue
+            concerns.append({
+                "id": cid, "severity": entry.severity, "effective_severity": entry.effective,
+                "parts": list(entry.parts), "text": entry.text,
+                "unresolved": entry.status == CONCERN_OPEN and not gates._concern_discharged(
+                    entry.scope, entry.local_id, entry.text, state, doc),
+            })
+        records.append({
+            "record_seq": event.get("record_seq") or 0,
+            "plan_sha256": event.get("plan_sha256", ""),
+            "reviewer_verdict": event.get("raw_verdict") or event.get("verdict", ""),
+            "effective_verdict": event.get("verdict", ""),
+            "concerns": concerns,
+        })
+    latest = state.plan_pair_reviews.get(pair)
+    changed: list[str] = []
+    if latest is not None and latest.plan_path == target:
+        digests = part_digest_map(doc)
+        changed = [
+            part for part in pair_part_tokens(pair)
+            if digests.get(part) is None or latest.part_digests.get(part) != digests[part]
+        ]
+    return Directive(
+        True, state.node, "inspect",
+        f"{len(records)} recorded review(s) of pair {pair!r} against {target}",
+        data={"pair": pair, "records": records, "changed_parts_since_last": changed},
     )
 
 
@@ -10213,6 +10275,7 @@ COMMANDS = {
     "plan-review-delta": cmd_plan_review_delta,
     "plan-review-walk": cmd_plan_review_walk,
     "plan-review-compose": cmd_plan_review_compose,
+    "plan-review-pair-history": cmd_plan_review_pair_history,
     "risk-accept": cmd_risk_accept,
     "stage-review": cmd_stage_review,
     "code-review": cmd_code_review,
@@ -10285,8 +10348,8 @@ _SESSION_COMMANDS = (
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
     "plan-render", "plan-grants", "plan-resources", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
-    "plan-review-delta", "plan-review-walk", "plan-review-compose", "risk-accept",
-    "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
+    "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
+    "risk-accept", "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
     "record-result", "declare",
     "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
@@ -10353,8 +10416,10 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "claim / question / order-element id"),
     ("claim", ("ledger-dispose",), "id of the grounding claim, not its text"),
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
-    ("target", ("question-raise", "plan-review", "plan-review-walk", "plan-review-compose"),
+    ("target", ("question-raise", "plan-review", "plan-review-walk", "plan-review-compose",
+                "plan-review-pair-history"),
      "plan element address or plan file path"),
+    ("pair", ("plan-review-pair-history",), "review pair id (`<base>-<service>`) — an id, not narrative"),
     ("control", ("question-raise",),
      "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
      "grammar-bound name, never the prose --control of record-result/close"),
@@ -10799,6 +10864,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "every digest, pair and depth is computed from it")
     sp.add_argument("--format", choices=("text", "json"), default="text",
                     help="'json' emits the walk as {plan_path, discharges, levels}")
+    sp = add("plan-review-pair-history"); sp.add_argument("--session", required=True)
+    sp.add_argument("--target", default=None,
+                    help="plan file the pair's records were taken against (defaults to the "
+                         "session's current plan_path)")
+    sp.add_argument("--pair", required=True,
+                    help="the review pair id (as listed by plan-review-walk)")
     sp = add("plan-review-compose"); sp.add_argument("--session", required=True)
     sp.add_argument("--target", default=None,
                     help="plan file to compose a whole-plan pass for (defaults to the "

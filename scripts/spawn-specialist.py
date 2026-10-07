@@ -567,6 +567,15 @@ def build_parser() -> argparse.ArgumentParser:
         "scripts/plan-review-topological.py is the planned whole-plan driver "
         "that walks every pair through this flag.",
     )
+    p.add_argument(
+        "--review-topo-history",
+        default=None,
+        metavar="<file>",
+        help="JSON file holding the `agentctl plan-review-pair-history` data payload "
+        "for the --review-topo pair: the bundle then carries the pair's prior "
+        "verdicts and concerns and the parts changed since, for a re-review. "
+        "Only valid with --review-topo; the spawn stays session-free.",
+    )
     p.add_argument("--dry-run", action="store_true", help="print the prompt and the command that would run, then exit")
     return p
 
@@ -1987,6 +1996,11 @@ def main(argv: list[str] | None = None) -> int:
     topo_view_dir: "Path | None" = None
     topo_plan_sha256: "str | None" = None
     topo_doc = None
+    topo_history: "dict | None" = None
+    if args.review_topo_history is not None and args.review_topo is None:
+        print("error: --review-topo-history is only valid with --review-topo.", file=sys.stderr)
+        log_refused("review-topo-history-without-review-topo", {"kind": args.kind})
+        return 2
     if args.review_topo is not None:
         if args.kind != "thinker":
             print(
@@ -2027,6 +2041,16 @@ def main(argv: list[str] | None = None) -> int:
                 {"kind": args.kind, "review_pair": topo_pair, "plan_sha256": topo_plan_sha256},
             )
             return 2
+        if args.review_topo_history is not None:
+            try:
+                topo_history = json.loads(Path(args.review_topo_history).read_text(encoding="utf-8"))
+                if not (isinstance(topo_history, dict) and isinstance(topo_history.get("records"), list)
+                        and isinstance(topo_history.get("changed_parts_since_last"), list)):
+                    raise ValueError("expected an object with `records` and `changed_parts_since_last` lists")
+            except (OSError, ValueError) as exc:
+                print(f"error: --review-topo-history {args.review_topo_history}: {exc}", file=sys.stderr)
+                log_refused("review-topo-history-unreadable", {"kind": args.kind, "review_pair": topo_pair})
+                return 2
         topo_units_override = os.environ.get("AGENTCTL_TOPO_UNITS_DIR")
         topo_root = Path(topo_units_override) if topo_units_override else agentctl_topo_units_dir()
         topo_view_dir = topo_root / topo_plan_sha256 / topo_pair_view_dirname(topo_pair)
@@ -2094,7 +2118,8 @@ def main(argv: list[str] | None = None) -> int:
     topo_bundle: "str | None" = None
     if topo_pair is not None:
         topo_bundle = render_pair_review_bundle(
-            topo_doc, topo_pair, plan_sha256=topo_plan_sha256, view_dir=topo_view_dir
+            topo_doc, topo_pair, plan_sha256=topo_plan_sha256, view_dir=topo_view_dir,
+            history=topo_history,
         )
     try:
         prompt = assemble_prompt(
