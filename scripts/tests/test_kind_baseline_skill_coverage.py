@@ -76,6 +76,10 @@ _KIND_FILES: dict[str, tuple[str, ...]] = {
 _EXEMPT: dict[tuple[str, str], str] = {
     ("developer", "git push --force"): "a forbidden action the brief prohibits, never one it instructs",
     ("developer", "git reset --hard"): "a forbidden action the brief prohibits, never one it instructs",
+    ("developer", "python3 -c"): (
+        "names a write bypass the norm forbids and the guard does not catch, "
+        "never an instruction to run it"
+    ),
     ("developer", "git -C <worktree> commit …"): (
         "illustrative placeholder shape (<worktree> + trailing ellipsis) showing which "
         "flag to use, not a literal invocation"

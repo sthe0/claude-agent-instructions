@@ -1333,7 +1333,14 @@ reviewed_by = "developer"
 
 [sites."scripts/long_job_detect.py::<module>::re.compile"]
 class = "structural"
-ground = "Compile the nohup shell-token pattern and the launch-verb command-word pattern used on Bash commands."
+ground = "Compile the nohup shell-token pattern, the launch-verb command-word pattern and the single-/double-quoted-span patterns used on Bash commands; shell syntax, no free-text meaning."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/long_job_detect.py::_strip_quoted::pattern.sub"]
+class = "structural"
+ground = "Strips single- and double-quoted spans from a shell command line so the nohup/orchestrator/verb tokens are searched only in unquoted shell syntax; no free-text meaning is decided."
 hits = 2
 hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
