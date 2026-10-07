@@ -208,6 +208,45 @@ def test_legacy_events_take_their_ledger_records_in_order(store, session):
     assert [c["id"] for c in new["concerns"]] == second.data["concern_ids"]
 
 
+def test_older_legacy_event_does_not_take_the_newer_events_open_blocker(store, session):
+    plan = session
+    _review_pair(store, plan, "revise", ["blocking: C1: first complaint"])
+    _retitle(plan, "Scaffold module")
+    second = _review_pair(store, plan, "revise", ["blocking: C1: second complaint"])
+    _strip_event_ids(store)
+    state = store.load(SID)
+    for cid in [c for c, e in state.concern_ledger.items() if "first complaint" in e.text]:
+        del state.concern_ledger[cid]
+    store.save(state)
+
+    old, new = _history(store, plan)["records"]
+    assert [c["id"] for c in old["concerns"]] == [""]
+    assert "first complaint" in old["concerns"][0]["text"] and not old["concerns"][0]["unresolved"]
+    (blocker,) = new["concerns"]
+    assert blocker["id"] == second.data["concern_ids"][0] and blocker["unresolved"] is True
+    assert "UNRESOLVED BLOCKER" in _bundle(plan, _history(store, plan))
+
+
+def test_record_against_another_plan_path_supplies_no_concerns_to_the_target(store, session):
+    from agentctl.state import ConcernRecord
+    plan = session
+    first = _review_pair(store, plan, "revise", ["blocking: C1: stage 1 scaffold is wrong"])
+    _strip_event_ids(store)
+    state = store.load(SID)
+    own = state.concern_ledger[first.data["concern_ids"][0]]
+    state.concern_ledger["other#0.c0"] = ConcernRecord(
+        id="other#0.c0", scope=own.scope, plan_path="/elsewhere/plan.toml", local_id="c0",
+        text="a complaint about another plan", severity="blocking", effective="blocking",
+        parts=list(own.parts), record_seq=0, status="open")
+    store.save(state)
+
+    data = _history(store, plan)
+    (concern,) = data["records"][0]["concerns"]
+    assert concern["id"] == own.id and concern["unresolved"] is True
+    text = _bundle(plan, data)
+    assert "another plan" not in text and "UNRESOLVED BLOCKER" in text
+
+
 def test_legacy_event_without_a_ledger_entry_shows_its_texts_without_ids(store, session):
     plan = session
     _review_pair(store, plan, "revise", ["blocking: C1: stage 1 scaffold is wrong"])

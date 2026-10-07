@@ -291,6 +291,7 @@ _WRAPPER_DO_NOT_WRAP: dict[str, dict[str, str]] = {
         "continue_worktree": "a worktree path — a filesystem reference, not prose",
         "session": "engine session id — an opaque store key, not prose",
         "review_topo": "a unit selector — an integer stage index or the literal 'order', not prose",
+        "review_topo_history": "path to the driver-written JSON history file, not prose",
     },
     "spawn-cursor-specialist.py": {
         "kind": "specialization name — an id from a fixed catalog (SKILL.md directory names), not prose",

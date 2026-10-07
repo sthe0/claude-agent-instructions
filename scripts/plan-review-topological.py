@@ -63,7 +63,7 @@ SUMMARY_COST_RE = re.compile(r"\bcost_usd=([0-9.]+)")
 SUMMARY_DURATION_RE = re.compile(r"\bduration_ms=(\d+)")
 DRY_CHARS_RE = re.compile(r"^# stdin: <prompt (\d+) chars>", re.MULTILINE)
 DRY_VIEW_RE = re.compile(r"^TOPO-VIEW: \S+ files=(\S*)", re.MULTILINE)
-HISTORY_PLACEHOLDER = "<pair-history.json>"
+HISTORY_PLACEHOLDER = "pair-history.json"
 CEILING_HINT = "exits: split the pair's plan content or dispatch this pair by hand (user override)"
 
 

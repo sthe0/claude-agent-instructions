@@ -4425,10 +4425,7 @@ def _blocking_parts(parsed, parts_by_concern) -> set[str]:
 def _entry_stays_open(entry: ConcernRecord, digests: dict, reraised: set[str]) -> bool:
     """An open concern survives a record unless a part it names changed since it was
     last raised and the record does not re-raise that part as blocking."""
-    moved = any(
-        digests.get(p) is None or entry.raise_digests.get(p) != digests[p]
-        for p in entry.parts
-    )
+    moved = _changed_parts(entry.parts, digests, entry.raise_digests)
     return not moved or bool(reraised.intersection(entry.parts))
 
 
@@ -5141,13 +5138,14 @@ def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = No
     )
 
 
-def _pair_ledger_groups(state: SessionState, pair: str) -> "dict[int, list[ConcernRecord]]":
-    """The pair scope's ledger entries grouped by the record that raised them, each group
-    in concern order — how a record taken before events carried `concern_ids` is found."""
+def _pair_ledger_groups(state: SessionState, pair: str, target: str) -> "dict[int, list[ConcernRecord]]":
+    """The pair scope's ledger entries raised against `target`, grouped by the record that
+    raised them, each group in concern order — how a record taken before events carried
+    `concern_ids` is found."""
     scope = plan_review_scope_for_pair(pair)
     groups: dict[int, list[ConcernRecord]] = {}
     for entry in state.concern_ledger.values():
-        if entry.scope == scope:
+        if entry.scope == scope and entry.plan_path == target:
             groups.setdefault(entry.record_seq, []).append(entry)
     for group in groups.values():
         group.sort(key=lambda e: (len(e.local_id), e.local_id))
@@ -5189,7 +5187,7 @@ def cmd_plan_review_pair_history(args, *, store: StateStore, runner: Runner | No
         e for e in state.history
         if e.get("event") == "plan_pair_review" and e.get("pair") == pair and e.get("target") == target
     ]
-    by_seq = _pair_ledger_groups(state, pair)
+    by_seq = _pair_ledger_groups(state, pair, target)
     claimed = {e["record_seq"] for e in events if e.get("record_seq")}
     claimed.update(
         state.concern_ledger[cid].record_seq for e in events for cid in e.get("concern_ids") or []
@@ -5201,8 +5199,12 @@ def cmd_plan_review_pair_history(args, *, store: StateStore, runner: Runner | No
                    if cid in state.concern_ledger]
         if not entries and event.get("record_seq") in by_seq:
             entries = by_seq[event["record_seq"]]
-        elif not entries and not event.get("record_seq") and event.get("concerns") and unclaimed:
-            entries = by_seq[unclaimed.pop(0)]
+        elif not entries and not event.get("record_seq") and event.get("concerns"):
+            texts = list(event["concerns"])
+            seq = next((s for s in unclaimed if [e.text for e in by_seq[s]] == texts), None)
+            if seq is not None:
+                unclaimed.remove(seq)
+                entries = by_seq[seq]
         concerns = [_ledger_concern(entry, state, doc) for entry in entries] or [
             {"id": "", "severity": "", "effective_severity": "", "parts": [], "text": text,
              "unresolved": False}

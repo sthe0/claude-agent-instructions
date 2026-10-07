@@ -549,9 +549,8 @@ def _open_prior_concerns(pr, state: SessionState, doc) -> list:
     ledger_scope = _plan_review_scope_for_stage(index) if index is not None else pr.scope
     return [
         e for e in state.concern_ledger.values()
-        if e.scope == ledger_scope and e.status == CONCERN_OPEN
-        and e.record_seq != pr.record_seq
-        and not _concern_discharged(e.scope, e.local_id, e.text, state, doc)
+        if e.scope == ledger_scope and e.record_seq != pr.record_seq
+        and concern_unresolved(e, state, doc)
     ]
 
 
