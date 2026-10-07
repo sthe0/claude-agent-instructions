@@ -23,6 +23,8 @@ import pytest
 from agentctl import cli, gates, task_accumulator
 from agentctl.config import Thresholds
 from agentctl.plan import load_plan, review_pairs
+from agentctl.state import Node, SessionState
+from conftest import STAGE_OBSERVATIONS
 
 AGENTCTL_DIR = Path(__file__).resolve().parents[1] / "agentctl"
 
@@ -145,53 +147,177 @@ def test_replay_same_version_counts_one_round(store, fixtures_dir, tmp_path, gat
     assert _rounds(sid, store) == 2
 
 
-def test_replay_same_digest_two_stale_callers_count_once(store, fixtures_dir, tmp_path, gate_on):
-    """Two sessions that each loaded the task's state before either wrote, and record a
-    pair against the same plan digest, count one round: compare-and-increment runs
-    under the accumulator's lock, not against the caller's stale snapshot."""
-    plan = _plan(fixtures_dir, tmp_path)
-    _to_plan_ready(store, "rv-a", plan, task="shared")
-    _start(store, "rv-b", "shared")
-    a, b = store.load("rv-a"), store.load("rv-b")
-    digest = _sha(plan)
-    for state in (a, b):
-        cli._count_review_round(state, digest)
-    assert a.review_rounds == 1 and b.review_rounds == 1
-    assert task_accumulator.get("shared")["per_axis_totals"]["review_rounds"] == 1
+def _race_two_counters(add, root, monkeypatch):
+    """Release two threads past a barrier into `add(..., count_if_digest_differs=)` for the
+    SAME digest, with the accumulator's parse step stretched so a read that happens
+    before the other caller's write is a stale read. Returns the stored total."""
+    import threading
+    import time
+
+    real_coerce = task_accumulator._coerce
+
+    def slow_coerce(raw, task_id):
+        out = real_coerce(raw, task_id)
+        time.sleep(0.15)
+        return out
+
+    monkeypatch.setattr(task_accumulator, "_coerce", slow_coerce)
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def caller():
+        try:
+            barrier.wait(timeout=5)
+            add("race", "review_rounds", 1, count_if_digest_differs="d" * 64, root=root)
+        except BaseException as exc:  # noqa: BLE001 - surfaced by the assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=caller) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert not errors, errors
+    monkeypatch.setattr(task_accumulator, "_coerce", real_coerce)
+    return task_accumulator.get("race", root=root)["per_axis_totals"]["review_rounds"]
+
+
+def _split_read_then_write_add(task_id, axis, count, *, root, count_if_digest_differs, **_):
+    """The defective shape the real `add` must not have: the digest is read OUTSIDE the
+    lock and the decision is made on that read, then the increment is written under it."""
+    path = task_accumulator._path(task_id, root)
+    seen = (task_accumulator._coerce(path.read_text(encoding="utf-8"), task_id)
+            if path.exists() else task_accumulator._empty(task_id))
+    with task_accumulator._FileLock(path):
+        data = (task_accumulator._coerce(path.read_text(encoding="utf-8"), task_id)
+                if path.exists() else task_accumulator._empty(task_id))
+        if seen["review_rounds_last_sha256"] != count_if_digest_differs:
+            data["per_axis_totals"][axis] += count
+        data["review_rounds_last_sha256"] = count_if_digest_differs
+        task_accumulator._write_atomic(path, data)
+
+
+def test_replay_same_digest_two_stale_callers_count_once(tmp_path, monkeypatch):
+    """Two callers released together on one digest — each holding a snapshot taken before
+    either wrote — count ONE round: compare-and-increment is a single locked step."""
+    assert _race_two_counters(task_accumulator.add, tmp_path, monkeypatch) == 1
+
+
+def test_replay_race_harness_catches_a_split_read_then_write(tmp_path, monkeypatch):
+    """The control for the test above: the same harness over a read-then-write variant
+    counts the round twice, so the single-round result is not an artefact of timing."""
+    assert _race_two_counters(_split_read_then_write_add, tmp_path, monkeypatch) == 2
+
+
+def _refined_plan(fixtures_dir, tmp_path) -> str:
+    dest = tmp_path / "refined.toml"
+    dest.write_bytes((fixtures_dir / "plan_two_stage_refined.toml").read_bytes())
+    return str(dest)
+
+
+def _drive_to_executing(store, sid, plan, *, record_pass=True) -> None:
+    if record_pass:
+        _whole_record(store, sid, plan, verdict="pass")
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.ok, d.detail
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    assert store.load(sid).node == Node.EXECUTING.value
 
 
 def test_replay_release_stays_active_after_replan(store, fixtures_dir, tmp_path, gate_on):
-    """approve/replan zero plan_review_rounds; review_rounds is not reset by them, so a
-    spent valve stays spent across a replan."""
+    """Approve and a real replan zero plan_review_rounds; review_rounds is not reset by
+    either, so a valve that has fired stays fired across them."""
     sid = "rv-replan"
     plan = _plan(fixtures_dir, tmp_path)
     _to_plan_ready(store, sid, plan)
     thr = _threshold()
     for version in range(thr):
         _pair_record(store, sid, plan, _pairs(plan)[0])
-        _new_version(plan, version)
+        if version < thr - 1:
+            _new_version(plan, version)
+            cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
     assert _release_active(store, sid)
-    _whole_record(store, sid, plan, verdict="pass")
-    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    _drive_to_executing(store, sid, plan)
     after_approve = store.load(sid)
     assert after_approve.plan_review_rounds == 0
     assert after_approve.review_rounds >= thr
     assert gates.plan_review_round_release_active(after_approve)
 
+    refined = _refined_plan(fixtures_dir, tmp_path)
+    cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker", concerns=None,
+                           note="", target=refined, plan_digest=_sha(refined)), store=store)
+    d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
+    assert d.ok, d.detail
+    assert [e for e in store.load(sid).history if e["event"] == "replan"]
+    after_replan = store.load(sid)
+    assert after_replan.plan_review_rounds == 0
+    assert after_replan.review_rounds >= thr
+    assert gates.plan_review_round_release_active(after_replan)
+
 
 # --- replay: ts on history events ---------------------------------------------------
 
+def _assert_utc_ts(event) -> None:
+    ts = event.get("ts")
+    assert ts, f"event without ts: {event}"
+    assert dt.datetime.fromisoformat(ts).utcoffset() == dt.timedelta(0)
+
+
 def test_replay_ts_events_carry_utc_timestamp(store, fixtures_dir, tmp_path, gate_on):
+    """submit_plan, plan_pair_review, replan and verify_final — driven by real commands —
+    and every other event on the way each carry an ISO-8601 UTC `ts`."""
     sid = "rv-ts"
     plan = _plan(fixtures_dir, tmp_path)
     _to_plan_ready(store, sid, plan)
+    _pair_record(store, sid, plan, _pairs(plan)[0])
+    _drive_to_executing(store, sid, plan)
+    refined = _refined_plan(fixtures_dir, tmp_path)
+    cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker", concerns=None,
+                           note="", target=refined, plan_digest=_sha(refined)), store=store)
+    d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
+    assert d.ok, d.detail
+    for observation in STAGE_OBSERVATIONS[:2]:
+        cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                                 control="reviewed: ok", observation=observation),
+                              store=store)
+        cli.cmd_next_stage(ns(session=sid), store=store)
+    d = cli.cmd_verify_final(ns(session=sid), store=store)
+    assert d.ok, d.detail
     history = store.load(sid).history
-    assert history
+    assert {"submit_plan", "plan_pair_review", "replan", "verify_final"} <= {e["event"] for e in history}
     for event in history:
-        ts = event.get("ts")
-        assert ts, f"event without ts: {event}"
-        parsed = dt.datetime.fromisoformat(ts)
-        assert parsed.utcoffset() == dt.timedelta(0)
+        _assert_utc_ts(event)
+
+
+def test_replay_ts_copies_of_a_loaded_state_never_stamp_old_events(store, tmp_path):
+    """The boundary between old and new events travels with every way a state object is
+    rebuilt: a JSON round-trip or a `dataclasses.replace` copy of an unstamped, loaded
+    state must not give its pre-existing events the save time."""
+    import dataclasses
+    import json
+
+    sid = "rv-ts-copy"
+    _start(store, sid)
+    path = store.path(sid)
+    raw = json.loads(path.read_text())
+    for event in raw["history"]:
+        event.pop("ts", None)
+    path.write_text(json.dumps(raw))
+    loaded = store.load(sid)
+    copies = (
+        SessionState.from_json(loaded.to_json()),
+        dataclasses.replace(loaded, goal="copy"),
+    )
+    assert "_loaded_history_len" not in loaded.to_json()
+    for copy in copies:
+        assert copy._loaded_history_len == len(loaded.history)
+        copy.log("note_after_copy")
+        store.save(copy)
+        history = store.load(sid).history
+        assert all("ts" not in e for e in history if e["event"] != "note_after_copy")
+        assert "ts" in history[-1]
 
 
 def test_replay_ts_old_events_stay_unstamped(store, tmp_path):
@@ -238,15 +364,22 @@ def test_review_rounds_survives_approve_and_replan_and_second_session(
     _to_plan_ready(store, sid, plan)
     _whole_record(store, sid, plan, verdict="pass")
     assert store.load(sid).review_rounds == 1
-    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    _drive_to_executing(store, sid, plan, record_pass=False)
     assert store.load(sid).review_rounds == 1
+    refined = _refined_plan(fixtures_dir, tmp_path)
+    cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker", concerns=None,
+                           note="", target=refined, plan_digest=_sha(refined)), store=store)
+    assert store.load(sid).review_rounds == 2
+    d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
+    assert d.ok, d.detail
+    assert store.load(sid).review_rounds == 2
     _start(store, "rv-surv-2")
     assert store.load("rv-surv-2").review_rounds == 0  # mirror is filled at first _require
     cli.cmd_classify(ns(session="rv-surv-2", chat=True, changed_lines=None, files=None,
                         wall_clock_min=None, tracker_key=None, architectural=False,
                         external_effect=False, new_dependency=False,
                         public_api_change=False), store=store)
-    assert _rounds("rv-surv-2", store) == 1
+    assert _rounds("rv-surv-2", store) == 2
 
 
 def test_second_session_does_not_double_count_a_counted_digest(

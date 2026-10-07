@@ -31,9 +31,11 @@ def stamp_new_history(state: SessionState, now: dt.datetime | None = None) -> No
     `ts`, once. The clock lives here, at the store seam, because SessionState.log and
     the gate modules are pure. Events that were already in the file at load time stay
     exactly as they were: stamping a pre-change event with the save time would make a
-    session that began before this field existed look as if it began after it. A state
-    never loaded from a file (a new session) counts all its events as appended."""
-    start = getattr(state, "_loaded_history_len", 0)
+    session that began before this field existed look as if it began after it. The
+    boundary is `SessionState._loaded_history_len`, set at construction (so a loaded or
+    `dataclasses.replace`d state treats its existing events as already persisted); a new
+    session is built with no history, so all of its events count as appended."""
+    start = state._loaded_history_len
     stamp = (now or dt.datetime.now(dt.timezone.utc)).isoformat(timespec="seconds")
     for event in state.history[start:]:
         event.setdefault("ts", stamp)
@@ -62,9 +64,7 @@ class FileStateStore:
         p = self.path(session_id)
         if not p.exists():
             return None
-        state = SessionState.from_json(p.read_text(encoding="utf-8"))
-        state._loaded_history_len = len(state.history)
-        return state
+        return SessionState.from_json(p.read_text(encoding="utf-8"))
 
     def save(self, state: SessionState) -> None:
         state.check_invariants()

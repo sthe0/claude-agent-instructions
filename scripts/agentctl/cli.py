@@ -4227,9 +4227,9 @@ def _note_round_release(state, review_blockers, store: StateStore) -> dict | Non
     `gates.plan_review_blockers` substitutes the release message into its own
     returned blockers on EITHER condition, so a guard that only checked the solo
     axis would miss a cross-axis-only release and report None here while the
-    caller's blockers already carry the substituted message. The payload shape
-    itself is unchanged by this — still keyed only on `rounds` — so existing
-    exact-dict assertions against the solo-axis path keep passing.
+    caller's blockers already carry the substituted message. The payload carries
+    `rounds` (the counter the valve actually read, i.e. the larger of the two),
+    `review_rounds` (the task-level spend) and the `threshold` it fired against.
 
     Returns None when neither valve is active, which is also the payload callers put
     on the Directive — an explicit "no release here" rather than a missing key.
@@ -4248,7 +4248,8 @@ def _note_round_release(state, review_blockers, store: StateStore) -> dict | Non
         state.log("plan_review_round_release", rounds=rounds, review_rounds=state.review_rounds,
                   threshold=Thresholds().effort_replan_absolute())
         store.save(state)
-    return {"rounds": rounds}
+    return {"rounds": rounds, "review_rounds": state.review_rounds,
+            "threshold": Thresholds().effort_replan_absolute()}
 
 
 def _append_escalation_ledger(rows: list[dict]) -> None:
@@ -4617,7 +4618,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         remedy_cut = review.remedy_tags.count("cut")
         remedy_add = review.remedy_tags.count("add")
         if _is_counted_review(args.verdict, review.reviewer):
-            _count_review_round(state, _plan_file_sha256(target), thinker_record=True)
+            _count_review_round(state, review.plan_sha256 or _plan_file_sha256(target), thinker_record=True)
         if gates.plan_review_scope_moved_since_pass(prior_pass, doc, scope):
             if scope:
                 state.plan_stage_reviews[scope] = review
@@ -4698,8 +4699,8 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     # the release in its own Directive, rather than one round later.
     _count_plan_review_round(state, target)
     if _is_counted_review(args.verdict, review.reviewer):
-        _count_review_round(state, _plan_file_sha256(target), thinker_record=True)
-    blockers = gates.plan_review_blockers(state, target)
+        _count_review_round(state, review.plan_sha256 or _plan_file_sha256(target), thinker_record=True)
+    blockers =gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)
     state.log("plan_review", target=target, verdict=args.verdict, scope=scope,
               reviewer=review.reviewer,

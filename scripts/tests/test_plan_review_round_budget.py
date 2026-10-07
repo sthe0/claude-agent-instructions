@@ -223,13 +223,15 @@ def test_release_present_in_surfaced_payload_and_recorded(store, fixtures_dir, g
     _to_round_budget_exhausted(store, sid, plan)
     d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert d.node == Node.PLAN_READY.value  # still refused — never auto-approves
-    assert d.data["plan_review_round_release"] == {"rounds": 5}
+    spent = store.load(sid).review_rounds
+    expected = {"rounds": 5, "review_rounds": spent, "threshold": 5}
+    assert d.data["plan_review_round_release"] == expected
     events = [e for e in store.load(sid).history if e.get("event") == "plan_review_round_release"]
     assert len(events) == 1
     assert events[0]["rounds"] == 5
     # a second blocked approve at the SAME round count must not duplicate the record
     d2 = cli.cmd_approve(ns(session=sid, by="user"), store=store)
-    assert d2.data["plan_review_round_release"] == {"rounds": 5}
+    assert d2.data["plan_review_round_release"] == expected
     events = [e for e in store.load(sid).history if e.get("event") == "plan_review_round_release"]
     assert len(events) == 1
 
@@ -238,7 +240,8 @@ def test_release_present_in_surfaced_payload_and_recorded(store, fixtures_dir, g
     # every release after the first.
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
     d3 = cli.cmd_approve(ns(session=sid, by="user"), store=store)
-    assert d3.data["plan_review_round_release"] == {"rounds": 6}
+    assert d3.data["plan_review_round_release"] == {
+        "rounds": 6, "review_rounds": store.load(sid).review_rounds, "threshold": 5}
     events = [e for e in store.load(sid).history if e.get("event") == "plan_review_round_release"]
     assert [e["rounds"] for e in events] == [5, 6]
 
@@ -415,7 +418,7 @@ def test_post_approval_versions_count_and_release_lands_in_the_verdict_directive
     assert s.plan_review_rounds == 4
     assert s.review_rounds == 5
     assert gates.plan_review_round_release_active(s) is True
-    assert d.data["plan_review_round_release"] == {"rounds": 5}
+    assert d.data["plan_review_round_release"] == {"rounds": 5, "review_rounds": 5, "threshold": 5}
     assert len(d.data["blockers"]) == 1
     assert "round budget exhausted at round 5" in d.data["blockers"][0]
 
@@ -479,15 +482,14 @@ def test_release_reaches_the_coordinator_on_the_replan_path(
     d = cli.cmd_replan(ns(session=sid, plan=plan), store=store)
     assert d.ok is False and d.action == "plan_review"
     assert "needs a thinker review" not in d.detail
-    assert d.data["plan_review_round_release"] == {"rounds": 6}
+    assert d.data["plan_review_round_release"] == {"rounds": 6, "review_rounds": 6, "threshold": 5}
     assert len(d.data["blockers"]) == 1
     assert "round budget exhausted at round 6" in d.data["blockers"][0]
     # One event for the round, though two different commands surfaced it — the dedup is
     # per round count, so the history stays countable as a metric. The earlier verdicts
     # that crossed the threshold at 5 recorded their own event; this one adds round 6.
     events = [e for e in store.load(sid).history if e.get("event") == "plan_review_round_release"]
-    assert [e["rounds"] for e in events][-1] == 6
-    assert len({e["rounds"] for e in events}) == len(events)
+    assert [e["rounds"] for e in events] == [5, 6]
 
 
 def _parent_at_executing(store, sid, *, rounds, digest):

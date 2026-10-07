@@ -19,6 +19,7 @@ import json
 import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
+from typing import ClassVar
 
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
@@ -1928,8 +1929,17 @@ class SessionState:
     settings_drift: list[dict] = field(default_factory=list)
     cwd_drift: list[dict] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
+    # Not a dataclass field (ClassVar): the number of history events that were already
+    # present when this object was built — what store.stamp_new_history uses to tell a
+    # pre-existing event from one appended since. Kept out of the field set so asdict /
+    # to_json / `SessionState(**asdict(s))` never see it. __post_init__ sets it per
+    # instance, so every construction route (from_json, dataclasses.replace, a direct
+    # call with a history) treats its existing events as already-persisted and none of
+    # them is ever stamped with a later save time.
+    _loaded_history_len: ClassVar[int] = 0
 
     def __post_init__(self) -> None:
+        self._loaded_history_len = len(self.history)
         self.check_invariants()
 
     # --- invariants -------------------------------------------------------
