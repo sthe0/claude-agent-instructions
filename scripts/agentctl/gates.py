@@ -64,7 +64,7 @@ from .plan import (
 )
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
-from .state import Node, PAIR_BINDING_KEYS, Route, SessionState, StageStatus, WeightClass
+from .state import CONCERN_OPEN, Node, PAIR_BINDING_KEYS, Route, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
@@ -515,14 +515,32 @@ def _plan_review_verdict_blockers(pr, *, state: SessionState | None = None, doc=
     blocking_ids = set(pr.in_scope_concern_ids) if classified else set(ids)
     relevant = [(cid, text, i) for i, (cid, text) in enumerate(zip(ids, pr.concerns))
                 if cid in blocking_ids]
+    unfinished = _open_prior_blockers(pr, state, doc)
     if not relevant:
-        return []
+        return default if unfinished else []
     relevant = [r for r in relevant if concern_is_blocking(pr, r[2])]
     if not relevant:
-        return default
-    if all(_concern_discharged(pr.scope, cid, text, state, doc) for cid, text, _ in relevant):
+        return default if unfinished else []
+    if not unfinished and all(
+        _concern_discharged(pr.scope, cid, text, state, doc) for cid, text, _ in relevant
+    ):
         return []
     return default
+
+
+def _open_prior_blockers(pr, state: SessionState, doc) -> list:
+    """Blocking concerns an EARLIER record on `pr`'s scope raised that nothing has
+    discharged. Each scope keeps only its latest record, so a later revise whose own
+    concerns are all advisory must not make the gate forget a blocker it never
+    answered: the ledger is where such a blocker is still found."""
+    index = _plan_review_scope_stage_index(pr.scope) if pr.scope else None
+    ledger_scope = _plan_review_scope_for_stage(index) if index is not None else pr.scope
+    return [
+        e for e in state.concern_ledger.values()
+        if e.scope == ledger_scope and e.status == CONCERN_OPEN
+        and e.record_seq != pr.record_seq
+        and not _concern_discharged(e.scope, e.local_id, e.text, state, doc)
+    ]
 
 
 def _stale_path_blocker(reviewed_path: str | None, target_plan: str | None) -> str:
@@ -700,7 +718,8 @@ def effective_concern_severity(
     unchanged since the scope's previous record and none of them carries an open blocker
     from an earlier record — a finished part is frozen, an unfixed one is not — or (b)
     it restates (`re:<id>`) a concern already dispositioned (risk-accepted, or closed by
-    a later pass/override) and brings no new regression command. A first review (no
+    a later pass/override) and brings no new regression command; a part that still
+    carries an open blocker keeps its concern blocking under either rule. A first review (no
     previous record), a concern naming no part, and `new_evidence` (a regression command
     the scope has not seen, or run-demonstrated evidence) downgrade nothing. `parts` are
     the part tokens the concern names; `changed` the ones whose digest moved since the
@@ -709,11 +728,11 @@ def effective_concern_severity(
         return severity
     if not has_prev or not parts or new_evidence:
         return EFFECTIVE_BLOCKING
-    if restates_dispositioned:
-        return EFFECTIVE_ADVISORY
-    if any(p in changed or p in open_parts for p in parts):
+    if any(p in open_parts for p in parts):
         return EFFECTIVE_BLOCKING
-    return EFFECTIVE_ADVISORY
+    if restates_dispositioned or not any(p in changed for p in parts):
+        return EFFECTIVE_ADVISORY
+    return EFFECTIVE_BLOCKING
 
 
 def concern_is_blocking(pr, index: int) -> bool:

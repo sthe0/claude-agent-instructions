@@ -97,6 +97,10 @@ from .state import (
     CheckKind,
     CheckVenue,
     CodeReview,
+    CONCERN_FIXED,
+    CONCERN_OPEN,
+    CONCERN_RECORDED,
+    CONCERN_SUPERSEDED,
     ConcernRecord,
     Critique,
     Criterion,
@@ -4299,12 +4303,6 @@ def _condition4_ledger_rows(
     ]
 
 
-CONCERN_OPEN = "open"
-CONCERN_FIXED = "fixed"
-CONCERN_SUPERSEDED = "superseded"
-CONCERN_RECORDED = "recorded"
-
-
 @dataclass
 class _ConcernPlan:
     """What the severity rules made of one review record's concerns, before it is stored."""
@@ -4401,9 +4399,34 @@ def _plan_concern_severity(
     effective_verdict = verdict
     if (verdict == gates._PLAN_REVIEW_REVISE and parsed and attested and may_promote
             and gates.EFFECTIVE_BLOCKING not in effective):
-        effective_verdict = gates._PLAN_REVIEW_PASS
+        reraised = _blocking_parts(parsed, parts_by_concern)
+        still_open = [
+            e for e in state.concern_ledger.values()
+            if e.scope == ledger_scope and e.status == CONCERN_OPEN
+            and not gates._concern_discharged(e.scope, e.local_id, e.text, state, doc)
+            and _entry_stays_open(e, digests, reraised)
+        ]
+        if not still_open:
+            effective_verdict = gates._PLAN_REVIEW_PASS
     return _ConcernPlan(parsed, parts_by_concern, effective, effective_verdict, digests,
                         regression_command)
+
+
+def _blocking_parts(parsed, parts_by_concern) -> set[str]:
+    return {
+        p for pc, parts in zip(parsed, parts_by_concern)
+        if pc.severity == SEVERITY_BLOCKING for p in parts
+    }
+
+
+def _entry_stays_open(entry: ConcernRecord, digests: dict, reraised: set[str]) -> bool:
+    """An open concern survives a record unless a part it names changed since it was
+    last raised and the record does not re-raise that part as blocking."""
+    moved = any(
+        digests.get(p) is None or entry.raise_digests.get(p) != digests[p]
+        for p in entry.parts
+    )
+    return not moved or bool(reraised.intersection(entry.parts))
 
 
 def _stamp_concern_plan(review, cp: _ConcernPlan, raw_verdict: str) -> None:
@@ -4416,39 +4439,39 @@ def _stamp_concern_plan(review, cp: _ConcernPlan, raw_verdict: str) -> None:
 
 
 def _commit_concern_ledger(state: SessionState, review, cp: _ConcernPlan, ledger_scope: str,
-                           local_ids: list[str], seq: int) -> list[str]:
+                           local_ids: list[str], seq: int, *, record_only: bool = False) -> list[str]:
     """Close the scope's open concerns this record settles, register this record's own,
     and return their stable ids. A pass/override supersedes every open concern; any other
     record fixes one whose part changed since it was raised and that this record does not
-    re-raise."""
+    re-raise, and refreshes the raise digests of one it does re-raise. A concern outside the
+    reviewer's own scope never opens. `record_only` registers the concerns as recorded
+    without touching the scope's open ones — for a record that does not become the scope's
+    authoritative review."""
     settles_all = review.verdict in (gates._PLAN_REVIEW_PASS, gates._PLAN_REVIEW_OVERRIDE)
-    reraised = {
-        p for pc, parts in zip(cp.parsed, cp.parts)
-        if pc.severity == SEVERITY_BLOCKING for p in parts
-    }
+    reraised = _blocking_parts(cp.parsed, cp.parts)
+    out_of_scope = set(getattr(review, "out_of_scope_concern_ids", []))
     for entry in state.concern_ledger.values():
-        if entry.scope != ledger_scope or entry.status != CONCERN_OPEN:
+        if record_only or entry.scope != ledger_scope or entry.status != CONCERN_OPEN:
             continue
         if settles_all:
             entry.status = CONCERN_SUPERSEDED
-            continue
-        moved = any(
-            cp.part_digests.get(p) is None or entry.raise_digests.get(p) != cp.part_digests[p]
-            for p in entry.parts
-        )
-        if moved and not reraised.intersection(entry.parts):
+        elif _entry_stays_open(entry, cp.part_digests, reraised):
+            if reraised.intersection(entry.parts):
+                entry.raise_digests = {p: cp.part_digests.get(p, "") for p in entry.parts}
+        else:
             entry.status = CONCERN_FIXED
     prefix = plan_review_pair_scope(ledger_scope) or ledger_scope or "plan"
     ids = []
     for i, (pc, parts, eff) in enumerate(zip(cp.parsed, cp.parts, cp.effective)):
         cid = f"{prefix}#{seq}.c{i}"
         ids.append(cid)
+        opens = (eff == gates.EFFECTIVE_BLOCKING and not settles_all and not record_only
+                 and local_ids[i] not in out_of_scope)
         state.concern_ledger[cid] = ConcernRecord(
             id=cid, scope=ledger_scope, plan_path=review.plan_path, local_id=local_ids[i],
             text=pc.body, severity=pc.severity, effective=eff, parts=list(parts),
             raise_digests={p: cp.part_digests.get(p, "") for p in parts}, record_seq=seq,
-            status=CONCERN_OPEN if eff == gates.EFFECTIVE_BLOCKING and not settles_all
-            else CONCERN_RECORDED,
+            status=CONCERN_OPEN if opens else CONCERN_RECORDED,
             regression_commands=[cp.regression_command] if cp.regression_command else [],
         )
         target = state.concern_ledger.get(pc.restates) if pc.restates else None
@@ -4558,7 +4581,7 @@ def _cmd_plan_review_pair(
     review.concern_ids = _commit_concern_ledger(
         state, review, cp, ledger_scope, [f"c{i}" for i in range(len(concerns))], review.record_seq)
     ledger = []
-    if verdict == gates._PLAN_REVIEW_REVISE:
+    if review.verdict == gates._PLAN_REVIEW_REVISE:
         ledger = _condition4_ledger_rows(state, doc, target, review, concerns, "confirmed-gap")
     elif verdict == gates._PLAN_REVIEW_OVERRIDE and prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE:
         ledger = _condition4_ledger_rows(state, doc, target, prev, prev.concerns, "false-alarm")
@@ -4778,6 +4801,8 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     )
     if not scope:
         _stamp_whole_plan_baseline(state, review, doc)
+    else:
+        review.record_seq = _next_record_seq(state)
     evidenced = is_post_pass_revise and gates._plan_review_regression_evidence(prior_pass, review, doc)
     ledger_scope = _ledger_scope(scope)
     concern_plan = _plan_concern_severity(
@@ -4787,7 +4812,11 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         evidence=bool(evidenced), may_promote=not (is_post_pass_revise and not evidenced),
     )
     _stamp_concern_plan(review, concern_plan, args.verdict)
-    if is_post_pass_revise and not evidenced:
+    unevidenced = is_post_pass_revise and not evidenced
+    review.stable_ids = _commit_concern_ledger(
+        state, review, concern_plan, ledger_scope, plan_review_concern_ids(review),
+        review.record_seq, record_only=unevidenced)
+    if unevidenced:
         # The prior PASS stays authoritative — plan_review_passes is never
         # touched here, so gates.plan_review_prior_pass keeps reporting it as
         # found — meaning THIS revise does not reopen the gate by itself
@@ -4834,6 +4863,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             "plan_review_post_pass_unevidenced": True,
             "prior_pass_reviewer": prior_pass.reviewer,
             "concerns": review.concerns,
+            "concern_ids": review.stable_ids,
             "remedy_tags": review.remedy_tags,
             "regression_command_error": regression_command_error,
         }
@@ -4865,9 +4895,6 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             "acceptable>), or edit the plan as the concern proposes (cut or add).",
             data=data,
         )
-    review.stable_ids = _commit_concern_ledger(
-        state, review, concern_plan, ledger_scope, plan_review_concern_ids(review),
-        review.record_seq or _next_record_seq(state))
     _log_concerns_downgraded(state, concern_plan, scope, args.verdict)
     if scope:
         state.plan_stage_reviews[scope] = review

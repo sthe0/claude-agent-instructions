@@ -674,6 +674,12 @@ class PlanPairReview:
 # rules. `parts` are the part tokens the concern names (its explicit token, else the
 # scope's own parts); `raise_digests` are those parts' digests at the last record that
 # carried the concern, the baseline "the part changed" is measured from.
+CONCERN_OPEN = "open"
+CONCERN_FIXED = "fixed"
+CONCERN_SUPERSEDED = "superseded"
+CONCERN_RECORDED = "recorded"
+
+
 @dataclass
 class ConcernRecord:
     id: str

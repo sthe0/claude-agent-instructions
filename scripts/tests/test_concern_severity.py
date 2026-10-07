@@ -188,6 +188,7 @@ def test_extractor_labels_a_terminal_review_block_with_tagged_concerns_review():
     (dict(), "advisory"),
     (dict(restates_dispositioned=True, changed={"stage:1"}), "advisory"),
     (dict(restates_dispositioned=True, new_evidence=True), "blocking"),
+    (dict(restates_dispositioned=True, open_parts={"stage:1"}), "blocking"),
 ])
 def test_effective_concern_severity_branches(kwargs, expected):
     args = dict(severity="blocking", parts=("stage:1",), has_prev=True, changed=set(),
@@ -353,6 +354,91 @@ def test_restating_a_dispositioned_concern_blocks_only_with_a_new_regression_com
     assert d.ok, d.detail
     assert _record(store, sid).effective_severities == [expected]
     assert _record(store, sid).verdict == ("pass" if expected == "advisory" else "revise")
+
+
+# --- 4b. an open blocker keeps holding its scope --------------------------------
+
+def test_advisory_remark_on_another_part_does_not_close_an_open_blocker(store, fixtures_dir, tmp_path):
+    plan = _session(store, fixtures_dir, tmp_path, "o1")
+    first = _review(store, "o1", plan, "revise", ["blocking: stage:1: scaffold is wrong"])
+    (first_id,) = first.data["concern_ids"]
+
+    second = _review(store, "o1", plan, "revise", ["blocking: stage:2: frozen remark"])
+    state = store.load("o1")
+    assert state.plan_review.effective_severities == ["advisory"]
+    assert state.plan_review.verdict == "revise"
+    assert state.concern_ledger[first_id].status == "open"
+    assert gates.plan_review_blockers(state, str(plan))
+    assert second.ok is False
+
+
+def test_open_blocker_on_an_unchanged_part_survives_a_change_elsewhere(store, fixtures_dir, tmp_path):
+    plan = _session(store, fixtures_dir, tmp_path, "o2")
+    first = _review(store, "o2", plan, "revise", ["blocking: stage:1: scaffold is wrong"])
+    (first_id,) = first.data["concern_ids"]
+
+    _retitle(plan, "Add tests")
+    d = _review(store, "o2", plan, "revise", ["blocking: stage:1: scaffold is still wrong"])
+    state = store.load("o2")
+    assert state.plan_review.effective_severities == ["blocking"]
+    assert state.concern_ledger[first_id].status == "open"
+    assert d.ok is False
+
+
+def test_reraising_a_blocker_refreshes_its_raise_digests(store, fixtures_dir, tmp_path):
+    plan = _session(store, fixtures_dir, tmp_path, "o3")
+    first = _review(store, "o3", plan, "revise", ["blocking: stage:1: scaffold is wrong"])
+    (first_id,) = first.data["concern_ids"]
+    old = dict(store.load("o3").concern_ledger[first_id].raise_digests)
+
+    _retitle(plan, "Scaffold module")
+    _review(store, "o3", plan, "revise", ["blocking: stage:1: scaffold is wrong again"])
+    refreshed = store.load("o3").concern_ledger[first_id].raise_digests
+    assert refreshed != old
+
+    _review(store, "o3", plan, "revise", ["blocking: stage:2: unrelated remark"])
+    assert store.load("o3").concern_ledger[first_id].status == "open"
+
+
+def test_note_beside_an_out_of_scope_blocker_does_not_block_a_stage_review(store, fixtures_dir, tmp_path):
+    plan = _session(store, fixtures_dir, tmp_path, "o4")
+    d = _review(store, "o4", plan, "revise",
+                ["blocking: stage:2: someone else's stage", "note: stage:1: aside about mine"],
+                scope="stage:1")
+    assert d.ok is False
+    state = store.load("o4")
+    review = state.plan_stage_reviews["stage:1"]
+    assert gates._plan_review_verdict_blockers(review, state=state, doc=load_plan(str(plan))) == []
+
+
+def test_stage_review_stores_its_record_seq_and_the_ids_match(store, fixtures_dir, tmp_path):
+    plan = _session(store, fixtures_dir, tmp_path, "o5")
+    d = _review(store, "o5", plan, "revise", ["blocking: stage:1: scaffold is wrong"], scope="stage:1")
+    review = store.load("o5").plan_stage_reviews["stage:1"]
+    assert review.record_seq > 0
+    assert d.data["concern_ids"] == [f"stage:1#{review.record_seq}.c0"]
+
+
+def test_unevidenced_post_pass_revise_still_records_its_concerns(store, fixtures_dir, tmp_path):
+    plan = _session(store, fixtures_dir, tmp_path, "o6")
+    assert _review(store, "o6", plan, "pass").ok
+    d = _review(store, "o6", plan, "revise", ["blocking: stage:1: late worry"])
+    (cid,) = d.data["concern_ids"]
+    entry = store.load("o6").concern_ledger[cid]
+    assert entry.status == "recorded" and entry.text == "stage:1: late worry"
+
+
+def test_revise_promoted_to_pass_writes_no_confirmed_gap_row(store, fixtures_dir, tmp_path, monkeypatch):
+    ledger = tmp_path / "escalation.jsonl"
+    monkeypatch.setenv(cli.ESCALATION_LEDGER_ENV, str(ledger))
+    plan = _session(store, fixtures_dir, tmp_path, "o7")
+    assert _pair(store, "o7", plan, "revise", ["blocking: C4: not covered"]).ok
+    _override(store, "o7", plan)
+    rows = len(ledger.read_text().splitlines())
+
+    assert _pair(store, "o7", plan, "revise", ["blocking: C4: not covered, again"]).ok
+    assert _record(store, "o7").verdict == "pass"
+    assert len(ledger.read_text().splitlines()) == rows
 
 
 # --- 5. stored records of the earlier format ------------------------------------
