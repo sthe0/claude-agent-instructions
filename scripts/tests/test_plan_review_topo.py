@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, gates
+from agentctl import cli, gates, task_accumulator
 from agentctl.dispatch import RunResult
 from agentctl.plan import (
     CONDITION_MARKERS,
@@ -936,6 +936,15 @@ def _bounded_env(make_env, *, skip: tuple[str, ...] = ("plan-4",)) -> Env:
 
 
 def test_tr13_scoped_discharge_over_the_walk_stale_set(make_env):
+    # Every section below is its own review loop on task "t"; without a fresh review
+    # budget per env the sections' pair records would add up to an open round-release
+    # valve, which collapses the per-pair blockers these sections assert on.
+    build_env = make_env
+
+    def make_env(*args, **kwargs):
+        task_accumulator.reset("t")
+        return build_env(*args, **kwargs)
+
     env = make_env()
     _record_pairs(env)
     assert _compose(env).ok

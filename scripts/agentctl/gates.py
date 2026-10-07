@@ -1068,8 +1068,8 @@ def pair_discharged_stages(state: SessionState, doc, plan_path: str) -> "list[st
 #: an override — this message now says so explicitly rather than leaving that exit
 #: for the reader to infer from the code.
 _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
-    "review round budget exhausted at round {rounds} (config.md's "
-    "effort-replan-absolute threshold, reused) — no further thinker review is required, but the "
+    "review round budget exhausted at round {rounds} (the task's review_rounds count "
+    "against config.md's effort-replan-absolute threshold, reused) — no further thinker review is required, but the "
     "decision is the coordinator's and must be recorded. Two exits, both executable from this "
     "state: (1) run a fresh whole-plan thinker review and record plan-review --verdict "
     "pass — this clears the gate exactly as an on-budget pass always does, because it "
@@ -1095,8 +1095,8 @@ _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
 #: is fixed by spending a further review round; only override or a scope edit
 #: is.
 _PLAN_REVIEW_ROUND_RELEASE_MESSAGE_POST_PASS = (
-    "review round budget exhausted at round {rounds} (config.md's "
-    "effort-replan-absolute threshold, reused) — a whole-plan or stage thinker PASS was already "
+    "review round budget exhausted at round {rounds} (the task's review_rounds count "
+    "against config.md's effort-replan-absolute threshold, reused) — a whole-plan or stage thinker PASS was already "
     "recorded this approval cycle, and a recorded pass is terminal: 'run a fresh "
     "whole-plan thinker review' is no longer an exit, because an on-budget pass would have "
     "cleared the gate directly rather than reaching this message at all. The decision "
@@ -1114,8 +1114,14 @@ _PLAN_REVIEW_ROUND_RELEASE_MESSAGE_POST_PASS = (
 #: — one instance per axis, all three sharing the same threshold accessor
 #: (`Thresholds.effort_replan_absolute`) and comparison, differing only in WHERE their
 #: round count lives.
+#:
+#: The plan-review count is the larger of two: `plan_review_rounds` (reset by approve and
+#: replan) and `review_rounds` (the task's never-reset total, one per reviewed plan version
+#: or thinker record — the pairwise route's 700+ verdicts never touch the first). A max can
+#: only make a release easier to reach than the first counter alone.
 _PLAN_REVIEW_ROUND_COUNTER = RoundReleaseCounter(
-    name="plan_review", getter=lambda state: state.plan_review_rounds,
+    name="plan_review",
+    getter=lambda state: max(state.plan_review_rounds, getattr(state, "review_rounds", 0)),
 )
 _CODE_REVIEW_ROUND_COUNTER = RoundReleaseCounter(
     name="code_review", getter=lambda state: state.code_review_rounds,
@@ -1126,8 +1132,9 @@ _PLAN_ENUMERATE_ROUND_COUNTER = RoundReleaseCounter(
 
 
 def plan_review_round_release_active(state: SessionState | None, thr: Thresholds | None = None) -> bool:
-    """True once `state.plan_review_rounds` has reached the Rule-of-Three threshold this
-    stage reuses rather than duplicating — config.md's `effort-replan-absolute`. Past this
+    """True once the plan-review round count has reached the threshold this
+    stage reuses rather than duplicating — config.md's `effort-replan-absolute`. The count is
+    `max(state.plan_review_rounds, state.review_rounds)` (see `_PLAN_REVIEW_ROUND_COUNTER`). Past this
     point `plan_review_blockers` stops demanding another review pass and routes to the user
     instead (see `_PLAN_REVIEW_ROUND_RELEASE_MESSAGE`).
 
@@ -1170,8 +1177,8 @@ PLAN_ENUMERATE_ROUND_RELEASE_MESSAGE = (
 
 
 def plan_enumerate_round_release_active(bag, thr: Thresholds | None = None) -> bool:
-    """True once the premise bag's `enumerate_pass` reaches the Rule-of-Three threshold
-    this function reuses — config.md's `effort-replan-absolute`. Past this point
+    """True once the premise bag's `enumerate_pass` reaches the
+    threshold this function reuses — config.md's `effort-replan-absolute`. Past this point
     `premise_blockers` stops demanding another re-run for a stale enumeration and routes
     to the user instead (see `PLAN_ENUMERATE_ROUND_RELEASE_MESSAGE`).
 
@@ -1193,7 +1200,7 @@ def plan_enumerate_round_release_active(bag, thr: Thresholds | None = None) -> b
 
 def cross_axis_friction_release_active(state: SessionState | None, thr: Thresholds | None = None) -> bool:
     """True once the SUM of plan-review + plan-enumerate + code-review round counts
-    reaches the shared Rule-of-Three threshold (config.md's `effort-replan-absolute`)
+    reaches the shared threshold (config.md's `effort-replan-absolute`)
     — even when no single axis has individually reached it.
 
     Exists because the three per-axis valves (`plan_review_round_release_active`,
@@ -1888,7 +1895,7 @@ _DIAGNOSING_REPLAN_CEILING_MESSAGE = (
 
 
 def diagnosing_replan_round_release_active(replan_count: int, thr: Thresholds | None = None) -> bool:
-    """True once the task's cross-session `replan_count` has reached the Rule-of-Three
+    """True once the task's cross-session `replan_count` has reached the
     threshold this axis reuses rather than duplicating — config.md's
     `effort-replan-absolute`. Past this point `diagnosing_replan_blockers` stops
     letting `agentctl replan` proceed silently from DIAGNOSING and routes to an
@@ -1904,7 +1911,7 @@ def diagnosing_replan_round_release_active(replan_count: int, thr: Thresholds | 
 
 def diagnosing_replan_blockers(state: SessionState, *, task_replan_count: int) -> list[str]:
     """Precondition for `agentctl replan` while `state.node == DIAGNOSING`: once the
-    task's cross-session replan count reaches the Rule-of-Three threshold, a further
+    task's cross-session replan count reaches the `effort-replan-absolute` threshold, a further
     replan is refused until the customer has made an explicit renegotiation decision.
     [] == ok.
 
@@ -1920,7 +1927,7 @@ def diagnosing_replan_blockers(state: SessionState, *, task_replan_count: int) -
     when `continue`/`rescope` zeroes the cross-session accumulator (mirroring
     `task-reset`) — so `diagnosing_replan_round_release_active` alone, reading the live
     counter on every call, is sufficient. A historical "already decided" record cannot
-    distinguish that from a new, independent Rule-of-Three cycle landing on the same
+    distinguish that from a new, independent cycle to the threshold landing on the same
     threshold value again."""
     if state is None or state.node != Node.DIAGNOSING.value:
         return []
@@ -2041,7 +2048,7 @@ _CODE_REVIEW_ROUND_RELEASE_MESSAGE = (
 
 
 def code_review_round_release_active(state: SessionState | None, thr: Thresholds | None = None) -> bool:
-    """True once `state.code_review_rounds` has reached the Rule-of-Three threshold —
+    """True once `state.code_review_rounds` has reached the shared threshold —
     config.md's `effort-replan-absolute`. Past this point `code_review_blockers` stops
     demanding another code-reviewer pass and routes to the user instead (see
     `_CODE_REVIEW_ROUND_RELEASE_MESSAGE`). Mirrors `plan_review_round_release_active`;

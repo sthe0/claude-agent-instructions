@@ -5,7 +5,7 @@ a session, and `effort.py`'s REPLANS scale bounds a session's own replan count
 against `effort-replan-absolute` -- but both budgets reset to zero on a fresh
 session. A task stuck across a session restart (crash, `/clear`, a new
 terminal) gets a brand-new budget each time, so two sessions on the SAME
-task_id can each independently pay up to the Rule-of-Three threshold before
+task_id can each independently pay up to the `effort-replan-absolute` threshold before
 either one's own valve fires. Concrete incident: task
 `hook-guard-permission-self-grant`, sessions `18fb6860` and `2442a5ac`, same
 evening, each hit the 3-replan wall on its own.
@@ -34,8 +34,10 @@ real cross-machine accumulator directory::
         "plan_review_rounds": 0,
         "plan_enumerate_rounds": 0,
         "code_review_rounds": 0,
-        "resolved_reentry": 0
+        "resolved_reentry": 0,
+        "review_rounds": 0
       },
+      "review_rounds_last_sha256": "<plan digest the last review round was counted for>",
       "session_ids_contributing": ["18fb6860", "2442a5ac"],
       "last_updated": "<caller-supplied timestamp, e.g. an ISO8601 string>"
     }
@@ -69,9 +71,15 @@ from lib import config_root
 #: this whole module exists, in its sharpest form: `cmd_reset` builds a brand-new
 #: SessionState, so a counter kept there would be zeroed by the very act it is
 #: supposed to count -- an unbounded reopen loop that resets its own budget each lap.
+#:
+#: `review_rounds` is the plan-review valve's own never-reset spend: one per reviewed
+#: plan version or thinker spawn of the task, counted by `add(count_if_digest_differs=)`
+#: / `add(force_digest=)` below. Unlike `plan_review_rounds` (folded in only at
+#: approve/replan, from a session counter those commands zero) it is incremented at
+#: record time, so the review loop cannot reset the budget that is meant to end it.
 AXES = (
     "replan_count", "plan_review_rounds", "plan_enumerate_rounds", "code_review_rounds",
-    "resolved_reentry",
+    "resolved_reentry", "review_rounds",
 )
 
 SCHEMA_VERSION = 1
@@ -126,6 +134,7 @@ def _empty(task_id: str) -> dict:
         "schema_version": SCHEMA_VERSION,
         "task_id": task_id,
         "per_axis_totals": {axis: 0 for axis in AXES},
+        "review_rounds_last_sha256": "",
         "session_ids_contributing": [],
         "last_updated": None,
     }
@@ -150,6 +159,7 @@ def _coerce(raw: str, task_id: str) -> dict:
         "schema_version": SCHEMA_VERSION,
         "task_id": data.get("task_id", task_id),
         "per_axis_totals": {axis: int(totals.get(axis, 0) or 0) for axis in AXES},
+        "review_rounds_last_sha256": str(data.get("review_rounds_last_sha256") or ""),
         "session_ids_contributing": list(data.get("session_ids_contributing") or []),
         "last_updated": data.get("last_updated"),
     }
@@ -226,6 +236,8 @@ def add(
     session_id: str | None = None,
     now: float | str | None = None,
     root: Path | None = None,
+    count_if_digest_differs: str | None = None,
+    force_digest: str | None = None,
 ) -> dict:
     """Add `count` to `axis`'s running total for `task_id` and persist it,
     returning the updated totals. Guarded by an exclusive lock spanning the
@@ -235,15 +247,35 @@ def add(
     `count` may be 0 (a no-op fold, e.g. a session that closed having spent no
     rounds on this axis) but never negative -- this is a monotonic
     accumulator, not a settable value; a caller wanting to zero it uses
-    `reset()`, the one named, explicit-renegotiation path for that."""
+    `reset()`, the one named, explicit-renegotiation path for that.
+
+    The two digest parameters make `add` the one place a plan version becomes a
+    counted review round (`review_rounds` axis only): both store the plan digest
+    in the task's `review_rounds_last_sha256`, and the comparison with the stored
+    digest and the increment are one critical section -- a caller never reads the
+    digest and then decides, so two callers holding a stale read still produce one
+    increment. `count_if_digest_differs=<sha>` adds `count` only when the stored
+    digest differs from `<sha>` (a pair record on an already counted version adds
+    nothing); `force_digest=<sha>` always adds `count` (a thinker spawn is a round
+    in itself) and records `<sha>` so a pairwise run right after it on the same
+    version does not count again."""
     if axis not in AXES:
         raise ValueError(f"unknown accumulator axis: {axis!r} (expected one of {AXES})")
     if count < 0:
         raise ValueError(f"accumulator counts never decrease: got {count} for axis {axis!r}")
+    if count_if_digest_differs is not None and force_digest is not None:
+        raise ValueError("count_if_digest_differs and force_digest are mutually exclusive")
+    digest = count_if_digest_differs if count_if_digest_differs is not None else force_digest
+    if digest is not None and axis != "review_rounds":
+        raise ValueError("a plan digest is only tracked for the 'review_rounds' axis")
     path = _path(task_id, root)
     with _FileLock(path):
         data = _coerce(path.read_text(encoding="utf-8"), task_id) if path.exists() else _empty(task_id)
+        if count_if_digest_differs is not None and data["review_rounds_last_sha256"] == digest:
+            count = 0
         data["per_axis_totals"][axis] += count
+        if digest is not None:
+            data["review_rounds_last_sha256"] = digest
         if session_id and session_id not in data["session_ids_contributing"]:
             data["session_ids_contributing"].append(session_id)
         if now is not None:

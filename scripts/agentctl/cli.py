@@ -1540,7 +1540,27 @@ def _require(store: StateStore, session_id: str) -> SessionState:
     state = store.load(session_id)
     if state is None:
         raise KeyError(f"no session {session_id!r}")
+    state.review_rounds = task_accumulator.get(state.task_id)["per_axis_totals"]["review_rounds"]
     return state
+
+
+def _count_review_round(state: SessionState, plan_sha256: str, *, thinker_record: bool = False) -> None:
+    """Count one review round of the task and mirror the new total into `state`.
+
+    `thinker_record=False` is a pairwise record: the accumulator adds a round only
+    when `plan_sha256` is not the version it last counted (one pairwise run over N
+    pairs, or a rerun on the same version, is one round). `thinker_record=True` is a
+    whole-plan or stage thinker spawn, a round in itself. The compare-and-increment
+    is the accumulator's own critical section, so this never reads the digest first.
+    An empty digest (unreadable plan) counts nothing — same fail-direction as
+    `_count_plan_review_round`."""
+    if not plan_sha256:
+        return
+    digest = {"force_digest" if thinker_record else "count_if_digest_differs": plan_sha256}
+    totals = task_accumulator.add(
+        state.task_id, "review_rounds", 1, session_id=state.session_id, now=_utcnow(), **digest,
+    )
+    state.review_rounds = totals["per_axis_totals"]["review_rounds"]
 
 
 def _park_blocked(state: SessionState, store: StateStore, stage, marker, base: dict) -> Directive:
@@ -4219,15 +4239,16 @@ def _note_round_release(state, review_blockers, store: StateStore) -> dict | Non
         and (gates.plan_review_round_release_active(state) or gates.cross_axis_friction_release_active(state))
     ):
         return None
+    rounds = gates._PLAN_REVIEW_ROUND_COUNTER.value(state)
     already_logged = any(
-        e.get("event") == "plan_review_round_release"
-        and e.get("rounds") == state.plan_review_rounds
+        e.get("event") == "plan_review_round_release" and e.get("rounds") == rounds
         for e in state.history
     )
     if not already_logged:
-        state.log("plan_review_round_release", rounds=state.plan_review_rounds)
+        state.log("plan_review_round_release", rounds=rounds, review_rounds=state.review_rounds,
+                  threshold=Thresholds().effort_replan_absolute())
         store.save(state)
-    return {"rounds": state.plan_review_rounds}
+    return {"rounds": rounds}
 
 
 def _append_escalation_ledger(rows: list[dict]) -> None:
@@ -4280,7 +4301,8 @@ def _cmd_plan_review_pair(
     pair record is judged only against a CURRENT same-pair record (gates.pair_status),
     never against the nearest whole-plan pass, and it is written only to
     state.plan_pair_reviews — never to plan_review, plan_review_passes or
-    plan_stage_reviews, and it never advances plan_review_rounds. The binding is
+    plan_stage_reviews, and it never advances plan_review_rounds (it advances the
+    task's review_rounds, once per plan version — see _count_review_round). The binding is
     recomputed here from a FRESH load of the evaluated plan, never taken from node
     files materialized at spawn time or from state.stages."""
     def refuse(msg: str) -> Directive:
@@ -4356,6 +4378,8 @@ def _cmd_plan_review_pair(
     elif verdict == gates._PLAN_REVIEW_OVERRIDE and prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE:
         ledger = _condition4_ledger_rows(state, doc, target, prev, prev.concerns, "false-alarm")
     state.plan_pair_reviews[pair] = review
+    if _is_counted_review(verdict, reviewer):
+        _count_review_round(state, live)
     state.log("plan_pair_review", target=target, pair=pair, verdict=verdict, reviewer=reviewer,
               plan_sha256=attested, concerns=concerns, note=note,
               regression_command=regression_command, regression_exit=regression_exit,
@@ -4372,6 +4396,15 @@ def _cmd_plan_review_pair(
 
 
 TOPOLOGICAL_COMPOSITION_REVIEWER = "topological-composition"
+
+
+def _is_counted_review(verdict: str, reviewer: str) -> bool:
+    """A reviewer's pass/revise is a review round; an override is a decision, and the
+    engine's own composition record is not a review at all."""
+    return (
+        verdict in (gates._PLAN_REVIEW_PASS, gates._PLAN_REVIEW_REVISE)
+        and reviewer != TOPOLOGICAL_COMPOSITION_REVIEWER
+    )
 
 
 def _next_record_seq(state) -> int:
@@ -4583,6 +4616,8 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         # record there (test_stage_scoped_revise_after_whole_plan_pass_is_terminal).
         remedy_cut = review.remedy_tags.count("cut")
         remedy_add = review.remedy_tags.count("add")
+        if _is_counted_review(args.verdict, review.reviewer):
+            _count_review_round(state, _plan_file_sha256(target), thinker_record=True)
         if gates.plan_review_scope_moved_since_pass(prior_pass, doc, scope):
             if scope:
                 state.plan_stage_reviews[scope] = review
@@ -4662,6 +4697,8 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     # Placed BEFORE the blockers call so the verdict that exhausts the budget surfaces
     # the release in its own Directive, rather than one round later.
     _count_plan_review_round(state, target)
+    if _is_counted_review(args.verdict, review.reviewer):
+        _count_review_round(state, _plan_file_sha256(target), thinker_record=True)
     blockers = gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)
     state.log("plan_review", target=target, verdict=args.verdict, scope=scope,
@@ -8485,7 +8522,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         return Directive(False, state.node, "submit_plan", "no current plan to replan against")
 
     # diagnosing-replan renegotiation gate (GitHub #177): once this task's
-    # cross-session replan_count reaches the Rule-of-Three ceiling
+    # cross-session replan_count reaches the ceiling
     # (`effort-replan-absolute`) while inside DIAGNOSING, a further replan is
     # refused until the order's customer has made an explicit renegotiation
     # decision. [] (and this whole block a no-op) outside DIAGNOSING and below
@@ -8577,7 +8614,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # effective_deltas() reads this exact accumulator field against the same
         # static ceiling and never resets it itself, which is why an unbounded
         # renegotiation-free loop could re-fire on every subsequent replan; zeroing
-        # it here means the closing replan starts the scale's next Rule-of-Three
+        # it here means the closing replan starts the scale's next
         # budget from zero instead.
         task_accumulator.reset(state.task_id)
 
@@ -10734,8 +10771,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="override cost log path for tests (defaults to cost.COST_LOG)")
     sp.add_argument("--renegotiation-decision", dest="renegotiation_decision", default=None,
                     choices=["continue", "rescope", "abandon"],
-                    help="clear the diagnosing_replan round-release ceiling (Rule-of-Three "
-                         "replans out of DIAGNOSING): continue/rescope zero the cross-session "
+                    help="clear the diagnosing_replan round-release ceiling (the "
+                         "replan-count threshold out of DIAGNOSING): continue/rescope zero the cross-session "
                          "task accumulator and let this replan proceed; abandon parks the "
                          "session at BLOCKED without applying --plan. Requires "
                          "--renegotiated-by and --renegotiation-note")

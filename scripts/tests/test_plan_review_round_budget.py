@@ -401,7 +401,10 @@ def test_post_approval_versions_count_and_release_lands_in_the_verdict_directive
     _to_executing(store, sid, plan)
     assert store.load(sid).plan_review_rounds == 0
 
-    for n in range(4):
+    # The pre-approval pass in _to_executing is itself a counted thinker record, so the
+    # task's review_rounds leads plan_review_rounds by one and the valve opens at the
+    # fourth post-approval verdict.
+    for n in range(3):
         d = _revise_post(store, sid, plan)
         assert d.data["plan_review_round_release"] is None
         assert store.load(sid).plan_review_rounds == n + 1
@@ -409,7 +412,8 @@ def test_post_approval_versions_count_and_release_lands_in_the_verdict_directive
 
     d = _revise_post(store, sid, plan)
     s = store.load(sid)
-    assert s.plan_review_rounds == 5
+    assert s.plan_review_rounds == 4
+    assert s.review_rounds == 5
     assert gates.plan_review_round_release_active(s) is True
     assert d.data["plan_review_round_release"] == {"rounds": 5}
     assert len(d.data["blockers"]) == 1
@@ -467,18 +471,23 @@ def test_release_reaches_the_coordinator_on_the_replan_path(
     for n in range(5):
         _revise_post(store, sid, plan)
         _retitle_stage(plan, 2, f"Add tests, revision {n}")
+    # plan_review_rounds counts the 5 post-approval versions; the task's review_rounds
+    # also holds the approving pass from _to_executing, so the valve's count is 6.
     assert store.load(sid).plan_review_rounds == 5
+    assert store.load(sid).review_rounds == 6
 
     d = cli.cmd_replan(ns(session=sid, plan=plan), store=store)
     assert d.ok is False and d.action == "plan_review"
     assert "needs a thinker review" not in d.detail
-    assert d.data["plan_review_round_release"] == {"rounds": 5}
+    assert d.data["plan_review_round_release"] == {"rounds": 6}
     assert len(d.data["blockers"]) == 1
-    assert "round budget exhausted at round 5" in d.data["blockers"][0]
+    assert "round budget exhausted at round 6" in d.data["blockers"][0]
     # One event for the round, though two different commands surfaced it — the dedup is
-    # per round count, so the history stays countable as a metric.
+    # per round count, so the history stays countable as a metric. The earlier verdicts
+    # that crossed the threshold at 5 recorded their own event; this one adds round 6.
     events = [e for e in store.load(sid).history if e.get("event") == "plan_review_round_release"]
-    assert [e["rounds"] for e in events] == [5]
+    assert [e["rounds"] for e in events][-1] == 6
+    assert len({e["rounds"] for e in events}) == len(events)
 
 
 def _parent_at_executing(store, sid, *, rounds, digest):

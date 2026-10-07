@@ -1,4 +1,4 @@
-"""One reusable round-release ("Rule of Three") primitive, shared by every axis
+"""One reusable round-release primitive, shared by every axis
 that bounds a review/re-run loop against config.md's `effort-replan-absolute`.
 
 Before this module, plan-review and plan-enumerate each carried their own
@@ -44,8 +44,8 @@ class RoundReleaseCounter:
         return int(self.getter(subject) or 0)
 
     def release_active(self, subject: object, thr: Thresholds | None = None) -> bool:
-        """True once this axis alone has reached the shared Rule-of-Three
-        threshold (config.md's `effort-replan-absolute`)."""
+        """True once this axis alone has reached the shared threshold
+        (config.md's `effort-replan-absolute`)."""
         if subject is None:
             return False
         thr = thr if thr is not None else Thresholds()
@@ -54,7 +54,7 @@ class RoundReleaseCounter:
 
 def compute_cross_axis_ceiling(values: Iterable[int], thr: Thresholds | None = None) -> bool:
     """True once the SUM of the given per-axis round counts reaches the shared
-    Rule-of-Three threshold — even when every individual value is still under it.
+    threshold (`effort-replan-absolute`) — even when every individual value is still under it.
 
     Deliberately a plain SUM, not a weighted combination: the diagnosis this
     exists for is that friction accumulated on ANY mix of axes is the same

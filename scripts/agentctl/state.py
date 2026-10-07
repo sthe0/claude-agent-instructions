@@ -23,7 +23,7 @@ from enum import Enum
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 42  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 43  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -53,6 +53,9 @@ SCHEMA_VERSION = 42  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # reviewed_pair_bindings (pair id -> sha256 of its seven-digest
                      # binding) and record_seq, PlanPairReview gains record_seq, both
                      # stamped from SessionState.next_record_seq
+                     # 43: SessionState gains review_rounds -- the mirror of the task's
+                     # never-reset review-round total (task_accumulator axis of the
+                     # same name) that the plan-review round valve reads
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1672,10 +1675,18 @@ class SessionState:
     #     actually recur); cmd_replan resets it and plan_review_counted_digest together.
     # The two paths are disjoint in time, not merely by convention: cmd_submit_plan sets
     # approval.passed = False BEFORE its own increment, so no single call can satisfy
-    # both conditions. Read by gates.plan_review_round_release_active against the
-    # Rule-of-Three threshold config.md's effort-replan-absolute reuses. 0
+    # both conditions. Read by gates.plan_review_round_release_active against
+    # config.md's effort-replan-absolute threshold, which it reuses. 0
     # on legacy states (absent key -> dataclass default via from_dict's cls(**data)).
     plan_review_rounds: int = 0
+    # The task's total of review rounds — one per reviewed plan version or thinker
+    # record, never reset by approve/replan/push/pop (task-level, not plan-level) —
+    # mirrored from task_accumulator's `review_rounds` axis whenever cli.py loads the
+    # session (`_require`) and after each increment. The accumulator, not this field,
+    # is the source of truth: gates.py stays pure and reads only this mirror, as
+    # max(plan_review_rounds, review_rounds). 0 on legacy states (absent key ->
+    # dataclass default via from_dict's cls(**data)).
+    review_rounds: int = 0
     # sha256 of the plan bytes whose review last advanced plan_review_rounds on the
     # post-approval path (schema 30). The counted UNIT is a plan VERSION, not a recorded
     # verdict: gates._plan_review_blockers_coverage surfaces ONE uncovered stage at a

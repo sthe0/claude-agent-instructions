@@ -7,6 +7,7 @@ touching the state machine or classification logic.
 """
 from __future__ import annotations
 
+import datetime as dt
 from pathlib import Path
 from typing import Protocol
 
@@ -23,6 +24,20 @@ def safe_session_id(session_id: str) -> str:
 
 
 _safe = safe_session_id
+
+
+def stamp_new_history(state: SessionState, now: dt.datetime | None = None) -> None:
+    """Give every history event appended since this state was loaded an ISO-8601 UTC
+    `ts`, once. The clock lives here, at the store seam, because SessionState.log and
+    the gate modules are pure. Events that were already in the file at load time stay
+    exactly as they were: stamping a pre-change event with the save time would make a
+    session that began before this field existed look as if it began after it. A state
+    never loaded from a file (a new session) counts all its events as appended."""
+    start = getattr(state, "_loaded_history_len", 0)
+    stamp = (now or dt.datetime.now(dt.timezone.utc)).isoformat(timespec="seconds")
+    for event in state.history[start:]:
+        event.setdefault("ts", stamp)
+    state._loaded_history_len = len(state.history)
 
 
 class StateStore(Protocol):
@@ -47,9 +62,12 @@ class FileStateStore:
         p = self.path(session_id)
         if not p.exists():
             return None
-        return SessionState.from_json(p.read_text(encoding="utf-8"))
+        state = SessionState.from_json(p.read_text(encoding="utf-8"))
+        state._loaded_history_len = len(state.history)
+        return state
 
     def save(self, state: SessionState) -> None:
         state.check_invariants()
+        stamp_new_history(state)
         self.root.mkdir(parents=True, exist_ok=True)
         self.path(state.session_id).write_text(state.to_json(), encoding="utf-8")
