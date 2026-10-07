@@ -1067,6 +1067,7 @@ def build_worklist(
     *,
     rescore_items: "list[tuple[str, DifficultyRecord]]" = (),
     now: "datetime | None" = None,
+    prior: "PriorBoard | None" = None,
 ) -> dict:
     now = now or datetime.now(timezone.utc)
     items = []
@@ -1074,20 +1075,21 @@ def build_worklist(
         ("new", new_items), ("changed", changed_items), ("rescore", rescore_items)
     ):
         for ref, record in batch:
-            items.append(
-                {
-                    "item_ref": ref,
-                    "bucket": bucket,
-                    "title": record.title or record.target,
-                    "functional_ground": record.functional_ground,
-                    "severity": record.severity.value,
-                    "severity_labeled": record.severity_labeled,
-                    "reporter": record.reporter,
-                    "evidence": record.evidence,
-                    "cost_estimate": record.cost_estimate,
-                    "source_digest": item_digest(_backlog_text(record), "open"),
-                }
-            )
+            entry = {
+                "item_ref": ref,
+                "bucket": bucket,
+                "title": record.title or record.target,
+                "functional_ground": record.functional_ground,
+                "severity": record.severity.value,
+                "severity_labeled": record.severity_labeled,
+                "reporter": record.reporter,
+                "evidence": record.evidence,
+                "cost_estimate": record.cost_estimate,
+                "source_digest": item_digest(_backlog_text(record), "open"),
+            }
+            if bucket != "new" and prior is not None and ref in prior.items:
+                entry["addresses"] = list(prior.items[ref].addresses)
+            items.append(entry)
     return {
         "schema": BOARD_SCHEMA,
         "generated_at": now.isoformat(),
@@ -1398,7 +1400,7 @@ def _cost_sort_key(cost: dict) -> tuple:
 
 def _proxy_sort_key(finding: dict) -> tuple:
     score = finding.get("proxy_score")
-    return (-(score if score is not None else float("-inf")), finding["key"])
+    return (-(score if score is not None else float("-inf")), finding["source_ref"])
 
 
 def _join_addressed_clusters(findings: "list[dict]") -> "list[dict]":
@@ -1554,7 +1556,8 @@ def _run_backlog_phase_a(args: argparse.Namespace) -> int:
     new_items, changed_items, unchanged_refs, closed_refs = diff_backlog(records, prior)
     rescore_items = rescore_candidates(records, prior)
     worklist = build_worklist(
-        new_items, changed_items, coverage_gaps, closed_refs, rescore_items=rescore_items
+        new_items, changed_items, coverage_gaps, closed_refs, rescore_items=rescore_items,
+        prior=prior,
     )
     write_worklist(worklist, args.emit_worklist)
     print(
@@ -1622,8 +1625,12 @@ def _apply_addresses_amendments(
     kept: "dict[str, dict]" = {}
     amended = dict(prior.items)
     for ref, c in items.items():
-        if isinstance(c, dict) and set(c) == {"addresses"} and ref in prior.items \
-                and ref not in in_worklist:
+        if (
+            isinstance(c, dict)
+            and set(c) == {"addresses"}
+            and ref in prior.items
+            and ref not in in_worklist
+        ):
             amended[ref] = replace(prior.items[ref], addresses=parse_addresses(ref, c["addresses"]))
         else:
             kept[ref] = c

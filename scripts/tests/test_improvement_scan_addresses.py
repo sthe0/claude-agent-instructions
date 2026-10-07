@@ -244,8 +244,10 @@ def test_absent_addresses_leave_the_existing_ranking_unchanged():
     assert all("addresses" not in f for f in findings)
     assert scan._join_addressed_clusters(findings) == findings
     ranked = scan._rank_findings(findings)
-    measured = [f for f in ranked if f["cost_signal"]["measured"]]
-    assert ranked[: len(measured)] == measured
+    # Order frozen from the pre-change script's output on this fixture.
+    assert [f["source_ref"] for f in ranked] == [
+        "cost-concentration/sess-a", "core-issue-201", "core-issue-207", "delegation-misses/proj-x",
+    ]
     assert not any("via" in f or "dangling" in f for f in ranked)
 
 
@@ -287,3 +289,78 @@ def test_item_with_larger_own_measured_cost_keeps_it_without_a_via_note(tmp_path
     assert item["cost_signal"]["usd_per_week"] == 500.0 and "via" not in item
     assert _order(ranked) == ["b1", "t1"]
     assert "via " not in scan._render_markdown(ranked)
+
+
+# --- reclassified items keep their addresses --------------------------------------
+
+def _changed_worklist_phase_b(tmp_path, classification):
+    assert _phase_b(tmp_path, {"ref-1": _classification(addresses=[K1])}) == 0
+    prior = scan.load_prior_board(tmp_path / "board.json")
+    record = scan.DifficultyRecord(
+        ts="2026-10-08T00:00:00Z", layer="core", target="t", functional_ground="g",
+        severity=scan.Severity.MEDIUM, reporter="agent", evidence="ev",
+        cost_estimate="not estimable: n/a", ref="ref-1",
+    )
+    worklist = scan.build_worklist([], [("ref-1", record)], [], [], prior=prior)
+    assert worklist["items"][0]["addresses"] == [K1]
+    wl, cls = tmp_path / "worklist.json", tmp_path / "classifications.json"
+    wl.write_text(json.dumps(worklist), encoding="utf-8")
+    cls.write_text(json.dumps({"items": {"ref-1": classification}}), encoding="utf-8")
+    args = argparse.Namespace(
+        prior=None, classifications=str(cls), worklist=str(wl), out=None,
+        store=str(tmp_path / "store.jsonl"), dry_run=False,
+    )
+    assert scan._run_backlog_phase_b(args) == 0
+    return _board(tmp_path)["ref-1"]["addresses"]
+
+
+@pytest.mark.parametrize(
+    "overrides, expected",
+    [({}, [K1]), ({"addresses": [K2]}, [K2]), ({"addresses": []}, [])],
+    ids=["omitted-keeps", "supplied-replaces", "empty-clears"],
+)
+def test_changed_item_arrives_with_prior_addresses(tmp_path, overrides, expected):
+    classification = _classification(**overrides)
+    assert _changed_worklist_phase_b(tmp_path, classification) == expected
+
+
+# --- (n) a resolved telemetry row is not open -------------------------------------
+
+def test_key_whose_telemetry_row_is_resolved_is_dangling(tmp_path):
+    store = tmp_path / "store.jsonl"
+    kinds = frozenset([sds.KIND_TELEMETRY_PATTERN])
+    scan.store_findings([_telemetry("t1", 100.0)], kinds=kinds, store_path=store)
+    scan.store_findings([_telemetry("t2", 5.0)], kinds=kinds, store_path=store)
+    scan.store_findings(
+        [_backlog("b1", [_key("t1")])],
+        kinds=frozenset([sds.KIND_BACKLOG_ITEM]), store_path=store,
+    )
+
+    item = _by_signal(scan._rank_findings(scan._report_findings(store)))["b1"]
+    assert item["dangling"] == [_key("t1")] and "via" not in item
+    assert not item["cost_signal"]["measured"]
+
+
+# --- (o) an unranked item produces no Finding, so it is not joined ---------------
+
+def test_unranked_item_with_addresses_yields_no_finding():
+    board, findings, no_urgency = scan.classify_and_score(
+        scan._empty_board(),
+        {"ref-1": _classification(severity_labeled=False, addresses=[K1])},
+        [],
+    )
+
+    assert findings == [] and no_urgency == ["ref-1"]
+    assert board.items["ref-1"].addresses == (K1,)
+
+
+# --- tie-break: equal cost and proxy score order by source_ref --------------------
+
+def test_equal_cost_and_proxy_score_order_by_source_ref(tmp_path):
+    ranked = _report(
+        tmp_path,
+        [_telemetry("t1", 40.0)],
+        [_backlog("b-zeta", [_key("t1")]), _backlog("b-alpha", [_key("t1")])],
+    )
+
+    assert _order(ranked) == ["t1", "b-alpha", "b-zeta"]

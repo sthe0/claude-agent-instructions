@@ -35,8 +35,8 @@ the script's own closed vocabularies gate.
   (breadth, cost_to_resolve, in_flight, recommended_next_step — validated against
   closed vocabularies, rejecting the whole call on the first out-of-vocabulary
   value; optional `addresses` — 12-hex telemetry store keys the item removes,
-  shape-checked at phase B and joined to the cluster's measured cost at report
-  time) and merges item metadata from `--worklist` (a gap exits 2 naming the ref),
+  shape-checked at phase B and joined to the cluster's measured cost at
+  report time) and merges item metadata from `--worklist` (a gap exits 2 naming the ref),
   scores and ranks via
   `score(item) = breadth_weight × recurrence_mass / cost_to_resolve`, and
   writes both the new board to the state file and `Finding` rows to the durable store.

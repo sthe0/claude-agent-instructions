@@ -51,7 +51,9 @@ Procedure step 6).
    12-hex telemetry store keys, copied from the report's telemetry rows, naming
    the measured cluster the item removes; the join to that cluster's cost
    happens at report time). `{"<ref>": {"addresses": [...]}}` alone also amends
-   an item already on the board (`[]` clears it). Reason from the item's own
+   an item already on the board (`[]` clears it). Changed/rescore items arrive
+   with their existing `addresses` already filled in, so re-supply the key only
+   to change it. Reason from the item's own
    text per `backlog-triage-practice.md` § Priority rubric, never guessed.
    Do not copy the item's title, ground, severity, `severity_labeled`, evidence
    or digest: phase B merges them from the worklist. An item with no severity
