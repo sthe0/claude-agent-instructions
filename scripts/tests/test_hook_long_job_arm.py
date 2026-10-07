@@ -63,6 +63,15 @@ def test_detect_silent_on_plain_command(monkeypatch):
     assert mod.detect("cat airflow.md") is None  # tool word, no launch verb
 
 
+def test_detect_silent_on_keyword_inside_quoted_grep_pattern():
+    assert mod.detect('ps -eo pid,cmd | grep -iE "nohup|setsid"') is None
+
+
+def test_detect_silent_on_orchestrator_name_inside_quotes(monkeypatch):
+    monkeypatch.setattr(long_job_detect, "TOOL_RE", long_job_detect._build_tool_re(("airflow", "dagster")))
+    assert mod.detect('echo "airflow start"') is None
+
+
 # --- configurable orchestrator list ------------------------------------------
 
 def test_default_orchestrator_list_unconfigured(tmp_path):
