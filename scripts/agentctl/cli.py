@@ -8964,6 +8964,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # it here means the closing replan starts the scale's next
         # budget from zero instead.
         task_accumulator.reset(state.task_id)
+        state.review_rounds = 0
 
     # The renormalization branch sits HERE deliberately: after difficulty_blockers (a
     # renormalization offers a whole plan, and offering one while the difficulty record

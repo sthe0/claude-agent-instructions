@@ -250,3 +250,27 @@ def test_empty_renegotiated_by_is_refused(store, fixtures_dir):
     state = store.load(sid)
     assert state.node == Node.DIAGNOSING.value
     assert state.renegotiations == []
+
+
+def test_renegotiating_replan_clears_the_round_release_in_the_same_call(store, fixtures_dir, monkeypatch):
+    sid = "rr"
+    _to_diagnosing(store, fixtures_dir, sid)
+    thr = _seed_to_threshold(sid)
+    task_accumulator.add(TASK, "review_rounds", thr, session_id=sid, now=None)
+    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+
+    seen = []
+    real = cli.gates.plan_review_blockers
+
+    def spy(state, *a, **kw):
+        seen.append((state.review_rounds, cli.gates.plan_review_round_release_active(state)))
+        return real(state, *a, **kw)
+
+    monkeypatch.setattr(cli.gates, "plan_review_blockers", spy)
+    d = cli.cmd_replan(ns(
+        session=sid, plan=refined, renegotiation_decision="continue",
+        renegotiated_by="user", renegotiation_note="keep going",
+    ), store=store)
+    assert d.ok is True, d.detail
+    assert seen, "plan_review_blockers was not consulted"
+    assert all(rounds == 0 and not active for rounds, active in seen), seen
