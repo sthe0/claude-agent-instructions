@@ -310,7 +310,7 @@ def test_same_turn_denies_even_with_receipt_present(tmp_path):
 # --- missing observables -> allow, no stamp -----------------------------------
 
 def test_wrong_node_allows_no_stamp(tmp_path):
-    write_full_state(tmp_path, "s12", node="EXECUTING", approval_passed=True,
+    write_full_state(tmp_path, "s12", node="PLANNING", approval_passed=True,
                      plan_presentations=[make_receipt(RENDERING, presented_ts=100.0)])
     t = write_transcript(tmp_path / "t.jsonl", [user_prompt_entry(90.0), text_only_entry(105.0, RENDERING), user_prompt_entry(110.0)])
     proc = run_hook(ask_payload("s12", t), tmp_path)

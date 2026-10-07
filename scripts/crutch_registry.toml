@@ -8120,6 +8120,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "39a33b4c5954b368"
+domain = "code"
+file = "scripts/tests/test_plan_delivery_gate_hook.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "0942cf4bad69198c"
 domain = "code"
 file = "scripts/tests/test_plan_delivery_gate_hook.py"
@@ -8128,7 +8136,47 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "f18f2707355e580b"
+domain = "code"
+file = "scripts/tests/test_plan_delivery_gate_hook.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "0b381d5c28a8c2dd"
+domain = "code"
+file = "scripts/tests/test_plan_delivery_gate_hook.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "c2896f0ed8fce938"
+domain = "code"
+file = "scripts/tests/test_plan_delivery_gate_hook.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "a1c36ea667265253"
+domain = "code"
+file = "scripts/tests/test_plan_delivery_gate_hook.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "791a658b0b78b44e"
+domain = "code"
+file = "scripts/tests/test_plan_delivery_gate_hook.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "cf3a4c7a4291a1a2"
 domain = "code"
 file = "scripts/tests/test_plan_delivery_gate_hook.py"
 class = "not-a-gate"
@@ -22492,6 +22540,30 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
+id = "fab6afaa590e2805"
+domain = "prose"
+file = "memory-global/leaves/fanout-trial-under-cap.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "627dfe4634516fef"
+domain = "prose"
+file = "memory-global/leaves/fanout-trial-under-cap.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "a42e2abe443db808"
+domain = "prose"
+file = "memory-global/leaves/fanout-trial-under-cap.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "441f40d9ea90814d"
 domain = "prose"
 file = "memory-global/leaves/formalization-ladder-l1-l3.md"
@@ -25117,6 +25189,14 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "fbc2b5ddcc55e443"
+domain = "prose"
+file = "memory-global/leaves/published-text-writer-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "688dd551cf77ef29"
 domain = "prose"
 file = "memory-global/leaves/published-text-writer-gate.md"
 class = "perception"
@@ -29100,7 +29180,7 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
-id = "ad062284c9b77295"
+id = "5dd3adb74f30c27f"
 domain = "prose"
 file = "skills/specializations/planner/SKILL.md"
 class = "perception"
