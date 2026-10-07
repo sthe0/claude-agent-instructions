@@ -4366,6 +4366,11 @@ def _concern_parts(body: str, own_parts) -> list[str]:
     return [plan_review_scope_for_stage(index) if index is not None else token]
 
 
+def _changed_parts(parts, digests: dict, prev_digests: dict) -> list[str]:
+    """The parts whose current digest is missing or differs from the one a record stored."""
+    return [p for p in parts if digests.get(p) is None or prev_digests.get(p) != digests[p]]
+
+
 def _plan_concern_severity(
     state: SessionState, doc, ledger_scope: str, own_parts, prev, parsed, verdict: str, *,
     attested: bool, regression_command: str, evidence: bool, may_promote: bool,
@@ -4374,14 +4379,13 @@ def _plan_concern_severity(
     prev_digests = prev.part_digests if prev is not None else {}
     open_parts = {
         p for e in state.concern_ledger.values()
-        if e.scope == ledger_scope and e.status == CONCERN_OPEN
-        and not gates._concern_discharged(e.scope, e.local_id, e.text, state, doc)
+        if e.scope == ledger_scope and gates.concern_unresolved(e, state, doc)
         for p in e.parts
     }
     parts_by_concern, effective = [], []
     for pc in parsed:
         parts = _concern_parts(pc.body, own_parts or tuple(digests))
-        changed = {p for p in parts if digests.get(p) is None or prev_digests.get(p) != digests[p]}
+        changed = set(_changed_parts(parts, digests, prev_digests))
         target = state.concern_ledger.get(pc.restates) if pc.restates else None
         dispositioned = target is not None and (
             target.status == CONCERN_SUPERSEDED
@@ -4402,8 +4406,7 @@ def _plan_concern_severity(
         reraised = _blocking_parts(parsed, parts_by_concern)
         still_open = [
             e for e in state.concern_ledger.values()
-            if e.scope == ledger_scope and e.status == CONCERN_OPEN
-            and not gates._concern_discharged(e.scope, e.local_id, e.text, state, doc)
+            if e.scope == ledger_scope and gates.concern_unresolved(e, state, doc)
             and _entry_stays_open(e, digests, reraised)
         ]
         if not still_open:
@@ -5138,6 +5141,27 @@ def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = No
     )
 
 
+def _pair_ledger_groups(state: SessionState, pair: str) -> "dict[int, list[ConcernRecord]]":
+    """The pair scope's ledger entries grouped by the record that raised them, each group
+    in concern order — how a record taken before events carried `concern_ids` is found."""
+    scope = plan_review_scope_for_pair(pair)
+    groups: dict[int, list[ConcernRecord]] = {}
+    for entry in state.concern_ledger.values():
+        if entry.scope == scope:
+            groups.setdefault(entry.record_seq, []).append(entry)
+    for group in groups.values():
+        group.sort(key=lambda e: (len(e.local_id), e.local_id))
+    return groups
+
+
+def _ledger_concern(entry: ConcernRecord, state: SessionState, doc) -> dict:
+    return {
+        "id": entry.id, "severity": entry.severity, "effective_severity": entry.effective,
+        "parts": list(entry.parts), "text": entry.text,
+        "unresolved": gates.concern_unresolved(entry, state, doc),
+    }
+
+
 def cmd_plan_review_pair_history(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Read-only: what an earlier review of one pair said, for the next reviewer of it.
 
@@ -5161,22 +5185,29 @@ def cmd_plan_review_pair_history(args, *, store: StateStore, runner: Runner | No
         parse_pair(doc, pair)
     except (OSError, PlanError, ValueError) as e:
         return Directive(False, state.node, "noop", f"pair history for {pair!r} in {target}: {e}")
+    events = [
+        e for e in state.history
+        if e.get("event") == "plan_pair_review" and e.get("pair") == pair and e.get("target") == target
+    ]
+    by_seq = _pair_ledger_groups(state, pair)
+    claimed = {e["record_seq"] for e in events if e.get("record_seq")}
+    claimed.update(
+        state.concern_ledger[cid].record_seq for e in events for cid in e.get("concern_ids") or []
+        if cid in state.concern_ledger)
+    unclaimed = [seq for seq in sorted(by_seq) if seq not in claimed]
     records = []
-    for event in state.history:
-        if (event.get("event") != "plan_pair_review" or event.get("pair") != pair
-                or event.get("target") != target):
-            continue
-        concerns = []
-        for cid in event.get("concern_ids") or []:
-            entry = state.concern_ledger.get(cid)
-            if entry is None:
-                continue
-            concerns.append({
-                "id": cid, "severity": entry.severity, "effective_severity": entry.effective,
-                "parts": list(entry.parts), "text": entry.text,
-                "unresolved": entry.status == CONCERN_OPEN and not gates._concern_discharged(
-                    entry.scope, entry.local_id, entry.text, state, doc),
-            })
+    for event in events:
+        entries = [state.concern_ledger[cid] for cid in event.get("concern_ids") or []
+                   if cid in state.concern_ledger]
+        if not entries and event.get("record_seq") in by_seq:
+            entries = by_seq[event["record_seq"]]
+        elif not entries and not event.get("record_seq") and event.get("concerns") and unclaimed:
+            entries = by_seq[unclaimed.pop(0)]
+        concerns = [_ledger_concern(entry, state, doc) for entry in entries] or [
+            {"id": "", "severity": "", "effective_severity": "", "parts": [], "text": text,
+             "unresolved": False}
+            for text in event.get("concerns") or []
+        ]
         records.append({
             "record_seq": event.get("record_seq") or 0,
             "plan_sha256": event.get("plan_sha256", ""),
@@ -5186,12 +5217,10 @@ def cmd_plan_review_pair_history(args, *, store: StateStore, runner: Runner | No
         })
     latest = state.plan_pair_reviews.get(pair)
     changed: list[str] = []
-    if latest is not None and latest.plan_path == target:
+    if latest is not None:
         digests = part_digest_map(doc)
-        changed = [
-            part for part in pair_part_tokens(pair)
-            if digests.get(part) is None or latest.part_digests.get(part) != digests[part]
-        ]
+        stored = latest.part_digests if latest.plan_path == target else {}
+        changed = _changed_parts(pair_part_tokens(pair), digests, stored)
     return Directive(
         True, state.node, "inspect",
         f"{len(records)} recorded review(s) of pair {pair!r} against {target}",

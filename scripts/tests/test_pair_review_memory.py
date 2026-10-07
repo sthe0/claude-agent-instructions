@@ -168,7 +168,77 @@ def test_history_of_a_pair_never_reviewed_is_empty(store, session):
 
 
 def test_verb_is_not_a_user_authority_verb():
-    assert "plan-review-pair-history" not in (SCRIPTS / "lib" / "widening_targets.py").read_text()
+    from lib import widening_targets
+    assert "plan-review-pair-history" not in widening_targets.AGENTCTL_USER_AUTHORITY_VERBS
+
+
+def _strip_event_ids(store) -> None:
+    state = store.load(SID)
+    for event in state.history:
+        if event.get("event") == "plan_pair_review":
+            event.pop("concern_ids", None)
+            event.pop("record_seq", None)
+    store.save(state)
+
+
+def test_legacy_event_without_concern_ids_still_shows_the_open_blocker(store, session):
+    plan = session
+    first = _review_pair(store, plan, "revise", ["blocking: C1: stage 1 scaffold is wrong"])
+    (blocker_id,) = first.data["concern_ids"]
+    _strip_event_ids(store)
+
+    data = _history(store, plan)
+    (concern,) = data["records"][0]["concerns"]
+    assert concern["id"] == blocker_id and concern["unresolved"] is True
+    assert concern["severity"] == "blocking" and concern["parts"]
+    text = _bundle(plan, data)
+    assert f"`{blocker_id}`" in text and "UNRESOLVED BLOCKER" in text
+    assert "no concerns" not in text
+
+
+def test_legacy_events_take_their_ledger_records_in_order(store, session):
+    plan = session
+    first = _review_pair(store, plan, "revise", ["blocking: C1: first complaint"])
+    _retitle(plan, "Scaffold module")
+    second = _review_pair(store, plan, "revise", ["note: C2: second remark"])
+    _strip_event_ids(store)
+
+    old, new = _history(store, plan)["records"]
+    assert [c["id"] for c in old["concerns"]] == first.data["concern_ids"]
+    assert [c["id"] for c in new["concerns"]] == second.data["concern_ids"]
+
+
+def test_legacy_event_without_a_ledger_entry_shows_its_texts_without_ids(store, session):
+    plan = session
+    _review_pair(store, plan, "revise", ["blocking: C1: stage 1 scaffold is wrong"])
+    _strip_event_ids(store)
+    state = store.load(SID)
+    state.concern_ledger.clear()
+    store.save(state)
+
+    data = _history(store, plan)
+    (concern,) = data["records"][0]["concerns"]
+    assert concern["id"] == "" and "scaffold is wrong" in concern["text"]
+    text = _bundle(plan, data)
+    assert "scaffold is wrong" in text and "no concerns" not in text
+
+
+def test_record_against_another_plan_path_lists_every_own_part_as_changed(store, session, tmp_path):
+    from agentctl.plan import pair_part_tokens
+    plan = session
+    assert _review_pair(store, plan, "pass").ok
+    other = tmp_path / "other.toml"
+    other.write_text(plan.read_text())
+    directive = cli.cmd_plan_review_pair_history(
+        ns(session=SID, target=str(other), pair=PAIR), store=store)
+    assert directive.ok
+    assert directive.data["changed_parts_since_last"] == list(pair_part_tokens(PAIR))
+
+
+def test_one_helper_decides_which_parts_changed():
+    digests = {"stage:1": "x", "stage:2": "y"}
+    assert cli._changed_parts(["stage:1", "stage:2", "meta:"], digests, {"stage:1": "x", "stage:2": "z"}) == [
+        "stage:2", "meta:"]
 
 
 # --- the bundle -------------------------------------------------------------------
@@ -262,6 +332,16 @@ def test_spawner_renders_the_history_into_the_bundle(spawner, store, session, tm
     assert "## Prior review of this pair" not in capsys.readouterr().out
 
 
+def test_spawner_refuses_valid_json_of_the_wrong_shape(spawner, session, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(spawner, "COST_LOG", tmp_path / "costs.jsonl")
+    monkeypatch.setenv("AGENTCTL_TOPO_UNITS_DIR", str(tmp_path / "topo"))
+    bad = tmp_path / "shape.json"
+    bad.write_text(json.dumps({"pair": PAIR, "records": []}))
+    rc = spawner.main(_spawn_argv(session, "--review-topo", PAIR, "--review-topo-history", str(bad)))
+    assert rc == 2
+    assert "changed_parts_since_last" in capsys.readouterr().err
+
+
 def test_spawner_refuses_an_unreadable_history_file(spawner, session, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(spawner, "COST_LOG", tmp_path / "costs.jsonl")
     monkeypatch.setenv("AGENTCTL_TOPO_UNITS_DIR", str(tmp_path / "topo"))
@@ -342,3 +422,47 @@ def test_driver_removes_its_history_files_afterwards(drv, monkeypatch, tmp_path)
     assert path.exists()
     driver.cleanup_history()
     assert not path.exists()
+
+
+def test_a_failing_history_verb_stays_fail_open_but_is_named(drv, monkeypatch, tmp_path, capsys):
+    plan = tmp_path / "plan.toml"
+    plan.write_text("x")
+    driver, _, spawned, _ = _driver(drv, monkeypatch, plan, [RECORD])
+    monkeypatch.setattr(drv, "run_agentctl", lambda argv, env: {"ok": False, "detail": "boom", "data": {}})
+    driver.launch({"pair": PAIR, "status": "revise"})
+    assert "--review-topo-history" not in spawned[0]
+    line = next(l for l in capsys.readouterr().out.splitlines() if l.startswith("TOPO-HISTORY-UNAVAILABLE"))
+    assert f"pair={PAIR}" in line and "boom" in line
+
+
+def test_dry_run_names_the_history_command_not_a_deleted_temp_file(drv, monkeypatch, tmp_path, capsys):
+    plan = tmp_path / "plan.toml"
+    plan.write_text("x")
+    driver, _, _, _ = _driver(drv, monkeypatch, plan, [RECORD])
+    monkeypatch.setattr(
+        drv, "spawn_pair", lambda argv: (0, "# stdin: <prompt 10 chars>\nTOPO-VIEW: v files=2\n", ""))
+    try:
+        driver.dry_run({"levels": [[{"pair": PAIR, "status": "revise"}]]})
+    finally:
+        driver.cleanup_history()
+    out = capsys.readouterr().out
+    assert "topo-history-" not in out
+    assert "plan-review-pair-history" in out and f"--pair {PAIR}" in out
+    assert "--review-topo-history" in out and "TOPO-DRY" in out
+
+
+def test_parallel_launches_share_one_history_dir_and_clean_it_up(drv, monkeypatch, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    plan = tmp_path / "plan.toml"
+    plan.write_text("x")
+    driver, _, spawned, _ = _driver(drv, monkeypatch, plan, [RECORD])
+    rows = [{"pair": PAIR, "status": "revise"}, {"pair": "3-2", "status": "stale"},
+            {"pair": "4-3", "status": "revise"}]
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        list(pool.map(driver.launch, rows))
+    paths = [Path(a[a.index("--review-topo-history") + 1]) for a in spawned]
+    assert len(paths) == 3 and len({p.name for p in paths}) == 3
+    directory = paths[0].parent
+    assert {p.parent for p in paths} == {directory} and directory.is_dir()
+    driver.cleanup_history()
+    assert not directory.exists()

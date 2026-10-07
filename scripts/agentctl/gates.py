@@ -471,6 +471,12 @@ def _concern_discharged(scope: str, concern_id: str, concern_text: str, state: S
     )
 
 
+def concern_unresolved(entry, state: SessionState, doc) -> bool:
+    """Whether a ledger entry is still open and no risk acceptance discharges it."""
+    return entry.status == CONCERN_OPEN and not _concern_discharged(
+        entry.scope, entry.local_id, entry.text, state, doc)
+
+
 def _plan_review_verdict_blockers(pr, *, state: SessionState | None = None, doc=None) -> list[str]:
     if pr.verdict == _PLAN_REVIEW_PASS:
         # CONTRACT INVERSION (reviewer-attested binding): plan_sha256 is now the

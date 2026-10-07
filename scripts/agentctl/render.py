@@ -873,6 +873,9 @@ def _prior_review_section(history: dict) -> list[str]:
         verdicts = f"`{reviewer}`" if reviewer == recorded else f"`{reviewer}` (recorded as `{recorded}`)"
         lines.append(f"Review {position} (record {record['record_seq']}): verdict {verdicts}")
         for concern in record["concerns"]:
+            if not concern["id"]:
+                lines.append(f"- (not in the concern ledger) {concern['text']}")
+                continue
             marks = f"{concern['severity']} (effective: {concern['effective_severity']})"
             if concern["unresolved"]:
                 marks += " — UNRESOLVED BLOCKER"

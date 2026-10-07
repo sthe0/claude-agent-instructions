@@ -19,6 +19,7 @@ telemetry; nothing is gated on them.
       [--parallel <k>] [--pairs <p,...>] [--ledger <path>]
 
 Output lines: TOPO-PAIR, TOPO-REFUSED, TOPO-CURRENT, TOPO-WAITING, TOPO-DRY,
+TOPO-HISTORY-UNAVAILABLE (the history verb failed; the pair is reviewed without it),
 TOPO-SUMMARY, COMPOSE. Exit codes: 0 composed pass (or scoped run whose pairs passed),
 1 blocked (a revise, stale, missing or waiting pair remains), 2 a TOPO-REFUSED occurred
 anywhere in the run or a usage error, 3 nothing to review (every pair already current).
@@ -62,6 +63,7 @@ SUMMARY_COST_RE = re.compile(r"\bcost_usd=([0-9.]+)")
 SUMMARY_DURATION_RE = re.compile(r"\bduration_ms=(\d+)")
 DRY_CHARS_RE = re.compile(r"^# stdin: <prompt (\d+) chars>", re.MULTILINE)
 DRY_VIEW_RE = re.compile(r"^TOPO-VIEW: \S+ files=(\S*)", re.MULTILINE)
+HISTORY_PLACEHOLDER = "<pair-history.json>"
 CEILING_HINT = "exits: split the pair's plan content or dispatch this pair by hand (user override)"
 
 
@@ -420,7 +422,11 @@ class Driver:
             return None
         directive = self.agentctl("plan-review-pair-history", "--pair", row["pair"])
         data = directive.get("data") or {}
-        if not directive.get("ok") or not data.get("records"):
+        if not directive.get("ok"):
+            detail = " ".join(str(directive.get("detail", "")).split())
+            emit(f"TOPO-HISTORY-UNAVAILABLE: pair={row['pair']} {detail}")
+            return None
+        if not data.get("records"):
             return None
         with self.history_lock:
             if self.history_dir is None:
@@ -519,7 +525,10 @@ class Driver:
                     continue
                 history_path = self.history_file(row)
                 spawn_cmd = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
-                                             history_path=history_path)
+                                             history_path=HISTORY_PLACEHOLDER if history_path else None)
+                if history_path:
+                    emit(f"  history: {shlex.join([sys.executable, str(AGENTCTL_CLI), 'plan-review-pair-history', '--session', self.sid, '--target', self.plan_path, '--pair', pair])}"
+                         f" > {HISTORY_PLACEHOLDER}")
                 emit("  spawn: " + shlex.join([sys.executable, str(SPAWNER), *spawn_cmd]))
                 emit("  record: " + shlex.join(
                     [sys.executable, str(AGENTCTL_CLI),
