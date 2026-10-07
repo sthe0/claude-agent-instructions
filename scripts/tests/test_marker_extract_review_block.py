@@ -93,6 +93,51 @@ def test_terminal_other_marker_quoting_an_earlier_review_block_goes_to_the_model
     assert result.marker == "COMPLETED"
 
 
+def test_the_shared_parse_is_structural_and_ignores_a_later_marker():
+    from lib import review_block
+
+    text = f"REVIEW:\nVerdict: pass\nPlan digest: {DIGEST}\n\nCOMPLETED: done\n"
+    block = review_block.find_terminal_review_block(text)
+    assert block is not None
+    assert block.followed_by_other_marker is True
+
+
+def test_driver_parses_a_block_followed_by_a_completed_line():
+    text = f"REVIEW:\nVerdict: pass\nPlan digest: {DIGEST}\n\nCOMPLETED: done\n"
+    parsed = _driver().parse_review_output(text)
+    assert (parsed.verdict, parsed.digest, parsed.concerns) == ("pass", DIGEST, [])
+
+
+def test_a_block_with_nothing_after_it_is_not_followed_by_another_marker():
+    from lib import review_block
+
+    text = f"REVIEW:\nVerdict: pass\nPlan digest: {DIGEST}\n"
+    assert review_block.find_terminal_review_block(text).followed_by_other_marker is False
+
+
+@pytest.mark.parametrize("lead", ["COMPLETED: stage done.", "PLAN-READY: plan below."])
+def test_non_thinker_message_leading_with_a_marker_and_quoting_a_review_goes_to_the_model(
+    monkeypatch, lead
+):
+    text = f"{lead}\n\nThe reviewer said:\nREVIEW:\nVerdict: pass\nPlan digest: {DIGEST}\n"
+    model = _Model("COMPLETED")
+    monkeypatch.setattr(marker_extract, "enabled", lambda: True)
+    monkeypatch.setattr(marker_extract, "extractor_available", lambda host=None: True)
+    result = marker_extract.build_extraction(text, kind="developer", runner=model)
+    assert model.calls == 1
+    assert result.marker == "COMPLETED"
+
+
+def test_thinker_kind_short_circuits_through_build_extraction(monkeypatch):
+    text = f"REVIEW:\nVerdict: revise\nPlan digest: {DIGEST}\nC1: x\n"
+    model = _Model("COMPLETED")
+    monkeypatch.setattr(marker_extract, "enabled", lambda: True)
+    monkeypatch.setattr(marker_extract, "extractor_available", lambda host=None: True)
+    result = marker_extract.build_extraction(text, kind="thinker", runner=model)
+    assert model.calls == 0
+    assert result.marker == "REVIEW"
+
+
 def test_review_block_without_a_verdict_line_goes_to_the_model():
     text = f"Findings follow.\n\nREVIEW:\nPlan digest: {DIGEST}\nC1: holds.\n"
     model = _Model("INCOMPLETE")

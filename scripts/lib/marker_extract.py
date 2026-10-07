@@ -333,13 +333,14 @@ def _attempt(run: Runner, argv: list[str], timeout: int, allowed: tuple[str, ...
 def _structural_review(result_text: str, allowed: tuple[str, ...]) -> Extraction | None:
     """A message whose terminal block is a verdict-bearing REVIEW block is labelled
     REVIEW by its own typed contract (``lib.review_block``); the model is asked only
-    about replies outside it."""
+    about replies outside it. A block followed by another return-marker line was only
+    quoted, so the message is left to the model."""
     if "REVIEW" not in allowed:
         return None
     from lib import review_block  # lazy, like planner_plan_check's own agentctl.plan import
 
     block = review_block.find_terminal_review_block(result_text)
-    if block is None:
+    if block is None or block.followed_by_other_marker:
         return None
     return Extraction(
         "REVIEW",
@@ -357,8 +358,14 @@ def extract(
     runner: Runner | None = None,
     timeout: int = _EXTRACT_TIMEOUT_S,
     runtime_host: str = HOST_CLAUDE,
+    structural_review: bool = True,
 ) -> Extraction:
     """Run the perception pass over ``result_text`` and return its verdict.
+
+    ``structural_review`` lets a terminal verdict-bearing REVIEW block answer REVIEW
+    without the model; ``build_extraction`` enables it only for the thinker, so a
+    non-thinker message that leads with COMPLETED / PLAN-READY and quotes a REVIEW
+    block after it still goes to the model.
 
     Fail CLOSED on a JUDGEMENT: a NONE verdict or a token outside ``allowed``
     return ``marker=None, outcome=NO_MARKER`` immediately — never a guessed
@@ -374,9 +381,10 @@ def extract(
     specialist with real side effects and needs a different mechanism).
     ``degraded`` is never set here — that is ``build_extraction``'s layer.
     Never raises."""
-    structural = _structural_review(result_text, allowed)
-    if structural is not None:
-        return structural
+    if structural_review:
+        structural = _structural_review(result_text, allowed)
+        if structural is not None:
+            return structural
     run = runner or subprocess_runner
     prompt = build_prompt(result_text, allowed, hint)
     try:
@@ -450,6 +458,7 @@ def build_extraction(
         hint=hint_markers_for(kind) if kind else (),
         runner=runner or subprocess_runner,
         runtime_host=runtime_host,
+        structural_review=kind == "thinker",
     )
     if result.outcome == OUTCOME_EXTRACTOR_FAILED:
         return replace(result, degraded=True)

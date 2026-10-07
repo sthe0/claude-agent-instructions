@@ -19,6 +19,8 @@
 # scripts/hook-*.py (other guardian hooks)                   | code   | structural
 # scripts/lib/prompt_judges.py (judge-guarded)               | code   | semantic-guarded
 # scripts/lib/semantic_join.py (judge-guarded)               | code   | semantic-guarded
+# scripts/lib/review_block.py                                | code   | structural
+# scripts/lib/marker_extract.py                              | code   | structural
 # scripts/lib/** (incl. term_ruleset.py, published_body.py)  | code   | structural
 # scripts/crutch-inventory.py (self)                         | code   | not-a-gate
 # scripts/gen_crutch_registry.py (self)                      | code   | not-a-gate
@@ -2109,7 +2111,7 @@ domain = "code"
 file = "scripts/lib/marker_extract.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "The model is the classifier of a specialist's return marker; the patterns here only parse the extractor's own fixed-grammar reply (`MARKER:` / `DIGEST:` / `PLAN:` lines), window the text and recognise a verdict-bearing REVIEW block by its protocol tokens (via review_block.py) — an unparseable or out-of-vocabulary reply fails closed to no marker rather than a guess."
 
 [[entry]]
 id = "56c97871186704d2"
@@ -2253,7 +2255,7 @@ domain = "code"
 file = "scripts/lib/review_block.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "Parses the closed REVIEW reply contract the thinker's SKILL.md fixes — the `REVIEW:` / `Verdict:` / `Plan digest:` / condition-prefix tokens and list-numbering/emphasis decoration — never the meaning of a concern's text: the verdict is read from its token, and a message without that token is returned as no block so the marker extractor's model judges it instead."
 
 [[entry]]
 id = "db8bc2e69b1ea4d2"
@@ -2261,7 +2263,7 @@ domain = "code"
 file = "scripts/lib/review_block.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "Parses the closed REVIEW reply contract the thinker's SKILL.md fixes — the `REVIEW:` / `Verdict:` / `Plan digest:` / condition-prefix tokens and list-numbering/emphasis decoration — never the meaning of a concern's text: the verdict is read from its token, and a message without that token is returned as no block so the marker extractor's model judges it instead."
 
 [[entry]]
 id = "4e2901cfa65aeade"
@@ -2269,7 +2271,7 @@ domain = "code"
 file = "scripts/lib/review_block.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "Parses the closed REVIEW reply contract the thinker's SKILL.md fixes — the `REVIEW:` / `Verdict:` / `Plan digest:` / condition-prefix tokens and list-numbering/emphasis decoration — never the meaning of a concern's text: the verdict is read from its token, and a message without that token is returned as no block so the marker extractor's model judges it instead."
 
 [[entry]]
 id = "2096be138557e317"
@@ -2277,7 +2279,7 @@ domain = "code"
 file = "scripts/lib/review_block.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "Parses the closed REVIEW reply contract the thinker's SKILL.md fixes — the `REVIEW:` / `Verdict:` / `Plan digest:` / condition-prefix tokens and list-numbering/emphasis decoration — never the meaning of a concern's text: the verdict is read from its token, and a message without that token is returned as no block so the marker extractor's model judges it instead."
 
 [[entry]]
 id = "f8a6bf2da63838bb"
@@ -2285,7 +2287,7 @@ domain = "code"
 file = "scripts/lib/review_block.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "Parses the closed REVIEW reply contract the thinker's SKILL.md fixes — the `REVIEW:` / `Verdict:` / `Plan digest:` / condition-prefix tokens and list-numbering/emphasis decoration — never the meaning of a concern's text: the verdict is read from its token, and a message without that token is returned as no block so the marker extractor's model judges it instead."
 
 [[entry]]
 id = "464715fd8ffd4a9c"
@@ -7488,6 +7490,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "e1b8c76bd2486e15"
+domain = "code"
+file = "scripts/tests/test_marker_extract_review_block.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b8cf1c60ea86da3a"
+domain = "code"
+file = "scripts/tests/test_marker_extract_review_block.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "95a5bc3ea24c2a53"
 domain = "code"
 file = "scripts/tests/test_marker_extract_review_block.py"
@@ -7513,6 +7531,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "9fd37955aa910473"
+domain = "code"
+file = "scripts/tests/test_marker_extract_review_block.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "c418ac2f0542a009"
 domain = "code"
 file = "scripts/tests/test_marker_extract_review_block.py"
 class = "not-a-gate"
@@ -13213,7 +13239,7 @@ domain = "code_file_rollup"
 file = "scripts/lib/marker_extract.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow. (file-level rollup of the file's scopes.)"
+ground = "The model is the classifier of a specialist's return marker; the patterns here only parse the extractor's own fixed-grammar reply (`MARKER:` / `DIGEST:` / `PLAN:` lines), window the text and recognise a verdict-bearing REVIEW block by its protocol tokens (via review_block.py) — an unparseable or out-of-vocabulary reply fails closed to no marker rather than a guess. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "1c6004d0450298e2"
@@ -13253,7 +13279,7 @@ domain = "code_file_rollup"
 file = "scripts/lib/review_block.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow. (file-level rollup of the file's scopes.)"
+ground = "Parses the closed REVIEW reply contract the thinker's SKILL.md fixes — the `REVIEW:` / `Verdict:` / `Plan digest:` / condition-prefix tokens and list-numbering/emphasis decoration — never the meaning of a concern's text: the verdict is read from its token, and a message without that token is returned as no block so the marker extractor's model judges it instead. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "eaf4a7a8c0c520e3"

@@ -240,6 +240,28 @@ CODE_PARTITIONS = [
         "file.",
     ),
     (
+        "scripts/lib/review_block.py",
+        lambda f: f == "scripts/lib/review_block.py",
+        "structural",
+        "keep",
+        "Parses the closed REVIEW reply contract the thinker's SKILL.md fixes — the "
+        "`REVIEW:` / `Verdict:` / `Plan digest:` / condition-prefix tokens and "
+        "list-numbering/emphasis decoration — never the meaning of a concern's text: "
+        "the verdict is read from its token, and a message without that token is "
+        "returned as no block so the marker extractor's model judges it instead.",
+    ),
+    (
+        "scripts/lib/marker_extract.py",
+        lambda f: f == "scripts/lib/marker_extract.py",
+        "structural",
+        "keep",
+        "The model is the classifier of a specialist's return marker; the patterns "
+        "here only parse the extractor's own fixed-grammar reply (`MARKER:` / "
+        "`DIGEST:` / `PLAN:` lines), window the text and recognise a verdict-bearing "
+        "REVIEW block by its protocol tokens (via review_block.py) — an unparseable "
+        "or out-of-vocabulary reply fails closed to no marker rather than a guess.",
+    ),
+    (
         "scripts/lib/** (incl. term_ruleset.py, published_body.py)",
         lambda f: f.startswith("scripts/lib/"),
         "structural",

@@ -42,14 +42,16 @@ class ReviewBlock:
         return None if self.digest_at is None else self.entries[self.digest_at][0][1]
 
     @property
-    def lines(self) -> list[str]:
-        return [raw for _, raw in self.entries]
-
-    @property
     def region(self) -> list[Classified]:
         """What follows both the verdict and the digest line: the concerns."""
         start = max(self.verdict_at, -1 if self.digest_at is None else self.digest_at) + 1
         return list(self.entries[start:])
+
+    @property
+    def followed_by_other_marker(self) -> bool:
+        """A return-marker line other than REVIEW comes after the block — the message
+        is labelled by that marker and the REVIEW block was only quoted."""
+        return any(_carries_other_marker(raw) for _, raw in self.entries)
 
 
 def lead_clean(raw: str) -> str:
@@ -93,10 +95,10 @@ def _carries_other_marker(raw: str) -> bool:
 def find_terminal_review_block(text: str) -> ReviewBlock | None:
     """The message's terminal REVIEW block, or ``None``.
 
-    Terminal: the last ``REVIEW:`` line that a ``Verdict:`` line follows, with no
-    other return-marker line after it (a COMPLETED/REPLAN/... line later means the
-    message is labelled by that marker and the REVIEW block was only quoted). A
-    block with no verdict line is not a block."""
+    Terminal: the last ``REVIEW:`` line that a ``Verdict:`` line follows. A block
+    with no verdict line is not a block. Purely structural — whether a later marker
+    line means the block was only quoted is ``ReviewBlock.followed_by_other_marker``,
+    a question only the marker extractor asks."""
     lines = [ln for ln in text.splitlines() if ln.strip()]
     classified = [(classify_line(ln), ln) for ln in lines]
     anchor = None
@@ -106,8 +108,6 @@ def find_terminal_review_block(text: str) -> ReviewBlock | None:
     if anchor is None:
         return None
     entries = tuple(classified[anchor + 1:])
-    if any(_carries_other_marker(raw) for _, raw in entries):
-        return None
     verdict_at = next(i for i, ((k, _), _) in enumerate(entries) if k == "verdict")
     digest_at = next((i for i, ((k, _), _) in enumerate(entries) if k == "digest"), None)
     return ReviewBlock(entries, verdict_at, digest_at)
