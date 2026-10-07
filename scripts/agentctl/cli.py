@@ -26,7 +26,7 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 import proc_tree
-from lib import argv_text, config_root, kind_baselines, transcript_stops, widening_targets
+from lib import argv_text, config_root, kind_baselines, transcript_stops, widening_targets, writer_pass
 
 from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
@@ -3781,6 +3781,16 @@ def _plan_presentation_skeleton(stages: list[Stage]) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
+def _present_plan_transcript(session_id: str) -> Path | None:
+    """The newest transcript the harness wrote for `session_id` under any
+    projects root, or None. Derived, never supplied: the gated actor must not
+    choose which transcript is checked."""
+    found = config_root.iter_transcripts(f"*/{session_id}.jsonl")
+    if not found:
+        return None
+    return max(found, key=lambda p: p.stat().st_mtime)
+
+
 def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Stamp a PlanPresentation receipt: proof the coordinator rendered the plan
     for the user, bound to the exact plan version (plan_sha256) and the exact
@@ -4012,6 +4022,49 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             _sha_doc = None
     presented_grants_sha256 = grants_sha256(_sha_doc) if _sha_doc is not None else None
 
+    # Writer-pass gate: the rendering's bytes must be bound to a tech-writer
+    # witness in this session's transcript — the published-text hook's table
+    # (hook-published-text-writer-gate.py `_decide_text`) minus its content-rule
+    # judge, which checks ticket-text publication rules, not a plan rendering.
+    # Last, so a rendering refused anyway costs no writer pass.
+    writer_gate: dict
+    if os.environ.get(writer_pass.OVERRIDE_ENV) == "0":
+        writer_gate = {"outcome": "override"}
+    else:
+        transcript_path = _present_plan_transcript(state.session_id)
+        if transcript_path is None:
+            writer_gate = {"outcome": "no_transcript"}
+        else:
+            binding = writer_pass.bind(text, transcript_path)
+            writer_gate = {
+                "outcome": "bound", "strength": binding.strength,
+                "evidence": binding.evidence, "transcript": str(transcript_path),
+            }
+            if binding.strength == writer_pass.UNREADABLE:
+                writer_gate["outcome"] = "unreadable"
+            elif binding.strength in writer_pass.REFUSING_STRENGTHS:
+                return Directive(
+                    False, state.node, "noop",
+                    f"rendering is not bound to a tech-writer witness in {transcript_path}: "
+                    f"{binding.strength} — run the tech-writer pass on these exact bytes "
+                    "(Skill tech-writer, or spawn-specialist.py --kind tech-writer) and "
+                    "rewrite the whole rendering file with Write after it — an Edit fragment "
+                    f"never binds the whole body; {writer_pass.OVERRIDE_ENV}=0 overrides",
+                    data={"writer_gate": {**writer_gate, "outcome": "refused"}},
+                )
+            elif binding.strength not in (writer_pass.WRITER_OUTPUT, writer_pass.POST_WITNESS):
+                writer_gate["outcome"] = "allowed"
+    state.log("present_plan_writer_gate", outcome=writer_gate["outcome"], kind=kind)
+
+    def _with_writer_gate(directive: Directive) -> Directive:
+        directive.data["writer_gate"] = writer_gate
+        if writer_gate["outcome"] == "override":
+            directive.detail = (
+                f"writer gate OVERRIDDEN ({writer_pass.OVERRIDE_ENV}=0) — name this to the "
+                f"user in the presenting turn. {directive.detail}"
+            )
+        return directive
+
     presentation = PlanPresentation(
         plan_path=target,
         kind=kind,
@@ -4060,7 +4113,7 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
         override = _agent_review_override(state)
         if override is not None:
             data["agent_review_override"] = override
-        return Directive(True, state.node, "continue", detail, data=data)
+        return _with_writer_gate(Directive(True, state.node, "continue", detail, data=data))
 
     if kind == PLAN_PRESENTATION_KIND_REPLAN_DIFF:
         # Mirrors the essence choreography above exactly, substituting the
@@ -4085,15 +4138,15 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             "authorize_replan_marker": AUTHORIZE_REPLAN_MARKER,
             "next_steps": next_steps,
         }
-        return Directive(True, state.node, "continue", detail, data=data)
+        return _with_writer_gate(Directive(True, state.node, "continue", detail, data=data))
 
-    return Directive(
+    return _with_writer_gate(Directive(
         True, state.node, "continue",
         f"presentation receipt recorded (kind={kind}); emit this exact rendering "
         "as the turn's FINAL text message so the delivery hook can verify it "
         "actually reached the user",
         data={"rendering_sha256": presentation.rendering_sha256, "plan_sha256": presentation.plan_sha256},
-    )
+    ))
 
 
 def cmd_confirm_delivery(args, *, store: StateStore, runner: Runner | None = None) -> Directive:

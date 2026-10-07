@@ -378,6 +378,7 @@ def test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes
         data={
             "rendering_sha256": _sha256_file(rendering_file),
             "plan_sha256": _sha256_file(plan),
+            "writer_gate": {"outcome": "no_transcript"},
         },
     ), f"present_plan mismatch: got {d}"
 

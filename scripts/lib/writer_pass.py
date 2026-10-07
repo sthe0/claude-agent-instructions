@@ -155,6 +155,14 @@ NONE_STRENGTH = "NONE"
 NO_WITNESS_IN_WINDOW = "NO_WITNESS_IN_WINDOW"
 UNREADABLE = "UNREADABLE"
 
+# Kill switch shared by every in-process and hook caller of `bind`
+# (`CLAUDE_PUBLISHED_TEXT_GATE=0`); the hook keeps its own literal and a test
+# pins the two equal.
+OVERRIDE_ENV = "CLAUDE_PUBLISHED_TEXT_GATE"
+# The strengths a caller refuses on; UNREADABLE is a missing observable and
+# fails open.
+REFUSING_STRENGTHS = (NONE_STRENGTH, NO_WITNESS_IN_WINDOW)
+
 _BASH_KIND_FLAG_RE = re.compile(r"--kind[=\s]+tech-writer\b")
 _BASH_SKILL_PATH_RE = re.compile(r"skills/(?:specializations/)?tech-writer(?:/SKILL\.md)?\b")
 

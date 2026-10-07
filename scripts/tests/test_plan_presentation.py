@@ -183,7 +183,7 @@ def test_present_plan_full_directive_detail_unchanged(store, fixtures_dir, tmp_p
         "as the turn's FINAL text message so the delivery hook can verify it "
         "actually reached the user"
     )
-    assert set(d.data.keys()) == {"rendering_sha256", "plan_sha256"}
+    assert set(d.data.keys()) == {"rendering_sha256", "plan_sha256", "writer_gate"}
 
 
 def test_emitted_essence_marker_satisfies_hook(store, fixtures_dir, tmp_path, gate_on):
