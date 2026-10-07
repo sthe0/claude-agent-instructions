@@ -122,10 +122,12 @@ _KNOWN_UNGUARDED_HARD_SINKS = {
         "structural per the registry: only regex is shell-variable syntax "
         "(`\\$\\{?\\w+\\}?`), never natural-language meaning.",
     ),
-    "47508b590a381f20": (
-        "scripts/hook-multi-mount-search-guard.py", "main",
-        "structural per the registry: only regex is /proc/mounts octal "
-        "decoding (`re.sub(r'\\\\(\\d{3})', ...)`), not meaning.",
+    "4c318993ddc97c55": (
+        "scripts/hook-multi-mount-search-guard.py", "_run",
+        "structural per the registry: the verdict from decide() is a function "
+        "of shlex-token command shape, path containment and the /proc mounts "
+        "fstype; the only regex is the mounts octal decode in "
+        "fuse_mounts_from_text, never natural-language meaning.",
     ),
     "6b802bd6c3ae8553": (
         "scripts/hook-plan-delivery-gate.py", "deny_with",
