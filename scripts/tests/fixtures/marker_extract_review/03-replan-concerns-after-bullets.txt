@@ -1,0 +1,18 @@
+# wrong-label: REPLAN
+I found one gap in stage 10's checks (C4) and one smaller C3 issue, so the verdict is revise. C1 and C2 have no concerns. I read only the stage-10 file in the view directory.
+
+- **C1:** R12 maps to stage 10's verify_command and final_check 5, so the map has no gap and nothing arbitrary.
+- **C2:** The stage follows from the order. A claim about every site can only be checked by listing every site plus checking the end state.
+- **C3:** Most of the stage holds. The flaw is one of brittleness, not of the stage passing when it shouldn't: the leaf script matches a key's qualname as a plain substring of the bullet.
+- **C4:** Only one failure of `--check` is proven by the negative control. Three others rest only on tests that nothing pins:
+  - a stale site,
+  - a changed hit count,
+  - a meaning-decision site with no Open-violations bullet.
+
+  The verify command runs the whole suite. If those tests were left out or renamed, the suite would still pass.
+
+REVIEW:
+Verdict: revise
+Plan digest: 814a1c4569d4d6048bd6baedeca7da7d802450ef02dc35e658867809652a7e28
+C4: add: stage:10 — Stage 10's declared product proves only one of R12's `--check` failures. The 'stale:', 'count-changed:' and 'meaning-decision-without-open-violation:' failures rest only on tests in one test file, and the verify_command never checks those tests exist. Fix: run that file with a `-k` selection and assert the expected passed count.
+C3: add: stage:10 — The leaf script matches a key's qualname as a plain substring of the bullet (`q in b`). If two keys in one file have qualnames where one contains the other, a correct bullet matches twice and the stage cannot pass however the bullet is worded. Match the qualname as a whole token, or as a backtick span, instead.

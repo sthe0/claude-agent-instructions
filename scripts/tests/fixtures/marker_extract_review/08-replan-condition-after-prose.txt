@@ -1,0 +1,18 @@
+# wrong-label: REPLAN
+I reviewed only the base-plan pair. Verdict: **revise**. The goal and done criterion cover R1–R6. One part of R7 has no named check, though the done criterion promises a named check for every requirement.
+
+R7 asks for four things that the done criterion never checks by name:
+- `--early-stop` brings back the old stop-at-revise behaviour.
+- `--no-early-stop` stays as an alias that does nothing.
+- Continuing past a revise level means every open pair is reviewed and cached in one run.
+- td3 is rewritten.
+
+Final_check 8 only looks for the word `--early-stop` in the README, and the default-behaviour test only exercises the default. So if `--early-stop` were silently ignored, every named check would still pass.
+
+REVIEW:
+Verdict: revise
+Plan digest: 6f9e2c60a46d49a240710bfa4b7c3d1e39a1342fdd07d6e742a2274606c18cdf
+C1: pass. The order has a stated customer, a scope-out list and a functional place naming four inadequacies that map one-to-one to R1–R4.
+C2: pass. Each requirement carries an order -> problem -> functional place -> task derivation that matches the stated inadequacy.
+C3: not applicable. The base activity delivers no product of its own for a consumer to rely on.
+C4: R7 is only partly answered by the done criterion. Four clauses of R7 have no named check: "`--early-stop` restores the old stop", "`--no-early-stop` stays as a no-op alias", "every open pair is reviewed and cached in one run", and "a rewritten td3". Fix: name `-k` tests in stage 1's verify_command and in the final_check 8 test-name loop and add them to the R7 coverage line.

@@ -42,7 +42,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 from agentctl import plan  # noqa: E402 - protocol tokens are read as plan.X at call time
 from agentctl.config import Thresholds, parse_config_md  # noqa: E402
 from agentctl.render import topo_pair_view_dirname  # noqa: E402
-from lib import planner_plan_check  # noqa: E402
+from lib import review_block  # noqa: E402
 from lib.config_root import agentctl_topo_units_dir  # noqa: E402
 
 SPAWNER = SCRIPTS_DIR / "spawn-specialist.py"
@@ -51,7 +51,6 @@ COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
 
 SATISFIED = ("current", "override")
 DIGEST_RE = re.compile(r"[0-9a-f]{64}")
-NUMBERING_RE = re.compile(r"^\d+[.)]\s*")
 LIST_ITEM_RE = re.compile(r"^\s*(?:[-*]\s|\d+[.)]\s)")
 SUMMARY_MARKER_RE = re.compile(r"\bmarker=(\S+)")
 SUMMARY_COST_RE = re.compile(r"\bcost_usd=([0-9.]+)")
@@ -152,37 +151,8 @@ def record_argv(sid: str, plan_path: str, pair: str, verdict: str, digest: str,
 # --- parsing the spawner's output ----------------------------------------------
 
 
-def _lead_clean(raw: str) -> str:
-    text = raw.lstrip(planner_plan_check._DECORATION_CHARS)
-    text = NUMBERING_RE.sub("", text)
-    return text.lstrip(planner_plan_check._DECORATION_CHARS)
-
-
-def _clean_value(text: str) -> str:
-    trimmed = text.strip(planner_plan_check.CONCERN_VALUE_DECORATION_CHARS)
-    return re.sub(r"\*+", "", trimmed.replace("`", ""))
-
-
-def _classify(raw: str) -> tuple[str, str]:
-    """(kind, value) of one raw line; kind is review, verdict, digest, condition or other.
-    A condition's value is its recorded concern text."""
-    strip = planner_plan_check.strip_decoration
-    cleaned = strip(NUMBERING_RE.sub("", strip(raw)))
-    for kind, marker in (
-        ("review", plan.REVIEW_MARKER),
-        ("verdict", plan.VERDICT_MARKER),
-        ("digest", plan.PLAN_DIGEST_MARKER),
-    ):
-        if cleaned.startswith(marker):
-            value = strip(cleaned[len(marker):])
-            if kind == "review" and value not in ("pass", "revise", ""):
-                return "other", ""
-            return kind, value
-    for marker in plan.CONDITION_MARKERS:
-        if cleaned.startswith(marker):
-            leading = _lead_clean(raw)
-            return "condition", f"{marker} {_clean_value(leading[len(marker):])}".rstrip()
-    return "other", ""
+_classify = review_block.classify_line
+_clean_value = review_block.clean_value
 
 
 def strip_envelope(stdout: str) -> str:
@@ -200,26 +170,17 @@ def strip_envelope(stdout: str) -> str:
 
 
 def parse_review_output(stdout: str) -> ParsedReview:
-    lines = [ln for ln in strip_envelope(stdout).splitlines() if ln.strip()]
-    classified = [(_classify(ln), ln) for ln in lines]
-    anchor = None
-    for i, ((kind, _), _) in enumerate(classified):
-        if kind == "review" and any(k == "verdict" for (k, _), _ in classified[i + 1:]):
-            anchor = i
-    if anchor is None:
+    found = review_block.find_terminal_review_block(strip_envelope(stdout))
+    if found is None:
         raise TopoRefused(f"no {plan.REVIEW_MARKER} block with a {plan.VERDICT_MARKER} line")
-    block = classified[anchor + 1:]
-    verdict_at = next((i for i, ((k, _), _) in enumerate(block) if k == "verdict"), None)
-    digest_at = next((i for i, ((k, _), _) in enumerate(block) if k == "digest"), None)
-    if digest_at is None:
+    if found.digest is None:
         raise TopoRefused(f"no {plan.PLAN_DIGEST_MARKER} line in the review block")
-    verdict = block[verdict_at][0][1]
-    digest = block[digest_at][0][1]
+    verdict, digest = found.verdict, found.digest
     if verdict not in ("pass", "revise"):
         raise TopoRefused(f"verdict must be pass or revise, got {verdict!r}")
     if not DIGEST_RE.fullmatch(digest):
         raise TopoRefused(f"{plan.PLAN_DIGEST_MARKER} is not 64 lowercase hex characters: {digest!r}")
-    region = block[max(verdict_at, digest_at) + 1:]
+    region = found.region
     concerns = _parse_concerns(region, verdict) if verdict == "revise" else []
     return ParsedReview(verdict, digest, concerns)
 

@@ -1,0 +1,12 @@
+# wrong-label: MALFORMED (the spawner set malformed=true with no return marker because the extractor model answered NONE)
+The pair is mostly sound, but I'm returning **revise** for one gap. Stage 11 runs from "the branch head after stage 10" and promises the worktree "stays clean at the stage-10 delivered head". Nothing checks that its evidence came from that head.
+
+- **C1 (attribution):** holds. Stage 11 needs the converted scripts at the stage-10 head, and that is stage 10's relayed product.
+- **C2 (derivation):** holds. R13 is the order's live check for unit B.
+- **C3 (full product):** gap. The verify command reads only the run directory. Nothing records or compares the head the run used, and nothing checks that the worktree stayed clean.
+- **C4 (service covers the edge):** holds. Stage 10 ends on a clean committed head, records it, and has the full suite passing on it.
+
+REVIEW:
+Verdict: revise
+Plan digest: aa82abed3985594da95d8d513dc7af9336f2cfaf6ae0627e253d99a3f5903c7d
+C3: Stage 11 ties its run to stage 10's product, but its verify_command reads only the run directory. Nothing records or compares the head the run used, and nothing checks that the worktree stayed clean. Fix: record `git rev-parse HEAD` and `git status --porcelain=v1` into the run directory before and after, and have the verify_command assert both heads equal the recorded stage-10 head and that the porcelain output is empty; extend the negative control with a fixture whose head-after differs.

@@ -330,6 +330,25 @@ def _attempt(run: Runner, argv: list[str], timeout: int, allowed: tuple[str, ...
     )
 
 
+def _structural_review(result_text: str, allowed: tuple[str, ...]) -> Extraction | None:
+    """A message whose terminal block is a verdict-bearing REVIEW block is labelled
+    REVIEW by its own typed contract (``lib.review_block``); the model is asked only
+    about replies outside it."""
+    if "REVIEW" not in allowed:
+        return None
+    from lib import review_block  # lazy, like planner_plan_check's own agentctl.plan import
+
+    block = review_block.find_terminal_review_block(result_text)
+    if block is None:
+        return None
+    return Extraction(
+        "REVIEW",
+        digest=f"plan review verdict: {block.verdict}",
+        reason="terminal REVIEW block with a Verdict line",
+        outcome=OUTCOME_CLASSIFIED,
+    )
+
+
 def extract(
     result_text: str,
     *,
@@ -355,6 +374,9 @@ def extract(
     specialist with real side effects and needs a different mechanism).
     ``degraded`` is never set here — that is ``build_extraction``'s layer.
     Never raises."""
+    structural = _structural_review(result_text, allowed)
+    if structural is not None:
+        return structural
     run = runner or subprocess_runner
     prompt = build_prompt(result_text, allowed, hint)
     try:

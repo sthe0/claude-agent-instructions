@@ -1,0 +1,14 @@
+# wrong-label: REPLAN
+The plan doesn't fully pass this pair review. One requirement (R6, the landing check) can't be proven for the stage-1 change, and R3's "keep the caveat" clause is unchecked. C1 and C2 hold, and C3 doesn't apply here.
+
+- **The base is soundly organised (C1).** R1–R4 follow the four groups the user picked. R5 and R6 are constraints that apply across all four.
+- **The requirements come from real problems (C2).** Each derivation runs from the order to a concrete problem, then to the functional place, then to the task.
+- **The checks don't cover two requirements (C4).**
+  - *Stage 1 landing is unproven.* The landing evidence is the stage-4 commit check plus markers for stages 2 and 3. Stage 1's change has no marker.
+  - *R3's caveat could be forbidden.* Nothing checks that the note about read-only servers survives, and the check that removes the old fallback wording bans text a natural phrasing of that caveat would trip.
+
+REVIEW:
+Verdict: revise
+Plan digest: 82db89eaba9088344d0b05cdc37c134e2388ca19a8c34eab10b7a3133523b6e0
+C4: R6 ("the repo change is landed on origin/main") and R1's landing are not evidenced for stage 1 — final_check 3 asserts only stage 4's delivered commit is in origin/main and final_check 8 adds landed markers only for stages 2 and 3; unless stage 1 is declared an ancestor of stage 4's commit, add a stage-1 marker to final_check 8.
+C4: R3 requires keeping the write-capability caveat where a server is read-only, but the done criterion never checks that the caveat survives, and final_check 5's negative grep pattern would also match a natural phrasing of that very caveat, so the check can contradict R3; narrow the forbidden pattern to the old fallback sentence and add a positive check that the caveat exists.

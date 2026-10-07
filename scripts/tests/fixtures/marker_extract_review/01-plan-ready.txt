@@ -1,0 +1,16 @@
+# wrong-label: PLAN-READY
+I checked the base against the plan's goal and done criterion.
+
+The verdict is pass. Every requirement maps to a verification point in the plan. The two gaps below are already enforced by stage checks or are wording mismatches, so neither changes what gets built or verified.
+
+- **Stage numbers for landing:** the requirement says "after stage 4", the done criterion says "after stage 3". In the plan the landing stages land the commits those stages deliver, so the two texts number different things.
+- **The done criterion leaves out some requirement clauses.** The coverage map has later stages check them, so the plan cannot finish without them.
+
+REVIEW:
+Verdict: pass
+Plan digest: dcb28b10bd64503c8ce29503daae8c6cbc37be8142a15ce1432c7ccb6c555add
+C1: Holds. The requirements split along the order's own axes.
+C2: Holds. Each requirement's derivation goes back to the functional place or to the order's explicit constraints.
+C3: Not applicable (the base delivers no product of its own).
+C4: Advisory, not blocking. The done criterion says landings happen "after stage 3", while the requirement says "after stage 4". The plan has no real conflict, but the wording should name the landing stages.
+C4: Advisory, not blocking. The done criterion omits some measurements the coverage map enforces at later stages, so verification is unaffected, but the headline criterion under-states what "done" asserts.

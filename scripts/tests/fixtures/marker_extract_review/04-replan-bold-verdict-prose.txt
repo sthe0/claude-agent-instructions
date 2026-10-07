@@ -1,0 +1,18 @@
+# wrong-label: REPLAN
+**Verdict: revise.** Conditions C1–C3 hold for this pair. C4 has one gap: the requirement says canon may move only by `git pull --ff-only`, but stage 5's check proves something weaker.
+
+**What holds**
+- **C1:** the requirement is mapped to stages 5 and 12 and final checks 3 and 4.
+- **C2:** it comes straight from the brief and the project instructions.
+- **C3 and most of C4:** stage 5's check decides most of the requirement for unit A:
+  - the decision record, its time before the landing, and the label check;
+  - the pre-landing `origin/main` being an ancestor of the landed head;
+  - canon status and stash compared as raw bytes.
+
+**The gap**
+The only check on how canon's `main` moved is that its old head is an ancestor of its new one. That passes for any forward move, including a commit or merge made directly in canon.
+
+REVIEW:
+Verdict: revise
+Plan digest: 0e316f54c258358622f1b66db3e3510fdb2ae31682c91824141c79174c40b247
+C4: The requirement says canon moves only by `git pull --ff-only`, but stage 5's verify_command only asserts that canon-main-before is an ancestor of `main`. A local commit or merge in canon would pass that too. Add `assert anc("main", "origin/main")` on both the land and hold paths, and add a negative-control fixture with a canon-local commit on top of main that goes red on that assertion's message.

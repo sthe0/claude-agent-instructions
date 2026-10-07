@@ -1,0 +1,15 @@
+# wrong-label: COMPLETED
+Stage 10's declared product covers R12, the one requirement this edge assigns to it. I'm passing the pair. There is one small weakness in the check, explained below and listed in the review block as advisory only.
+
+**How each part of R12 is checked:**
+- **The enumerator finds every lexical call it claims to cover.** Pinned tests cover compiled patterns, the lexical-overlap helpers called by bare name, through a module attribute or through an aliased import, and nested non-test files.
+- **Every committed entry carries a class, a non-empty ground and a hit count.**
+- **`--check` fails on each of its four error kinds.** Unclassified, stale, count-changed and an unlisted meaning-decision site are each pinned twice.
+- **The red state at base is real.** Over the base tree, `--check` exits 1 with an `unclassified:` line, which is what the done criterion requires.
+
+**The weakness:** keeping the "report reads attention.corrections" claim is checked only by looking for a tool name anywhere in the leaf, never that the leaf still makes the claim.
+
+REVIEW:
+Verdict: pass
+Plan digest: 9c98a4c5c5feabee3c9dbcb203cd25bd09ee11498bbb5f539ed86710ce0467bc
+C4: advisory (non-blocking) — the leaf script checks the kept claim only by the substring of the tool name anywhere in the leaf; also asserting `attention.corrections` in the leaf would pin the claim itself rather than a mention of the tool.

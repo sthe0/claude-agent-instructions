@@ -1,0 +1,16 @@
+# wrong-label: COMPLETED
+I checked all four conditions for this pair and found nothing that needs revising. I read stage 10's full file, because the projected product alone did not show that its worktree is clean at the recorded head.
+
+- **C1 (every need of stage 12 comes through a declared edge): holds.**
+  - The delivered head comes from stage 10 (material).
+  - The verify command it reruns comes from stage 10 (knowledge).
+  - The unit-A decision record and head come from stage 5.
+- **C2 (stage 12 genuinely follows from the order): holds.** The order asks for unit B to land by fast-forward after the user confirms, which needs stage 10's recorded head.
+- **C3 (stage 12 delivers its full product): holds.**
+  - **Merged head:** stage 12 reruns stage 10's verify command on it.
+  - **Missing inventory file:** if a revision lacks the inventory file, the drift check reads it as an empty set and does not crash.
+- **C4 (stage 10's product covers what stage 12 relies on): holds.** Stage 10 lists the recorded-head file among its outputs, and its invariants require the worktree to be clean at that head.
+
+REVIEW:
+Verdict: pass
+Plan digest: 8ff3db59c04ec83b32470cad7114a73c2d0b181aab3da12b018e7b2de5ec02d9
