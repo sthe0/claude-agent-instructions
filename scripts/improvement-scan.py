@@ -1437,7 +1437,7 @@ def _rank_findings(findings: "list[dict]") -> "list[dict]":
     the unmeasured band (proxy score descending) — NEVER interleaved, even when a
     proxy score is numerically higher than a measured finding's cost. A backlog item
     ranked via an addressed cluster follows that cluster's own row, by proxy score
-    then key."""
+    then source_ref."""
     findings = _join_addressed_clusters(findings)
     measured = sorted(
         (f for f in findings if f["cost_signal"]["measured"] and not f.get("via")),
