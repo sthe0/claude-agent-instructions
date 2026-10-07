@@ -49,6 +49,7 @@ from . import delivery
 from .config import Thresholds
 from .plan import (
     PlanError,
+    SEVERITY_BLOCKING,
     changed_parts,
     effects_place,
     grants_place,
@@ -512,10 +513,14 @@ def _plan_review_verdict_blockers(pr, *, state: SessionState | None = None, doc=
     # still read as classified, not be mistaken for an unclassified legacy one.
     classified = len(pr.in_scope_concern_ids) + len(pr.out_of_scope_concern_ids) >= len(pr.concerns)
     blocking_ids = set(pr.in_scope_concern_ids) if classified else set(ids)
-    relevant = [(cid, text) for cid, text in zip(ids, pr.concerns) if cid in blocking_ids]
+    relevant = [(cid, text, i) for i, (cid, text) in enumerate(zip(ids, pr.concerns))
+                if cid in blocking_ids]
     if not relevant:
         return []
-    if all(_concern_discharged(pr.scope, cid, text, state, doc) for cid, text in relevant):
+    relevant = [r for r in relevant if concern_is_blocking(pr, r[2])]
+    if not relevant:
+        return default
+    if all(_concern_discharged(pr.scope, cid, text, state, doc) for cid, text, _ in relevant):
         return []
     return default
 
@@ -678,6 +683,44 @@ def classify_concerns(scope: str, ids: list[str], concerns: list[str]) -> "tuple
         else:
             out_of_scope.append(cid)
     return in_scope, out_of_scope
+
+
+EFFECTIVE_BLOCKING = "blocking"
+EFFECTIVE_ADVISORY = "advisory"
+
+
+def effective_concern_severity(
+    severity: str, parts, *, has_prev: bool, changed, open_parts,
+    restates_dispositioned: bool, new_evidence: bool,
+) -> str:
+    """The severity a reviewer-written concern is recorded with: `blocking`, or
+    `advisory` when the freeze rules apply, or `note` as written.
+
+    A `blocking` concern is downgraded to advisory when (a) every part it names is
+    unchanged since the scope's previous record and none of them carries an open blocker
+    from an earlier record — a finished part is frozen, an unfixed one is not — or (b)
+    it restates (`re:<id>`) a concern already dispositioned (risk-accepted, or closed by
+    a later pass/override) and brings no new regression command. A first review (no
+    previous record), a concern naming no part, and `new_evidence` (a regression command
+    the scope has not seen, or run-demonstrated evidence) downgrade nothing. `parts` are
+    the part tokens the concern names; `changed` the ones whose digest moved since the
+    scope's previous record; `open_parts` the ones carrying an undischarged blocker."""
+    if severity != SEVERITY_BLOCKING:
+        return severity
+    if not has_prev or not parts or new_evidence:
+        return EFFECTIVE_BLOCKING
+    if restates_dispositioned:
+        return EFFECTIVE_ADVISORY
+    if any(p in changed or p in open_parts for p in parts):
+        return EFFECTIVE_BLOCKING
+    return EFFECTIVE_ADVISORY
+
+
+def concern_is_blocking(pr, index: int) -> bool:
+    """Whether concern `index` of a PlanReview/PlanPairReview blocks. A legacy record
+    carries no effective severities and every concern of it blocks."""
+    eff = pr.effective_severities
+    return index >= len(eff) or eff[index] == EFFECTIVE_BLOCKING
 
 
 def plan_review_prior_pass(state: SessionState, scope: str, target_plan: str | None):

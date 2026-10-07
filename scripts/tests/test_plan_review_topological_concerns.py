@@ -43,13 +43,13 @@ def test_review_prefixed_elaboration_folds_instead_of_reopening_the_marker(drv):
 
     stdout = (
         f"REVIEW:\nVerdict: revise\nPlan digest: {SHA}\n"
-        f"C4: the stage omits a grant\n{elaboration}\nC1: other concern"
+        f"blocking: C4: the stage omits a grant\n{elaboration}\nblocking: C1: other concern"
     )
     parsed = drv.parse_review_output(stdout)
     assert parsed.verdict == "revise"
     assert parsed.concerns == [
-        f"C4: the stage omits a grant {elaboration}",
-        "C1: other concern",
+        f"blocking: C4: the stage omits a grant {elaboration}",
+        "blocking: C1: other concern",
     ]
 
 
@@ -58,12 +58,12 @@ def test_indented_bullet_elaborating_an_open_concern_folds(drv):
     condition-prefixed concern is a continuation, not a new unprefixed concern."""
     stdout = (
         f"REVIEW:\nVerdict: revise\nPlan digest: {SHA}\n"
-        "C2: the open concern\n"
+        "blocking: C2: the open concern\n"
         "  - elaboration bullet indented"
     )
     parsed = drv.parse_review_output(stdout)
     assert parsed.verdict == "revise"
-    assert parsed.concerns == ["C2: the open concern - elaboration bullet indented"]
+    assert parsed.concerns == ["blocking: C2: the open concern - elaboration bullet indented"]
 
 
 def test_column_zero_bullet_before_any_concern_still_refused(drv):
@@ -75,7 +75,7 @@ def test_column_zero_bullet_before_any_concern_still_refused(drv):
     stdout = (
         f"REVIEW:\nVerdict: revise\nPlan digest: {SHA}\n"
         "- a bullet before any concern\n"
-        "C1: later concern"
+        "blocking: C1: later concern"
     )
     with pytest.raises(drv.TopoRefused, match="unprefixed concern"):
         drv.parse_review_output(stdout)

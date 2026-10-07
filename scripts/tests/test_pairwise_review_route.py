@@ -88,7 +88,7 @@ def _record_pairs(eng: Eng, sid: str, plan: str, *, override: tuple[str, ...] = 
         if pair in override:
             assert eng.run("plan_review", session=sid, verdict="revise", reviewer="thinker",
                            target=plan, scope=f"topo:{pair}", plan_digest=digest,
-                           concern=["open"])["ok"], pair
+                           concern=["blocking: open"])["ok"], pair
             assert eng.run("plan_review", session=sid, verdict="override", reviewer="user",
                            target=plan, scope=f"topo:{pair}", note="accepted")["ok"], pair
         else:

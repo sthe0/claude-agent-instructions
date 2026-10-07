@@ -14,5 +14,5 @@ I found one gap in stage 10's checks (C4) and one smaller C3 issue, so the verdi
 REVIEW:
 Verdict: revise
 Plan digest: 814a1c4569d4d6048bd6baedeca7da7d802450ef02dc35e658867809652a7e28
-C4: add: stage:10 — Stage 10's declared product proves only one of R12's `--check` failures. The 'stale:', 'count-changed:' and 'meaning-decision-without-open-violation:' failures rest only on tests in one test file, and the verify_command never checks those tests exist. Fix: run that file with a `-k` selection and assert the expected passed count.
-C3: add: stage:10 — The leaf script matches a key's qualname as a plain substring of the bullet (`q in b`). If two keys in one file have qualnames where one contains the other, a correct bullet matches twice and the stage cannot pass however the bullet is worded. Match the qualname as a whole token, or as a backtick span, instead.
+blocking: C4: add: stage:10 — Stage 10's declared product proves only one of R12's `--check` failures. The 'stale:', 'count-changed:' and 'meaning-decision-without-open-violation:' failures rest only on tests in one test file, and the verify_command never checks those tests exist. Fix: run that file with a `-k` selection and assert the expected passed count.
+blocking: C3: add: stage:10 — The leaf script matches a key's qualname as a plain substring of the bullet (`q in b`). If two keys in one file have qualnames where one contains the other, a correct bullet matches twice and the stage cannot pass however the bullet is worded. Match the qualname as a whole token, or as a backtick span, instead.

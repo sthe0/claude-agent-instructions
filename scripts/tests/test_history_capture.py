@@ -393,7 +393,7 @@ def test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes
         action="continue",
         detail=f"thinker review recorded for {plan} (verdict=pass); the plan-review gate is now satisfied for this plan version",
         marker=None,
-        data={},
+        data={"concern_ids": []},
     ), f"plan_review mismatch: got {d}"
 
 

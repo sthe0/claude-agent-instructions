@@ -343,7 +343,7 @@ def test_risk_accept_refuses_an_unknown_concern_id(store, fixtures_dir, gate_on)
     plan_path = str(fixtures_dir / "plan_two_stage_substantive.toml")
     _to_plan_ready(store, sid, plan_path)
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="revise",
-                           reviewer="thinker", concerns=["missing tests"],
+                           reviewer="thinker", concerns=["blocking: missing tests"],
                            concern_ids=["c-tests"], note="", plan_digest=None), store=store)
     d = cli.cmd_risk_accept(ns(session=sid, scope=None, concern_id="c-nope",
                                 basis="the team accepts the gap", risk="a regression ships",
@@ -362,7 +362,8 @@ def test_risk_accept_refuses_a_duplicate_concern_id(store, fixtures_dir, gate_on
     plan_path = str(fixtures_dir / "plan_two_stage_substantive.toml")
     _to_plan_ready(store, sid, plan_path)
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="revise",
-                           reviewer="thinker", concerns=["missing tests", "missing docs"],
+                           reviewer="thinker",
+                           concerns=["blocking: missing tests", "blocking: missing docs"],
                            concern_ids=["c-dup", "c-dup"], note="", plan_digest=None), store=store)
     d = cli.cmd_risk_accept(ns(session=sid, scope=None, concern_id="c-dup",
                                 basis="the team accepts the gap", risk="a regression ships",
@@ -377,7 +378,7 @@ def test_risk_accept_refuses_a_placeholder_basis(store, fixtures_dir, gate_on):
     plan_path = str(fixtures_dir / "plan_two_stage_substantive.toml")
     _to_plan_ready(store, sid, plan_path)
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="revise",
-                           reviewer="thinker", concerns=["missing tests"],
+                           reviewer="thinker", concerns=["blocking: missing tests"],
                            concern_ids=["c-tests"], note="", plan_digest=None), store=store)
     d = cli.cmd_risk_accept(ns(session=sid, scope=None, concern_id="c-tests",
                                 basis="n/a", risk="a regression ships",
@@ -404,7 +405,7 @@ def test_risk_accept_clears_the_gate_end_to_end(store, fixtures_dir, gate_on):
     plan_path = str(fixtures_dir / "plan_two_stage_substantive.toml")
     _to_plan_ready(store, sid, plan_path)
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="revise",
-                           reviewer="thinker", concerns=["missing tests"],
+                           reviewer="thinker", concerns=["blocking: missing tests"],
                            concern_ids=["c-tests"], note="", plan_digest=None), store=store)
     d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert d.node != Node.APPROVED.value  # still revise-blocked, no plan edit made
@@ -437,7 +438,7 @@ def test_risk_accept_scope_stage_clears_the_gate_end_to_end(store, fixtures_dir,
 
     plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
     cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="revise",
-                           reviewer="thinker", concerns=["the retitle hides a scope change"],
+                           reviewer="thinker", concerns=["blocking: the retitle hides a scope change"],
                            concern_ids=["c-retitle"], note="", plan_digest=None), store=store)
     d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert d.node != Node.APPROVED.value
@@ -460,7 +461,7 @@ def test_risk_accept_and_override_are_independent_routes(store, fixtures_dir, ga
     plan_path = str(fixtures_dir / "plan_two_stage_substantive.toml")
     _to_plan_ready(store, sid, plan_path)
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="revise",
-                           reviewer="thinker", concerns=["missing tests"],
+                           reviewer="thinker", concerns=["blocking: missing tests"],
                            concern_ids=["c-tests"], note="", plan_digest=None), store=store)
     d = cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="override",
                                reviewer="thinker", concerns=None, concern_ids=None,

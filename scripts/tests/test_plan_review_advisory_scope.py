@@ -254,7 +254,7 @@ def test_out_of_scope_revise_recorded_via_cli_reports_not_blocking_note(store, f
                            reviewer="fedor", concerns=None, note="whole-plan escape",
                            plan_digest=None), store=store)
     d = cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="revise",
-                               reviewer="thinker", concerns=["stage:2: not my stage"],
+                               reviewer="thinker", concerns=["blocking: stage:2: not my stage"],
                                note="", plan_digest=None), store=store)
     assert d.ok is True
     assert "out-of-scope findings recorded, not blocking" in d.detail

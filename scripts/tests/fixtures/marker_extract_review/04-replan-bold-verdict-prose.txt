@@ -15,4 +15,4 @@ The only check on how canon's `main` moved is that its old head is an ancestor o
 REVIEW:
 Verdict: revise
 Plan digest: 0e316f54c258358622f1b66db3e3510fdb2ae31682c91824141c79174c40b247
-C4: The requirement says canon moves only by `git pull --ff-only`, but stage 5's verify_command only asserts that canon-main-before is an ancestor of `main`. A local commit or merge in canon would pass that too. Add `assert anc("main", "origin/main")` on both the land and hold paths, and add a negative-control fixture with a canon-local commit on top of main that goes red on that assertion's message.
+blocking: C4: The requirement says canon moves only by `git pull --ff-only`, but stage 5's verify_command only asserts that canon-main-before is an ancestor of `main`. A local commit or merge in canon would pass that too. Add `assert anc("main", "origin/main")` on both the land and hold paths, and add a negative-control fixture with a canon-local commit on top of main that goes red on that assertion's message.

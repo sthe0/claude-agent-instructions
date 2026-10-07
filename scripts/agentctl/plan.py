@@ -1595,6 +1595,52 @@ VERDICT_MARKER = "Verdict:"
 PLAN_DIGEST_MARKER = "Plan digest:"
 CONDITION_MARKERS = ("C1:", "C2:", "C3:", "C4:")
 
+# A reviewer's concern is `<severity>: [re:<concern-id>] <body>`; the engine stores the
+# body in `concerns` and the severity / restated id beside it, so the body keeps the
+# leading `cut:`/`add:` remedy tag, part token and `C1:`..`C4:` marker its readers key on.
+SEVERITY_BLOCKING = "blocking"
+SEVERITY_NOTE = "note"
+CONCERN_SEVERITIES = (SEVERITY_BLOCKING, SEVERITY_NOTE)
+RESTATES_PREFIX = "re:"
+CONCERN_FORM = (
+    f"`{SEVERITY_BLOCKING}: [{RESTATES_PREFIX}<concern-id>] <concern>` or "
+    f"`{SEVERITY_NOTE}: [{RESTATES_PREFIX}<concern-id>] <concern>`"
+)
+_CONCERN_RE = re.compile(
+    rf"^\s*({'|'.join(CONCERN_SEVERITIES)}):\s*(?:{re.escape(RESTATES_PREFIX)}(\S+)\s+)?(\S.*)$",
+    re.DOTALL,
+)
+_RESTATES_ID_STRIP = "<>[]()`\"'*,;:."
+
+
+class ConcernFormatError(ValueError):
+    """A `--concern` / REVIEW line that is not in the `CONCERN_FORM` grammar."""
+
+
+@dataclass(frozen=True)
+class ParsedConcern:
+    severity: str
+    restates: str
+    body: str
+
+
+def parse_concern(text: str) -> ParsedConcern:
+    """Split a tagged concern into severity, the restated concern id ('' when it is not a
+    restatement) and body. An untagged concern is an error, never defaulted: a severity
+    the reviewer did not write would decide what blocks."""
+    found = _CONCERN_RE.match(text or "")
+    if found is None:
+        raise ConcernFormatError(
+            f"concern {(text or '')[:80]!r} is untagged: write it as {CONCERN_FORM}"
+        )
+    restates = (found.group(2) or "").strip(_RESTATES_ID_STRIP)
+    return ParsedConcern(found.group(1), restates, found.group(3).strip())
+
+
+def format_concern(severity: str, restates: str, body: str) -> str:
+    re_part = f"{RESTATES_PREFIX}{restates} " if restates else ""
+    return f"{severity}: {re_part}{body}"
+
 
 def _stage_by_index(doc: PlanDoc, n: int) -> Stage:
     """`doc`'s stage at 1-based index `n`, or PlanError if there is none."""
@@ -2358,6 +2404,40 @@ def plan_stage_digests(doc: PlanDoc) -> dict[int, str]:
 
 PAIR_PLAN_NODE = "plan"
 PAIR_BASE_NODE = "base"
+
+META_TOKEN = "meta:"
+ORDER_TOKEN = "order:"
+
+
+def stage_token(index: int) -> str:
+    return f"stage:{index}"
+
+
+def part_digest_map(doc: PlanDoc) -> dict[str, str]:
+    """`{part token: digest}` for every part a review concern can name — `meta:` (the
+    goal and done criterion, without the order table), `order:` and each `stage:<n>` —
+    the baseline a later record compares against to say which parts changed."""
+    meta_payload = repr((
+        doc.meta.goal, doc.meta.done_criterion, doc.meta.criterion_type,
+        doc.meta.weight_class, doc.meta.repo_root,
+    ))
+    digests = {
+        META_TOKEN: hashlib.sha256(meta_payload.encode("utf-8")).hexdigest(),
+        ORDER_TOKEN: hashlib.sha256(repr(order_place(doc.meta)).encode("utf-8")).hexdigest(),
+    }
+    digests.update({stage_token(i): d for i, d in plan_stage_digests(doc).items()})
+    return digests
+
+
+def pair_part_tokens(pair_id: str) -> tuple[str, ...]:
+    """The parts a pair review judges: both nodes' parts, the `plan` and `base` nodes
+    standing for the meta and the order."""
+    tokens: list[str] = []
+    for node in split_pair_id(pair_id):
+        own = (META_TOKEN, ORDER_TOKEN) if node in (PAIR_PLAN_NODE, PAIR_BASE_NODE) else (
+            stage_token(node),)
+        tokens.extend(t for t in own if t not in tokens)
+    return tuple(tokens)
 
 def plan_coverage_refs(doc: PlanDoc) -> dict[int, tuple[str, ...]]:
     """`{stage index: requirement ids}` for every stage a `[meta.order.coverage]`

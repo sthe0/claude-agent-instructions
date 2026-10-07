@@ -245,7 +245,8 @@ CODE_PARTITIONS = [
         "structural",
         "keep",
         "Parses the closed REVIEW reply contract the thinker's SKILL.md fixes — the "
-        "`REVIEW:` / `Verdict:` / `Plan digest:` / condition-prefix tokens and "
+        "`REVIEW:` / `Verdict:` / `Plan digest:` / condition-prefix tokens, the "
+        "`blocking:` / `note:` severity tag and `re:<id>` restatement token, and "
         "list-numbering/emphasis decoration — never the meaning of a concern's text: "
         "the verdict is read from its token, and a message without that token is "
         "returned as no block so the marker extractor's model judges it instead.",

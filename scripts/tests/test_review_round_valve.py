@@ -77,7 +77,7 @@ def _pairs(plan):
 def _pair_record(store, sid, plan, pair, verdict="revise", reviewer="thinker", note=""):
     d = cli.cmd_plan_review(
         ns(session=sid, target=plan, scope=f"topo:{pair}", verdict=verdict,
-           reviewer=reviewer, concerns=["a pair concern"] if verdict == "revise" else None,
+           reviewer=reviewer, concerns=["blocking: a pair concern"] if verdict == "revise" else None,
            note=note, plan_digest=_sha(plan), regression_command=None),
         store=store)
     assert d.ok, d.detail
@@ -87,7 +87,7 @@ def _pair_record(store, sid, plan, pair, verdict="revise", reviewer="thinker", n
 def _whole_record(store, sid, plan, verdict="revise"):
     d = cli.cmd_plan_review(
         ns(session=sid, target=plan, verdict=verdict, reviewer="thinker",
-           concerns=["a concern"] if verdict == "revise" else None, note="",
+           concerns=["blocking: a concern"] if verdict == "revise" else None, note="",
            plan_digest=_sha(plan)),
         store=store)
     if verdict == "pass":
@@ -429,7 +429,7 @@ def test_whole_plan_and_stage_records_each_add_one_and_a_pair_after_adds_nothing
     assert _rounds(sid, store) == 2  # a second thinker record on the same bytes is a round
     cli.cmd_plan_review(
         ns(session=sid, target=plan, scope="stage:1", verdict="revise", reviewer="thinker",
-           concerns=["stage concern"], note="", plan_digest=_sha(plan)),
+           concerns=["blocking: stage concern"], note="", plan_digest=_sha(plan)),
         store=store)
     assert _rounds(sid, store) == 3
     # the pair record lands on a digest the whole-plan record already counted

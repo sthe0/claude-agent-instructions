@@ -222,7 +222,7 @@ def test_stage_scoped_override_is_attestation_free_and_needs_distinct_reviewer(
 
     plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
     cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="revise",
-                           reviewer="thinker", concerns=["title needs work"], note="",
+                           reviewer="thinker", concerns=["blocking: title needs work"], note="",
                            plan_digest=None), store=store)
 
     d = cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="override",

@@ -46,8 +46,11 @@ from .machine import transition
 from .plan import (
     CONDITION_MARKERS,
     META_PART,
+    ConcernFormatError,
     PlanDoc,
     PlanError,
+    SEVERITY_BLOCKING,
+    SEVERITY_NOTE,
     changed_parts,
     check_venue_warnings,
     grants_sha256,
@@ -55,7 +58,10 @@ from .plan import (
     load_plan_with_digest,
     order_digest,
     pair_binding,
+    pair_part_tokens,
+    parse_concern,
     parse_pair,
+    part_digest_map,
     plan_has_any_grants,
     plan_meta_digest,
     plan_meta_element_key,
@@ -91,6 +97,7 @@ from .state import (
     CheckKind,
     CheckVenue,
     CodeReview,
+    ConcernRecord,
     Critique,
     Criterion,
     CriterionType,
@@ -4292,6 +4299,171 @@ def _condition4_ledger_rows(
     ]
 
 
+CONCERN_OPEN = "open"
+CONCERN_FIXED = "fixed"
+CONCERN_SUPERSEDED = "superseded"
+CONCERN_RECORDED = "recorded"
+
+
+@dataclass
+class _ConcernPlan:
+    """What the severity rules made of one review record's concerns, before it is stored."""
+
+    parsed: list
+    parts: list
+    effective: list
+    verdict: str
+    part_digests: dict
+    regression_command: str
+
+    @property
+    def bodies(self) -> list[str]:
+        return [pc.body for pc in self.parsed]
+
+    @property
+    def severities(self) -> list[str]:
+        return [pc.severity for pc in self.parsed]
+
+    @property
+    def downgraded(self) -> bool:
+        return any(
+            pc.severity == SEVERITY_BLOCKING and eff != gates.EFFECTIVE_BLOCKING
+            for pc, eff in zip(self.parsed, self.effective)
+        )
+
+
+def _ledger_scope(scope: str) -> str:
+    index = plan_review_scope_stage_index(scope) if scope else None
+    return plan_review_scope_for_stage(index) if index is not None else scope
+
+
+def _parse_review_concerns(state: SessionState, raw: list[str], verdict: str):
+    """Every `--concern` split into severity / restated id / body, or the refusal text.
+    Untagged, `blocking:` on a pass, and a `re:<id>` naming no ledger concern all refuse."""
+    parsed = []
+    for text in raw:
+        try:
+            pc = parse_concern(text)
+        except ConcernFormatError as e:
+            return None, str(e)
+        if pc.severity == SEVERITY_BLOCKING and verdict == gates._PLAN_REVIEW_PASS:
+            return None, (
+                f"a `pass` review cannot carry a blocking concern ({text[:80]!r}): "
+                f"write it as `{SEVERITY_NOTE}: ...` or record a `revise`"
+            )
+        if pc.restates and pc.restates not in state.concern_ledger:
+            return None, (
+                f"`re:{pc.restates}` names no recorded concern: a restatement cites the "
+                "stable id of an earlier concern (`data.concern_ids` of its plan-review record)"
+            )
+        parsed.append(pc)
+    return parsed, ""
+
+
+def _concern_parts(body: str, own_parts) -> list[str]:
+    token = gates._concern_part_token(body)
+    if token is None:
+        return list(own_parts)
+    index = plan_review_scope_stage_index(token)
+    return [plan_review_scope_for_stage(index) if index is not None else token]
+
+
+def _plan_concern_severity(
+    state: SessionState, doc, ledger_scope: str, own_parts, prev, parsed, verdict: str, *,
+    attested: bool, regression_command: str, evidence: bool, may_promote: bool,
+) -> _ConcernPlan:
+    digests = part_digest_map(doc) if doc is not None else {}
+    prev_digests = prev.part_digests if prev is not None else {}
+    open_parts = {
+        p for e in state.concern_ledger.values()
+        if e.scope == ledger_scope and e.status == CONCERN_OPEN
+        and not gates._concern_discharged(e.scope, e.local_id, e.text, state, doc)
+        for p in e.parts
+    }
+    parts_by_concern, effective = [], []
+    for pc in parsed:
+        parts = _concern_parts(pc.body, own_parts or tuple(digests))
+        changed = {p for p in parts if digests.get(p) is None or prev_digests.get(p) != digests[p]}
+        target = state.concern_ledger.get(pc.restates) if pc.restates else None
+        dispositioned = target is not None and (
+            target.status == CONCERN_SUPERSEDED
+            or gates._concern_discharged(target.scope, target.local_id, target.text, state, doc)
+        )
+        differs = bool(regression_command) and (
+            target is None or regression_command not in target.regression_commands
+        )
+        parts_by_concern.append(parts)
+        effective.append(gates.effective_concern_severity(
+            pc.severity, parts, has_prev=prev is not None, changed=changed,
+            open_parts=open_parts, restates_dispositioned=dispositioned,
+            new_evidence=evidence or differs,
+        ))
+    effective_verdict = verdict
+    if (verdict == gates._PLAN_REVIEW_REVISE and parsed and attested and may_promote
+            and gates.EFFECTIVE_BLOCKING not in effective):
+        effective_verdict = gates._PLAN_REVIEW_PASS
+    return _ConcernPlan(parsed, parts_by_concern, effective, effective_verdict, digests,
+                        regression_command)
+
+
+def _stamp_concern_plan(review, cp: _ConcernPlan, raw_verdict: str) -> None:
+    review.concerns = cp.bodies
+    review.severities = cp.severities
+    review.effective_severities = cp.effective
+    review.raw_verdict = raw_verdict
+    review.part_digests = cp.part_digests
+    review.verdict = cp.verdict
+
+
+def _commit_concern_ledger(state: SessionState, review, cp: _ConcernPlan, ledger_scope: str,
+                           local_ids: list[str], seq: int) -> list[str]:
+    """Close the scope's open concerns this record settles, register this record's own,
+    and return their stable ids. A pass/override supersedes every open concern; any other
+    record fixes one whose part changed since it was raised and that this record does not
+    re-raise."""
+    settles_all = review.verdict in (gates._PLAN_REVIEW_PASS, gates._PLAN_REVIEW_OVERRIDE)
+    reraised = {
+        p for pc, parts in zip(cp.parsed, cp.parts)
+        if pc.severity == SEVERITY_BLOCKING for p in parts
+    }
+    for entry in state.concern_ledger.values():
+        if entry.scope != ledger_scope or entry.status != CONCERN_OPEN:
+            continue
+        if settles_all:
+            entry.status = CONCERN_SUPERSEDED
+            continue
+        moved = any(
+            cp.part_digests.get(p) is None or entry.raise_digests.get(p) != cp.part_digests[p]
+            for p in entry.parts
+        )
+        if moved and not reraised.intersection(entry.parts):
+            entry.status = CONCERN_FIXED
+    prefix = plan_review_pair_scope(ledger_scope) or ledger_scope or "plan"
+    ids = []
+    for i, (pc, parts, eff) in enumerate(zip(cp.parsed, cp.parts, cp.effective)):
+        cid = f"{prefix}#{seq}.c{i}"
+        ids.append(cid)
+        state.concern_ledger[cid] = ConcernRecord(
+            id=cid, scope=ledger_scope, plan_path=review.plan_path, local_id=local_ids[i],
+            text=pc.body, severity=pc.severity, effective=eff, parts=list(parts),
+            raise_digests={p: cp.part_digests.get(p, "") for p in parts}, record_seq=seq,
+            status=CONCERN_OPEN if eff == gates.EFFECTIVE_BLOCKING and not settles_all
+            else CONCERN_RECORDED,
+            regression_commands=[cp.regression_command] if cp.regression_command else [],
+        )
+        target = state.concern_ledger.get(pc.restates) if pc.restates else None
+        if target is not None and cp.regression_command \
+                and cp.regression_command not in target.regression_commands:
+            target.regression_commands.append(cp.regression_command)
+    return ids
+
+
+def _log_concerns_downgraded(state: SessionState, cp: _ConcernPlan, scope: str, raw_verdict: str) -> None:
+    if cp.downgraded or cp.verdict != raw_verdict:
+        state.log("plan_review_concerns_downgraded", scope=scope, raw_verdict=raw_verdict,
+                  verdict=cp.verdict, severities=cp.severities, effective=cp.effective)
+
+
 def _cmd_plan_review_pair(
     args, state: SessionState, target: str, pair: str, *,
     store: StateStore, runner: Runner | None,
@@ -4325,6 +4497,9 @@ def _cmd_plan_review_pair(
     except (OSError, PlanError, ValueError) as e:
         return refuse(f"--scope 'topo:{pair}' cannot be recorded against {target}: {e}")
     verdict = args.verdict
+    parsed, parse_error = _parse_review_concerns(state, list(getattr(args, "concerns", None) or []), verdict)
+    if parsed is None:
+        return refuse(parse_error)
     reviewer = (getattr(args, "reviewer", "") or "").strip()
     note = (getattr(args, "note", "") or "").strip()
     attested = (getattr(args, "plan_digest", None) or "").strip().lower()
@@ -4367,21 +4542,32 @@ def _cmd_plan_review_pair(
                 f"{regression_exit!r}): the current pass for pair {pair!r} stands"
             )
     base, service = parse_pair(doc, pair)
-    concerns = list(getattr(args, "concerns", None) or [])
+    ledger_scope = plan_review_scope_for_pair(pair)
+    cp = _plan_concern_severity(
+        state, doc, ledger_scope, pair_part_tokens(pair), state.plan_pair_reviews.get(pair),
+        parsed, verdict, attested=bool(attested), regression_command=regression_command,
+        evidence=bool(regression_exit), may_promote=True,
+    )
+    concerns = cp.bodies
     review = PlanPairReview(
         pair=pair, base=base, service=service, verdict=verdict, reviewer=reviewer,
         concerns=concerns, note=note, plan_path=target, plan_sha256=attested,
         record_seq=_next_record_seq(state), **pair_binding(doc, pair),
     )
+    _stamp_concern_plan(review, cp, verdict)
+    review.concern_ids = _commit_concern_ledger(
+        state, review, cp, ledger_scope, [f"c{i}" for i in range(len(concerns))], review.record_seq)
     ledger = []
     if verdict == gates._PLAN_REVIEW_REVISE:
         ledger = _condition4_ledger_rows(state, doc, target, review, concerns, "confirmed-gap")
     elif verdict == gates._PLAN_REVIEW_OVERRIDE and prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE:
         ledger = _condition4_ledger_rows(state, doc, target, prev, prev.concerns, "false-alarm")
     state.plan_pair_reviews[pair] = review
-    if _is_counted_review(verdict, reviewer):
+    if _is_counted_review(review.verdict, reviewer):
         _count_review_round(state, live)
-    state.log("plan_pair_review", target=target, pair=pair, verdict=verdict, reviewer=reviewer,
+    _log_concerns_downgraded(state, cp, ledger_scope, verdict)
+    state.log("plan_pair_review", target=target, pair=pair, verdict=review.verdict,
+              raw_verdict=verdict, reviewer=reviewer,
               plan_sha256=attested, concerns=concerns, note=note,
               regression_command=regression_command, regression_exit=regression_exit,
               ledger_lines=len(ledger))
@@ -4392,7 +4578,8 @@ def _cmd_plan_review_pair(
         True, state.node, "continue",
         f"pair review recorded for {pair!r} against {target} (verdict={verdict}); "
         f"pair status: {status}",
-        data={"pair": pair, "pair_status": status, "ledger_lines": len(ledger)},
+        data={"pair": pair, "pair_status": status, "ledger_lines": len(ledger),
+              "concern_ids": review.concern_ids},
     )
 
 
@@ -4496,6 +4683,9 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                 False, state.node, "noop",
                 f"--scope {scope!r}: no stage {stage_index} in {target}",
             )
+    parsed, parse_error = _parse_review_concerns(state, list(getattr(args, "concerns", None) or []), args.verdict)
+    if parsed is None:
+        return Directive(False, state.node, "noop", parse_error)
     # An override is the USER's escape from a reviewer's `revise` deadlock — the
     # reviewer who issued the blocking verdict cannot override themselves. Checked
     # here, before the record is overwritten and the prior reviewer's identity lost.
@@ -4565,7 +4755,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         except Exception as exc:  # noqa: BLE001 - never let a broken regression command crash recording
             regression_exit = None
             regression_command_error = str(exc)
-    concerns = list(getattr(args, "concerns", None) or [])
+    concerns = [pc.body for pc in parsed]
     review = PlanReview(
         plan_path=target,
         verdict=args.verdict,
@@ -4589,6 +4779,14 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     if not scope:
         _stamp_whole_plan_baseline(state, review, doc)
     evidenced = is_post_pass_revise and gates._plan_review_regression_evidence(prior_pass, review, doc)
+    ledger_scope = _ledger_scope(scope)
+    concern_plan = _plan_concern_severity(
+        state, doc, ledger_scope, (ledger_scope,) if scope else (),
+        state.plan_stage_reviews.get(scope) if scope else state.plan_review, parsed, args.verdict,
+        attested=bool(attested), regression_command=regression_command,
+        evidence=bool(evidenced), may_promote=not (is_post_pass_revise and not evidenced),
+    )
+    _stamp_concern_plan(review, concern_plan, args.verdict)
     if is_post_pass_revise and not evidenced:
         # The prior PASS stays authoritative — plan_review_passes is never
         # touched here, so gates.plan_review_prior_pass keeps reporting it as
@@ -4667,6 +4865,10 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             "acceptable>), or edit the plan as the concern proposes (cut or add).",
             data=data,
         )
+    review.stable_ids = _commit_concern_ledger(
+        state, review, concern_plan, ledger_scope, plan_review_concern_ids(review),
+        review.record_seq or _next_record_seq(state))
+    _log_concerns_downgraded(state, concern_plan, scope, args.verdict)
     if scope:
         state.plan_stage_reviews[scope] = review
     else:
@@ -4698,11 +4900,12 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     # Placed BEFORE the blockers call so the verdict that exhausts the budget surfaces
     # the release in its own Directive, rather than one round later.
     _count_plan_review_round(state, target)
-    if _is_counted_review(args.verdict, review.reviewer):
+    if _is_counted_review(review.verdict, review.reviewer):
         _count_review_round(state, review.plan_sha256 or _plan_file_sha256(target), thinker_record=True)
     blockers =gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)
-    state.log("plan_review", target=target, verdict=args.verdict, scope=scope,
+    state.log("plan_review", target=target, verdict=review.verdict, raw_verdict=args.verdict,
+              scope=scope,
               reviewer=review.reviewer,
               reviewer_raw=review.reviewer,
               reviewer_token=_normalize_reviewer_token(review.reviewer),
@@ -4725,6 +4928,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             "thinker review recorded but does not clear the gate",
             data={
                 "blockers": blockers,
+                "concern_ids": review.stable_ids,
                 "plan_review_round_release": round_release,
                 "regression_command_error": regression_command_error,
             },
@@ -4737,8 +4941,9 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         )
     return Directive(
         True, state.node, "continue",
-        f"thinker review recorded for {target} (verdict={args.verdict}); "
+        f"thinker review recorded for {target} (verdict={review.verdict}); "
         "the plan-review gate is now satisfied for this plan version" + out_of_scope_note,
+        data={"concern_ids": review.stable_ids},
     )
 
 
@@ -10509,7 +10714,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--reviewer", default="",
                     help="who performed the review (the user, for an override)")
     sp.add_argument("--concern", dest="concerns", action="append", default=None,
-                    help="a blocking concern the thinker raised (repeatable; audit trail)")
+                    help="a concern the thinker raised, written `blocking: [re:<concern-id>] "
+                         "<concern>` or `note: [re:<concern-id>] <concern>` (repeatable; an "
+                         "untagged concern is refused, `blocking:` on a pass is refused, "
+                         "`re:<concern-id>` must name a recorded concern)")
     sp.add_argument("--concern-id", dest="concern_ids", action="append", default=None,
                     help="stable id for the --concern at the same position (repeatable, "
                          "positionally paired); omitted concerns get a derived id "

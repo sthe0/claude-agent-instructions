@@ -166,7 +166,7 @@ def test_first_submission_does_not_count_as_a_round(store, fixtures_dir, gate_on
 
 def _record_revise(store, sid, plan):
     cli.cmd_plan_review(ns(session=sid, verdict="revise", reviewer="thinker",
-                           concerns=["the migration drops a column"], note="",
+                           concerns=["blocking: the migration drops a column"], note="",
                            target=plan, plan_digest=_sha256_file(plan)), store=store)
 
 
@@ -296,7 +296,7 @@ def test_a_stage_scoped_review_staled_by_its_own_answer_still_spends_a_round(
     _to_plan_ready(store, sid, plan)
     for n in range(5):
         cli.cmd_plan_review(ns(session=sid, verdict="revise", reviewer="thinker",
-                               concerns=[f"stage 2 concern {n}"], note="", target=plan,
+                               concerns=[f"blocking: stage 2 concern {n}"], note="", target=plan,
                                plan_digest=_sha256_file(plan), scope="stage:2"), store=store)
         _retitle_stage(plan, 2, f"Add tests, revision {n}")
         cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
@@ -360,7 +360,7 @@ def _to_executing(store, sid, plan):
 
 def _revise_post(store, sid, plan):
     return cli.cmd_plan_review(ns(session=sid, verdict="revise", reviewer="thinker",
-                                  concerns=["stage 2 still asserts nothing"], note="",
+                                  concerns=["blocking: stage 2 still asserts nothing"], note="",
                                   target=plan, plan_digest=_sha256_file(plan)), store=store)
 
 
@@ -407,12 +407,15 @@ def test_post_approval_versions_count_and_release_lands_in_the_verdict_directive
     # The pre-approval pass in _to_executing is itself a counted thinker record, so the
     # task's review_rounds leads plan_review_rounds by one and the valve opens at the
     # fourth post-approval verdict.
+    # Each verdict follows an edit of the plan: a blocking concern on a part unchanged
+    # since the scope's previous record (here the approving pass) is recorded as advisory.
     for n in range(3):
+        _retitle_stage(plan, 2, f"Add tests, revision {n}")
         d = _revise_post(store, sid, plan)
         assert d.data["plan_review_round_release"] is None
         assert store.load(sid).plan_review_rounds == n + 1
-        _retitle_stage(plan, 2, f"Add tests, revision {n}")
 
+    _retitle_stage(plan, 2, "Add tests, revision 3")
     d = _revise_post(store, sid, plan)
     s = store.load(sid)
     assert s.plan_review_rounds == 4
@@ -472,8 +475,9 @@ def test_release_reaches_the_coordinator_on_the_replan_path(
     plan = _copy_fixture(fixtures_dir, tmp_path, "plan_two_stage.toml")
     _to_executing(store, sid, plan)
     for n in range(5):
-        _revise_post(store, sid, plan)
         _retitle_stage(plan, 2, f"Add tests, revision {n}")
+        _revise_post(store, sid, plan)
+    _retitle_stage(plan, 2, "Add tests, revision 5")
     # plan_review_rounds counts the 5 post-approval versions; the task's review_rounds
     # also holds the approving pass from _to_executing, so the valve's count is 6.
     assert store.load(sid).plan_review_rounds == 5

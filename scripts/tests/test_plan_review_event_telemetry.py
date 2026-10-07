@@ -36,7 +36,7 @@ def test_plan_review_event_carries_the_full_record(store, tmp_path):
 
     cli.cmd_plan_review(ns(
         session="s", verdict="pass", reviewer="thinker",
-        concerns=["the fix sizes are unrecoverable"], note="see availability census",
+        concerns=["note: the fix sizes are unrecoverable"], note="see availability census",
         target=None, plan_digest=_sha256_file(plan),
         findings_blocking=3, findings_nonblocking=1,
     ), store=store)

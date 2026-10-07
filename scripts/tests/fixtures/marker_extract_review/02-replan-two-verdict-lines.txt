@@ -10,5 +10,5 @@ Everything else stage 13 needs from stage 2 is covered:
 REVIEW:
 Verdict: revise
 Plan digest: c0589d4b6df41bff8c47ac561a77815efa312109b784c011455b3371d3db7529
-C1: add: stage:13 — the digest check for a file action hashes the text after the first "\n**Evidence:**\n" of the filed body and so relies on record_to_fields keeping `**Evidence:**\n{record.evidence}` as its last field with the evidence verbatim; the adapter is a stage-2 output artifact, but this reliance is not in stage 13's supplies edge on stage 2 — add it to the edge artifact text.
-C4: add: stage:2 — stage 2's declared product pins a few adapter internals, but not record_to_fields' evidence-last, verbatim body shape that stage 13's filed-issue digest needs; pin it with one assertion that the body ends with "**Evidence:**\n" + evidence.
+blocking: C1: add: stage:13 — the digest check for a file action hashes the text after the first "\n**Evidence:**\n" of the filed body and so relies on record_to_fields keeping `**Evidence:**\n{record.evidence}` as its last field with the evidence verbatim; the adapter is a stage-2 output artifact, but this reliance is not in stage 13's supplies edge on stage 2 — add it to the edge artifact text.
+blocking: C4: add: stage:2 — stage 2's declared product pins a few adapter internals, but not record_to_fields' evidence-last, verbatim body shape that stage 13's filed-issue digest needs; pin it with one assertion that the body ends with "**Evidence:**\n" + evidence.

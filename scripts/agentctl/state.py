@@ -24,7 +24,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 43  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 44  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -57,6 +57,9 @@ SCHEMA_VERSION = 43  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # 43: SessionState gains review_rounds -- the mirror of the task's
                      # never-reset review-round total (task_accumulator axis of the
                      # same name) that the plan-review round valve reads
+                     # 44: PlanReview/PlanPairReview gain per-concern severities,
+                     # effective severities, raw_verdict, part_digests and stable ids;
+                     # SessionState gains concern_ledger (blocking/note severity model)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -497,6 +500,18 @@ class PlanReview:
     # walk-stale"). `record_seq` totally orders review records of every kind.
     reviewed_pair_bindings: "dict[str, str] | None" = None
     record_seq: int = 0
+    # Schema 44: the severity the reviewer wrote on each concern (`blocking`/`note`,
+    # positionally paired with `concerns`), the engine's effective severity after the
+    # freeze rules (`blocking`/`note`/`advisory`), the reviewer's own verdict when the
+    # engine recorded a different one (`verdict` is the effective one every gate reads),
+    # the plan's per-part digests at record time, and each concern's stable ledger id.
+    # All empty on a legacy record, which reads as: every concern blocking, every part
+    # changed.
+    severities: list[str] = field(default_factory=list)
+    effective_severities: list[str] = field(default_factory=list)
+    raw_verdict: str = ""
+    part_digests: dict[str, str] = field(default_factory=dict)
+    stable_ids: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "PlanReview | None":
@@ -522,6 +537,11 @@ class PlanReview:
                 dict(rpb) if isinstance(rpb := d.get("reviewed_pair_bindings"), dict) else None
             ),
             record_seq=d.get("record_seq") or 0,
+            severities=list(d.get("severities", [])),
+            effective_severities=list(d.get("effective_severities", [])),
+            raw_verdict=d.get("raw_verdict", ""),
+            part_digests=dict(pd) if isinstance(pd := d.get("part_digests"), dict) else {},
+            stable_ids=list(d.get("stable_ids", [])),
         )
 
 
@@ -607,6 +627,13 @@ class PlanPairReview:
     service_interface_digest: str = ""
     service_file_digest: str = ""
     record_seq: int = 0
+    # Schema 44, as on PlanReview. `concern_ids` are the stable ledger ids
+    # `<pair>#<record_seq>.c<i>` a later `re:<id>` names.
+    concern_ids: list[str] = field(default_factory=list)
+    severities: list[str] = field(default_factory=list)
+    effective_severities: list[str] = field(default_factory=list)
+    raw_verdict: str = ""
+    part_digests: dict[str, str] = field(default_factory=dict)
 
     def binding(self) -> dict[str, str]:
         """The stored digests, in the shape plan.pair_binding returns."""
@@ -627,7 +654,53 @@ class PlanPairReview:
             plan_path=d.get("plan_path", ""),
             plan_sha256=d.get("plan_sha256", ""),
             record_seq=d.get("record_seq") or 0,
+            concern_ids=list(d.get("concern_ids", [])),
+            severities=list(d.get("severities", [])),
+            effective_severities=list(d.get("effective_severities", [])),
+            raw_verdict=d.get("raw_verdict", ""),
+            part_digests=dict(pd) if isinstance(pd := d.get("part_digests"), dict) else {},
             **{key: d.get(key, "") for key in PAIR_BINDING_KEYS},
+        )
+
+
+# One reviewer concern in the session's concern ledger (schema 44), keyed by its stable
+# id in SessionState.concern_ledger. The review families keep only their LATEST record
+# per scope, so what an earlier record raised — and whether it is still open — lives
+# here: `status` is `open` for an effective-blocking concern nothing has discharged,
+# `fixed` once its part changed and the next record on the scope did not re-raise it,
+# `superseded` once a later pass/override on the scope closed it, `recorded` for a
+# concern that never blocked (note or advisory). A risk acceptance is NOT a status: it
+# is read from SessionState.risk_acceptances at use time, so it keeps its own staleness
+# rules. `parts` are the part tokens the concern names (its explicit token, else the
+# scope's own parts); `raise_digests` are those parts' digests at the last record that
+# carried the concern, the baseline "the part changed" is measured from.
+@dataclass
+class ConcernRecord:
+    id: str
+    scope: str
+    plan_path: str
+    local_id: str
+    text: str
+    severity: str
+    effective: str
+    parts: list[str] = field(default_factory=list)
+    raise_digests: dict[str, str] = field(default_factory=dict)
+    record_seq: int = 0
+    status: str = "recorded"
+    regression_commands: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "ConcernRecord | None":
+        if not d or not d.get("id"):
+            return None
+        return cls(
+            id=d["id"], scope=d.get("scope", ""), plan_path=d.get("plan_path", ""),
+            local_id=d.get("local_id", ""), text=d.get("text", ""),
+            severity=d.get("severity", ""), effective=d.get("effective", ""),
+            parts=list(d.get("parts", [])),
+            raise_digests=dict(rd) if isinstance(rd := d.get("raise_digests"), dict) else {},
+            record_seq=d.get("record_seq") or 0, status=d.get("status", "recorded"),
+            regression_commands=list(d.get("regression_commands", [])),
         )
 
 
@@ -1661,6 +1734,10 @@ class SessionState:
     # review-record write -- whole-plan, composed or per-pair -- so records carry a
     # total order that does not depend on wall-clock time.
     next_record_seq: int = 0
+    # Every concern any review record raised, by stable id (schema 44) — see ConcernRecord.
+    # Never reset: a `re:<id>` must resolve across approve/replan, and a concern's
+    # status outlives the record that raised it. Empty on legacy states.
+    concern_ledger: dict[str, "ConcernRecord"] = field(default_factory=dict)
     # Recorded risk acceptances discharging `revise` concerns (schema 28) — see
     # RiskAcceptance's docstring for the binding. Empty on legacy pre-schema-28
     # states (absent key -> dataclass default via from_dict), which is what makes
@@ -2152,6 +2229,10 @@ class SessionState:
         data["plan_pair_reviews"] = {
             pair: r for pair, v in (data.get("plan_pair_reviews") or {}).items()
             if (r := PlanPairReview.from_dict(v)) is not None
+        }
+        data["concern_ledger"] = {
+            cid: r for cid, v in (data.get("concern_ledger") or {}).items()
+            if (r := ConcernRecord.from_dict(v)) is not None
         }
         data["risk_acceptances"] = [
             r for r in (RiskAcceptance.from_dict(x) for x in data.get("risk_acceptances", [])) if r is not None

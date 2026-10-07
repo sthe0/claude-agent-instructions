@@ -29,7 +29,10 @@ from .directive import Directive
 from .plan import (
     CONDITION_MARKERS,
     PLAN_DIGEST_MARKER,
+    RESTATES_PREFIX,
     REVIEW_MARKER,
+    SEVERITY_BLOCKING,
+    SEVERITY_NOTE,
     VERDICT_MARKER,
     PAIR_BASE_NODE,
     PAIR_PLAN_NODE,
@@ -955,8 +958,20 @@ def render_pair_review_bundle(doc: PlanDoc, pair_id: str, *, plan_sha256: str, v
         f"verbatim; do not compute it;"
     )
     lines.append(
-        f"- one concern per line, each prefixed by the marker of the condition it "
-        f"concerns ({concern_markers}); a condition-4 gap is a `{gap_marker}` line."
+        f"- one concern per line, written `{SEVERITY_BLOCKING}: [{RESTATES_PREFIX}<concern-id>] "
+        f"<marker> <concern>` or `{SEVERITY_NOTE}: ...`, where <marker> is the condition the "
+        f"concern concerns ({concern_markers}); a condition-4 gap is a `{gap_marker}` line. "
+        f"An untagged concern line is refused."
+    )
+    lines.append(
+        f"  - `{SEVERITY_BLOCKING}:` keeps the plan from passing; `{SEVERITY_NOTE}:` is "
+        f"recorded and does not. A `{VERDICT_MARKER} pass` carries `{SEVERITY_NOTE}:` lines only."
+    )
+    lines.append(
+        f"  - Block only on a part that changed since the last review of this pair, or on a "
+        f"part that still carries an unresolved blocker, re-raised as "
+        f"`{RESTATES_PREFIX}<concern-id>` (the stable id of the earlier concern). A blocking "
+        f"concern on an unchanged part is recorded as advisory."
     )
     lines.append(
         f"The {REVIEW_MARKER} block is the last thing in your reply, with no other "

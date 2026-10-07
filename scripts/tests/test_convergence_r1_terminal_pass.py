@@ -74,7 +74,7 @@ def test_revise_after_pass_without_regression_evidence_does_not_block(store, fix
                         store=store)
 
     d = cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="revise",
-                               reviewer="thinker", concerns=["reconsider stage 1"], note="",
+                               reviewer="thinker", concerns=["blocking: reconsider stage 1"], note="",
                                plan_digest=None, regression_command=None),
                             store=store)
 
@@ -102,7 +102,7 @@ def test_revise_after_pass_with_red_regression_command_blocks(store, fixtures_di
     plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
     d = cli.cmd_plan_review(
         ns(session=sid, target=None, scope=None, verdict="revise", reviewer="thinker",
-           concerns=["stage:1 needs another look"], note="",
+           concerns=["blocking: stage:1 needs another look"], note="",
            plan_digest=None, regression_command="repro-regression"),
         store=store, runner=lambda argv: RunResult(1, stdout="", stderr="reproduced"),
     )
@@ -132,7 +132,7 @@ def test_green_regression_command_is_not_evidence(store, fixtures_dir, tmp_path,
     plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
     d = cli.cmd_plan_review(
         ns(session=sid, target=None, scope=None, verdict="revise", reviewer="thinker",
-           concerns=["stage:1 needs another look"], note="",
+           concerns=["blocking: stage:1 needs another look"], note="",
            plan_digest=None, regression_command="repro-regression"),
         store=store, runner=lambda argv: RunResult(0, stdout="", stderr=""),
     )
@@ -166,7 +166,7 @@ def test_regression_concern_must_name_part_changed_since_pass(store, fixtures_di
     plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
     d = cli.cmd_plan_review(
         ns(session=sid, target=None, scope=None, verdict="revise", reviewer="thinker",
-           concerns=["the tone of the plan feels off"], note="",
+           concerns=["blocking: the tone of the plan feels off"], note="",
            plan_digest=None, regression_command="repro-regression"),
         store=store, runner=lambda argv: RunResult(1, stdout="", stderr="reproduced"),
     )
@@ -211,7 +211,7 @@ def test_concern_remedy_tags_are_logged(store, fixtures_dir, gate_on):
 
     cli.cmd_plan_review(
         ns(session=sid, target=None, scope=None, verdict="revise", reviewer="thinker",
-           concerns=["cut: drop stage 2 entirely", "add: a rollback step"], note="",
+           concerns=["blocking: cut: drop stage 2 entirely", "blocking: add: a rollback step"], note="",
            plan_digest=None, regression_command=None),
         store=store,
     )
@@ -239,7 +239,7 @@ def test_stage_scoped_revise_after_whole_plan_pass_is_terminal(store, fixtures_d
     # find it, so this unevidenced stage-scoped revise is bound by the same
     # terminal rule a whole-plan revise would be, not a loophole around it.
     d = cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="revise",
-                               reviewer="thinker", concerns=["stage:1 reconsider"], note="",
+                               reviewer="thinker", concerns=["blocking: stage:1 reconsider"], note="",
                                plan_digest=None, regression_command=None),
                             store=store)
 
@@ -260,7 +260,7 @@ def test_concern_remedy_tags_are_logged_on_ordinary_review(store, fixtures_dir, 
 
     cli.cmd_plan_review(
         ns(session=sid, target=None, scope=None, verdict="revise", reviewer="thinker",
-           concerns=["cut: drop stage 2 entirely", "add: a rollback step"], note="",
+           concerns=["blocking: cut: drop stage 2 entirely", "blocking: add: a rollback step"], note="",
            plan_digest=None, regression_command=None),
         store=store,
     )
@@ -291,7 +291,7 @@ def test_moved_scope_revise_then_stage_override_clears_gate(store, fixtures_dir,
     # no longer covers this scope's current content either way.
     plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
     d = cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="revise",
-                               reviewer="thinker", concerns=["stage:1 reconsider"], note="",
+                               reviewer="thinker", concerns=["blocking: stage:1 reconsider"], note="",
                                plan_digest=None, regression_command=None),
                             store=store)
 

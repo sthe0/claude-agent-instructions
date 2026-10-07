@@ -244,7 +244,8 @@ def test_tr2_pass_needs_a_digest_and_records_without_prerequisite_pairs(env):
 
 def test_tr3_condition4_ledger_lines_and_whole_plan_records_untouched(env):
     concern = f"{C4} stage 3 relies on a product stage 1 never delivers"
-    d = env.record("topo:3-1", "revise", concerns=[concern, f"{CONDITION_MARKERS[0]} wording only"])
+    d = env.record("topo:3-1", "revise",
+                   concerns=[f"blocking: {concern}", f"blocking: {CONDITION_MARKERS[0]} wording only"])
     assert d.ok, d.detail
     (line,) = env.ledger_lines()
     assert line["unit"] == "3-1"
@@ -265,15 +266,18 @@ def test_tr3_condition4_ledger_lines_and_whole_plan_records_untouched(env):
     assert netted["concern"] == concern
 
     lines_before = env.ledger_lines()
-    assert env.record("topo:3-2", "revise", concerns=[f"{CONDITION_MARKERS[0]} wording only"]).ok
-    assert env.record("topo:plan-3", "pass", concerns=[f"{C4} stray marker on a pass"]).ok
+    assert env.record("topo:3-2", "revise", concerns=[f"blocking: {CONDITION_MARKERS[0]} wording only"]).ok
+    assert env.record("topo:plan-3", "pass", concerns=[f"note: {C4} stray marker on a pass"]).ok
     assert env.record("topo:base-plan", "revise").ok
     assert env.ledger_lines() == lines_before
 
+    # The pair's earlier record was overridden on the unchanged plan, so a new blocking
+    # concern would be frozen to advisory; edit the pair's own part first.
+    env.edit(lambda d: d["stage"][2].update(method="edited after the override"))
     _seed_whole_plan_pass(env)
     before = _review_dicts(env.state())
     gap = f"{C4} gap behind a whole-plan pass"
-    d = env.record("topo:3-1", "revise", concerns=[gap])
+    d = env.record("topo:3-1", "revise", concerns=[f"blocking: {gap}"])
     assert d.ok, d.detail
     assert [row["outcome"] for row in env.ledger_lines()[len(lines_before):]] == ["confirmed-gap"]
     state = env.state()
@@ -455,24 +459,24 @@ def test_tr15_freshness_and_target_copy_recording(env):
 def test_tr16_prior_pass_branching_overturn_and_scope_parsing(make_env):
     env = make_env()
     _seed_whole_plan_pass(env, reviewed_meta_digest="superseded", reviewed_stage_keys={"1": "old"})
-    d = env.record("topo:3-1", "revise", concerns=["needs work"])
+    d = env.record("topo:3-1", "revise", concerns=["blocking: needs work"])
     assert d.ok, d.detail
     assert env.state().plan_pair_reviews["3-1"].verdict == "revise"
 
     env = make_env()
     assert env.record("topo:3-1", "pass").ok
 
-    d = env.record("topo:3-1", "revise", concerns=["regressed"])
+    d = env.record("topo:3-1", "revise", concerns=["blocking: regressed"])
     assert not d.ok
     assert "--regression-command" in d.detail
     assert env.status("3-1") == "current"
 
-    d = env.record("topo:3-1", "revise", concerns=["regressed"],
+    d = env.record("topo:3-1", "revise", concerns=["blocking: regressed"],
                    regression_command="check", runner=_exit(0))
     assert not d.ok
     assert env.status("3-1") == "current"
 
-    d = env.record("topo:3-1", "revise", concerns=["regressed"],
+    d = env.record("topo:3-1", "revise", concerns=["blocking: regressed"],
                    regression_command="check", runner=_exit(1))
     assert d.ok, d.detail
     assert env.status("3-1") == "revise"
@@ -481,12 +485,12 @@ def test_tr16_prior_pass_branching_overturn_and_scope_parsing(make_env):
     assert env.record("topo:3-1", "pass").ok
     assert env.record("topo:3-1", "override", reviewer="fedor", note="accepted").ok
     assert env.status("3-1") == "override"
-    assert env.record("topo:3-1", "revise", concerns=["reopened"]).ok
+    assert env.record("topo:3-1", "revise", concerns=["blocking: reopened"]).ok
 
     env = make_env()
     for scope in ("", "stage:1"):
         assert env.record(scope, "pass").ok
-        d = env.record(scope, "revise", concerns=["late objection"])
+        d = env.record(scope, "revise", concerns=["blocking: late objection"])
         assert d.data["plan_review_post_pass_unevidenced"] is True
         assert env.state().plan_review_passes[scope].verdict == "pass"
 
@@ -531,7 +535,7 @@ def test_tr18_interface_empty_or_source_service_binds_the_full_brief(make_env, p
 def test_tr21_pair_override_checks_and_storage(make_env):
     env = make_env(_data(customer_id="fedor"))
     concern = f"{C4} stage 3 relies on a product stage 1 never delivers"
-    assert env.record("topo:3-1", "revise", reviewer="thinker", concerns=[concern]).ok
+    assert env.record("topo:3-1", "revise", reviewer="thinker", concerns=[f"blocking: {concern}"]).ok
     _seed_whole_plan_pass(env)
     before = _review_dicts(env.state())
 
@@ -561,7 +565,7 @@ def test_tr21_pair_override_checks_and_storage(make_env):
     # pair, exactly as it cannot self-override the whole plan; once it records one
     # under a release, the user surface names it.
     env = make_env(_data())
-    assert env.record("topo:3-1", "revise", reviewer="thinker", concerns=[concern]).ok
+    assert env.record("topo:3-1", "revise", reviewer="thinker", concerns=[f"blocking: {concern}"]).ok
     d = env.record("topo:3-1", "override", reviewer="agent", note="self-waiver")
     assert not d.ok and "agent-authored override is refused" in d.detail
     whole = cli.cmd_plan_review(
@@ -583,7 +587,7 @@ def test_tr21_pair_override_checks_and_storage(make_env):
                               ("--findings-nonblocking", "findings_nonblocking", 0)):
         d = cli.cmd_plan_review(
             Namespace(session=SID, target=None, scope="topo:3-1", verdict="revise",
-                      reviewer="thinker", concerns=[concern], note="", plan_digest=None,
+                      reviewer="thinker", concerns=[f"blocking: {concern}"], note="", plan_digest=None,
                       regression_command=None, **{dest: value}),
             store=env.store)
         assert not d.ok and flag in d.detail
@@ -754,7 +758,7 @@ def test_tr5_compose_refuses_and_names_the_failing_pairs(make_env):
     env = make_env()
     for pair in review_pairs(env.doc()):
         verdict = "revise" if pair == "3-1" else "pass"
-        assert env.record(f"topo:{pair}", verdict, concerns=["gap"] if verdict == "revise" else None).ok
+        assert env.record(f"topo:{pair}", verdict, concerns=["blocking: gap"] if verdict == "revise" else None).ok
     d = _compose(env)
     assert not d.ok
     assert d.data["failing"] == {"3-1": "revise"}
@@ -1135,7 +1139,7 @@ def test_tr20_replan_target_composes_a_pass_bound_to_the_replacement_plan(env):
 
 
 def _override_pair(env: Env, pair: str) -> None:
-    assert env.record(f"topo:{pair}", "revise", concerns=["open question"]).ok
+    assert env.record(f"topo:{pair}", "revise", concerns=["blocking: open question"]).ok
     assert env.record(f"topo:{pair}", "override", reviewer="fedor", note="accepted as is").ok
 
 
@@ -1170,7 +1174,7 @@ def _stale_and_revise_round(env: Env) -> None:
     """P_OLD = {3-1 stale, plan-3 revise}: the earlier round's records, left behind by
     a later edit and a later revise."""
     assert env.record("topo:base-plan", "pass").ok
-    assert env.record("topo:plan-3", "revise", concerns=["gap"]).ok
+    assert env.record("topo:plan-3", "revise", concerns=["blocking: gap"]).ok
     assert env.record("topo:3-1", "pass").ok
     assert env.record("topo:3-2", "pass").ok
     env.edit(lambda d: d["stage"][0].update(method="edited in the earlier round"))
@@ -1209,7 +1213,7 @@ def test_tr25_missing_plan_node_pair_in_the_baseline_still_blocks_on_its_own_sta
 
 def test_tr26_a_whole_plan_revise_baseline_blocks_even_when_w_is_empty(env):
     _record_pairs(env)
-    d = env.record("", "revise", concerns=["the plan needs more work"])
+    d = env.record("", "revise", concerns=["blocking: the plan needs more work"])
     assert not d.ok
     assert env.state().plan_review.verdict == "revise"
     assert _w(env) == []
@@ -1295,7 +1299,7 @@ def test_tr9_condition4_gap_detector_counts_distinct_net_confirmed_pair_keys(mak
     env = make_env()
     ledger.write_text("", encoding="utf-8")
     for pair in ("3-1", "3-2", "plan-3"):
-        assert env.record(f"topo:{pair}", "revise", concerns=[f"{C4} gap at {pair}"]).ok
+        assert env.record(f"topo:{pair}", "revise", concerns=[f"blocking: {C4} gap at {pair}"]).ok
     real = env.ledger_lines()
     assert len(real) == 3
     for line in real:

@@ -86,6 +86,14 @@ def _doc(stages, order=None, **meta_overrides):
     return parse_plan({"meta": meta, "stage": stages})
 
 
+def _doc_with_raw(stages, raw_depends_on):
+    """A plan whose raw `depends_on` carries edges the supplies-derived graph lacks:
+    parsing merges the two, so the divergence is written onto the parsed doc."""
+    doc = _doc(stages)
+    doc.raw_depends_on.update({n: tuple(edges) for n, edges in raw_depends_on.items()})
+    return doc
+
+
 def _order(requirements, coverage, **extra):
     return {
         "requirements": [{"id": rid, "text": rid} for rid in requirements],
@@ -454,12 +462,12 @@ def test_tb7_unknown_pair_and_unit_form_ids_raise_value_error():
 
 
 def test_tb8_non_direct_edges_reliance_set_raw_depends_on_and_closure():
-    doc = _doc([
+    doc = _doc_with_raw([
         _stage(1),
         _stage(2),
         _stage(3, depends_on=[1]),
-        _stage(4, depends_on=[3], supplies=[{"on": 2}]),
-    ])
+        _stage(4, supplies=[{"on": 2}]),
+    ], {4: [3]})
     stage4 = next(s for s in doc.stages if s.index == 4)
     assert doc.raw_depends_on[4] == (3,)
     assert list(stage4.depends_on) == [2]
@@ -539,11 +547,11 @@ def test_tb8_pair_binding_moves_with_the_part_of_the_plan_each_digest_covers():
 
 def test_tb8_removing_a_raw_only_edge_moves_edge_digest_and_nothing_else():
     def doc_with(raw_depends_on):
-        return _doc([
+        return _doc_with_raw([
             _stage(1),
-            _stage(2, depends_on=raw_depends_on, supplies=[{"on": 1, "element": "e1"}]),
+            _stage(2, supplies=[{"on": 1, "element": "e1"}]),
             _stage(3),
-        ])
+        ], {2: raw_depends_on})
 
     with_edge = doc_with([1, 3])
     without_edge = doc_with([1])
@@ -559,13 +567,12 @@ def test_tb8_removing_a_raw_only_edge_moves_edge_digest_and_nothing_else():
 
 
 def test_tb10_dangling_raw_edge_raises_planerror():
-    # The dangling raw edge hides behind an explicit (valid) supplies list, so
-    # parse_plan's own graph validation (derived, supplies-collapsed edges only)
-    # never sees it.
-    doc = _doc([
+    # parse_plan validates the merged graph, so a dangling raw edge is only reachable
+    # on a doc whose raw depends_on was written after parsing.
+    doc = _doc_with_raw([
         _stage(1),
-        _stage(2, depends_on=[99, 1], supplies=[{"on": 1}]),
-    ])
+        _stage(2, supplies=[{"on": 1}]),
+    ], {2: [99, 1]})
     with pytest.raises(PlanError):
         reliance_set(doc, 2)
     with pytest.raises(PlanError):
@@ -574,13 +581,13 @@ def test_tb10_dangling_raw_edge_raises_planerror():
 
 def test_tb10_raw_union_cycle_hidden_behind_acyclic_derived_graph_raises_planerror():
     # Raw depends_on cycle 1 -> 2 -> 3 -> 1; stage 3's supplies point the DERIVED
-    # graph at a plain sink instead, so parse-time validation sees an acyclic graph.
-    doc = _doc([
+    # graph at a plain sink instead, so the derived graph is acyclic.
+    doc = _doc_with_raw([
         _stage(1, depends_on=[2]),
         _stage(2, depends_on=[3]),
-        _stage(3, depends_on=[1], supplies=[{"on": 4}]),
+        _stage(3, supplies=[{"on": 4}]),
         _stage(4),
-    ])
+    ], {3: [1]})
     stage3 = next(s for s in doc.stages if s.index == 3)
     assert list(stage3.depends_on) == [4]
     with pytest.raises(PlanError):
@@ -599,12 +606,12 @@ def test_tb10_raw_union_cycle_hidden_behind_acyclic_derived_graph_raises_planerr
 def test_tb10_cycle_reached_through_an_already_visited_node_raises_planerror():
     # 2 <-> 3 is reachable from 1 both directly and via 2; the derived graph
     # (stage 3 supplies on 4) stays acyclic.
-    doc = _doc([
+    doc = _doc_with_raw([
         _stage(1, depends_on=[2, 3]),
         _stage(2, depends_on=[3]),
-        _stage(3, depends_on=[2], supplies=[{"on": 4}]),
+        _stage(3, supplies=[{"on": 4}]),
         _stage(4),
-    ])
+    ], {3: [2]})
     with pytest.raises(PlanError, match="2 -> 3 -> 2"):
         reliance_closure(doc, 1)
 
@@ -735,11 +742,11 @@ def test_tb15_bundle_carries_procedure_and_view_path_no_valve_token():
 
 
 def _tb16_doc():
-    return _doc([
+    return _doc_with_raw([
         _stage(1),
         _stage(2),
-        _stage(3, depends_on=[1, 2], supplies=[{"on": 1}]),
-    ])
+        _stage(3, supplies=[{"on": 1}]),
+    ], {3: [1, 2]})
 
 
 def test_tb16_raw_only_edge_reliance_set_first_hop_consumers_pairs_view():
@@ -918,11 +925,11 @@ def test_tb21_ordering_tag_lines_per_pair():
 
 
 def test_tb21_ordering_tag_flips_when_transitively_engine_ordered():
-    doc = _doc([
+    doc = _doc_with_raw([
         _stage(1, depends_on=[2]),
         _stage(2),
-        _stage(3, depends_on=[1, 2], supplies=[{"on": 1}]),
-    ])
+        _stage(3, supplies=[{"on": 1}]),
+    ], {3: [1, 2]})
     assert _edge_lines(_bundle(doc, "3-1"))[-1] == "- Ordering: engine-ordered"
     assert _edge_lines(_bundle(doc, "3-2"))[-1] == "- Ordering: engine-ordered"
 
@@ -952,9 +959,15 @@ def test_tb22_protocol_text_pins_markers_echo_concerns_and_per_pair_steps():
         "- `Verdict: <pass|revise>`;",
         "- `Plan digest: <sha256>` — echo the `Plan digest:` line above verbatim; "
         "do not compute it;",
-        "- one concern per line, each prefixed by the marker of the condition it "
-        "concerns (`C1:`, `C2:`, `C3:`, `C4:`); a condition-4 gap is a `C4:` line.",
+        "- one concern per line, written `blocking: [re:<concern-id>] <marker> <concern>` "
+        "or `note: ...`, where <marker> is the condition the concern concerns "
+        "(`C1:`, `C2:`, `C3:`, `C4:`); a condition-4 gap is a `C4:` line. "
+        "An untagged concern line is refused.",
     ]
+    assert "  - Block only on a part that changed since the last review of this pair, or on " \
+        "a part that still carries an unresolved blocker, re-raised as `re:<concern-id>` " \
+        "(the stable id of the earlier concern). A blocking concern on an unchanged part " \
+        "is recorded as advisory." in _sections(bundle)["## Review protocol"].splitlines()
     assert "- `/tmp/v/stage-1.md`" in _sections(bundle)["## Service file"].splitlines()
 
     procedure = _sections(bundle)["## Per-pair procedure"].splitlines()

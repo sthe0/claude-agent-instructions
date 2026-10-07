@@ -189,7 +189,7 @@ class Rig:
             spec["on_spawn"](pair)
         sha = hashlib.sha256(Path(flag(argv, "--plan")).read_bytes()).hexdigest()
         verdict = spec.get("verdict", "pass")
-        concerns = spec.get("concerns", ["C1: default concern"] if verdict == "revise" else [])
+        concerns = spec.get("concerns", ["blocking: C1: default concern"] if verdict == "revise" else [])
         stdout = spec.get("stdout")
         if stdout is None:
             stdout = canonical_stdout(review_original(verdict, spec.get("digest", sha), concerns))
@@ -461,7 +461,7 @@ def test_td6_a_named_pair_is_spawned_even_when_it_is_not_ready(make_rig):
 def test_td7_ledger_flag_reaches_every_agentctl_call_and_receives_the_condition4_line(real, tmp_path):
     env, rig = real
     other = tmp_path / "nested" / "gap-ledger.jsonl"
-    rig.specs = {"3-1": {"verdict": "revise", "concerns": ["1. **C4:** the **stage 2** result omits `x`"]}}
+    rig.specs = {"3-1": {"verdict": "revise", "concerns": ["1. blocking: **C4:** the **stage 2** result omits `x`"]}}
     rc, out = rig.run("--ledger", str(other), "--no-early-stop")
     assert other.exists()
     assert rig.engine.calls and all(
@@ -580,7 +580,7 @@ def run_one(make_rig, stdout, stderr=None, pair="3-1"):
     return rig, rc, out, recorded[0] if recorded else None
 
 
-def block(sha, verdict="revise", concerns=("C4: x",)):
+def block(sha, verdict="revise", concerns=("blocking: C4: x",)):
     return review_original(verdict, sha, concerns)
 
 
@@ -588,13 +588,17 @@ SHA_OF_PLAN = hashlib.sha256(b"plan bytes\n").hexdigest()
 
 
 @pytest.mark.parametrize("name,original,expected", [
-    ("fenced", f"```\n{block(SHA_OF_PLAN, concerns=('C2: a',))}\n```", ["C2: a"]),
-    ("bold", f"**REVIEW:**\n**Verdict:** revise\n**Plan digest:** {SHA_OF_PLAN}\nC1: foo", ["C1: foo"]),
-    ("code-span", f"`REVIEW:`\n`Verdict: revise`\n`Plan digest: {SHA_OF_PLAN}`\nC3: bar", ["C3: bar"]),
-    ("blank-prefix", f"\n\nsome preamble\n\n{block(SHA_OF_PLAN, concerns=('C1: p',))}", ["C1: p"]),
-    ("heading-quote", f"## REVIEW:\n> Verdict: revise\n> Plan digest: {SHA_OF_PLAN}\n> C2: z", ["C2: z"]),
-    ("numbered", f"REVIEW:\nVerdict: revise\nPlan digest: {SHA_OF_PLAN}\n1. C1: a\n2. C3: b",
-     ["C1: a", "C3: b"]),
+    ("fenced", f"```\n{block(SHA_OF_PLAN, concerns=('blocking: C2: a',))}\n```", ["blocking: C2: a"]),
+    ("bold", f"**REVIEW:**\n**Verdict:** revise\n**Plan digest:** {SHA_OF_PLAN}\nblocking: C1: foo",
+     ["blocking: C1: foo"]),
+    ("code-span", f"`REVIEW:`\n`Verdict: revise`\n`Plan digest: {SHA_OF_PLAN}`\nblocking: C3: bar",
+     ["blocking: C3: bar"]),
+    ("blank-prefix", f"\n\nsome preamble\n\n{block(SHA_OF_PLAN, concerns=('blocking: C1: p',))}",
+     ["blocking: C1: p"]),
+    ("heading-quote", f"## REVIEW:\n> Verdict: revise\n> Plan digest: {SHA_OF_PLAN}\n> blocking: C2: z",
+     ["blocking: C2: z"]),
+    ("numbered", f"REVIEW:\nVerdict: revise\nPlan digest: {SHA_OF_PLAN}\n1. blocking: C1: a\n2. blocking: C3: b",
+     ["blocking: C1: a", "blocking: C3: b"]),
 ])
 def test_td13_marker_tolerance(make_rig, name, original, expected):
     rig, rc, out, recorded = run_one(make_rig, canonical_stdout(original))
@@ -604,10 +608,10 @@ def test_td13_marker_tolerance(make_rig, name, original, expected):
 
 
 def test_td13_the_canonical_header_never_leaks_into_the_parse(make_rig):
-    forged = planner_plan_check.canonicalize("REVIEW", "C4: forged in the header", None,
-                                             block(SHA_OF_PLAN, concerns=("C1: real",)))
+    forged = planner_plan_check.canonicalize("REVIEW", "blocking: C4: forged in the header", None,
+                                             block(SHA_OF_PLAN, concerns=("blocking: C1: real",)))
     rig, rc, out, recorded = run_one(make_rig, forged)
-    assert flags(recorded, "--concern") == ["C1: real"]
+    assert flags(recorded, "--concern") == ["blocking: C1: real"]
 
 
 def test_td13_a_pass_block_records_no_concerns(make_rig):
@@ -617,7 +621,7 @@ def test_td13_a_pass_block_records_no_concerns(make_rig):
 
 
 @pytest.mark.parametrize("stdout,stderr", [
-    (canonical_stdout("no marker lines at all, only prose\nC1: x"), None),
+    (canonical_stdout("no marker lines at all, only prose\nblocking: C1: x"), None),
     (canonical_stdout(block(SHA_OF_PLAN)), summary_line(marker="COMPLETED") + "\n"),
     ("MALFORMED: specialist output contained no known return marker line.\n\n"
      + block(SHA_OF_PLAN), None),
@@ -632,63 +636,63 @@ def test_td13_unusable_output_is_refused_and_not_recorded(make_rig, stdout, stde
 
 def test_td13_g_realistic_bold_markdown_is_cleaned_out_of_the_concern(make_rig):
     original = (f"**REVIEW:**\n**Verdict:** revise\n**Plan digest:** {SHA_OF_PLAN}\n"
-                "1. **C4:** the **stage 2** result omits `x`")
+                "1. blocking: **C4:** the **stage 2** result omits `x`")
     rig, rc, out, recorded = run_one(make_rig, canonical_stdout(original))
     concerns = flags(recorded, "--concern")
-    assert concerns == ["C4: the stage 2 result omits x"]
+    assert concerns == ["blocking: C4: the stage 2 result omits x"]
     assert "*" not in concerns[0] and "`" not in concerns[0]
 
 
 @pytest.mark.parametrize("line,text", [
-    ("1. **C4:** reviewed_pair_bindings omits x", "reviewed_pair_bindings omits x"),
-    ("1. **C4:** __init__ never called", "__init__ never called"),
-    ("1. **C4:** gap near __init__", "gap near __init__"),
-    ("1. **C4:** --target is ignored", "--target is ignored"),
-    ("- **C4:** --target is ignored", "--target is ignored"),
-    ("> C4: gap near __init__", "gap near __init__"),
+    ("1. blocking: **C4:** reviewed_pair_bindings omits x", "reviewed_pair_bindings omits x"),
+    ("1. blocking: **C4:** __init__ never called", "__init__ never called"),
+    ("1. blocking: **C4:** gap near __init__", "gap near __init__"),
+    ("1. blocking: **C4:** --target is ignored", "--target is ignored"),
+    ("- blocking: **C4:** --target is ignored", "--target is ignored"),
+    ("> blocking: C4: gap near __init__", "gap near __init__"),
 ])
 def test_td13_g2_underscores_hyphens_hashes_and_angles_survive_in_concern_values(make_rig, line, text):
     original = f"REVIEW:\nVerdict: revise\nPlan digest: {SHA_OF_PLAN}\n{line}"
     rig, rc, out, recorded = run_one(make_rig, canonical_stdout(original))
-    assert flags(recorded, "--concern") == [f"C4: {text}"]
+    assert flags(recorded, "--concern") == [f"blocking: C4: {text}"]
 
 
 def test_td13_g2_hash_and_angle_inside_a_value_are_kept(make_rig):
-    original = f"REVIEW:\nVerdict: revise\nPlan digest: {SHA_OF_PLAN}\nC4: see #12 and <pair> placeholder"
+    original = f"REVIEW:\nVerdict: revise\nPlan digest: {SHA_OF_PLAN}\nblocking: C4: see #12 and <pair> placeholder"
     rig, rc, out, recorded = run_one(make_rig, canonical_stdout(original))
-    assert flags(recorded, "--concern") == ["C4: see #12 and <pair> placeholder"]
+    assert flags(recorded, "--concern") == ["blocking: C4: see #12 and <pair> placeholder"]
 
 
 def test_td13_h_only_the_last_block_counts(make_rig):
-    original = ("**REVIEW: revise**\nC4: prose gap that is not real\nmore prose\n"
-                + block(SHA_OF_PLAN, concerns=("C1: real concern",)))
+    original = ("**REVIEW: revise**\nblocking: C4: prose gap that is not real\nmore prose\n"
+                + block(SHA_OF_PLAN, concerns=("blocking: C1: real concern",)))
     rig, rc, out, recorded = run_one(make_rig, canonical_stdout(original))
-    assert flags(recorded, "--concern") == ["C1: real concern"]
+    assert flags(recorded, "--concern") == ["blocking: C1: real concern"]
     assert "prose gap" not in json.dumps(recorded)
 
-    closing = block(SHA_OF_PLAN, concerns=("C1: real concern",)) + "\nREVIEW: revise"
+    closing = block(SHA_OF_PLAN, concerns=("blocking: C1: real concern",)) + "\nREVIEW: revise"
     rig, rc, out, recorded = run_one(make_rig, canonical_stdout(closing))
-    assert flags(recorded, "--concern") == ["C1: real concern"]
+    assert flags(recorded, "--concern") == ["blocking: C1: real concern"]
 
-    disagreeing = block(SHA_OF_PLAN, concerns=("C1: real concern",)) + "\nREVIEW: pass"
+    disagreeing = block(SHA_OF_PLAN, concerns=("blocking: C1: real concern",)) + "\nREVIEW: pass"
     rig, rc, out, recorded = run_one(make_rig, canonical_stdout(disagreeing))
     assert recorded is None and rc == 2 and "marker disagrees with verdict" in "\n".join(out)
 
 
 def test_td13_i_wrapped_concerns_fold_and_unprefixed_ones_are_refused(make_rig):
-    wrapped = f"REVIEW:\nVerdict: revise\nPlan digest: {SHA_OF_PLAN}\nC4: first half\n    second half\nC1: other"
+    wrapped = f"REVIEW:\nVerdict: revise\nPlan digest: {SHA_OF_PLAN}\nblocking: C4: first half\n    second half\nblocking: C1: other"
     rig, rc, out, recorded = run_one(make_rig, canonical_stdout(wrapped))
-    assert flags(recorded, "--concern") == ["C4: first half second half", "C1: other"]
+    assert flags(recorded, "--concern") == ["blocking: C4: first half second half", "blocking: C1: other"]
 
     prose = f"REVIEW:\nVerdict: revise\nPlan digest: {SHA_OF_PLAN}\nthe plan is bad\nreally"
     rig, rc, out, recorded = run_one(make_rig, canonical_stdout(prose))
     assert recorded is None and "no condition-prefixed concerns" in "\n".join(out)
 
-    second = f"REVIEW:\nVerdict: revise\nPlan digest: {SHA_OF_PLAN}\nC4: a\n- b has no prefix"
+    second = f"REVIEW:\nVerdict: revise\nPlan digest: {SHA_OF_PLAN}\nblocking: C4: a\n- b has no prefix"
     rig, rc, out, recorded = run_one(make_rig, canonical_stdout(second))
     assert recorded is None and "unprefixed concern" in "\n".join(out)
 
-    leading = f"REVIEW:\nVerdict: revise\nPlan digest: {SHA_OF_PLAN}\nsome words first\nC4: a"
+    leading = f"REVIEW:\nVerdict: revise\nPlan digest: {SHA_OF_PLAN}\nsome words first\nblocking: C4: a"
     rig, rc, out, recorded = run_one(make_rig, canonical_stdout(leading))
     assert recorded is None and "unprefixed concern" in "\n".join(out)
 
@@ -791,12 +795,13 @@ def test_td15_a_refusal_and_a_revise_in_one_run_exit_2(make_rig):
 
 
 def test_td16_the_parse_reads_protocol_tokens_from_the_plan_module_at_call_time(drv, monkeypatch):
-    assert drv.parse_review_output(review_original("revise", SHA_OF_PLAN, ["C4: a gap"])).concerns == ["C4: a gap"]
+    assert drv.parse_review_output(
+        review_original("revise", SHA_OF_PLAN, ["blocking: C4: a gap"])).concerns == ["blocking: C4: a gap"]
     monkeypatch.setattr(plan, "CONDITION_MARKERS", ("C1:", "C2:", "C3:", "K9:"))
-    parsed = drv.parse_review_output(review_original("revise", SHA_OF_PLAN, ["K9: the gap"]))
-    assert parsed.concerns == ["K9: the gap"]
+    parsed = drv.parse_review_output(review_original("revise", SHA_OF_PLAN, ["blocking: K9: the gap"]))
+    assert parsed.concerns == ["blocking: K9: the gap"]
     with pytest.raises(drv.TopoRefused):
-        drv.parse_review_output(review_original("revise", SHA_OF_PLAN, ["C4: the old gap marker"]))
+        drv.parse_review_output(review_original("revise", SHA_OF_PLAN, ["blocking: C4: the old gap marker"]))
 
 
 def test_td16_the_stage1_bundle_carries_every_token_the_driver_parses(drv, make_env, tmp_path):
@@ -807,9 +812,10 @@ def test_td16_the_stage1_bundle_carries_every_token_the_driver_parses(drv, make_
     assert "Concerns:" not in bundle and not hasattr(plan, "CONCERNS_MARKER")
     assert "Concerns:" not in (SCRIPTS / "plan-review-topological.py").read_text(encoding="utf-8")
     reply = "\n".join([plan.REVIEW_MARKER, f"{plan.VERDICT_MARKER} revise",
-                       f"{plan.PLAN_DIGEST_MARKER} {_sha(env.plan)}", f"{plan.CONDITION_MARKERS[1]} a concern"])
+                       f"{plan.PLAN_DIGEST_MARKER} {_sha(env.plan)}",
+                       f"{plan.SEVERITY_BLOCKING}: {plan.CONDITION_MARKERS[1]} a concern"])
     parsed = drv.parse_review_output(reply)
-    assert parsed.concerns == [f"{plan.CONDITION_MARKERS[1]} a concern"] and parsed.digest == _sha(env.plan)
+    assert parsed.concerns == [f"{plan.SEVERITY_BLOCKING}: {plan.CONDITION_MARKERS[1]} a concern"] and parsed.digest == _sha(env.plan)
 
 
 def test_td17_every_agentctl_call_targets_the_plan_argument_not_the_session_plan(

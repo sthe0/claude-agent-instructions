@@ -181,8 +181,26 @@ def parse_review_output(stdout: str) -> ParsedReview:
     if not DIGEST_RE.fullmatch(digest):
         raise TopoRefused(f"{plan.PLAN_DIGEST_MARKER} is not 64 lowercase hex characters: {digest!r}")
     region = found.region
-    concerns = _parse_concerns(region, verdict) if verdict == "revise" else []
+    concerns = _parse_concerns(region, verdict) if verdict == "revise" else _pass_notes(region)
     return ParsedReview(verdict, digest, concerns)
+
+
+def _pass_notes(region) -> list[str]:
+    """A pass carries `note:` concerns only: a tagged `blocking:` line is refused, an
+    untagged condition line is the reviewer's own prose and not a concern."""
+    notes = []
+    for (kind, value), _ in region:
+        if kind != "condition":
+            continue
+        try:
+            tagged = plan.parse_concern(value)
+        except plan.ConcernFormatError:
+            continue
+        if tagged.severity == plan.SEVERITY_BLOCKING:
+            raise TopoRefused(f"a pass cannot carry a blocking concern ({value[:80]!r}): "
+                              f"write it as {plan.CONCERN_FORM} with `note:`")
+        notes.append(value)
+    return notes
 
 
 def _parse_concerns(region, verdict: str) -> list[str]:
@@ -211,6 +229,11 @@ def _parse_concerns(region, verdict: str) -> list[str]:
             concerns[-1] = f"{concerns[-1]} {_clean_value(raw.strip())}"
     if not concerns:
         raise TopoRefused("no condition-prefixed concerns")
+    for concern in concerns:
+        try:
+            plan.parse_concern(concern)
+        except plan.ConcernFormatError as exc:
+            raise TopoRefused(str(exc)) from exc
     return concerns
 
 

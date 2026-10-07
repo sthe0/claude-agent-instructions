@@ -14,6 +14,7 @@ have parsed fine was refused for a mislabel.
 """
 from __future__ import annotations
 
+import functools
 import re
 from dataclasses import dataclass
 
@@ -21,6 +22,17 @@ from agentctl import plan
 from lib import planner_plan_check
 
 NUMBERING_RE = re.compile(r"^\d+[.)]\s*")
+
+@functools.lru_cache(maxsize=None)
+def _tagged_condition_re(markers: tuple[str, ...]) -> re.Pattern:
+    severities = "|".join(plan.CONCERN_SEVERITIES)
+    conditions = "|".join(re.escape(m) for m in markers)
+    return re.compile(
+        rf"^({severities}):[\s*`_]*"
+        rf"({re.escape(plan.RESTATES_PREFIX)}[^\s*`]+[\s*`_]+)?"
+        rf"({conditions})(.*)$",
+        re.DOTALL,
+    )
 
 Classified = tuple[tuple[str, str], str]
 
@@ -80,9 +92,15 @@ def classify_line(raw: str) -> tuple[str, str]:
             if kind == "review" and value not in ("pass", "revise", ""):
                 return "other", ""
             return kind, value
+    leading = lead_clean(raw)
+    tagged = _tagged_condition_re(tuple(plan.CONDITION_MARKERS)).match(leading)
+    if tagged is not None:
+        restates = re.sub(r"[*`]", "", tagged.group(2) or "").strip()
+        body = f"{tagged.group(3)} {clean_value(tagged.group(4))}".rstrip()
+        return "condition", plan.format_concern(
+            tagged.group(1), restates[len(plan.RESTATES_PREFIX):], body)
     for marker in plan.CONDITION_MARKERS:
         if cleaned.startswith(marker):
-            leading = lead_clean(raw)
             return "condition", f"{marker} {clean_value(leading[len(marker):])}".rstrip()
     return "other", ""
 
