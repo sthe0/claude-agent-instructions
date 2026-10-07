@@ -468,3 +468,162 @@ def test_load_gate_fields_unreadable_returns_none(tmp_path):
     mod = _load_module()
     p = tmp_path / "missing.json"
     assert mod.load_gate_fields(p) is None
+
+
+# --- stamping at replan-capable nodes (present-before-replan ordering) ---------
+
+import ast  # noqa: E402
+import inspect  # noqa: E402
+
+import test_plan_delivery_gate_presentation as pres  # noqa: E402
+from agentctl import cli as _cli  # noqa: E402
+from agentctl import delivery as _delivery_mod  # noqa: E402
+from agentctl.state import Node  # noqa: E402
+
+NON_PLAN_READY_STAMP_NODES = ("APPROVED", "PARTITIONED", "EXECUTING", "VERIFYING", "DIAGNOSING")
+_NOT_STAMP_NODES = ("RESOLVED", "CLASSIFIED", "ROUTED", "PLANNING", "RESOLUTION", "BLOCKED")
+
+
+def _delivered_transcript(tmp_path: Path, delivered_ts: float = 105.0, text: str = pres.RENDERING) -> Path:
+    return pres.write_transcript(tmp_path / "t.jsonl", [
+        pres.user_prompt_entry(90.0), pres.text_only_entry(delivered_ts, text), pres.user_prompt_entry(110.0),
+    ])
+
+
+def _state_with_receipt(tmp_path: Path, sid: str, node: str, receipts=None) -> None:
+    pres.write_full_state(
+        tmp_path, sid, node=node, approval_passed=node != "PLAN_READY",
+        plan_presentations=receipts or [pres.make_receipt(pres.RENDERING, presented_ts=100.0)],
+    )
+
+
+def test_stamp_written_at_replan_capable_node_on_verified_essence(tmp_path):
+    _state_with_receipt(tmp_path, "r1", "APPROVED")
+    proc = pres.run_hook(pres.ask_payload("r1", _delivered_transcript(tmp_path), with_marker=False), tmp_path)
+    assert not pres._is_deny(proc)
+    stamp = pres._stamp(tmp_path, "r1")
+    assert stamp is not None
+    assert stamp.source == _delivery_mod.SOURCE_HOOK
+    assert (stamp.plan_sha256, stamp.rendering_sha256) == ("a" * 64, "b" * 64)
+
+
+def test_stamp_still_written_at_plan_ready(tmp_path):
+    _state_with_receipt(tmp_path, "r2", "PLAN_READY")
+    proc = pres.run_hook(pres.ask_payload("r2", _delivered_transcript(tmp_path)), tmp_path)
+    assert not pres._is_deny(proc)
+    assert pres._stamp(tmp_path, "r2") is not None
+
+
+def test_no_stamp_when_delivery_unverified(tmp_path):
+    _state_with_receipt(tmp_path, "r3", "APPROVED")
+    t = pres.write_transcript(tmp_path / "t.jsonl", [pres.user_prompt_entry(90.0), pres.user_prompt_entry(110.0)])
+    proc = pres.run_hook(pres.ask_payload("r3", t, with_marker=False), tmp_path)
+    assert not pres._is_deny(proc)
+    assert pres._stamp(tmp_path, "r3") is None
+
+
+def test_no_stamp_for_stale_rendering(tmp_path):
+    _state_with_receipt(tmp_path, "r4", "EXECUTING")
+    # the rendering landed BEFORE the receipt registered it: the previous presentation's delivery
+    proc = pres.run_hook(
+        pres.ask_payload("r4", _delivered_transcript(tmp_path, delivered_ts=95.0), with_marker=False), tmp_path
+    )
+    assert not pres._is_deny(proc)
+    assert pres._stamp(tmp_path, "r4") is None
+
+
+def test_latest_essence_receipt_wins_over_later_replan_diff(tmp_path):
+    diff = pres.make_receipt("## Diff\nreplan changes", presented_ts=101.0)
+    diff.kind = "replan_diff"
+    diff.plan_sha256, diff.rendering_sha256 = "c" * 64, "d" * 64
+    _state_with_receipt(tmp_path, "r5", "APPROVED", [pres.make_receipt(pres.RENDERING, presented_ts=100.0), diff])
+    proc = pres.run_hook(pres.ask_payload("r5", _delivered_transcript(tmp_path), with_marker=False), tmp_path)
+    assert not pres._is_deny(proc)
+    stamp = pres._stamp(tmp_path, "r5")
+    assert stamp is not None and (stamp.plan_sha256, stamp.rendering_sha256) == ("a" * 64, "b" * 64)
+
+
+def test_stamp_nodes_match_cmd_replan_precondition():
+    mod = _load_module()
+    assert set(mod.STAMP_NODES) == {mod.GATED_NODE, *NON_PLAN_READY_STAMP_NODES}
+    assert set(mod.STAMP_NODES) | set(_NOT_STAMP_NODES) == {n.value for n in Node}
+    assert not set(mod.STAMP_NODES) & set(_NOT_STAMP_NODES)
+    tree = ast.parse(inspect.getsource(_cli._cmd_replan).lstrip())
+    def tests_node(expr):
+        return any(
+            isinstance(c, ast.Compare)
+            and any(isinstance(x, ast.Attribute) and x.attr == "node" for x in [c.left, *c.comparators])
+            for c in ast.walk(expr)
+        )
+
+    def refuses(stmts):
+        return any(
+            isinstance(r, ast.Return) and isinstance(r.value, ast.Call)
+            and getattr(r.value.func, "id", "") == "Directive"
+            and r.value.args and isinstance(r.value.args[0], ast.Constant) and r.value.args[0].value is False
+            for s in stmts for r in ast.walk(s)
+        )
+
+    refusals = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.If) and tests_node(n.test) and refuses(n.body)]
+    assert refusals == [], "cmd_replan refuses on a node condition: re-derive STAMP_NODES"
+
+
+def _decide_in_process(mod, monkeypatch, tmp_path, sid, transcript):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_AGENT_HOME", raising=False)
+    monkeypatch.setenv("AGENTCTL_PLAN_PRESENTATION", "1")
+    scans = []
+    monkeypatch.setattr(mod, "delivered_final_texts", lambda *_a, **_k: scans.append(1) or [(pres.RENDERING, 105.0)])
+    payload = pres.ask_payload(sid, transcript, with_marker=False)
+    return mod.decide(payload), scans
+
+
+def test_no_scan_or_stamp_when_receipt_already_stamped(tmp_path, monkeypatch):
+    mod = _load_module()
+    _state_with_receipt(tmp_path, "r6", "EXECUTING")
+    state_file = tmp_path / "agentctl" / "state" / "r6.json"
+    _delivery_mod.write_stamp(state_file, _delivery_mod.DeliveryStamp(
+        plan_path="/plan.toml", plan_sha256="a" * 64, rendering_sha256="b" * 64,
+        verified_ts=1.0, source=_delivery_mod.SOURCE_HOOK,
+    ))
+    t = _delivered_transcript(tmp_path)
+    (decision, _r, _sp, to_stamp), scans = _decide_in_process(mod, monkeypatch, tmp_path, "r6", t)
+    assert decision == "allow" and to_stamp is None and scans == []
+    # control: without the stamp the same ask does scan and does certify
+    _delivery_mod.stamp_path_for(state_file).unlink()
+    (decision, _r, _sp, to_stamp), scans = _decide_in_process(mod, monkeypatch, tmp_path, "r6", t)
+    assert _sp is not None, "state file not resolved"
+    assert decision == "allow" and to_stamp is not None and scans == [1]
+
+
+def test_no_same_turn_deny_outside_plan_ready(tmp_path):
+    for i, node in enumerate(NON_PLAN_READY_STAMP_NODES):
+        sid = f"r7{i}"
+        _state_with_receipt(tmp_path, sid, node)
+        # only a user prompt before the plan submission (100): same turn, a DENY at PLAN_READY
+        t = pres.write_transcript(tmp_path / f"t{i}.jsonl", [pres.user_prompt_entry(90.0)])
+        proc = pres.run_hook(pres.ask_payload(sid, t), tmp_path)
+        assert not pres._is_deny(proc), node
+        assert pres._stamp(tmp_path, sid) is None, node
+
+
+def test_no_judge_call_outside_plan_ready(tmp_path):
+    marker = tmp_path / "judge-called"
+
+    def run(sid, node):
+        _state_with_receipt(tmp_path, sid, node)
+        bin_dir = tmp_path / "_probebin"
+        bin_dir.mkdir(exist_ok=True)
+        stub = bin_dir / "claude"
+        stub.write_text(f"#!/bin/sh\ntouch {marker}\necho YES\n")
+        stub.chmod(0o755)
+        env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path)}
+        payload = pres.ask_payload(sid, _delivered_transcript(tmp_path))
+        return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                              capture_output=True, text=True, env=env)
+
+    run("r8a", "EXECUTING")
+    assert not marker.exists()
+    run("r8b", "PLAN_READY")
+    assert marker.exists(), "control: the judge is called at PLAN_READY"

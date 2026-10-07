@@ -146,6 +146,14 @@ resolve_state_path = config_root.resolve_agentctl_state_file
 # The only node this gate concerns itself with: the plan-approval hard gate.
 GATED_NODE = "PLAN_READY"
 
+# Nodes at which a presented essence can be re-presented before a replan (the
+# premise gate refuses present-plan only after its blockers clear, and a changed
+# plan must be re-presented BEFORE replan, while the node is still APPROVED...
+# DIAGNOSING). There the hook only OBSERVES and stamps; it never denies — every
+# DENY stays confined to GATED_NODE. cmd_replan has no node precondition, so
+# the set is listed, not derived.
+STAMP_NODES = (GATED_NODE, "APPROVED", "PARTITIONED", "EXECUTING", "VERIFYING", "DIAGNOSING")
+
 # Safe-by-default kill-switch: unset or any value other than "0" leaves the
 # classifier enabled, matching every other semantic judge's env convention.
 _APPROVAL_ASK_KILLSWITCH_ENV = "CLAUDE_APPROVAL_ASK_SEMANTIC"
@@ -404,10 +412,16 @@ def gate_decision(
     can only DENY; the presentation/delivery checks below are ADDITIVE — they
     can add a further DENY but never relax the same-turn one.
     """
-    if node != GATED_NODE:
+    if node not in STAMP_NODES:
         return "allow", "", False
     if plan_submitted_ts is None:
         return "allow", "", False
+
+    if node != GATED_NODE:
+        # Observe-only: nothing is denied outside the approval node.
+        if not presentation_active:
+            return "allow", "", False
+        return "allow", "", _delivery_observed(receipt, receipt_stale_reason, delivered_texts)
 
     if _same_turn_denied(plan_submitted_ts, last_user_prompt_ts, turn_start_ts):
         return "deny", _SAME_TURN_REASON, False
@@ -447,6 +461,15 @@ def deny_with(reason: str) -> None:
             "permissionDecisionReason": reason,
         }
     }))
+
+
+def _already_stamped(state_file: Path, receipt: _PlanPresentation) -> bool:
+    stamp = _delivery.read_stamp(state_file)
+    return (
+        stamp is not None
+        and stamp.plan_sha256 == receipt.plan_sha256
+        and stamp.rendering_sha256 == receipt.rendering_sha256
+    )
 
 
 def _stamp_delivery(state_file: Path, receipt: _PlanPresentation) -> None:
@@ -542,13 +565,14 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
     # same-turn deny fires before it ever looks at presentation_active or
     # receipt, so a same-turn ask's judge call would otherwise buy nothing but
     # a verdict gate_decision discards.
-    if node == GATED_NODE and plan_ts is not None:
-        same_turn_denied = _same_turn_denied(plan_ts, prompt_ts, turn_start_ts)
+    if node in STAMP_NODES and plan_ts is not None:
+        observe_only = node != GATED_NODE
+        same_turn_denied = not observe_only and _same_turn_denied(plan_ts, prompt_ts, turn_start_ts)
         state = _state()
         if state is not None:
             presentation_active = _gates.plan_presentation_active(state)
             if presentation_active:
-                if not same_turn_denied:
+                if not same_turn_denied and not observe_only:
                     ask_text = flat_text(payload.get("tool_input") or {})
                     # Skipping the call on a False prefilter is safe because
                     # judge_approval_ask runs this same prefilter internally
@@ -579,6 +603,8 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
                                 ceiling=_APPROVAL_ASK_JUDGE_BUDGET_S,
                             )
                 receipt = _gates._plan_presentation_for(state, _KIND_ESSENCE)
+                if observe_only and receipt is not None and _already_stamped(sp, receipt):
+                    receipt = None  # an ordinary ask after approval: no scan, no write
                 if receipt is not None:
                     receipt_stale_reason = _receipt_stale_reason(state)
                     has_marker = _has_show_full_plan_option(payload.get("tool_input") or {})

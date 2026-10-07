@@ -26,6 +26,13 @@ import sys
 from pathlib import Path
 
 NOHUP_RE = re.compile(r"\bnohup\b")
+_SINGLE_QUOTED_RE = re.compile(r"'[^']*'")
+_DOUBLE_QUOTED_RE = re.compile(r'"[^"]*"')
+
+
+def _strip_quoted(cmd: str) -> str:
+    """Drop quoted spans so a keyword inside a search pattern is not read as a launch."""
+    return _DOUBLE_QUOTED_RE.sub("", _SINGLE_QUOTED_RE.sub("", cmd))
 
 # Core carries no org-specific orchestrator names; the list is entirely
 # operator-supplied via agent-identity.local's `long_job_orchestrators=` key.
@@ -71,9 +78,10 @@ VERB_RE = re.compile(
 
 def detect(cmd: str) -> str | None:
     """Return a short reason string if the command looks like a long-job launch."""
-    if NOHUP_RE.search(cmd):
+    scan = _strip_quoted(cmd)
+    if NOHUP_RE.search(scan):
         return "detached process (nohup)"
-    if TOOL_RE.search(cmd) and VERB_RE.search(cmd):
-        tool = TOOL_RE.search(cmd).group(1).lower()
+    if TOOL_RE.search(scan) and VERB_RE.search(scan):
+        tool = TOOL_RE.search(scan).group(1).lower()
         return f"orchestrator launch ({tool})"
     return None

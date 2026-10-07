@@ -347,6 +347,17 @@ CODE_PARTITIONS = [
 # per the stage-2 method's step 3 ("every semantic-unguarded code site... must
 # be individually named, not hidden in a partition").
 CODE_ID_OVERRIDES = {
+    # long_job_detect.py: the file-level hooks/scripts default ground (markdown /
+    # frontmatter parsing) does not describe this helper, so it is stated here.
+    ("scripts/long_job_detect.py", "_strip_quoted"): (
+        "structural", "keep",
+        "Removes single- and double-quoted spans from a shell command so that "
+        "detect() matches launch keywords only in the command's own words; this "
+        "is shell-quoting syntax, not a judgment about what the text means, and "
+        "the function reaches no hard-behaviour sink itself (it only returns the "
+        "stripped string). Limit: no escaped-quote or $'...' handling, so an "
+        "unbalanced quote leaves the span in place and detect() may still match.",
+    ),
     # hook-published-text-writer-gate.py's deny_with is reached from decide()'s
     # two branches, both of which end in a semantic judge call or a structural
     # fact-check: _decide_text's unbound deny is a structural fact-check
