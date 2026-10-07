@@ -5028,6 +5028,12 @@ def cmd_risk_accept(args, *, store: StateStore, runner: Runner | None = None) ->
                 False, state.node, "noop",
                 f"concern {concern_id!r} is {held.status}, not open — nothing there to accept",
             )
+        if scope and scope != held.scope:
+            return Directive(
+                False, state.node, "noop",
+                f"--scope {scope!r} disagrees with concern {concern_id!r}, which belongs to "
+                f"scope {held.scope!r} — drop --scope or pass the matching one",
+            )
         accepted_scope, accepted_id, accepted_text = held.scope, held.local_id, held.text
     else:
         if scope:
@@ -5078,8 +5084,8 @@ def cmd_risk_accept(args, *, store: StateStore, runner: Runner | None = None) ->
     state.risk_acceptances.append(acceptance)
     blockers = gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)
-    state.log("risk_accept", target=target, scope=scope, concern_id=concern_id,
-              author=author, basis=basis, risk=risk)
+    state.log("risk_accept", target=target, scope=accepted_scope, concern_id=accepted_id,
+              ledger_id=concern_id, author=author, basis=basis, risk=risk)
     store.save(state)
     if blockers:
         return Directive(
@@ -5089,7 +5095,7 @@ def cmd_risk_accept(args, *, store: StateStore, runner: Runner | None = None) ->
         )
     return Directive(
         True, state.node, "continue",
-        f"risk acceptance recorded for {target} (scope={scope!r} concern={concern_id!r}); "
+        f"risk acceptance recorded for {target} (scope={accepted_scope!r} concern={accepted_id!r}); "
         "the plan-review gate is now satisfied for this plan version",
     )
 

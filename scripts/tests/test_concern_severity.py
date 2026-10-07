@@ -475,6 +475,32 @@ def test_risk_accept_by_ledger_id_discharges_the_held_blocker(store, fixtures_di
     assert gates.plan_review_blockers(store.load("o10"), str(plan)) == []
 
 
+def test_risk_accept_by_ledger_id_logs_the_resolved_scope_and_id(store, fixtures_dir, tmp_path):
+    plan = _session(store, fixtures_dir, tmp_path, "o12")
+    first = _review(store, "o12", plan, "revise", ["blocking: stage:1: scaffold is wrong"])
+    (first_id,) = first.data["concern_ids"]
+    held = store.load("o12").concern_ledger[first_id]
+
+    accepted = cli.cmd_risk_accept(
+        ns(session="o12", scope=None, concern_id=first_id, basis="the team accepts the gap",
+           risk="a regression ships", author="fedor"), store=store)
+    assert accepted.ok, accepted.detail
+    (event,) = [e for e in store.load("o12").history if e["event"] == "risk_accept"]
+    assert (event["scope"], event["concern_id"], event["ledger_id"]) == (held.scope, held.local_id, first_id)
+
+
+def test_risk_accept_refuses_a_scope_that_disagrees_with_the_ledger_id(store, fixtures_dir, tmp_path):
+    plan = _session(store, fixtures_dir, tmp_path, "o13")
+    first = _review(store, "o13", plan, "revise", ["blocking: stage:1: scaffold is wrong"])
+    (first_id,) = first.data["concern_ids"]
+
+    refused = cli.cmd_risk_accept(
+        ns(session="o13", scope="stage:77", concern_id=first_id, basis="the team accepts the gap",
+           risk="a regression ships", author="fedor"), store=store)
+    assert refused.ok is False and "disagrees" in refused.detail
+    assert store.load("o13").risk_acceptances == []
+
+
 def test_risk_accept_refuses_a_ledger_id_that_is_not_open(store, fixtures_dir, tmp_path):
     plan = _session(store, fixtures_dir, tmp_path, "o11")
     first = _review(store, "o11", plan, "revise", ["blocking: stage:1: scaffold is wrong"])

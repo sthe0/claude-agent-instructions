@@ -198,14 +198,10 @@ class PlanDoc:
     meta: PlanMeta
     stages: list[Stage] = field(default_factory=list)
     # The RAW `depends_on` TOML list for every stage, keyed by 1-based stage
-    # index, captured independently of `_build_supplies`/`Stage.depends_on`.
-    # `_build_supplies` silently discards a stage's `depends_on` list whenever
-    # that stage also declares `[[stage.supplies]]` (explicit supplies win),
-    # so `Stage.depends_on` (derived purely from `supplies`) can no longer see
-    # an edge the plan author wrote — the "supplies-wins collapse". This field
-    # is filled by `parse_plan` for EVERY stage index (empty tuple when the
-    # stage declares no `depends_on`), so the reliance helpers below can read
-    # the raw-union-of-declared-edges view without depending on `supplies`.
+    # index. `_build_supplies` merges it with `[[stage.supplies]]`, so
+    # `Stage.depends_on` already carries every declared edge; this field keeps the
+    # list as written and is filled by `parse_plan` for EVERY stage index (empty
+    # tuple when the stage declares no `depends_on`).
     raw_depends_on: dict[int, tuple[int, ...]] = field(default_factory=dict)
 
 
@@ -1358,9 +1354,8 @@ def parse_plan(
     raw_depends_on: dict[int, tuple[int, ...]] = {}
     for i, s in enumerate(raw_stages, start=1):
         index = int(s.get("index", i))
-        # Captured independently of _build_supplies (see PlanDoc.raw_depends_on)
-        # so a stage's raw depends_on survives even when it also declares
-        # [[stage.supplies]], which would otherwise discard it.
+        # The raw list as written, kept beside the derived Stage.depends_on
+        # (see PlanDoc.raw_depends_on).
         raw_depends_on[index] = tuple(int(d) for d in s.get("depends_on", []))
         for required in ("title", "executor", "expected_result_image", "done_criterion"):
             if not s.get(required):
@@ -1655,12 +1650,9 @@ def _stage_by_index(doc: PlanDoc, n: int) -> Stage:
 def reliance_set(doc: PlanDoc, n: int) -> frozenset[int]:
     """Stage `n`'s RAW reliance edges: the union of its raw TOML
     `depends_on` (`doc.raw_depends_on`) and its typed `supplies[].on`
-    edges. `_build_supplies` silently discards a stage's raw `depends_on`
-    whenever that stage also declares `[[stage.supplies]]` (explicit
-    supplies win) -- this is the "supplies-wins collapse" -- so
-    `Stage.depends_on`, which is derived purely from `supplies`, can no
-    longer see an edge the plan author wrote. Reading the raw union
-    instead recovers it. Raises PlanError when `n` is unknown, when `n`
+    edges. `_build_supplies` merges the two, so for a parsed plan this equals
+    `Stage.depends_on`; the explicit union is kept for a PlanDoc whose
+    `raw_depends_on` was edited after parsing. Raises PlanError when `n` is unknown, when `n`
     has no entry in `doc.raw_depends_on` (parse_plan populates one for
     every stage; a missing key means the caller handed us a foreign
     PlanDoc, not "no edges"), or when an edge points at a stage index the

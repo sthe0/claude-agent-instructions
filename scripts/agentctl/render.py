@@ -727,10 +727,9 @@ def _engine_dispatch_closure(doc: PlanDoc, n: int) -> frozenset[int]:
     """The transitive closure of the DERIVED, supplies-only `Stage.depends_on`
     graph upstream from stage `n`, excluding `n` itself -- the engine's OWN
     dispatch-ordering view. Narrower than `plan.reliance_closure`, which
-    closes over the raw `depends_on ∪ supplies.on` union `_build_supplies`'s
-    supplies-wins collapse may have silently widened away from what the
-    engine actually dispatches on. Used only to compute an edge's ORDERING
-    tag."""
+    closes over the raw `depends_on ∪ supplies.on` union, which differs only
+    for a PlanDoc whose `raw_depends_on` was edited after parsing. Used only
+    to compute an edge's ORDERING tag."""
     stage_by_index = {s.index: s for s in doc.stages}
     closure: set[int] = set()
     stack = [n]
@@ -747,10 +746,10 @@ def _ordering_tag(doc: PlanDoc, consumer: int, supplier: int) -> str:
     """Whether the edge "`consumer` relies on `supplier`" is reflected in
     the engine's own dispatch order (`supplier` in the transitive closure of
     `consumer`'s derived `Stage.depends_on`) or only in the raw declared
-    union `reliance_set` reads. This is the exact drift the supplies-wins
-    collapse can introduce: a plan author's TOML `depends_on` edge that
-    `_build_supplies` then drops from what the engine actually dispatches
-    on, once that stage also declares `[[stage.supplies]]`."""
+    union `reliance_set` reads. For a parsed plan the two agree
+    (`_build_supplies` merges `depends_on` into the supplies); the
+    declared-only tag appears only when `raw_depends_on` was edited after
+    parsing."""
     if supplier in _engine_dispatch_closure(doc, consumer):
         return _ENGINE_ORDERED
     return _DECLARED_ONLY_ORDERING
@@ -762,8 +761,8 @@ def _supply_edge_label(doc: PlanDoc, consumer: int, supplier: int) -> str:
     declaration order and joined with `; ` — each its element (`whole
     product` when the supply names none) and artifact, when named. A stage
     declaring no supplies gets one whole-product supply per `depends_on`
-    edge at parse time, so `depends_on-only` marks exactly a raw TOML
-    `depends_on` edge the supplies-wins collapse dropped."""
+    edge at parse time, so `depends_on-only` appears only for a raw
+    `depends_on` edge added to the PlanDoc after parsing."""
     consumer_stage = next(s for s in doc.stages if s.index == consumer)
     edges = []
     for supply in consumer_stage.supplies:

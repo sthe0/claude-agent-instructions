@@ -1,0 +1,60 @@
+# Contradictions between the plan-review documentation and the mechanism found
+# while making plan review converge. Each item is closed by a literal that must
+# be present in a repo file (absent at the planning base d9315480), or tracked by
+# an existing issue. Checked by the stage-6 verify command of the convergence plan.
+
+[[item]]
+id = "D1"
+text = "The agentctl README called scoped and whole-plan review one mechanism, while a SPAWN-route plan is reviewed pairwise only and other routes whole-plan."
+resolution = "doc"
+file = "scripts/agentctl/README.md"
+present = "**Route split.**"
+absent = "one mechanism for scoped and whole-plan"
+
+[[item]]
+id = "D2"
+text = "The replan row implied the diff baseline is always the approved snapshot; it is the snapshot only when that file exists, else plan_path."
+resolution = "doc"
+file = "scripts/agentctl/README.md"
+present = "`_replan_baseline_path`"
+
+[[item]]
+id = "D3"
+text = "Docstrings called the shared round threshold the Rule-of-Three although effort-replan-absolute is configurable."
+resolution = "doc"
+file = "scripts/agentctl/round_release.py"
+present = "One reusable round-release primitive"
+absent = "Rule-of-Three"
+
+[[item]]
+id = "D4"
+text = "The replan text promised PASSED stages are carried forward, but a change to only verify_venue_at_final resets them."
+resolution = "doc"
+file = "scripts/agentctl/README.md"
+present = "issues/305"
+
+[[item]]
+id = "D5"
+text = "A plan-review record bound by path was lost on a byte-identical plan rename (issue 195, fixed on main, still open)."
+resolution = "issue"
+url = "https://github.com/sthe0/claude-agent-instructions/issues/195"
+
+[[item]]
+id = "D6"
+text = "An agent override of the question-enumeration escape is not disclosed to the user (item 4 of issue 276)."
+resolution = "issue"
+url = "https://github.com/sthe0/claude-agent-instructions/issues/276"
+
+[[item]]
+id = "D7"
+text = "check-coverage reports OK while replan refuses the same plan (item 7 of issue 276)."
+resolution = "issue"
+url = "https://github.com/sthe0/claude-agent-instructions/issues/276"
+
+[[item]]
+id = "D8"
+text = "The README charged the single round of a topological review at compose; the round is now counted per plan digest by the pair records into review_rounds."
+resolution = "doc"
+file = "scripts/agentctl/README.md"
+present = "**`review_rounds` — the task-level counter.**"
+absent = "single round a topological review costs is charged"

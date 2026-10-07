@@ -236,15 +236,14 @@ def test_record_against_another_plan_path_supplies_no_concerns_to_the_target(sto
     own = state.concern_ledger[first.data["concern_ids"][0]]
     state.concern_ledger["other#0.c0"] = ConcernRecord(
         id="other#0.c0", scope=own.scope, plan_path="/elsewhere/plan.toml", local_id="c0",
-        text="a complaint about another plan", severity="blocking", effective="blocking",
+        text=own.text, severity="blocking", effective="blocking",
         parts=list(own.parts), record_seq=0, status="open")
     store.save(state)
 
     data = _history(store, plan)
     (concern,) = data["records"][0]["concerns"]
     assert concern["id"] == own.id and concern["unresolved"] is True
-    text = _bundle(plan, data)
-    assert "another plan" not in text and "UNRESOLVED BLOCKER" in text
+    assert "other#0.c0" not in _bundle(plan, data)
 
 
 def test_legacy_event_without_a_ledger_entry_shows_its_texts_without_ids(store, session):

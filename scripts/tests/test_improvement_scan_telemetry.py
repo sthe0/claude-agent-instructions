@@ -40,6 +40,13 @@ scan = _load_scan()
 T0 = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_escalation_ledger(tmp_path, monkeypatch):
+    """The condition-4 detector reads the machine's real ledger by default, so a live
+    session writing revise rows would change which items the gating tests see."""
+    monkeypatch.setenv(scan.ESCALATION_LEDGER_ENV, str(tmp_path / "escalations-absent.jsonl"))
+
+
 def _write_config(tmp_path):
     p = tmp_path / "config.md"
     p.write_text(
