@@ -1,7 +1,7 @@
-# Contradictions between the plan-review documentation and the mechanism found
-# while making plan review converge. Each item is closed by a literal that must
-# be present in a repo file (absent at the planning base d9315480), or tracked by
-# an existing issue. Checked by the stage-6 verify command of the convergence plan.
+# Dated record (2026-10-07) of contradictions between the plan-review
+# documentation and the mechanism, found while making plan review converge.
+# Each item names the literal the fixed text contains or the open issue that
+# tracks it. Nothing enforces these literals after the task that wrote them.
 
 [[item]]
 id = "D1"
@@ -35,7 +35,7 @@ present = "issues/305"
 
 [[item]]
 id = "D5"
-text = "A plan-review record bound by path was lost on a byte-identical plan rename (issue 195, fixed on main, still open)."
+text = "Issue 195 stays open for its sub-case: a new-version plan file with one changed stage is still rejected on its path (the byte-identical rename is handled by _binds_across_path_change)."
 resolution = "issue"
 url = "https://github.com/sthe0/claude-agent-instructions/issues/195"
 
@@ -53,7 +53,7 @@ url = "https://github.com/sthe0/claude-agent-instructions/issues/276"
 
 [[item]]
 id = "D8"
-text = "The README charged the single round of a topological review at compose; the round is now counted per plan digest by the pair records into review_rounds."
+text = "The README named only one of the two round counters: pair records advance review_rounds once per plan digest, while compose still advances plan_review_rounds once per plan version after approval."
 resolution = "doc"
 file = "scripts/agentctl/README.md"
 present = "**`review_rounds` — the task-level counter.**"
