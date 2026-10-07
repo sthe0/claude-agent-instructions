@@ -4947,9 +4947,11 @@ def cmd_plan_review_walk(args, *, store: StateStore, runner: Runner | None = Non
 def cmd_plan_review_compose(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Compose the pair records into one ordinary whole-plan pass, written only when
     EVERY pair of `plan.review_pairs` is current or override against `--target` (the
-    session's plan by default). Readiness is not consulted. The record is not a
-    thinker verdict, so it never reaches the order ledger and never counts as the
-    first-thinker pass the autonomy boundary requires."""
+    session's plan by default). Readiness is not consulted. When every pair is a
+    pass (none override-satisfied) the composed record is the first thinker verdict
+    the autonomy boundary requires and goes to the order ledger; a compose that
+    includes an override pair records nothing there — an override never becomes a
+    thinker verdict."""
     state = _require(store, args.session)
     target = _walk_target(args, state)
     if not target:
@@ -4980,6 +4982,8 @@ def cmd_plan_review_compose(args, *, store: StateStore, runner: Runner | None = 
     _stamp_whole_plan_baseline(state, review, doc)
     state.plan_review = review
     state.plan_review_passes[""] = review
+    if not overridden:
+        _record_first_thinker_verdict(state, doc, review, "")
     _count_plan_review_round(state, target)
     blockers = gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)

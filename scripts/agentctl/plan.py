@@ -523,8 +523,8 @@ def _validate_substantive_stage(s: dict, index: int) -> None:
 
 
 def _build_supplies(s: dict, index: int) -> list[Supply]:
-    """Build typed Supply edges. Explicit [[stage.supplies]] wins; otherwise the
-    flat `depends_on` list is lifted into element-less edges."""
+    """Build typed Supply edges: the explicit [[stage.supplies]] plus an
+    element-less edge for each flat `depends_on` index no supply already names."""
     raw = s.get("supplies")
     if raw:
         supplies = []
@@ -538,8 +538,13 @@ def _build_supplies(s: dict, index: int) -> list[Supply]:
                     artifact=edge.get("artifact"),
                 )
             )
-        return supplies
-    return [Supply(on=int(d)) for d in s.get("depends_on", [])]
+    else:
+        supplies = []
+    named = {sup.on for sup in supplies}
+    for d in s.get("depends_on", []):
+        if int(d) not in named:
+            supplies.append(Supply(on=int(d)))
+    return supplies
 
 
 def _validate_graph(stages: list[Stage], *, is_substantive: bool) -> None:

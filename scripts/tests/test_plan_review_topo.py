@@ -341,7 +341,8 @@ def test_tr6_staleness_by_edge_kind(make_env):
     before = pair_binding(env.doc(), "3-1")
     env.edit(lambda d: d["stage"][2].update(depends_on=[1]))
     after = pair_binding(env.doc(), "3-1")
-    assert {k for k in before if before[k] != after[k]} == {"edge_digest"}
+    # depends_on is a real supply edge, so dropping index 2 also rewrites stage 3's own file
+    assert {k for k in before if before[k] != after[k]} == {"edge_digest", "base_key", "base_file_digest"}
     assert env.status("3-1") == "stale:edge"
 
     data = _data()
@@ -353,9 +354,10 @@ def test_tr6_staleness_by_edge_kind(make_env):
     assert pair_binding(env.doc(), "3-2") == before
 
     env.edit(lambda d: d["stage"][0].update(depends_on=[], supplies=[]))
-    after = pair_binding(env.doc(), "3-2")
-    assert {k for k in before if before[k] != after[k]} == {"edge_digest"}
-    assert env.status("3-2") == "stale:edge"
+    # stage 3's depends_on is a typed edge of its own, so the 3-2 edge no longer rides
+    # on the chain through stage 1 and dropping stage 1's edge leaves the pair current
+    assert pair_binding(env.doc(), "3-2") == before
+    assert env.status("3-2") == "current"
 
 
 def test_tr10_state_files_load_across_schema_variants_and_effects_move_the_service_file(make_env):
@@ -685,9 +687,10 @@ def _hand_baseline(env: Env, *, record_seq: int = 1, **overrides) -> PlanReview:
 
 def test_tr4_compose_over_all_current_pair_passes_writes_an_ordinary_whole_plan_pass(env, monkeypatch):
     env.record_all()
-    monkeypatch.setattr(cli, "_record_first_thinker_verdict",
-                        lambda *a, **k: pytest.fail("compose must not record a first-thinker verdict"))
+    recorded = []
+    monkeypatch.setattr(cli, "_record_first_thinker_verdict", lambda *a, **k: recorded.append(a[2:]))
     d = _compose(env)
+    assert len(recorded) == 1 and recorded[0][1] == ""
     assert d.ok, d.detail
     state = env.state()
     review = state.plan_review
@@ -864,11 +867,11 @@ def test_tr8_round_release_and_delta_messages_name_the_topological_route(env):
     assert "plan-review-compose" in d.detail
 
 
-def test_tr12_raw_only_depends_on_edge_is_a_pair_and_comes_from_the_plan_file_not_state_stages(env):
+def test_tr12_depends_on_next_to_supplies_is_a_pair_and_comes_from_the_plan_file_not_state_stages(env):
     doc = env.doc()
     assert "3-2" in review_pairs(doc)
     stage_3 = next(s for s in doc.stages if s.index == 3)
-    assert stage_3.depends_on == [1]
+    assert stage_3.depends_on == [1, 2]
     env.mutate_state(lambda state: setattr(state, "stages", list(doc.stages)))
     env.record_all()
     env.edit(lambda d: d["stage"][1].update(method="edited"))

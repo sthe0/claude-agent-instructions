@@ -12,7 +12,11 @@ This module covers two slots:
   `submit_plan` event. The `_obs_submit_plan` observer supplies that trigger:
   it emits a blocking PluginDirective naming the thinker spawn whenever
   `gates.plan_review_blockers` is non-empty for the just-submitted plan, and
-  stays silent once a bound passing/overridden review exists.
+  stays silent once a bound passing/overridden review exists. On a SPAWN-route
+  session (`gates.pairwise_review_route`, the predicate the blocker message
+  shares) the directive names the topological pairwise review and
+  `plan-review-compose` as THE review route; every other route keeps the
+  whole-plan thinker spawn.
 
   code_review -> code-reviewer. gates.code_review_blockers already REACTIVELY
   blocks `record-result --status passed` on a needs_control() (spawn:developer)
@@ -132,6 +136,27 @@ def _obs_submit_plan(state, bag) -> list[PluginDirective]:
                 for scope_arg in scopes
             ) + " (a pass does NOT bind without a matching --plan-digest)"
         )
+    if gates.pairwise_review_route(state):
+        return [PluginDirective(
+            plugin="review_dispatch",
+            action="spawn_thinker_review",
+            detail=(
+                f"run `scripts/plan-review-topological.py --session {state.session_id} "
+                f"--plan {target_plan}` -- pairwise review is the required route for this "
+                f"plan: it spawns one pair reviewer per base-service pair (each echoes the "
+                f"spawner-rendered `Plan digest:` line), records every verdict; then run "
+                f"`agentctl plan-review-compose --session {state.session_id}` to compose "
+                f"the pass (exit 0 composed pass, 1 blocked, 3 nothing to review, 2 a "
+                f"refused pair or a usage error). A pair bundle carries no question list: "
+                f"read `agentctl question-list --session {state.session_id} --format md` "
+                f"yourself as the ROOT and weigh it against the plan"
+            ),
+            blocking=True,
+            data={"slot": "plan_review", "specialist": specialist, "mode": "pairwise",
+                  "blockers": blockers, "whole_plan": delta["whole_plan"],
+                  "stages": delta["stages"], "scopes": delta["scopes"],
+                  "render_command": delta["render_command"]},
+        )]
     return [PluginDirective(
         plugin="review_dispatch",
         action="spawn_thinker_review",
@@ -142,16 +167,10 @@ def _obs_submit_plan(state, bag) -> list[PluginDirective]:
             f"--session {state.session_id} --format md`; on this inline route the "
             f"reviewer must compute the sha256 of {target_plan} from its OWN read and "
             f"report it as a `Plan digest: <sha256-hex>` line in its REVIEW message -- it "
-            f"never calls `agentctl plan-review` itself. {record_instruction}. Once the "
-            f"whole-plan spawn ceiling refuses this plan, run `scripts/plan-review-topological.py "
-            f"--session {state.session_id} --plan {target_plan}` instead: it spawns one "
-            f"pair reviewer per base-service pair (each echoes the spawner-rendered "
-            f"`Plan digest:` line rather than computing one), records every verdict and "
-            f"composes the pass; exit 0 composed pass, 1 blocked, 3 nothing to review, 2 a "
-            f"refused pair or a usage error"
+            f"never calls `agentctl plan-review` itself. {record_instruction}"
         ),
         blocking=True,
-        data={"slot": "plan_review", "specialist": specialist, "blockers": blockers,
+        data={"slot": "plan_review", "specialist": specialist, "mode": "whole", "blockers": blockers,
               "whole_plan": delta["whole_plan"], "stages": delta["stages"],
               "scopes": delta["scopes"], "render_command": delta["render_command"]},
     )]

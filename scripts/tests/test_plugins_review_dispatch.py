@@ -156,7 +156,7 @@ def test_submit_plan_fires_blocking_thinker_directive(capsys, tmp_path, fixtures
     assert m["data"]["slot"] == "plan_review"
 
 
-def test_submit_plan_directive_names_topological_route_and_scopes_digest_to_inline(
+def test_submit_plan_directive_names_topological_route_as_the_required_review(
         capsys, tmp_path, fixtures_dir):
     root = str(tmp_path / "state")
     plan = str(fixtures_dir / "plan_two_stage.toml")
@@ -164,8 +164,8 @@ def test_submit_plan_directive_names_topological_route_and_scopes_digest_to_inli
     detail = next(p["detail"] for p in d["data"]["plugin_directives"]
                   if p["action"] == "spawn_thinker_review")
     assert f"scripts/plan-review-topological.py --session rd1t --plan {plan}" in detail
-    assert "on this inline route the reviewer must compute the sha256" in detail
     assert "echoes the spawner-rendered `Plan digest:` line" in detail
+    assert "on this inline route" not in detail
 
 
 def test_submit_plan_silent_once_bound_passing_review_exists(capsys, tmp_path, fixtures_dir):

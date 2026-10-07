@@ -63,7 +63,7 @@ from .plan import (
 )
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
-from .state import Node, PAIR_BINDING_KEYS, SessionState, StageStatus, WeightClass
+from .state import Node, PAIR_BINDING_KEYS, Route, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
@@ -549,9 +549,28 @@ def _binds_across_path_change(pr, target_plan: str | None) -> bool:
     return _file_sha256(target_plan) == pr.plan_sha256
 
 
+_NO_REVIEW_BLOCKER = "no thinker review recorded — run: plan-review (thinker verdict required before this plan is approved/applied)"
+_NO_REVIEW_BLOCKER_PAIRWISE = (
+    "no thinker review recorded — run scripts/plan-review-topological.py then plan-review-compose "
+    "(pairwise review is the required route for a SPAWN-route session; its composed pass is the "
+    "thinker verdict this plan needs before it is approved/applied)"
+)
+
+
+def pairwise_review_route(state: SessionState | None) -> bool:
+    """Whether plan review runs pairwise for this session — the one predicate the
+    `submit_plan` directive and the blocker message both read, so trigger and gate
+    never name different routes."""
+    return state is not None and state.route == Route.SPAWN.value
+
+
+def _no_review_blocker(state: SessionState | None) -> str:
+    return _NO_REVIEW_BLOCKER_PAIRWISE if pairwise_review_route(state) else _NO_REVIEW_BLOCKER
+
+
 def _plan_review_blockers_whole(pr, target_plan: str | None, *, state: SessionState | None = None, doc=None) -> list[str]:
     if pr is None:
-        return ["no thinker review recorded — run: plan-review (thinker verdict required before this plan is approved/applied)"]
+        return [_no_review_blocker(state)]
     if not target_plan:
         return [_stale_path_blocker(pr.plan_path, target_plan)]
     if pr.plan_path != target_plan:
@@ -968,7 +987,7 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     recorded" test."""
     whole = state.plan_review
     if whole is None:
-        return ["no thinker review recorded — run: plan-review (thinker verdict required before this plan is approved/applied)"]
+        return [_no_review_blocker(state)]
     if whole.plan_path != target_plan and not _binds_across_path_change(whole, target_plan):
         return [_stale_path_blocker(whole.plan_path, target_plan)]
     meta_moved, moved_stages = changed_parts(doc, _plan_review_baseline(whole))
