@@ -161,6 +161,12 @@ def _race_two_counters(add, root, monkeypatch):
         time.sleep(0.15)
         return out
 
+    # Seed the file under another digest so every read, locked or not, goes through the
+    # stretched parse: with no file the unlocked read is instant and, under a loaded
+    # parallel run, one caller can finish its write before the other reads at all.
+    seed = task_accumulator._empty("race")
+    seed["review_rounds_last_sha256"] = "e" * 64
+    task_accumulator._write_atomic(task_accumulator._path("race", root), seed)
     monkeypatch.setattr(task_accumulator, "_coerce", slow_coerce)
     barrier = threading.Barrier(2)
     errors: list[BaseException] = []
