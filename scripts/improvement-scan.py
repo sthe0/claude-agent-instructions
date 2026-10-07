@@ -53,7 +53,7 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -259,6 +259,9 @@ class Finding:
     # order the unmeasured band without re-deriving it; never compared against a
     # measured CostSignal (the two bands never mix — see `_rank_findings`).
     proxy_score: "float | None" = None
+    # Telemetry store keys this backlog item says it addresses; resolved against the
+    # report's open telemetry rows at report time, never against a persisted cost.
+    addresses: "tuple[str, ...]" = ()
 
     def __post_init__(self) -> None:
         if not self.kind:
@@ -302,6 +305,8 @@ def _finding_record(finding: Finding) -> dict:
         "recommended_next_step": finding.recommended_next_step,
         "proxy_score": finding.proxy_score,
     }
+    if finding.addresses:
+        payload["addresses"] = list(finding.addresses)
     return {
         "kind": finding.kind,
         "path": finding.signal,
@@ -367,6 +372,7 @@ class PriorBoardItem:
     # True when a nominated clustering pair involving this item got no genuine judge verdict,
     # so its cluster_size is a lower bound, not a confirmed count.
     unjudged: bool = False
+    addresses: "tuple[str, ...]" = ()
 
 
 @dataclass(frozen=True)
@@ -432,6 +438,7 @@ def _prior_from_raw(raw: dict) -> PriorBoard:
             severity_labeled=entry.get("severity_labeled") is True,
             cluster_size=int(entry.get("cluster_size", 1)),
             unjudged=entry.get("unjudged") is True,
+            addresses=tuple(str(a) for a in (entry.get("addresses") or ())),
         )
     return PriorBoard(
         schema=BOARD_SCHEMA, generated_at=str(raw.get("generated_at", "")), items=items
@@ -460,6 +467,7 @@ def write_board(board: PriorBoard, path: "str | Path") -> None:
                 "severity_labeled": item.severity_labeled,
                 "cluster_size": item.cluster_size,
                 "unjudged": item.unjudged,
+                "addresses": list(item.addresses),
             }
             for ref, item in board.items.items()
         },
@@ -1129,6 +1137,27 @@ def _constrained_rank(refs: "list[str]", items: "dict[str, PriorBoardItem]") -> 
     return result
 
 
+_HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+def _is_store_key(value) -> bool:
+    return isinstance(value, str) and len(value) == 12 and set(value) <= _HEX_DIGITS
+
+
+def parse_addresses(ref: str, value) -> "tuple[str, ...]":
+    """Validate a classification's optional `addresses`: a list of 12-hex telemetry store
+    keys (the key the report prints). Shape only — a key is deliberately NOT checked
+    against the store here, since clusters resolve out between runs."""
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(_is_store_key(k) for k in value):
+        raise ValueError(
+            f"item {ref!r}: 'addresses' must be a list of 12-hex telemetry store keys, "
+            f"got {value!r}"
+        )
+    return tuple(dict.fromkeys(value))
+
+
 def classify_and_score(
     prior: PriorBoard,
     classified: "dict[str, dict]",
@@ -1149,6 +1178,7 @@ def classify_and_score(
     now = now or datetime.now(timezone.utc)
     closed = set(closed_refs)
 
+    addresses_of = {ref: parse_addresses(ref, c.get("addresses")) for ref, c in classified.items()}
     for ref, c in classified.items():
         _validate_vocab("breadth", c.get("breadth"), BREADTH_WEIGHTS)
         _validate_vocab("cost_to_resolve", c.get("cost_to_resolve"), _BUDGET_TIER_KEYS)
@@ -1201,6 +1231,7 @@ def classify_and_score(
                 severity_labeled=severity_labeled,
                 cluster_size=cluster_size.get(ref, 1),
                 unjudged=True,
+                addresses=addresses_of[ref],
             )
             continue
         if other_cluster_count == 0 and not severity_labeled:
@@ -1221,6 +1252,7 @@ def classify_and_score(
                 cost_estimate=c.get("cost_estimate", ""),
                 severity_labeled=severity_labeled,
                 cluster_size=cluster_size.get(ref, 1),
+                addresses=addresses_of[ref],
             )
             continue
         score = score_item(
@@ -1241,6 +1273,7 @@ def classify_and_score(
             severity_labeled=severity_labeled,
             cluster_size=cluster_size.get(ref, 1),
             unjudged=unjudged,
+            addresses=addresses_of[ref],
         )
 
     all_items = {**carried, **fresh}
@@ -1264,6 +1297,7 @@ def classify_and_score(
             severity_labeled=item.severity_labeled,
             cluster_size=item.cluster_size,
             unjudged=item.unjudged,
+            addresses=item.addresses,
         )
         if final_items[ref].rank is not None:
             findings.append(
@@ -1277,6 +1311,7 @@ def classify_and_score(
                     source_ref=ref,
                     recommended_next_step=final_items[ref].recommended_next_step,
                     proxy_score=final_items[ref].score,
+                    addresses=final_items[ref].addresses,
                 )
             )
 
@@ -1343,6 +1378,7 @@ def _report_findings(store_path: "str | Path | None") -> "list[dict]":
                 "measured": bool(cost.get("measured", False)),
             },
             "proxy_score": payload.get("proxy_score"),
+            **({"addresses": list(payload["addresses"])} if payload.get("addresses") else {}),
             "source_ref": payload.get("source_ref", ""),
             "recommended_next_step": payload.get("recommended_next_step", "planner"),
             "first_seen": row.get("first_seen", ""),
@@ -1365,14 +1401,54 @@ def _proxy_sort_key(finding: dict) -> tuple:
     return (-(score if score is not None else float("-inf")), finding["key"])
 
 
+def _join_addressed_clusters(findings: "list[dict]") -> "list[dict]":
+    """Resolve each backlog finding's `addresses` against the open telemetry rows of this
+    same report, at report time. A resolved measured cluster gives the item that cluster's
+    cost (the larger of it and the item's own) plus a `via` key; keys matching no open row
+    are listed under `dangling`. The cost is copied, never summed across items."""
+    telemetry = {
+        f["key"]: f for f in findings if f["source"] == sds.KIND_TELEMETRY_PATTERN
+    }
+    joined: "list[dict]" = []
+    for f in findings:
+        keys = f.get("addresses") or []
+        if not keys:
+            joined.append(f)
+            continue
+        item = {**f, "dangling": [k for k in keys if k not in telemetry]}
+        clusters = [
+            telemetry[k] for k in keys
+            if k in telemetry and telemetry[k]["cost_signal"]["measured"]
+        ]
+        if clusters:
+            best = max(clusters, key=lambda c: _cost_sort_key(c["cost_signal"]))
+            own = f["cost_signal"]
+            if not own["measured"] or _cost_sort_key(best["cost_signal"]) > _cost_sort_key(own):
+                item["cost_signal"] = best["cost_signal"]
+                item["via"] = best["key"]
+        joined.append(item)
+    return joined
+
+
 def _rank_findings(findings: "list[dict]") -> "list[dict]":
     """Measured band first (cost, then attention, then stability, descending), then
     the unmeasured band (proxy score descending) — NEVER interleaved, even when a
-    proxy score is numerically higher than a measured finding's cost."""
+    proxy score is numerically higher than a measured finding's cost. A backlog item
+    ranked via an addressed cluster follows that cluster's own row, by proxy score
+    then key."""
+    findings = _join_addressed_clusters(findings)
     measured = sorted(
-        (f for f in findings if f["cost_signal"]["measured"]),
+        (f for f in findings if f["cost_signal"]["measured"] and not f.get("via")),
         key=lambda f: _cost_sort_key(f["cost_signal"]), reverse=True,
     )
+    via_rows: "dict[str, list[dict]]" = {}
+    for f in findings:
+        if f.get("via"):
+            via_rows.setdefault(f["via"], []).append(f)
+    measured = [
+        r for f in measured
+        for r in [f, *sorted(via_rows.get(f["key"], ()), key=_proxy_sort_key)]
+    ]
     unmeasured = sorted(
         (f for f in findings if not f["cost_signal"]["measured"]),
         key=_proxy_sort_key,
@@ -1395,10 +1471,15 @@ def _format_cost(cost: dict) -> str:
 
 def _render_finding_md(f: dict) -> str:
     evidence = ", ".join(f["evidence"]) if f["evidence"] else "(none)"
+    via = f" — via {f['via']}" if f.get("via") else ""
+    dangling = (
+        [f"- **Dangling addresses:** {', '.join(f['dangling'])}"] if f.get("dangling") else []
+    )
     return "\n".join([
         f"### {f['title']}",
         f"- **Functional ground:** {f['functional_ground']}",
-        f"- **Cost:** {_format_cost(f['cost_signal'])}",
+        f"- **Cost:** {_format_cost(f['cost_signal'])}{via}",
+        *dangling,
         f"- **Evidence:** {evidence}",
         f"- **Store key:** `{f['key']}` — {f['status']}, surfaced {f['times_surfaced']}x, "
         f"first seen {f['first_seen']}",
@@ -1530,6 +1611,25 @@ def _read_json_object(path: str, what: str) -> "dict | None":
     return data
 
 
+def _apply_addresses_amendments(
+    prior: PriorBoard, items: "dict[str, dict]", worklist_items: "list[dict] | None"
+) -> "tuple[PriorBoard, dict[str, dict]]":
+    """Split off classifications that carry ONLY `addresses` for an item already on the
+    board (and not in this worklist): they set that item's `addresses` (an empty list
+    clears) and change nothing else. Every other entry is returned untouched for the
+    normal merge, which rejects an unknown ref or an incomplete entry."""
+    in_worklist = {w.get("item_ref") for w in worklist_items or ()}
+    kept: "dict[str, dict]" = {}
+    amended = dict(prior.items)
+    for ref, c in items.items():
+        if isinstance(c, dict) and set(c) == {"addresses"} and ref in prior.items \
+                and ref not in in_worklist:
+            amended[ref] = replace(prior.items[ref], addresses=parse_addresses(ref, c["addresses"]))
+        else:
+            kept[ref] = c
+    return replace(prior, items=amended), kept
+
+
 def _run_backlog_phase_b(args: argparse.Namespace) -> int:
     prior = _load_prior(args)
     payload = _read_json_object(args.classifications, "classifications")
@@ -1549,10 +1649,9 @@ def _run_backlog_phase_b(args: argparse.Namespace) -> int:
         )
         return 2
     try:
-        classified = _merge_worklist_metadata(
-            items,
-            (worklist.get("items") or []) if worklist is not None else None,
-        )
+        worklist_items = (worklist.get("items") or []) if worklist is not None else None
+        prior, items = _apply_addresses_amendments(prior, items, worklist_items)
+        classified = _merge_worklist_metadata(items, worklist_items)
     except ValueError as exc:
         print(f"improvement-scan backlog (phase B): {exc}", file=sys.stderr)
         return 2

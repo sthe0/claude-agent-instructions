@@ -47,7 +47,11 @@ Procedure step 6).
    per item ref: `breadth` (`narrow`/`shared-mechanism`/`universal`),
    `cost_to_resolve` (a budget tier key), `in_flight` (a readiness coefficient
    key), `recommended_next_step` (one of `self-improvement`/`planner`/
-   `file-difficulty`), and optionally `blocked_by`. Reason from the item's own
+   `file-difficulty`), and optionally `blocked_by` and `addresses` (a list of
+   12-hex telemetry store keys, copied from the report's telemetry rows, naming
+   the measured cluster the item removes; the join to that cluster's cost
+   happens at report time). `{"<ref>": {"addresses": [...]}}` alone also amends
+   an item already on the board (`[]` clears it). Reason from the item's own
    text per `backlog-triage-practice.md` § Priority rubric, never guessed.
    Do not copy the item's title, ground, severity, `severity_labeled`, evidence
    or digest: phase B merges them from the worklist. An item with no severity
@@ -104,7 +108,10 @@ Procedure step 6).
    ```
    The renderer ranks cost-first across both producers and never interleaves
    measured and unmeasured bands — present its output as-is, in the dialogue
-   language, with the recommended next step already attached per finding.
+   language, with the recommended next step already attached per finding. A
+   backlog item ranked at an addressed cluster's cost carries a `via <key>`
+   note; keys matching no open telemetry row are listed as dangling. Items
+   without a rank (no-urgency-signal, unjudged) are not joined.
 
 9. **Optionally republish the board as a human-readable view** rendered from
    the state file (`Artifact action:"publish"`, the current `url:` named in

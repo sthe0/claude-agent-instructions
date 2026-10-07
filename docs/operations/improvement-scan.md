@@ -46,7 +46,7 @@ python3 scripts/improvement-scan.py backlog \
 ```
 
 Phase B takes a classifications file (`{"items": {<ref>: {breadth, cost_to_resolve, in_flight,
-recommended_next_step, blocked_by?}}, "closed_refs": [...]}`) and merges each item's metadata
+recommended_next_step, blocked_by?, addresses?}}, "closed_refs": [...]}`) and merges each item's metadata
 (title, functional_ground, severity, severity_labeled, reporter, evidence, cost_estimate,
 source_digest) from `--worklist`; a field the classification names wins over the worklist's.
 Without `--worklist` the classification must carry title, functional_ground, severity and
@@ -57,6 +57,14 @@ closed vocabulary (rejecting the whole call on the first out-of-vocabulary value
 ranks via `score(item) = breadth_weight × recurrence_mass / cost_to_resolve`, applies the hard
 partial order from any explicit `blocked_by` edges, writes the new board JSON to the state file,
 and stores `Finding` rows.
+
+`addresses` is an optional list of 12-hex telemetry store keys (the `Store key` the report
+prints) naming the measured cluster(s) a backlog item removes. Phase B checks only the shape
+(anything else exits 2 naming the ref) and persists it on the board; whether a key still
+resolves is decided at report time, because clusters resolve out between runs. A classification
+carrying only `addresses` for a ref already on the board (and not in the worklist) amends that
+item: it replaces its `addresses` (`[]` clears) and changes nothing else; any other field on
+such an entry, or a ref on neither the worklist nor the board, exits 2.
 
 ## `telemetry` — session pattern detection
 
@@ -107,6 +115,15 @@ python3 scripts/improvement-scan.py report --store <store-path> --format md|json
 
 Renders every stored `Finding` from both producers into one cost-first-ranked report, never
 interleaving measured and unmeasured cost bands.
+
+At report time each backlog item's `addresses` keys are looked up among the open telemetry rows
+of the same report. The highest measured cluster cost among them (or the item's own measured
+cost, if larger) becomes the item's cost, shown with a `via <key>` note when the cluster's is the
+larger; the item then follows its cluster's own row at equal cost, by proxy score. The cost is
+copied, never summed across items sharing a cluster. Keys matching no open row are listed as
+`dangling` (markdown and JSON) even when another key resolved; an item whose keys match only
+unmeasured rows, or none, stays in the unmeasured band. Items without a rank
+(no-urgency-signal, unjudged) are not joined.
 
 ## Flags common to all subcommands
 
