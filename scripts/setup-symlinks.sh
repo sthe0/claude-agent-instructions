@@ -216,3 +216,9 @@ if [[ ! -f "$CLAUDE_AGENT_HOME/.claude.json" ]] \
   echo "    CLAUDE_CONFIG_DIR=$_login_root claude auth login"
   echo "(or 'claude-agent /login' if you source scripts/claude-launchers.sh)"
 fi
+
+# Optional speed-up hint for the Core test suite (side-effect-free probe).
+if ! python3 -c 'import xdist' >/dev/null 2>&1; then
+  echo
+  echo "Optional: pip install pytest-xdist — the Core test suite (python3 -m pytest scripts/tests) runs in parallel when it is present."
+fi

@@ -2,6 +2,8 @@
 
 Automation for the agent-instructions system: setup / symlink wiring, `verify-*` / `lint-*` policy checks, reminder & gate hooks, specialist spawning, and reporting. The table below is machine-checked against the filesystem by [verify-readme.py](verify-readme.py) (every `scripts/*.py|*.sh` and `cursor/scripts/*.py|*.sh` must appear; nothing dangling). Add a row when you add a script; `verify-readme.py --fix` reconciles the row set, then fill in any `TODO` purpose cells by hand.
 
+Core tests: `python3 -m pytest scripts/tests`; the suite runs in parallel when pytest-xdist is installed (optional: `pip install pytest-xdist`). Never pass `-n` to a worker-spawning trial without [cap-run.sh](cap-run.sh).
+
 <!-- inventory:scripts:begin -->
 | Script | Purpose |
 |---|---|
