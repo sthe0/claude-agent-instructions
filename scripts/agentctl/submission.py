@@ -62,7 +62,7 @@ from . import exempt_paths, grant_shadow
 from .conditions import judge_restatement, restatement_prefilter
 from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
-from .state import AGENT_ACTOR, CheckKind, CriterionType, WeightClass
+from .state import AGENT_ACTOR, CheckKind, CheckVenue, CriterionType, WeightClass
 from .text_shape import ELEMENT_NAMES
 from .text_shape import normalize_string as _normalize_string
 
@@ -763,6 +763,37 @@ def _negative_control_violations(stage) -> list[str]:
     ]
 
 
+def _landed_delivery_venue_violations(doc) -> list[str]:
+    """A landed check whose delivered stage is not verified in the delivery venue. [] == clean.
+
+    The landed check freezes HEAD of the delivered stage's verify venue. A repo_root-venue
+    stage freezes the canonical checkout's HEAD — a commit already on trunk — so the check
+    would go green for work that never was this task's delivery. Checked here, at the
+    submission seam, like negative controls: `load_plan` stays permissive."""
+    specs = [
+        (f"stage {s.index} ({s.title!r})", s.criterion.landed)
+        for s in doc.stages
+        if s.criterion.verify_kind == CheckKind.LANDED.value and s.criterion.landed
+    ] + [
+        (f"final_check {fc.label!r}" if fc.label else "a final_check", fc.landed)
+        for fc in doc.meta.final_check
+        if fc.kind == CheckKind.LANDED.value and fc.landed
+    ]
+    by_index = {s.index: s for s in doc.stages}
+    out: list[str] = []
+    for where, spec in specs:
+        delivered = by_index.get(spec.delivered_stage)
+        if delivered is None or delivered.criterion.verify_venue == CheckVenue.DELIVERY.value:
+            continue
+        out.append(
+            f"{where}: landed check names delivered_stage {spec.delivered_stage}, whose "
+            f"verify_venue is {delivered.criterion.verify_venue!r} — a repo_root-venue stage "
+            f"freezes a commit already on trunk, so the check would prove nothing about this "
+            f"task's delivery; name a stage verified in the delivery venue"
+        )
+    return out
+
+
 def _ephemeral_artifacts_violations(stage) -> list[str]:
     """A declared output_artifacts entry that resolves under an OS-temp scratch root
     (exempt_paths.scratch_roots()) claims durability the path does not have: a green
@@ -834,6 +865,7 @@ def submission_violations(
     out.extend(_order_violations(doc.meta))
     out.extend(_element_traceability_violations(doc))
     out.extend(_requirement_derivation_violations(doc.meta.order))
+    out.extend(_landed_delivery_venue_violations(doc))
     for stage in doc.stages:
         # Supplies are already built by the time a PlanDoc exists, so the "supplied by an
         # earlier stage" alternative is decidable here — evaluating the knowledge

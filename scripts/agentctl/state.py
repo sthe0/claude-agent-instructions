@@ -1486,6 +1486,12 @@ class Outcome:
     # records a result; absent on every pre-schema-23 state (default via
     # from_dict), so legacy states load unchanged.
     delivered_head: str | None = None
+    # Frozen alongside delivered_head: `merge-base(delivery HEAD, <remote>/<target>)` at
+    # freeze time. The landed check's task-proof range is `delivered_base..delivered_head`
+    # and the squash test's merge base is this value too, so both stay constant as trunk
+    # moves. None on a state frozen before this field existed (legacy rule: only the
+    # delivered commit's own message is inspected).
+    delivered_base: str | None = None
     # Green-check cache: the venue tree identity (HEAD sha + a diff against HEAD
     # covering staged and unstaged changes + untracked files' contents, see
     # cli._venue_tree_identity) at the last time this stage's verify_command was
@@ -1692,6 +1698,10 @@ class SessionState:
     # byte-identical to pre-field behaviour; live states predating the field load
     # unchanged. Backs plan.check_venue_warnings.
     delivery_worktree: str | None = None
+    # The plan's own [meta].task_id — the id stage commits' `Task:` trailers are written
+    # with. Distinct from `task_id`, which `agentctl start --task` sets and nothing binds
+    # to the plan. Stamped by cli._sync_venue_from_plan; "" on a state predating the field.
+    plan_task_id: str = ""
     # Typed end-to-end checks run at verify-final after per-stage re-runs.
     # Absent in legacy states (schema_version <= 7): from_dict defaults to [].
     final_check: list[FinalCheck] = field(default_factory=list)
@@ -2091,16 +2101,28 @@ class SessionState:
         monotone containment of the commit `spec.delivered_stage` delivered (the LITERAL string frozen on that
         stage's Outcome.delivered_head, never re-resolved here) against both
         the local `target` ref and its local `remote/target` remote-tracking
-        ref. Containment is ancestry (`git merge-base --is-ancestor`, the fast
-        path) or, when that answers "not an ancestor", patch equivalence: no
-        merge commit in `<ref>..<delivered>` (git cherry skips merges, so
-        they fail closed) and `git cherry <ref> <delivered>` printing no `+`
-        line. The fallback lets a rebase landing go green (land-branch.py is
-        fast-forward only, so a moved trunk forces a rebase beforehand).
-        Known reds: a squash landing of 2+ commits, a rebase whose diff text
-        changed (conflict resolution, context drift), a delivered range
-        containing a merge; an empty delivered commit is not distinguished
-        by cherry. Returns (command, refusal): `command` is the exact string a
+        ref. Before any containment test the check proves the commits are THIS
+        task's: a line exactly `Task: <plan task id>` must appear in the
+        messages of `delivered_base..delivered_head` (an empty range is red);
+        with no frozen `delivered_base` (state frozen by the pre-trailer
+        engine) the delivered commit's own message must carry it. The id is
+        the plan's [meta].task_id (`plan_task_id`, else read off the plan
+        file, else the session's `task_id`) — the id stage commits' trailers
+        are written with. Containment is ancestry (`git merge-base
+        --is-ancestor`, the fast path) or, when that answers "not an
+        ancestor", patch equivalence: no merge commit in `<ref>..<delivered>`
+        (git cherry skips merges, so they fail closed) and `git cherry <ref>
+        <delivered>` printing no `+` line — the rebase landing
+        (land-branch.py is fast-forward only, so a moved trunk forces a
+        rebase beforehand). When cherry reports a `+` line, or the range has a
+        merge, a squash test runs: the patch-id of the combined diff
+        `delivered_base..delivered_head` must equal the patch-id of some
+        non-merge commit in `delivered_base..<ref>` (the frozen base, so the
+        comparison is constant over time; legacy state without one uses
+        `merge-base <ref> <delivered>`).
+        Known reds: a rebase or squash whose diff text changed (conflict
+        resolution, context drift); an empty delivered commit is not
+        distinguished by cherry. Returns (command, refusal): `command` is the exact string a
         caller passes as `bash -c <command>` — it carries its own
         `git -C <repo_root>`, so it needs no cwd/`cd`; `refusal` is set
         instead when the check cannot even be attempted (no repo_root, an
@@ -2140,21 +2162,72 @@ class SessionState:
         target = shlex.quote(spec.target)
         remote_target = shlex.quote(f"{spec.remote}/{spec.target}")
         git = f"git -C {repo_root}"
+        err = LANDED_GIT_ERROR_EXIT
+        task_id = self._landed_task_id()
+        if not task_id:
+            return None, (
+                "landed check cannot name the task whose commits it proves "
+                "(no plan [meta].task_id and no session task_id)"
+            )
+        trailer = f"Task: {task_id}"
+        base = stage.outcome.delivered_base
+        if base:
+            messages = f"{git} log --format=%B {shlex.quote(f'{base}..{delivered}')}"
+            scope = f"{base}..{delivered}"
+            merge_base = shlex.quote(base)
+        else:
+            messages = f"{git} log -1 --format=%B {commit}"
+            scope = delivered
+            merge_base = f'$({git} merge-base "$R" {commit}) || exit {err}'
+        missing = shlex.quote(f"landed check: no line {trailer!r} in the messages of {scope}")
+        patch_id = "patch-id --stable | cut -d' ' -f1"
         command = (
+            f"t=$({messages}) || exit {err}; "
+            f"printf '%s\\n' \"$t\" | grep -qxF -- {shlex.quote(trailer)}; s=$?; "
+            f'if [ "$s" -eq 1 ]; then printf \'%s\\n\' {missing} >&2; exit 1; fi; '
+            f'[ "$s" -eq 0 ] || exit {err}; '
             f"for R in {target} {remote_target}; do "
             f'{git} merge-base --is-ancestor {commit} "$R"; s=$?; '
             f'[ "$s" -eq 0 ] && continue; '
-            f'[ "$s" -eq 1 ] || exit {LANDED_GIT_ERROR_EXIT}; '
-            f'm=$({git} rev-list --merges "$R"..{commit}) || exit {LANDED_GIT_ERROR_EXIT}; '
-            f'[ -z "$m" ] || exit 1; '
-            f'c=$({git} cherry "$R" {commit}) || exit {LANDED_GIT_ERROR_EXIT}; '
+            f'[ "$s" -eq 1 ] || exit {err}; '
+            f'm=$({git} rev-list --merges "$R"..{commit}) || exit {err}; '
+            f'if [ -z "$m" ]; then '
+            f'c=$({git} cherry "$R" {commit}) || exit {err}; '
             f"printf '%s\\n' \"$c\" | grep -q '^+'; s=$?; "
             f'[ "$s" -eq 1 ] && continue; '
-            f'[ "$s" -eq 0 ] && exit 1; '
-            f"exit {LANDED_GIT_ERROR_EXIT}; "
+            f'[ "$s" -eq 0 ] || exit {err}; '
+            "fi; "
+            f"MB={merge_base}; "
+            f'd=$({git} diff --no-ext-diff "$MB" {commit}) || exit {err}; '
+            f"P=$(set -o pipefail; printf '%s\\n' \"$d\" | {git} {patch_id}) || exit {err}; "
+            f'[ -n "$P" ] || exit 1; '
+            f"L=$(set -o pipefail; {git} log -p --no-merges --no-ext-diff "
+            f"--format='commit %H' \"$MB\"..\"$R\" | {git} {patch_id}) || exit {err}; "
+            f"printf '%s\\n' \"$L\" | grep -qxF -- \"$P\"; s=$?; "
+            f'[ "$s" -eq 0 ] && continue; '
+            f'[ "$s" -eq 1 ] && exit 1; '
+            f"exit {err}; "
             "done; exit 0"
         )
         return command, None
+
+    def _landed_task_id(self) -> str:
+        """The id the landed check's `Task:` trailer must carry: the plan's own
+        [meta].task_id. `plan_task_id` is stamped from the plan on every route that
+        (re)reads it; a state saved by the engine before that field existed reads the
+        plan file instead, and only an unreadable plan falls back to the session's
+        `task_id` (set by `agentctl start --task`, bound to the plan by nothing)."""
+        if self.plan_task_id:
+            return self.plan_task_id
+        if self.plan_path:
+            from .plan import PlanError, load_plan
+            try:
+                from_plan = load_plan(self.plan_path, strict=False).meta.task_id
+            except (OSError, PlanError):
+                from_plan = ""
+            if from_plan:
+                return from_plan
+        return self.task_id
 
     # --- stage helpers ----------------------------------------------------
     def stage(self, index: int) -> Stage:

@@ -52,6 +52,11 @@ GIT_ENV = {
 }
 
 
+# The session fixtures below carry task_id "t" and no plan file, so the landed check's
+# task-proof reads the session id: every fixture commit is written with its trailer.
+TRAILER = "Task: t"
+
+
 def git(*args, cwd, check=True):
     return subprocess.run(
         ["git", *args], cwd=str(cwd), env={**os.environ, **GIT_ENV},
@@ -73,13 +78,13 @@ def make_repo_with_remote(tmp_path: Path, name: str = "work") -> Path:
     git("clone", "--quiet", str(origin), str(work), cwd=tmp_path)
     (work / "README.md").write_text("seed\n")
     git("add", "-A", cwd=work)
-    git("commit", "--quiet", "-m", "seed", cwd=work)
+    git("commit", "--quiet", "-m", f"seed\n\n{TRAILER}", cwd=work)
     git("push", "--quiet", "-u", "origin", "main", cwd=work)
     return work
 
 
 def commit(work: Path, msg: str) -> str:
-    git("commit", "--quiet", "--allow-empty", "-m", msg, cwd=work)
+    git("commit", "--quiet", "--allow-empty", "-m", f"{msg}\n\n{TRAILER}", cwd=work)
     return rev_parse(work)
 
 
@@ -219,13 +224,15 @@ def test_self_referencing_stage_finds_frozen_head_present(tmp_path):
     must find its own delivered head already frozen — proving freeze runs
     before dispatch in the SAME record-result call, not after."""
     work = make_repo_with_remote(tmp_path)
-    already_landed_sha = rev_parse(work)  # HEAD == main == origin/main already
+    git("checkout", "--quiet", "-b", "feature", cwd=work)
+    delivered_sha = commit(work, "feature work")  # ahead of main: not landed
     stage = _landed_stage(1, delivered_stage=1)
     state = _executing("sr1", [stage])
     state.repo_root = str(work)
     d = _record_delivered(_MemStore(state), "sr1")
-    assert d.ok is True, d.detail
-    assert stage.outcome.delivered_head == already_landed_sha
+    assert stage.outcome.delivered_head == delivered_sha
+    assert d.action != "fix_venue" and "not yet frozen" not in d.detail, d.detail
+    assert d.ok is False  # a genuine red verdict on the frozen commit, not a refusal
 
 
 # --- never-landed commit stays red -------------------------------------------
@@ -390,16 +397,24 @@ def test_resolved_venue_missing_refuses_landed_but_fails_shell_control(tmp_path)
 def test_no_delivery_worktree_freezes_repo_root_head_runs_green(tmp_path):
     """No [meta] delivery_worktree declared: freeze reads repo_root's own HEAD
     (resolve_check_venue's documented delivery-defaults-to-repo_root fallback),
-    and a self-referencing landed stage already on `main` passes cleanly."""
+    and the delivered commit passes the landed final_check once it is on `main`."""
     work = make_repo_with_remote(tmp_path)
-    sha = rev_parse(work)
-    stage = _landed_stage(1, delivered_stage=1)
-    state = _executing("dw1", [stage])
+    git("checkout", "--quiet", "-b", "feature", cwd=work)
+    sha = commit(work, "feature work")
+    fc = FinalCheck(command="", kind=CheckKind.LANDED.value,
+                    landed=LandedSpec(target="main", remote="origin", delivered_stage=1),
+                    venue="repo_root")
+    stage = _shell_stage(1)
+    state = _executing("dw1", [stage], final_check=[fc])
     state.repo_root = str(work)
     assert state.delivery_worktree is None
-    d = _record_delivered(_MemStore(state), "dw1")
-    assert d.ok is True
+    store = _MemStore(state)
+    assert _record_delivered(store, "dw1").ok is True
     assert stage.outcome.delivered_head == sha
+    git("checkout", "--quiet", "main", cwd=work)
+    git("merge", "--quiet", "--ff-only", "feature", cwd=work)
+    push_main(work)
+    assert cli.cmd_verify_final(ns(session="dw1"), store=store, runner=None).ok is True
 
 
 # --- the dogfood fixture loads and synthesizes end-to-end --------------------
@@ -443,7 +458,7 @@ def test_fixture_plan_landed_example_synthesizes_end_to_end(tmp_path, fixtures_d
 def commit_file(work: Path, name: str, text: str) -> str:
     (work / name).write_text(text)
     git("add", name, cwd=work)
-    git("commit", "--quiet", "-m", f"add {name}", cwd=work)
+    git("commit", "--quiet", "-m", f"add {name}\n\n{TRAILER}", cwd=work)
     return rev_parse(work)
 
 
@@ -524,7 +539,7 @@ def test_cherry_path_merges_listing_failure_is_a_git_error(tmp_path):
     assert "--merges" in shim["seen"].read_text().split()
 
 
-def test_squash_of_two_commits_stays_red(tmp_path):
+def test_squash_of_two_commits_is_green(tmp_path):
     work = make_repo_with_remote(tmp_path)
     git("checkout", "--quiet", "-b", "feature", cwd=work)
     commit_file(work, "a.txt", "a\n")
@@ -533,7 +548,7 @@ def test_squash_of_two_commits_stays_red(tmp_path):
     git("merge", "--quiet", "--squash", "feature", cwd=work)
     git("commit", "--quiet", "-m", "squashed", cwd=work)
     push_main(work)
-    assert landed_exit(work, delivered) == 1
+    assert landed_exit(work, delivered) == 0
 
 
 def test_merge_in_range_stays_red_though_every_patch_is_on_trunk(tmp_path):

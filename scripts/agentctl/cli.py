@@ -820,7 +820,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
 
 
 def _sync_venue_from_plan(state: SessionState, doc: "PlanDoc | None" = None) -> None:
-    """Derive state.repo_root and state.delivery_worktree from a plan's [meta].
+    """Derive state.repo_root, state.delivery_worktree and state.plan_task_id from a plan's [meta].
 
     The ONE place that answers "which trees is this session executing in", called
     from every route that establishes, re-establishes or re-reads which plan the
@@ -848,6 +848,7 @@ def _sync_venue_from_plan(state: SessionState, doc: "PlanDoc | None" = None) -> 
             return
     state.repo_root = doc.meta.repo_root
     state.delivery_worktree = doc.meta.delivery_worktree
+    state.plan_task_id = doc.meta.task_id
 
 
 def _plan_venue_pair(path: str | None) -> tuple[str, str] | None:
@@ -1482,6 +1483,8 @@ def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) ->
     stage (a retried, previously-FAILED stage may deliver new commits) — but
     once stamped, no landed check ever re-derives it: only this call site
     writes the field, everyone else only reads it (SessionState.render_landed_command).
+    `delivered_base` (merge-base of HEAD and the landed spec's `<remote>/<target>`) is
+    stamped next to it: the lower bound of the range whose `Task:` trailer the check proves.
     Fails open: an unresolvable venue or a git error leaves whatever was
     already stamped (if anything) untouched, rather than clobbering it."""
     cwd = state.resolve_check_venue(stage.criterion.verify_venue)
@@ -1489,27 +1492,45 @@ def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) ->
         return
     run = runner or subprocess_runner
     result = run(["git", "-C", cwd, "rev-parse", "HEAD"])
-    if result.returncode == 0 and result.stdout.strip():
-        stage.outcome.delivered_head = result.stdout.strip()
+    head = result.stdout.strip() if result.returncode == 0 else ""
+    if not head:
+        return
+    previous_head = stage.outcome.delivered_head
+    stage.outcome.delivered_head = head
+    spec = _landed_spec_for_stage(state, stage.index)
+    if spec is None or (head == previous_head and stage.outcome.delivered_base):
+        return
+    # The base is frozen with the head: a re-record on an unchanged head keeps the base
+    # computed before landing (afterwards HEAD is on trunk and the merge-base would
+    # collapse the task-proof range to empty).
+    base = run(["git", "-C", cwd, "merge-base", "HEAD", f"{spec.remote}/{spec.target}"])
+    if base.returncode == 0 and base.stdout.strip():
+        stage.outcome.delivered_base = base.stdout.strip()
 
 
-def _needs_delivered_head_freeze(state: SessionState, stage_index: int) -> bool:
-    """True when SOME landed check in this plan — a stage's own criterion (a
-    self-reference) or a final_check — names `stage_index` as its
-    `delivered_stage`. Freezing is the only case that matters; skipping it
-    otherwise keeps every plan with no landed check byte-identical to before
-    (no runner call record-result did not already make) — the regression an
-    unconditional freeze would otherwise introduce for every ordinary stage."""
+def _landed_spec_for_stage(state: SessionState, stage_index: int):
+    """The first landed check in this plan — a stage's own criterion (a
+    self-reference) or a final_check — that names `stage_index` as its
+    `delivered_stage`, else None."""
     for s in state.stages:
         crit = s.criterion
         if (crit.verify_kind == CheckKind.LANDED.value and crit.landed
                 and crit.landed.delivered_stage == stage_index):
-            return True
+            return crit.landed
     for fc in state.final_check:
         if (fc.kind == CheckKind.LANDED.value and fc.landed
                 and fc.landed.delivered_stage == stage_index):
-            return True
-    return False
+            return fc.landed
+    return None
+
+
+def _needs_delivered_head_freeze(state: SessionState, stage_index: int) -> bool:
+    """True when SOME landed check in this plan names `stage_index` as its
+    `delivered_stage`. Freezing is the only case that matters; skipping it
+    otherwise keeps every plan with no landed check byte-identical to before
+    (no runner call record-result did not already make) — the regression an
+    unconditional freeze would otherwise introduce for every ordinary stage."""
+    return _landed_spec_for_stage(state, stage_index) is not None
 
 
 def _landed_check_result(
@@ -9589,6 +9610,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                 duration_ms=prev.outcome.duration_ms,
                 spawn_count=prev.outcome.spawn_count,
                 delivered_head=prev.outcome.delivered_head,
+                delivered_base=prev.outcome.delivered_base,
             ),
             prior_control=prev.control,
             reattest_digest=stage_reattest_digest(ns),
