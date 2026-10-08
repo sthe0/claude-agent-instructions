@@ -58,7 +58,7 @@ If OD proposes a rule patch — push back. Usually the right move is the archite
 ## Routing the proposal
 
 1. OD returns the architectural proposal (replanning task) — typically a small set of concrete file changes.
-2. **Ask in the same turn as, but separately from, the resolution `AskUserQuestion`**: land first (see `landing-discipline.md`), then alongside "considered resolved?", add "Apply architectural fix <name>?" with options `Apply (Recommended) / Show diff / Reject`.
+2. **Ask as an extra question in the same `AskUserQuestion` call as the resolution question, never as an option of the rating question**: landing has already happened by then (land first, see `landing-discipline.md`); alongside "considered resolved?", add "Apply architectural fix <name>?" with options `Apply (Recommended) / Show diff / Reject`.
 3. On `Apply` → `Skill(self-improvement)` writes the changes. On `Reject` → record in the experience leaf as a **rejected architectural proposal** with the user's reason (so a future scan doesn't re-discover the same proposal blindly).
 4. On `Show diff` → write the files in chat, then re-ask.
 

@@ -32,7 +32,8 @@ ANCHORS = [
     (QUALITY, "[resolution-ask]"),
     (CURSOR, "[resolution-ask]"),
     (LANDING, "landing_waiver"),
-    (PITFALLS, "before the resolution AskUserQuestion"),
+    (PITFALLS, "land before the resolution ask"),
+    (SCAN, "landing has already happened by then"),
     (REVIEW, "before the resolution AskUserQuestion"),
     (COORD_INDEX, "before the resolution AskUserQuestion"),
 ]
@@ -40,6 +41,8 @@ ANCHORS = [
 FORBIDDEN = [
     (CLAUDE, "landing is **first and `(Recommended)`**"),
     (CLAUDE, "(push, scope)"),
+    (CLAUDE, "Push, then land into trunk/main"),
+    (QUALITY, "inside the SAME resolution"),
     (LANDING, "Bundle the delivering step into the resolution"),
     (CURSOR, "bundle the delivering option into that same ask"),
     (SCAN, 'and "push?"'),
