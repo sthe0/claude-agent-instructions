@@ -65,11 +65,57 @@ def is_production_file(path: str) -> bool:
     return bool(_PRODUCTION_FILE_RE.search(path or ""))
 
 
+def _gate_scratch_roots() -> "tuple[str, ...]":
+    """scratch_roots() minus any root so broad it would exempt the home directory:
+    '/', $HOME, or an ancestor of $HOME — whatever its source (TMPDIR is
+    user-settable). $HOME is read at call time. Gate side only; the ledger keeps
+    scratch_roots() unfiltered."""
+    home = os.path.realpath(os.environ.get("HOME") or os.path.expanduser("~"))
+    keep = []
+    for root in scratch_roots():
+        r = os.path.realpath(root)
+        if r == os.sep or home == r or home.startswith(r + os.sep):
+            continue
+        keep.append(root)
+    return tuple(keep)
+
+
+def _under(p: str, root: str) -> bool:
+    return p == root or p.startswith(root + os.sep)
+
+
+def _under_local_state(p: str) -> bool:
+    """True if the realpath `p` is under <projects-root>/<one component>/local-state/."""
+    try:
+        from lib import config_root
+        roots = config_root.projects_roots()
+    except Exception:
+        return False
+    for root in roots:
+        r = os.path.realpath(str(root))
+        if not p.startswith(r + os.sep):
+            continue
+        parts = p[len(r) + 1:].split(os.sep)
+        if len(parts) >= 3 and parts[0] and parts[1] == "local-state":
+            return True
+    return False
+
+
 def is_engine_exempt(path: str) -> bool:
-    """True if the path is unconditionally exempt from the engine gate
-    (memory / scratch). Plan files are NOT exempt here — see is_plan_file."""
+    """True if the path is unconditionally exempt from the engine gate: memory,
+    ``/tmp/``, anything that resolves (realpath containment, never substring) under
+    a scratch root that is not as broad as $HOME, and the personal per-project
+    ``<projects-root>/<hash>/local-state/`` directory. Plan files are NOT exempt
+    here — see is_plan_file."""
     p = path or ""
-    return any(seg in p for seg in _EXEMPT_SUBSTRINGS)
+    if any(seg in p for seg in _EXEMPT_SUBSTRINGS):
+        return True
+    if not p:
+        return False
+    rp = os.path.realpath(os.path.normpath(p))
+    if any(_under(rp, os.path.realpath(root)) for root in _gate_scratch_roots()):
+        return True
+    return _under_local_state(rp)
 
 
 def is_plan_file(path: str) -> bool:
@@ -150,8 +196,9 @@ def is_ledger_noise(path: str) -> bool:
     — the two predicates must stay independent, or the ledger silently inherits the
     gate's permission answer for a question the gate was never asked.
 
-    The session scratchpad (a per-session working area that is not an OS-temp
-    path and is not gate-exempt either) is deliberately NOT scratch here and
-    stays ledgered.
+    The scratch roots are /tmp, $TMPDIR and tempfile.gettempdir(); a session
+    scratchpad living under one of them (e.g. TMPDIR=/var/tmp) is therefore
+    scratch here, while one outside them stays ledgered. The gate's extra
+    exemptions (local-state, the breadth guard on roots) do not apply here.
     """
     return under_scratch_root(path)
