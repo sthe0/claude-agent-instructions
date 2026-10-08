@@ -18,8 +18,10 @@ import pytest
 
 from agentctl import cli, gates
 from agentctl.plan import parse_plan
+from agentctl.render import render_meta_md
 from agentctl.state import (
-    FinalCheck, LandedSpec, Node, Route, WeightClass,
+    Actor, Criterion, FinalCheck, GateRecord, LandedSpec, Means, Node, Outcome,
+    Route, SessionState, Stage, StageStatus, Subject, WeightClass,
 )
 from agentctl.submission import submission_violations
 from conftest import STAGE_OBSERVATIONS
@@ -70,8 +72,8 @@ def quality_rows():
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def to_resolution(store, sid, fixtures_dir):
-    """Drive plan_two_stage.toml to the RESOLUTION node, ready for a resolve call."""
+def to_resolution(store, sid, fixtures_dir, plan=None):
+    """Drive plan_two_stage.toml (or `plan`) to the RESOLUTION node, ready for a resolve call."""
     cli.cmd_start(ns(session=sid, task="demo", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(
@@ -80,7 +82,7 @@ def to_resolution(store, sid, fixtures_dir):
         new_dependency=False, public_api_change=False,
     ), store=store)
     cli.cmd_plan(ns(session=sid), store=store)
-    cli.cmd_submit_plan(ns(session=sid, plan=str(fixtures_dir / "plan_two_stage.toml")), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=str(plan or fixtures_dir / "plan_two_stage.toml")), store=store)
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
@@ -368,3 +370,75 @@ def test_close_passes_the_waiver_to_its_probe_and_to_the_confirmed_resolve(store
                          confirmed_by="user", quality=5, quality_by="user-confirmed"), store=store)
     assert d.ok is True and d.node == Node.RESOLVED.value
     assert quality_rows()[-1]["landing_waiver_source"] == "resolve"
+
+
+# --- plan-time route end to end, sub-plan custody, rendering -----------------
+
+def _finished_child_state(state):
+    state.stages = [Stage(index=1, title="child stage",
+                          subject=Subject(material="m", result="img"),
+                          means=Means(means="Edit", method="do"),
+                          actor=Actor(executor="in_thread"),
+                          criterion=Criterion(criterion_type="measurable", done_criterion="done"),
+                          outcome=Outcome(status=StageStatus.PASSED.value))]
+    state.resolution = GateRecord("resolution", armed=True, passed=True, by="user")
+    state.node = Node.RESOLVED.value
+    state.current_stage = None
+
+
+def _executing_parent(store, sid, **extra):
+    store.save(SessionState(
+        session_id=sid, task_id="parent", weight_class="SUBSTANTIVE", plan_path="/plan.toml",
+        plan_verified=True, node=Node.EXECUTING.value,
+        approval=GateRecord("plan_approval", armed=True, passed=True, by="user"),
+        current_stage=1, **extra))
+
+
+def test_a_plan_file_waiver_reaches_state_through_submit_and_approve(store, fixtures_dir, tmp_path):
+    """No amend(): the waiver travels plan TOML -> submit-plan -> approve -> resolve."""
+    text = (fixtures_dir / "plan_two_stage.toml").read_text()
+    plan = tmp_path / "plan_with_waiver.toml"
+    plan.write_text(text.replace(
+        'criterion_type = "measurable"\n\n[[stage]]',
+        'criterion_type = "measurable"\nlanding_waiver = "investigation only, lands nothing"\n\n[[stage]]', 1))
+    to_resolution(store, "e2e-waiver", fixtures_dir, plan=plan)
+    assert store.load("e2e-waiver").landing_waiver == "investigation only, lands nothing"
+
+    d = resolve(store, "e2e-waiver")
+    assert d.ok is True
+    assert quality_rows()[-1]["landing_waiver_source"] == "plan"
+
+
+def test_a_sub_plans_waiver_does_not_excuse_the_parents_gate_after_pop(store):
+    sid = "waiver-custody"
+    _executing_parent(store, sid)
+    cli.cmd_push_subplan(ns(session=sid, plan="/tmp/child.toml", task="child",
+                            originating_stage=1), store=store)
+    state = store.load(sid)
+    assert state.landing_waiver is None
+    state.landing_waiver = "child lands nothing"
+    _finished_child_state(state)
+    store.save(state)
+
+    assert cli.cmd_pop_subplan(ns(session=sid), store=store).ok is True
+    assert store.load(sid).landing_waiver is None
+
+
+def test_a_parents_waiver_survives_a_sub_plan_push_and_pop(store):
+    sid = "waiver-custody-kept"
+    _executing_parent(store, sid, landing_waiver="parent lands nothing")
+    cli.cmd_push_subplan(ns(session=sid, plan="/tmp/child.toml", task="child",
+                            originating_stage=1), store=store)
+    state = store.load(sid)
+    assert state.plan_stack[0].landing_waiver == "parent lands nothing"
+    _finished_child_state(state)
+    store.save(state)
+
+    assert cli.cmd_pop_subplan(ns(session=sid), store=store).ok is True
+    assert store.load(sid).landing_waiver == "parent lands nothing"
+
+
+def test_plan_render_shows_the_landing_waiver():
+    doc = parse_plan(_plan_data(landing_waiver="docs-only, lands nothing"))
+    assert "- **Landing waiver:** docs-only, lands nothing" in render_meta_md(doc)
+    assert not any("Landing waiver" in line for line in render_meta_md(parse_plan(_plan_data())))

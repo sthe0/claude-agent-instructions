@@ -1505,6 +1505,10 @@ class PlanFrame:
     # above: the service sub-plan's own code-review rounds are a separate budget from the
     # parent's, so cmd_push_subplan snapshots and zeroes, cmd_pop_subplan restores.
     code_review_rounds: int = 0
+    # The parent plan's [meta].landing_waiver — plan-level like delivery_worktree, so a
+    # pushed child (which resets the live field) must not leave its own waiver behind
+    # to excuse the parent's landing gate after the pop.
+    landing_waiver: str | None = None
     # Venue-substitution guard (schema 34): the exact (repo_root, delivery_worktree)
     # pair _sync_venue_from_plan read off the PARENT plan file at push time, so pop can
     # tell "the parent file's venue fields moved out from under the pushed child" apart
@@ -2437,6 +2441,7 @@ class SessionState:
                 plan_review_rounds=f.get("plan_review_rounds") or 0,
                 plan_review_counted_digest=f.get("plan_review_counted_digest") or "",
                 code_review_rounds=f.get("code_review_rounds") or 0,
+                landing_waiver=f.get("landing_waiver"),
                 parent_repo_root=f.get("parent_repo_root") or "",
                 parent_delivery_worktree=f.get("parent_delivery_worktree") or "",
                 parent_venue_captured=bool(f.get("parent_venue_captured", False)),

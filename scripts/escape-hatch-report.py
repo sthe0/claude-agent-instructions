@@ -66,6 +66,16 @@ _ESCAPE_HATCH_ARGS: "tuple[tuple[str, str, str, str], ...]" = (
         "the requirement to re-norm a reproducible factor at difficulty closure",
         "free text only — countable as present/absent, not by kind",
     ),
+    (
+        "resolve", "landing_waiver",
+        "the requirement that a plan assert its change reached trunk, for a plan with no git delivery venue",
+        "free text, logged as the landing_gate state event and the quality row's landing_waiver",
+    ),
+    (
+        "close", "landing_waiver",
+        "the same landing requirement, threaded to close's probe and its confirmed resolve",
+        "free text, logged as the landing_gate state event and the quality row's landing_waiver",
+    ),
 )
 
 
