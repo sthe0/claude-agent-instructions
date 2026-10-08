@@ -71,6 +71,7 @@ from .state import plan_review_scope_stage_index as _plan_review_scope_stage_ind
 from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESSENCE
 from .state import PLAN_PRESENTATION_KIND_REPLAN_DIFF as _PLAN_PRESENTATION_KIND_REPLAN_DIFF
 from .state import Stage as _Stage
+from .state import asserts_landing
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
 from .text_shape import normalize_string as _normalize_string
 
@@ -135,6 +136,29 @@ def acceptance_active(state: SessionState) -> bool:
     if env == "0":
         return False
     return state.weight_class == WeightClass.SUBSTANTIVE.value
+
+
+def landing_gate_active(state: SessionState) -> bool:
+    """Whether resolve requires the plan to assert landing (or carry a waiver).
+
+    Scoped like acceptance_active: SUBSTANTIVE sessions always pay it, and so does any
+    session whose plan names a delivery worktree — a branch that still has to reach
+    trunk is the case the gate exists for, whatever the weight class was classified as.
+    AGENTCTL_LANDING_GATE overrides in both directions ("1" forces on, "0" forces off);
+    cmd_resolve logs a set value, so the override is never silent. Env-only reads, so the
+    gate stays pure. Deliberately NOT part of resolution_blockers: verify-final and the
+    Stop-hook guardian read that list, and neither can supply a resolve-time waiver."""
+    env = os.environ.get("AGENTCTL_LANDING_GATE")
+    if env == "1":
+        return True
+    if env == "0":
+        return False
+    return state.weight_class == WeightClass.SUBSTANTIVE.value or bool(state.delivery_worktree)
+
+
+def plan_asserts_landing(state: SessionState) -> bool:
+    """Whether some stage or final_check of the session's plan is a landed check."""
+    return asserts_landing(state.stages, state.final_check)
 
 
 def _acceptance_review_check(state: SessionState) -> tuple[str, list[str], dict[str, str]]:
@@ -2688,6 +2712,7 @@ def _meta_place(meta) -> tuple:
         meta.external_research,
         meta.repo_root,
         meta.delivery_worktree,
+        meta.landing_waiver,
         _final_check_surface(meta),
         order_place(meta),
     )

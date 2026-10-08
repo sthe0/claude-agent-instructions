@@ -62,7 +62,7 @@ from . import exempt_paths, grant_shadow
 from .conditions import judge_restatement, restatement_prefilter
 from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
-from .state import AGENT_ACTOR, CheckKind, CheckVenue, CriterionType, WeightClass
+from .state import AGENT_ACTOR, CheckKind, CheckVenue, CriterionType, WeightClass, asserts_landing
 from .text_shape import ELEMENT_NAMES
 from .text_shape import normalize_string as _normalize_string
 
@@ -794,6 +794,36 @@ def _landed_delivery_venue_violations(doc) -> list[str]:
     return out
 
 
+def _landing_declaration_violations(doc) -> list[str]:
+    """A plan that delivers in a git worktree with no landing declaration. [] == clean.
+
+    `[meta] delivery_worktree` says the change is authored on a branch that still has to
+    reach trunk. Such a plan must say so in one of two reviewed ways: a `kind = "landed"`
+    check (stage or final_check) that proves the landing, or a `landing_waiver` naming why
+    this change lands nothing. Neither leaves landing unprovable and unexcused; both is the
+    same ambiguity `negative_control` + `negative_control_waiver` is — a waiver says no
+    landing check applies, but one is present. The waiver is plan-time on purpose: it
+    passes through plan review and approval before the work it excuses."""
+    if not doc.meta.delivery_worktree:
+        return []
+    waiver = str(doc.meta.landing_waiver or "").strip()
+    landed = asserts_landing(doc.stages, doc.meta.final_check)
+    if landed and waiver:
+        return [
+            "[meta] declares both a kind = \"landed\" check and 'landing_waiver' — "
+            "ambiguous: a waiver says no landing check applies, but one is present. "
+            "Keep whichever is actually true and drop the other."
+        ]
+    if landed or waiver:
+        return []
+    return [
+        f"[meta] delivery_worktree {doc.meta.delivery_worktree!r} is set but the plan "
+        f"declares no landing: add a kind = \"landed\" check (a stage criterion or a "
+        f"[[final_check]]) that proves the delivery reached trunk, or "
+        f"landing_waiver = \"<why this change lands nothing>\" in [meta]"
+    ]
+
+
 def _ephemeral_artifacts_violations(stage) -> list[str]:
     """A declared output_artifacts entry that resolves under an OS-temp scratch root
     (exempt_paths.scratch_roots()) claims durability the path does not have: a green
@@ -866,6 +896,7 @@ def submission_violations(
     out.extend(_element_traceability_violations(doc))
     out.extend(_requirement_derivation_violations(doc.meta.order))
     out.extend(_landed_delivery_venue_violations(doc))
+    out.extend(_landing_declaration_violations(doc))
     for stage in doc.stages:
         # Supplies are already built by the time a PlanDoc exists, so the "supplied by an
         # earlier stage" alternative is decidable here — evaluating the knowledge

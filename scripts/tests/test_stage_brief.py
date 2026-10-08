@@ -326,6 +326,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (PlanMeta, "criterion_type"), (PlanMeta, "weight_class"),
         (PlanMeta, "external_research"), (PlanMeta, "repo_root"),
         (PlanMeta, "delivery_worktree"), (PlanMeta, "final_check"),
+        (PlanMeta, "landing_waiver"),  # excluded: a resolve-time gate input, not stage material
         # excluded: the typed order is the ROOT's material at the approval gate — it is
         # plan-level, grows with the customer's requirement count, and the executor of one
         # stage receives its own requirement through that stage's own fields plus

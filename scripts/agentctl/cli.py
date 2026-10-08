@@ -148,6 +148,7 @@ from .state import (
     StageStatus,
     Subject,
     WeightClass,
+    landed_containment_script,
 )
 from .store import FileStateStore, StateStore, safe_session_id as _safe_session_id
 
@@ -848,6 +849,7 @@ def _sync_venue_from_plan(state: SessionState, doc: "PlanDoc | None" = None) -> 
             return
     state.repo_root = doc.meta.repo_root
     state.delivery_worktree = doc.meta.delivery_worktree
+    state.landing_waiver = doc.meta.landing_waiver
     state.plan_task_id = doc.meta.task_id
 
 
@@ -8362,6 +8364,98 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     return Directive(True, state.node, "await_user_confirmation", detail, data=data)
 
 
+def _first_git_landed_remote_target(state: SessionState) -> tuple[str, str]:
+    """(remote, target) of the first landed check whose provider is git — a stage's own
+    criterion first, then the final_checks — else the repository default origin/main."""
+    for spec in [s.criterion.landed for s in state.stages if s.criterion.landed] + [
+        fc.landed for fc in state.final_check if fc.landed
+    ]:
+        if spec.provider == "git":
+            return spec.remote, spec.target
+    return "origin", "main"
+
+
+def _unlanded_branch_blockers(state: SessionState, runner: Runner | None) -> list[str]:
+    """Blockers when the plan's delivery worktree still holds commits trunk lacks.
+
+    Network-free (compares against the local remote-tracking ref) and run only through
+    the injected Runner. A delivery worktree that is gone — what land-branch.py leaves
+    after landing — or is not a git work tree yields nothing: the check is git-only.
+    Containment is `state.landed_containment_script`'s, the same ancestry / cherry /
+    squash-patch-id test the landed check applies, so resolve cannot call landed what the
+    landed check calls unlanded. A probe error blocks (fail closed); the plan-time
+    landing_waiver is the escape for a plan that deliberately lands nothing."""
+    worktree = state.delivery_worktree
+    if not worktree or not Path(worktree).is_dir():
+        return []
+    run = runner or subprocess_runner
+    inside = run(["git", "-C", worktree, "rev-parse", "--is-inside-work-tree"])
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        return []
+    remote, target = _first_git_landed_remote_target(state)
+    ref = f"{remote}/{target}"
+    git = f"git -C {shlex.quote(worktree)}"
+    err = LANDED_GIT_ERROR_EXIT
+    script = landed_containment_script(
+        git, "HEAD", shlex.quote(ref), f'$({git} merge-base "$R" HEAD) || exit {err}', err
+    )
+    probe = run(["bash", "-c", script])
+    if probe.returncode == 0:
+        return []
+    branch = run(["git", "-C", worktree, "rev-parse", "--abbrev-ref", "HEAD"])
+    name = branch.stdout.strip() if branch.returncode == 0 and branch.stdout.strip() else "HEAD"
+    if probe.returncode == 1:
+        return [
+            f"delivery branch {name!r} in {worktree} holds commits not on {ref} — land it "
+            f"first (`python3 scripts/land-branch.py`), then resolve; a plan that "
+            f"deliberately lands nothing declares [meta] landing_waiver via replan"
+        ]
+    return [
+        f"cannot tell whether delivery branch {name!r} in {worktree} has landed on {ref} "
+        f"(git exited {probe.returncode}: {probe.stderr.strip()[:200] or 'no message'}) — "
+        f"fix the repository state, or declare [meta] landing_waiver via replan"
+    ]
+
+
+def _landing_gate(state: SessionState, args, runner: Runner | None) -> tuple[list[str], dict]:
+    """The resolve-time landing blockers plus the record of how the gate was met.
+
+    The record is {waiver, waiver_source, override}: the waiver text and where it came
+    from ('plan' = [meta] landing_waiver, 'resolve' = --landing-waiver), and the
+    AGENTCTL_LANDING_GATE value when it overrode the gate — so a bypass is never silent.
+    A resolve-time waiver is accepted only when the plan has no git delivery venue: for a
+    delivery_worktree plan the waiver must come from the approved plan, because an actor
+    writing it after the outcome is known can excuse anything."""
+    env = os.environ.get("AGENTCTL_LANDING_GATE")
+    record = {"waiver": None, "waiver_source": None, "override": env if env in ("0", "1") else None}
+    if not gates.landing_gate_active(state):
+        return [], record
+    blockers: list[str] = []
+    plan_waiver = (state.landing_waiver or "").strip()
+    if plan_waiver:
+        record["waiver"], record["waiver_source"] = plan_waiver, "plan"
+    elif not gates.plan_asserts_landing(state):
+        if state.delivery_worktree:
+            blockers.append(
+                "plan declares neither a kind=landed check nor [meta] landing_waiver — "
+                "declare one via replan (a resolve-time --landing-waiver is refused for a "
+                "plan with a delivery_worktree)"
+            )
+        else:
+            given = getattr(args, "landing_waiver", None)
+            if given is not None and given.strip():
+                record["waiver"], record["waiver_source"] = given.strip(), "resolve"
+            else:
+                blockers.append(
+                    "plan declares no kind=landed check: "
+                    + ("--landing-waiver must be non-empty" if given is not None else
+                       "resolve needs --landing-waiver '<why nothing lands>'")
+                )
+    if not plan_waiver:
+        blockers.extend(_unlanded_branch_blockers(state, runner))
+    return blockers, record
+
+
 def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     # plugin gates fold into resolve (not verify_final) so a plugin can let the
@@ -8380,6 +8474,8 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         ]
     elif quality not in _VALID_QUALITY_RATINGS:
         blockers = blockers + [f"invalid --quality {quality!r}: must be an integer 1-5"]
+    landing_blockers, landing = _landing_gate(state, args, runner)
+    blockers = blockers + landing_blockers
     _log_gate(state, "resolution", blockers, passed=not blockers)
     if blockers:
         return Directive(False, state.node, "fix_stages", "cannot resolve", data={"blockers": blockers})
@@ -8398,6 +8494,8 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     quality_by = getattr(args, "quality_by", None) or "user-confirmed"
     quality_note = getattr(args, "quality_note", None)
     state.log("resolve", by=args.by, quality=quality, quality_by=quality_by)
+    state.log("landing_gate", waiver=landing["waiver"], waiver_source=landing["waiver_source"],
+              override=landing["override"])
     store.save(state)
     # Session-end cleanup: drop any sidecar a background enumeration wrote for this
     # session, whether or not it was ever folded (e.g. an outstanding child from the
@@ -8467,6 +8565,9 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             1 for m in state.planning_misses if not m.get("asked_user")
         ),
         "materialization_defects": len(state.materialization_defects),
+        "landing_waiver": landing["waiver"],
+        "landing_waiver_source": landing["waiver_source"],
+        "landing_gate_override": landing["override"],
     }
     _write_quality_row(quality_row)
     # Whether to stamp is fully decidable from observed state (resolved + a known
@@ -8492,6 +8593,10 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if acceptance_bypass is not None:
         data["acceptance_bypass"] = acceptance_bypass
         detail += " (acceptance recorded via bypass; see acceptance_bypass)"
+    if landing["override"] is not None:
+        data["landing_gate_override"] = landing["override"]
+        detail += (f" (landing gate overridden by AGENTCTL_LANDING_GATE={landing['override']}; "
+                   "see landing_gate_override)")
     return Directive(True, state.node, "done", detail, marker="COMPLETED", data=data)
 
 
@@ -10010,6 +10115,7 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     # silently stop holding if dispatch ever became reachable from CLASSIFIED.
     state.repo_root = None
     state.delivery_worktree = None
+    state.landing_waiver = None
     state.final_check = []
     state.partition = None
     state.approval = GateRecord("plan_approval")
@@ -10354,7 +10460,8 @@ def cmd_close(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         rs = argparse.Namespace(session=args.session, by=(confirmer or ""),
                                 quality=getattr(args, "quality", None),
                                 quality_by=getattr(args, "quality_by", None),
-                                quality_note=getattr(args, "quality_note", None))
+                                quality_note=getattr(args, "quality_note", None),
+                                landing_waiver=getattr(args, "landing_waiver", None))
         d = _run_step(cmd_resolve, rs, store=store, runner=runner, trace=trace)
         if d.ok:
             return Directive(True, d.node, d.action, "close: task resolved",
@@ -10531,6 +10638,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("factor", ("normalize",)),
     ("normalize_factor", ("replan",)),
     ("quality_note", ("resolve", "close")),
+    ("landing_waiver", ("resolve", "close")),
     ("coverage_waiver", ("replan",)),
     ("normalization_waiver", ("replan",)),
     ("renegotiation_note", ("replan",)),
@@ -11201,6 +11309,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="'user-confirmed' (default), 'user-adjusted', or 'user-other' "
                          "(free-text answer)")
     sp.add_argument("--quality-note", dest="quality_note", default=None)
+    sp.add_argument("--landing-waiver", dest="landing_waiver", default=None,
+                    help="reason this task has no landing to assert; accepted only when the "
+                         "plan has no delivery_worktree (a git delivery venue declares its "
+                         "waiver in the plan)")
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG); "
                          "read to derive the realized budget_tiers for the quality row")
@@ -11313,6 +11425,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="1-5 rating threaded to resolve (see resolve --quality)")
     sp.add_argument("--quality-by", dest="quality_by", default="user-confirmed")
     sp.add_argument("--quality-note", dest="quality_note", default=None)
+    sp.add_argument("--landing-waiver", dest="landing_waiver", default=None,
+                    help="threaded to resolve (see resolve --landing-waiver)")
 
     sp = add("push-subplan"); sp.add_argument("--session", required=True)
     sp.add_argument("--plan", required=True, help="path to the child service sub-plan TOML")

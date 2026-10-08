@@ -194,6 +194,55 @@ class LandedSpec:
         return cls(**{k: v for k, v in d.items() if k in known})
 
 
+def asserts_landing(stages, final_check) -> bool:
+    """Whether any stage or final_check is a `kind = "landed"` check — the one
+    definition of "this plan asserts landing", shared by the check-venue
+    survivability lint, the submission rule and the resolve landing gate."""
+    return any(
+        s.criterion.verify_kind == CheckKind.LANDED.value for s in stages or []
+    ) or any(fc.kind == CheckKind.LANDED.value for fc in final_check or [])
+
+
+def landed_containment_script(git: str, commit: str, refs: str, merge_base: str, err: int) -> str:
+    """The shell fragment proving `commit` is contained in every ref of `refs`.
+
+    Shared by the landed check (`SessionState.render_landed_command`) and resolve's
+    unlanded-branch probe, so the two cannot disagree about what "landed" means.
+    Containment is ancestry, else — when there is no merge commit in `<ref>..<commit>` —
+    patch equivalence (`git cherry` printing no `+` line), else the squash test: the
+    patch-id of the combined diff `merge_base..commit` equals that of some non-merge
+    commit in `merge_base..<ref>`. Exit 0 contained, 1 not contained, `err` when git
+    could not answer.
+
+    `git` is the quoted `git -C <repo>` prefix, `commit`/`refs` are shell words
+    (`refs` space-separated), `merge_base` a shell expression that may use `$R`."""
+    patch_id = "patch-id --stable | cut -d' ' -f1"
+    return (
+        f"for R in {refs}; do "
+        f'{git} merge-base --is-ancestor {commit} "$R"; s=$?; '
+        f'[ "$s" -eq 0 ] && continue; '
+        f'[ "$s" -eq 1 ] || exit {err}; '
+        f'm=$({git} rev-list --merges "$R"..{commit}) || exit {err}; '
+        f'if [ -z "$m" ]; then '
+        f'c=$({git} cherry "$R" {commit}) || exit {err}; '
+        f"printf '%s\\n' \"$c\" | grep -q '^+'; s=$?; "
+        f'[ "$s" -eq 1 ] && continue; '
+        f'[ "$s" -eq 0 ] || exit {err}; '
+        "fi; "
+        f"MB={merge_base}; "
+        f'd=$({git} diff --no-ext-diff "$MB" {commit}) || exit {err}; '
+        f"P=$(set -o pipefail; printf '%s\\n' \"$d\" | {git} {patch_id}) || exit {err}; "
+        f'[ -n "$P" ] || exit 1; '
+        f"L=$(set -o pipefail; {git} log -p --no-merges --no-ext-diff "
+        f"--format='commit %H' \"$MB\"..\"$R\" | {git} {patch_id}) || exit {err}; "
+        f"printf '%s\\n' \"$L\" | grep -qxF -- \"$P\"; s=$?; "
+        f'[ "$s" -eq 0 ] && continue; '
+        f'[ "$s" -eq 1 ] && exit 1; '
+        f"exit {err}; "
+        "done; exit 0"
+    )
+
+
 class StageStatus(str, Enum):
     PENDING = "PENDING"
     ACTIVE = "ACTIVE"
@@ -1714,6 +1763,10 @@ class SessionState:
     # byte-identical to pre-field behaviour; live states predating the field load
     # unchanged. Backs plan.check_venue_warnings.
     delivery_worktree: str | None = None
+    # The plan's own [meta].landing_waiver — the plan-time, reviewed reason a plan
+    # declares no landed check. Stamped with the venue by cli._sync_venue_from_plan;
+    # None (default) = no waiver, byte-identical for states predating the field.
+    landing_waiver: str | None = None
     # The plan's own [meta].task_id — the id stage commits' `Task:` trailers are written
     # with. Distinct from `task_id`, which `agentctl start --task` sets and nothing binds
     # to the plan. Stamped by cli._sync_venue_from_plan; "" on a state predating the field.
@@ -2198,34 +2251,12 @@ class SessionState:
             scope = delivered
             merge_base = f'$({git} merge-base "$R" {commit}) || exit {err}'
         missing = shlex.quote(f"landed check: no line {trailer!r} in the messages of {scope}")
-        patch_id = "patch-id --stable | cut -d' ' -f1"
         command = (
             f"t=$({messages}) || exit {err}; "
             f"printf '%s\\n' \"$t\" | grep -qxF -- {shlex.quote(trailer)}; s=$?; "
             f'if [ "$s" -eq 1 ]; then printf \'%s\\n\' {missing} >&2; exit 1; fi; '
             f'[ "$s" -eq 0 ] || exit {err}; '
-            f"for R in {target} {remote_target}; do "
-            f'{git} merge-base --is-ancestor {commit} "$R"; s=$?; '
-            f'[ "$s" -eq 0 ] && continue; '
-            f'[ "$s" -eq 1 ] || exit {err}; '
-            f'm=$({git} rev-list --merges "$R"..{commit}) || exit {err}; '
-            f'if [ -z "$m" ]; then '
-            f'c=$({git} cherry "$R" {commit}) || exit {err}; '
-            f"printf '%s\\n' \"$c\" | grep -q '^+'; s=$?; "
-            f'[ "$s" -eq 1 ] && continue; '
-            f'[ "$s" -eq 0 ] || exit {err}; '
-            "fi; "
-            f"MB={merge_base}; "
-            f'd=$({git} diff --no-ext-diff "$MB" {commit}) || exit {err}; '
-            f"P=$(set -o pipefail; printf '%s\\n' \"$d\" | {git} {patch_id}) || exit {err}; "
-            f'[ -n "$P" ] || exit 1; '
-            f"L=$(set -o pipefail; {git} log -p --no-merges --no-ext-diff "
-            f"--format='commit %H' \"$MB\"..\"$R\" | {git} {patch_id}) || exit {err}; "
-            f"printf '%s\\n' \"$L\" | grep -qxF -- \"$P\"; s=$?; "
-            f'[ "$s" -eq 0 ] && continue; '
-            f'[ "$s" -eq 1 ] && exit 1; '
-            f"exit {err}; "
-            "done; exit 0"
+            + landed_containment_script(git, commit, f"{target} {remote_target}", merge_base, err)
         )
         return command, None
 

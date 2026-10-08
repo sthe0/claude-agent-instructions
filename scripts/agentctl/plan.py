@@ -157,6 +157,7 @@ from .state import (
     StageStatus,
     Subject,
     Supply,
+    asserts_landing,
 )
 from .text_shape import ELEMENT_NAMES as _ELEMENT_NAMES
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
@@ -184,6 +185,11 @@ class PlanMeta:
     # no worktree-venue signal, byte-identical to pre-field behaviour. Backs the
     # check_venue_warnings lint below.
     delivery_worktree: str | None = None
+    # The plan-time, reviewed reason a plan declares no `kind = "landed"` check. A plan
+    # that sets delivery_worktree must declare a landed check OR this waiver (never both),
+    # so "this change lands nothing" is a decision the approved plan carries, not one the
+    # resolving actor makes after the outcome is known. None = no waiver.
+    landing_waiver: str | None = None
     # Optional typed end-to-end checks run by verify-final after per-stage re-runs.
     # Absent => [] (back-compat). Parsed from top-level [[final_check]] tables.
     final_check: list[FinalCheck] = field(default_factory=list)
@@ -1220,10 +1226,7 @@ def check_venue_warnings(
     # signal, not a proof. Restricted to measurable stages because verify-final
     # re-runs a verify_command only for those (an acceptance-review stage's
     # command never re-runs at final, so it cannot refuse there).
-    asserts_landing = any(
-        s.criterion.verify_kind == CheckKind.LANDED.value for s in stages or []
-    ) or any(fc.kind == CheckKind.LANDED.value for fc in final_check or [])
-    if asserts_landing:
+    if asserts_landing(stages, final_check):
         for s in stages or []:
             crit = s.criterion
             if (
@@ -1345,6 +1348,7 @@ def parse_plan(
         external_research=str(m["external_research"]) if m.get("external_research") else None,
         repo_root=str(m["repo_root"]) if m.get("repo_root") else None,
         delivery_worktree=str(m["delivery_worktree"]) if m.get("delivery_worktree") else None,
+        landing_waiver=str(m["landing_waiver"]) if m.get("landing_waiver") else None,
         final_check=final_checks,
         order=order,
     )
@@ -1847,6 +1851,7 @@ def order_extra_digest(meta: PlanMeta) -> str:
         meta.external_research,
         meta.task_id,
         meta.delivery_worktree,
+        *((("landing_waiver", meta.landing_waiver),) if meta.landing_waiver else ()),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

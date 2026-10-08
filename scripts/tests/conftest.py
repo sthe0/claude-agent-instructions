@@ -263,6 +263,20 @@ def _acceptance_gate_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _landing_gate_off_by_default(monkeypatch):
+    """Default the resolve-time landing gate OFF for the suite at large, the same
+    accommodation as `_acceptance_gate_off_by_default` above and for the same reason:
+    `gates.landing_gate_active` falls back to weight_class == SUBSTANTIVE (or a set
+    delivery_worktree) when AGENTCTL_LANDING_GATE is unset, and `cmd_resolve` then
+    requires a landed check or a landing waiver — but the overwhelming majority of
+    resolve-driving tests exercise unrelated machinery with plans that assert no
+    landing. AGENTCTL_LANDING_GATE=0 is the documented force-off knob. Its real
+    block/pass/waiver behaviour is proven end-to-end by test_resolve_landing_gate.py,
+    which explicitly re-enables it."""
+    monkeypatch.setenv("AGENTCTL_LANDING_GATE", "0")
+
+
+@pytest.fixture(autouse=True)
 def _advisor_off_by_default(monkeypatch):
     """Default the advisory judge OFF for the suite at large, the same accommodation as
     `_plan_review_gate_off_by_default` above and for the same reason.

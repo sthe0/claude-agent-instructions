@@ -129,6 +129,8 @@ def render_meta_md(doc: PlanDoc) -> list[str]:
     lines.append(f"- **Criterion type:** {m.criterion_type}")
     if m.repo_root:
         lines.append(f"- **Repo root:** {m.repo_root}")
+    if m.landing_waiver:
+        lines.append(f"- **Landing waiver:** {m.landing_waiver}")
     if m.external_research:
         lines.append(f"- **External research:** {m.external_research}")
     lines.append("")
