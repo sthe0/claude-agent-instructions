@@ -303,6 +303,26 @@ def test_freeze_stamps_delivered_base_and_keeps_it_after_landing(tmp_path):
     assert stage.outcome.delivered_base == seed
 
 
+def test_legacy_state_rerecorded_after_fast_forward_stamps_no_base(tmp_path):
+    work = make_repo(tmp_path)
+    git("checkout", "--quiet", "-b", "feature", cwd=work)
+    head = commit_file(work, "a.txt", "a\n")
+    git("checkout", "--quiet", "main", cwd=work)
+    git("merge", "--quiet", "--ff-only", "feature", cwd=work)
+    push_main(work)
+    git("checkout", "--quiet", "feature", cwd=work)
+    fc = FinalCheck(command="", kind=CheckKind.LANDED.value,
+                    landed=LandedSpec(target="main", remote="origin", delivered_stage=1),
+                    venue="repo_root")
+    stage = _stage()
+    stage.outcome.delivered_head = head
+    state = SessionState(session_id="lg", task_id="t", stages=[stage], repo_root=str(work),
+                         final_check=[fc])
+    cli._freeze_delivered_head(state, stage, None)
+    assert stage.outcome.delivered_head == head
+    assert stage.outcome.delivered_base is None
+
+
 def test_plan_without_landed_check_writes_no_base(tmp_path):
     work = make_repo(tmp_path)
     stage = _stage()

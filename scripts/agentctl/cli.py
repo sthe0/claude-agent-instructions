@@ -1502,9 +1502,11 @@ def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) ->
         return
     # The base is frozen with the head: a re-record on an unchanged head keeps the base
     # computed before landing (afterwards HEAD is on trunk and the merge-base would
-    # collapse the task-proof range to empty).
+    # collapse the task-proof range to empty). A merge-base equal to HEAD means HEAD is
+    # already on trunk (a legacy state frozen without a base, re-recorded after landing):
+    # stamping it would freeze that empty range, so the base stays unset.
     base = run(["git", "-C", cwd, "merge-base", "HEAD", f"{spec.remote}/{spec.target}"])
-    if base.returncode == 0 and base.stdout.strip():
+    if base.returncode == 0 and base.stdout.strip() and base.stdout.strip() != head:
         stage.outcome.delivered_base = base.stdout.strip()
 
 
