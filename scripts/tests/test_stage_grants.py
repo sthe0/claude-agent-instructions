@@ -1073,7 +1073,6 @@ SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
     "agentctl/classify.py": "mention",
     "agentctl/exempt_paths.py": "mention",
     "agentctl/plan.py": "mention",
-    "apply-mcp-local.sh": "writer",
     "apply-settings.sh": "writer",
     "doctor.sh": "reader",
     "hook-canon-guard-wired-check.py": "reader",
