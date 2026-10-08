@@ -645,6 +645,7 @@ _STAGE_RESIDUAL_COVERAGE = {
     "supplies.on": "stage_question_key (and depends_on, which projects from it)",
     "supplies.element": "stage_question_key (and depends_on, which projects from it)",
     "supplies.artifact": "stage_question_key (and depends_on, which projects from it)",
+    "supplies.delivery": "stage_question_key, via delivery_place",
     "output_artifacts": "the residual's own splice — outside stage_question_key because "
                         "no Question.target names it, inside here because re-declaring "
                         "what a stage produces moves which green a check can reach",

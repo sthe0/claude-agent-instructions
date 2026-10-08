@@ -76,6 +76,9 @@ _UNCLAIMED_STAGE_LEAVES = {
     "criterion.observation": "written at record-result time, not authored in the plan — "
                              "the criterion's declaration is what a question is answered "
                              "against, not the observation that later satisfied it",
+    "supplies.delivery": "declared-only: `plan.delivery_place` splices it into the "
+                         "whole-stage digest and the `material` element, so no leaf path "
+                         "may claim it (a claimed path would move every legacy key)",
     "output_artifacts": "the paths a stage promises to produce. An answer about the "
                         "result rests on `subject.result`, which does claim its element",
     "ephemeral_artifacts_waiver": "the submission-time waiver for a declared "

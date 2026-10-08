@@ -1223,10 +1223,17 @@ class Principle:
 class Supply:
     """A typed provision edge: stage `on` supplies `element` (optionally a named
     `artifact`) to the stage that owns this Supply. The SOLE source of stage
-    edges — Stage.depends_on is a derived projection over these."""
+    edges — Stage.depends_on is a derived projection over these.
+
+    `delivery` says HOW the supplier's provision reaches the consumer; one of
+    SUPPLY_DELIVERIES, or None for an edge that does not say (legacy behaviour)."""
     on: int
     element: str | None = None
     artifact: str | None = None
+    delivery: str | None = None
+
+
+SUPPLY_DELIVERIES = ("artifact", "continuation", "report")
 
 
 @dataclass

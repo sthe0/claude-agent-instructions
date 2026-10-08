@@ -688,10 +688,10 @@ _CD = ("carry_key", "apply_refined", "diff_plans", "question_key")
 #:    'no_change' and the correction is silently dropped — the exact failure class
 #:    this key family exists to close (diff_plans' own cost_tier/verify_venue
 #:    precedent comments name this pattern explicitly).
-#:  - `supplies.element` / `supplies.artifact`: invisible to carry_key BY DESIGN
-#:    (matching stage_question_key's own docstring: "carry-forward never needed
-#:    them"), but ALSO invisible to diff_plans, which is not a stated design —
-#:    `_structural_signature` reads only `depends_on`, i.e. `.on`.
+#:  - `supplies.element` / `supplies.artifact` / `supplies.delivery`: visible to
+#:    carry_key since StageNorm (its edges are typed deliveries), but invisible to
+#:    diff_plans, which is not a stated design — `_structural_signature` reads only
+#:    `depends_on`, i.e. `.on`.
 #:  - `output_artifacts`: invisible to ALL FOUR. Not copied by
 #:    `_apply_refined_stage_fields`, so a refinement replan correcting a stage's
 #:    declared output_artifacts leaves the LIVE stage stale; and undetected by
@@ -737,8 +737,9 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "preconditions": frozenset(_CD),
     "knowledge": frozenset(_CD),
     "supplies.on": frozenset(_CD),
-    "supplies.element": frozenset({"apply_refined", "question_key"}),
-    "supplies.artifact": frozenset({"apply_refined", "question_key"}),
+    "supplies.element": frozenset({"carry_key", "apply_refined", "question_key"}),
+    "supplies.artifact": frozenset({"carry_key", "apply_refined", "question_key"}),
+    "supplies.delivery": frozenset({"carry_key", "apply_refined", "question_key"}),
     "output_artifacts": frozenset(),
     "ephemeral_artifacts_waiver": frozenset({"apply_refined", "diff_plans"}),
     "outcome.status": frozenset(),

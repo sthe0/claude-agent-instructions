@@ -156,6 +156,7 @@ from .state import (
     StageStatus,
     Subject,
     Supply,
+    SUPPLY_DELIVERIES,
 )
 from .text_shape import ELEMENT_NAMES as _ELEMENT_NAMES
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
@@ -527,11 +528,18 @@ def _build_supplies(s: dict, index: int) -> list[Supply]:
         for edge in raw:
             if "on" not in edge:
                 raise PlanError(f"stage {index} supply missing 'on'")
+            delivery = edge.get("delivery")
+            if delivery is not None and delivery not in SUPPLY_DELIVERIES:
+                raise PlanError(
+                    f"stage {index} supply on stage {edge['on']} has unknown delivery "
+                    f"{delivery!r}; allowed: {list(SUPPLY_DELIVERIES)}"
+                )
             supplies.append(
                 Supply(
                     on=int(edge["on"]),
                     element=edge.get("element"),
                     artifact=edge.get("artifact"),
+                    delivery=delivery,
                 )
             )
     else:
@@ -1755,20 +1763,10 @@ def stage_interface_digest(doc: PlanDoc, stage: Stage) -> str:
     a stage -- rather than the blank interface fields, so a method-only edit
     to an interface_empty transitive member (which a reviewer read in full
     via that fallback) still stales every record whose interface_keys names
-    it. Imports render_stage_interface locally: render.py imports from this
-    module, so a module-level import here would cycle."""
-    if interface_empty(stage):
-        from .render import render_stage_interface
-        payload = render_stage_interface(doc, stage.index, contract=True)
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    payload = repr((
-        stage.title,
-        stage.subject.result,
-        stage.criterion.criterion_type,
-        stage.criterion.done_criterion,
-        tuple(stage.output_artifacts),
-    ))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    it. A projection of `StageNorm.interface_digest`; imports it locally:
+    stage_norm.py imports from this module, so a module-level import would cycle."""
+    from .stage_norm import StageNorm
+    return StageNorm.from_stage(stage, doc=doc).interface_digest()
 
 
 def order_scope(meta) -> tuple:
@@ -2027,6 +2025,21 @@ def negative_control_place(stage) -> tuple:
     return () if place == _NEGATIVE_CONTROL_PLACE_ABSENT else (place,)
 
 
+def delivery_place(stage) -> tuple:
+    """The edge deliveries as a contribution to a change-decision key: a ONE-element tuple
+    holding the per-edge deliveries TAGGED with this field's name, or the EMPTY tuple when
+    no edge declares one.
+
+    Declared-only, for the reason `preconditions_place` documents: a plan that predates
+    `Supply.delivery` keeps the exact key it had, so every persisted
+    `Question.disposed_at_key` stays valid. Tagged, as `procedure_place` is, so the splice
+    cannot collide with another independently conditional one. Unlike its siblings it
+    joins `stage_question_key` only; `stage_carry_key` already sees the deliveries as part
+    of the typed edges."""
+    deliveries = tuple(s.delivery for s in stage.supplies)
+    return () if all(d is None for d in deliveries) else (("delivery", deliveries),)
+
+
 def stage_carry_key(stage) -> tuple:
     """Full-fidelity per-stage identity for PASSED carry-forward across a
     substantive replan (#12): a stage keeps its PASSED status only if NOTHING about
@@ -2034,38 +2047,15 @@ def stage_carry_key(stage) -> tuple:
 
     A superset of `_structural_signature`'s per-stage tuple (executor / deps /
     done_criterion / criterion_type) PLUS the prose fields (title / result /
-    invariants / means / method / conditions / verify_command / expected_exit).
+    invariants / means / method / conditions / verify_command / expected_exit), with
+    the deps as typed edges (`StageNorm.carry_key`).
     Kept SEPARATE from `_structural_signature` (which drives diff_plans'
     refinement-vs-substantive classification) so that extending the carry-forward
     key never reclassifies a prose refinement as substantive — the two answer
     different questions and must evolve independently. Operates on a Stage, so both
     plan-doc stages and live SessionState stages key identically."""
-    return (
-        stage.actor.executor,
-        tuple(sorted(stage.depends_on)),
-        stage.criterion.done_criterion,
-        stage.criterion.criterion_type,
-        stage.criterion.verify_command,
-        stage.criterion.expected_exit,
-        stage.title,
-        stage.subject.result,
-        stage.subject.invariants,
-        stage.means.means,
-        stage.means.method,
-        stage.conditions,
-        _normalize_string(stage.criterion.verify_venue),
-        _normalize_string(stage.criterion.verify_kind),
-        stage.criterion.landed,
-        # Contribute the field ONLY when declared, so a plan without it hashes
-        # byte-identically to a schema-23 plan (the V4 identity), uniform with
-        # stage_question_key where this identity is load-bearing across processes.
-        *((_normalize_string(stage.criterion.verify_venue_at_final),)
-          if stage.criterion.verify_venue_at_final else ()),
-        *knowledge_place(stage),
-        *preconditions_place(stage),
-        *procedure_place(stage),
-        *negative_control_place(stage),
-    )
+    from .stage_norm import StageNorm
+    return StageNorm.from_stage(stage).carry_key()
 
 
 def stage_reattest_key(stage) -> tuple:
@@ -2235,61 +2225,13 @@ def stage_question_key(stage, element: str | None = None) -> str:
     if element is not None:
         paths = _ELEMENT_FIELDS[element]
         if paths is not _WHOLE_STAGE_DEFINITION:
-            payload = repr((element, tuple(_leaf_values(stage, p) for p in paths)))
+            # A declared edge delivery is part of what `material` hands over, so it joins
+            # this element's payload only when declared (legacy keys stay byte-identical).
+            extra = delivery_place(stage) if element == "material" else ()
+            payload = repr((element, tuple(_leaf_values(stage, p) for p in paths), *extra))
             return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    principle = stage.principle
-    principle_tuple = (
-        (principle.statement, principle.source, principle.derivation,
-         principle.confidence, principle.refutation)
-        if principle is not None else None
-    )
-    supplies_tuple = tuple((s.on, s.element, s.artifact) for s in stage.supplies)
-    payload = repr((
-        stage.actor.executor,
-        stage.actor.capability_required,
-        tuple(sorted(stage.depends_on)),
-        stage.criterion.done_criterion,
-        stage.criterion.criterion_type,
-        stage.criterion.verify_command,
-        stage.criterion.expected_exit,
-        stage.title,
-        stage.subject.material,
-        stage.subject.result,
-        stage.subject.invariants,
-        stage.means.means,
-        stage.means.method,
-        stage.conditions,
-        principle_tuple,
-        supplies_tuple,
-        _normalize_string(stage.criterion.verify_venue),
-        _normalize_string(stage.criterion.verify_kind),
-        stage.criterion.landed,
-        # Persisted in Question.disposed_at_key and compared at the plan_approval
-        # gate across processes, so an absent field MUST reproduce the schema-23
-        # digest exactly (the V4 identity) — contribute it only when declared,
-        # never as `... or ""` (which would flip every disposed question of every
-        # live session to a spurious "stage definition changed" blocker).
-        *((_normalize_string(stage.criterion.verify_venue_at_final),)
-          if stage.criterion.verify_venue_at_final else ()),
-        # `knowledge` is a legal Question.target (it is in ELEMENT_NAMES), and
-        # material_refs is material's structural projection — a question answered
-        # against the old material must be invalidated when the refs are redrawn.
-        *knowledge_place(stage),
-        # `preconditions` is the other half of the `conditions` place, which IS a legal
-        # Question.target: a question answered against conditions that carried the
-        # starting requirements must be invalidated when they move to their own field.
-        *preconditions_place(stage),
-        # `procedure` is a legal Question.target too, and the reason it must be covered
-        # is the sharper one: it is the field an executor may replace WITHOUT
-        # re-approval, so an answer given against the old sequence is exactly the kind
-        # that goes stale without anyone being asked.
-        *procedure_place(stage),
-        # `negative_control`/`negative_control_waiver` are what makes the stage's
-        # positive check trustworthy; an answer given before either was set must be
-        # invalidated once the discriminating input (or its waiver) is supplied.
-        *negative_control_place(stage),
-    ))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    from .stage_norm import StageNorm
+    return StageNorm.from_stage(stage).review_digest()
 
 
 META_PART = "meta"
