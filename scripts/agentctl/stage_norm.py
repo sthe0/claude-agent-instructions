@@ -236,3 +236,37 @@ class StageNorm:
 
     def carry_digest(self) -> str:
         return hashlib.sha256(repr(self.carry_key()).encode("utf-8")).hexdigest()
+
+
+def _interface_token(stage) -> str:
+    """A supplier's interface for the carry decision. Live stages have no PlanDoc, so a
+    blank-interface stage (whose digest would hash its rendered brief) is identified by
+    its whole carry key instead: wider than the interface, never narrower."""
+    norm = StageNorm.from_stage(stage)
+    if interface_empty(stage):
+        return "full:" + norm.carry_digest()
+    return norm.interface_digest()
+
+
+def stage_carried(prev_stages, new_stages, index: int) -> bool:
+    """Whether the PASSED verdict of stage `index` in `prev_stages` still holds against
+    `new_stages`: its carry digest is unchanged AND every direct supplier named by the
+    new stage's edges has an unchanged interface. A supplier missing on either side
+    counts as changed; a supplier's construction (method, means, procedure) is not part
+    of its interface, so changing only that carries its consumers.
+
+    The one carry decision: both carry sites (approve-time refresh, substantive replan)
+    call it with stage lists captured before either side is mutated."""
+    prev = {s.index: s for s in prev_stages}
+    new = {s.index: s for s in new_stages}
+    if index not in prev or index not in new:
+        return False
+    if (StageNorm.from_stage(prev[index]).carry_digest()
+            != StageNorm.from_stage(new[index]).carry_digest()):
+        return False
+    for sup in {e.on for e in new[index].supplies}:
+        if sup not in prev or sup not in new:
+            return False
+        if _interface_token(prev[sup]) != _interface_token(new[sup]):
+            return False
+    return True

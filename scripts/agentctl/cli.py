@@ -933,13 +933,13 @@ def _refresh_caches_from_plan_path(
 
     Mutates each live stage IN PLACE via `_apply_refined_stage_fields`, which
     never touches `outcome` — an unchanged stage's Outcome therefore survives
-    with no extra logic. A stage whose full definition (`stage_carry_key`)
-    DID change is a different case: its recorded PASSED outcome no longer
-    attests to the stage's current criterion, so it is reset to PENDING for
-    re-verification. The carry-key must be read from `cur` BEFORE
-    `_apply_refined_stage_fields` mutates it — comparing after would compare
-    `cur` against itself post-copy, which always matches and would let a
-    genuinely stale PASSED outcome survive unnoticed.
+    with no extra logic. A stage that is not carried (`stage_norm.stage_carried`: its
+    full definition changed, or a direct supplier's interface did) is a different
+    case: its recorded PASSED outcome no longer attests to the stage's current
+    criterion or inputs, so it is reset to PENDING for re-verification. Carry is
+    decided for every stage BEFORE `_apply_refined_stage_fields` mutates any —
+    comparing after would compare a stage against itself post-copy, which always
+    matches and would let a genuinely stale PASSED outcome survive unnoticed.
 
     An absent plan_path still returns [] — "there is nothing to refresh" is not a
     submission violation, and the plan_approval gate already refuses a session with no
@@ -950,7 +950,8 @@ def _refresh_caches_from_plan_path(
     this function's own docstring names."""
     if not state.plan_path:
         return []
-    from .plan import PlanError, load_plan as _load, stage_carry_key
+    from .plan import PlanError, load_plan as _load
+    from .stage_norm import stage_carried
     try:
         refreshed = _load(state.plan_path)
     except (OSError, PlanError) as exc:
@@ -960,12 +961,16 @@ def _refresh_caches_from_plan_path(
         return violations
     if advice is not None:
         advice.extend(_submission_advice(refreshed, runner, state.weight_class))
+    # Decided for every stage BEFORE any is mutated: a consumer's verdict depends on its
+    # suppliers' pre-edit interfaces.
+    carried = {rs.index: stage_carried(state.stages, refreshed.stages, rs.index)
+               for rs in refreshed.stages}
     for rs in refreshed.stages:
         try:
             cur = state.stage(rs.index)
         except KeyError:
             continue
-        unchanged = stage_carry_key(cur) == stage_carry_key(rs)
+        unchanged = carried[rs.index]
         _apply_refined_stage_fields(cur, rs)
         if not unchanged and cur.outcome.status == StageStatus.PASSED.value:
             cur.outcome.status = StageStatus.PENDING.value
@@ -8865,7 +8870,8 @@ def _replan_spelling_advisories(plan_path: str) -> list[str]:
 
 def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
-    from .plan import diff_plans, load_plan as _load, stage_carry_key
+    from .plan import diff_plans, load_plan as _load
+    from .stage_norm import stage_carried
 
     # --normalize-factor lets a replan record a normalize event in the SAME call,
     # instead of requiring a separate `normalize` invocation first. Validated here
@@ -9598,7 +9604,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         prev = live_by_index.get(ns.index)
         if (prev is not None
                 and prev.outcome.status == StageStatus.PASSED.value
-                and stage_carry_key(prev) == stage_carry_key(ns)):
+                and stage_carried(state.stages, new.stages, ns.index)):
             ns.outcome = prev.outcome
     state.stages = new.stages
     _sync_venue_from_plan(state, new)
