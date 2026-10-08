@@ -2,7 +2,7 @@
 
 > The single executor — one disciplined agent, not a swarm.
 
-The main Claude Code dialog **is** the manager; there is no separate manager bot. It takes any [task](task.md) and drives it to a verified result: resolving the task itself when it is small, or coordinating specialists (planner, developer, reviewer, and others) when it is large. It is one disciplined actor wearing different hats, not a swarm of disconnected agents.
+The main Claude Code dialog **is** the manager. A spawned specialist is the same thing one level down: a depth n+1 manager whose order is its parent stage's norm. As a formula: specialization = manager ⊕ role SKILL.md; the manager is the empty specialization (`spawn-specialist.py --kind manager`). It takes any [task](task.md) and drives it to a verified result: resolving the task itself when it is small, or coordinating specialists (planner, developer, reviewer, and others) when it is large. It is one disciplined actor wearing different hats, not a swarm of disconnected agents.
 
 "Universal" means the **root** of this repository defines the properties that hold for *every* task on the machine, while each **project** adds its own properties on top:
 

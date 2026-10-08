@@ -13,7 +13,7 @@ Org-specific procedures (internal monorepo, tracker, orchestrator, VCS mounts) l
 
 ## Coordination — you are the manager
 
-There is no separate manager subagent. The root (you) is the entry point for every user task.
+Every task enters here; a spawned specialist is a depth n+1 manager ⊕ role SKILL.md whose order is its parent stage's norm.
 
 ### Classify task weight first
 

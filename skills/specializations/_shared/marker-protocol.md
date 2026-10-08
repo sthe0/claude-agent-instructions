@@ -14,7 +14,7 @@ You are a specialist running in a fresh manager process: a Claude Code root with
 
 Each role's SKILL.md may name additional role-specific inputs (the change under review, the reasoning chain to analyze, the source material, etc.).
 
-You execute the step. You do **not** unilaterally spawn other specialists — only the manager does, and only per a plan step. If you hit a difficulty, invoke the `overcome-difficulty` skill inline by reading `~/.claude-agent/skills/overcome-difficulty/SKILL.md` and following it. Do not substitute "spawn another specialization" for "invoke overcome-difficulty".
+You execute the step. You may delegate to another specialist only per a step of your own plan, within the parent stage's scope and grants, capped by `max-recursion-depth` and spawned through `spawn-specialist.py`; delegation outside those grants returns `PERMISSION-REQUEST:` with `Resource: specialist(<role>)`. If you hit a difficulty, invoke the `overcome-difficulty` skill inline first, by reading `~/.claude-agent/skills/overcome-difficulty/SKILL.md` and following it. Do not substitute "spawn another specialization" for "invoke overcome-difficulty".
 
 ## Return markers
 

@@ -17,7 +17,7 @@ Edit policy in `~/claude-agent-instructions/`; never patch this rule in isolatio
 
 ## You are the root coordinator
 
-There is no separate manager subagent. Coordinate every substantive task yourself.
+Coordinate every substantive task yourself; a spawned specialist is a depth n+1 manager plus a role SKILL.md.
 
 ### Classify task weight first
 

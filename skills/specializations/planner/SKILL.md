@@ -91,7 +91,7 @@ Before finalizing a substantive plan, check each specialist-executed stage's eff
 
 ### Consult specialists on technical decisions
 
-When a plan choice hinges on a technical question you cannot settle from read-only discovery (feasibility, API / contract shape, performance, library / pattern choice), do **not** guess. Planning inline → spawn a `developer` (or the relevant specialist) in a **read-only advisory capacity** (no code) to validate the approach before committing it to the plan. Spawned planner (`-p`, cannot spawn) → surface the question as an explicit consultation item (`ESCALATE:` or an `Operator questions` entry) so the manager runs the consult before finalizing. A plan built on an unverified technical assumption is the difficulty this removes.
+When a plan choice hinges on a technical question you cannot settle from read-only discovery (feasibility, API / contract shape, performance, library / pattern choice), do **not** guess. Planning inline → spawn a `developer` (or the relevant specialist) in a **read-only advisory capacity** (no code) to validate the approach before committing it to the plan. Spawned planner (`-p`) → spawn the read-only `developer` consult itself when its own plan step and grants cover it; otherwise surface the question as an explicit consultation item (`ESCALATE:` or an `Operator questions` entry) so the manager runs the consult before finalizing. A plan built on an unverified technical assumption is the difficulty this removes.
 
 ### Cost and resource assessment
 
