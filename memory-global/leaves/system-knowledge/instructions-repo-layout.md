@@ -34,7 +34,7 @@ skills/                              # flat skills + specializations container
     yandex-cloud-expert/SKILL.md
     tech-writer/SKILL.md             # Russian technical writer / editor (README, docs, plan & comment polishing)
 skills-local/                        # gitignored; machine-local single-file skills
-mcp-local/                           # gitignored; applied to settings.local.json
+mcp-local/                           # gitignored; registered into <config root>/.claude.json
 cursor/
   README.md
   rules/

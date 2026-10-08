@@ -52,6 +52,10 @@ CLAUDE_CONFIG_DIR=~/.claude-agent claude auth login   # or: claude-agent /login
 
 The token then lives in your OS keychain (encrypted). `setup-symlinks.sh` and `doctor.sh` print this command when the system root isn't logged in yet.
 
+### MCP servers
+
+`apply-mcp-local.sh` registers every server defined in `mcp-local/*.json` (and in an org layer's `mcp-plugins/*.json`) into `$CLAUDE_AGENT_HOME/.claude.json`, the file Claude Code reads user-scope servers from. `setup-symlinks.sh` runs it; re-run it after the one-time login above, since login can rewrite `.claude.json`. `doctor.sh` runs `apply-mcp-local.sh --check` and warns by name about any defined-but-unregistered server.
+
 ### Migrating an older in-place install
 
 Machines set up before isolation have the system symlinks directly in `~/.claude`. Move them into the isolated root with:

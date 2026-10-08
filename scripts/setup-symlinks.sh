@@ -237,7 +237,13 @@ if [[ ! -f "$CLAUDE_AGENT_HOME/.claude.json" ]] \
   echo "Log in to it ONCE (nothing is copied from ~/.claude; the token stays in your Keychain):"
   echo "    CLAUDE_CONFIG_DIR=$_login_root claude auth login"
   echo "(or 'claude-agent /login' if you source scripts/claude-launchers.sh)"
+  echo "Then re-run scripts/apply-mcp-local.sh to register your MCP servers (mcp-local/, mcp-plugins/)."
 fi
+
+# Register MCP server definitions into <root>/.claude.json. A root that is not
+# logged in yet gets a notice (exit 0); a failure must not abort the rest of setup.
+"$REPO/scripts/apply-mcp-local.sh" \
+  || echo "WARN: apply-mcp-local.sh failed — fix the definition it names and re-run it."
 
 # Optional speed-up hint for the Core test suite (side-effect-free probe).
 if ! python3 -c 'import xdist' >/dev/null 2>&1; then

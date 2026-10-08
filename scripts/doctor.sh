@@ -176,6 +176,17 @@ else
   warn "system config root not logged in — run once: CLAUDE_CONFIG_DIR=$_login_root claude auth login"
 fi
 
+# 7b. Soft: every MCP server defined in mcp-local/ or an org layer's mcp-plugins/
+#     must be registered in <root>/.claude.json, the file the CLI reads user-scope
+#     servers from. Side-effect-free file comparison (apply-mcp-local.sh --check);
+#     names only, never a definition value. Warn-only.
+_mcp_out="$("$REPO/scripts/apply-mcp-local.sh" --check 2>&1)"
+case $? in
+  0) pass "MCP server definitions registered (or none defined)" ;;
+  1) warn "${_mcp_out//$'\n'/; } — run scripts/apply-mcp-local.sh" ;;
+  *) warn "MCP registration check failed: ${_mcp_out//$'\n'/; }" ;;
+esac
+
 # 8. Legacy layout advisory: if ~/.claude (the old in-place location) still holds
 #    repo-pointing system symlinks, the isolated root may be incomplete. Detection
 #    is the shared agent_legacy_inplace_layout helper (config-root.sh) — the single

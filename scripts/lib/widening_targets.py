@@ -584,7 +584,9 @@ def agentctl_user_authority_call(tokens: list[str]) -> str | None:
 # `scripts/tests/test_stage_grants.py::SETTINGS_REFERENCE_CLASSIFICATION`
 # is the committed, self-testing classification of every script this repo's
 # own settings-file references touch, so a newly added settings-writing
-# script fails that test until it is added here too.
+# script fails that test until it is added here too. `apply-mcp-local.sh` stays
+# although it no longer names a settings file: it registers MCP servers into the
+# harness's user-scope config, i.e. it chooses which commands the harness starts.
 SETTINGS_CHANNEL_PROGRAMS = frozenset({
     "apply-settings.sh",
     "apply-mcp-local.sh",
