@@ -163,7 +163,7 @@ from .state import (
 )
 from .text_shape import ELEMENT_NAMES as _ELEMENT_NAMES
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
-from .text_shape import WHOLE_STAGE_ELEMENT
+from .text_shape import CARRY_ELEMENT, INTERFACE_ELEMENT, WHOLE_STAGE_ELEMENT
 from .text_shape import normalize_string as _normalize_string
 
 
@@ -2603,6 +2603,120 @@ def changed_parts(doc: PlanDoc, baseline_digests: dict) -> tuple[bool, set[int]]
     return (baseline_digests.get("meta") or "") != plan_meta_digest(doc), moved
 
 
+# Moves of these two are not question targets (no `stage:<n>.<name>` names them): they are the
+# consumer-facing identities of a stage, tracked beside the question vocabulary.
+PSEUDO_ELEMENTS = frozenset({INTERFACE_ELEMENT, CARRY_ELEMENT})
+
+
+def stage_norm_keys(stage) -> dict[str, str]:
+    """`stage_element_keys` plus the two identities a consumer of the stage relies on:
+    its interface token and its carry digest (`stage_norm`)."""
+    from .stage_norm import StageNorm, interface_token
+    keys = stage_element_keys(stage)
+    keys[INTERFACE_ELEMENT] = interface_token(stage)
+    keys[CARRY_ELEMENT] = StageNorm.from_stage(stage).carry_digest()
+    return keys
+
+
+def _final_check_place(doc: PlanDoc) -> list:
+    return [
+        (fc.command, fc.expected_exit, fc.label,
+         _normalize_string(fc.venue), _normalize_string(fc.kind), fc.landed)
+        for fc in doc.meta.final_check
+    ]
+
+
+def final_check_digest(doc: PlanDoc) -> str:
+    """Digest of the plan's final checks, which sit outside `plan_meta_digest`."""
+    return hashlib.sha256(repr(_final_check_place(doc)).encode("utf-8")).hexdigest()
+
+
+def stage_element_baseline(doc: PlanDoc) -> dict[str, dict[str, str]]:
+    """`{str(stage index): {element: key}}` -- what a record keeps so a later `norm_delta_from`
+    can name the elements that moved, not just the stages."""
+    return {str(s.index): stage_norm_keys(s) for s in doc.stages}
+
+
+def norm_baseline(doc: PlanDoc) -> dict:
+    """Everything `norm_delta_from` compares a document against."""
+    return {
+        "meta": plan_meta_digest(doc),
+        "order": hashlib.sha256(repr(order_place(doc.meta)).encode("utf-8")).hexdigest(),
+        "final_check": final_check_digest(doc),
+        "stages": stage_element_baseline(doc),
+    }
+
+
+@dataclass(frozen=True)
+class NormDelta:
+    """How a plan's norm moved against a baseline: the one answer every consumer of "what
+    changed" reads instead of diffing the documents itself.
+
+    `elements` holds, per stage present in the document, the names whose key moved (the
+    question vocabulary, the reserved whole-stage entry, and `interface` / `carry`); a stage
+    absent from the baseline is in `added` with every element moved. `order_moved` is a
+    sub-case of `meta_moved` (the order rides in the meta digest)."""
+    meta_moved: bool
+    order_moved: bool
+    final_check_moved: bool
+    added: frozenset
+    removed: frozenset
+    elements: dict
+
+    @property
+    def moved_stages(self) -> frozenset:
+        return frozenset(self.elements)
+
+    @property
+    def interface_moved(self) -> frozenset:
+        return frozenset(i for i, names in self.elements.items() if INTERFACE_ELEMENT in names)
+
+    def question_elements(self, index: int) -> frozenset:
+        """The moved elements of stage `index` a question can be bound to."""
+        return self.elements.get(index, frozenset()) - PSEUDO_ELEMENTS
+
+    @property
+    def any_moved(self) -> bool:
+        return bool(self.meta_moved or self.order_moved or self.final_check_moved
+                    or self.added or self.removed or self.elements)
+
+
+def norm_delta_from(baseline: dict, doc: PlanDoc) -> NormDelta:
+    """The `NormDelta` of `doc` against `baseline` (a `norm_baseline` value, typically
+    round-tripped through JSON, so stage indices are compared as strings). A missing entry
+    compares as moved: the wider answer."""
+    recorded = {str(k): v for k, v in (baseline.get("stages") or {}).items()}
+    elements: dict[int, frozenset] = {}
+    added = set()
+    present = set()
+    for s in doc.stages:
+        present.add(str(s.index))
+        keys = stage_norm_keys(s)
+        old = recorded.get(str(s.index))
+        if old is None:
+            added.add(s.index)
+            elements[s.index] = frozenset(keys)
+            continue
+        moved = frozenset(name for name, key in keys.items() if old.get(name) != key)
+        if moved:
+            elements[s.index] = moved
+    removed = frozenset(int(k) for k in recorded if k not in present)
+    return NormDelta(
+        meta_moved=(baseline.get("meta") or "") != plan_meta_digest(doc),
+        order_moved=(baseline.get("order") or "")
+        != hashlib.sha256(repr(order_place(doc.meta)).encode("utf-8")).hexdigest(),
+        final_check_moved=(baseline.get("final_check") or "") != final_check_digest(doc),
+        added=frozenset(added),
+        removed=removed,
+        elements=elements,
+    )
+
+
+def norm_delta(old: PlanDoc, new: PlanDoc) -> NormDelta:
+    """Pure document-vs-document form of `norm_delta_from`."""
+    return norm_delta_from(norm_baseline(old), new)
+
+
 def _venue_for(doc: PlanDoc) -> str:
     """The venue `derive_stage_grants` resolves DR-E/in-venue paths against —
     `delivery_worktree` when declared else `repo_root`, mirroring
@@ -2654,11 +2768,34 @@ def _grants_grew(old: PlanDoc, new: PlanDoc) -> bool:
     shared_venue = _venue_for(new)
     old_map = _grants_effective_map(old, venue=shared_venue)
     new_map = _grants_effective_map(new, venue=shared_venue)
-    for idx, (new_rules, new_dirs) in new_map.items():
-        old_rules, old_dirs = old_map.get(idx, (frozenset(), frozenset()))
-        if (new_rules - old_rules) or (new_dirs - old_dirs):
+    old_stages = {s.index: s for s in old.stages}
+    for stage in new.stages:
+        new_rules, new_dirs = new_map[stage.index]
+        old_rules, old_dirs = old_map.get(stage.index, (frozenset(), frozenset()))
+        grown_rules = new_rules - old_rules
+        if grown_rules and stage.index in old_stages:
+            # DR-V derives one literal per verify_command segment, so rewriting a command
+            # always adds literals; only a segment running a program/script the stage did
+            # not already run is wider. See `grants.bash_rule_identity`.
+            known = {
+                _grants.bash_rule_identity(r.rule)
+                for r in _derived_verify_rules(old_stages[stage.index], shared_venue)
+            }
+            verify_rules = {r.rule for r in _derived_verify_rules(stage, shared_venue)}
+            grown_rules = {
+                r for r in grown_rules
+                if r not in verify_rules
+                or _grants.bash_rule_identity(r) is None
+                or _grants.bash_rule_identity(r) not in known
+            }
+        if grown_rules or (new_dirs - old_dirs):
             return True
     return False
+
+
+def _derived_verify_rules(stage, venue: str) -> list:
+    derived, _dropped = _grants.derive_stage_grants(stage, venue=venue)
+    return [r for r in derived.allow if r.provenance == "derived:DR-V"]
 
 
 def plan_has_any_grants(doc: PlanDoc) -> bool:
@@ -2761,12 +2898,7 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              *negative_control_place(s))
             for s in doc.stages
         ]
-    def _fc(doc: PlanDoc):
-        return [
-            (fc.command, fc.expected_exit, fc.label,
-             _normalize_string(fc.venue), _normalize_string(fc.kind), fc.landed)
-            for fc in doc.meta.final_check
-        ]
+    _fc = _final_check_place
     # `order_place` is the meta-level sibling of the `knowledge_place`/`preconditions_place`
     # splices above, and it is here for the identical reason: without it a re-worded
     # requirement, a corrected functional place or a coverage entry pointed at a different
@@ -2779,17 +2911,16 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     # wider DR-V, say — without moving a single field `_structural_signature`
     # OR the prose/`_fc`/`order_place` keys below compare, or while only moving
     # a field the prose keys below DO compare. Checked HERE, before the prose
-    # comparison, and unconditionally: the approved done criterion is "grant
-    # edits and effective-set growth are substantive", full stop — a
-    # `verify_command` edit that also derives a wider DR-V rule (or any other
-    # field whose edit both registers in `_prose` and widens the derived set)
-    # is substantive precisely BECAUSE it widens the derived set, not merely
-    # 'refinement with a grant on the side'. A `verify_command` edit that does
-    # NOT grow the effective set is untouched by this check and falls through
-    # to the ordinary `_prose` comparison, so it still classifies only as
-    # 'refinement'. "Did the EFFECTIVE grant set grow" is not folded into
-    # `_structural_signature` itself because it is not a pure function of the
-    # two docs' own bytes alone (it also calls the same deriver dispatch will).
+    # comparison, and unconditionally: grant edits and effective-set growth are
+    # substantive. A `verify_command` edit is judged by what it lets the stage RUN,
+    # not by its text: DR-V derives one literal per segment, so a rewritten command
+    # always adds literals, and `_grants_grew` counts one as growth only when its
+    # program (for an interpreter: its script) is new to the stage. Arguments to an
+    # already-granted program are a refinement; the boundary check (`_kind_within_boundary`)
+    # still re-approves an unresolved or out-of-set command. "Did the EFFECTIVE grant
+    # set grow" is not folded into `_structural_signature` itself because it is not a
+    # pure function of the two docs' own bytes alone (it also calls the same deriver
+    # dispatch will).
     if _grants_grew(old, new):
         return "substantive"
     if (_prose(old) != _prose(new) or old.meta.goal != new.meta.goal

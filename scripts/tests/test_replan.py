@@ -145,25 +145,28 @@ def test_refinement_applies_changed_means_to_state(store, fixtures_dir):
     assert state.stage(1).means.method == "establish the import context the working caller uses"
 
 
-def test_verify_command_change_classifies_as_substantive(fixtures_dir):
-    """diff_plans returns 'substantive' (not 'refinement') when verify_command changes
-    to a textually different command: DR-V derives a Bash(<verify_command>:*) rule
-    straight from the literal text, so the two plans' effective grant sets differ and
-    `_grants_grew` intercepts this before the prose comparison is ever reached — a
-    verify_command edit that does not change the derived rule (e.g. a pure
-    non-semantic edit outside the derivable segment) still falls through to
-    'refinement', but this fixture pair's two commands ARE textually different.
+def test_verify_command_change_is_judged_by_what_it_runs(fixtures_dir):
+    """A verify_command edit is a refinement while the stage keeps running the same
+    program/script (new arguments), and substantive once it runs another script or a
+    new interpreter-less program: DR-V derives one `Bash(<segment>:*)` literal per
+    segment, so the rewritten text always adds a literal, and `_grants_grew` counts it
+    as growth only when its (program, script) identity is new to the stage.
 
-    Uses a dedicated `_grantgrowth` fixture pair rather than the widely-shared
-    `plan_two_stage_verifyfix[.toml/_changed.toml]` pair: both of THOSE plans'
-    verify_commands are `python -c '...'` (inline code, no positional script-file
-    operand), which the interpreter/launcher allowlist now refuses outright for
-    BOTH plans equally, collapsing `_grants_grew`'s difference to nothing and
-    falling through to 'refinement' -- this pair uses a real script-file operand
-    (`python3 mod.py` / `python3 mod.py --strict`) so DR-V actually derives a rule."""
-    base = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml"))
+    Uses the `_grantgrowth` fixture (a real script-file operand, `python3 mod.py`) rather
+    than the shared `plan_two_stage_verifyfix` pair, whose commands are inline
+    `python -c` code that derives no rule at all. The `_changed` variant of the fixture
+    also rewrites the stage's done criterion, which is authority-bearing on its own."""
+    def with_command(command):
+        doc = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml"))
+        doc.stages[0].criterion.verify_command = command
+        return doc
+
+    base = with_command("python3 mod.py")
+    assert diff_plans(base, with_command("python3 mod.py --strict")) == "refinement"
+    assert diff_plans(base, with_command("python3 other.py")) == "substantive"
     changed = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml"))
-    assert diff_plans(base, changed) == "substantive"
+    assert diff_plans(load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml")),
+                      changed) == "substantive"
 
 
 def test_substantive_verify_command_change_carries_into_state(store, fixtures_dir):

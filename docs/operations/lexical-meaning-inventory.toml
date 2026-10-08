@@ -226,6 +226,12 @@ ground = "INTERPRETER_RE.match tests whether a program token names an interprete
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/grants.py::bash_rule_identity::pattern.match"]
+class = "structural"
+ground = "INTERPRETER_RE.match tests whether a program token names an interpreter, a shell-command token check."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/agentctl/plan.py::check_venue_warnings._first_cd_target::re.split"]
 class = "structural"
 ground = "re.split on '&&', ';' and '|' splits a shell command into segments."

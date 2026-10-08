@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -694,6 +695,35 @@ def top_level_segment_count(command: str) -> int | None:
     if segments is None:
         return None
     return len(segments)
+
+
+def bash_rule_identity(rule: str) -> tuple | None:
+    """What a DR-V `Bash(<segment>:*)` rule lets a stage run, coarser than its text: the
+    program, and for an interpreter the script it is pointed at (`-m <module>` counts as
+    the script). Arguments after the script are not part of it, so a verify_command that
+    only changes arguments keeps its identity.
+
+    `None` when no script can be named (an interpreter given no script path) or the rule
+    does not parse: such a rule is always treated as a new grant by the caller."""
+    parsed = rule_program_and_arg(rule)
+    if parsed is None or parsed[0] != "Bash":
+        return None
+    try:
+        tokens = shlex.split(bash_command_from_rule_arg(parsed[1]))
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    prog, operands = tokens[0], tokens[1:]
+    if prog not in _INTERPRETERS and not widening_targets.INTERPRETER_RE.match(prog):
+        return (prog,)
+    module = _interpreter_operand_named_module(operands)
+    if module is not None:
+        return (prog, "-m", module)
+    for tok in _strip_interpreter_value_flags(prog, operands):
+        if not tok.startswith("-"):
+            return (prog, tok)
+    return None
 
 
 def _in_venue(path: str, venue: str) -> bool:

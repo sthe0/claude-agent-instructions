@@ -264,6 +264,22 @@ def enumeration_run_scope(bag, doc) -> tuple[bool, set[int]]:
     return True, set(plan.plan_stage_digests(doc))
 
 
+def enumeration_element_scope(bag, doc, stage_scope) -> dict[int, frozenset]:
+    """For each stage of a narrowed pass, the elements whose key moved since the recorded
+    pass -- `{stage index: {element names}}`, read from `plan.norm_delta_from`.
+
+    A stage missing from the result is read whole: the bag recorded no element baseline
+    for it (a bag written before the baselines existed, or a stage added since), so there
+    is nothing to narrow against and the whole-stage scope applies."""
+    recorded = bag.get("enumerated_stage_elements") or {}
+    delta = plan.norm_delta_from({"stages": recorded}, doc)
+    return {
+        index: delta.question_elements(index)
+        for index in stage_scope
+        if str(index) in recorded
+    }
+
+
 def _enumeration_in_flight(bag) -> bool:
     """Whether a background enumeration launch is outstanding right now: armed (a
     launch actually went out), not yet landed, and still inside its deadline. This
@@ -406,7 +422,7 @@ def premise_blockers(state, bag, *, include_essence_coverage: bool = True) -> li
     plan_path = getattr(state, "plan_path", None)
     if plan_path:
         doc = plan.load_plan(plan_path)
-        stage_keys = {s.index: plan.stage_element_keys(s) for s in doc.stages}
+        stage_keys = {s.index: plan.stage_norm_keys(s) for s in doc.stages}
         meta_keys = plan.plan_meta_element_keys(doc)
         content_digest = _plan_content_digest(doc)
     else:
@@ -522,6 +538,10 @@ register(
             # two are told apart in stale_enumeration_parts, which is the only reader.
             "enumerated_meta_at": "",
             "enumerated_stage_at": {},
+            # Per stage, the key of every element at the recorded pass
+            # (plan.stage_element_baseline): what a narrowed pass compares against to
+            # name the elements that moved. Absent for a stage means "read it whole".
+            "enumerated_stage_elements": {},
             "enumerated_runner_ok": None,
             # The failed run's own stderr, carried from the pass that produced
             # enumerated_runner_ok so the blocker can pre-select the escape reason

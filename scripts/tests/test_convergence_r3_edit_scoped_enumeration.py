@@ -144,16 +144,16 @@ def test_out_of_scope_pair_is_listed_not_written_to_candidates(store, tmp_path):
     _enumerate(store, "s", _runner(""))
 
     _write_plan(plan_path, [(1, "img-one"), (2, "img-two-EDITED")])
-    run = _runner("stage:1.means\tstill valid?\nstage:2.result\tand now?")
+    run = _runner("stage:1.result\tstill valid?\nstage:2.result\tand now?")
     d = _enumerate(store, "s", run)
 
     assert d.data["whole_plan"] is False and d.data["stages"] == [2]
     assert d.data["out_of_scope"] == [
-        {"target": "stage:1.means", "question": "still valid?",
+        {"target": "stage:1.result", "question": "still valid?",
          "reason": premise.CANDIDATE_OUT_OF_EDIT_SCOPE},
     ]
     targets = {c["target"] for c in _bag(store)["candidates"]}
-    assert "stage:1.means" not in targets
+    assert "stage:1.result" not in targets
     assert "stage:2.result" in targets
 
 
@@ -166,16 +166,16 @@ def test_out_of_scope_pair_is_raised_when_its_stage_is_read(store, tmp_path):
     _enumerate(store, "s", _runner(""))
 
     _write_plan(plan_path, [(1, "img-one"), (2, "img-two-EDITED")])
-    d1 = _enumerate(store, "s", _runner("stage:1.means\tstill valid?"))
+    d1 = _enumerate(store, "s", _runner("stage:1.result\tstill valid?"))
     assert d1.data["out_of_scope"] and not any(
-        c["target"] == "stage:1.means" for c in _bag(store)["candidates"])
+        c["target"] == "stage:1.result" for c in _bag(store)["candidates"])
 
     _write_plan(plan_path, [(1, "img-one-EDITED"), (2, "img-two-EDITED")])
-    d2 = _enumerate(store, "s", _runner("stage:1.means\tstill valid?"))
+    d2 = _enumerate(store, "s", _runner("stage:1.result\tstill valid?"))
 
     assert d2.data["whole_plan"] is False and d2.data["stages"] == [1]
     assert d2.data["out_of_scope"] == []
-    matches = [c for c in _bag(store)["candidates"] if c["target"] == "stage:1.means"]
+    matches = [c for c in _bag(store)["candidates"] if c["target"] == "stage:1.result"]
     assert len(matches) == 1 and matches[0]["disposition"] == "raised"
 
 
@@ -195,20 +195,20 @@ def test_carried_entry_never_overwrites_open_candidate_with_other_text(store, tm
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
     _state(store, plan_path=plan_path)
     _enumerate(store, "s", _runner(
-        "stage:1.means\tfirst wording?\nstage:1.means\tsecond wording, unrelated?"))
+        "stage:1.result\tfirst wording?\nstage:1.result\tsecond wording, unrelated?"))
     ids = {c["statement"]: c["id"] for c in _bag(store)["candidates"]}
-    assert ids["[stage:1.means] first wording?"] == "qenum-s1-1"
-    assert ids["[stage:1.means] second wording, unrelated?"] == "qenum-s1-2"
+    assert ids["[stage:1.result] first wording?"] == "qenum-s1-1"
+    assert ids["[stage:1.result] second wording, unrelated?"] == "qenum-s1-2"
 
     _dispose(store, "s", "qenum-s1-2", reason="answered in the order")
 
     _write_plan(plan_path, [(1, "img-one-EDITED")])
-    _enumerate(store, "s", _runner("stage:1.means\tsecond wording, unrelated?"))
+    _enumerate(store, "s", _runner("stage:1.result\tsecond wording, unrelated?"))
 
     candidates = {c["id"]: c for c in _bag(store)["candidates"]}
-    assert candidates["qenum-s1-1"]["statement"] == "[stage:1.means] first wording?"
+    assert candidates["qenum-s1-1"]["statement"] == "[stage:1.result] first wording?"
     assert candidates["qenum-s1-1"]["disposition"] == "raised"
-    assert candidates["qenum-s1-2"]["statement"] == "[stage:1.means] second wording, unrelated?"
+    assert candidates["qenum-s1-2"]["statement"] == "[stage:1.result] second wording, unrelated?"
     assert candidates["qenum-s1-2"]["disposition"] == "dismissed"
     assert candidates["qenum-s1-2"]["reason"] == "carried: answered in the order (from qenum-s1-2)"
 
@@ -229,25 +229,25 @@ def test_dismissal_carried_by_content_hash_across_ids(store, tmp_path):
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
     _state(store, plan_path=plan_path)
     _enumerate(store, "s", _runner(
-        "stage:1.means\twhy this tool?\nstage:1.means\ta second question?"))
+        "stage:1.result\twhy this tool?\nstage:1.result\ta second question?"))
     ids = {c["statement"]: c["id"] for c in _bag(store)["candidates"]}
-    assert ids["[stage:1.means] a second question?"] == "qenum-s1-2"
+    assert ids["[stage:1.result] a second question?"] == "qenum-s1-2"
 
     _dispose(store, "s", "qenum-s1-2", reason="answered in the order")
 
     _write_plan(plan_path, [(1, "img-one-EDITED"), (2, "img-two")])
-    _enumerate(store, "s", _runner("stage:1.means\ta second question?"))
+    _enumerate(store, "s", _runner("stage:1.result\ta second question?"))
 
     candidates = {c["statement"]: c for c in _bag(store)["candidates"]}
-    match = candidates["[stage:1.means] a second question?"]
+    match = candidates["[stage:1.result] a second question?"]
     assert match["disposition"] == "dismissed"
     assert match["reason"] == "carried: answered in the order (from qenum-s1-2)"
     # Its OWN id is what carries — not the id a plain re-raise would have computed
     # (position 1 in a shrunk pass, i.e. "qenum-s1-1", which is where the OTHER,
     # untouched, open candidate still lives).
     assert match["id"] == "qenum-s1-2"
-    assert candidates["[stage:1.means] why this tool?"]["id"] == "qenum-s1-1"
-    assert candidates["[stage:1.means] why this tool?"]["disposition"] == "raised"
+    assert candidates["[stage:1.result] why this tool?"]["id"] == "qenum-s1-1"
+    assert candidates["[stage:1.result] why this tool?"]["disposition"] == "raised"
 
 
 def test_manual_enumerate_does_not_reraise_dismissed_text(store, tmp_path):
@@ -261,19 +261,19 @@ def test_manual_enumerate_does_not_reraise_dismissed_text(store, tmp_path):
     the coordinator just reopened."""
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
     _state(store, plan_path=plan_path)
-    _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
+    _enumerate(store, "s", _runner("stage:1.result\twhy this tool?"))
     _dispose(store, "s", "qenum-s1-1", reason="answered in the order")
 
     _write_plan(plan_path, [(1, "img-one-EDITED")])
-    d = _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
+    d = _enumerate(store, "s", _runner("stage:1.result\twhy this tool?"))
 
-    match = next(c for c in _bag(store)["candidates"] if c["statement"] == "[stage:1.means] why this tool?")
+    match = next(c for c in _bag(store)["candidates"] if c["statement"] == "[stage:1.result] why this tool?")
     assert match["disposition"] == "dismissed"
     assert match["id"] in d.data["carried"]
 
     _write_plan(plan_path, [(1, "img-one-EDITED-AGAIN")])
-    d2 = _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"), reopen_dismissed=True)
-    match2 = next(c for c in _bag(store)["candidates"] if c["statement"] == "[stage:1.means] why this tool?")
+    d2 = _enumerate(store, "s", _runner("stage:1.result\twhy this tool?"), reopen_dismissed=True)
+    match2 = next(c for c in _bag(store)["candidates"] if c["statement"] == "[stage:1.result] why this tool?")
     assert match2["disposition"] == "raised"
     assert d2.data["carried"] == []
 
@@ -281,8 +281,8 @@ def test_manual_enumerate_does_not_reraise_dismissed_text(store, tmp_path):
     # re-dismiss it. Pre-fix, --reopen-dismissed only skipped honoring the record
     # for its OWN pass without removing it, so this call would have re-carried it.
     _write_plan(plan_path, [(1, "img-one-EDITED-YET-AGAIN")])
-    d3 = _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
-    match3 = next(c for c in _bag(store)["candidates"] if c["statement"] == "[stage:1.means] why this tool?")
+    d3 = _enumerate(store, "s", _runner("stage:1.result\twhy this tool?"))
+    match3 = next(c for c in _bag(store)["candidates"] if c["statement"] == "[stage:1.result] why this tool?")
     assert match3["disposition"] == "raised"
     assert d3.data["carried"] == []
 
@@ -298,7 +298,7 @@ def test_reappearance_under_a_different_target_is_a_hint_not_a_carry(store, tmp_
     under carried_hint, never carried."""
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
     _state(store, plan_path=plan_path)
-    _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
+    _enumerate(store, "s", _runner("stage:1.result\twhy this tool?"))
     _dispose(store, "s", "qenum-s1-1", reason="answered in the order")
 
     source_before = copy.deepcopy(
@@ -313,7 +313,7 @@ def test_reappearance_under_a_different_target_is_a_hint_not_a_carry(store, tmp_
                  if c["statement"] == "[stage:2.result] why this tool?")
     assert match["disposition"] == "raised"
     assert match["reason"] == premise.dismissal_hint_note(
-        {"reason": "answered in the order", "from_id": "qenum-s1-1", "target": "stage:1.means"})
+        {"reason": "answered in the order", "from_id": "qenum-s1-1", "target": "stage:1.result"})
     assert match["id"] not in d.data["carried"]
     assert match["id"] in d.data["carried_hint"]
 
@@ -327,23 +327,23 @@ def test_disposing_as_recorded_forgets_the_dismissed_hash(store, tmp_path):
     forward under a ruling that no longer holds."""
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
     _state(store, plan_path=plan_path)
-    _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
+    _enumerate(store, "s", _runner("stage:1.result\twhy this tool?"))
     _dispose(store, "s", "qenum-s1-1", reason="answered in the order")
     assert _bag(store)["dismissed_hashes"]
 
     state = store.load("s")
     state.plugins["premise"]["questions"] = [
-        {"id": "q1", "target": "stage:1.means", "question": "why this tool, really?"}]
+        {"id": "q1", "target": "stage:1.result", "question": "why this tool, really?"}]
     store.save(state)
     _dispose(store, "s", "qenum-s1-1", as_="recorded", question="q1")
 
-    content_hash = premise.dismissal_hash("[stage:1.means] why this tool?")
+    content_hash = premise.dismissal_hash("[stage:1.result] why this tool?")
     assert premise.dismissed_hash_records(_bag(store).get("dismissed_hashes"), content_hash) == []
 
     _write_plan(plan_path, [(1, "img-one-EDITED")])
-    d = _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
+    d = _enumerate(store, "s", _runner("stage:1.result\twhy this tool?"))
     match = next(c for c in _bag(store)["candidates"]
-                 if c["statement"] == "[stage:1.means] why this tool?")
+                 if c["statement"] == "[stage:1.result] why this tool?")
     assert match["disposition"] == "raised"
     assert d.data["carried"] == []
 
@@ -360,18 +360,18 @@ def test_recorded_disposition_never_converted_by_carry(tmp_path):
     doc = load_plan(plan_path)
     bag = {
         "candidates": [{
-            "id": "qenum-s1-1", "statement": "[stage:1.means] why this tool?",
-            "disposition": "recorded", "reason": "", "question": "q1", "target": "stage:1.means",
+            "id": "qenum-s1-1", "statement": "[stage:1.result] why this tool?",
+            "disposition": "recorded", "reason": "", "question": "q1", "target": "stage:1.result",
         }],
         "dismissed_hashes": {
-            premise.dismissal_hash("[stage:1.means] why this tool?"): [
-                {"reason": "answered in the order", "from_id": "qenum-old", "target": "stage:1.means"},
+            premise.dismissal_hash("[stage:1.result] why this tool?"): [
+                {"reason": "answered in the order", "from_id": "qenum-old", "target": "stage:1.result"},
             ],
         },
         "enumerated": True,
     }
     cli._apply_enumeration_result(
-        bag, doc, plan_path, [("stage:1.means", "why this tool?")], True)
+        bag, doc, plan_path, [("stage:1.result", "why this tool?")], True)
 
     match = next(c for c in bag["candidates"] if c["id"] == "qenum-s1-1")
     assert match["disposition"] == "recorded"
@@ -386,11 +386,11 @@ def test_out_of_scope_candidate_is_byte_identical_across_a_narrowed_pass(store, 
     rewrote e.g. its reason or disposition."""
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
     _state(store, plan_path=plan_path)
-    _enumerate(store, "s", _runner("stage:1.means\tstill valid?"))
+    _enumerate(store, "s", _runner("stage:1.result\tstill valid?"))
     before = dict(next(c for c in _bag(store)["candidates"] if c["id"] == "qenum-s1-1"))
 
     _write_plan(plan_path, [(1, "img-one"), (2, "img-two-EDITED")])
-    _enumerate(store, "s", _runner("stage:1.means\tstill valid?\nstage:2.result\tand now?"))
+    _enumerate(store, "s", _runner("stage:1.result\tstill valid?\nstage:2.result\tand now?"))
     after = next(c for c in _bag(store)["candidates"] if c["id"] == "qenum-s1-1")
 
     assert after == before
@@ -401,7 +401,7 @@ def test_out_of_scope_candidate_is_byte_identical_across_a_narrowed_pass(store, 
 def test_enumerate_log_records_scope_source_and_carry_counts(store, tmp_path):
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
     state = _state(store, plan_path=plan_path)
-    _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
+    _enumerate(store, "s", _runner("stage:1.result\twhy this tool?"))
     first_log = store.load("s").history[-1]
     assert first_log["scope_source"] == "whole_plan"
     assert first_log["out_of_scope"] == 0
@@ -416,7 +416,7 @@ def test_enumerate_log_records_scope_source_and_carry_counts(store, tmp_path):
     # stage 1 (the only stage that moved), so it lands dismissed without a fresh
     # coordinator ruling. The stage:2 pair is out of this pass's scope.
     _enumerate(store, "s", _runner(
-        "stage:1.means\twhy this tool?\nstage:2.result\tstill unaddressed?"))
+        "stage:1.result\twhy this tool?\nstage:2.result\tstill unaddressed?"))
     second_log = store.load("s").history[-1]
     assert second_log["scope_source"] == "enumeration_baseline"
     assert second_log["out_of_scope"] == 1
@@ -434,7 +434,7 @@ def test_fold_log_records_scope_source_and_carry_counts(store, tmp_path, monkeyp
 
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
     state = _state(store, plan_path=plan_path)
-    _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
+    _enumerate(store, "s", _runner("stage:1.result\twhy this tool?"))
     _dispose(store, "s", "qenum-s1-1", reason="answered in the order")
 
     _write_plan(plan_path, [(1, "img-one-EDITED"), (2, "img-two")])
@@ -447,7 +447,7 @@ def test_fold_log_records_scope_source_and_carry_counts(store, tmp_path, monkeyp
             # the only stage this pass re-read) — a silent carry requires target
             # identity, not just text identity; see the cross-target hint test for
             # why a different target would NOT carry here.
-            "pairs": [["stage:1.means", "why this tool?"],
+            "pairs": [["stage:1.result", "why this tool?"],
                       ["stage:2.result", "still unaddressed?"]],
             "runner_ok": True, "stages": [1], "stderr": "",
         } if want_digest == digest else None,
@@ -471,7 +471,7 @@ def test_fold_log_records_scope_source_and_carry_counts(store, tmp_path, monkeyp
 def test_dismissed_hashes_survives_launch_clear_and_missing_key_loads_fine(store, tmp_path):
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one")])
     _state(store, plan_path=plan_path)
-    _enumerate(store, "s", _runner("stage:1.means\twhy this tool?"))
+    _enumerate(store, "s", _runner("stage:1.result\twhy this tool?"))
     _dispose(store, "s", "qenum-s1-1", reason="answered in the order")
 
     state = store.load("s")
@@ -486,7 +486,7 @@ def test_dismissed_hashes_survives_launch_clear_and_missing_key_loads_fine(store
     # KeyError, and must behave as "nothing carried" (the safe, pre-lever direction).
     old_bag = {"candidates": [], "enumerated": False}
     result = cli._apply_enumeration_result(
-        old_bag, doc, plan_path, [("stage:1.means", "why this tool?")], True)
+        old_bag, doc, plan_path, [("stage:1.result", "why this tool?")], True)
     assert result.carried == []
     assert old_bag["candidates"][0]["disposition"] == "raised"
 
@@ -495,9 +495,9 @@ def test_legacy_target_less_dismissal_record_only_hints():
     """A dismissed_hashes record written before per-target tracking (a bare
     {reason, from_id} dict) has no target, so it can never match one: the same
     text is raised with a hint naming an unknown target, never carried."""
-    h = premise.dismissal_hash("[stage:1.means] why this tool?")
+    h = premise.dismissal_hash("[stage:1.result] why this tool?")
     legacy = {h: {"reason": "answered in the order", "from_id": "qenum-s1-1"}}
-    carry, hint = premise.dismissed_hash_lookup(legacy, h, "stage:1.means")
+    carry, hint = premise.dismissed_hash_lookup(legacy, h, "stage:1.result")
     assert carry is None
     assert hint == legacy[h]
     assert "unknown target" in premise.dismissal_hint_note(hint)
@@ -508,9 +508,9 @@ def test_carry_never_reuses_a_dismissed_row_addressed_to_another_target():
     addressed to the SAME target. A same-text dismissed row at a different target
     must stay untouched, and the carried entry must land under a fresh id."""
     other = {
-        "id": "qenum-s1-1", "statement": "[stage:1.means] why this tool?",
+        "id": "qenum-s1-1", "statement": "[stage:1.result] why this tool?",
         "disposition": "dismissed", "reason": "answered in the order",
-        "question": "", "target": "stage:1.means",
+        "question": "", "target": "stage:1.result",
     }
     candidates = [copy.deepcopy(other)]
     entry = {
@@ -602,9 +602,9 @@ def test_reopen_dismissed_reopens_a_meta_question_on_a_narrowed_pass(tmp_path):
 def test_hint_lookup_prefers_the_record_that_names_a_target():
     """`record_dismissed_hash` turns a legacy target-less dict into a list and appends
     to it, so one hash can carry [legacy, targeted]; the hint names the targeted one."""
-    h = premise.dismissal_hash("[stage:1.means] why this tool?")
+    h = premise.dismissal_hash("[stage:1.result] why this tool?")
     legacy = {"reason": "old", "from_id": "qenum-s1-1"}
-    targeted = {"reason": "new", "from_id": "qenum-s1-2", "target": "stage:1.means"}
+    targeted = {"reason": "new", "from_id": "qenum-s1-2", "target": "stage:1.result"}
     carry, hint = premise.dismissed_hash_lookup({h: [legacy, targeted]}, h, "stage:3.means")
     assert carry is None
     assert hint == targeted

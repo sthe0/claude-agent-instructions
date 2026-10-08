@@ -52,7 +52,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-from .text_shape import ELEMENT_NAMES
+from .text_shape import ELEMENT_NAMES, INTERFACE_ELEMENT
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
 from .text_shape import WHOLE_STAGE_ELEMENT
 from .text_shape import normalize_string as _normalize_string
@@ -237,6 +237,32 @@ def _accepted_keys(element_keys: dict[str, str], element: str) -> tuple[str, ...
     older engine to a staleness blocker in one step."""
     accepted = (element_keys.get(element), element_keys.get(WHOLE_STAGE_ELEMENT))
     return tuple(k for k in accepted if k is not None)
+
+
+ORDER_BINDING_PREFIX = "iface:"
+
+
+def order_binding_key(element_keys: dict[str, str]) -> str:
+    """The stamp an order element 'covered' by this stage carries: the stage's interface
+    token, which moves with what a consumer of the stage relies on (title, result image,
+    criterion, output artifacts) and not with how the stage is carried out. "" when the
+    key map has no interface entry -- a caller that built it from `stage_element_keys`
+    alone -- in which case nothing is stamped and the coverage check is skipped."""
+    token = element_keys.get(INTERFACE_ELEMENT)
+    return ORDER_BINDING_PREFIX + token if token else ""
+
+
+def _accepted_order_keys(element_keys: dict[str, str]) -> tuple[str, ...]:
+    """The stamps that let an order element's coverage stand: the stage's current binding
+    key, the whole-stage key, and the empty string.
+
+    The whole-stage key is the legacy stamp (what `content_digest` held before the binding
+    moved to the interface), so a coverage recorded by an older engine still discharges
+    until its stage's whole definition moves -- the same bounded residual as in
+    `_accepted_keys`: the stamp is a digest of a plan version that may no longer exist,
+    so it cannot be migrated. Order bindings recorded before the stamp existed carry ""."""
+    return (*(k for k in (order_binding_key(element_keys),
+                          element_keys.get(WHOLE_STAGE_ELEMENT)) if k), "")
 
 
 def _accepted_plan_keys(meta_keys: dict[str, str], element: str) -> tuple[str, ...]:
@@ -509,8 +535,7 @@ def validate_order_elements(
             elif (
                 stage_keys
                 and e.stage in stage_keys
-                and e.content_digest
-                not in (*_accepted_keys(stage_keys[e.stage], WHOLE_STAGE_ELEMENT), "")
+                and e.content_digest not in _accepted_order_keys(stage_keys[e.stage])
             ):
                 blockers.append(
                     f"order element {e.id!r} is covered by stage {e.stage}, which "
@@ -598,6 +623,9 @@ CANDIDATE_IMMATERIAL = "immaterial: addressed to no control this plan contains"
 # under this label in the Directive's data.out_of_scope instead, re-evaluated fresh on
 # every pass rather than carried. Never appears in VALID_CANDIDATE_DISPOSITIONS.
 CANDIDATE_OUT_OF_EDIT_SCOPE = "out of edit scope: addressed to a stage this pass did not read"
+
+CANDIDATE_UNMOVED_ELEMENT = (
+    "out of edit scope: addressed to a stage element that did not change since the last pass")
 
 _STATEMENT_TARGET_PREFIX_RE = re.compile(r"^\[[^\]]*\]\s*")
 
@@ -829,7 +857,7 @@ def invalidate_stale_order_dispositions(
     bag: dict, stage_keys: dict[int, dict[str, str]]
 ) -> bool:
     """Walk all 'covered' order elements; for each whose content_digest no longer
-    matches its covering stage's current whole-stage key, stamp stale_note (#123) —
+    matches its covering stage's current binding (`_accepted_order_keys`), stamp stale_note (#123) —
     the order-coverage twin of invalidate_stale_dispositions above. The disposition
     itself is preserved. Returns True if any element was annotated or un-annotated.
 
@@ -842,8 +870,8 @@ def invalidate_stale_order_dispositions(
             continue
         if not stage_keys or e.stage not in stage_keys:
             continue  # dangling target: validate_order_elements handles it separately
-        accepted = (*_accepted_keys(stage_keys[e.stage], WHOLE_STAGE_ELEMENT), "")
-        note = "" if e.content_digest in accepted else STALE_DISPOSITION_NOTE
+        note = ("" if e.content_digest in _accepted_order_keys(stage_keys[e.stage])
+                else STALE_DISPOSITION_NOTE)
         if e.stale_note != note:
             e.stale_note = note
             changed = True

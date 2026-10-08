@@ -69,7 +69,8 @@ from .plan import (
     plan_meta_element_keys,
     plan_stage_digests,
     review_pairs,
-    stage_element_keys,
+    stage_element_baseline,
+    stage_norm_keys,
     stage_part,
     stage_question_key,
     stage_reattest_digest,
@@ -77,7 +78,6 @@ from .plan import (
     verify_command_scope_warnings,
     _venue_for,
 )
-from .text_shape import WHOLE_STAGE_ELEMENT
 from .render import (
     cmd_plan_grants,
     cmd_plan_render,
@@ -754,12 +754,14 @@ def _record_first_thinker_verdict(state: SessionState, doc, review, scope: str) 
 
 
 def _kind_within_boundary(state: SessionState, kind: str, doc) -> str:
-    """A refinement that moves the order digest or adds a resource beyond the user's
-    approved set is not a refinement: it re-enters the approval gate as substantive."""
+    """A refinement that moves the order digest, adds a resource beyond the user's
+    approved set, or changes a command the engine cannot resolve to a resource is not a
+    refinement: it re-enters the approval gate as substantive."""
     if kind != "refinement" or _ledgered_order_key(state) is None:
         return kind
     verdict = _autonomy_for(state, doc)
-    if verdict["order_changed"] or verdict["extra_resources"]:
+    if (verdict["order_changed"] or verdict["extra_resources"]
+            or verdict["unresolved_changed_commands"]):
         return "substantive"
     return kind
 
@@ -2140,11 +2142,12 @@ def _bound_stage_key(state, question: "premise.Question", plan_path: str | None 
 def _bound_order_stage_key(
     state, element: "premise.OrderElement", plan_path: str | None = None
 ) -> str:
-    """The current whole-stage key of the stage an OrderElement is marked 'covered'
+    """The current binding of the stage an OrderElement is marked 'covered'
     by — the value cmd_order_dispose stamps into `content_digest` (#123), the
-    order-coverage twin of `_bound_stage_key`. Whole-stage rather than per-element:
-    an order element cites a stage's OUTCOME, not one of its named fields, so any
-    edit to that stage should be visible as coverage drift. Returns "" when
+    order-coverage twin of `_bound_stage_key`. Bound to the stage's deliverable (its
+    interface token, `premise.order_binding_key`) rather than to a named field or the
+    whole definition: an order element cites a stage's OUTCOME, so an edit to HOW the
+    stage proceeds does not move it and an edit to what it hands over does. Returns "" when
     `element.stage` is None or no plan has been submitted yet — the cases
     premise.validate_order_elements exempts from the key-mismatch check.
 
@@ -2160,11 +2163,11 @@ def _bound_order_stage_key(
     if not plan_path:
         return ""
     doc = load_plan(plan_path)
-    keys = {s.index: stage_element_keys(s) for s in doc.stages}
+    keys = {s.index: stage_norm_keys(s) for s in doc.stages}
     stage_keys = keys.get(element.stage)
     if not stage_keys:
         return ""
-    return stage_keys.get(WHOLE_STAGE_ELEMENT, "")
+    return premise.order_binding_key(stage_keys)
 
 
 def _materiality_doc(state, named_plan) -> "tuple[PlanDoc | None, str]":
@@ -2809,6 +2812,7 @@ class EnumerationApplyResult:
 def _apply_enumeration_result(
     bag: dict, doc: PlanDoc, plan_path, pairs: list[tuple[str, str]], runner_ok: bool | None,
     *, parts: tuple[bool, set[int]] | None = None,
+    element_scope: dict[int, frozenset] | None = None,
     preserve_disposition: bool = False, stderr: str = "",
     honor_dismissed_hashes: bool = True,
 ) -> EnumerationApplyResult:
@@ -2841,6 +2845,13 @@ def _apply_enumeration_result(
     the same safe direction `_enumeration_part` and `_candidate_immateriality` take —
     but, the meta part being unread, into a slot that never displaces a different
     existing meta question (`_unread_part_slot`).
+
+    `element_scope` (from plugins_premise.enumeration_element_scope) narrows a stage's
+    candidates one level further: a pair addressed to `stage:<n>.<element>` is out of
+    scope when stage n has an entry and the element's key did not move. An element that
+    maps to the whole stage (`control`, `order`, `requirements`) moves with it. A stage
+    with no entry is read at the whole-stage scope -- the pass has no baseline to call
+    its elements unmoved against.
 
     `preserve_disposition` is what separates the two callers. A human running
     `question-enumerate` ASKED for a fresh pass, so re-raising a candidate they had
@@ -2883,6 +2894,12 @@ def _apply_enumeration_result(
                 out_of_scope.append({"target": target, "question": question,
                                     "reason": premise.CANDIDATE_OUT_OF_EDIT_SCOPE})
                 continue
+            if stage_index is not None and element_scope and stage_index in element_scope:
+                element = premise.parse_target(target)[2]
+                if element not in element_scope[stage_index]:
+                    out_of_scope.append({"target": target, "question": question,
+                                        "reason": premise.CANDIDATE_UNMOVED_ELEMENT})
+                    continue
         by_part.setdefault(_enumeration_part(target), []).append((target, question))
 
     candidates = bag.setdefault("candidates", [])
@@ -2931,6 +2948,14 @@ def _apply_enumeration_result(
         str(index): (digest if index in stage_scope else recorded[str(index)])
         for index, digest in live_stages.items()
         if index in stage_scope or str(index) in recorded
+    }
+    live_elements = stage_element_baseline(doc)
+    recorded_elements = bag.get("enumerated_stage_elements") or {}
+    bag["enumerated_stage_elements"] = {
+        str(index): (live_elements[str(index)] if index in stage_scope
+                     else recorded_elements[str(index)])
+        for index in live_stages
+        if index in stage_scope or str(index) in recorded_elements
     }
     bag["enumerated_plan"] = str(plan_path)
     bag["enumerated_runner_ok"] = runner_ok
@@ -3017,8 +3042,10 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
                          f"cannot parse plan {plan_path!r}: {exc}")
 
     whole_plan, stage_scope = plugins_premise.enumeration_run_scope(bag, doc)
+    element_scope = ({} if whole_plan
+                     else plugins_premise.enumeration_element_scope(bag, doc, stage_scope))
     if not whole_plan:
-        plan_text = render_stages_md(doc, stage_scope)
+        plan_text = _narrowed_plan_text(doc, stage_scope, element_scope)
     scope_source = "whole_plan" if whole_plan else "enumeration_baseline"
 
     run = runner if runner is not None else advisor.enumerate_subprocess_runner
@@ -3027,7 +3054,7 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
 
     result = _apply_enumeration_result(
         bag, doc, plan_path, pairs, runner_ok, stderr=stderr,
-        parts=(whole_plan, stage_scope),
+        parts=(whole_plan, stage_scope), element_scope=element_scope,
         honor_dismissed_hashes=not getattr(args, "reopen_dismissed", False))
     state.log("question_enumerate", raised=len(result.raised), runner_ok=runner_ok, via="command",
               stages=sorted(stage_scope) if not whole_plan else None,
@@ -3089,6 +3116,16 @@ def cmd_question_enumerate(args, *, store: StateStore, runner: Runner | None = N
             "done_criterion + every stage by hand for smuggled premises before approving"
         )
     return d
+
+
+def _narrowed_plan_text(doc: PlanDoc, stage_scope, element_scope) -> str:
+    """The text a narrowed pass reads: the moved stages in full, headed by which of their
+    elements moved so the advisor spends its attention there."""
+    moved = [f"stage {index}: {', '.join(sorted(name or 'whole stage' for name in names))}"
+             for index, names in sorted(element_scope.items()) if names]
+    head = ("Changed since the last pass -- raise questions about these elements only:\n"
+            + "\n".join(f"- {line}" for line in moved) + "\n\n") if moved else ""
+    return head + render_stages_md(doc, stage_scope)
 
 
 def _parse_stage_scope(raw) -> set[int] | None:
@@ -3605,8 +3642,11 @@ def _fold_enumeration_sidecar(state: SessionState, doc: PlanDoc, plan_path) -> b
     parts = ((True, set(plan_stage_digests(doc))) if whole_plan
              else (False, set(sidecar_stages)))
     scope_source = "whole_plan" if whole_plan else "enumeration_baseline"
+    element_scope = ({} if whole_plan
+                     else plugins_premise.enumeration_element_scope(bag, doc, parts[1]))
     result = _apply_enumeration_result(bag, doc, plan_path, pairs, runner_ok,
-                                       parts=parts, preserve_disposition=True,
+                                       parts=parts, element_scope=element_scope,
+                                       preserve_disposition=True,
                                        stderr=payload.get("stderr", ""))
     # Surface the oversize escape explicitly so question-list --format md shows
     # "enumeration refused (oversize)" rather than a silent absence or a generic
@@ -9508,7 +9548,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # before the pblock return — so a blocked replan still surfaces stale notes on disk.
     _inv_bag = state.plugins.get("premise")
     if _inv_bag is not None:
-        _inv_stage_keys = {s.index: stage_element_keys(s) for s in new.stages}
+        _inv_stage_keys = {s.index: stage_norm_keys(s) for s in new.stages}
         _inv_meta_keys = plan_meta_element_keys(new)
         _inv_changed = premise.invalidate_stale_dispositions(
             _inv_bag, _inv_stage_keys, meta_keys=_inv_meta_keys
