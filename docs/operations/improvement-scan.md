@@ -7,7 +7,7 @@
 
 ## Overview
 
-`scripts/improvement-scan.py` provides three subcommands. Each does only the mechanizable rule
+`scripts/improvement-scan.py` provides four subcommands (`backlog`, `loss`, `telemetry`, `report`). Each does only the mechanizable rule
 part of its responsibility — collection, diffing, scoring, deduplication, rendering — and leaves
 every judgment call (classification, functional-ground statement, which candidate is worth acting
 on) to whichever live session drives it via the `improvement-scan` skill. The CLI never files a
@@ -54,9 +54,22 @@ source_digest itself. An unknown ref, a missing field, or a worklist ref left un
 exits 2 naming the ref, as does an `items` that is not an object. `closed_refs` falls back to the
 worklist's list when the classifications file carries none. It validates every field against its
 closed vocabulary (rejecting the whole call on the first out-of-vocabulary value), scores and
-ranks via `score(item) = breadth_weight × recurrence_mass / cost_to_resolve`, applies the hard
-partial order from any explicit `blocked_by` edges, writes the new board JSON to the state file,
-and stores `Finding` rows.
+computes the old rubric score (`breadth_weight`, `recurrence_mass` and `cost_to_resolve`, kept
+as `old_score`), which is now a tie-break input only; the rank itself is min/week from the
+`loss` subcommand below. It applies the hard partial order from any explicit `blocked_by`
+edges, writes the new board JSON to the state file, and stores `Finding` rows.
+
+A classification may also carry the loss fields: `signatures` (list of non-empty strings),
+`minutes_per_occurrence` (number > 0) with `minutes_basis`, `precision` (0..1) with
+`precision_sample` `{n, true}`, `family` (string) and `silent_estimate` (non-empty string).
+They are validated on shape; a bad one exits 2 naming the ref. A re-classified item inherits
+its previous loss fields. An amendment-only entry for a carried item may hold any subset of
+these keys plus `addresses`. Phase A's worklist also lists `loss_unclassified`: open board items
+with neither signatures nor a silent estimate.
+
+Migration: a board written before the loss fields existed loads unchanged. Every item keeps
+its old classification, severity and fix-cost fields, and gains empty signature and precision
+fields. Such items sit under *Awaiting loss classification* until classified; none is dropped.
 
 `addresses` is an optional list of 12-hex telemetry store keys (the `Store key` the report
 prints) naming the measured cluster(s) a backlog item removes. Phase B checks only the shape
@@ -65,6 +78,56 @@ resolves is decided at report time, because clusters resolve out between runs. A
 carrying only `addresses` for a ref already on the board (and not in the worklist) amends that
 item: it replaces its `addresses` (`[]` clears) and changes nothing else; any other field on
 such an entry, or a ref on neither the worklist nor the board, exits 2.
+
+## `loss` — measured-loss ranking
+
+```
+python3 scripts/improvement-scan.py loss [--board-state <path>] [--days 14] [--until <iso>] \
+  [--projects-root <dir> ...] [--hits-cache <path>] [--emit-samples <samples.json>] \
+  [--sample-size 10] [--store <store-path>]
+```
+
+Reads the board state file, counts for every item with `signatures` the distinct sessions
+whose transcripts hit a signature inside the window, and rewrites the board with each item's
+`loss_measurement` and lane `rank`. Rank is min/week = est sessions/window × min/occurrence /
+(days/7). Counting surfaces are `tool_result` blocks, `system` entries and attachments whose
+type starts with `hook`; assistant text, thinking, tool_use inputs and user text never count.
+Known limit: `async_hook_response` attachments are not counted as hits. A `tool_result` whose
+originating call was discussing or filing (input holds the signature, `#N` / `issues/N` of the
+item, or `gh issue` / `file-difficulty.py` / `improvement-scan.py`) is excluded.
+
+Hit cache: `~/.local/state/improvement-scan/loss-hits.json` (`--hits-cache`), keyed per
+transcript by mtime and size, holding timestamps of hits per signature. A transcript is reopened
+only when it grew or a signature it has not scanned yet is wanted; a transcript last modified
+before the window start is skipped. A corrupt or absent cache is a full rescan. `--dry-run`
+writes neither cache nor board.
+
+`--emit-samples` writes seeded excerpts (one hit per session, up to `--sample-size`) for the
+items whose `precision` is missing or was judged on a different signature set. The model judges
+them and amends `precision` and `precision_sample` through phase B. Unjudged precision counts as
+1 and the row says so (upper bound).
+
+Report lanes, in order: **Measured loss** (columns min/week, sessions/window raw → estimated,
+min/occurrence, basis, fix cost, members), **Silent lane** (items without a signature, with their
+qualitative estimate), **Awaiting loss classification** (neither). Every open item is in exactly
+one row. An item with a signature that has no measurement yet is never moved into the silent lane; only a missing signature puts it there. A family (shared `family` id) is one row: its loss is computed once over the union of
+its members' hit sessions, each shared session charged at the per-session max of p × minutes, so
+a family is never the sum of its members. Within a lane, rows sort by min/week descending, then
+tie-break inputs: severity (labelled first, higher mass first), fix cost ascending, old score
+descending, ref. `blocked_by` is a hard order only within a lane; an edge crossing lanes imposes
+none.
+
+`report --board` JSON carries `findings`, `loss`, `silent` and `awaiting`; a `loss` row has
+`ref`, `family`, `members`, `min_per_week`, `sessions_hit`, `sessions_est`, `min_per_occurrence`,
+`basis`, `fix_cost`, `window_days`.
+
+### Design choices
+
+The transcript enumeration is the telemetry producer's own (`lib.config_root` roots, subagents
+included), so both producers see the same sessions. The hit cache is a new mtime-gated file
+instead of `LedgerCursor`: the cursor stores one position per session for one fixed question,
+while the loss scan asks a different question per signature, and a changed signature set must
+rescan without resetting anything else. A per-transcript cache keyed by signature does that.
 
 ## `telemetry` — session pattern detection
 
@@ -114,7 +177,8 @@ python3 scripts/improvement-scan.py report --store <store-path> --format md|json
 ```
 
 Renders every stored `Finding` from both producers into one cost-first-ranked report, never
-interleaving measured and unmeasured cost bands.
+interleaving measured and unmeasured cost bands. With a readable `--board` (default: the board
+state file) the loss, silent and awaiting lanes come first.
 
 At report time each backlog item's `addresses` keys are looked up among the open telemetry rows
 of the same report. The highest measured cluster cost among them (or the item's own measured
