@@ -7066,30 +7066,6 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
-id = "a5fbb8ffd3f28b54"
-domain = "code"
-file = "scripts/tests/test_hook_state_gate.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "479707de5235d01c"
-domain = "code"
-file = "scripts/tests/test_hook_state_gate.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "b448db19a6b2189f"
-domain = "code"
-file = "scripts/tests/test_hook_state_gate.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
 id = "292ddf5713902f08"
 domain = "code"
 file = "scripts/tests/test_hook_state_gate.py"
@@ -7098,7 +7074,7 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
-id = "56797af44bd547eb"
+id = "a5fbb8ffd3f28b54"
 domain = "code"
 file = "scripts/tests/test_hook_state_gate.py"
 class = "not-a-gate"
@@ -7122,7 +7098,31 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "56797af44bd547eb"
+domain = "code"
+file = "scripts/tests/test_hook_state_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "479707de5235d01c"
+domain = "code"
+file = "scripts/tests/test_hook_state_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "d6242c07e28fc048"
+domain = "code"
+file = "scripts/tests/test_hook_state_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b448db19a6b2189f"
 domain = "code"
 file = "scripts/tests/test_hook_state_gate.py"
 class = "not-a-gate"
@@ -17350,7 +17350,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "5009c3a2fd24a03e"
+id = "7575d6f9e11c8fbe"
 domain = "prose"
 file = "memory-global/leaves/coordinator-pitfalls.md"
 class = "perception"
@@ -28286,6 +28286,14 @@ disposition = "keep"
 ground = "System-knowledge leaves document durable FACTS about how an external system behaves (leaf-schema.md's non-self-evident-fact criterion); a modal keyword here typically reports the external system's own constraint, not a live rule this agent must decide."
 
 [[entry]]
+id = "660504524aca1d9a"
+domain = "prose"
+file = "memory-global/leaves/systemic-pattern-scan.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "95b6597ff08bb663"
 domain = "prose"
 file = "memory-global/leaves/team/MEMORY.md"
@@ -28870,7 +28878,7 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "a25920ad47606318"
+id = "1d4c91cbb3538f5e"
 domain = "prose"
 file = "skills/overcome-difficulty/SKILL.md"
 class = "perception"
@@ -28886,7 +28894,7 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
-id = "8d60d393f4bb9d2a"
+id = "157f3445e62a8f94"
 domain = "prose"
 file = "skills/overcome-difficulty/SKILL.md"
 class = "perception"
@@ -30070,14 +30078,6 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
-id = "69e4fd84cabc1888"
-domain = "prose"
-file = "skills/specializations/planner/SKILL.md"
-class = "perception"
-disposition = "keep"
-ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
-
-[[entry]]
 id = "47f4ced02b7a4283"
 domain = "prose"
 file = "skills/specializations/planner/SKILL.md"
@@ -30404,6 +30404,14 @@ file = "skills/specializations/planner/policy.md"
 class = "perception"
 disposition = "keep"
 ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "e764cc4c647a3dd2"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
 id = "5af845daeda83570"
@@ -30855,6 +30863,14 @@ ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the s
 
 [[entry]]
 id = "3da1e95344b47bbc"
+domain = "prose"
+file = "skills/specializations/thinker/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "f5d7b7cd6e681fe9"
 domain = "prose"
 file = "skills/specializations/thinker/SKILL.md"
 class = "perception"
