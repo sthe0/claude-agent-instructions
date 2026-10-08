@@ -136,7 +136,11 @@ try:
     from lib import judge_budget  # noqa: E402
     from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
     from lib.ask_text import flat_text  # noqa: E402
-    from lib.transcript_turns import delivered_final_texts, latest_turn_start  # noqa: E402
+    from lib.transcript_turns import (  # noqa: E402
+        delivered_final_texts,
+        has_marker_option as _has_marker_option,
+        latest_turn_start,
+    )
 except BaseException as exc:
     judge_ledger.import_failed("plan_delivery", f"{type(exc).__name__}: {exc}")
     raise
@@ -268,31 +272,6 @@ def _receipt_stale_reason(state: _SessionState) -> str | None:
         if "delivery" not in reason:
             return reason
     return None
-
-
-def _has_marker_option(tool_input: dict, marker: str) -> bool:
-    """True iff ANY option, across every question in this ask, carries
-    `marker` in its label or description. Tolerant of missing or malformed
-    keys — schema drift contributes nothing rather than raising."""
-    if not isinstance(tool_input, dict):
-        return False
-    questions = tool_input.get("questions")
-    if not isinstance(questions, list):
-        return False
-    for q in questions:
-        if not isinstance(q, dict):
-            continue
-        options = q.get("options")
-        if not isinstance(options, list):
-            continue
-        for opt in options:
-            if not isinstance(opt, dict):
-                continue
-            for key in ("label", "description"):
-                val = opt.get(key)
-                if isinstance(val, str) and marker in val:
-                    return True
-    return False
 
 
 def _has_show_full_plan_option(tool_input: dict) -> bool:

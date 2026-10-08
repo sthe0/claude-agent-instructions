@@ -156,6 +156,21 @@ def landing_gate_active(state: SessionState) -> bool:
     return state.weight_class == WeightClass.SUBSTANTIVE.value or bool(state.delivery_worktree)
 
 
+def resolution_ask_gate_active(state: SessionState) -> bool:
+    """Whether resolve requires an answered `[resolution-ask]` AskUserQuestion that
+    post-dates the session's verify-final stamp (the rating is asked only after final
+    verification). SUBSTANTIVE sessions pay it; AGENTCTL_RESOLUTION_ASK_GATE overrides
+    in both directions ("1" on, "0" off) and cmd_resolve logs a set value, so the
+    override is never silent. Deliberately NOT part of resolution_blockers: it reads the
+    session transcript, which the Stop-hook guardian and verify-final cannot supply."""
+    env = os.environ.get("AGENTCTL_RESOLUTION_ASK_GATE")
+    if env == "1":
+        return True
+    if env == "0":
+        return False
+    return state.weight_class == WeightClass.SUBSTANTIVE.value
+
+
 def plan_asserts_landing(state: SessionState) -> bool:
     """Whether some stage or final_check of the session's plan is a landed check."""
     return asserts_landing(state.stages, state.final_check)

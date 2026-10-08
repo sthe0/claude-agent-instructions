@@ -277,6 +277,20 @@ def _landing_gate_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _resolution_ask_gate_off_by_default(monkeypatch):
+    """Default the resolve-time resolution-ask gate OFF for the suite at large, the same
+    accommodation as `_landing_gate_off_by_default` above and for the same reason:
+    `gates.resolution_ask_gate_active` falls back to weight_class == SUBSTANTIVE when
+    AGENTCTL_RESOLUTION_ASK_GATE is unset, and `cmd_resolve` then reads the session
+    transcript for an answered `[resolution-ask]` AskUserQuestion — which the
+    overwhelming majority of resolve-driving tests, running without a harness
+    transcript, do not have. AGENTCTL_RESOLUTION_ASK_GATE=0 is the documented force-off
+    knob. Its real block/pass/escape behaviour is proven end-to-end by
+    test_resolution_ask_marker_gate.py, which explicitly re-enables it."""
+    monkeypatch.setenv("AGENTCTL_RESOLUTION_ASK_GATE", "0")
+
+
+@pytest.fixture(autouse=True)
 def _advisor_off_by_default(monkeypatch):
     """Default the advisory judge OFF for the suite at large, the same accommodation as
     `_plan_review_gate_off_by_default` above and for the same reason.

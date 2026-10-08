@@ -1002,6 +1002,12 @@ PLAN_PRESENTATION_KINDS = (
 # never drift apart.
 SHOW_FULL_PLAN_MARKER = "[show-full-plan]"
 
+# Language-independent ASCII marker the resolution AskUserQuestion (the one that
+# carries the 1-5 rating) must embed in an option label or description. Emitted by
+# cli.cmd_verify_final's success Directive, checked by cli.cmd_resolve against the
+# session transcript — single-sourced here so the two can never drift apart.
+RESOLUTION_ASK_MARKER = "[resolution-ask]"
+
 # Language-independent ASCII marker a replan-diff rendering must embed so the
 # delivery hook (extended by stage 4) can recognize the turn as carrying a
 # replan-authorization presentation, exactly mirroring SHOW_FULL_PLAN_MARKER —

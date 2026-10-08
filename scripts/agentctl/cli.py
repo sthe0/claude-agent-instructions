@@ -26,7 +26,7 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 import proc_tree
-from lib import argv_text, config_root, kind_baselines, transcript_stops, widening_targets, writer_pass
+from lib import argv_text, config_root, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
 from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
@@ -139,6 +139,7 @@ from .state import (
     plan_review_scope_stage_index,
     ReattestStash,
     RequirementVerdict,
+    RESOLUTION_ASK_MARKER,
     RiskAcceptance,
     Route,
     SessionState,
@@ -8335,7 +8336,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     state.cost = rollup
     state.node = transition(state.node, "final")  # VERIFYING -> RESOLUTION
     state.resolution = GateRecord("resolution", armed=True, passed=False)
-    state.log("verify_final")
+    state.log("verify_final", at=time.time())
     store.save(state)
     kind = "run the measurable check" if state.overall_criterion_type == CriterionType.MEASURABLE.value \
         else "ask the user to accept on review"
@@ -8346,13 +8347,21 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             "spawn_count": rollup.spawn_count,
             "attributed_stages": rollup.attributed_stages,
             "note": rollup.note,
-        }
+        },
+        "resolution_ask_marker": RESOLUTION_ASK_MARKER,
     }
     # Bypass visibility: verify-final never returns a clean bill while any acceptance
     # pass skipped a genuine judge verdict (kill switch / override) — the bypasses are
     # surfaced verbatim so the resolution decision is made with them in view, never
     # silently. A later passing review does not clear them.
     detail = f"all stages passed; resolution gate armed — {kind}"
+    if gates.resolution_ask_gate_active(state):
+        detail += (
+            f"; the resolution AskUserQuestion that carries the 1-5 rating must embed the "
+            f"literal marker {RESOLUTION_ASK_MARKER!r} in an option label or description "
+            f"and be asked AFTER this verify-final — resolve refuses a rating without an "
+            f"answered marked ask"
+        )
     bypasses = _judge_bypassed_surface(state)
     if bypasses:
         data["judge_bypassed"] = bypasses
@@ -8456,6 +8465,62 @@ def _landing_gate(state: SessionState, args, runner: Runner | None) -> tuple[lis
     return blockers, record
 
 
+RESOLUTION_ASK_BLOCKER_PREFIX = "resolution ask: "
+
+
+def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
+    """The resolve-time resolution-ask blockers plus the record of how the gate was met.
+
+    The 1-5 rating must be asked inside an AskUserQuestion that embeds
+    RESOLUTION_ASK_MARKER, was asked AFTER the session's latest verify-final stamp, and
+    was answered. Both ends are machine records — the engine's `verify_final` event and
+    the harness transcript — so the order is compared, not trusted to prose. The
+    transcript is derived from the session id, never supplied. The record is
+    {override, unverifiable}: the AGENTCTL_RESOLUTION_ASK_GATE value when it overrode
+    the gate, and the reason given when --resolution-ask-unverifiable stood in for an
+    unreadable transcript — so a bypass is never silent."""
+    env = os.environ.get("AGENTCTL_RESOLUTION_ASK_GATE")
+    record = {"override": env if env in ("0", "1") else None, "unverifiable": None}
+    if not gates.resolution_ask_gate_active(state):
+        return [], record
+    prefix = RESOLUTION_ASK_BLOCKER_PREFIX
+    stamps = [h for h in state.history if h.get("event") == "verify_final"]
+    verified_at = stamps[-1].get("at") if stamps else None
+    if not isinstance(verified_at, (int, float)):
+        return [prefix + "no precise verify-final stamp is recorded for this session — "
+                         "re-run verify-final, then ask the resolution question"], record
+    path = _present_plan_transcript(state.session_id)
+    calls = transcript_turns.ask_user_question_calls(path) if path is not None else None
+    given = getattr(args, "resolution_ask_unverifiable", None)
+    if calls is None:
+        reason = (given or "").strip()
+        if reason:
+            record["unverifiable"] = reason
+            return [], record
+        return [prefix + f"cannot locate or read the transcript of session {state.session_id!r}, "
+                         "so the resolution ask cannot be verified"
+                         + (" — --resolution-ask-unverifiable must be non-empty" if given is not None
+                            else " — pass --resolution-ask-unverifiable '<why the transcript is unavailable>'")], record
+    marked = [(ts, answered) for tool_input, ts, answered in calls
+              if transcript_turns.has_marker_option(tool_input, RESOLUTION_ASK_MARKER)]
+    escape_note = ("" if given is None else
+                   " (--resolution-ask-unverifiable is refused: the transcript is readable)")
+    if not marked:
+        return [prefix + f"no AskUserQuestion carrying the marker {RESOLUTION_ASK_MARKER!r} in an "
+                         "option label or description was found in this session's transcript — "
+                         "ask the resolution question (with the 1-5 rating) after verify-final"
+                         + escape_note], record
+    after = [answered for ts, answered in marked if ts is not None and ts > verified_at]
+    if not after:
+        return [prefix + f"the {RESOLUTION_ASK_MARKER!r} ask predates the latest verify-final — "
+                         "ask the resolution question again now that final verification has passed"
+                         + escape_note], record
+    if not any(after):
+        return [prefix + f"the {RESOLUTION_ASK_MARKER!r} ask after verify-final has not been "
+                         "answered — resolve only after the user answers it" + escape_note], record
+    return [], record
+
+
 def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     # plugin gates fold into resolve (not verify_final) so a plugin can let the
@@ -8476,6 +8541,8 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         blockers = blockers + [f"invalid --quality {quality!r}: must be an integer 1-5"]
     landing_blockers, landing = _landing_gate(state, args, runner)
     blockers = blockers + landing_blockers
+    ask_blockers, resolution_ask = _resolution_ask_gate(state, args)
+    blockers = blockers + ask_blockers
     _log_gate(state, "resolution", blockers, passed=not blockers)
     if blockers:
         return Directive(False, state.node, "fix_stages", "cannot resolve", data={"blockers": blockers})
@@ -8496,6 +8563,9 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     state.log("resolve", by=args.by, quality=quality, quality_by=quality_by)
     state.log("landing_gate", waiver=landing["waiver"], waiver_source=landing["waiver_source"],
               override=landing["override"])
+    if resolution_ask["override"] is not None or resolution_ask["unverifiable"] is not None:
+        state.log("resolution_ask_gate", override=resolution_ask["override"],
+                  unverifiable=resolution_ask["unverifiable"])
     store.save(state)
     # Session-end cleanup: drop any sidecar a background enumeration wrote for this
     # session, whether or not it was ever folded (e.g. an outstanding child from the
@@ -8568,6 +8638,8 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         "landing_waiver": landing["waiver"],
         "landing_waiver_source": landing["waiver_source"],
         "landing_gate_override": landing["override"],
+        "resolution_ask_gate_override": resolution_ask["override"],
+        "resolution_ask_unverifiable": resolution_ask["unverifiable"],
     }
     _write_quality_row(quality_row)
     # Whether to stamp is fully decidable from observed state (resolved + a known
@@ -8597,6 +8669,13 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         data["landing_gate_override"] = landing["override"]
         detail += (f" (landing gate overridden by AGENTCTL_LANDING_GATE={landing['override']}; "
                    "see landing_gate_override)")
+    if resolution_ask["override"] is not None:
+        data["resolution_ask_gate_override"] = resolution_ask["override"]
+        detail += (f" (resolution-ask gate overridden by AGENTCTL_RESOLUTION_ASK_GATE="
+                   f"{resolution_ask['override']}; see resolution_ask_gate_override)")
+    if resolution_ask["unverifiable"] is not None:
+        data["resolution_ask_unverifiable"] = resolution_ask["unverifiable"]
+        detail += " (resolution ask unverifiable, escape used; see resolution_ask_unverifiable)"
     return Directive(True, state.node, "done", detail, marker="COMPLETED", data=data)
 
 
@@ -10463,16 +10542,21 @@ def cmd_close(args, *, store: StateStore, runner: Runner | None = None) -> Direc
                                 quality=getattr(args, "quality", None),
                                 quality_by=getattr(args, "quality_by", None),
                                 quality_note=getattr(args, "quality_note", None),
-                                landing_waiver=getattr(args, "landing_waiver", None))
+                                landing_waiver=getattr(args, "landing_waiver", None),
+                                resolution_ask_unverifiable=getattr(
+                                    args, "resolution_ask_unverifiable", None))
         d = _run_step(cmd_resolve, rs, store=store, runner=runner, trace=trace)
         if d.ok:
             return Directive(True, d.node, d.action, "close: task resolved",
                              marker=d.marker, data={"trace": trace})
         # blocked: separate the gate-stop sentinels (confirmer + rating, both
-        # supplied by the confirmed re-run itself) from real blockers
+        # supplied by the confirmed re-run itself; without a confirmer the resolution
+        # ask cannot have happened yet either) from real blockers
         blockers = d.data.get("blockers", [])
+        gate_stop = ("empty confirmer", "missing --quality")
         real = [b for b in blockers
-                if "empty confirmer" not in b and "missing --quality" not in b]
+                if not any(s in b for s in gate_stop)
+                and not (not confirmer and b.startswith(RESOLUTION_ASK_BLOCKER_PREFIX))]
         if real:
             detail = ("close: confirmer given but resolution still blocked"
                       if confirmer and confirmer.strip() else "close: resolution blocked")
@@ -10641,6 +10725,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("normalize_factor", ("replan",)),
     ("quality_note", ("resolve", "close")),
     ("landing_waiver", ("resolve", "close")),
+    ("resolution_ask_unverifiable", ("resolve", "close")),
     ("coverage_waiver", ("replan",)),
     ("normalization_waiver", ("replan",)),
     ("renegotiation_note", ("replan",)),
@@ -11315,6 +11400,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="reason this task has no landing to assert; accepted only when the "
                          "plan has no delivery_worktree (a git delivery venue declares its "
                          "waiver in the plan)")
+    sp.add_argument("--resolution-ask-unverifiable", dest="resolution_ask_unverifiable",
+                    default=None,
+                    help="why the session transcript is unlocatable or unreadable, so the "
+                         "answered [resolution-ask] AskUserQuestion cannot be verified; "
+                         "refused whenever the transcript is readable")
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG); "
                          "read to derive the realized budget_tiers for the quality row")
@@ -11429,6 +11519,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--quality-note", dest="quality_note", default=None)
     sp.add_argument("--landing-waiver", dest="landing_waiver", default=None,
                     help="threaded to resolve (see resolve --landing-waiver)")
+    sp.add_argument("--resolution-ask-unverifiable", dest="resolution_ask_unverifiable",
+                    default=None,
+                    help="threaded to resolve (see resolve --resolution-ask-unverifiable)")
 
     sp = add("push-subplan"); sp.add_argument("--session", required=True)
     sp.add_argument("--plan", required=True, help="path to the child service sub-plan TOML")

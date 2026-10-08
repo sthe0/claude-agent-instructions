@@ -173,3 +173,80 @@ def delivered_final_texts(transcript_path: Path) -> list[tuple[str, float | None
         epoch = iso_to_epoch(ts) if isinstance(ts, str) else None
         results.append((text, epoch))
     return results
+
+
+def has_marker_option(tool_input: dict, marker: str) -> bool:
+    """True iff ANY option, across every question in an AskUserQuestion input,
+    carries `marker` in its label or description — never in a question stem or
+    header. Tolerant of schema drift: a malformed payload contributes nothing
+    rather than raising. Single walker shared by the plan-delivery hook and the
+    resolution-ask scanner so the two cannot disagree on what "carries the marker"
+    means."""
+    if not isinstance(tool_input, dict):
+        return False
+    questions = tool_input.get("questions")
+    if not isinstance(questions, list):
+        return False
+    for q in questions:
+        options = q.get("options") if isinstance(q, dict) else None
+        if not isinstance(options, list):
+            continue
+        for opt in options:
+            if not isinstance(opt, dict):
+                continue
+            for key in ("label", "description"):
+                val = opt.get(key)
+                if isinstance(val, str) and marker in val:
+                    return True
+    return False
+
+
+def ask_user_question_calls(
+    transcript_path: Path,
+) -> list[tuple[dict, float | None, bool]] | None:
+    """(tool input, epoch timestamp, answered) for every AskUserQuestion tool_use
+    in the transcript, in file order. `answered` means a LATER user entry carries
+    a tool_result with the same tool_use_id and no `is_error` — a declined or
+    errored ask is not an answer. The timestamp is None when the tool_use entry's
+    own timestamp is missing/unparsable (the ask exists; only its time is unknown).
+
+    None iff the transcript could not be read at all — a MISSING OBSERVABLE; a
+    readable transcript with no AskUserQuestion is [] — an OBSERVED NEGATIVE.
+    Callers must keep the two apart (see delivered_final_texts)."""
+    try:
+        lines = transcript_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return None
+    asks: dict[str, list] = {}
+    order: list[str] = []
+    answered: set[str] = set()
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        message = entry.get("message")
+        if not isinstance(message, dict):
+            continue
+        for block in _content_items(message):
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "tool_use" and block.get("name") == "AskUserQuestion":
+                call_id = block.get("id")
+                tool_input = block.get("input")
+                if not isinstance(call_id, str) or not isinstance(tool_input, dict):
+                    continue
+                ts = entry.get("timestamp")
+                asks[call_id] = [tool_input, iso_to_epoch(ts) if isinstance(ts, str) else None]
+                order.append(call_id)
+            elif btype == "tool_result" and not block.get("is_error"):
+                call_id = block.get("tool_use_id")
+                if isinstance(call_id, str) and call_id in asks:
+                    answered.add(call_id)
+    return [(asks[i][0], asks[i][1], i in answered) for i in order]
