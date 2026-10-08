@@ -28,7 +28,7 @@ channels) and diffs them against the board state file. Emits only new/changed it
 `closed_refs`, not a full re-derivation.
 
 The durable board is a **local state file** — `$IMPROVEMENT_SCAN_BOARD_STATE`, default
-`~/.local/state/improvement-scan/board.json`; the env var moves it for all three subcommands,
+`~/.local/state/improvement-scan/board.json`; the env var moves it for every subcommand,
 `backlog --board-state` for `backlog` only. Phase B writes it atomically (nothing under
 `--dry-run`); phase A, `telemetry --board` and `report --board` read it by default. With no state
 file phase A cold-starts from an empty board and prints one stderr note; an unreadable or

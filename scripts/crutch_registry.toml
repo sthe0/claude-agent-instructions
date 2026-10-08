@@ -7394,6 +7394,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "e4c49d40af21e591"
+domain = "code"
+file = "scripts/tests/test_improvement_scan_loss.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "0259f2761e60e020"
 domain = "code"
 file = "scripts/tests/test_improvement_scan_loss.py"
@@ -16622,7 +16630,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "ad42bcb32de95499"
+id = "dad7b9133574f87d"
 domain = "prose"
 file = "memory-global/leaves/backlog-triage-practice.md"
 class = "perception"
@@ -16630,7 +16638,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "11cede0c43e58a09"
+id = "fbf500f4f518f287"
 domain = "prose"
 file = "memory-global/leaves/backlog-triage-practice.md"
 class = "perception"
@@ -16638,7 +16646,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "e1359376b4935bdd"
+id = "d5610bdba63fd00a"
 domain = "prose"
 file = "memory-global/leaves/backlog-triage-practice.md"
 class = "perception"
@@ -16646,7 +16654,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "1d78bd514aaf0438"
+id = "0d47b3d7ec0affc6"
 domain = "prose"
 file = "memory-global/leaves/backlog-triage-practice.md"
 class = "already-mechanized"
@@ -16654,23 +16662,7 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "d6c7c27407ebefbc"
-domain = "prose"
-file = "memory-global/leaves/backlog-triage-practice.md"
-class = "perception"
-disposition = "keep"
-ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
-
-[[entry]]
-id = "4b729c771b10cdff"
-domain = "prose"
-file = "memory-global/leaves/backlog-triage-practice.md"
-class = "perception"
-disposition = "keep"
-ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
-
-[[entry]]
-id = "6649cf8d82798269"
+id = "3e92f2d3f262bc3f"
 domain = "prose"
 file = "memory-global/leaves/backlog-triage-practice.md"
 class = "perception"
@@ -16686,6 +16678,14 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "9b0f89a9aeea1417"
+domain = "prose"
+file = "memory-global/leaves/backlog-triage-practice.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "fa55795947236d3c"
 domain = "prose"
 file = "memory-global/leaves/backlog-triage-practice.md"
@@ -16694,7 +16694,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "8b1d341e22719fa3"
+id = "3e811ec4ad7a25ca"
 domain = "prose"
 file = "memory-global/leaves/backlog-triage-practice.md"
 class = "perception"
@@ -16734,7 +16734,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "a381f8a1cca6ec2d"
+id = "d53617708422f131"
 domain = "prose"
 file = "memory-global/leaves/backlog-triage-practice.md"
 class = "already-mechanized"
@@ -23502,6 +23502,14 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "ef12ef27e875c12d"
+domain = "prose"
+file = "memory-global/leaves/improvement-scan.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "4b6387015090a735"
 domain = "prose"
 file = "memory-global/leaves/improvement-scan.md"
@@ -28758,6 +28766,14 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
+id = "ba10f6c04da2ceae"
+domain = "prose"
+file = "skills/improvement-scan/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
 id = "528c435349c8e07f"
 domain = "prose"
 file = "skills/improvement-scan/SKILL.md"
@@ -28774,7 +28790,7 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
-id = "65af177d612b4e31"
+id = "ae96514a30d0be12"
 domain = "prose"
 file = "skills/improvement-scan/SKILL.md"
 class = "perception"
@@ -30439,6 +30455,22 @@ ground = "The statement's own text names a concrete enforcing artifact (a script
 
 [[entry]]
 id = "c5355e25783b0718"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "82519e80b6c4ddc1"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "deb4c3312ceb6bd0"
 domain = "prose"
 file = "skills/specializations/planner/policy.md"
 class = "perception"

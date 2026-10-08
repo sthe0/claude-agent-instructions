@@ -475,6 +475,41 @@ def test_tie_break_by_severity_then_fix_cost_then_old_score():
     ]
 
 
+def test_blocked_by_orders_within_a_lane_only():
+    loss = _loss()
+
+    def measured(n):
+        return {"window_days": 14, "sessions": [f"s{i}" for i in range(n)]}
+
+    items = {
+        "big": _item(signatures=("X",), minutes_per_occurrence=7.0, loss_measurement=measured(5),
+                     blocked_by=("small",)),
+        "small": _item(signatures=("Y",), minutes_per_occurrence=7.0, loss_measurement=measured(1)),
+        "mid": _item(signatures=("Z",), minutes_per_occurrence=7.0, loss_measurement=measured(3),
+                     blocked_by=("quiet",)),
+        "quiet": _item(silent_estimate="rare"),
+    }
+
+    lanes = loss.build_lanes(items)
+
+    # mid's edge crosses lanes and is ignored; big waits for its in-lane blocker small.
+    assert [row["ref"] for row in lanes["loss"]] == ["mid", "small", "big"]
+    assert [row["ref"] for row in lanes["silent"]] == ["quiet"]
+
+
+def test_loss_dry_run_writes_nothing(tmp_path):
+    paths = _Paths(tmp_path)
+    paths.write_board({"item": _item(signatures=("SIG-D",), minutes_per_occurrence=5.0)})
+    _sessions(paths, "SIG-D", 2, "d")
+    before = paths.board.read_bytes()
+
+    assert scan.main(["--dry-run", *paths.loss_argv()]) == 0
+
+    assert paths.board.read_bytes() == before
+    assert not paths.store.exists()
+    assert not paths.cache.exists()
+
+
 def test_loss_reemits_findings_for_all_board_items(tmp_path):
     paths = _Paths(tmp_path)
     items = {

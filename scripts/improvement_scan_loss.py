@@ -13,8 +13,8 @@ occurrence, the precision and the family grouping; this module only counts and
 sorts. A signature match is a lexical CANDIDATE filter — the precision factor,
 judged by a model on sampled excerpts, is what turns a count into an estimate.
 
-No subprocess, no network: file reads (transcripts, the hit cache) and pure
-arithmetic only, asserted by scripts/tests/test_improvement_scan.py.
+No subprocess, no network: reads transcripts, reads and writes the hit cache,
+pure arithmetic otherwise, asserted by scripts/tests/test_improvement_scan.py.
 """
 from __future__ import annotations
 
