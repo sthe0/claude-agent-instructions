@@ -222,6 +222,30 @@ A `pass` must carry `--plan-digest` equal to the sha256 of a fresh load of the t
 
 **Residual K1.** The induction covers only couplings expressed as reliance edges (`depends_on`, `supplies`). A coupling expressed in neither — an undeclared shared resource, an ordering side effect between stages with no reliance path — passes every pair while the plan fails, and so does a defect visible only across two edges at once (two services of one base whose conflict neither pair's context shows). C1's "declare the edge" obligation and C4's "enrich the interface" mitigate it; the gap ledger measures how often it happens. It is a named residual, not a closed case.
 
+### StageNorm — the stage's norm and its three identities
+
+`scripts/agentctl/stage_norm.py`'s `StageNorm` is one stage's norm as plain data: the same object a spawned specialist (a depth n+1 manager) receives as its order. `to_dict` / `from_dict` round-trip it through JSON. It replaces three hand-maintained field lists that each claimed "this stage's norm changed" with three projections of one object ([ADR-0007](../../docs/adr/0007-stage-norm.md)); `plan.stage_carry_key` and `plan.stage_interface_digest` delegate to it.
+
+| Identity | Covers | Decides |
+|---|---|---|
+| `review_digest` | the whole stage as a reviewer saw it; byte-identical to `plan.stage_question_key(stage)` (persisted in `Question.disposed_at_key`, so its payload may not drift) | which stages moved since a review |
+| `interface_digest` | what a consumer relies on: title, result image, criterion, `output_artifacts` (a stage with a blank interface falls back to its rendered brief) | whether a stage's consumers are affected |
+| `carry_digest` | the stage's definition with its edges as sorted `(on, element, artifact, delivery)` tuples in place of the bare `depends_on` slot | whether a PASSED verdict survives |
+
+**Carry rule.** `stage_norm.stage_carried(prev, new, index)`: a PASSED stage keeps its outcome iff its own `carry_digest` is unchanged and every direct supplier's `interface_digest` is unchanged; otherwise it is reset to PENDING. A supplier missing on either side counts as changed; a supplier whose only change is construction (method, means, procedure) carries its consumers. Both carry sites call it before mutating the live stages: the `approve`-time refresh and the substantive `replan`. Retyping an edge (element, artifact or delivery) at an unchanged supplier index moves the `carry_digest`, which the former index-only key missed.
+
+**Review-scope rule.** `gates.review_scope` computes what a refinement owes review: the stages whose `review_digest` moved, plus the direct consumers of every moved stage whose `interface_digest` also moved. `plan-review-delta` reports it and the `plan_review_blockers` enforce it. A review baseline recorded before interface digests were kept cannot show an interface unchanged, so it widens the scope to the consumers, never narrows it. A consumer pair's currency and `walk_stale_pairs`' service-end staleness follow the service's declared product (`interface_digest`), not `service_key` / `service_file`.
+
+**Edge delivery.** Every edge in a new substantive plan names `element` (a bare edge is refused by `submit-plan`, naming the edge and what to add; legacy plans still load). An edge may also name how its provision arrives with `delivery`, optional, one of:
+
+- `artifact` — a named file; needs `artifact = "<path>"` naming one of the supplier's `output_artifacts` entries, else `submit-plan` refuses.
+- `continuation` — the consumer continues the supplier's working copy and branch; the supplier must be a `spawn` stage.
+- `report` — an inline or summary hand-off with no file or tree dependency.
+
+An unknown value is a `PlanError` at load. `delivery` joins `review_digest` only as a trailing splice when some edge declares one, so legacy plans hash identically. `cli._continuation_worktree` decides per edge: a `spawn` dependency is continued if any edge to it says `continuation` or says nothing (the `depends_on` inference, unchanged for edges without `delivery`); an explicit `artifact` or `report` edge stops the continuation.
+
+**Limits.** Stage identity is the index: a plan that renumbers stages resets them. A `restructure` pair verdict (revising plan structure through pair review, Core #319) is not implemented; the structure-change test stays in `plan._structural_signature`, and `StageNorm` keeps the edge list as data for a future changed-structure-only review.
+
 ### Accepted risks (`risk-accept`)
 
 A `revise`-verdict concern that the plan's author judges an acceptable trade-off previously had no way to clear the plan-review gate short of a cosmetic edit that satisfied nothing but the digest check. `risk-accept` records a `RiskAcceptance` (mirroring `question-dispose --disposition assumed`'s basis/risk shape) bound to the same `(scope, concern_id)` pair a `plan-review --verdict revise --concern` recorded, plus a snapshot of the plan bytes as they stand at the moment the acceptance is recorded. `_plan_review_verdict_blockers` discharges a `revise` verdict once every one of its concerns is matched by a live acceptance — `gates._risk_acceptance_stale` re-derives staleness the same way a review at that scope would (a moved order/meta always invalidates; a moved stage invalidates only an acceptance scoped to that stage), and `_risk_acceptance_superseded` separately catches a concern id that survived a plan edit but whose recorded text no longer matches what was actually accepted. Every live acceptance appears in the coverage block the presented essence must carry, checked by the same containment machinery that already checks the order-coverage block (§ Plugins), so the trade is visible at the approval gate rather than buried.

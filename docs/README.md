@@ -64,4 +64,4 @@ Setup and distribution, the git workflow, the verification-guard suite, and laye
 
 ## Decisions — architecture decision records
 
-The [ADR index](adr/README.md) records the significant, hard-to-reverse design decisions.
+The [ADR index](adr/README.md) records the significant, hard-to-reverse design decisions. [ADR-0007](adr/0007-stage-norm.md) records `StageNorm`, the stage-norm object behind review scope, PASSED-stage carry-forward and typed edge delivery (operational summary: [agentctl README § StageNorm](../scripts/agentctl/README.md#stagenorm--the-stages-norm-and-its-three-identities)).
