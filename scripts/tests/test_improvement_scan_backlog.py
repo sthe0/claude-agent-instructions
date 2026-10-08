@@ -228,7 +228,7 @@ def test_no_urgency_signal_section(tmp_path):
     assert board.items["ref-lonely"].score is None
     assert board.items["ref-lonely"].rank is None
     assert board.items["ref-lonely"].classification == "no-urgency-signal"
-    assert findings == []
+    assert [f.source_ref for f in findings] == ["ref-lonely"]
 
 
 # --- (7) out-of-vocabulary classification value rejected --------------------

@@ -13,6 +13,11 @@ decays. This module supplies the shared core two resumable producers build on:
 a `Finding` model, registration as a second external producer in the existing
 `self_diagnose_store.py`, and one resume seam per producer.
 
+The `loss` subcommand ranks the board by MEASURED loss — distinct sessions whose transcripts
+show an item's observable signature, scaled by a model-judged precision, times minutes per
+occurrence (`improvement_scan_loss.py`) — instead of the breadth x severity / cost proxy, which
+stays as `old_score` and as a tie-break.
+
 This script only REPORTS and RECOMMENDS. It never files a difficulty, never
 dispatches a specialist, and never edits repo content — asserted by
 `scripts/tests/test_improvement_scan.py` via `ast_purity.impure_names`, the
@@ -54,7 +59,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -96,6 +101,7 @@ cluster_judge_line = _rec_for_scan.cluster_judge_line
 # see improvement_scan_shell.py's docstring for why, and
 # test_module_never_shells_out_or_reaches_the_network for the invariant this preserves.
 import improvement_scan_shell as shell  # noqa: E402
+import improvement_scan_loss as loss  # noqa: E402
 from agentctl import advisor  # noqa: E402
 from agentctl.cost import COST_LOG as SPAWN_LEDGER_DEFAULT, read_rows as read_spawn_rows  # noqa: E402
 
@@ -373,6 +379,24 @@ class PriorBoardItem:
     # so its cluster_size is a lower bound, not a confirmed count.
     unjudged: bool = False
     addresses: "tuple[str, ...]" = ()
+    # The rubric inputs `loss.py`'s tie-break reads; carried so a rank recompute never needs
+    # the live record. `old_score` is the legacy rubric score computed for EVERY item (a
+    # missing severity counts as the lowest mass) — a tie-breaker and a column, never the rank.
+    severity: str = ""
+    cost_to_resolve: str = ""
+    old_score: "float | None" = None
+    # Measured-loss inputs (all additive and defaulted: an old board loads unchanged).
+    # `signatures` are observable strings the transcripts would show; `precision` was judged
+    # on the signature set whose digest is `signatures_digest` and is stale under any other.
+    signatures: "tuple[str, ...]" = ()
+    minutes_per_occurrence: "float | None" = None
+    minutes_basis: str = ""
+    precision: "float | None" = None
+    precision_sample: "dict | None" = None
+    signatures_digest: str = ""
+    family: str = ""
+    silent_estimate: str = ""
+    loss_measurement: "dict | None" = None
 
 
 @dataclass(frozen=True)
@@ -419,6 +443,10 @@ def _read_board_json(path: Path) -> "dict | None":
     return raw if isinstance(raw, dict) and raw.get("schema") == BOARD_SCHEMA else None
 
 
+def _float_or_none(value) -> "float | None":
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def _prior_from_raw(raw: dict) -> PriorBoard:
     items = {}
     for ref, entry in (raw.get("items") or {}).items():
@@ -439,6 +467,22 @@ def _prior_from_raw(raw: dict) -> PriorBoard:
             cluster_size=int(entry.get("cluster_size", 1)),
             unjudged=entry.get("unjudged") is True,
             addresses=tuple(str(a) for a in (entry.get("addresses") or ())),
+            severity=str(entry.get("severity", "")),
+            cost_to_resolve=str(entry.get("cost_to_resolve", "")),
+            old_score=_float_or_none(entry.get("old_score")),
+            signatures=tuple(str(s) for s in (entry.get("signatures") or ())),
+            minutes_per_occurrence=_float_or_none(entry.get("minutes_per_occurrence")),
+            minutes_basis=str(entry.get("minutes_basis", "")),
+            precision=_float_or_none(entry.get("precision")),
+            precision_sample=(
+                entry["precision_sample"] if isinstance(entry.get("precision_sample"), dict) else None
+            ),
+            signatures_digest=str(entry.get("signatures_digest", "")),
+            family=str(entry.get("family", "")),
+            silent_estimate=str(entry.get("silent_estimate", "")),
+            loss_measurement=(
+                entry["loss_measurement"] if isinstance(entry.get("loss_measurement"), dict) else None
+            ),
         )
     return PriorBoard(
         schema=BOARD_SCHEMA, generated_at=str(raw.get("generated_at", "")), items=items
@@ -468,6 +512,18 @@ def write_board(board: PriorBoard, path: "str | Path") -> None:
                 "cluster_size": item.cluster_size,
                 "unjudged": item.unjudged,
                 "addresses": list(item.addresses),
+                "severity": item.severity,
+                "cost_to_resolve": item.cost_to_resolve,
+                "old_score": item.old_score,
+                "signatures": list(item.signatures),
+                "minutes_per_occurrence": item.minutes_per_occurrence,
+                "minutes_basis": item.minutes_basis,
+                "precision": item.precision,
+                "precision_sample": item.precision_sample,
+                "signatures_digest": item.signatures_digest,
+                "family": item.family,
+                "silent_estimate": item.silent_estimate,
+                "loss_measurement": item.loss_measurement,
             }
             for ref, item in board.items.items()
         },
@@ -1070,6 +1126,19 @@ def build_worklist(
     prior: "PriorBoard | None" = None,
 ) -> dict:
     now = now or datetime.now(timezone.utc)
+    closed = set(closed_refs)
+    # Board items with neither an observable signature nor a silent-lane estimate: the
+    # model's backlog of loss classification. Separate from `items`, which is the
+    # new+changed worklist and keeps its contract.
+    loss_unclassified = [
+        {
+            "item_ref": ref,
+            "title": item.title,
+            "functional_ground": item.functional_ground,
+        }
+        for ref, item in (prior.items.items() if prior is not None else ())
+        if ref not in closed and not item.signatures and not item.silent_estimate.strip()
+    ]
     items = []
     for bucket, batch in (
         ("new", new_items), ("changed", changed_items), ("rescore", rescore_items)
@@ -1097,6 +1166,7 @@ def build_worklist(
         # Not itself an "item" (per the Phase-A contract, only new+changed are) — bookkeeping
         # Phase B needs, since it has no live channel access of its own to re-derive "closed".
         "closed_refs": list(closed_refs),
+        "loss_unclassified": loss_unclassified,
         "items": items,
     }
 
@@ -1115,28 +1185,20 @@ def write_worklist(worklist: dict, path: "str | Path") -> None:
 
 # --- backlog producer: classification + the deterministic scoring half -----
 
-def _constrained_rank(refs: "list[str]", items: "dict[str, PriorBoardItem]") -> "list[str]":
-    """Order `refs` by score descending, with a HARD partial order from `blocked_by`
-    edges: a blocked item never precedes its blocker, regardless of score. A blocker
-    absent from this board (already closed, or never existed) imposes no constraint.
-    A cycle among the remaining items gives up enforcing it (falls back to score order
-    for just those items) rather than looping forever.
+def _constrained_rank(
+    refs: "list[str]", items: "dict[str, PriorBoardItem]", key=None
+) -> "list[str]":
+    """Order `refs` by `key` ascending (default: score descending, then ref), with a HARD
+    partial order from `blocked_by` edges: a blocked item never precedes its blocker,
+    regardless of score. A blocker absent from this board (already closed, or never
+    existed) imposes no constraint. A cycle among the remaining items gives up enforcing it
+    (falls back to key order for just those items) rather than looping forever.
     """
-    remaining = sorted(refs, key=lambda r: (-(items[r].score or 0.0), r))
-    result: "list[str]" = []
-    guard = len(remaining) + 1
-    while remaining and guard:
-        guard -= 1
-        ready = [
-            r for r in remaining
-            if all(b not in remaining or b in result for b in items[r].blocked_by)
-        ]
-        if not ready:
-            ready = remaining  # a cycle: stop enforcing the order for what's left
-        pick = ready[0]
-        result.append(pick)
-        remaining.remove(pick)
-    return result
+    return loss.constrained_order(
+        refs,
+        {r: items[r].blocked_by for r in refs},
+        key or (lambda r: (-(items[r].score or 0.0), r)),
+    )
 
 
 _HEX_DIGITS = frozenset("0123456789abcdef")
@@ -1160,6 +1222,83 @@ def parse_addresses(ref: str, value) -> "tuple[str, ...]":
     return tuple(dict.fromkeys(value))
 
 
+# The model-supplied measured-loss fields, valid both in a full classification and (as any
+# non-empty subset, with `addresses`) in an amendment of a carried item.
+LOSS_INPUT_KEYS = frozenset({
+    "signatures", "minutes_per_occurrence", "minutes_basis", "precision", "precision_sample",
+    "family", "silent_estimate",
+})
+AMENDABLE_KEYS = LOSS_INPUT_KEYS | {"addresses"}
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _nonempty_str(ref: str, key: str, value) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"item {ref!r}: {key!r} must be a non-empty string, got {value!r}")
+    return value.strip()
+
+
+def parse_loss_fields(ref: str, c: dict) -> dict:
+    """Validate the measured-loss fields present in classification/amendment `c` and return
+    them as board-field values (only the keys present). Raises ValueError naming `ref`."""
+    out: dict = {}
+    if "signatures" in c:
+        value = c["signatures"]
+        if not isinstance(value, list):
+            raise ValueError(f"item {ref!r}: 'signatures' must be a list of non-empty strings, got {value!r}")
+        out["signatures"] = tuple(
+            dict.fromkeys(_nonempty_str(ref, "signatures", s) for s in value)
+        )
+    if "minutes_per_occurrence" in c:
+        value = c["minutes_per_occurrence"]
+        if not _is_number(value) or value <= 0:
+            raise ValueError(f"item {ref!r}: 'minutes_per_occurrence' must be a number > 0, got {value!r}")
+        out["minutes_per_occurrence"] = float(value)
+    if "minutes_basis" in c:
+        out["minutes_basis"] = _nonempty_str(ref, "minutes_basis", c["minutes_basis"])
+    if "precision" in c:
+        value = c["precision"]
+        if not _is_number(value) or not 0 <= value <= 1:
+            raise ValueError(f"item {ref!r}: 'precision' must be a number in [0, 1], got {value!r}")
+        out["precision"] = float(value)
+    if "precision_sample" in c:
+        value = c["precision_sample"]
+        ok = (
+            isinstance(value, dict)
+            and isinstance(value.get("n"), int) and not isinstance(value.get("n"), bool)
+            and isinstance(value.get("true"), int) and not isinstance(value.get("true"), bool)
+            and value["n"] >= value["true"] >= 0
+        )
+        if not ok:
+            raise ValueError(
+                f"item {ref!r}: 'precision_sample' must be {{n, true}} integers with n >= true >= 0, "
+                f"got {value!r}"
+            )
+        out["precision_sample"] = {"n": value["n"], "true": value["true"]}
+    if "family" in c:
+        if not isinstance(c["family"], str):
+            raise ValueError(f"item {ref!r}: 'family' must be a string, got {c['family']!r}")
+        out["family"] = c["family"].strip()
+    if "silent_estimate" in c:
+        out["silent_estimate"] = _nonempty_str(ref, "silent_estimate", c["silent_estimate"])
+    return out
+
+
+def apply_loss_fields(item: PriorBoardItem, fields: dict) -> PriorBoardItem:
+    """`item` with validated loss fields applied. A precision is stamped with the digest of the
+    signature set the item carries AFTER this edit, so editing signatures alone leaves an
+    earlier precision stale."""
+    if not fields:
+        return item
+    updated = replace(item, **fields)
+    if "precision" in fields:
+        updated = replace(updated, signatures_digest=loss.signatures_digest(updated.signatures))
+    return updated
+
+
 def classify_and_score(
     prior: PriorBoard,
     classified: "dict[str, dict]",
@@ -1181,6 +1320,7 @@ def classify_and_score(
     closed = set(closed_refs)
 
     addresses_of = {ref: parse_addresses(ref, c.get("addresses")) for ref, c in classified.items()}
+    loss_of = {ref: parse_loss_fields(ref, c) for ref, c in classified.items()}
     for ref, c in classified.items():
         _validate_vocab("breadth", c.get("breadth"), BREADTH_WEIGHTS)
         _validate_vocab("cost_to_resolve", c.get("cost_to_resolve"), _BUDGET_TIER_KEYS)
@@ -1208,124 +1348,117 @@ def classify_and_score(
 
     no_urgency_signal: "list[str]" = []
     fresh: "dict[str, PriorBoardItem]" = {}
-    findings: "list[Finding]" = []
     for ref, c in classified.items():
         severity = Severity.parse(c.get("severity", "medium"))
         other_cluster_count = cluster_size.get(ref, 1) - 1
         recurrence_mass = severity.mass + other_cluster_count
-        evidence = tuple(e for e in (c.get("evidence"),) if e)
         severity_labeled = c.get("severity_labeled") is True
         unjudged = ref in unjudged_refs
+        classification: "str | None" = c["breadth"]
+        score: "float | None" = None
         if other_cluster_count == 0 and not severity_labeled and unjudged:
             # An undecided nominated pair leaves "no cluster" unconfirmed: park the item as
             # unjudged, not as a confirmed no-urgency singleton.
-            fresh[ref] = PriorBoardItem(
-                classification="unjudged",
-                score=None,
-                rank=None,
-                source_digest=c.get("source_digest", ""),
-                title=c.get("title", ref),
-                functional_ground=c.get("functional_ground", ""),
-                evidence=evidence,
-                recommended_next_step=c["recommended_next_step"],
-                blocked_by=tuple(c.get("blocked_by") or ()),
-                cost_estimate=c.get("cost_estimate", ""),
-                severity_labeled=severity_labeled,
-                cluster_size=cluster_size.get(ref, 1),
-                unjudged=True,
-                addresses=addresses_of[ref],
-            )
-            continue
-        if other_cluster_count == 0 and not severity_labeled:
+            classification = "unjudged"
+        elif other_cluster_count == 0 and not severity_labeled:
             # "No severity signal AND no cluster": the adapter defaults an unlabeled issue
             # to MEDIUM, so only the record's `severity_labeled` flag tells a stated
             # severity from a defaulted one.
+            classification = "no-urgency-signal"
             no_urgency_signal.append(ref)
-            fresh[ref] = PriorBoardItem(
-                classification="no-urgency-signal",
-                score=None,
-                rank=None,
-                source_digest=c.get("source_digest", ""),
-                title=c.get("title", ref),
-                functional_ground=c.get("functional_ground", ""),
-                evidence=evidence,
-                recommended_next_step=c["recommended_next_step"],
-                blocked_by=tuple(c.get("blocked_by") or ()),
-                cost_estimate=c.get("cost_estimate", ""),
-                severity_labeled=severity_labeled,
-                cluster_size=cluster_size.get(ref, 1),
-                addresses=addresses_of[ref],
+        else:
+            score = score_item(
+                c["breadth"], recurrence_mass, c["cost_to_resolve"], c["in_flight"],
+                config_path=config_path,
             )
-            continue
-        score = score_item(
-            c["breadth"], recurrence_mass, c["cost_to_resolve"], c["in_flight"],
-            config_path=config_path,
-        )
-        fresh[ref] = PriorBoardItem(
-            classification=c["breadth"],
+        old_score = score
+        if old_score is None:
+            # The legacy score for an item the rubric parks: a missing severity counts as the
+            # lowest mass. It only breaks ties among equally measured items (loss.py).
+            old_score = score_item(
+                c["breadth"], Severity.LOW.mass + other_cluster_count, c["cost_to_resolve"],
+                c["in_flight"], config_path=config_path,
+            )
+        item = PriorBoardItem(
+            classification=classification,
             score=score,
             rank=None,
             source_digest=c.get("source_digest", ""),
             title=c.get("title", ref),
             functional_ground=c.get("functional_ground", ""),
-            evidence=evidence,
+            evidence=tuple(e for e in (c.get("evidence"),) if e),
             recommended_next_step=c["recommended_next_step"],
             blocked_by=tuple(c.get("blocked_by") or ()),
             cost_estimate=c.get("cost_estimate", ""),
             severity_labeled=severity_labeled,
             cluster_size=cluster_size.get(ref, 1),
-            unjudged=unjudged,
+            unjudged=unjudged or classification == "unjudged",
             addresses=addresses_of[ref],
+            severity=str(c.get("severity") or ""),
+            cost_to_resolve=c["cost_to_resolve"],
+            old_score=old_score,
         )
+        fresh[ref] = apply_loss_fields(_inherit_loss_fields(item, prior.items.get(ref)), loss_of[ref])
 
     all_items = {**carried, **fresh}
     scored_refs = [ref for ref, item in all_items.items() if item.score is not None]
     order = _constrained_rank(scored_refs, all_items)
     rank_of = {ref: i + 1 for i, ref in enumerate(order)}
+    if any(item.loss_measurement for item in all_items.values()):
+        # A board that carries measured loss keeps its measured order across a phase B run;
+        # `loss` recomputes it after the next measurement.
+        rank_of = loss.lane_ranks(loss.build_lanes(all_items))
 
-    final_items: "dict[str, PriorBoardItem]" = {}
-    for ref, item in all_items.items():
-        final_items[ref] = PriorBoardItem(
-            classification=item.classification,
-            score=item.score,
-            rank=rank_of.get(ref),
-            source_digest=item.source_digest,
+    final_items = {ref: replace(item, rank=rank_of.get(ref)) for ref, item in all_items.items()}
+    board = PriorBoard(schema=BOARD_SCHEMA, generated_at=now.isoformat(), items=final_items)
+    return board, emit_board_findings(final_items), no_urgency_signal
+
+
+def _inherit_loss_fields(item: PriorBoardItem, prior: "PriorBoardItem | None") -> PriorBoardItem:
+    """A re-classified item keeps the measured-loss fields its previous board entry held, so
+    a changed ticket text does not discard the signatures and precision already judged."""
+    if prior is None:
+        return item
+    return replace(
+        item,
+        signatures=prior.signatures,
+        minutes_per_occurrence=prior.minutes_per_occurrence,
+        minutes_basis=prior.minutes_basis,
+        precision=prior.precision,
+        precision_sample=prior.precision_sample,
+        signatures_digest=prior.signatures_digest,
+        family=prior.family,
+        silent_estimate=prior.silent_estimate,
+        loss_measurement=prior.loss_measurement,
+    )
+
+
+def emit_board_findings(items: "dict[str, PriorBoardItem]") -> "list[Finding]":
+    """One backlog-item Finding per board item, whatever its severity label or measured state.
+
+    `store_findings` resolves out every same-kind row absent from the newest scan, so both
+    phase B and `loss` must emit the WHOLE board through this one function."""
+    return [
+        Finding(
+            kind="backlog-item",
+            signal=ref,
             title=item.title,
             functional_ground=item.functional_ground,
             evidence=item.evidence,
+            cost_signal=parse_backlog_cost_rate(item.cost_estimate),
+            source_ref=ref,
             recommended_next_step=item.recommended_next_step,
-            blocked_by=item.blocked_by,
-            cost_estimate=item.cost_estimate,
-            severity_labeled=item.severity_labeled,
-            cluster_size=item.cluster_size,
-            unjudged=item.unjudged,
+            proxy_score=item.old_score if item.old_score is not None else item.score,
             addresses=item.addresses,
         )
-        if final_items[ref].rank is not None:
-            findings.append(
-                Finding(
-                    kind="backlog-item",
-                    signal=ref,
-                    title=final_items[ref].title,
-                    functional_ground=final_items[ref].functional_ground,
-                    evidence=final_items[ref].evidence,
-                    cost_signal=parse_backlog_cost_rate(final_items[ref].cost_estimate),
-                    source_ref=ref,
-                    recommended_next_step=final_items[ref].recommended_next_step,
-                    proxy_score=final_items[ref].score,
-                    addresses=final_items[ref].addresses,
-                )
-            )
-
-    board = PriorBoard(schema=BOARD_SCHEMA, generated_at=now.isoformat(), items=final_items)
-    return board, findings, no_urgency_signal
+        for ref, item in items.items()
+    ]
 
 
 # --- report: one cost-first ranking over both producers' findings ----------
-# Reads ONLY the store (a bare `--store <path>` is enough to render) — the richer
+# The stored findings alone are enough to render (a bare `--store <path>`) — the richer
 # fields survive there because `_finding_record` JSON-encodes them into `detail`.
-# `--board` is accepted for CLI-surface completeness but unused: the store alone
-# fully determines report content, so there is nothing yet for it to add.
+# `--board`, when readable, adds the measured-loss / silent / awaiting lanes ahead of them.
 
 # The rendered command TEXT for each closed-vocabulary next step — printed only,
 # never executed (no subprocess/network reach anywhere in this section; asserted
@@ -1489,37 +1622,123 @@ def _render_finding_md(f: dict) -> str:
     ])
 
 
-def _render_markdown(ranked: "list[dict]") -> str:
+def _lane_member_refs(lanes: dict) -> "set[str]":
+    return (
+        {m for row in lanes["loss"] + lanes["silent"] for m in row["members"]}
+        | {row["ref"] for row in lanes["awaiting"]}
+    )
+
+
+def _cell(text: str) -> str:
+    return " ".join(str(text).split()).replace("|", "\\|")
+
+
+def _address_notes(members: "list[str]", addresses: "dict[str, tuple[str, ...]]", telemetry: "set[str]") -> str:
+    notes = []
+    for member in members:
+        for key in addresses.get(member, ()):
+            notes.append(f"{member}: {'via' if key in telemetry else 'dangling'} `{key}`")
+    return "; ".join(notes)
+
+
+def _render_lanes_md(lanes: dict, ranked: "list[dict]", addresses: "dict[str, tuple[str, ...]]") -> "list[str]":
+    telemetry = {f["key"] for f in ranked if f["source"] == sds.KIND_TELEMETRY_PATTERN}
+    parts: "list[str]" = []
+    if lanes["loss"]:
+        parts += [
+            "## Measured loss — min/week",
+            "",
+            "| min/week | sessions/window (raw → est) | min/occurrence | basis | fix cost | members |",
+            "|---|---|---|---|---|---|",
+        ]
+        for row in lanes["loss"]:
+            members = ", ".join(row["members"])
+            notes = _address_notes(row["members"], addresses, telemetry)
+            if notes:
+                members += f" ({notes})"
+            parts.append(
+                f"| **{row['min_per_week']:.1f}** | {row['sessions_hit']} → {row['sessions_est']:.1f} "
+                f"/ {row['window_days']}d | {row['min_per_occurrence']:.1f} | {_cell(row['basis'])} "
+                f"| {row['fix_cost'] or '?'} | {_cell(members)} |"
+            )
+        parts.append("")
+    return parts
+
+
+def _render_tail_lanes_md(lanes: dict) -> "list[str]":
+    parts: "list[str]" = []
+    if lanes["silent"]:
+        parts += ["## Silent lane — no observable signature", ""]
+        for row in lanes["silent"]:
+            parts.append(f"- **{row['ref']}** ({', '.join(row['members'])}) — {_cell(row['silent_estimate'])}")
+        parts.append("")
+    if lanes["awaiting"]:
+        parts += ["## Awaiting loss classification", ""]
+        for row in lanes["awaiting"]:
+            parts.append(f"- **{row['ref']}** — {_cell(row['title'])}")
+        parts.append("")
+    return parts
+
+
+def _render_markdown(
+    ranked: "list[dict]", lanes: "dict | None" = None,
+    addresses: "dict[str, tuple[str, ...]] | None" = None,
+) -> str:
+    lanes = lanes or {"loss": [], "silent": [], "awaiting": []}
+    shown = _lane_member_refs(lanes)
+    ranked = [
+        f for f in ranked
+        if not (f["source"] == sds.KIND_BACKLOG_ITEM and f["source_ref"] in shown)
+    ]
     measured = [f for f in ranked if f["cost_signal"]["measured"]]
     unmeasured = [f for f in ranked if not f["cost_signal"]["measured"]]
     parts = ["# Improvement-scan report", ""]
+    parts += _render_lanes_md(lanes, ranked, addresses or {})
     if measured:
         parts.append("## Measured cost signal — ranked by cost, then attention, then stability")
         parts.append("")
         for f in measured:
             parts.append(_render_finding_md(f))
             parts.append("")
+    parts += _render_tail_lanes_md(lanes)
     if unmeasured:
         parts.append("## No measured cost signal — ordered by the triage rubric's proxy score")
         parts.append("")
         for f in unmeasured:
             parts.append(_render_finding_md(f))
             parts.append("")
-    if not measured and not unmeasured:
+    if not measured and not unmeasured and not (lanes["loss"] or lanes["silent"] or lanes["awaiting"]):
         parts.append("No open improvement-scan findings.")
     return "\n".join(parts).rstrip() + "\n"
 
 
-def _render_json(ranked: "list[dict]") -> str:
-    return json.dumps({"findings": ranked}, ensure_ascii=False, indent=2)
+def _render_json(ranked: "list[dict]", lanes: "dict | None" = None) -> str:
+    lanes = lanes or {"loss": [], "silent": [], "awaiting": []}
+    return json.dumps(
+        {
+            "findings": ranked,
+            "loss": lanes["loss"],
+            "silent": lanes["silent"],
+            "awaiting": lanes["awaiting"],
+        },
+        ensure_ascii=False, indent=2,
+    )
+
+
+def _board_for_report(board_path: "str | None") -> "PriorBoard | None":
+    raw = _read_board_json(Path(board_path)) if board_path else None
+    return _prior_from_raw(raw) if raw is not None else None
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
     ranked = _rank_findings(_report_findings(args.store))
+    board = _board_for_report(getattr(args, "board", None))
+    lanes = loss.build_lanes(board.items) if board is not None else None
     if args.format == "json":
-        print(_render_json(ranked))
+        print(_render_json(ranked, lanes))
     else:
-        print(_render_markdown(ranked))
+        addresses = {ref: item.addresses for ref, item in board.items.items()} if board else None
+        print(_render_markdown(ranked, lanes, addresses))
     return 0
 
 
@@ -1617,21 +1836,26 @@ def _read_json_object(path: str, what: str) -> "dict | None":
 def _apply_addresses_amendments(
     prior: PriorBoard, items: "dict[str, dict]", worklist_items: "list[dict] | None"
 ) -> "tuple[PriorBoard, dict[str, dict]]":
-    """Split off classifications that carry ONLY `addresses` for an item already on the
-    board (and not in this worklist): they set that item's `addresses` (an empty list
-    clears) and change nothing else. Every other entry is returned untouched for the
-    normal merge, which rejects an unknown ref or an incomplete entry."""
+    """Split off classifications that carry ONLY amendable keys (`addresses` and the
+    measured-loss fields) for an item already on the board (and not in this worklist):
+    they set exactly those fields (an empty `addresses` list clears) and change nothing
+    else. Every other entry is returned untouched for the normal merge, which rejects an
+    unknown ref or an incomplete entry."""
     in_worklist = {w.get("item_ref") for w in worklist_items or ()}
     kept: "dict[str, dict]" = {}
     amended = dict(prior.items)
     for ref, c in items.items():
         if (
             isinstance(c, dict)
-            and set(c) == {"addresses"}
+            and c
+            and set(c) <= AMENDABLE_KEYS
             and ref in prior.items
             and ref not in in_worklist
         ):
-            amended[ref] = replace(prior.items[ref], addresses=parse_addresses(ref, c["addresses"]))
+            item = prior.items[ref]
+            if "addresses" in c:
+                item = replace(item, addresses=parse_addresses(ref, c["addresses"]))
+            amended[ref] = apply_loss_fields(item, parse_loss_fields(ref, c))
         else:
             kept[ref] = c
     return replace(prior, items=amended), kept
@@ -1703,6 +1927,116 @@ def _cmd_backlog(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     return 2
+
+
+def hits_cache_path() -> Path:
+    return Path.home() / ".local" / "state" / "improvement-scan" / "loss-hits.json"
+
+
+def _measure_board(
+    board: PriorBoard, transcripts: "list[Path]", cache: dict, *,
+    days: int, until: datetime, now: datetime,
+) -> "tuple[dict[str, PriorBoardItem], dict[str, tuple], int]":
+    """Count hit sessions for every board item that carries signatures and stamp each with
+    its `loss_measurement`. Returns (items, specs, transcripts opened)."""
+    since = until - timedelta(days=days)
+    specs = {
+        ref: (item.signatures, loss.issue_number(ref))
+        for ref, item in board.items.items() if item.signatures
+    }
+    sessions, opened = loss.count_sessions(specs, transcripts, cache, since=since, until=until)
+    items = {
+        ref: (
+            replace(item, loss_measurement=loss.measurement_for(
+                item, sessions[ref], window_days=days, until=until, now=now))
+            if ref in sessions else item
+        )
+        for ref, item in board.items.items()
+    }
+    return items, specs, opened
+
+
+def _write_samples(
+    path: str, items: "dict[str, PriorBoardItem]", specs: dict, transcripts: "list[Path]",
+    cache: dict, *, days: int, until: datetime, sample_size: int,
+) -> int:
+    """Excerpts for the model's precision judgment, for every item whose precision is missing
+    or was judged on a different signature set. Returns the number of items written."""
+    since = until - timedelta(days=days)
+    needing = {
+        ref: spec for ref, spec in specs.items() if not loss.effective_precision(items[ref])[1]
+    }
+    samples = loss.build_samples(
+        needing, transcripts, cache, since=since, until=until, sample_size=sample_size
+    )
+    _atomic_write_json({
+        "window_days": days,
+        "until": until.isoformat(),
+        "sample_size": sample_size,
+        "items": {
+            ref: {
+                "title": items[ref].title,
+                "signatures": list(items[ref].signatures),
+                "signatures_digest": loss.signatures_digest(items[ref].signatures),
+                "samples": samples[ref],
+            }
+            for ref in needing
+        },
+    }, path)
+    return len(needing)
+
+
+def _cmd_loss(args: argparse.Namespace) -> int:
+    if args.days < 1:
+        print(f"improvement-scan loss: --days must be at least 1, got {args.days}", file=sys.stderr)
+        return 2
+    state = _board_state_arg(args)
+    raw = _read_board_json(state)
+    if raw is None:
+        print(f"improvement-scan loss: no readable board state at {state}", file=sys.stderr)
+        return 2
+    board = _prior_from_raw(raw)
+    try:
+        until_arg = datetime.fromisoformat(args.until) if args.until else None
+    except ValueError:
+        print(f"improvement-scan loss: --until {args.until!r} is not an ISO timestamp", file=sys.stderr)
+        return 2
+    now = datetime.now(timezone.utc)
+    _since, until = loss.window_bounds(args.days, until_arg)
+    transcripts = loss.enumerate_transcripts([Path(p) for p in args.projects_roots] or None)
+    cache_path = Path(args.hits_cache) if args.hits_cache else hits_cache_path()
+    cache = loss.load_hit_cache(cache_path)
+
+    items, specs, opened = _measure_board(
+        board, transcripts, cache, days=args.days, until=until, now=now
+    )
+    lanes = loss.build_lanes(items)
+    ranks = loss.lane_ranks(lanes)
+    items = {ref: replace(item, rank=ranks.get(ref)) for ref, item in items.items()}
+    measured = PriorBoard(schema=BOARD_SCHEMA, generated_at=now.isoformat(), items=items)
+    findings = emit_board_findings(items)
+
+    summary = (
+        f"improvement-scan loss: {len(specs)} item(s) with signatures over {len(transcripts)} "
+        f"transcript(s) ({opened} opened); lanes: {len(lanes['loss'])} loss, "
+        f"{len(lanes['silent'])} silent, {len(lanes['awaiting'])} awaiting"
+    )
+    if getattr(args, "dry_run", False):
+        print(summary + f" — dry run: nothing written, {len(findings)} finding(s) not stored")
+        return 0
+    loss.save_hit_cache(cache, cache_path)
+    sampled = 0
+    if args.emit_samples:
+        sampled = _write_samples(
+            args.emit_samples, items, specs, transcripts, cache,
+            days=args.days, until=until, sample_size=args.sample_size,
+        )
+    write_board(measured, state)
+    store_findings(findings, kinds=frozenset([sds.KIND_BACKLOG_ITEM]), store_path=args.store)
+    print(summary + f"; {len(findings)} finding(s) stored -> {state}")
+    if args.emit_samples:
+        print(f"improvement-scan loss: {sampled} item(s) await a precision judgment -> {args.emit_samples}")
+    return 0
 
 
 def _run_telemetry_scan(args: argparse.Namespace) -> int:
@@ -1815,6 +2149,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_backlog.add_argument("--store", default=None, help="findings store path (phase B only)")
     p_backlog.set_defaults(func=_cmd_backlog)
 
+    p_loss = sub.add_parser(
+        "loss", help="count signature hits in session transcripts and rank the board by measured loss"
+    )
+    p_loss.add_argument(
+        "--board-state", default=None,
+        help="the durable board state file (default: $IMPROVEMENT_SCAN_BOARD_STATE or "
+        "~/.local/state/improvement-scan/board.json)",
+    )
+    p_loss.add_argument("--store", default=None, help="findings store path")
+    p_loss.add_argument(
+        "--projects-root", action="append", default=[], dest="projects_roots",
+        help="a `projects` directory of transcripts (repeatable); default: every configured root",
+    )
+    p_loss.add_argument("--days", type=int, default=loss.DEFAULT_WINDOW_DAYS, help="window length in days")
+    p_loss.add_argument("--until", default=None, help="window end, ISO timestamp (default: now)")
+    p_loss.add_argument(
+        "--hits-cache", default=None,
+        help="per-transcript hit cache (default: ~/.local/state/improvement-scan/loss-hits.json)",
+    )
+    p_loss.add_argument(
+        "--emit-samples", default=None,
+        help="write seeded excerpts for items whose precision is missing or stale here",
+    )
+    p_loss.add_argument(
+        "--sample-size", type=int, default=loss.DEFAULT_SAMPLE_SIZE, help="excerpts per item"
+    )
+    p_loss.set_defaults(func=_cmd_loss)
+
     p_telemetry = sub.add_parser("telemetry", help="scan recent session telemetry for recurring difficulties")
     p_telemetry.add_argument(
         "--emit-evidence", default=None,
@@ -1839,8 +2201,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--store", default=None, help="findings store path to render")
     p_report.add_argument(
         "--board", default=str(board_state_path()),
-        help="board state file (accepted for CLI-surface parity; unused — the store alone "
-        "fully determines report content)",
+        help="board state file; when readable, its measured-loss, silent and awaiting lanes are "
+        "rendered ahead of the stored findings",
     )
     p_report.add_argument("--format", choices=("md", "json"), default="md", help="output format")
     p_report.set_defaults(func=_cmd_report)

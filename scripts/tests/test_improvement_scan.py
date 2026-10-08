@@ -304,3 +304,4 @@ def test_module_never_shells_out_or_reaches_the_network():
     specialist, and performs no network I/O — all of which would require one
     of the transport-capable roots ast_purity.py already names."""
     assert impure_names(scan) == set()
+    assert impure_names(importlib.import_module("improvement_scan_loss")) == set()

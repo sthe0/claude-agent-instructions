@@ -69,7 +69,7 @@ def test_unlabeled_singleton_has_no_urgency_signal(tmp_path):
     assert no_urgency == ["ref-1"]
     assert board.items["ref-1"].score is None
     assert board.items["ref-1"].cluster_size == 1
-    assert findings == []
+    assert [f.source_ref for f in findings] == ["ref-1"]
 
 
 def test_clustered_item_score_unchanged_by_label(tmp_path):
