@@ -116,6 +116,24 @@ def test_specialist_only_marker_is_malformed_for_manager(mod):
     assert not ok and marker is None
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("**RESOLVED:** fixed\n", "RESOLVED"),
+        ("`INVESTIGATION: partial`\n", "INVESTIGATION"),
+        ("Summary first.\n## LOOP_DETECTED: same task\n", "LOOP_DETECTED"),
+        ("INVESTIGATION: early\nmore\n- RESOLVED: final\n", "RESOLVED"),
+        ("no marker here\n", None),
+    ],
+)
+def test_kind_extractor_keeps_extract_marker_contract(mod, text, expected):
+    from lib.planner_plan_check import MANAGER_RETURN_MARKERS, extract_kind_marker, extract_marker
+
+    assert extract_kind_marker(text, MANAGER_RETURN_MARKERS) == expected
+    swapped = text.replace(expected, "COMPLETED") if expected else text
+    assert extract_marker(swapped) == ("COMPLETED" if expected else None)
+
+
 def test_global_marker_set_is_unchanged():
     from lib.planner_plan_check import RETURN_MARKERS
 
