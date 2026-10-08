@@ -16,12 +16,14 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, gates
-from agentctl.state import Node, RESOLUTION_ASK_MARKER
+from agentctl import cli, gates, state as state_module
+from agentctl.state import Node
 from conftest import STAGE_OBSERVATIONS
-from lib.transcript_turns import ask_user_question_calls, has_marker_option
+from lib import transcript_turns
 
 SID = "ask-sess"
+# The literal is pinned here, and the engine's constant is asserted equal to it below.
+RESOLUTION_ASK_MARKER = "[resolution-ask]"
 
 
 def ns(**kw):
@@ -126,7 +128,8 @@ def quality_rows():
 
 def test_verify_final_directive_names_the_marker_and_logs_a_precise_stamp(store):
     d = to_resolution(store)
-    assert d.data["resolution_ask_marker"] == RESOLUTION_ASK_MARKER == "[resolution-ask]"
+    assert state_module.RESOLUTION_ASK_MARKER == RESOLUTION_ASK_MARKER
+    assert d.data["resolution_ask_marker"] == RESOLUTION_ASK_MARKER
     assert RESOLUTION_ASK_MARKER in d.detail
     at = verified_at(store)
     assert isinstance(at, float) and at > 1e9
@@ -331,9 +334,9 @@ def test_scanner_orders_asks_and_distinguishes_unreadable_from_empty(tmp_path):
         ask_entry("a1", 100.0, label="plain"), answer_entry("a1", 101.0),
         ask_entry("a2", 200.0, label=RESOLUTION_ASK_MARKER),
     ])
-    calls = ask_user_question_calls(path)
+    calls = transcript_turns.ask_user_question_calls(path)
     assert [(ts, answered) for _, ts, answered in calls] == [(100.0, True), (200.0, False)]
-    assert [has_marker_option(i, RESOLUTION_ASK_MARKER) for i, _, _ in calls] == [False, True]
+    assert [transcript_turns.has_marker_option(i, RESOLUTION_ASK_MARKER) for i, _, _ in calls] == [False, True]
 
-    assert ask_user_question_calls(tmp_path / "missing.jsonl") is None
-    assert ask_user_question_calls(write_transcript(tmp_path, [], sid="empty")) == []
+    assert transcript_turns.ask_user_question_calls(tmp_path / "missing.jsonl") is None
+    assert transcript_turns.ask_user_question_calls(write_transcript(tmp_path, [], sid="empty")) == []
