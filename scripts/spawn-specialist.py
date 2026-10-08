@@ -64,6 +64,7 @@ from lib.planner_plan_check import (  # single shared home for return-marker + p
     RETURN_MARKERS,
     check_planner_return,
     extract_marker,
+    markers_for_kind,
     validate_marker,
     validate_planner_plan,
 )
@@ -298,8 +299,13 @@ def assemble_prompt(
         "<abs-path>/agentctl-cli.py <verb> ...` works from any cwd; the "
         "repo-relative `python3 scripts/agentctl-cli.py <verb> ...` only when your "
         "cwd already is the repo/worktree root. If your work needs a parent-engine "
-        "action, return a marker (see § Return markers) instead of calling it "
-        "yourself.",
+        "action, return a marker "
+        + (
+            "(one of the markers your brief names)"
+            if is_manager_kind(getattr(args, "kind", None))
+            else "(see § Return markers)"
+        )
+        + " instead of calling it yourself.",
         "",
     ]
     if getattr(args, "kind", None) == "planner":
@@ -347,11 +353,21 @@ def assemble_prompt(
             ),
             "",
         ]
-    sections += [
-        "If your work needs an action not covered, return PERMISSION-REQUEST: with the request.",
-        "If you hit a small specific question whose answer is needed to continue, return CLARIFY: (see § Return markers).",
-    ]
+    sections.append("If your work needs an action not covered, return PERMISSION-REQUEST: with the request.")
+    if not is_manager_kind(getattr(args, "kind", None)):
+        sections.append(
+            "If you hit a small specific question whose answer is needed to continue, return CLARIFY: (see § Return markers)."
+        )
     return "\n".join(sections)
+
+
+# The empty specialization: a depth n+1 manager with no role SKILL.md and no
+# appended marker protocol. Used by the overcome-difficulty escape.
+MANAGER_KIND = "manager"
+
+
+def is_manager_kind(kind: str | None) -> bool:
+    return kind == MANAGER_KIND
 
 
 def skill_path(kind: str) -> Path:
@@ -419,7 +435,7 @@ def log_refused(reason: str, extra: dict) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--kind", required=True, help="specialization name (must exist at ~/.claude/skills/<kind>/SKILL.md)")
+    p.add_argument("--kind", required=True, help="specialization name (must exist at ~/.claude/skills/<kind>/SKILL.md); 'manager' is the empty specialization: a vanilla child with no role SKILL.md and no appended marker protocol, returning RESOLVED/INVESTIGATION/LOOP_DETECTED/PERMISSION-REQUEST")
     p.add_argument("--plan", type=Path, required=True, help="path to the markdown plan; mark the step the specialist owns with **<<this step>>**")
     p.add_argument("--done-criterion", required=True,
                    help="concrete done criterion for the step; '@<path>' reads it from a file")
@@ -1816,7 +1832,9 @@ def _build_extraction(result_text: str, kind: str) -> "marker_extract.Extraction
     without invoking main()'s subprocess plumbing. The shared implementation
     (``marker_extract.build_extraction``) runs the pass unconditionally
     whenever it can, not only after the legacy any-line regex scan failed."""
-    return marker_extract.build_extraction(result_text, kind=kind)
+    return marker_extract.build_extraction(
+        result_text, kind=kind, allowed=markers_for_kind(kind)
+    )
 
 
 # The CHILD's own terminal condition, distinct from every marker/extraction
@@ -1924,8 +1942,8 @@ def main(argv: list[str] | None = None) -> int:
         print(argv_text.file_arg_error("--plan", args.plan), file=sys.stderr)
         log_refused("plan-not-found", {"kind": args.kind, "plan": argv_text.abbreviate(args.plan)})
         return 2
-    skill = skill_path(args.kind)
-    if not skill.exists():
+    skill = None if is_manager_kind(args.kind) else skill_path(args.kind)
+    if skill is not None and not skill.exists():
         print(f"error: unknown specialization (no SKILL.md at {skill})", file=sys.stderr)
         log_refused("unknown-kind", {"kind": args.kind})
         return 2
@@ -2202,8 +2220,11 @@ def main(argv: list[str] | None = None) -> int:
     cmd = [
         "claude",
         "-p",
-        "--append-system-prompt-file",
-        str(composed_system_prompt_file(skill)),
+        *(
+            ["--append-system-prompt-file", str(composed_system_prompt_file(skill))]
+            if skill is not None
+            else []
+        ),
         "--max-budget-usd",
         cap,
         "--output-format",

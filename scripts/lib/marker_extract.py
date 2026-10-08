@@ -48,7 +48,7 @@ from dataclasses import dataclass, replace
 from typing import Callable
 
 from lib import host_llm
-from lib.planner_plan_check import RETURN_MARKERS
+from lib.planner_plan_check import RETURN_MARKERS, markers_for_kind
 from lib.runtime_models import HOST_CLAUDE, model_for
 
 # "low" complexity per lib.runtime_models — Claude's haiku, byte-identical to
@@ -222,8 +222,9 @@ def model(host: str = HOST_CLAUDE) -> str:
 def hint_markers_for(kind: str | None) -> tuple[str, ...]:
     """The markers ``kind`` TYPICALLY returns — a prompt hint only. An unlisted
     kind yields the full vocabulary, so an incomplete table degrades to a flat
-    closed-set question rather than to a rejection."""
-    return HINTS_BY_KIND.get(kind or "", RETURN_MARKERS)
+    closed-set question rather than to a rejection — except a kind with its own
+    vocabulary (``manager``), whose full set is its kind's marker set."""
+    return HINTS_BY_KIND.get(kind or "", markers_for_kind(kind))
 
 
 def _window(result_text: str) -> str:

@@ -37,6 +37,20 @@ RETURN_MARKERS = (
     "REVIEW",
 )
 MARKER_RE = re.compile(rf"^({'|'.join(RETURN_MARKERS)}):")
+
+# The escape child spawned as kind ``manager`` is a vanilla manager, not a
+# specialist: it answers in overcome-difficulty's own vocabulary. Kept OUT of
+# RETURN_MARKERS so every other kind validates against the specialist set
+# unchanged; PERMISSION-REQUEST is shared because a child outside its grants
+# must be able to ask.
+MANAGER_RETURN_MARKERS = ("RESOLVED", "INVESTIGATION", "LOOP_DETECTED", "PERMISSION-REQUEST")
+_MARKERS_BY_KIND = {"manager": MANAGER_RETURN_MARKERS}
+
+
+def markers_for_kind(kind: str | None) -> tuple[str, ...]:
+    return _MARKERS_BY_KIND.get(kind or "", RETURN_MARKERS)
+
+
 PLAN_PATH_RE = re.compile(r"^\s*Plan\s*:\s*(.+?)\s*$", re.MULTILINE)
 
 # Markdown/quoting decoration a specialist's terminal marker is commonly wrapped
@@ -84,13 +98,34 @@ def extract_marker(result_text: str) -> str | None:
     return found[-1]
 
 
-def validate_marker(result_text: str) -> tuple[str, bool]:
+def extract_kind_marker(result_text: str, markers: tuple[str, ...]) -> str | None:
+    """``extract_marker`` for a kind with its own marker vocabulary: the same
+    last-marker-line, decoration-tolerant contract over ``markers`` instead of
+    ``RETURN_MARKERS``."""
+    found = [
+        head
+        for line in result_text.splitlines()
+        for head, colon, _ in [_strip_decoration(line).partition(":")]
+        if colon and head in markers
+    ]
+    return found[-1] if found else None
+
+
+def _marker_in(result_text: str, markers: tuple[str, ...]) -> str | None:
+    if markers == RETURN_MARKERS:
+        return extract_marker(result_text)
+    return extract_kind_marker(result_text, markers)
+
+
+def validate_marker(
+    result_text: str, markers: tuple[str, ...] = RETURN_MARKERS
+) -> tuple[str, bool]:
     """Return ``(text, ok)``. A return marker is the label of the message; accept it on
     ANY line (the ``^MARKER:`` anchor keeps prose from matching by accident), not only the
     first non-empty one — specialists routinely write a short summary before the marker,
     and rejecting that as MALFORMED false-BLOCKs an otherwise-passing stage. If no line
     carries a known marker, prepend ``MALFORMED:`` and ``ok=False``."""
-    if extract_marker(result_text) is not None:
+    if _marker_in(result_text, markers) is not None:
         return result_text, True
     return (
         "MALFORMED: specialist output contained no known return marker line.\n\n"
@@ -251,10 +286,11 @@ def check_planner_return(
         plan_path = extraction.plan_path
         forwarded = canonicalize(marker, extraction.digest, plan_path, result_text)
     else:
-        forwarded, ok = validate_marker(result_text)
+        kind_markers = markers_for_kind(kind)
+        forwarded, ok = validate_marker(result_text, kind_markers)
         if not ok:
             return forwarded, False, None
-        marker = extract_marker(forwarded)
+        marker = _marker_in(forwarded, kind_markers)
         plan_path = None
 
     if kind == "planner" and marker == "PLAN-READY":

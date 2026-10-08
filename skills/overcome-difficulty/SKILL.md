@@ -129,19 +129,19 @@ Verification after the next round of action loops back to declaration if a new d
 
 Use this when working through declaration → investigation → critique in the current thread is **not converging**: the same difficulty keeps re-appearing in different costumes, plan-rework iterations chase their tail, you can feel the parent thread is anchored on a wrong frame, or accumulated context noise is more burden than help.
 
-Mechanism: spawn a **fresh manager** in a separate Claude Code process via `claude -p` — **no `--agent` flag** and **no `--append-system-prompt-file`**. That keeps the full Claude Code built-in system prompt, the same `CLAUDE.md`, the same memory, the same skills, the same subagent infrastructure; only the conversation history is empty.
+Mechanism: spawn a **fresh manager** through `scripts/spawn-specialist.py --kind manager` — the **empty specialization**: a depth n+1 manager with no role `SKILL.md` and no appended marker protocol. That keeps the full Claude Code built-in system prompt, the same `CLAUDE.md`, the same memory, the same skills, the same subagent infrastructure; only the conversation history is empty. The wrapper also supplies the depth cap, budget ceiling and telemetry that a hand-written `claude -p` would lack.
 
-The escape is **always a vanilla manager**, never a specialization-preloaded process — even when the difficulty arose inside a specialist (e.g. inside a developer `claude -p` process). The whole point of the escape is a fresh perspective without anchors. If the fresh manager determines it needs a specific specialist to resolve the sub-difficulty, it will spawn one itself via the standard spawn template (per its own freshly-built plan).
+The escape is **always the empty specialization**, never a role-preloaded process — even when the difficulty arose inside a specialist (e.g. inside a developer `claude -p` process). The whole point of the escape is a fresh perspective without anchors. If the fresh manager determines it needs a specific specialist to resolve the sub-difficulty, it will spawn one itself via the standard spawn template (per its own freshly-built plan).
 
 Each spawn can itself spawn another (overcome-difficulty escape can recurse) up to the depth cap defined below.
 
 ### Invocation
 
-Before spawning, verify the would-be `AGENT_RECURSION_DEPTH` does not exceed `max-recursion-depth` (see `~/.claude-agent/config.md`) — if it would, follow the hard depth cap below and do not spawn. Choose the budget tier per `CLAUDE.md` § Budget tier — `budget-medium-usd` is the default for overcome-difficulty escapes; `budget-large-usd` only when the difficulty likely needs deep exploration. The `claude -p` bash template (with the `AGENT_RECURSION_DEPTH` increment + the self-contained escape prompt) and how it works: [policy.md](policy.md) § Invocation.
+Before spawning, verify the would-be `AGENT_RECURSION_DEPTH` does not exceed `max-recursion-depth` (see `~/.claude-agent/config.md`) — if it would, follow the hard depth cap below and do not spawn. Choose the budget tier per `CLAUDE.md` § Budget tier — `budget-medium-usd` is the default for overcome-difficulty escapes; `budget-large-usd` only when the difficulty likely needs deep exploration. The `spawn-specialist.py --kind manager` recipe (with the self-contained escape brief) and how it works: [policy.md](policy.md) § Invocation.
 
 ### Reading the result
 
-The child returns one marker on stdout: **`RESOLVED:`** (apply + continue), **`INVESTIGATION:`** (incorporate findings; retry inline / escalate / accept partial), **`LOOP_DETECTED:`** (stop, summarize, ask the user — do not re-spawn on the same difficulty); a budget-cap exit without a marker is treated as `INVESTIGATION:`. Detail: [policy.md](policy.md) § Reading the result.
+The child returns one marker on stdout: **`RESOLVED:`** (apply + continue), **`INVESTIGATION:`** (incorporate findings; retry inline / escalate / accept partial), **`LOOP_DETECTED:`** (stop, summarize, ask the user — do not re-spawn on the same difficulty), **`PERMISSION-REQUEST:`** (the child needs an action outside its grants; route as for any specialist); a budget-cap exit without a marker is treated as `INVESTIGATION:`. Detail: [policy.md](policy.md) § Reading the result.
 
 ### Safeguards
 
