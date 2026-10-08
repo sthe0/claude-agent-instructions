@@ -160,7 +160,7 @@ def test_out_of_scope_revise_does_not_block(gate_on, tmp_path, fixtures_dir):
     doc0 = load_plan(str(plan_path))
     whole = _whole_review(plan_path, doc0)
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     doc1 = load_plan(str(plan_path))
     concerns = ["stage:2: this belongs to the other stage", "meta: unrelated worry"]
     ids = ["c1", "c2"]

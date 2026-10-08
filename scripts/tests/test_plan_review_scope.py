@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli, gates
-from agentctl.plan import load_plan, plan_meta_digest, plan_stage_digests
+from agentctl.plan import load_plan, plan_interface_digests, plan_meta_digest, plan_stage_digests
 from agentctl.render import render_plan_grants
 from agentctl.state import Node, PlanReview, SessionState
 
@@ -57,6 +57,7 @@ def _whole_review(plan_path, doc, **kw) -> PlanReview:
         plan_sha256=(_sha256_file(plan_path) if attest else ""),
         reviewed_meta_digest=plan_meta_digest(doc),
         reviewed_stage_keys={str(k): v for k, v in plan_stage_digests(doc).items()},
+        reviewed_interface_keys={str(k): v for k, v in plan_interface_digests(doc).items()},
         **kw,
     )
 
@@ -71,6 +72,7 @@ def _stage_review(plan_path, doc, index, **kw) -> PlanReview:
         plan_sha256=(_sha256_file(plan_path) if attest else ""),
         reviewed_meta_digest=plan_meta_digest(doc),
         reviewed_stage_keys={str(k): v for k, v in plan_stage_digests(doc).items()},
+        reviewed_interface_keys={str(k): v for k, v in plan_interface_digests(doc).items()},
         **kw,
     )
 
@@ -145,7 +147,7 @@ def test_stage_scoped_pass_clears_gate_for_its_own_moved_stage(gate_on, tmp_path
     doc0 = load_plan(str(plan_path))
     whole = _whole_review(plan_path, doc0)
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     doc1 = load_plan(str(plan_path))
     stage1 = _stage_review(plan_path, doc1, 1)
 
@@ -220,7 +222,7 @@ def test_stage_scoped_override_is_attestation_free_and_needs_distinct_reviewer(
                            reviewer="thinker", concerns=None, note="",
                            plan_digest=_sha256_file(plan)), store=store)
 
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="revise",
                            reviewer="thinker", concerns=["blocking: title needs work"], note="",
                            plan_digest=None), store=store)
@@ -330,7 +332,7 @@ def test_essence_allowed_when_stage_scoped_review_covers_the_moved_stage(
                            reviewer="thinker", concerns=None, note="",
                            plan_digest=_sha256_file(plan)), store=store)
 
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     cli.cmd_submit_plan(ns(session=sid, plan=str(plan)), store=store)
     cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="pass",
                            reviewer="thinker", concerns=None, note="",
@@ -482,7 +484,7 @@ def test_moved_stages_review_binds_a_renamed_target_by_bytes(gate_on, tmp_path, 
     reviewed = tmp_path / "plan.toml"
     reviewed.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc0 = load_plan(str(reviewed))
-    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     doc1 = load_plan(str(reviewed))
 
     renamed = tmp_path / "plan-v2.toml"

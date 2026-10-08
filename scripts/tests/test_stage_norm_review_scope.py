@@ -12,14 +12,20 @@ Pairs: base-plan, plan-3, plan-4, 2-1, 3-2 (pair `b-s`: base b is the consumer, 
 s its supplier)."""
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from agentctl import gates
+from agentctl.state import PlanReview
 
 from test_plan_review_topo import (  # noqa: F401  (fixtures + helpers)
+    _blockers,
     _bounded_data,
     _delta,
+    _effects,
     _hand_baseline,
+    _stage,
     _w,
     make_env,
 )
@@ -35,6 +41,14 @@ def _interface(index):
 
 def _scope(env):
     return gates.plan_review_delta(env.state(), env.doc())
+
+
+def _stage_pass(env, index):
+    """Record a stage-scoped pass. The directive's `ok` reports whether the whole gate
+    cleared, which it need not -- another stage may still be owed -- so the record
+    itself is what is checked."""
+    env.record(f"stage:{index}", "pass")
+    assert env.state().plan_stage_reviews[f"stage:{index}"].verdict == "pass"
 
 
 @pytest.fixture
@@ -143,3 +157,117 @@ def test_a_source_service_is_still_stale_by_its_construction(make_env):
     env.record_all()
     env.edit(_construction(1))
     assert env.status("2-1").startswith("stale:")
+
+
+def _effects_on_stage2(resolver):
+    return lambda d: d["stage"][1].update(effects=_effects(resolver))
+
+
+def test_effects_only_edit_of_a_relying_service_keeps_its_consumer_pair_current(make_env):
+    data = _bounded_data()
+    data["stage"][1]["effects"] = _effects("r1")
+    env = make_env(data)
+    env.record_all()
+    env.edit(_effects_on_stage2("r2"))
+    assert env.status("3-2") == "current"
+    assert env.status("2-1").startswith("stale:")
+
+
+def test_effects_only_edit_moves_no_review_key_so_nothing_is_in_scope(whole_pass):
+    whole_pass.edit(_effects_on_stage2("r2"))
+    assert _scope(whole_pass) == (False, set())
+
+
+def test_moved_consumer_with_a_current_stage_pass_still_owes_the_new_interface(whole_pass):
+    whole_pass.edit(_construction(2))
+    assert _scope(whole_pass) == (False, {2})
+    _stage_pass(whole_pass, 2)
+    assert _scope(whole_pass) == (False, set())
+
+    whole_pass.edit(_interface(1))
+    assert _scope(whole_pass) == (False, {1, 2})
+    _stage_pass(whole_pass, 1)
+    assert _scope(whole_pass) == (False, {2})
+
+
+def test_consumer_discharged_by_its_own_stage_pass_is_stale_again_when_the_interface_moves_again(whole_pass):
+    whole_pass.edit(_interface(1))
+    _stage_pass(whole_pass, 1)
+    _stage_pass(whole_pass, 2)
+    assert _scope(whole_pass) == (False, set())
+
+    whole_pass.edit(lambda d: d["stage"][0].update(expected_result_image="img 1 edited again"))
+    assert _scope(whole_pass) == (False, {1, 2})
+    _stage_pass(whole_pass, 1)
+    assert _scope(whole_pass) == (False, {2})
+
+
+def test_consumer_linked_by_supplies_alone_is_in_scope(make_env):
+    data = _bounded_data()
+    data["stage"][1]["depends_on"] = []
+    env = make_env(data)
+    assert env.record("", "pass").ok
+    env.edit(_interface(1))
+    assert _scope(env) == (False, {1, 2})
+
+
+def test_consumer_linked_by_depends_on_alone_is_in_scope(make_env):
+    data = _bounded_data()
+    data["stage"][1]["supplies"] = []
+    env = make_env(data)
+    assert env.record("", "pass").ok
+    env.edit(_interface(1))
+    assert _scope(env) == (False, {1, 2})
+
+
+def test_an_added_stage_is_in_scope_and_widens_nothing_else(whole_pass):
+    whole_pass.edit(lambda d: d["stage"].append(_stage(5, depends_on=[1], supplies=[{"on": 1}])))
+    assert _scope(whole_pass) == (False, {5})
+
+
+def test_interface_move_blocks_until_the_consumer_has_a_pass_that_saw_the_new_interface(whole_pass):
+    whole_pass.edit(_interface(1))
+    assert _blockers(whole_pass)
+    _stage_pass(whole_pass, 1)
+    owed = _blockers(whole_pass)
+    assert owed
+    assert any("stage 2" in b for b in owed)
+    _stage_pass(whole_pass, 2)
+    assert _blockers(whole_pass) == []
+
+
+def test_construction_only_move_needs_no_consumer_pass(whole_pass):
+    whole_pass.edit(_construction(1))
+    assert _blockers(whole_pass)
+    _stage_pass(whole_pass, 1)
+    assert _blockers(whole_pass) == []
+
+
+def test_blockers_and_delta_name_the_same_stages(whole_pass):
+    whole_pass.edit(_interface(1))
+    _stage_pass(whole_pass, 1)
+    assert _scope(whole_pass) == (False, {2})
+    text = " ".join(_blockers(whole_pass))
+    assert "stage 2" in text or "stage:2" in text
+    assert "stage 1" not in text and "stage:1" not in text
+
+
+def test_a_moved_consumer_pass_recorded_before_the_interface_moved_does_not_discharge_it(whole_pass):
+    whole_pass.edit(_construction(2))
+    _stage_pass(whole_pass, 2)
+    assert _blockers(whole_pass) == []
+    whole_pass.edit(_interface(1))
+    _stage_pass(whole_pass, 1)
+    assert _blockers(whole_pass)
+
+
+def test_plan_review_without_interface_or_pair_currency_fields_reads_as_a_legacy_record():
+    review = PlanReview(plan_path="/plan.toml", verdict="pass", reviewer="thinker",
+                        plan_sha256="0" * 64, reviewed_interface_keys={"1": "a" * 64},
+                        reviewed_pair_currency={"2-1": "b" * 64})
+    raw = dataclasses.asdict(review)
+    assert PlanReview.from_dict(raw) == review
+    del raw["reviewed_interface_keys"], raw["reviewed_pair_currency"]
+    restored = PlanReview.from_dict(raw)
+    assert restored.reviewed_interface_keys == {}
+    assert restored.reviewed_pair_currency is None

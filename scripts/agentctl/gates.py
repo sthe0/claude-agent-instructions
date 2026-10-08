@@ -1029,11 +1029,52 @@ def _remedy_tag_for_concern(concern: str) -> str:
     return m.group(1) if m else ""
 
 
+class _ReviewScope(NamedTuple):
+    meta_moved: bool
+    moved: "set[int]"
+    reliant: "dict[int, list[int]]"
+
+    @property
+    def stages(self) -> "set[int]":
+        return self.moved | set(self.reliant)
+
+
+def review_scope(doc, whole) -> _ReviewScope:
+    """The one computation of what a refinement owes review, against the whole-plan
+    record `whole` (None reads as an empty baseline): the stages whose own key moved,
+    and `{consumer: [moved suppliers whose interface moved]}` for every direct consumer
+    of such a supplier -- a consumer that is itself moved included, since its own
+    pass is of no use if it was written against the supplier's earlier interface. A
+    baseline recording no interface for a moved stage cannot show it unchanged
+    (`plan.moved_interfaces`), so its consumers are in. `plan_review_delta` reports this
+    scope and the blockers enforce it; neither recomputes it."""
+    baseline = (
+        _plan_review_baseline(whole) if whole is not None
+        else {"meta": "", "stages": {}, "interfaces": {}}
+    )
+    meta_moved, moved = changed_parts(doc, baseline)
+    if meta_moved:
+        return _ReviewScope(True, moved, {})
+    reliant: dict[int, list[int]] = {}
+    for supplier in sorted(moved_interfaces(doc, baseline["interfaces"], moved)):
+        for consumer in sorted(consumers(doc, supplier)):
+            reliant.setdefault(consumer, []).append(supplier)
+    return _ReviewScope(False, moved, reliant)
+
+
+def _interface_unseen(doc, stage_review, suppliers) -> bool:
+    """Whether `stage_review` did not record some supplier's interface as it is now (a
+    record from before interfaces were kept records none, so it never has)."""
+    seen = {str(k): v for k, v in stage_review.reviewed_interface_keys.items()}
+    current = plan_interface_digests(doc, set(suppliers))
+    return any(seen.get(str(m)) != current[m] for m in suppliers)
+
+
 class _PairRoute(NamedTuple):
     walk_stale: "list[str]"
     status: "dict[str, str]"
     discharged: bool
-    moved_stages: "frozenset | set"
+    scope: _ReviewScope
     error: str = ""
 
 
@@ -1050,16 +1091,16 @@ def _pair_route(state: SessionState, doc, plan_path: "str | None") -> "_PairRout
         return None
     if whole.plan_path != plan_path and not _binds_across_path_change(whole, plan_path):
         return None
-    meta_moved, moved_stages = changed_parts(doc, _plan_review_baseline(whole))
-    if meta_moved or _plan_review_verdict_blockers(whole, state=state, doc=doc):
+    scope = review_scope(doc, whole)
+    if scope.meta_moved or _plan_review_verdict_blockers(whole, state=state, doc=doc):
         return None
     try:
         walk_stale = walk_stale_pairs(state, doc, plan_path, whole)
     except PlanError as exc:
-        return _PairRoute([], {}, False, moved_stages, str(exc))
+        return _PairRoute([], {}, False, scope, str(exc))
     status = {pid: pair_status(state, doc, plan_path, pid) for pid in walk_stale}
     return _PairRoute(
-        walk_stale, status, all(s in PAIR_SATISFIED for s in status.values()), moved_stages,
+        walk_stale, status, all(s in PAIR_SATISFIED for s in status.values()), scope,
     )
 
 
@@ -1087,8 +1128,8 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
         return [_no_review_blocker(state)]
     if whole.plan_path != target_plan and not _binds_across_path_change(whole, target_plan):
         return [_stale_path_blocker(whole.plan_path, target_plan)]
-    meta_moved, moved_stages = changed_parts(doc, _plan_review_baseline(whole))
-    if meta_moved:
+    scope = review_scope(doc, whole)
+    if scope.meta_moved:
         return [
             "thinker review is stale — the plan's meta/order changed since it was "
             "reviewed; re-run plan-review"
@@ -1097,8 +1138,8 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     if blockers:
         return blockers
     if not has_pair_records_for(state, target_plan):
-        for index in sorted(moved_stages):
-            blockers = _stage_route_gaps(state, target_plan, doc, index)
+        for index in sorted(scope.stages):
+            blockers = _stage_route_gaps(state, target_plan, doc, index, scope.reliant.get(index, ()))
             if blockers:
                 return blockers
         return []
@@ -1107,16 +1148,16 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     if route.error:
         return [f"review pairs cannot be enumerated for this plan: {route.error}"]
     # a stage's own stage:<n> pass covers the pairs touching that stage
-    stage_gaps = {index: _stage_route_gaps(state, target_plan, doc, index)
-                  for index in sorted(moved_stages)}
+    stage_gaps = {index: _stage_route_gaps(state, target_plan, doc, index, scope.reliant.get(index, ()))
+                  for index in sorted(scope.stages)}
     blockers = []
     if not route.discharged:
         blockers = next((b for b in stage_gaps.values() if b), [])
     for pid in route.walk_stale:
         if route.status[pid] in PAIR_SATISFIED:
             continue
-        moved_ends = [x for x in split_pair_id(pid) if x in moved_stages]
-        if moved_ends and all(not stage_gaps[x] for x in moved_ends):
+        scoped_ends = [x for x in split_pair_id(pid) if x in scope.stages]
+        if scoped_ends and all(not stage_gaps[x] for x in scoped_ends):
             continue
         blockers.append(
             f"review pair {pid} is {route.status[pid]} and is not covered by a stage-scoped "
@@ -1125,16 +1166,31 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     return blockers
 
 
-def _stage_route_gaps(state: SessionState, target_plan: str, doc, index: int) -> list[str]:
-    """What keeps moved stage `index` from being covered by its own `stage:<n>`
-    review at its current key; [] when that stage-scoped pass stands."""
+def _stage_route_gaps(
+    state: SessionState, target_plan: str, doc, index: int, relied_on: "tuple | list" = (),
+) -> list[str]:
+    """What keeps in-scope stage `index` from being covered by its own `stage:<n>`
+    review at its current key; [] when that stage-scoped pass stands. `relied_on` are
+    the suppliers whose declared product moved (`review_scope().reliant[index]`): the
+    pass must also have recorded each of their interfaces as they are now."""
     scope = _plan_review_scope_for_stage(index)
     spr = state.plan_stage_reviews.get(scope)
     if spr is None or (spr.plan_path != target_plan
                        and not _binds_across_path_change(spr, target_plan)):
+        if relied_on:
+            return [
+                f"stage {index} relies on stage(s) {sorted(relied_on)} whose declared product "
+                f"changed since the whole-plan review; needs its own pass — run: "
+                f"plan-review --scope {scope}"
+            ]
         return [
             f"stage {index} changed since the whole-plan review; needs its own "
             f"pass — run: plan-review --scope {scope}"
+        ]
+    if relied_on and _interface_unseen(doc, spr, relied_on):
+        return [
+            f"thinker review for stage {index} predates the changed declared product of "
+            f"stage(s) {sorted(relied_on)}; re-run plan-review --scope {scope}"
         ]
     stage_meta_moved, stage_moved = changed_parts(doc, _plan_review_baseline(spr))
     if stage_meta_moved:
@@ -1159,8 +1215,8 @@ def pair_discharged_stages(state: SessionState, doc, plan_path: str) -> "list[st
     if route is None or not route.discharged:
         return []
     return [
-        _plan_review_scope_for_stage(index) for index in sorted(route.moved_stages)
-        if _stage_route_gaps(state, plan_path, doc, index)
+        _plan_review_scope_for_stage(index) for index in sorted(route.scope.stages)
+        if _stage_route_gaps(state, plan_path, doc, index, route.scope.reliant.get(index, ()))
     ]
 
 
@@ -1439,13 +1495,11 @@ def plan_review_delta(state: SessionState, doc) -> "tuple[bool, set[int]]":
     whose meta/order moved — both mean "review the whole thing". Backs the
     read-only `plan-review-delta` command in place of a raw digest dump.
 
-    NOT reused by `_plan_review_blockers_coverage`, despite computing a related
-    gap over the same baseline: that gate additionally binds each review to
+    The gate `_plan_review_blockers_coverage` enforces the same scope -- both read
+    `review_scope` -- but is not this function: it additionally binds each review to
     `target_plan` (a path check this function has no parameter for), fails fast
     on the first uncovered part instead of enumerating all of them, and folds
-    in the verdict/attestation check this function deliberately excludes. The
-    two share only their building blocks (`_plan_review_baseline`,
-    `changed_parts`), not a call path.
+    in the verdict/attestation check this function deliberately excludes.
 
     The stage scope is the stages whose own key moved plus the direct consumers of
     every moved stage whose INTERFACE moved: a consumer relied on the declared
@@ -1458,23 +1512,19 @@ def plan_review_delta(state: SessionState, doc) -> "tuple[bool, set[int]]":
 
 def plan_review_delta_detail(state: SessionState, doc) -> "tuple[bool, set[int], dict[int, list[int]]]":
     """`plan_review_delta` plus `{consumer: [moved suppliers whose interface moved]}`
-    for the stages in the scope only because of that reliance (their own key did not
-    move), so a reviewer sees why each is there.
+    for the stages in the scope only because of that reliance (any pass of their own
+    is current but predates the supplier's interface), so a reviewer sees why each is
+    there.
 
     A baseline that records no interface digest for a moved stage cannot show its
     interface unchanged, so its consumers are in scope (`plan.moved_interfaces`). A
-    consumer's own `stage:<n>` record stands for it only if it also recorded each such
-    supplier's interface as it is now."""
-    whole = state.plan_review
-    baseline = (
-        _plan_review_baseline(whole) if whole is not None
-        else {"meta": "", "stages": {}, "interfaces": {}}
-    )
-    meta_moved, moved_stages = changed_parts(doc, baseline)
-    if meta_moved:
+    consumer's own `stage:<n>` record -- a moved consumer's included -- stands for it
+    only if it also recorded each such supplier's interface as it is now."""
+    scope = review_scope(doc, state.plan_review)
+    if scope.meta_moved:
         return True, set(), {}
     needing: set[int] = set()
-    for index in moved_stages:
+    for index in scope.moved:
         spr = state.plan_stage_reviews.get(_plan_review_scope_for_stage(index))
         if spr is None:
             needing.add(index)
@@ -1482,20 +1532,15 @@ def plan_review_delta_detail(state: SessionState, doc) -> "tuple[bool, set[int],
         stage_meta_moved, stage_moved = changed_parts(doc, _plan_review_baseline(spr))
         if stage_meta_moved or index in stage_moved:
             needing.add(index)
-    interface_moved = moved_interfaces(doc, baseline["interfaces"], moved_stages)
-    current = plan_interface_digests(doc, interface_moved)
-    reliant: dict[int, list[int]] = {}
-    for supplier in sorted(interface_moved):
-        for consumer in sorted(consumers(doc, supplier) - moved_stages):
-            reliant.setdefault(consumer, []).append(supplier)
     consumer_of: dict[int, list[int]] = {}
-    for consumer, suppliers in reliant.items():
+    for consumer, suppliers in scope.reliant.items():
+        if consumer in needing:
+            continue
         spr = state.plan_stage_reviews.get(_plan_review_scope_for_stage(consumer))
         if spr is not None:
             stage_meta_moved, stage_moved = changed_parts(doc, _plan_review_baseline(spr))
-            seen = {str(k): v for k, v in spr.reviewed_interface_keys.items()}
             if (not stage_meta_moved and consumer not in stage_moved
-                    and all(seen.get(str(m)) == current[m] for m in suppliers)):
+                    and not _interface_unseen(doc, spr, suppliers)):
                 continue
         needing.add(consumer)
         consumer_of[consumer] = suppliers

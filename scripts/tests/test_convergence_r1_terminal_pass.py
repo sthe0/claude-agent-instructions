@@ -289,7 +289,7 @@ def test_moved_scope_revise_then_stage_override_clears_gate(store, fixtures_dir,
     # stage 1 itself moves -- an unevidenced revise scoped to stage:1 is bound
     # by the same terminal rule as a whole-plan revise, and the whole-plan pass
     # no longer covers this scope's current content either way.
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     d = cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="revise",
                                reviewer="thinker", concerns=["blocking: stage:1 reconsider"], note="",
                                plan_digest=None, regression_command=None),

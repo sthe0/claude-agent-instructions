@@ -33,7 +33,7 @@ import pytest
 from agentctl import cli, gates, plugins
 from agentctl import plugins_premise as pp
 from agentctl import premise
-from agentctl.plan import load_plan, plan_meta_digest, plan_stage_digests
+from agentctl.plan import load_plan, plan_interface_digests, plan_meta_digest, plan_stage_digests
 from agentctl.premise import OrderElement
 from agentctl.state import Node, PlanPresentation, PlanReview, RiskAcceptance, SessionState
 
@@ -71,6 +71,7 @@ def _whole_review(plan_path, doc, **kw) -> PlanReview:
         plan_path=str(plan_path), scope="",
         reviewed_meta_digest=plan_meta_digest(doc),
         reviewed_stage_keys={str(k): v for k, v in plan_stage_digests(doc).items()},
+        reviewed_interface_keys={str(k): v for k, v in plan_interface_digests(doc).items()},
         **kw,
     )
 
@@ -84,6 +85,7 @@ def _stage_review(plan_path, doc, index, **kw) -> PlanReview:
         plan_path=str(plan_path), scope=f"stage:{index}",
         reviewed_meta_digest=plan_meta_digest(doc),
         reviewed_stage_keys={str(k): v for k, v in plan_stage_digests(doc).items()},
+        reviewed_interface_keys={str(k): v for k, v in plan_interface_digests(doc).items()},
         **kw,
     )
 
@@ -216,7 +218,7 @@ def test_stage_scoped_concern_is_discharged_by_a_stage_scoped_acceptance(gate_on
     whole = _whole_review(plan_path, doc0, verdict="pass", concerns=[], concern_ids=[],
                            plan_sha256=_sha256_file(plan_path))
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     doc1 = load_plan(str(plan_path))
     stage1 = _stage_review(plan_path, doc1, 1)
     acceptance = _acceptance("stage:1", "c-retitle", "the retitle hides a scope change", plan_path, doc1)
@@ -436,7 +438,7 @@ def test_risk_accept_scope_stage_clears_the_gate_end_to_end(store, fixtures_dir,
                            reviewer="thinker", concerns=None, concern_ids=None, note="",
                            plan_digest=_sha256_file(plan_path)), store=store)
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="revise",
                            reviewer="thinker", concerns=["blocking: the retitle hides a scope change"],
                            concern_ids=["c-retitle"], note="", plan_digest=None), store=store)
