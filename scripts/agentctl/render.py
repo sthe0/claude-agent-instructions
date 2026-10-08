@@ -129,6 +129,8 @@ def render_meta_md(doc: PlanDoc) -> list[str]:
     lines.append(f"- **Criterion type:** {m.criterion_type}")
     if m.repo_root:
         lines.append(f"- **Repo root:** {m.repo_root}")
+    if m.landing_waiver:
+        lines.append(f"- **Landing waiver:** {m.landing_waiver}")
     if m.external_research:
         lines.append(f"- **External research:** {m.external_research}")
     lines.append("")
@@ -196,8 +198,7 @@ def render_final_checks_md(doc: PlanDoc) -> list[str]:
                 ls = fc.landed
                 lines.append(
                     f"- {label}**landed check:** stage {ls.delivered_stage}'s "
-                    f"delivered commit must be contained in `{ls.target}` and "
-                    f"`{ls.remote}/{ls.target}`"
+                    f"delivered commit must be contained in {ls.refs_phrase()}"
                 )
             else:
                 lines.append(f"- {label}`{fc.command}` (expected exit {fc.expected_exit})")
@@ -236,8 +237,7 @@ def render_plan_md(doc: PlanDoc) -> str:
             ls = s.criterion.landed
             lines.append(
                 f"- **Landed check:** stage {ls.delivered_stage}'s delivered "
-                f"commit must be contained in `{ls.target}` and "
-                f"`{ls.remote}/{ls.target}`"
+                f"commit must be contained in {ls.refs_phrase()}"
             )
         elif s.criterion.verify_command:
             lines.append(f"- **Verify command:** `{s.criterion.verify_command}`")
@@ -365,8 +365,7 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
         ls = s.criterion.landed
         lines.append(
             f"- **Landed check:** stage {ls.delivered_stage}'s delivered "
-            f"commit must be contained in `{ls.target}` and "
-            f"`{ls.remote}/{ls.target}`"
+            f"commit must be contained in {ls.refs_phrase()}"
         )
     elif s.criterion.verify_command:
         lines.append(f"- **Verify command:** `{s.criterion.verify_command}`")

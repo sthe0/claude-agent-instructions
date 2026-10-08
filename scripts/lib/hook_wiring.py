@@ -141,8 +141,8 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
      "(self-improvement engagement, resolution) is ever blocked on"),
     ("hook-resolution-reminder.py",
      "denies opening an AskUserQuestion menu that proposes a PR/merge-review "
-     "delivery path while the resolution gate is open in a direct-push-only "
-     "repo; absent, that PreToolUse consult never runs and a wrong-shaped "
+     "delivery path while landing is pending or the resolution gate is open "
+     "in a direct-push-only repo; absent, that PreToolUse consult never runs and a wrong-shaped "
      "menu reaches the user unblocked"),
     ("hook-published-text-writer-gate.py",
      "denies a Bash publication call whose text body has no preceding "

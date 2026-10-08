@@ -88,6 +88,9 @@ def _stage_landed_resources(stage: Stage) -> list:
     crit = stage.criterion
     if crit.verify_kind != CheckKind.LANDED.value or crit.landed is None:
         return []
+    if crit.landed.provider != "git":
+        # The target names a ref in the provider's own VCS, not an `<remote>/<ref>` git ref.
+        return []
     return [_resources.VcsRefResource(crit.landed.remote, crit.landed.target, "land")]
 
 

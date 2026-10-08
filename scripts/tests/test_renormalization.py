@@ -663,6 +663,7 @@ _STAGE_RESIDUAL_COVERAGE = {
     "outcome.duration_ms": "outside: the mutable execution RECORD, same reason",
     "outcome.spawn_count": "outside: the mutable execution RECORD, same reason",
     "outcome.delivered_head": "outside: the mutable execution RECORD, same reason",
+    "outcome.delivered_base": "outside: the mutable execution RECORD, same reason",
     "outcome.checked_tree_identity": "outside: the mutable execution RECORD, same reason",
     "outcome.checked_tree_ok": "outside: the mutable execution RECORD, same reason",
     "outcome.record_attempts": "outside: the mutable execution RECORD, same reason",
@@ -694,6 +695,7 @@ _STAGE_RESIDUAL_COVERAGE = {
     "criterion.landed.delivered_stage": "stage_question_key, via the whole LandedSpec "
                                         "object",
     "criterion.landed.remote": "stage_question_key, via the whole LandedSpec object",
+    "criterion.landed.provider": "stage_question_key, via the whole LandedSpec object",
     "criterion.verify_venue_at_final": "stage_question_key",
     "criterion.negative_control": "stage_question_key, via negative_control_place",
     "criterion.negative_control_waiver": "stage_question_key, via negative_control_place",

@@ -16,13 +16,14 @@ This means a fresh clone in another org needs **zero edits** to Core.
 
 ## The seams, at a glance
 
-Every org-specific facility attaches to Core through one of six seams. Each is *mechanism in Core, data outside it* — Core ships the resolver, the neutral default and the contract; a higher layer (Personal, machine-local, or a project overlay) supplies the org half.
+Every org-specific facility attaches to Core through one of seven seams. Each is *mechanism in Core, data outside it* — Core ships the resolver, the neutral default and the contract; a higher layer (Personal, machine-local, or a project overlay) supplies the org half.
 
 | Seam | Core ships | A higher layer installs | Where |
 |---|---|---|---|
 | Workspace / tracker backends | `git` workspace, `github` + `none` trackers, the registry and the `default` auth profile | an org workspace backend, an org tracker backend, org auth profiles | `${CLAUDE_PROJECT_PLUGIN_DIR:-<config root>/project-entry-plugins}/{backends,trackers}/`, `${CLAUDE_AUTH_PROFILE_DIR:-~/.config/claude/auth-profiles.d}/` |
 | Difficulty-channel adapters | the `DifficultyChannel` port, the `github` adapter, the registry | an adapter for an org tracker, registering itself under its own channel name | `${CLAUDE_DIFFICULTY_PLUGIN_DIR:-<config root>/difficulty-channel-plugins}/adapters/<name>.py` |
 | Difficulty-channel **detect hook** | the probe interface and the org-neutral precedence | a `detect(...)` hook that recognizes org host signals | `${CLAUDE_DIFFICULTY_PLUGIN_DIR:-<config root>/difficulty-channel-plugins}/detect.py` |
+| Landed-check providers | the git landed check and the provider contract (`scripts/agentctl/landed_providers.py`) | a provider for an org VCS: `freeze(venue)` names the delivered work, `is_landed(token, target)` says whether it reached trunk | `${CLAUDE_LANDED_CHECK_PLUGIN_DIR:-<config root>/landed-check-plugins}/providers/<name>.py` (`landed-check-plugins`) |
 | Skills overlay | the catalog wiring and the two controls | org- or machine-specific skills, plus a manifest naming them | `<config root>/skills-local/`, named in `<config root>/extracted-skills.local` |
 | Term-lint ruleset | the matcher, the discovery order and the gates | the actual denylist of org-internal terms | `<config root>/term-rulesets/*.toml` (or `<project>/.claude/term-rulesets/`) |
 | Sandbox project composers | `scripts/instruction-sandbox.sh --project-mount`, the five-function contract and the generic project check | a composer that builds a project's `.claude/` into a sandbox-owned root | `${CLAUDE_INSTRUCTION_SANDBOX_PLUGIN_DIR:-<config root>/instruction-sandbox-plugins}/composers/<name>.sh` |

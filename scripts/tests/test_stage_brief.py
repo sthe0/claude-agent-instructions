@@ -326,6 +326,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (PlanMeta, "criterion_type"), (PlanMeta, "weight_class"),
         (PlanMeta, "external_research"), (PlanMeta, "repo_root"),
         (PlanMeta, "delivery_worktree"), (PlanMeta, "final_check"),
+        (PlanMeta, "landing_waiver"),  # excluded: a resolve-time gate input, not stage material
         # excluded: the typed order is the ROOT's material at the approval gate — it is
         # plan-level, grows with the customer's requirement count, and the executor of one
         # stage receives its own requirement through that stage's own fields plus
@@ -343,6 +344,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         # LandedSpec escapes both this drift check and the dedicated landed-check
         # test, which asserts three field values by name and so cannot notice a fourth.
         (LandedSpec, "target"), (LandedSpec, "remote"), (LandedSpec, "delivered_stage"),
+        (LandedSpec, "provider"),  # excluded: the brief names the check by label, not its VCS
     }
     declared = set()
     for cls in (Stage, Subject, Means, Actor, Criterion, Principle, Supply, PlanMeta,

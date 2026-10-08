@@ -137,6 +137,7 @@ from pathlib import Path
 
 from . import grants as _grants
 from .grants import AddDirGrant, RuleGrant, StageGrants
+from .landed_providers import PROVIDER_NAME_RE
 from .script_effects import StageEffectDeclaration
 from .state import (
     Actor,
@@ -158,6 +159,7 @@ from .state import (
     Subject,
     Supply,
     SUPPLY_DELIVERIES,
+    asserts_landing,
 )
 from .text_shape import ELEMENT_NAMES as _ELEMENT_NAMES
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
@@ -185,6 +187,11 @@ class PlanMeta:
     # no worktree-venue signal, byte-identical to pre-field behaviour. Backs the
     # check_venue_warnings lint below.
     delivery_worktree: str | None = None
+    # The plan-time, reviewed reason a plan declares no `kind = "landed"` check. A plan
+    # that sets delivery_worktree must declare a landed check OR this waiver (never both),
+    # so "this change lands nothing" is a decision the approved plan carries, not one the
+    # resolving actor makes after the outcome is known. None = no waiver.
+    landing_waiver: str | None = None
     # Optional typed end-to-end checks run by verify-final after per-stage re-runs.
     # Absent => [] (back-compat). Parsed from top-level [[final_check]] tables.
     final_check: list[FinalCheck] = field(default_factory=list)
@@ -393,16 +400,22 @@ def _parse_landed_spec(
         return None
     if not isinstance(raw_table, dict) or not raw_table:
         raise PlanError(f"{context}: kind = \"landed\" requires a [*.landed] table")
+    provider = raw_table.get("provider", "git")
+    if not isinstance(provider, str) or not PROVIDER_NAME_RE.fullmatch(provider):
+        raise PlanError(
+            f"{context}: landed.provider {provider!r} is not a plain identifier "
+            f"(expected to match {PROVIDER_NAME_RE.pattern}) (R12)"
+        )
     target = raw_table.get("target")
     if not target or not isinstance(target, str):
         raise PlanError(f"{context}: landed.target is required (non-empty string) (R2)")
-    if not _LANDED_REF_RE.match(target):
+    if provider == "git" and not _LANDED_REF_RE.match(target):
         raise PlanError(
             f"{context}: landed.target {target!r} is not a valid git ref name "
             f"(expected to match {_LANDED_REF_RE.pattern}) (R2)"
         )
     remote = str(raw_table.get("remote", "origin"))
-    if not _LANDED_REF_RE.match(remote):
+    if provider == "git" and not _LANDED_REF_RE.match(remote):
         raise PlanError(
             f"{context}: landed.remote {remote!r} is not a valid git ref name "
             f"(expected to match {_LANDED_REF_RE.pattern}) (R2)"
@@ -423,7 +436,8 @@ def _parse_landed_spec(
             f"have been recorded yet (self-reference, delivered_stage == "
             f"{owner_index}, is fine) (R5)"
         )
-    return LandedSpec(target=target, remote=remote, delivered_stage=delivered_stage)
+    return LandedSpec(target=target, remote=remote, delivered_stage=delivered_stage,
+                      provider=provider)
 
 
 # The only two executor shapes the engine dispatches: in-thread, or a named spawn
@@ -1221,10 +1235,7 @@ def check_venue_warnings(
     # signal, not a proof. Restricted to measurable stages because verify-final
     # re-runs a verify_command only for those (an acceptance-review stage's
     # command never re-runs at final, so it cannot refuse there).
-    asserts_landing = any(
-        s.criterion.verify_kind == CheckKind.LANDED.value for s in stages or []
-    ) or any(fc.kind == CheckKind.LANDED.value for fc in final_check or [])
-    if asserts_landing:
+    if asserts_landing(stages, final_check):
         for s in stages or []:
             crit = s.criterion
             if (
@@ -1346,6 +1357,7 @@ def parse_plan(
         external_research=str(m["external_research"]) if m.get("external_research") else None,
         repo_root=str(m["repo_root"]) if m.get("repo_root") else None,
         delivery_worktree=str(m["delivery_worktree"]) if m.get("delivery_worktree") else None,
+        landing_waiver=str(m["landing_waiver"]) if m.get("landing_waiver") else None,
         final_check=final_checks,
         order=order,
     )
@@ -1838,6 +1850,7 @@ def order_extra_digest(meta: PlanMeta) -> str:
         meta.external_research,
         meta.task_id,
         meta.delivery_worktree,
+        *((("landing_waiver", meta.landing_waiver),) if meta.landing_waiver else ()),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -2125,7 +2138,8 @@ _ELEMENT_FIELDS: dict[str, tuple[str, ...] | None] = {
                   "criterion.verify_command", "criterion.expected_exit",
                   "criterion.verify_venue", "criterion.verify_kind",
                   "criterion.landed.target", "criterion.landed.delivered_stage",
-                  "criterion.landed.remote", "criterion.verify_venue_at_final",
+                  "criterion.landed.remote", "criterion.landed.provider",
+                  "criterion.verify_venue_at_final",
                   "criterion.negative_control", "criterion.negative_control_waiver"),
     "done_criterion": ("criterion.done_criterion",),
     "principle": ("principle.statement", "principle.source", "principle.derivation",
@@ -2135,6 +2149,14 @@ _ELEMENT_FIELDS: dict[str, tuple[str, ...] | None] = {
     "control": _WHOLE_STAGE_DEFINITION,
     "order": _WHOLE_STAGE_DEFINITION,
     "requirements": _WHOLE_STAGE_DEFINITION,
+}
+
+
+# Leaf values that contribute nothing to an element's key, so a stage that never
+# declared the field (or declared its default) keeps the digest it had before the field
+# existed — the declared-only rule the whole-stage payload follows.
+_ELIDED_WHEN_DEFAULT: dict[str, tuple[tuple, ...]] = {
+    "criterion.landed.provider": ((None,), ("git",)),
 }
 
 
@@ -2226,10 +2248,14 @@ def stage_question_key(stage, element: str | None = None) -> str:
     if element is not None:
         paths = _ELEMENT_FIELDS[element]
         if paths is not _WHOLE_STAGE_DEFINITION:
+            values = tuple(
+                v for p in paths
+                if (v := _leaf_values(stage, p)) not in _ELIDED_WHEN_DEFAULT.get(p, ())
+            )
             # A declared edge delivery is part of what `material` hands over, so it joins
             # this element's payload only when declared (legacy keys stay byte-identical).
             extra = delivery_place(stage) if element == "material" else ()
-            payload = repr((element, tuple(_leaf_values(stage, p) for p in paths), *extra))
+            payload = repr((element, values, *extra))
             return hashlib.sha256(payload.encode("utf-8")).hexdigest()
     from .stage_norm import StageNorm
     return StageNorm.from_stage(stage).review_digest()

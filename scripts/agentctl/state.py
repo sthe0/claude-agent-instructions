@@ -19,6 +19,7 @@ import json
 import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
+from pathlib import Path
 from typing import ClassVar
 
 from .grants import StageGrants
@@ -159,16 +160,31 @@ class CheckKind(str, Enum):
 LANDED_GIT_ERROR_EXIT = 97
 
 
-@dataclass
+@dataclass(repr=False)
 class LandedSpec:
     """The declarative payload of a `kind = "landed"` check (schema 23): assert
     that the commit stage `delivered_stage` delivered is contained in `target`
     (and its `remote` remote-tracking ref) — never SHA equality, never a
     live-resolved head. See plan.py's `_parse_landed_spec` for the validation
-    rules this must satisfy before construction."""
+    rules this must satisfy before construction. `provider` names the VCS that
+    answers: "git" (built in) or a plugin loaded through landed_providers.py."""
     target: str
     delivered_stage: int
     remote: str = "origin"
+    provider: str = "git"
+
+    def __repr__(self) -> str:
+        # The default provider is left out so a git spec's repr (hashed into
+        # stage digests) stays byte-identical to the pre-provider shape.
+        extra = "" if self.provider == "git" else f", provider={self.provider!r}"
+        return (f"LandedSpec(target={self.target!r}, delivered_stage="
+                f"{self.delivered_stage!r}, remote={self.remote!r}{extra})")
+
+    def refs_phrase(self) -> str:
+        """Where the delivered work must be, as plan renderings and descriptions say it."""
+        if self.provider == "git":
+            return f"`{self.target}` and `{self.remote}/{self.target}`"
+        return f"`{self.target}` (as reported by landed provider `{self.provider}`)"
 
     @classmethod
     def from_dict(cls, d: dict) -> "LandedSpec":
@@ -176,6 +192,55 @@ class LandedSpec:
         mirrors Principle.from_dict's tolerant-reconstruction template."""
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in d.items() if k in known})
+
+
+def asserts_landing(stages, final_check) -> bool:
+    """Whether any stage or final_check is a `kind = "landed"` check — the one
+    definition of "this plan asserts landing", shared by the check-venue
+    survivability lint, the submission rule and the resolve landing gate."""
+    return any(
+        s.criterion.verify_kind == CheckKind.LANDED.value for s in stages or []
+    ) or any(fc.kind == CheckKind.LANDED.value for fc in final_check or [])
+
+
+def landed_containment_script(git: str, commit: str, refs: str, merge_base: str, err: int) -> str:
+    """The shell fragment proving `commit` is contained in every ref of `refs`.
+
+    Shared by the landed check (`SessionState.render_landed_command`) and resolve's
+    unlanded-branch probe, so the two cannot disagree about what "landed" means.
+    Containment is ancestry, else — when there is no merge commit in `<ref>..<commit>` —
+    patch equivalence (`git cherry` printing no `+` line), else the squash test: the
+    patch-id of the combined diff `merge_base..commit` equals that of some non-merge
+    commit in `merge_base..<ref>`. Exit 0 contained, 1 not contained, `err` when git
+    could not answer.
+
+    `git` is the quoted `git -C <repo>` prefix, `commit`/`refs` are shell words
+    (`refs` space-separated), `merge_base` a shell expression that may use `$R`."""
+    patch_id = "patch-id --stable | cut -d' ' -f1"
+    return (
+        f"for R in {refs}; do "
+        f'{git} merge-base --is-ancestor {commit} "$R"; s=$?; '
+        f'[ "$s" -eq 0 ] && continue; '
+        f'[ "$s" -eq 1 ] || exit {err}; '
+        f'm=$({git} rev-list --merges "$R"..{commit}) || exit {err}; '
+        f'if [ -z "$m" ]; then '
+        f'c=$({git} cherry "$R" {commit}) || exit {err}; '
+        f"printf '%s\\n' \"$c\" | grep -q '^+'; s=$?; "
+        f'[ "$s" -eq 1 ] && continue; '
+        f'[ "$s" -eq 0 ] || exit {err}; '
+        "fi; "
+        f"MB={merge_base}; "
+        f'd=$({git} diff --no-ext-diff "$MB" {commit}) || exit {err}; '
+        f"P=$(set -o pipefail; printf '%s\\n' \"$d\" | {git} {patch_id}) || exit {err}; "
+        f'[ -n "$P" ] || exit 1; '
+        f"L=$(set -o pipefail; {git} log -p --no-merges --no-ext-diff "
+        f"--format='commit %H' \"$MB\"..\"$R\" | {git} {patch_id}) || exit {err}; "
+        f"printf '%s\\n' \"$L\" | grep -qxF -- \"$P\"; s=$?; "
+        f'[ "$s" -eq 0 ] && continue; '
+        f'[ "$s" -eq 1 ] && exit 1; '
+        f"exit {err}; "
+        "done; exit 0"
+    )
 
 
 class StageStatus(str, Enum):
@@ -949,6 +1014,12 @@ PLAN_PRESENTATION_KINDS = (
 # never drift apart.
 SHOW_FULL_PLAN_MARKER = "[show-full-plan]"
 
+# Language-independent ASCII marker the resolution AskUserQuestion (the one that
+# carries the 1-5 rating) must embed in an option label or description. Emitted by
+# cli.cmd_verify_final's success Directive, checked by cli.cmd_resolve against the
+# session transcript — single-sourced here so the two can never drift apart.
+RESOLUTION_ASK_MARKER = "[resolution-ask]"
+
 # Language-independent ASCII marker a replan-diff rendering must embed so the
 # delivery hook (extended by stage 4) can recognize the turn as carrying a
 # replan-authorization presentation, exactly mirroring SHOW_FULL_PLAN_MARKER —
@@ -1459,6 +1530,10 @@ class PlanFrame:
     # above: the service sub-plan's own code-review rounds are a separate budget from the
     # parent's, so cmd_push_subplan snapshots and zeroes, cmd_pop_subplan restores.
     code_review_rounds: int = 0
+    # The parent plan's [meta].landing_waiver — plan-level like delivery_worktree, so a
+    # pushed child (which resets the live field) must not leave its own waiver behind
+    # to excuse the parent's landing gate after the pop.
+    landing_waiver: str | None = None
     # Venue-substitution guard (schema 34): the exact (repo_root, delivery_worktree)
     # pair _sync_venue_from_plan read off the PARENT plan file at push time, so pop can
     # tell "the parent file's venue fields moved out from under the pushed child" apart
@@ -1505,6 +1580,12 @@ class Outcome:
     # records a result; absent on every pre-schema-23 state (default via
     # from_dict), so legacy states load unchanged.
     delivered_head: str | None = None
+    # Frozen alongside delivered_head: `merge-base(delivery HEAD, <remote>/<target>)` at
+    # freeze time. The landed check's task-proof range is `delivered_base..delivered_head`
+    # and the squash test's merge base is this value too, so both stay constant as trunk
+    # moves. None on a state frozen before this field existed (legacy rule: only the
+    # delivered commit's own message is inspected).
+    delivered_base: str | None = None
     # Green-check cache: the venue tree identity (HEAD sha + a diff against HEAD
     # covering staged and unstaged changes + untracked files' contents, see
     # cli._venue_tree_identity) at the last time this stage's verify_command was
@@ -1711,6 +1792,14 @@ class SessionState:
     # byte-identical to pre-field behaviour; live states predating the field load
     # unchanged. Backs plan.check_venue_warnings.
     delivery_worktree: str | None = None
+    # The plan's own [meta].landing_waiver — the plan-time, reviewed reason a plan
+    # declares no landed check. Stamped with the venue by cli._sync_venue_from_plan;
+    # None (default) = no waiver, byte-identical for states predating the field.
+    landing_waiver: str | None = None
+    # The plan's own [meta].task_id — the id stage commits' `Task:` trailers are written
+    # with. Distinct from `task_id`, which `agentctl start --task` sets and nothing binds
+    # to the plan. Stamped by cli._sync_venue_from_plan; "" on a state predating the field.
+    plan_task_id: str = ""
     # Typed end-to-end checks run at verify-final after per-stage re-runs.
     # Absent in legacy states (schema_version <= 7): from_dict defaults to [].
     final_check: list[FinalCheck] = field(default_factory=list)
@@ -2110,16 +2199,28 @@ class SessionState:
         monotone containment of the commit `spec.delivered_stage` delivered (the LITERAL string frozen on that
         stage's Outcome.delivered_head, never re-resolved here) against both
         the local `target` ref and its local `remote/target` remote-tracking
-        ref. Containment is ancestry (`git merge-base --is-ancestor`, the fast
-        path) or, when that answers "not an ancestor", patch equivalence: no
-        merge commit in `<ref>..<delivered>` (git cherry skips merges, so
-        they fail closed) and `git cherry <ref> <delivered>` printing no `+`
-        line. The fallback lets a rebase landing go green (land-branch.py is
-        fast-forward only, so a moved trunk forces a rebase beforehand).
-        Known reds: a squash landing of 2+ commits, a rebase whose diff text
-        changed (conflict resolution, context drift), a delivered range
-        containing a merge; an empty delivered commit is not distinguished
-        by cherry. Returns (command, refusal): `command` is the exact string a
+        ref. Before any containment test the check proves the commits are THIS
+        task's: a line exactly `Task: <plan task id>` must appear in the
+        messages of `delivered_base..delivered_head` (an empty range is red);
+        with no frozen `delivered_base` (state frozen by the pre-trailer
+        engine) the delivered commit's own message must carry it. The id is
+        the plan's [meta].task_id (`plan_task_id`, else read off the plan
+        file, else the session's `task_id`) — the id stage commits' trailers
+        are written with. Containment is ancestry (`git merge-base
+        --is-ancestor`, the fast path) or, when that answers "not an
+        ancestor", patch equivalence: no merge commit in `<ref>..<delivered>`
+        (git cherry skips merges, so they fail closed) and `git cherry <ref>
+        <delivered>` printing no `+` line — the rebase landing
+        (land-branch.py is fast-forward only, so a moved trunk forces a
+        rebase beforehand). When cherry reports a `+` line, or the range has a
+        merge, a squash test runs: the patch-id of the combined diff
+        `delivered_base..delivered_head` must equal the patch-id of some
+        non-merge commit in `delivered_base..<ref>` (the frozen base, so the
+        comparison is constant over time; legacy state without one uses
+        `merge-base <ref> <delivered>`).
+        Known reds: a rebase or squash whose diff text changed (conflict
+        resolution, context drift); an empty delivered commit is not
+        distinguished by cherry. Returns (command, refusal): `command` is the exact string a
         caller passes as `bash -c <command>` — it carries its own
         `git -C <repo_root>`, so it needs no cwd/`cd`; `refusal` is set
         instead when the check cannot even be attempted (no repo_root, an
@@ -2134,6 +2235,8 @@ class SessionState:
         rather than answering), so a check that goes
         green cannot later go red without a history rewrite — see CheckKind's
         module comment for the 20-incident background this replaces."""
+        if spec.provider != "git":
+            return self._render_provider_landed_command(spec)
         if not self.repo_root:
             return None, (
                 "landed check requires [meta].repo_root to be set (nothing to "
@@ -2159,21 +2262,78 @@ class SessionState:
         target = shlex.quote(spec.target)
         remote_target = shlex.quote(f"{spec.remote}/{spec.target}")
         git = f"git -C {repo_root}"
+        err = LANDED_GIT_ERROR_EXIT
+        task_id = self._landed_task_id()
+        if not task_id:
+            return None, (
+                "landed check cannot name the task whose commits it proves "
+                "(no plan [meta].task_id and no session task_id)"
+            )
+        trailer = f"Task: {task_id}"
+        base = stage.outcome.delivered_base
+        if base:
+            messages = f"{git} log --format=%B {shlex.quote(f'{base}..{delivered}')}"
+            scope = f"{base}..{delivered}"
+            merge_base = shlex.quote(base)
+        else:
+            messages = f"{git} log -1 --format=%B {commit}"
+            scope = delivered
+            merge_base = f'$({git} merge-base "$R" {commit}) || exit {err}'
+        missing = shlex.quote(f"landed check: no line {trailer!r} in the messages of {scope}")
         command = (
-            f"for R in {target} {remote_target}; do "
-            f'{git} merge-base --is-ancestor {commit} "$R"; s=$?; '
-            f'[ "$s" -eq 0 ] && continue; '
-            f'[ "$s" -eq 1 ] || exit {LANDED_GIT_ERROR_EXIT}; '
-            f'm=$({git} rev-list --merges "$R"..{commit}) || exit {LANDED_GIT_ERROR_EXIT}; '
-            f'[ -z "$m" ] || exit 1; '
-            f'c=$({git} cherry "$R" {commit}) || exit {LANDED_GIT_ERROR_EXIT}; '
-            f"printf '%s\\n' \"$c\" | grep -q '^+'; s=$?; "
-            f'[ "$s" -eq 1 ] && continue; '
-            f'[ "$s" -eq 0 ] && exit 1; '
-            f"exit {LANDED_GIT_ERROR_EXIT}; "
-            "done; exit 0"
+            f"t=$({messages}) || exit {err}; "
+            f"printf '%s\\n' \"$t\" | grep -qxF -- {shlex.quote(trailer)}; s=$?; "
+            f'if [ "$s" -eq 1 ]; then printf \'%s\\n\' {missing} >&2; exit 1; fi; '
+            f'[ "$s" -eq 0 ] || exit {err}; '
+            + landed_containment_script(git, commit, f"{target} {remote_target}", merge_base, err)
         )
         return command, None
+
+    def _render_provider_landed_command(self, spec: "LandedSpec") -> tuple[str | None, str | None]:
+        """The landed check of a non-git provider: a call into
+        scripts/landed-provider-check.py with the token the provider froze at
+        record-result. The CLI maps the provider's True/False/None to 0/1/97.
+        Refuses (never a stage failure) when the check cannot even be attempted."""
+        try:
+            stage = self.stage(spec.delivered_stage)
+        except KeyError:
+            return None, (
+                f"landed check's delivered_stage {spec.delivered_stage} does "
+                "not name an existing stage"
+            )
+        token = stage.outcome.delivered_head
+        if not token:
+            return None, (
+                f"stage {spec.delivered_stage} has not yet frozen a delivery token "
+                f"(provider {spec.provider!r}: record-result must run for that stage, "
+                "with a resolvable delivery venue and an installed provider plugin, "
+                "before this landed check can be evaluated)"
+            )
+        # The engine's own copy, not repo_root's: the checked plan's repo may be any
+        # project, and an unlanded Core delivery has no such script in canon yet.
+        script = shlex.quote(str(Path(__file__).resolve().parents[1] / "landed-provider-check.py"))
+        return (
+            f"python3 {script} --provider={shlex.quote(spec.provider)} "
+            f"--token={shlex.quote(token)} --target={shlex.quote(spec.target)}"
+        ), None
+
+    def _landed_task_id(self) -> str:
+        """The id the landed check's `Task:` trailer must carry: the plan's own
+        [meta].task_id. `plan_task_id` is stamped from the plan on every route that
+        (re)reads it; a state saved by the engine before that field existed reads the
+        plan file instead, and only an unreadable plan falls back to the session's
+        `task_id` (set by `agentctl start --task`, bound to the plan by nothing)."""
+        if self.plan_task_id:
+            return self.plan_task_id
+        if self.plan_path:
+            from .plan import PlanError, load_plan
+            try:
+                from_plan = load_plan(self.plan_path, strict=False).meta.task_id
+            except (OSError, PlanError):
+                from_plan = ""
+            if from_plan:
+                return from_plan
+        return self.task_id
 
     # --- stage helpers ----------------------------------------------------
     def stage(self, index: int) -> Stage:
@@ -2306,6 +2466,7 @@ class SessionState:
                 plan_review_rounds=f.get("plan_review_rounds") or 0,
                 plan_review_counted_digest=f.get("plan_review_counted_digest") or "",
                 code_review_rounds=f.get("code_review_rounds") or 0,
+                landing_waiver=f.get("landing_waiver"),
                 parent_repo_root=f.get("parent_repo_root") or "",
                 parent_delivery_worktree=f.get("parent_delivery_worktree") or "",
                 parent_venue_captured=bool(f.get("parent_venue_captured", False)),

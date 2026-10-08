@@ -245,6 +245,24 @@ hits = 4
 hit_classes = ["structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/plan.py::_parse_landed_spec::pattern.fullmatch"]
+class = "structural"
+ground = "PROVIDER_NAME_RE.fullmatch validates a landed provider name as a plain identifier, a fixed syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/landed_providers.py::<module>::re.compile"]
+class = "structural"
+ground = "PROVIDER_NAME_RE compiles the plain-identifier syntax of a landed provider name (it becomes a plugin file name)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/landed_providers.py::load_provider::pattern.fullmatch"]
+class = "structural"
+ground = "PROVIDER_NAME_RE.fullmatch refuses a provider name that is not a plain identifier before it is joined into a plugin path."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/agentctl/plan.py::parse_concern::pattern.match"]
 class = "structural"
 ground = "_CONCERN_RE.match splits a `--concern` into its severity tag, optional `re:<concern-id>` and body: a protocol token the engine itself defines. An untagged concern is refused, never classified by what it says."
