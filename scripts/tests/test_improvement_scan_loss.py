@@ -136,26 +136,27 @@ def test_inversion_frequent_unlabelled_outranks_universal_critical_zero(tmp_path
     paths = _Paths(tmp_path)
     paths.write_board({
         "frequent": _item(
-            title="frequent", severity_labeled=False, old_score=1.0,
+            title="frequent", severity_labeled=False, old_score=1.0, cost_to_resolve="large",
             signatures=("ERR-FREQ",), minutes_per_occurrence=5.0, minutes_basis="re-run by hand",
         ),
         "critical": _item(
             title="critical", severity="critical", classification="universal", old_score=10.0,
+            cost_to_resolve="small",
             signatures=("ERR-CRIT",), minutes_per_occurrence=30.0, minutes_basis="outage",
         ),
     })
-    _sessions(paths, "ERR-FREQ", 6, "f")
+    _sessions(paths, "ERR-FREQ", 3, "f")
 
     assert paths.run_loss() == 0
 
     items = paths.board_items()
-    assert items["frequent"].loss_measurement["sessions_hit"] == 6
+    assert items["frequent"].loss_measurement["sessions_hit"] == 3
     assert items["critical"].loss_measurement["sessions_hit"] == 0
     assert items["frequent"].rank == 1 and items["critical"].rank == 2
     assert items["critical"].old_score > items["frequent"].old_score
     lanes = _loss().build_lanes(items)
     assert [row["ref"] for row in lanes["loss"]] == ["frequent", "critical"]
-    assert lanes["loss"][0]["min_per_week"] == 15.0
+    assert lanes["loss"][0]["min_per_week"] == 7.5
     assert lanes["loss"][1]["min_per_week"] == 0.0
 
 
@@ -177,7 +178,47 @@ def test_signatureless_item_lands_in_silent_lane():
     assert loss.lane_ranks(lanes) == {"measured": 1, "quiet": 2, "unclassified": 3}
 
 
+def _family_row(tmp_path: Path, name: str, items: dict, transcripts: dict) -> dict:
+    paths = _Paths(tmp_path / name)
+    paths.write_board(items)
+    for sid, text in transcripts.items():
+        _transcript(paths.root, sid, _hit(text))
+    assert paths.run_loss() == 0
+    lanes = _loss().build_lanes(paths.board_items())
+    assert len(lanes["loss"]) == 1
+    return lanes["loss"][0]
+
+
 def test_family_not_double_counted(tmp_path):
+    (tmp_path / "same").mkdir()
+    (tmp_path / "disjoint").mkdir()
+
+    same = _family_row(
+        tmp_path, "same",
+        {
+            "A": _item(family="fam", signatures=("SIG-A",), minutes_per_occurrence=4.0),
+            "B": _item(family="fam", signatures=("SIG-B",), minutes_per_occurrence=4.0),
+        },
+        {"s1": "SIG-A and SIG-B", "s2": "SIG-A and SIG-B"},
+    )
+    assert same["sessions_hit"] == 2
+    assert same["min_per_week"] == 4.0  # 2 sessions x 4 min / 2 weeks, as for either member alone
+
+    disjoint = _family_row(
+        tmp_path, "disjoint",
+        {
+            "A": _item(family="fam", signatures=("SIG-A",), minutes_per_occurrence=60.0),
+            "B": _item(family="fam", signatures=("SIG-B",), minutes_per_occurrence=1.0),
+        },
+        {"a1": "SIG-A", **{f"b{i}": "SIG-B" for i in range(10)}},
+    )
+    loss_a, loss_b = 1 * 60.0 / 2, 10 * 1.0 / 2  # each member's separately computed min/week
+    assert disjoint["sessions_hit"] == 11
+    assert max(loss_a, loss_b) <= disjoint["min_per_week"] <= loss_a + loss_b
+    assert disjoint["min_per_week"] != 11 * 60.0 / 2
+
+
+def test_family_partially_overlapping_sessions_counted_once(tmp_path):
     paths = _Paths(tmp_path)
     paths.write_board({
         "A": _item(family="fam", signatures=("SIG-A",), minutes_per_occurrence=4.0),
@@ -245,6 +286,27 @@ def test_discussion_and_filing_hits_excluded(tmp_path):
 
     measurement = paths.board_items()[ref].loss_measurement
     assert measurement["sessions"] == ["longer-number", "real-tool-result", "system-entry"]
+
+
+def test_only_hook_attachments_count(tmp_path):
+    paths = _Paths(tmp_path)
+    paths.write_board({"item": _item(signatures=("SIG-H",), minutes_per_occurrence=2.0)})
+    _transcript(paths.root, "hook", [{
+        "type": "attachment", "timestamp": _ts(2),
+        "attachment": {"type": "hook_success", "content": "SIG-H raised by a hook"},
+    }])
+    _transcript(paths.root, "file-attachment", [{
+        "type": "attachment", "timestamp": _ts(2),
+        "attachment": {"type": "file", "content": "notes quoting SIG-H"},
+    }])
+    _transcript(paths.root, "memory-attachment", [{
+        "type": "attachment", "timestamp": _ts(2),
+        "attachment": {"type": "nested_memory", "content": "SIG-H in a memory leaf"},
+    }])
+
+    assert paths.run_loss() == 0
+
+    assert paths.board_items()["item"].loss_measurement["sessions"] == ["hook"]
 
 
 def test_precision_scales_and_goes_stale_on_signature_change(tmp_path):

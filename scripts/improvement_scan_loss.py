@@ -140,7 +140,9 @@ def _counted_texts(entry: dict) -> "list[tuple[str, str | None]]":
     if kind == "system":
         return [(t, None) for key in _SYSTEM_TEXT_KEYS for t in _strings(entry.get(key))]
     if kind == "attachment":
-        return [(t, None) for t in _strings(entry.get("attachment"))]
+        attachment = entry.get("attachment")
+        if isinstance(attachment, dict) and str(attachment.get("type", "")).startswith("hook"):
+            return [(t, None) for t in _strings(attachment)]
     return []
 
 
