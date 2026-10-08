@@ -140,3 +140,12 @@ def test_a_supplier_absent_from_the_previous_plan_counts_as_changed():
     new = parse_plan({"meta": {"task_id": "t"}, "stage": [base, consumer]})
     assert stage_carried(new.stages, new.stages, 2) is True
     assert stage_carried(new.stages[1:], new.stages, 2) is False
+    # Absent from the new plan's stage list while the consumer's edge still names it.
+    assert stage_carried(new.stages, new.stages[1:], 2) is False
+
+
+def test_a_blank_interface_suppliers_construction_change_resets_its_consumer(statuses):
+    """With no interface to compare, the supplier's whole carry digest stands in."""
+    assert statuses({"s1_result": " "}, {"s1_result": " "}) == {1: PASSED, 2: PASSED}
+    got = statuses({"s1_result": " "}, {"s1_result": " ", "s1_method": "build it another way"})
+    assert got == {1: PENDING, 2: PENDING}

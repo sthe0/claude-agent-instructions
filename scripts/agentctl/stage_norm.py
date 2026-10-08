@@ -256,7 +256,8 @@ def stage_carried(prev_stages, new_stages, index: int) -> bool:
     of its interface, so changing only that carries its consumers.
 
     The one carry decision: both carry sites (approve-time refresh, substantive replan)
-    call it with stage lists captured before either side is mutated."""
+    call it before either side's norm fields are mutated. The replan site passes the live
+    `state.stages`; that holds only because it reassigns them after its carry loop."""
     prev = {s.index: s for s in prev_stages}
     new = {s.index: s for s in new_stages}
     if index not in prev or index not in new:
