@@ -100,7 +100,6 @@ def foreign_plan_owner(file_path: str, own_state: Path) -> tuple[Path, str | Non
     than the writer whose plan_path is file_path, else None. Unreadable or malformed
     state files are skipped: the ownership lookup fails open, never the write."""
     target = os.path.realpath(file_path)
-    own = os.path.realpath(own_state)
     dirs = [config_root.agentctl_state_dir(), config_root.agentctl_legacy_state_dir()]
     for d in dict.fromkeys(dirs):
         try:
@@ -108,7 +107,8 @@ def foreign_plan_owner(file_path: str, own_state: Path) -> tuple[Path, str | Non
         except OSError:
             continue
         for entry in entries:
-            if os.path.realpath(entry) == own:
+            # the writer's own session may have a stale copy in the other state dir
+            if entry.name == own_state.name:
                 continue
             fields = load_gate_fields(entry)
             if fields is None:
@@ -221,6 +221,8 @@ def main() -> int:
     # the writer's node only says what the writer may do with its own work. Checked
     # before the depth bypass because a spawned child starts at CLASSIFIED, a
     # plan-mutable node, and must not thereby rewrite its parent's approved plan.
+    # An owner at PLAN_READY allows the write on purpose: a child may refine its
+    # parent's plan awaiting approval, and approval binds a digest, so drift shows.
     if in_plans_dir:
         owner = foreign_plan_owner(file_path, sp)
         if owner is not None:
@@ -229,7 +231,11 @@ def main() -> int:
             decision, reason = gate_decision(owner_weight, owner_node, is_plan=True,
                                              diagnosing_plan_ok=owner_ok)
             if decision == "deny":
-                deny_with(owner_node, f"this plan belongs to another live session; {reason}")
+                deny_with(owner_node, (
+                    f"this plan belongs to another live session ({owner_path.stem}, "
+                    f"node={owner_node}); {reason}. If that session is abandoned, "
+                    "release the plan with `agentctl reset` or resolve in that session"
+                ))
             return 0
 
     # A spawned specialist (AGENT_RECURSION_DEPTH >= 1) is an EXECUTOR of an

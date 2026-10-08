@@ -311,6 +311,54 @@ def test_owner_node_skips_malformed_foreign_state(tmp_path):
     assert not _is_deny(proc)
 
 
+def test_owner_node_deny_names_owner_session_and_release_hint(tmp_path):
+    write_state(tmp_path, "writer", "PLANNING", weight_class="SUBSTANTIVE")
+    write_state(tmp_path, "owner-sess", "EXECUTING", weight_class="SUBSTANTIVE", plan_path=OWNED_PLAN)
+    reason = _deny_reason(run_hook(edit_payload("writer", OWNED_PLAN), tmp_path, extra_env=_OWNER_ENV))
+    assert "owner-sess" in reason
+    assert "node=EXECUTING" in reason
+    assert "agentctl reset" in reason
+
+
+def test_owner_node_denies_depth_zero_foreign_writer(tmp_path):
+    write_state(tmp_path, "writer", "PLANNING", weight_class="SUBSTANTIVE")
+    write_state(tmp_path, "owner", "EXECUTING", weight_class="SUBSTANTIVE", plan_path=OWNED_PLAN)
+    proc = run_hook(edit_payload("writer", OWNED_PLAN), tmp_path)
+    assert _is_deny(proc)
+    assert "another live session" in _deny_reason(proc)
+
+
+def test_owner_node_diagnosing_owner_incomplete_difficulty_denies(tmp_path):
+    write_state(tmp_path, "writer", "PLANNING", weight_class="SUBSTANTIVE")
+    write_diagnosing_state(tmp_path, "owner", OWNED_PLAN, difficulty=None)
+    proc = run_hook(edit_payload("writer", OWNED_PLAN), tmp_path, extra_env=_OWNER_ENV)
+    assert _is_deny(proc)
+    assert "difficulty record" in _deny_reason(proc)
+
+
+def test_owner_node_diagnosing_owner_complete_difficulty_allows(tmp_path):
+    write_state(tmp_path, "writer", "PLANNING", weight_class="SUBSTANTIVE")
+    write_diagnosing_state(tmp_path, "owner", OWNED_PLAN, difficulty=_complete_difficulty())
+    proc = run_hook(edit_payload("writer", OWNED_PLAN), tmp_path, extra_env=_OWNER_ENV)
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+
+
+def test_owner_node_ignores_writers_own_stale_copy_in_other_state_dir(tmp_path):
+    # current root (~/.claude-agent) holds the live writer; the legacy root (~/.claude)
+    # holds a stale copy of the SAME session that still claims the plan at EXECUTING
+    current = tmp_path / ".claude-agent" / "agentctl" / "state"
+    legacy = tmp_path / ".claude" / "agentctl" / "state"
+    current.mkdir(parents=True)
+    legacy.mkdir(parents=True)
+    (current / "writer.json").write_text(json.dumps({"node": "PLANNING", "weight_class": "SUBSTANTIVE"}))
+    (legacy / "writer.json").write_text(json.dumps(
+        {"node": "EXECUTING", "weight_class": "SUBSTANTIVE", "plan_path": OWNED_PLAN}))
+    proc = run_hook(edit_payload("writer", OWNED_PLAN), tmp_path, extra_env=_OWNER_ENV)
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+
+
 def test_depth_zero_root_still_gated(tmp_path):
     # the bypass is depth-conditioned: a depth-0 (root) session at PLAN_READY is
     # still gated on production code exactly as before

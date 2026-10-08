@@ -7058,6 +7058,46 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "292ddf5713902f08"
+domain = "code"
+file = "scripts/tests/test_hook_state_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "56797af44bd547eb"
+domain = "code"
+file = "scripts/tests/test_hook_state_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "5d8d8d632f8a01a0"
+domain = "code"
+file = "scripts/tests/test_hook_state_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "9272774e324fe855"
+domain = "code"
+file = "scripts/tests/test_hook_state_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "d6242c07e28fc048"
+domain = "code"
+file = "scripts/tests/test_hook_state_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "0fb4cbe6df6bf894"
 domain = "code"
 file = "scripts/tests/test_hook_turn_end_gate.py"
