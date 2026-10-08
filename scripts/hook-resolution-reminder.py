@@ -3,7 +3,8 @@
 when the user's prompt is brief gratitude — ambiguous between "thanks
 for the work" and "task is over".
 
-At the resolution gate, also checks whether the working branch is
+At the landing moment (every stage PASSED, verify-final not yet run) it says
+to land first; at the resolution gate it also checks whether the working branch is
 cleanly landable into trunk (`land-branch.py --check`) and, if so,
 appends a branch-hygiene line so a confirmed-resolved task doesn't
 leave an unmerged branch behind. The check is best-effort and silent
@@ -47,7 +48,7 @@ from a passing verify-final into composing its own resolution ask
 within one turn, no user prompt intervenes and DIRECT_PUSH_NO_PR_HINT
 never gets a chance to steer the menu before it is already shown. This
 second entry point runs on every AskUserQuestion tool call instead: when
-the gate is open AND direct_push_no_pr_hint applies to the delivery
+landing is pending or the gate is open AND direct_push_no_pr_hint applies to the delivery
 repo, it consults the semantic judge
 agentctl.advisor.judge_landing_discipline_ask on the ask's own text —
 unconditionally, with NO regex/content-based prefilter gating whether
@@ -89,6 +90,11 @@ except BaseException as exc:
     raise
 
 try:
+    from agentctl.state import RESOLUTION_ASK_MARKER  # noqa: E402
+except Exception:
+    RESOLUTION_ASK_MARKER = "[resolution-ask]"
+
+try:
     from difficulty_channel import authority  # noqa: E402
 except Exception:
     authority = None  # degrade silently — the direct-push-no-PR hint just won't fire
@@ -106,10 +112,10 @@ SHARED_BRANCH_RE = re.compile(
 
 BRANCH_HYGIENE_HINT = (
     "Also — a working branch is cleanly landable into trunk: run "
-    "`python3 scripts/land-branch.py --check` to preview, then bundle a "
-    "land+delete option into the SAME resolution AskUserQuestion (ref-only "
-    "ff; trunk-push needs explicit confirmation). Don't leave the branch "
-    "hanging. Full landing discipline: "
+    "`python3 scripts/land-branch.py --check` to preview, then land and "
+    "delete it (ref-only ff; trunk-push needs explicit confirmation) before "
+    "the resolution AskUserQuestion — never bundle landing into that ask. "
+    "Don't leave the branch hanging. Full landing discipline: "
     "memory-global/leaves/landing-discipline.md."
 )
 
@@ -138,11 +144,11 @@ UNPUSHED_BRANCH_HINT = (
     "Also — the current working branch has commits not on its remote "
     "(unpushed / ahead of upstream, or no upstream yet). Per CLAUDE.md "
     "§ On task resolution, deliver committed work to its terminal VCS state "
-    "proactively: bundle a **push** option into the SAME resolution "
-    "AskUserQuestion, recommended-first — pushing a personal / working "
-    "branch is pre-authorized (§ Acting without asking #4). Never leave the "
-    "push as a passive 'tell me if you want to push'. Full landing "
-    "discipline: memory-global/leaves/landing-discipline.md."
+    "proactively: push (and land) before the resolution AskUserQuestion, "
+    "never bundled into that ask — pushing a personal / working branch is "
+    "pre-authorized (§ Acting without asking #4). Never leave the push as a "
+    "passive 'tell me if you want to push'. Full landing discipline: "
+    "memory-global/leaves/landing-discipline.md."
 )
 
 # Safe-by-default kill-switch for the PreToolUse judge consult: unset or any
@@ -174,6 +180,30 @@ _LANDING_DISCIPLINE_DENY_REASON = (
     "memory-global/leaves/landing-discipline.md). Rework the option(s) to "
     "land by direct push (`python3 scripts/land-branch.py`) instead of "
     "opening a PR."
+)
+
+LANDING_PENDING_MESSAGE = (
+    "[resolution-reminder] Every stage has passed but verify-final has not "
+    "run: the landing moment. Land the delivery branch into trunk now "
+    "(`python3 scripts/land-branch.py`, or the repo's PR route when review-"
+    "gated) before the resolution AskUserQuestion, then run `agentctl "
+    "verify-final`, and only then ask the resolution AskUserQuestion — carrying the literal marker "
+    + RESOLUTION_ASK_MARKER + " and the agent-proposed 1-5 quality rating as "
+    "its first option. Landing comes before the rating ask."
+)
+
+PARKED_GATE_MESSAGE = (
+    "[resolution-reminder] The agentctl session is parked at the "
+    "resolution gate (node=RESOLUTION, not yet passed). Per CLAUDE.md "
+    "§ On task resolution, do NOT close the task on this message "
+    "regardless of its wording. Landing should already be done; if a hint "
+    "below fires, land before the resolution AskUserQuestion. Give a "
+    "one-line recap (`Requested: X. Delivered: Y.`) and ask the user to "
+    "confirm explicitly via the resolution AskUserQuestion carrying the "
+    "literal marker " + RESOLUTION_ASK_MARKER + ", then run `agentctl "
+    "resolve --by <user>` only after an unambiguous confirmation. Include "
+    "the agent-proposed 1-5 quality rating as the first resolution option "
+    "(see leaves/quality-regression-investigation.md)."
 )
 
 MAX_WORDS = 6
@@ -232,6 +262,27 @@ def resolution_gate_open(session_id: str) -> bool:
         return False
     resolution = data.get("resolution") or {}
     return not bool(resolution.get("passed"))
+
+
+def landing_pending(session_id: str) -> bool:
+    """True iff the state file says node==VERIFYING and every stage is PASSED —
+    the landing moment, before verify-final. Missing/corrupt state -> False."""
+    if not session_id:
+        return False
+    path = config_root.resolve_agentctl_state_file(session_id)
+    if path is None:
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("node") != "VERIFYING":
+            return False
+        stages = data.get("stages") or []
+        return bool(stages) and all(
+            ((s.get("outcome") or {}).get("status") or s.get("status")) == "PASSED"
+            for s in stages
+        )
+    except Exception:
+        return False
 
 
 def _delivery_repo_dir(session_id: str, cwd: str) -> str:
@@ -439,7 +490,7 @@ def decide(payload: dict) -> tuple[str, str]:
     if payload.get("tool_name") != "AskUserQuestion":
         return "allow", ""
     session_id = payload.get("session_id") or ""
-    if not resolution_gate_open(session_id):
+    if not (landing_pending(session_id) or resolution_gate_open(session_id)):
         return "allow", ""
     repo_dir = _delivery_repo_dir(
         session_id,
@@ -523,20 +574,12 @@ def main() -> int:
             return 0  # fail-open — a hook must never wedge the ask
         return 0
 
-    if resolution_gate_open(payload.get("session_id") or ""):
-        print(
-            "[resolution-reminder] The agentctl session is parked at the "
-            "resolution gate (node=RESOLUTION, not yet passed). Per CLAUDE.md "
-            "§ On task resolution, do NOT close the task on this message "
-            "regardless of its wording. Give a one-line recap "
-            "(`Requested: X. Delivered: Y.`) and ask the user to confirm "
-            "explicitly via AskUserQuestion, then run `agentctl resolve "
-            "--by <user>` only after an unambiguous confirmation. Include the "
-            "agent-proposed 1-5 quality rating as the first resolution option "
-            "(see leaves/quality-regression-investigation.md)."
-        )
+    session_id = payload.get("session_id") or ""
+    pending = landing_pending(session_id)
+    if pending or resolution_gate_open(session_id):
+        print(LANDING_PENDING_MESSAGE if pending else PARKED_GATE_MESSAGE)
         for hint in _collect_resolution_hints(
-            payload.get("session_id") or "",
+            session_id,
             payload.get("cwd") or str(Path(__file__).resolve().parent),
         ):
             print(hint)

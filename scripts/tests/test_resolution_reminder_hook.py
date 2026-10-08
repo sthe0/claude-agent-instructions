@@ -742,3 +742,164 @@ def test_pretooluse_child_env_guard_short_circuits_before_any_judge_call(monkeyp
     assert rc == 0
     assert out == ""
     assert not called
+
+
+# --- landing moment: VERIFYING with every stage PASSED, before verify-final --
+# Assertions run on the imported module's joined constants and on captured
+# printed output, never on source lines (a string split across adjacent
+# literals is invisible to a line grep).
+
+def _write_stages_state(state_dir: Path, session_id: str, node: str, statuses: list[str]) -> None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    data = {
+        "node": node,
+        "resolution": {"passed": False},
+        "stages": [{"outcome": {"status": st}} for st in statuses],
+    }
+    (state_dir / f"{session_id}.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def _arm_landing(mod, monkeypatch, tmp_path, session_id="sess-land", statuses=("PASSED", "PASSED")):
+    state_dir = _point_roots_at(monkeypatch, tmp_path)
+    _write_stages_state(state_dir, session_id, "VERIFYING", list(statuses))
+    return session_id
+
+
+def test_landing_pending_true_at_verifying_all_passed(monkeypatch, tmp_path):
+    mod = _load_module()
+    sid = _arm_landing(mod, monkeypatch, tmp_path)
+    assert mod.landing_pending(sid) is True
+
+
+def test_landing_pending_false_with_a_pending_stage(monkeypatch, tmp_path):
+    mod = _load_module()
+    sid = _arm_landing(mod, monkeypatch, tmp_path, statuses=("PASSED", "PENDING"))
+    assert mod.landing_pending(sid) is False
+
+
+def test_landing_pending_false_at_resolution_and_executing(monkeypatch, tmp_path):
+    mod = _load_module()
+    state_dir = _point_roots_at(monkeypatch, tmp_path)
+    _write_stages_state(state_dir, "s-res", "RESOLUTION", ["PASSED"])
+    _write_stages_state(state_dir, "s-exe", "EXECUTING", ["PASSED"])
+    assert mod.landing_pending("s-res") is False
+    assert mod.landing_pending("s-exe") is False
+
+
+def test_landing_pending_false_on_missing_state_or_empty_session(monkeypatch, tmp_path):
+    mod = _load_module()
+    _point_roots_at(monkeypatch, tmp_path)
+    assert mod.landing_pending("no-such-session") is False
+    assert mod.landing_pending("") is False
+
+
+def test_hint_constants_say_before_the_resolution_ask_not_same():
+    mod = _load_module()
+    for hint in (mod.BRANCH_HYGIENE_HINT, mod.UNPUSHED_BRANCH_HINT,
+                 mod.LANDING_PENDING_MESSAGE, mod.PARKED_GATE_MESSAGE):
+        assert "before the resolution AskUserQuestion" in hint
+        assert "SAME resolution AskUserQuestion" not in hint
+
+
+def test_parked_message_names_rating_leaf_and_marker():
+    mod = _load_module()
+    assert "quality rating" in mod.PARKED_GATE_MESSAGE
+    assert "quality-regression-investigation" in mod.PARKED_GATE_MESSAGE
+    assert mod.RESOLUTION_ASK_MARKER in mod.PARKED_GATE_MESSAGE
+    assert mod.RESOLUTION_ASK_MARKER in mod.LANDING_PENDING_MESSAGE
+
+
+def test_marker_is_the_engine_constant():
+    from agentctl.state import RESOLUTION_ASK_MARKER
+    assert _load_module().RESOLUTION_ASK_MARKER == RESOLUTION_ASK_MARKER
+
+
+def test_main_prints_landing_message_at_landing_moment(monkeypatch, capsys, tmp_path):
+    mod = _load_module()
+    sid = _arm_landing(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod, "direct_push_no_pr_hint", lambda repo_dir: None)
+
+    rc, out = _run(monkeypatch, capsys, mod, {"session_id": sid, "cwd": str(tmp_path)})
+
+    assert rc == 0
+    assert mod.LANDING_PENDING_MESSAGE in out
+    assert mod.PARKED_GATE_MESSAGE not in out
+    assert "SAME resolution AskUserQuestion" not in out
+
+
+def test_main_prints_parked_message_at_resolution_gate(monkeypatch, capsys, tmp_path):
+    mod = _load_module()
+    sid = _arm_gate(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod, "direct_push_no_pr_hint", lambda repo_dir: None)
+
+    rc, out = _run(monkeypatch, capsys, mod, {"session_id": sid, "cwd": str(tmp_path)})
+
+    assert rc == 0
+    assert mod.PARKED_GATE_MESSAGE in out
+    assert mod.LANDING_PENDING_MESSAGE not in out
+
+
+def test_main_hints_follow_landing_message(monkeypatch, capsys, tmp_path):
+    mod = _load_module()
+    sid = _arm_landing(mod, monkeypatch, tmp_path)
+    _suppress_other_hints(mod, monkeypatch)
+    monkeypatch.setattr(mod, "direct_push_no_pr_hint", lambda repo_dir: None)
+    monkeypatch.setattr(mod, "unpushed_branch_hint", lambda repo_dir: mod.UNPUSHED_BRANCH_HINT)
+
+    _, out = _run(monkeypatch, capsys, mod, {"session_id": sid, "cwd": str(tmp_path)})
+
+    assert out.index(mod.LANDING_PENDING_MESSAGE) < out.index(mod.UNPUSHED_BRANCH_HINT)
+
+
+def test_judge_consulted_at_verifying_all_passed(monkeypatch, capsys, tmp_path):
+    mod = _load_module()
+    sid = _arm_landing(mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    called = []
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask",
+                         lambda *a, **k: called.append(1) or (False, ""))
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    rc, out = _run(monkeypatch, capsys, mod, _ask_payload(sid, core_repo))
+
+    assert rc == 0
+    assert called == [1]
+
+
+def test_judge_denies_pr_menu_at_landing_moment(monkeypatch, capsys, tmp_path):
+    mod = _load_module()
+    sid = _arm_landing(mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask",
+                         lambda *a, **k: (True, ""))
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    _, out = _run(monkeypatch, capsys, mod, _ask_payload(sid, core_repo, text="Open a PR?"))
+
+    assert _deny_reason(out) == mod._LANDING_DISCIPLINE_DENY_REASON
+
+
+def test_judge_not_consulted_mid_execution(monkeypatch, capsys, tmp_path):
+    mod = _load_module()
+    state_dir = _point_roots_at(monkeypatch, tmp_path)
+    _write_stages_state(state_dir, "s-exe", "EXECUTING", ["PASSED", "PENDING"])
+    monkeypatch.setattr(mod.authority, "is_author", lambda *a, **k: True)
+    called = []
+    monkeypatch.setattr(mod._advisor, "judge_landing_discipline_ask",
+                         lambda *a, **k: called.append(1) or (True, ""))
+    core_repo = str(mod.authority.REPO_ROOT)
+
+    rc, out = _run(monkeypatch, capsys, mod, _ask_payload("s-exe", core_repo))
+
+    assert rc == 0
+    assert out == ""
+    assert not called
+
+
+def test_hook_wiring_description_covers_landing_moment():
+    from lib import hook_wiring
+    note = dict(hook_wiring.GATE_BEARING_HOOKS)["hook-resolution-reminder.py"]
+    assert "while the resolution gate is open" not in note
+    assert "landing is pending" in note
