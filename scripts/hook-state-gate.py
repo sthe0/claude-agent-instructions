@@ -95,6 +95,32 @@ def load_gate_fields(path: Path) -> tuple[str | None, str, str | None] | None:
     return weight, node, plan_path
 
 
+def foreign_plan_owner(file_path: str, own_state: Path) -> tuple[Path, str | None, str] | None:
+    """(state_path, weight_class, node) of a live (node != RESOLVED) session other
+    than the writer whose plan_path is file_path, else None. Unreadable or malformed
+    state files are skipped: the ownership lookup fails open, never the write."""
+    target = os.path.realpath(file_path)
+    own = os.path.realpath(own_state)
+    dirs = [config_root.agentctl_state_dir(), config_root.agentctl_legacy_state_dir()]
+    for d in dict.fromkeys(dirs):
+        try:
+            entries = sorted(d.glob("*.json"))
+        except OSError:
+            continue
+        for entry in entries:
+            if os.path.realpath(entry) == own:
+                continue
+            fields = load_gate_fields(entry)
+            if fields is None:
+                continue
+            weight, node, plan_path = fields
+            if node == "RESOLVED" or not isinstance(plan_path, str) or not plan_path:
+                continue
+            if os.path.realpath(plan_path) == target:
+                return entry, weight, node
+    return None
+
+
 def gate_decision(weight_class: str | None, node: str, is_plan: bool = False,
                   diagnosing_plan_ok: bool = False) -> tuple[str, str]:
     """Pure weight-aware gate. Returns ("allow"|"deny", reason).
@@ -191,20 +217,30 @@ def main() -> int:
     is_tracked = bool(plan_path) and os.path.realpath(file_path) == os.path.realpath(plan_path)
     is_plan = in_plans_dir and (node in PLAN_WRITE_POSITION_NODES or is_tracked)
 
+    # A plan file owned by another live session is decided by THAT session's node:
+    # the writer's node only says what the writer may do with its own work. Checked
+    # before the depth bypass because a spawned child starts at CLASSIFIED, a
+    # plan-mutable node, and must not thereby rewrite its parent's approved plan.
+    if in_plans_dir:
+        owner = foreign_plan_owner(file_path, sp)
+        if owner is not None:
+            owner_path, owner_weight, owner_node = owner
+            owner_ok = owner_node == "DIAGNOSING" and diagnosing_plan_write_ok(owner_path)
+            decision, reason = gate_decision(owner_weight, owner_node, is_plan=True,
+                                             diagnosing_plan_ok=owner_ok)
+            if decision == "deny":
+                deny_with(owner_node, f"this plan belongs to another live session; {reason}")
+            return 0
+
     # A spawned specialist (AGENT_RECURSION_DEPTH >= 1) is an EXECUTOR of an
     # already-approved stage, not a coordinator: its production-edit authority is
-    # inherited from the parent coordinator that passed the plan-approval gate
-    # before spawning it (the parent only spawns per an approved stage and verifies
-    # the output before record-result). Its own engine auto-starts at UNCLASSIFIED,
-    # which would otherwise deny every production write and force the child to fight
-    # the gate. So allow a depth>=1 session to edit production CODE.
+    # inherited from the parent coordinator that passed the plan-approval gate.
+    # Its own engine auto-starts at CLASSIFIED, which would otherwise deny every
+    # production write, so a depth>=1 session may edit production CODE.
     #
-    # NARROW BY DESIGN: this bypass excludes plan files. is_plan keeps flowing
-    # through gate_decision's node-aware plan rule, whose PLAN_MUTABLE_NODES does
-    # not include the child's UNCLASSIFIED node -> a spawned executor can never
-    # alter an approved plan. Plan integrity is the guarantee; only code editing is
-    # unblocked. (A spawned *planner* legitimately reaches a PLAN_MUTABLE node and
-    # is governed by the same rule, unchanged.)
+    # Plan files stay gated: is_plan flows through gate_decision's node-aware rule
+    # (the child's own plan only at its planning-position nodes), and a plan owned
+    # by another live session is governed by the owner check above.
     if not is_plan and recursion_depth() >= 1:
         return 0
 

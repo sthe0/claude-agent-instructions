@@ -228,10 +228,10 @@ def test_malformed_stdin_allows(tmp_path):
 # --- spawned-executor depth bypass: code allowed, plan still gated ---------
 
 def test_depth_allows_production_code_before_executing(tmp_path):
-    # a spawned specialist's own engine auto-starts at UNCLASSIFIED, which would
+    # a spawned specialist's own engine auto-starts at CLASSIFIED, which would
     # otherwise deny its production writes; depth>=1 unblocks production CODE so
     # the executor of an approved stage can do its job without fighting the gate
-    write_state(tmp_path, "d1", "UNCLASSIFIED", weight_class=None)
+    write_state(tmp_path, "d1", "CLASSIFIED", weight_class=None)
     proc = run_hook(
         edit_payload("d1", "/work/project/module.py"), tmp_path,
         extra_env={"AGENT_RECURSION_DEPTH": "1"},
@@ -254,7 +254,7 @@ def test_depth_does_not_unblock_plan_files(tmp_path):
     # NARROW BY DESIGN: the depth bypass excludes plan artifacts. A spawned
     # executor at a non-planning node can never alter an approved plan.
     plan_file = "/home/u/.claude/plans/task.md"
-    write_state(tmp_path, "d2", "UNCLASSIFIED", weight_class=None, plan_path=plan_file)
+    write_state(tmp_path, "d2", "EXECUTING", weight_class=None, plan_path=plan_file)
     proc = run_hook(
         edit_payload("d2", plan_file), tmp_path,
         extra_env={"AGENT_RECURSION_DEPTH": "1"},
@@ -262,6 +262,53 @@ def test_depth_does_not_unblock_plan_files(tmp_path):
     assert proc.returncode == 0
     assert _is_deny(proc)
     assert "replan" in _deny_reason(proc).lower()
+
+
+# --- owner-node rule: a plan owned by another live session ------------------
+
+OWNED_PLAN = "/home/u/.claude/plans/owned.toml"
+_OWNER_ENV = {"AGENT_RECURSION_DEPTH": "1"}
+
+
+@pytest.mark.parametrize("writer_node", ["CLASSIFIED", "ROUTED", "PLANNING", "PLAN_READY", "EXECUTING"])
+def test_owner_node_denies_foreign_plan_write(tmp_path, writer_node):
+    write_state(tmp_path, "writer", writer_node, weight_class="SUBSTANTIVE")
+    write_state(tmp_path, "owner", "EXECUTING", weight_class="SUBSTANTIVE", plan_path=OWNED_PLAN)
+    proc = run_hook(edit_payload("writer", OWNED_PLAN), tmp_path, extra_env=_OWNER_ENV)
+    assert proc.returncode == 0
+    assert _is_deny(proc)
+    assert "another live session" in _deny_reason(proc)
+
+
+def test_owner_node_allows_unowned_plan_for_planning_writer(tmp_path):
+    write_state(tmp_path, "writer", "PLANNING", weight_class="SUBSTANTIVE")
+    proc = run_hook(edit_payload("writer", OWNED_PLAN), tmp_path, extra_env=_OWNER_ENV)
+    assert not _is_deny(proc)
+
+
+def test_owner_node_allows_when_owner_at_plan_ready(tmp_path):
+    write_state(tmp_path, "writer", "EXECUTING", weight_class="SUBSTANTIVE")
+    write_state(tmp_path, "owner", "PLAN_READY", weight_class="SUBSTANTIVE", plan_path=OWNED_PLAN)
+    proc = run_hook(edit_payload("writer", OWNED_PLAN), tmp_path, extra_env=_OWNER_ENV)
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+
+
+def test_owner_node_ignores_resolved_owner(tmp_path):
+    write_state(tmp_path, "writer", "PLANNING", weight_class="SUBSTANTIVE")
+    write_state(tmp_path, "owner", "RESOLVED", weight_class="SUBSTANTIVE", plan_path=OWNED_PLAN)
+    proc = run_hook(edit_payload("writer", OWNED_PLAN), tmp_path, extra_env=_OWNER_ENV)
+    assert not _is_deny(proc)
+
+
+def test_owner_node_skips_malformed_foreign_state(tmp_path):
+    write_state(tmp_path, "writer", "PLANNING", weight_class="SUBSTANTIVE")
+    state_dir = tmp_path / ".claude" / "agentctl" / "state"
+    (state_dir / "junk.json").write_text("{not json")
+    (state_dir / "nonode.json").write_text(json.dumps({"plan_path": OWNED_PLAN}))
+    proc = run_hook(edit_payload("writer", OWNED_PLAN), tmp_path, extra_env=_OWNER_ENV)
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
 
 
 def test_depth_zero_root_still_gated(tmp_path):
