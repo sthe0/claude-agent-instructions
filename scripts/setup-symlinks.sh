@@ -86,6 +86,27 @@ name actually resolves here, and fails loudly when it does not.
 PLUGIN_README
 }
 
+# The landed-check provider seam: a non-git landed check (plan `provider = "<name>"`)
+# resolves <name> from this machine-local directory. Core creates the directory and the
+# README stub; the provider module itself is machine-local and never ships here.
+ensure_landed_check_plugin_dir() {
+  local dir="$CLAUDE_AGENT_HOME/landed-check-plugins"
+  mkdir -p "$dir/providers"
+  [[ -f "$dir/README.md" ]] && return 0
+  cat > "$dir/README.md" <<'PLUGIN_README'
+# Machine-local landed-check providers
+
+Nothing here is versioned. A plan's landed check defaults to git; a delivery in
+another VCS names `provider = "<name>"` and this directory supplies the answer.
+
+| Path | What it is |
+|---|---|
+| `providers/<name>.py` | Provider module with `freeze(venue) -> str \| None` (an opaque delivery token) and `is_landed(token, target) -> bool \| None` (True landed, False not yet, None cannot decide; once True it must stay True). Absolute imports only. |
+
+Contract and loader: `scripts/agentctl/landed_providers.py`.
+PLUGIN_README
+}
+
 prune_dangling() {
   local dir="$1"
   local logfile="$HOME/.local/log/setup-symlinks-prune.log"
@@ -182,6 +203,7 @@ CLAUDE_SETTINGS="$CLAUDE_AGENT_HOME/settings.json" "$REPO/scripts/apply-settings
 
 # ...and the directory the channel it names may need an adapter from.
 ensure_plugin_dir
+ensure_landed_check_plugin_dir
 
 # Wire the canonical reminder-hook set into settings.json. Hooks are a
 # machine-specific key (apply-settings.sh does not merge them), so the repo's

@@ -137,6 +137,7 @@ from pathlib import Path
 
 from . import grants as _grants
 from .grants import AddDirGrant, RuleGrant, StageGrants
+from .landed_providers import PROVIDER_NAME_RE
 from .script_effects import StageEffectDeclaration
 from .state import (
     Actor,
@@ -391,16 +392,22 @@ def _parse_landed_spec(
         return None
     if not isinstance(raw_table, dict) or not raw_table:
         raise PlanError(f"{context}: kind = \"landed\" requires a [*.landed] table")
+    provider = raw_table.get("provider", "git")
+    if not isinstance(provider, str) or not PROVIDER_NAME_RE.match(provider):
+        raise PlanError(
+            f"{context}: landed.provider {provider!r} is not a plain identifier "
+            f"(expected to match {PROVIDER_NAME_RE.pattern}) (R12)"
+        )
     target = raw_table.get("target")
     if not target or not isinstance(target, str):
         raise PlanError(f"{context}: landed.target is required (non-empty string) (R2)")
-    if not _LANDED_REF_RE.match(target):
+    if provider == "git" and not _LANDED_REF_RE.match(target):
         raise PlanError(
             f"{context}: landed.target {target!r} is not a valid git ref name "
             f"(expected to match {_LANDED_REF_RE.pattern}) (R2)"
         )
     remote = str(raw_table.get("remote", "origin"))
-    if not _LANDED_REF_RE.match(remote):
+    if provider == "git" and not _LANDED_REF_RE.match(remote):
         raise PlanError(
             f"{context}: landed.remote {remote!r} is not a valid git ref name "
             f"(expected to match {_LANDED_REF_RE.pattern}) (R2)"
@@ -421,7 +428,8 @@ def _parse_landed_spec(
             f"have been recorded yet (self-reference, delivered_stage == "
             f"{owner_index}, is fine) (R5)"
         )
-    return LandedSpec(target=target, remote=remote, delivered_stage=delivered_stage)
+    return LandedSpec(target=target, remote=remote, delivered_stage=delivered_stage,
+                      provider=provider)
 
 
 # The only two executor shapes the engine dispatches: in-thread, or a named spawn
@@ -2134,7 +2142,8 @@ _ELEMENT_FIELDS: dict[str, tuple[str, ...] | None] = {
                   "criterion.verify_command", "criterion.expected_exit",
                   "criterion.verify_venue", "criterion.verify_kind",
                   "criterion.landed.target", "criterion.landed.delivered_stage",
-                  "criterion.landed.remote", "criterion.verify_venue_at_final",
+                  "criterion.landed.remote", "criterion.landed.provider",
+                  "criterion.verify_venue_at_final",
                   "criterion.negative_control", "criterion.negative_control_waiver"),
     "done_criterion": ("criterion.done_criterion",),
     "principle": ("principle.statement", "principle.source", "principle.derivation",

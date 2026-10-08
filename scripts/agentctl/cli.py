@@ -1490,6 +1490,10 @@ def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) ->
     cwd = state.resolve_check_venue(stage.criterion.verify_venue)
     if not cwd:
         return
+    spec = _landed_spec_for_stage(state, stage.index)
+    if spec is not None and spec.provider != "git":
+        _freeze_provider_token(stage, spec.provider, cwd)
+        return
     run = runner or subprocess_runner
     result = run(["git", "-C", cwd, "rev-parse", "HEAD"])
     head = result.stdout.strip() if result.returncode == 0 else ""
@@ -1497,7 +1501,6 @@ def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) ->
         return
     previous_head = stage.outcome.delivered_head
     stage.outcome.delivered_head = head
-    spec = _landed_spec_for_stage(state, stage.index)
     if spec is None or (head == previous_head and stage.outcome.delivered_base):
         return
     # The base is frozen with the head: a re-record on an unchanged head keeps the base
@@ -1508,6 +1511,20 @@ def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) ->
     base = run(["git", "-C", cwd, "merge-base", "HEAD", f"{spec.remote}/{spec.target}"])
     if base.returncode == 0 and base.stdout.strip() and base.stdout.strip() != head:
         stage.outcome.delivered_base = base.stdout.strip()
+
+
+def _freeze_provider_token(stage, provider: str, venue: str) -> None:
+    """Stamp the delivery token a non-git landed provider freezes at `venue` onto
+    `delivered_head`. Fails open like the git freeze: a missing or broken plugin, a
+    raising provider, or a provider that cannot freeze leaves the stamp untouched, so
+    render_landed_command refuses legibly instead of the stage failing."""
+    from .landed_providers import load_provider
+    try:
+        token = load_provider(provider).freeze(venue)
+    except Exception:
+        return
+    if isinstance(token, str) and token:
+        stage.outcome.delivered_head = token
 
 
 def _landed_spec_for_stage(state: SessionState, stage_index: int):

@@ -19,6 +19,7 @@ import json
 import shlex
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
+from pathlib import Path
 from typing import ClassVar
 
 from .grants import StageGrants
@@ -159,16 +160,25 @@ class CheckKind(str, Enum):
 LANDED_GIT_ERROR_EXIT = 97
 
 
-@dataclass
+@dataclass(repr=False)
 class LandedSpec:
     """The declarative payload of a `kind = "landed"` check (schema 23): assert
     that the commit stage `delivered_stage` delivered is contained in `target`
     (and its `remote` remote-tracking ref) — never SHA equality, never a
     live-resolved head. See plan.py's `_parse_landed_spec` for the validation
-    rules this must satisfy before construction."""
+    rules this must satisfy before construction. `provider` names the VCS that
+    answers: "git" (built in) or a plugin loaded through landed_providers.py."""
     target: str
     delivered_stage: int
     remote: str = "origin"
+    provider: str = "git"
+
+    def __repr__(self) -> str:
+        # The default provider is left out so a git spec's repr (hashed into
+        # stage digests) stays byte-identical to the pre-provider shape.
+        extra = "" if self.provider == "git" else f", provider={self.provider!r}"
+        return (f"LandedSpec(target={self.target!r}, delivered_stage="
+                f"{self.delivered_stage!r}, remote={self.remote!r}{extra})")
 
     @classmethod
     def from_dict(cls, d: dict) -> "LandedSpec":
@@ -2137,6 +2147,8 @@ class SessionState:
         rather than answering), so a check that goes
         green cannot later go red without a history rewrite — see CheckKind's
         module comment for the 20-incident background this replaces."""
+        if spec.provider != "git":
+            return self._render_provider_landed_command(spec)
         if not self.repo_root:
             return None, (
                 "landed check requires [meta].repo_root to be set (nothing to "
@@ -2210,6 +2222,34 @@ class SessionState:
             "done; exit 0"
         )
         return command, None
+
+    def _render_provider_landed_command(self, spec: "LandedSpec") -> tuple[str | None, str | None]:
+        """The landed check of a non-git provider: a call into
+        scripts/landed-provider-check.py with the token the provider froze at
+        record-result. The CLI maps the provider's True/False/None to 0/1/97.
+        Refuses (never a stage failure) when the check cannot even be attempted."""
+        try:
+            stage = self.stage(spec.delivered_stage)
+        except KeyError:
+            return None, (
+                f"landed check's delivered_stage {spec.delivered_stage} does "
+                "not name an existing stage"
+            )
+        token = stage.outcome.delivered_head
+        if not token:
+            return None, (
+                f"stage {spec.delivered_stage} has not yet frozen a delivery token "
+                f"(provider {spec.provider!r}: record-result must run for that stage, "
+                "with a resolvable delivery venue and an installed provider plugin, "
+                "before this landed check can be evaluated)"
+            )
+        # The engine's own copy, not repo_root's: the checked plan's repo may be any
+        # project, and an unlanded Core delivery has no such script in canon yet.
+        script = shlex.quote(str(Path(__file__).resolve().parents[1] / "landed-provider-check.py"))
+        return (
+            f"python3 {script} --provider {shlex.quote(spec.provider)} "
+            f"--token {shlex.quote(token)} --target {shlex.quote(spec.target)}"
+        ), None
 
     def _landed_task_id(self) -> str:
         """The id the landed check's `Task:` trailer must carry: the plan's own
