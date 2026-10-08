@@ -288,7 +288,7 @@ def test_delta_specific_stages_needed(store, fixtures_dir, tmp_path, gate_on):
                            reviewer="thinker", concerns=None, note="",
                            plan_digest=_sha256_file(plan)), store=store)
 
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     d = cli.cmd_plan_review_delta(ns(session=sid, plan=str(plan)), store=store)
     assert d.ok is True
     assert d.data["whole_plan"] is False

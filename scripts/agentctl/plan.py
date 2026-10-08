@@ -151,6 +151,7 @@ from .state import (
     Means,
     Order,
     Outcome,
+    PAIR_BINDING_KEYS,
     Principle,
     Stage,
     StageStatus,
@@ -2486,6 +2487,54 @@ def pair_binding(doc: PlanDoc, pair_id: str) -> dict:
         "service_interface_digest": _sha256_hex(pair_service_text(doc, s)),
         "edge_digest": _sha256_hex(pair_edge_text(doc, b, s)),
     }
+
+
+PAIR_SERVICE_CONSTRUCTION_KEYS = ("service_key", "service_file_digest")
+
+
+def pair_shows_declared_product_only(doc: PlanDoc, pair_id: str) -> bool:
+    """Whether the bundle of `pair_id` shows its service only as the declared product
+    (`render.pair_service_text`): a stage service that relies on something and has a
+    concrete interface. A source stage and an `interface_empty` stage are shown in
+    full, and the synthetic `plan` service has no separate construction."""
+    _, s = parse_pair(doc, pair_id)
+    if s in (PAIR_PLAN_NODE, PAIR_BASE_NODE):
+        return False
+    return bool(reliance_set(doc, int(s))) and not interface_empty(_stage_by_index(doc, int(s)))
+
+
+def pair_currency_keys(doc: PlanDoc, pair_id: str) -> tuple[str, ...]:
+    """The `PAIR_BINDING_KEYS` a record of `pair_id` is judged current by: all seven,
+    less the service's construction (`service_key`, `service_file_digest`) when the
+    reviewer was shown only its declared product -- that evidence is
+    `service_interface_digest` alone. The order is `PAIR_BINDING_KEYS`'."""
+    if not pair_shows_declared_product_only(doc, pair_id):
+        return PAIR_BINDING_KEYS
+    return tuple(k for k in PAIR_BINDING_KEYS if k not in PAIR_SERVICE_CONSTRUCTION_KEYS)
+
+
+def pair_currency_hash(doc: PlanDoc, pair_id: str) -> str:
+    """sha256 of the `pair_currency_keys` digests of `pair_id` -- what a whole-plan
+    record keeps per pair in `reviewed_pair_currency`."""
+    binding = pair_binding(doc, pair_id)
+    text = "\n".join(f"{key}={binding[key]}" for key in pair_currency_keys(doc, pair_id))
+    return _sha256_hex(text)
+
+
+def plan_interface_digests(doc: PlanDoc, indices=None) -> dict[int, str]:
+    """`{stage index: interface digest}` for `indices` (default every stage)."""
+    return {
+        s.index: stage_interface_digest(doc, s) for s in doc.stages
+        if indices is None or s.index in indices
+    }
+
+
+def moved_interfaces(doc: PlanDoc, baseline_interfaces: dict, moved: set[int]) -> set[int]:
+    """The members of `moved` whose interface digest differs from the baseline's. A
+    stage the baseline records no interface for (any record written before they were
+    kept) counts as moved: the interface cannot be shown unchanged, so the wider answer."""
+    recorded = {str(k): v for k, v in (baseline_interfaces or {}).items()}
+    return {i for i, d in plan_interface_digests(doc, moved).items() if recorded.get(str(i)) != d}
 
 
 def plan_content_digest(doc: PlanDoc) -> str:

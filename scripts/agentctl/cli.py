@@ -65,6 +65,7 @@ from .plan import (
     plan_has_any_grants,
     plan_meta_digest,
     plan_meta_element_key,
+    plan_interface_digests,
     plan_meta_element_keys,
     plan_stage_digests,
     review_pairs,
@@ -4692,8 +4693,10 @@ def _stamp_whole_plan_baseline(state, review: PlanReview, doc) -> None:
         return
     try:
         review.reviewed_pair_bindings = gates.pair_baseline_bindings(doc)
+        review.reviewed_pair_currency = gates.pair_baseline_currency(doc)
     except PlanError:
         review.reviewed_pair_bindings = None
+        review.reviewed_pair_currency = None
 
 
 def _count_plan_review_round(state: SessionState, target: str) -> None:
@@ -4849,6 +4852,9 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         reviewed_meta_digest=plan_meta_digest(doc) if doc is not None else "",
         reviewed_stage_keys=(
             {str(k): v for k, v in plan_stage_digests(doc).items()} if doc is not None else {}
+        ),
+        reviewed_interface_keys=(
+            {str(k): v for k, v in plan_interface_digests(doc).items()} if doc is not None else {}
         ),
         concern_ids=list(getattr(args, "concern_ids", None) or []),
         regression_command=regression_command if is_post_pass_revise else "",
@@ -5177,7 +5183,7 @@ def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = No
         doc = load_plan(target)
     except (OSError, PlanError) as e:
         return Directive(False, state.node, "noop", f"{target} failed to load: {e}")
-    whole_plan_needed, stage_indices = gates.plan_review_delta(state, doc)
+    whole_plan_needed, stage_indices, consumer_of = gates.plan_review_delta_detail(state, doc)
     stages = sorted(stage_indices)
     pairs = gates.pairs_hint_for(state, doc, target)
     if whole_plan_needed:
@@ -5191,6 +5197,12 @@ def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = No
     elif stages:
         md = render_stages_md(doc, stages)
         detail = f"stage-scoped review needed for stage(s) {stages} in {target}"
+        if consumer_of:
+            named = "; ".join(
+                f"stage {c}: consumer of {', '.join(str(m) for m in consumer_of[c])}"
+                for c in sorted(consumer_of)
+            )
+            detail += f" ({named} -- its supplier's interface moved)"
     else:
         md = ""
         detail = f"no review gap: every part of {target} is covered by its current review"
@@ -5198,7 +5210,8 @@ def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = No
         detail += f"; walk-stale pairs — run: plan-review-topological.py --pairs {','.join(pairs)}"
     return Directive(
         True, state.node, "inspect", detail,
-        data={"markdown": md, "whole_plan": whole_plan_needed, "stages": stages, "pairs": pairs},
+        data={"markdown": md, "whole_plan": whole_plan_needed, "stages": stages, "pairs": pairs,
+              "consumer_of": {str(c): consumer_of[c] for c in sorted(consumer_of)}},
     )
 
 
@@ -5378,6 +5391,7 @@ def cmd_plan_review_compose(args, *, store: StateStore, runner: Runner | None = 
         plan_sha256=live,
         reviewed_meta_digest=plan_meta_digest(doc),
         reviewed_stage_keys={str(k): v for k, v in plan_stage_digests(doc).items()},
+        reviewed_interface_keys={str(k): v for k, v in plan_interface_digests(doc).items()},
     )
     _stamp_whole_plan_baseline(state, review, doc)
     state.plan_review = review

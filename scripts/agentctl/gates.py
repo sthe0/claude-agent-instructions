@@ -51,13 +51,19 @@ from .plan import (
     PlanError,
     SEVERITY_BLOCKING,
     changed_parts,
+    consumers,
     effects_place,
     grants_place,
     grants_sha256,
     load_plan,
+    moved_interfaces,
     order_place,
     pair_binding,
+    pair_currency_hash,
+    pair_currency_keys,
+    pair_shows_declared_product_only,
     plan_has_any_grants,
+    plan_interface_digests,
     review_pairs,
     split_pair_id,
     stage_question_key,
@@ -621,7 +627,10 @@ def _plan_review_blockers_whole(pr, target_plan: str | None, *, state: SessionSt
 
 
 def _plan_review_baseline(pr) -> dict:
-    return {"meta": pr.reviewed_meta_digest, "stages": pr.reviewed_stage_keys}
+    return {
+        "meta": pr.reviewed_meta_digest, "stages": pr.reviewed_stage_keys,
+        "interfaces": pr.reviewed_interface_keys,
+    }
 
 
 #: Matches a LEADING structural part token (`meta:`, `order:`, `stage:<n>`) a
@@ -780,17 +789,19 @@ def pair_status(state: SessionState, doc, plan_path: str, pair: str) -> str:
     count cannot drift between them.
 
     `missing` — no record, or one computed against a different plan path. Otherwise
-    the stored seven digests are compared, in `PAIR_BINDING_KEYS` order, with a fresh
-    `plan.pair_binding(doc, pair)`: the first that moved gives `stale:<key>` (the
-    digest name without its `_digest`/`_key` suffix, e.g. `stale:service_file`); with
-    all current the verdict is reported — `current` for a pass, `override`, or
-    `revise`. Raises ValueError for a pair `doc` does not have."""
+    the stored digests of `plan.pair_currency_keys` (the seven of `PAIR_BINDING_KEYS`,
+    less the service's construction when the reviewer saw only its declared product)
+    are compared, in `PAIR_BINDING_KEYS` order, with a fresh `plan.pair_binding(doc,
+    pair)`: the first that moved gives `stale:<key>` (the digest name without its
+    `_digest`/`_key` suffix, e.g. `stale:service_file`); with all current the verdict
+    is reported — `current` for a pass, `override`, or `revise`. Raises ValueError
+    for a pair `doc` does not have."""
     record = state.plan_pair_reviews.get(pair)
     if record is None or record.plan_path != plan_path:
         return "missing"
     fresh = pair_binding(doc, pair)
     stored = record.binding()
-    for key in PAIR_BINDING_KEYS:
+    for key in pair_currency_keys(doc, pair):
         if stored[key] != fresh[key]:
             return "stale:" + key.removesuffix("_digest").removesuffix("_key")
     return "current" if record.verdict == _PLAN_REVIEW_PASS else record.verdict
@@ -809,6 +820,10 @@ def pair_binding_hash(doc, pair: str) -> str:
 
 def pair_baseline_bindings(doc) -> "dict[str, str]":
     return {pid: pair_binding_hash(doc, pid) for pid in review_pairs(doc)}
+
+
+def pair_baseline_currency(doc) -> "dict[str, str]":
+    return {pid: pair_currency_hash(doc, pid) for pid in review_pairs(doc)}
 
 
 def pair_depths(doc) -> "dict[int | str, int]":
@@ -895,10 +910,15 @@ def walk_stale_pairs(state: SessionState, doc, plan_path: str, baseline) -> "lis
         return list(pairs)
     recorded = baseline.reviewed_pair_bindings
     _, moved = changed_parts(doc, _plan_review_baseline(baseline))
+    interface_moved = moved_interfaces(doc, baseline.reviewed_interface_keys, moved)
+    currency = baseline.reviewed_pair_currency or {}
     stale = []
     for pid in pairs:
         b, s = split_pair_id(pid)
-        if b in moved or s in moved or pid not in recorded:
+        service_moved = (
+            s in interface_moved if pair_shows_declared_product_only(doc, pid) else s in moved
+        )
+        if b in moved or service_moved or pid not in recorded:
             stale.append(pid)
             continue
         if pair_status(state, doc, plan_path, pid) in PAIR_SATISFIED:
@@ -908,7 +928,11 @@ def walk_stale_pairs(state: SessionState, doc, plan_path: str, baseline) -> "lis
             record is not None and record.plan_path == plan_path
             and record.verdict == _PLAN_REVIEW_REVISE and record.record_seq > baseline.record_seq
         )
-        if revised_since or pair_binding_hash(doc, pid) != recorded[pid]:
+        binding_moved = (
+            pair_currency_hash(doc, pid) != currency[pid] if pid in currency
+            else pair_binding_hash(doc, pid) != recorded[pid]
+        )
+        if revised_since or binding_moved:
             stale.append(pid)
     return stale
 
@@ -1421,12 +1445,34 @@ def plan_review_delta(state: SessionState, doc) -> "tuple[bool, set[int]]":
     on the first uncovered part instead of enumerating all of them, and folds
     in the verdict/attestation check this function deliberately excludes. The
     two share only their building blocks (`_plan_review_baseline`,
-    `changed_parts`), not a call path."""
+    `changed_parts`), not a call path.
+
+    The stage scope is the stages whose own key moved plus the direct consumers of
+    every moved stage whose INTERFACE moved: a consumer relied on the declared
+    product, so a changed product is a changed reliance even though the consumer's
+    own key did not move. See `plan_review_delta_detail` for which supplier put a
+    consumer in scope."""
+    whole_plan, needing, _ = plan_review_delta_detail(state, doc)
+    return whole_plan, needing
+
+
+def plan_review_delta_detail(state: SessionState, doc) -> "tuple[bool, set[int], dict[int, list[int]]]":
+    """`plan_review_delta` plus `{consumer: [moved suppliers whose interface moved]}`
+    for the stages in the scope only because of that reliance (their own key did not
+    move), so a reviewer sees why each is there.
+
+    A baseline that records no interface digest for a moved stage cannot show its
+    interface unchanged, so its consumers are in scope (`plan.moved_interfaces`). A
+    consumer's own `stage:<n>` record stands for it only if it also recorded each such
+    supplier's interface as it is now."""
     whole = state.plan_review
-    baseline = _plan_review_baseline(whole) if whole is not None else {"meta": "", "stages": {}}
+    baseline = (
+        _plan_review_baseline(whole) if whole is not None
+        else {"meta": "", "stages": {}, "interfaces": {}}
+    )
     meta_moved, moved_stages = changed_parts(doc, baseline)
     if meta_moved:
-        return True, set()
+        return True, set(), {}
     needing: set[int] = set()
     for index in moved_stages:
         spr = state.plan_stage_reviews.get(_plan_review_scope_for_stage(index))
@@ -1436,7 +1482,24 @@ def plan_review_delta(state: SessionState, doc) -> "tuple[bool, set[int]]":
         stage_meta_moved, stage_moved = changed_parts(doc, _plan_review_baseline(spr))
         if stage_meta_moved or index in stage_moved:
             needing.add(index)
-    return False, needing
+    interface_moved = moved_interfaces(doc, baseline["interfaces"], moved_stages)
+    current = plan_interface_digests(doc, interface_moved)
+    reliant: dict[int, list[int]] = {}
+    for supplier in sorted(interface_moved):
+        for consumer in sorted(consumers(doc, supplier) - moved_stages):
+            reliant.setdefault(consumer, []).append(supplier)
+    consumer_of: dict[int, list[int]] = {}
+    for consumer, suppliers in reliant.items():
+        spr = state.plan_stage_reviews.get(_plan_review_scope_for_stage(consumer))
+        if spr is not None:
+            stage_meta_moved, stage_moved = changed_parts(doc, _plan_review_baseline(spr))
+            seen = {str(k): v for k, v in spr.reviewed_interface_keys.items()}
+            if (not stage_meta_moved and consumer not in stage_moved
+                    and all(seen.get(str(m)) == current[m] for m in suppliers)):
+                continue
+        needing.add(consumer)
+        consumer_of[consumer] = suppliers
+    return False, needing, consumer_of
 
 
 def review_delta(state: SessionState, doc, target_plan: "str | None" = None) -> dict:

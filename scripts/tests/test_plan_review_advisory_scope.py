@@ -28,7 +28,7 @@ import pytest
 from agentctl import cli, gates, plugins
 from agentctl import plugins_review_dispatch as prd
 from agentctl.directive import Directive
-from agentctl.plan import load_plan, plan_meta_digest, plan_stage_digests
+from agentctl.plan import load_plan, plan_interface_digests, plan_meta_digest, plan_stage_digests
 from agentctl.render import cmd_plan_render
 from agentctl.state import Node, PlanReview, SessionState
 
@@ -68,6 +68,7 @@ def _whole_review(plan_path, doc, **kw) -> PlanReview:
         plan_sha256=_sha256_file(plan_path),
         reviewed_meta_digest=plan_meta_digest(doc),
         reviewed_stage_keys={str(k): v for k, v in plan_stage_digests(doc).items()},
+        reviewed_interface_keys={str(k): v for k, v in plan_interface_digests(doc).items()},
         **kw,
     )
 
@@ -80,6 +81,7 @@ def _stage_review(plan_path, doc, index, **kw) -> PlanReview:
         plan_sha256=_sha256_file(plan_path),
         reviewed_meta_digest=plan_meta_digest(doc),
         reviewed_stage_keys={str(k): v for k, v in plan_stage_digests(doc).items()},
+        reviewed_interface_keys={str(k): v for k, v in plan_interface_digests(doc).items()},
         **kw,
     )
 
@@ -320,7 +322,7 @@ def test_review_delta_helper(gate_on, tmp_path, fixtures_dir):
     doc0 = load_plan(str(plan_path))
     whole = _whole_review(plan_path, doc0)
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     doc1 = load_plan(str(plan_path))
     s = _subst(plan_path=str(plan_path), plan_review=whole)
 
@@ -372,7 +374,7 @@ def test_obs_submit_plan_data_carries_scoped_delta(gate_on, tmp_path, fixtures_d
     doc0 = load_plan(str(plan_path))
     whole = _whole_review(plan_path, doc0)
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     state = _subst(plan_path=str(plan_path), plan_review=whole,
                    node=Node.PLAN_READY.value)
     plugins.activate(state, "review_dispatch")
@@ -399,7 +401,7 @@ def test_obs_submit_plan_data_carries_multi_stage_scoped_delta(gate_on, tmp_path
     doc0 = load_plan(str(plan_path))
     whole = _whole_review(plan_path, doc0)
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1and2_retitled.toml").read_text())
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1and2_method_changed.toml").read_text())
     state = _subst(plan_path=str(plan_path), plan_review=whole,
                    node=Node.PLAN_READY.value)
     plugins.activate(state, "review_dispatch")
@@ -427,7 +429,7 @@ def test_post_approval_replan_refusal_carries_delta(store, fixtures_dir, tmp_pat
                            plan_digest=_sha256_file(plan_path)), store=store)
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     d = cli.cmd_replan(ns(session=sid, plan=str(plan_path)), store=store)
     assert d.ok is False
     delta = d.data["review_delta"]
@@ -452,7 +454,7 @@ def test_post_approval_replan_refusal_carries_multi_stage_delta(store, fixtures_
                            plan_digest=_sha256_file(plan_path)), store=store)
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1and2_retitled.toml").read_text())
+    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1and2_method_changed.toml").read_text())
     d = cli.cmd_replan(ns(session=sid, plan=str(plan_path)), store=store)
     assert d.ok is False
     delta = d.data["review_delta"]

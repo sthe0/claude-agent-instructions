@@ -333,12 +333,12 @@ def test_tr6_staleness_by_edge_kind(make_env):
         return [{"path": "scripts/x.sh", "sha256": "a" * 64, "resolver": resolver}]
 
     data = _tb8_data()
-    data["stage"][2]["effects"] = effects("r1")
+    data["stage"][1]["effects"] = effects("r1")
     env = make_env(data)
     env.record_all()
-    env.edit(lambda d: d["stage"][2].update(effects=effects("r2")))
-    assert env.status("4-3") == "stale:service_file"
-    assert env.status("4-2") == "current"
+    env.edit(lambda d: d["stage"][1].update(effects=effects("r2")))
+    assert env.status("4-2") == "stale:service_interface"
+    assert env.status("4-3") == "current"
 
     env = make_env()
     env.record_all()
@@ -661,6 +661,10 @@ def _edit_n_interface(d):
     d["stage"][0].update(expected_result_image="img edited")
 
 
+def _edit_a_interface(d):
+    d["stage"][1].update(expected_result_image="img edited")
+
+
 def _edit_n_method(d):
     d["stage"][0].update(method="method-1 edited")
 
@@ -720,7 +724,7 @@ def test_tr5_compose_refuses_and_names_the_failing_pairs(make_env):
     # moved stage key names every incident pair
     env = make_env()
     env.record_all()
-    env.edit(lambda d: d["stage"][2].update(method="edited"))
+    env.edit(lambda d: d["stage"][2].update(expected_result_image="edited"))
     d = _compose(env)
     assert not d.ok
     assert set(d.data["failing"]) == {"plan-3", "3-1", "3-2"}
@@ -729,13 +733,13 @@ def test_tr5_compose_refuses_and_names_the_failing_pairs(make_env):
 
     # moved service-file digest
     data = _tb8_data()
-    data["stage"][2]["effects"] = _effects("r1")
+    data["stage"][1]["effects"] = _effects("r1")
     env = make_env(data)
     env.record_all()
-    env.edit(lambda d: d["stage"][2].update(effects=_effects("r2")))
+    env.edit(lambda d: d["stage"][1].update(effects=_effects("r2")))
     d = _compose(env)
     assert not d.ok
-    assert d.data["failing"] == {"4-3": "stale:service_file", "3-1": "stale:base_file"}
+    assert d.data["failing"] == {"4-2": "stale:service_interface"}
 
     # moved service-interface digest
     env = make_env()
@@ -832,7 +836,7 @@ def test_tr7_walk_orders_base_before_service_with_advisory_readiness(make_env):
     for pair in review_pairs(env.doc()):
         if pair != "3-1":
             assert env.record(f"topo:{pair}", "pass").ok
-    env.edit(lambda d: d["stage"][1].update(method="edited"))
+    env.edit(lambda d: d["stage"][1].update(expected_result_image="edited"))
     before = env.store.path(SID).read_bytes()
     d = _walk(env)
     assert env.store.path(SID).read_bytes() == before
@@ -841,7 +845,7 @@ def test_tr7_walk_orders_base_before_service_with_advisory_readiness(make_env):
     assert json.loads(d.detail) == d.data
     rows = _rows(env)
     assert rows["3-1"]["status"] == "missing"
-    assert rows["4-2"]["status"] == "stale:service"
+    assert rows["4-2"]["status"] == "stale:base_file"
     assert rows["2-1"]["status"] == "stale:base"
     assert rows["base-plan"]["status"] == "current"
     for row in rows.values():
@@ -955,7 +959,7 @@ def test_tr13_scoped_discharge_over_the_walk_stale_set(make_env):
     env = make_env()
     _record_pairs(env)
     assert _compose(env).ok
-    env.edit(lambda d: d["stage"][2].update(method="edited"))
+    env.edit(lambda d: d["stage"][2].update(expected_result_image="edited"))
     state = env.state()
     assert state.plan_stage_reviews == {}
     assert _w(env) == ["plan-3", "3-1", "3-2"]
@@ -989,8 +993,8 @@ def test_tr13_scoped_discharge_over_the_walk_stale_set(make_env):
 
     # bounded W
     env = _bounded_env(make_env)
-    env.edit(_edit_n_interface)
-    assert env.status("3-2") == "stale:service_file"
+    env.edit(_edit_a_interface)
+    assert env.status("3-2") == "stale:base_file"
     assert _w(env) == ["2-1", "3-2"]
     assert env.state().plan_stage_reviews == {}
 
@@ -1073,10 +1077,17 @@ def test_tr13_scoped_discharge_over_the_walk_stale_set(make_env):
 
 def test_tr14_delta_names_exactly_the_walk_stale_set(make_env):
     env = _bounded_env(make_env)
-    env.edit(_edit_n_interface)
+    env.edit(_edit_a_interface)
     d = _delta(env)
     assert d.data["pairs"] == ["2-1", "3-2"]
     assert "plan-review-topological.py --pairs 2-1,3-2" in d.detail
+
+    # n's interface reaches only the pair that relies on n: b-a judges a's declared product
+    env = _bounded_env(make_env)
+    env.edit(_edit_n_interface)
+    assert env.status("3-2") == "current"
+    d = _delta(env)
+    assert d.data["pairs"] == ["2-1"]
 
     # method-only edit: b-a stays current
     env = _bounded_env(make_env)

@@ -500,6 +500,12 @@ class PlanReview:
     # walk-stale"). `record_seq` totally orders review records of every kind.
     reviewed_pair_bindings: "dict[str, str] | None" = None
     record_seq: int = 0
+    # Per-stage interface digests (`plan.plan_interface_digests`) at record time, and per
+    # pair the sha256 of its `plan.pair_currency_keys` digests. Both are empty/None on a
+    # record written before they were kept, which reads as: every moved stage's interface
+    # moved, and a pair is measured by its seven-digest `reviewed_pair_bindings` hash.
+    reviewed_interface_keys: dict[str, str] = field(default_factory=dict)
+    reviewed_pair_currency: "dict[str, str] | None" = None
     # Schema 44: the severity the reviewer wrote on each concern (`blocking`/`note`,
     # positionally paired with `concerns`), the engine's effective severity after the
     # freeze rules (`blocking`/`note`/`advisory`), the reviewer's own verdict when the
@@ -537,6 +543,12 @@ class PlanReview:
                 dict(rpb) if isinstance(rpb := d.get("reviewed_pair_bindings"), dict) else None
             ),
             record_seq=d.get("record_seq") or 0,
+            reviewed_interface_keys=(
+                dict(rik) if isinstance(rik := d.get("reviewed_interface_keys"), dict) else {}
+            ),
+            reviewed_pair_currency=(
+                dict(rpc) if isinstance(rpc := d.get("reviewed_pair_currency"), dict) else None
+            ),
             severities=list(d.get("severities", [])),
             effective_severities=list(d.get("effective_severities", [])),
             raw_verdict=d.get("raw_verdict", ""),
