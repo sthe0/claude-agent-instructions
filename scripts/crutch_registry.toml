@@ -15782,14 +15782,6 @@ disposition = "keep"
 ground = "CLAUDE.md's own § Coordination heading names this class explicitly: \"Cognition the engine does NOT replace (always yours)\" — escalation timing, task-weight judgment, verification-axis discipline, and outcome framing are judgment calls over conversational/task content, not predicates decidable from observable repo/engine state."
 
 [[entry]]
-id = "b94347b3bef11c6b"
-domain = "prose"
-file = "CLAUDE.md"
-class = "perception"
-disposition = "keep"
-ground = "CLAUDE.md's own § Coordination heading names this class explicitly: \"Cognition the engine does NOT replace (always yours)\" — escalation timing, task-weight judgment, verification-axis discipline, and outcome framing are judgment calls over conversational/task content, not predicates decidable from observable repo/engine state."
-
-[[entry]]
 id = "4498d28e12d80b9e"
 domain = "prose"
 file = "CLAUDE.md"
@@ -17054,7 +17046,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "df49fc03418c6192"
+id = "3ba3236bfa8a2d38"
 domain = "prose"
 file = "memory-global/leaves/coordination/MEMORY.md"
 class = "perception"
@@ -17351,6 +17343,14 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "8b7a23fc66d2040e"
+domain = "prose"
+file = "memory-global/leaves/coordinator-pitfalls.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "5009c3a2fd24a03e"
 domain = "prose"
 file = "memory-global/leaves/coordinator-pitfalls.md"
 class = "perception"
@@ -23494,7 +23494,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "a307ac3bfce80ede"
+id = "c8c8720e8e7985d4"
 domain = "prose"
 file = "memory-global/leaves/landing-discipline.md"
 class = "perception"
@@ -23502,7 +23502,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "148e99f8af167f0a"
+id = "2f63f320fe078196"
 domain = "prose"
 file = "memory-global/leaves/landing-discipline.md"
 class = "perception"
@@ -23510,7 +23510,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "87c5c53b558f0845"
+id = "57a14a70b732eb8d"
 domain = "prose"
 file = "memory-global/leaves/landing-discipline.md"
 class = "perception"
@@ -23518,7 +23518,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "3fc12fec66553036"
+id = "2cf24b9baf382d39"
 domain = "prose"
 file = "memory-global/leaves/landing-discipline.md"
 class = "perception"
@@ -23526,7 +23526,15 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "d7723bd48b027dca"
+id = "ff626499d5ceafd8"
+domain = "prose"
+file = "memory-global/leaves/landing-discipline.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "c955384f7ae0b592"
 domain = "prose"
 file = "memory-global/leaves/landing-discipline.md"
 class = "already-mechanized"
@@ -23534,7 +23542,7 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "99807aaa7e222cd7"
+id = "0b4d5fcf92ad7275"
 domain = "prose"
 file = "memory-global/leaves/landing-discipline.md"
 class = "perception"
@@ -23542,7 +23550,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "c69d9ac385ba2409"
+id = "7d367ad9d6cee1c6"
 domain = "prose"
 file = "memory-global/leaves/landing-discipline.md"
 class = "perception"
@@ -23550,7 +23558,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "6dfeab35228b1195"
+id = "06254a6a2a74a304"
 domain = "prose"
 file = "memory-global/leaves/landing-discipline.md"
 class = "perception"
@@ -23558,7 +23566,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "a30cdcc672b99af8"
+id = "3f45aff4a4bec453"
 domain = "prose"
 file = "memory-global/leaves/landing-discipline.md"
 class = "perception"
@@ -23566,7 +23574,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "9f7880dc7395f0a4"
+id = "0bc1e8ffa3759086"
 domain = "prose"
 file = "memory-global/leaves/landing-discipline.md"
 class = "perception"
@@ -23574,7 +23582,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "f352470b3cefd151"
+id = "9a13153726737579"
 domain = "prose"
 file = "memory-global/leaves/landing-discipline.md"
 class = "perception"
@@ -25926,7 +25934,7 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "56d49b9401859da9"
+id = "a43deaf1d3c8f69e"
 domain = "prose"
 file = "memory-global/leaves/quality-regression-investigation.md"
 class = "perception"

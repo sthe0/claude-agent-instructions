@@ -34,7 +34,7 @@ Nothing mechanically couples a code change to *being under review*, to *justifyi
 
 ## See also
 
-- [[landing-discipline]] — the **terminal** state (trunk/main at the resolution gate); this leaf is the **earlier** axis (an open review request at the code-producing stage). Open-review (here) and merged-to-trunk (there) are two distinct done-criteria on one change.
+- [[landing-discipline]] — the **terminal** state (trunk/main, reached before the resolution AskUserQuestion); this leaf is the **earlier** axis (an open review request at the code-producing stage). Open-review (here) and merged-to-trunk (there) are two distinct done-criteria on one change.
 - [[long-job-monitoring]] — the **mechanism** for driving an open review to mergeable (§ Generalization: detached poller + `CHECK_FAILED`/`NEW_COMMENTS`/`MERGED` markers, closure gated on merged). This leaf carries the *policy* (author owns the drive); that leaf carries the *how* (zero-token monitoring without offloading the cadence to the user).
 - [[tests-accompany-code]] — the symmetric author/reviewer template on the *test* axis; this leaf is its twin on the *review* axis.
 - `~/.claude-agent/skills/specializations/developer/SKILL.md` § Self-review before COMPLETED (author side)

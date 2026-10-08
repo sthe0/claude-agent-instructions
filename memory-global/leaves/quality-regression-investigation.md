@@ -27,8 +27,12 @@ bloat back or stay broken.
 ### 1. Rating flow at the resolution gate
 
 Every `agentctl resolve` requires `--quality 1..5` (refused without it). The rating is
-**agent-proposed, user-confirmed** — inside the SAME resolution `AskUserQuestion`,
-never a separate free-text question:
+**agent-proposed, user-confirmed** — asked only after the work has landed into trunk
+(land before `verify-final`, then `agentctl verify-final`), inside the resolution
+`AskUserQuestion` marked `[resolution-ask]`, never a separate free-text question.
+The landing is its own earlier step, not an option of this ask. The engine refuses
+`resolve --quality` unless a `[resolution-ask]` was answered after `verify-final`
+(and refuses an unlanded git delivery branch):
 
 - Propose a rating from the rubric (§ 2) adjusted by this task's in-flight signals (§ 3).
 - Option labels (user's language): «Решена, оценка N (Recommended)» FIRST (N = the
