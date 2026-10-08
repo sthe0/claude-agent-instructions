@@ -404,6 +404,8 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
                 edge += f", element: {sup.element}"
             if sup.artifact:
                 edge += f", artifact: {sup.artifact}"
+            if sup.delivery:
+                edge += f", delivery: {sup.delivery}"
             lines.append(f"  - {edge}")
     if s.control:
         lines.append(f"- **Control (prior attestation):** {s.control}")
@@ -772,6 +774,8 @@ def _supply_edge_label(doc: PlanDoc, consumer: int, supplier: int) -> str:
         edge = f"supplies {element}"
         if supply.artifact:
             edge += f" (artifact: `{supply.artifact}`)"
+        if supply.delivery:
+            edge += f" (delivery: `{supply.delivery}`)"
         edges.append(edge)
     return "; ".join(edges) if edges else _RAW_DEPENDS_ON_ONLY_EDGE
 

@@ -63,7 +63,9 @@ def test_to_dict_drops_derived_depends_on():
     s = SessionState(session_id="s", task_id="t", stages=[_grouped_stage(1, supplies=[Supply(on=1)])])
     raw = json.loads(s.to_json())
     assert "depends_on" not in raw["stages"][0]
-    assert raw["stages"][0]["supplies"] == [{"on": 1, "element": None, "artifact": None}]
+    assert raw["stages"][0]["supplies"] == [
+        {"on": 1, "element": None, "artifact": None, "delivery": None}
+    ]
 
 
 def test_is_spawn_reads_actor_executor():
