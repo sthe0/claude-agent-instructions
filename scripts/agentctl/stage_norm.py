@@ -140,7 +140,11 @@ class StageNorm:
     @classmethod
     def from_dict(cls, d: dict) -> "StageNorm":
         known = {f.name for f in fields(cls)}
-        raw = {k: v for k, v in d.items() if k in known}
+        unknown = sorted(set(d) - known)
+        if unknown:
+            # A silently dropped key would yield a norm other than the one serialized.
+            raise ValueError(f"StageNorm.from_dict: unknown field(s) {unknown}")
+        raw = dict(d)
         landed = raw.get("landed")
         if landed is not None:
             raw["landed"] = LandedSpec.from_dict(landed)
@@ -203,9 +207,9 @@ class StageNorm:
 
     def carry_key(self) -> tuple:
         """The stage's definition for PASSED carry-forward: everything but
-        `capability_required`, `material`, `principle` and the edges' provision detail,
-        with the edges standing in as sorted typed deliveries (supplier index, element,
-        artifact, delivery) so an edge retyped at the same supplier changes the key."""
+        `capability_required`, `material` and `principle`, with `depends_on` replaced by
+        the sorted typed edges (supplier index, element, artifact, delivery) so an edge
+        retyped at the same supplier changes the key."""
         return (
             self.executor,
             _sorted_edges(self.edges),

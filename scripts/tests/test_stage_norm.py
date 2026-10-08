@@ -135,6 +135,15 @@ def test_norm_round_trips_through_json_with_every_digest_intact():
         assert again.carry_digest() == norm.carry_digest()
 
 
+def test_from_dict_refuses_an_unknown_field_instead_of_dropping_it():
+    StageNorm = _norm_cls()
+    doc, stage = next(iter(_fixture_stages()))
+    payload = StageNorm.from_stage(stage, doc=doc).to_dict()
+    payload["methd"] = "typo"
+    with pytest.raises(ValueError, match="methd"):
+        StageNorm.from_dict(payload)
+
+
 def test_norm_is_built_from_a_stage_alone_and_records_supplier_interfaces():
     StageNorm = _norm_cls()
     doc, consumer = _consumer(element="knowledge")
