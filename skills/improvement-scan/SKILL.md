@@ -127,16 +127,15 @@ Procedure step 6).
    ```
    python3 scripts/improvement-scan.py report --store <store> --format md
    ```
-   The report opens with the board lanes: measured loss (min/week,
-   sessions/window, min/occurrence, basis; a family is one row), the silent lane
-   (qualitative estimate, no signature) and awaiting loss classification;
-   the stored findings follow, ranked cost-first and never interleaving
+   The report opens with the measured-loss lane (min/week,
+   sessions/window, min/occurrence, basis; a family is one row); the stored
+   findings follow, then the silent lane (qualitative estimate, no
+   signature) and awaiting loss classification. Findings are ranked cost-first and never interleaving
    measured and unmeasured bands. Severity and fix cost are tie-break
    inputs only. Present its output as-is, in the dialogue
    language, with the recommended next step already attached per finding. A
    backlog item ranked at an addressed cluster's cost carries a `via <key>`
-   note; keys matching no open telemetry row are listed as dangling. Items
-   without a rank (no-urgency-signal, unjudged) are not joined.
+   note; keys matching no open telemetry row are listed as dangling.
 
 9. **Optionally republish the board as a human-readable view** rendered from
    the state file (`Artifact action:"publish"`, the current `url:` named in

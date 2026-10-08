@@ -44,7 +44,7 @@ the script's own closed vocabularies gate.
   `silent_estimate`.
 - **`loss` subcommand** — the third input, reading session transcripts. It counts the distinct
   sessions per window that show an item's signature, adjusts by the judged precision, and ranks
-  the board by min/week (sessions/window × min/occurrence per week). A family of overlapping
+  the board by min/week (est sessions × min/occurrence ÷ (days/7)). A family of overlapping
   items is one row whose loss is taken over the union of its members' sessions, never summed.
   Items without a signature go to the silent lane with a qualitative estimate; items with
   neither are listed as awaiting classification. Severity and fix cost are tie-break inputs

@@ -7,7 +7,8 @@
 
 ## Overview
 
-`scripts/improvement-scan.py` provides four subcommands (`backlog`, `loss`, `telemetry`, `report`). Each does only the mechanizable rule
+`scripts/improvement-scan.py` provides four subcommands (`backlog`, `loss`, `telemetry`,
+`report`). Each does only the mechanizable rule
 part of its responsibility — collection, diffing, scoring, deduplication, rendering — and leaves
 every judgment call (classification, functional-ground statement, which candidate is worth acting
 on) to whichever live session drives it via the `improvement-scan` skill. The CLI never files a
@@ -56,7 +57,8 @@ worklist's list when the classifications file carries none. It validates every f
 closed vocabulary (rejecting the whole call on the first out-of-vocabulary value), scores and
 computes the old rubric score (`breadth_weight`, `recurrence_mass` and `cost_to_resolve`, kept
 as `old_score`), which is now a tie-break input only; the rank itself is min/week from the
-`loss` subcommand below. It applies the hard partial order from any explicit `blocked_by`
+`loss` subcommand below (until `loss` has run, the board still carries an old-formula `rank`,
+which the report ignores). It applies the hard partial order from any explicit `blocked_by`
 edges, writes the new board JSON to the state file, and stores `Finding` rows.
 
 A classification may also carry the loss fields: `signatures` (list of non-empty strings),
@@ -67,9 +69,11 @@ its previous loss fields. An amendment-only entry for a carried item may hold an
 these keys plus `addresses`. Phase A's worklist also lists `loss_unclassified`: open board items
 with neither signatures nor a silent estimate.
 
-Migration: a board written before the loss fields existed loads unchanged. Every item keeps
-its old classification, severity and fix-cost fields, and gains empty signature and precision
-fields. Such items sit under *Awaiting loss classification* until classified; none is dropped.
+Migration: a board written before the loss fields existed loads without loss. Every item keeps
+its old classification, score and `severity_labeled`, and gains empty signature and precision
+fields. Old boards never stored `severity`, `cost_to_resolve` or `old_score`, so these load
+empty: fix cost sorts as unknown and the old-score tie-break falls back to the legacy score
+until the item is re-classified. Such items sit under *Awaiting loss classification* until classified; none is dropped.
 
 `addresses` is an optional list of 12-hex telemetry store keys (the `Store key` the report
 prints) naming the measured cluster(s) a backlog item removes. Phase B checks only the shape
@@ -107,15 +111,23 @@ items whose `precision` is missing or was judged on a different signature set. T
 them and amends `precision` and `precision_sample` through phase B. Unjudged precision counts as
 1 and the row says so (upper bound).
 
-Report lanes, in order: **Measured loss** (columns min/week, sessions/window raw → estimated,
-min/occurrence, basis, fix cost, members), **Silent lane** (items without a signature, with their
-qualitative estimate), **Awaiting loss classification** (neither). Every open item is in exactly
-one row. An item with a signature that has no measurement yet is never moved into the silent lane; only a missing signature puts it there. A family (shared `family` id) is one row: its loss is computed once over the union of
-its members' hit sessions, each shared session charged at the per-session max of p × minutes, so
-a family is never the sum of its members. Within a lane, rows sort by min/week descending, then
-tie-break inputs: severity (labelled first, higher mass first), fix cost ascending, old score
-descending, ref. `blocked_by` is a hard order only within a lane; an edge crossing lanes imposes
-none.
+Report lanes, in order:
+
+- **Measured loss**: columns min/week, sessions/window raw → estimated, min/occurrence, basis,
+  fix cost, members.
+- **Silent lane**: items without a signature, with their qualitative estimate.
+- **Awaiting loss classification**: items not yet rankable or silent-qualified: no signature
+  and no silent estimate; or signatures but no `minutes_per_occurrence`; or no `loss`
+  measurement yet, or one older than the current signature set (run `loss`). A signature
+  without measurement is never moved into the silent lane.
+
+Every open item is in exactly one row. A family (shared `family` id) is one row: its loss is
+computed once over the union of its members' hit sessions, each shared session charged at the
+per-session max of p × minutes, so a family is never the sum of its members. In the loss lane,
+rows sort by min/week descending, then tie-break inputs: severity (labelled first, higher mass
+first), fix cost ascending, old score descending, ref. The silent and awaiting lanes sort by the
+tie-break inputs alone. `blocked_by` is a hard order only within a lane; an edge crossing lanes
+imposes none.
 
 `report --board` JSON carries `findings`, `loss`, `silent` and `awaiting`; a `loss` row has
 `ref`, `family`, `members`, `min_per_week`, `sessions_hit`, `sessions_est`, `min_per_occurrence`,
@@ -123,8 +135,8 @@ none.
 
 ### Design choices
 
-The transcript enumeration is the telemetry producer's own (`lib.config_root` roots, subagents
-included), so both producers see the same sessions. The hit cache is a new mtime-gated file
+`loss` enumerates transcripts through `config_root.iter_transcripts` (subagents included) over
+the same `projects_roots()` root set that `policy-scorecard` globs, so both see the same sessions. The hit cache is a new mtime-gated file
 instead of `LedgerCursor`: the cursor stores one position per session for one fixed question,
 while the loss scan asks a different question per signature, and a changed signature set must
 rescan without resetting anything else. A per-transcript cache keyed by signature does that.
@@ -178,7 +190,8 @@ python3 scripts/improvement-scan.py report --store <store-path> --format md|json
 
 Renders every stored `Finding` from both producers into one cost-first-ranked report, never
 interleaving measured and unmeasured cost bands. With a readable `--board` (default: the board
-state file) the loss, silent and awaiting lanes come first.
+state file) the loss lane opens the report; the silent and awaiting lanes follow the measured
+telemetry findings.
 
 At report time each backlog item's `addresses` keys are looked up among the open telemetry rows
 of the same report. The highest measured cluster cost among them (or the item's own measured
@@ -186,8 +199,7 @@ cost, if larger) becomes the item's cost, shown with a `via <key>` note when the
 larger; the item then follows its cluster's own row at equal cost, by proxy score. The cost is
 copied, never summed across items sharing a cluster. Keys matching no open row are listed as
 `dangling` (markdown and JSON) even when another key resolved; an item whose keys match only
-unmeasured rows, or none, stays in the unmeasured band. Items without a rank
-(no-urgency-signal, unjudged) are not joined.
+unmeasured rows, or none, stays in the unmeasured band.
 
 ## Flags common to all subcommands
 
