@@ -8511,6 +8511,10 @@ def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
                          "ask the resolution question (with the 1-5 rating) after verify-final"
                          + escape_note], record
     after = [answered for ts, answered in marked if ts is not None and ts > verified_at]
+    if not after and any(ts is None for ts, _ in marked):
+        return [prefix + f"a {RESOLUTION_ASK_MARKER!r} ask has a missing or unparsable timestamp "
+                         "in the transcript, so its order against verify-final cannot be "
+                         "established — ask the resolution question again" + escape_note], record
     if not after:
         return [prefix + f"the {RESOLUTION_ASK_MARKER!r} ask predates the latest verify-final — "
                          "ask the resolution question again now that final verification has passed"

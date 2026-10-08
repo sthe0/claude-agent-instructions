@@ -158,6 +158,33 @@ def test_marked_ask_before_verify_final_is_refused(store, tmp_path):
     assert any("predates the latest verify-final" in b for b in ask_blockers(d))
 
 
+def test_the_latest_verify_final_stamp_is_the_one_an_ask_must_follow(store, tmp_path):
+    to_resolution(store)
+    first = verified_at(store)
+    state = store.load(SID)
+    state.log("verify_final", at=first + 10)
+    store.save(state)
+    write_transcript(tmp_path, [ask_entry("a1", first + 5, label=f"Resolve {RESOLUTION_ASK_MARKER}"),
+                                answer_entry("a1", first + 6)])
+
+    d = resolve(store)
+    assert d.ok is False
+    assert any("predates the latest verify-final" in b for b in ask_blockers(d))
+
+
+def test_marked_ask_with_an_unreadable_timestamp_is_refused_with_its_own_message(store, tmp_path):
+    to_resolution(store)
+    ask = ask_entry("a1", verified_at(store) + 5, label=f"Resolve {RESOLUTION_ASK_MARKER}")
+    ask.pop("timestamp")
+    write_transcript(tmp_path, [ask, answer_entry("a1", verified_at(store) + 6)])
+
+    d = resolve(store)
+    assert d.ok is False
+    blockers = ask_blockers(d)
+    assert any("missing or unparsable timestamp" in b for b in blockers)
+    assert not any("predates" in b for b in blockers)
+
+
 def test_marked_ask_after_verify_final_but_unanswered_is_refused(store, tmp_path):
     to_resolution(store)
     at = verified_at(store)

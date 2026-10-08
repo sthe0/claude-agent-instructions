@@ -138,7 +138,7 @@ try:
     from lib.ask_text import flat_text  # noqa: E402
     from lib.transcript_turns import (  # noqa: E402
         delivered_final_texts,
-        has_marker_option as _has_marker_option,
+        has_marker_option,
         latest_turn_start,
     )
 except BaseException as exc:
@@ -275,7 +275,7 @@ def _receipt_stale_reason(state: _SessionState) -> str | None:
 
 
 def _has_show_full_plan_option(tool_input: dict) -> bool:
-    return _has_marker_option(tool_input, SHOW_FULL_PLAN_MARKER)
+    return has_marker_option(tool_input, SHOW_FULL_PLAN_MARKER)
 
 
 def _same_turn_denied(
@@ -598,7 +598,7 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
     # them) before any state load or transcript scan — see the module
     # docstring's cost-guard note and test_replan_authorization.py's
     # cost-invariant case for what this buys.
-    if _has_marker_option(payload.get("tool_input") or {}, AUTHORIZE_REPLAN_MARKER):
+    if has_marker_option(payload.get("tool_input") or {}, AUTHORIZE_REPLAN_MARKER):
         replan_state = _state()
         if replan_state is not None:
             replan_receipt = _gates._plan_presentation_for(replan_state, _KIND_REPLAN_DIFF)
