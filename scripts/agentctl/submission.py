@@ -671,7 +671,7 @@ def _procedure_collapse(stage, judge_runner, judge_enabled: bool) -> str | None:
     )
 
 
-def _edge_violations(stage, stages_by_index=None) -> list[str]:
+def _edge_violations(stage, stages_by_index) -> list[str]:
     """Every edge of `stage` that states an ordering without stating a provision. [] == clean.
 
     A supply edge is one stage handing another a PLACE of its activity — the material to

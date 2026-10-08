@@ -6129,11 +6129,14 @@ def _continuation_worktree(state: SessionState, stage: Stage) -> str | None:
     falls back to the task_id-scoped default only when repo_root is known (a
     relative worktree path with no anchor would be meaningless)."""
     spawn = {s.index for s in state.stages if s.is_spawn()}
-    # An edge that declares its delivery decides for itself; only edges that say nothing
-    # fall back to inferring continuation from any depends_on over a spawn stage.
-    declared = {sup.on: sup.delivery for sup in stage.supplies if sup.delivery}
+    # Decided per edge, so several edges to one supplier never shadow each other: an
+    # edge continues if it says "continuation" or says nothing (the depends_on
+    # inference); a dependency with no edge at all keeps that inference too.
+    deliveries: dict[int, set] = {}
+    for sup in stage.supplies:
+        deliveries.setdefault(sup.on, set()).add(sup.delivery)
     if not any(
-        declared.get(d, "continuation") == "continuation"
+        deliveries.get(d, {None}) & {None, "continuation"}
         for d in stage.depends_on if d in spawn
     ):
         return None

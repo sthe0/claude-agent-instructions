@@ -132,3 +132,12 @@ def test_mixed_edges_continue_when_any_edge_continues_or_is_undeclared():
     assert cli._continuation_worktree(_state(s1, s2, consumer), consumer) == "/wt"
     consumer = _stage(3, [1, 2], {1: "report", 2: "artifact"}, spawn=True)
     assert cli._continuation_worktree(_state(s1, s2, consumer), consumer) is None
+
+
+@pytest.mark.parametrize("order", [("continuation", "report"), ("report", "continuation"),
+                                   (None, "artifact"), ("artifact", None)])
+def test_two_edges_to_one_supplier_continue_whatever_their_order(order):
+    supplier = _stage(1, spawn=True)
+    consumer = _stage(2, [1], spawn=True)
+    consumer.supplies = [SimpleNamespace(on=1, delivery=d) for d in order]
+    assert cli._continuation_worktree(_state(supplier, consumer), consumer) == "/wt"
