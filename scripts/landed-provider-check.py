@@ -24,10 +24,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--provider", required=True)
     ap.add_argument("--token", required=True)
     ap.add_argument("--target", required=True)
-    args = ap.parse_args(argv)
+    try:
+        args = ap.parse_args(argv)
+    except SystemExit as exc:
+        # A usage error (argparse exits 2) is a refusal, not a not-landed verdict.
+        return 0 if exc.code == 0 else LANDED_GIT_ERROR_EXIT
     try:
         verdict = load_provider(args.provider).is_landed(args.token, args.target)
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         print(f"landed provider {args.provider!r}: {type(exc).__name__}: {exc}", file=sys.stderr)
         return LANDED_GIT_ERROR_EXIT
     if verdict is True:

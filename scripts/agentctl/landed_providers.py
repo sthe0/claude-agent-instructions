@@ -33,7 +33,7 @@ PLUGIN_DIR_ENV = "CLAUDE_LANDED_CHECK_PLUGIN_DIR"
 PLUGIN_DIR_NAME = "landed-check-plugins"
 BUILTIN_PROVIDER = "git"
 _PLUGIN_NAMESPACE = "agentctl._plugin_landed_providers"
-PROVIDER_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+PROVIDER_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 
 
 class LandedProviderBroken(Exception):
@@ -56,7 +56,7 @@ def load_provider(name: str):
     LandedProviderBroken when the file is there but fails to import or lacks
     ``freeze`` / ``is_landed``.
     """
-    if not isinstance(name, str) or not PROVIDER_NAME_RE.match(name):
+    if not isinstance(name, str) or not PROVIDER_NAME_RE.fullmatch(name):
         raise ValueError(f"landed provider name {name!r} is not a plain identifier")
     if name == BUILTIN_PROVIDER:
         raise ValueError("the git provider is built in and is never loaded from a plugin")
@@ -64,7 +64,7 @@ def load_provider(name: str):
     relpath = f"providers/{name}.py"
     try:
         module = load_plugin_module(plugin_dir, relpath, _PLUGIN_NAMESPACE)
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         raise LandedProviderBroken(
             f"landed provider plugin {plugin_dir / relpath} failed to import: "
             f"{type(exc).__name__}: {exc}"

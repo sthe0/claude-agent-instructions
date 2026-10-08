@@ -1521,7 +1521,7 @@ def _freeze_provider_token(stage, provider: str, venue: str) -> None:
     from .landed_providers import load_provider
     try:
         token = load_provider(provider).freeze(venue)
-    except Exception:
+    except (Exception, SystemExit):
         return
     if isinstance(token, str) and token:
         stage.outcome.delivered_head = token
@@ -1570,6 +1570,13 @@ def _landed_check_result(
         return False, refusal, None
     run = runner or subprocess_runner
     result = run(["bash", "-c", command])
+    if result.returncode == LANDED_GIT_ERROR_EXIT and spec.provider != "git":
+        reason = (getattr(result, "stderr", "") or "").strip().splitlines()
+        return False, (
+            f"landed check of provider {spec.provider!r} could not answer for "
+            f"{spec.target!r} (exit {LANDED_GIT_ERROR_EXIT})"
+            + (f": {reason[-1]}" if reason else "")
+        ), result
     if result.returncode == LANDED_GIT_ERROR_EXIT:
         return False, (
             f"landed check could not resolve {spec.target!r} (or "

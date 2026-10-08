@@ -104,8 +104,9 @@ def _describe_stage_landed_assertion(m, doc: PlanDoc) -> str:
     spec = stage.criterion.landed if stage else None
     if spec is None:
         return ""
-    return (f"the commit stage {spec.delivered_stage} delivered is contained in "
-            f"{spec.target} and {spec.remote}/{spec.target}")
+    where = (f"{spec.target} and {spec.remote}/{spec.target}" if spec.provider == "git"
+             else f"{spec.target} (as reported by landed provider {spec.provider})")
+    return f"the commit stage {spec.delivered_stage} delivered is contained in {where}"
 
 
 def _describe_stage_done_criterion(m, doc) -> str:

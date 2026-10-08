@@ -393,7 +393,7 @@ def _parse_landed_spec(
     if not isinstance(raw_table, dict) or not raw_table:
         raise PlanError(f"{context}: kind = \"landed\" requires a [*.landed] table")
     provider = raw_table.get("provider", "git")
-    if not isinstance(provider, str) or not PROVIDER_NAME_RE.match(provider):
+    if not isinstance(provider, str) or not PROVIDER_NAME_RE.fullmatch(provider):
         raise PlanError(
             f"{context}: landed.provider {provider!r} is not a plain identifier "
             f"(expected to match {PROVIDER_NAME_RE.pattern}) (R12)"
@@ -2156,6 +2156,14 @@ _ELEMENT_FIELDS: dict[str, tuple[str, ...] | None] = {
 }
 
 
+# Leaf values that contribute nothing to an element's key, so a stage that never
+# declared the field (or declared its default) keeps the digest it had before the field
+# existed — the declared-only rule the whole-stage payload follows.
+_ELIDED_WHEN_DEFAULT: dict[str, tuple[tuple, ...]] = {
+    "criterion.landed.provider": ((None,), ("git",)),
+}
+
+
 def _leaf_values(stage, path: str) -> tuple:
     """Values reached by a dotted leaf path from a Stage, always as a tuple.
 
@@ -2244,7 +2252,11 @@ def stage_question_key(stage, element: str | None = None) -> str:
     if element is not None:
         paths = _ELEMENT_FIELDS[element]
         if paths is not _WHOLE_STAGE_DEFINITION:
-            payload = repr((element, tuple(_leaf_values(stage, p) for p in paths)))
+            values = tuple(
+                v for p in paths
+                if (v := _leaf_values(stage, p)) not in _ELIDED_WHEN_DEFAULT.get(p, ())
+            )
+            payload = repr((element, values))
             return hashlib.sha256(payload.encode("utf-8")).hexdigest()
     principle = stage.principle
     principle_tuple = (

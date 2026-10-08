@@ -2243,11 +2243,11 @@ def _landed_sort_key(landed) -> tuple:
     `sorted(...)`-built tuple. `LandedSpec` is a plain dataclass with no
     `__lt__`, so embedding it directly would raise TypeError the moment two
     stages/final_checks tie on every earlier field and `sorted` falls back to
-    comparing it. The sentinel ("", "", -1) sorts before any real spec, whose
+    comparing it. The sentinel ("", "", -1, "") sorts before any real spec, whose
     `delivered_stage` is always >= 1 (R5)."""
     if landed is None:
-        return ("", "", -1)
-    return (landed.target, landed.remote, landed.delivered_stage)
+        return ("", "", -1, "")
+    return (landed.target, landed.remote, landed.delivered_stage, landed.provider)
 
 
 def _refs_projection(subject) -> tuple:

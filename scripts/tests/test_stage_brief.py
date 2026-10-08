@@ -343,6 +343,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         # LandedSpec escapes both this drift check and the dedicated landed-check
         # test, which asserts three field values by name and so cannot notice a fourth.
         (LandedSpec, "target"), (LandedSpec, "remote"), (LandedSpec, "delivered_stage"),
+        (LandedSpec, "provider"),  # excluded: the brief names the check by label, not its VCS
     }
     declared = set()
     for cls in (Stage, Subject, Means, Actor, Criterion, Principle, Supply, PlanMeta,

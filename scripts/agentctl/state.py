@@ -180,6 +180,12 @@ class LandedSpec:
         return (f"LandedSpec(target={self.target!r}, delivered_stage="
                 f"{self.delivered_stage!r}, remote={self.remote!r}{extra})")
 
+    def refs_phrase(self) -> str:
+        """Where the delivered work must be, as plan renderings and descriptions say it."""
+        if self.provider == "git":
+            return f"`{self.target}` and `{self.remote}/{self.target}`"
+        return f"`{self.target}` (as reported by landed provider `{self.provider}`)"
+
     @classmethod
     def from_dict(cls, d: dict) -> "LandedSpec":
         """Rebuild a LandedSpec from its JSON dict, ignoring unknown keys —
@@ -2247,8 +2253,8 @@ class SessionState:
         # project, and an unlanded Core delivery has no such script in canon yet.
         script = shlex.quote(str(Path(__file__).resolve().parents[1] / "landed-provider-check.py"))
         return (
-            f"python3 {script} --provider {shlex.quote(spec.provider)} "
-            f"--token {shlex.quote(token)} --target {shlex.quote(spec.target)}"
+            f"python3 {script} --provider={shlex.quote(spec.provider)} "
+            f"--token={shlex.quote(token)} --target={shlex.quote(spec.target)}"
         ), None
 
     def _landed_task_id(self) -> str:
