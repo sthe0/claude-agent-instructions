@@ -671,7 +671,7 @@ def _procedure_collapse(stage, judge_runner, judge_enabled: bool) -> str | None:
     )
 
 
-def _edge_violations(stage) -> list[str]:
+def _edge_violations(stage, stages_by_index=None) -> list[str]:
     """Every edge of `stage` that states an ordering without stating a provision. [] == clean.
 
     A supply edge is one stage handing another a PLACE of its activity — the material to
@@ -721,7 +721,34 @@ def _edge_violations(stage) -> list[str]:
                 f"element {sup.element!r}, which is not an activity element — one of "
                 f"{', '.join(sorted(ELEMENT_NAMES))}"
             )
+        out.extend(_delivery_violations(stage, sup, stages_by_index or {}))
     return out
+
+
+def _delivery_violations(stage, sup, stages_by_index) -> list[str]:
+    """An edge that DECLARES how its provision arrives must be able to arrive that way.
+    An edge without `delivery` is never a violation here: the field is optional, and a
+    missing one keeps the engine's inferred behaviour. An unknown value never reaches this
+    point — `plan.parse_plan` refuses it at load."""
+    if sup.delivery is None:
+        return []
+    where = f"stage {stage.index} ({stage.title!r}): the edge to stage {sup.on}"
+    supplier = stages_by_index.get(sup.on)
+    if sup.delivery == "artifact":
+        declared = list(supplier.output_artifacts) if supplier is not None else []
+        if not sup.artifact:
+            return [f"{where} has delivery = \"artifact\" but names no artifact — add "
+                    f"artifact = \"<path>\", one of stage {sup.on}'s output_artifacts "
+                    f"{declared}"]
+        if sup.artifact not in declared:
+            return [f"{where} delivers artifact {sup.artifact!r}, which is not among stage "
+                    f"{sup.on}'s output_artifacts {declared}"]
+    elif sup.delivery == "continuation":
+        if supplier is not None and not supplier.is_spawn():
+            return [f"{where} has delivery = \"continuation\" but stage {sup.on} is not a "
+                    f"spawn stage — there is no working copy to continue; use \"artifact\" "
+                    f"or \"report\""]
+    return []
 
 
 def _negative_control_violations(stage) -> list[str]:
@@ -849,7 +876,7 @@ def submission_violations(
                 f"stage {stage.index} missing {label!r} (required for substantive plans): "
                 f"{_WHY[label]}"
             )
-        out.extend(_edge_violations(stage))
+        out.extend(_edge_violations(stage, {s.index: s for s in doc.stages}))
         out.extend(_negative_control_violations(stage))
         out.extend(_ephemeral_artifacts_violations(stage))
         restatement = _conditions_restatement(stage, judge_runner, judge_enabled)

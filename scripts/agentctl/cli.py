@@ -6128,9 +6128,13 @@ def _continuation_worktree(state: SessionState, stage: Stage) -> str | None:
     Prefers the plan's declared [meta] delivery_worktree (state.delivery_worktree);
     falls back to the task_id-scoped default only when repo_root is known (a
     relative worktree path with no anchor would be meaningless)."""
+    spawn = {s.index for s in state.stages if s.is_spawn()}
+    # An edge that declares its delivery decides for itself; only edges that say nothing
+    # fall back to inferring continuation from any depends_on over a spawn stage.
+    declared = {sup.on: sup.delivery for sup in stage.supplies if sup.delivery}
     if not any(
-        d in {s.index for s in state.stages if s.is_spawn()}
-        for d in stage.depends_on
+        declared.get(d, "continuation") == "continuation"
+        for d in stage.depends_on if d in spawn
     ):
         return None
     if state.delivery_worktree:
