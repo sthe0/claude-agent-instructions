@@ -39,6 +39,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 RUNNER = "reaper/runner.py"
 GIT_WORKTREES = "reaper/builtin/git_worktrees.py"
 CONTRACT = "reaper/contract.py"
+SCOPE_REGISTRY = "session_scope/registry.py"
 T_RUNNER = "tests/test_reaper_runner.py"
 T_GIT = "tests/test_reaper_git_worktrees.py"
 
@@ -60,7 +61,7 @@ def _ids(module: str, *names: str) -> "tuple[str, ...]":
 
 CATALOGUE: "dict[str, Mutant]" = {
     "keep-wins": Mutant(
-        RUNNER, "if verdict.action == KEEP:", 'if verdict.action == "never":',
+        RUNNER, "if v.action == KEEP\n", 'if v.action == "never"\n',
         _ids(
             T_RUNNER,
             "test_keep_wins_over_a_remove_on_the_same_path",
@@ -122,6 +123,58 @@ CATALOGUE: "dict[str, Mutant]" = {
     "landed-check-patch-equivalence": Mutant(
         GIT_WORKTREES, 'line.startswith("+")', 'line.startswith(("+", "-"))',
         _ids(T_GIT, "test_rebase_landed_branch_worktree_is_removed"),
+    ),
+    "worktree-remove-force": Mutant(
+        GIT_WORKTREES,
+        '_git_checked(repo, "worktree", "remove", entry.path)',
+        '_git_checked(repo, "worktree", "remove", "--force", entry.path)',
+        _ids(
+            T_GIT,
+            "test_remove_refuses_a_worktree_that_turned_dirty_after_the_scan",
+            "test_detached_worktree_that_turned_dirty_after_the_scan_survives_the_pass",
+        ),
+    ),
+    "detached-trunk-ancestor": Mutant(
+        GIT_WORKTREES, "if verdict == REMOVE and not head_in_trunk(wt.path):", "if False:",
+        _ids(T_GIT, "test_detached_worktree_with_a_commit_not_in_trunk_is_kept"),
+    ),
+    "scope-registry-fail-open": Mutant(
+        RUNNER, "if ctx.scope_registry_error:", "if False:",
+        _ids(
+            T_RUNNER,
+            "test_unreadable_scope_registry_cancels_every_removal_and_advances_no_stamp",
+            "test_unreadable_scope_registry_shows_as_keep_in_a_dry_run",
+        ),
+    ),
+    "scope-registry-lenient-load": Mutant(
+        RUNNER, "strict=True)", "strict=False)",
+        _ids(T_RUNNER, "test_main_removes_nothing_when_one_scope_record_is_corrupt"),
+    ),
+    "scope-registry-strict-ignored": Mutant(
+        SCOPE_REGISTRY, "            if strict:\n                raise\n", "",
+        _ids(
+            T_RUNNER,
+            "test_main_removes_nothing_when_one_scope_record_is_corrupt",
+            "test_load_all_skips_a_corrupt_record_by_default_and_raises_when_strict",
+        ),
+    ),
+    "skipped-module-ignored": Mutant(
+        RUNNER, "if skipped_modules:", "if False:",
+        _ids(
+            T_RUNNER,
+            "test_a_module_skipped_at_discovery_cancels_every_removal_but_still_prints",
+            "test_main_removes_nothing_when_discovery_skipped_a_module",
+        ),
+    ),
+    "keep-containment": Mutant(
+        RUNNER,
+        "return os.path.commonpath([real_a, real_b]) in (real_a, real_b)",
+        "return real_a == real_b",
+        _ids(
+            T_RUNNER,
+            "test_keep_on_a_directory_vetoes_a_remove_of_a_path_inside_it",
+            "test_keep_on_a_path_vetoes_a_remove_of_a_directory_containing_it",
+        ),
     ),
 }
 

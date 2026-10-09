@@ -7,7 +7,7 @@ what it can about its own kind of residue.
 
 A reaper is a Python module defining
 
-* ``NAME`` (str) and ``THROTTLE_HOURS`` (float, default 24);
+* ``NAME`` (str) and ``THROTTLE_HOURS`` (a finite number > 0, default 24);
 * ``scan(ctx) -> list[Verdict]`` — one verdict per item it has an opinion on, with no
   side effect beyond best-effort bookkeeping that checks ``ctx.dry_run`` and ``ctx.due``;
 * ``remove(path, ctx)`` — delete one item the runner approved. Raise (or return
@@ -79,6 +79,8 @@ class ReapContext:
 
     ``due`` is true while this reaper's own throttle window has elapsed (or the run is
     forced); a ``scan`` that writes anything must check it and ``dry_run``.
+    ``scope_registry_error`` is set when a session-scope record could not be read; the
+    runner then removes nothing, since ``scope_records`` may be missing an owner.
     """
 
     now: float
@@ -88,13 +90,7 @@ class ReapContext:
     scope_records: "list[registry.ScopeRecord]" = field(default_factory=list)
     due: bool = True
     heartbeat_ttl_hours: float = OWNER_HEARTBEAT_TTL_HOURS
+    scope_registry_error: "str | None" = None
 
     def owned_path(self, path: str) -> bool:
         return path_owned(path, self.scope_records, self.now, self.heartbeat_ttl_hours)
-
-    def owned_session(self, session_id: str) -> bool:
-        ttl_s = self.heartbeat_ttl_hours * 3600.0
-        return any(
-            rec.session_id == session_id and _record_alive(rec, self.now, ttl_s)
-            for rec in self.scope_records
-        )

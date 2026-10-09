@@ -9,12 +9,15 @@ Layers, in order:
   plugin   ${CLAUDE_REAPER_PLUGIN_DIR:-<config root>/reaper-plugins}/reapers/*.py
   project  <project>/.claude/reapers/*.py   (project = $CLAUDE_PROJECT_DIR, else cwd)
 
-A module that fails to import, or lacks NAME, scan or remove, is skipped with one
-stderr line; the rest still run.
+A module that fails to import, lacks NAME, scan or remove, or has a THROTTLE_HOURS that
+is not a finite number > 0, is skipped with one ``reaper: skipped`` line passed to
+``warn``; the rest still run. A skipped module's KEEP verdicts are lost with it, so the
+runner treats any skip as a failed scan: that pass removes nothing.
 """
 from __future__ import annotations
 
 import importlib
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +58,8 @@ def _contract_problem(module: ModuleType) -> "str | None":
     throttle = getattr(module, "THROTTLE_HOURS", DEFAULT_THROTTLE_HOURS)
     if isinstance(throttle, bool) or not isinstance(throttle, (int, float)):
         return "THROTTLE_HOURS is not a number"
+    if not math.isfinite(throttle) or throttle <= 0:
+        return f"THROTTLE_HOURS {throttle!r} is not a finite number > 0"
     return None
 
 

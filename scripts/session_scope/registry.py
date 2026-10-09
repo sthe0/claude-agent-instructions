@@ -249,9 +249,12 @@ def live_pid_check(records: "list[ScopeRecord]") -> "Callable[[str], bool]":
     return check
 
 
-def load_all(scopes_dir: "str | Path" = DEFAULT_SCOPES_DIR) -> "list[ScopeRecord]":
+def load_all(scopes_dir: "str | Path" = DEFAULT_SCOPES_DIR, *, strict: bool = False) -> "list[ScopeRecord]":
     """Load every session's record under scopes_dir. Corrupt files are skipped,
-    not raised — one broken record must not hide the rest of the registry."""
+    not raised — one broken record must not hide the rest of the registry.
+
+    ``strict=True`` raises on the first unreadable record instead: a caller that
+    deletes on "nobody owns this" cannot read a skipped record as "no owner"."""
     scopes_dir = Path(scopes_dir)
     if not scopes_dir.is_dir():
         return []
@@ -260,6 +263,8 @@ def load_all(scopes_dir: "str | Path" = DEFAULT_SCOPES_DIR) -> "list[ScopeRecord
         try:
             records.append(ScopeRecord.from_json(path.read_text(encoding="utf-8")))
         except (OSError, ValueError, KeyError, TypeError):
+            if strict:
+                raise
             continue
     return records
 

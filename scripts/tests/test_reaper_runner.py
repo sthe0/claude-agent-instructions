@@ -171,6 +171,20 @@ def test_broken_modules_are_skipped_with_one_stderr_line_each(tmp_path):
     assert len(lines) == 4 and all(line.startswith("reaper: skipped ") for line in lines)
 
 
+@pytest.mark.parametrize("throttle", ["0", "-1.5", "float('nan')", "float('inf')"])
+def test_throttle_hours_that_is_not_finite_and_positive_violates_the_contract(tmp_path, throttle):
+    root = tmp_path.resolve()
+    plugin = root / "pl" / "reapers"
+    plugin.mkdir(parents=True)
+    plugin.joinpath("bad.py").write_text(
+        f'NAME = "bad"\nTHROTTLE_HOURS = {throttle}\ndef scan(c): return []\ndef remove(p, c): pass\n',
+        encoding="utf-8",
+    )
+    lines = []
+    found = registry.discover(root, builtin_dir=root / "x" / "builtin", plugin_root=root / "pl", warn=lines.append)
+    assert found == [] and len(lines) == 1 and "THROTTLE_HOURS" in lines[0]
+
+
 def test_underscore_files_are_not_reapers(tmp_path):
     root = tmp_path.resolve()
     write_reaper(root / "pl" / "reapers", "_helper.py", "hidden")
@@ -229,6 +243,30 @@ def test_verdicts_are_joined_by_realpath(env):
     assert a.removed == []
 
 
+def test_keep_on_a_directory_vetoes_a_remove_of_a_path_inside_it(env):
+    inner = env.item / "inner"
+    inner.mkdir()
+    a, b = Fake("a", [rm(inner)]), Fake("b", [keep(env.item)])
+    env.run([a, b])
+    assert a.removed == []
+
+
+def test_keep_on_a_path_vetoes_a_remove_of_a_directory_containing_it(env):
+    inner = env.item / "inner"
+    inner.mkdir()
+    a, b = Fake("a", [rm(env.item)]), Fake("b", [keep(inner)])
+    env.run([a, b])
+    assert a.removed == []
+
+
+def test_keep_on_a_sibling_with_a_shared_name_prefix_does_not_veto(env):
+    sibling = env.tmp / (env.item.name + "-other")
+    sibling.mkdir()
+    a, b = Fake("a", [rm(env.item)]), Fake("b", [keep(sibling)])
+    env.run([a, b])
+    assert a.removed == [str(env.item)]
+
+
 def test_invalid_verdict_action_counts_as_a_failed_scan(env):
     a = Fake("a", [Verdict(str(env.item), "delete", "bad")])
     b = Fake("b", [rm(env.tmp / "other")])
@@ -255,6 +293,45 @@ def test_scan_exception_cancels_every_removal_and_advances_no_stamp(env):
     assert b.removed == [] and env.log_records() == []
     assert not env.stamps.exists()
     assert "reaper a: scan failed" in err
+
+
+def test_unreadable_scope_registry_cancels_every_removal_and_advances_no_stamp(env):
+    a = Fake("a", [rm(env.item)])
+    out, err = io.StringIO(), io.StringIO()
+    runner.execute_pass(
+        [a.reaper], env.ctx(scope_registry_error="ValueError: bad json"),
+        dry_run=False, force_run=False, only=None,
+        stamps=env.stamps, log_path=env.log, out=out, err=err,
+    )
+    assert a.removed == [] and env.log_records() == []
+    assert not env.stamps.exists()
+
+
+def test_unreadable_scope_registry_shows_as_keep_in_a_dry_run(env):
+    a = Fake("a", [rm(env.item)])
+    out = io.StringIO()
+    runner.execute_pass(
+        [a.reaper], env.ctx(dry_run=True, scope_registry_error="ValueError: bad json"),
+        dry_run=True, force_run=False, only=None,
+        stamps=env.stamps, log_path=env.log, out=out, err=io.StringIO(),
+    )
+    assert out.getvalue().splitlines() == [
+        f"a KEEP {env.item} (pass cancelled: scope registry unreadable: ValueError: bad json)"
+    ]
+
+
+def test_a_module_skipped_at_discovery_cancels_every_removal_but_still_prints(env):
+    a = Fake("a", [rm(env.item)], summary_line="a: summary")
+    out, err = io.StringIO(), io.StringIO()
+    runner.execute_pass(
+        [a.reaper], env.ctx(),
+        dry_run=False, force_run=False, only=None,
+        stamps=env.stamps, log_path=env.log, out=out, err=err,
+        skipped_modules=["reaper: skipped /p/broken.py: no scan"],
+    )
+    assert a.removed == [] and env.log_records() == []
+    assert not env.stamps.exists()
+    assert out.getvalue().strip() == "a: summary"
 
 
 def test_remove_exception_keeps_the_path_and_leaves_only_that_stamp_behind(env):
@@ -368,12 +445,12 @@ def test_summary_line_is_printed_for_due_reapers_but_not_in_dry_run(env):
 
 def test_session_start_mode_exits_zero_whatever_a_reaper_does(hermetic, capsys):
     boom = Fake("boom", [], scan_exc=RuntimeError("exploded"))
-    assert runner.main([], discover=lambda project: [boom.reaper]) == 0
+    assert runner.main([], discover=lambda project, warn: [boom.reaper]) == 0
     assert "scan failed" in capsys.readouterr().err
 
 
 def test_session_start_mode_exits_zero_even_if_discovery_itself_fails(hermetic, capsys):
-    def explode(project):
+    def explode(project, warn):
         raise RuntimeError("no discovery")
 
     assert runner.main([], discover=explode) == 0
@@ -381,21 +458,21 @@ def test_session_start_mode_exits_zero_even_if_discovery_itself_fails(hermetic, 
 
 
 def test_manual_mode_reports_a_runner_error_with_exit_one(hermetic):
-    def explode(project):
+    def explode(project, warn):
         raise RuntimeError("no discovery")
 
     assert runner.main(["--force-run"], discover=explode) == 1
 
 
 def test_unknown_only_name_exits_two(hermetic):
-    assert runner.main(["--only", "nope"], discover=lambda project: []) == 2
+    assert runner.main(["--only", "nope"], discover=lambda project, warn: []) == 2
 
 
 def test_main_force_run_writes_the_removal_log_under_the_config_root(hermetic):
     item = hermetic / "victim"
     item.mkdir()
     a = Fake("a", [rm(item)])
-    assert runner.main(["--force-run"], discover=lambda project: [a.reaper]) == 0
+    assert runner.main(["--force-run"], discover=lambda project, warn: [a.reaper]) == 0
     log = hermetic / "config" / "reaper" / "removed.jsonl"
     assert [json.loads(l)["path"] for l in log.read_text(encoding="utf-8").splitlines()] == [str(item)]
     assert not (hermetic / "home" / ".local" / "state" / "claude-reaper").exists()
@@ -403,8 +480,59 @@ def test_main_force_run_writes_the_removal_log_under_the_config_root(hermetic):
 
 def test_main_session_start_writes_stamps_under_the_home_state_dir(hermetic):
     a = Fake("a", [])
-    assert runner.main([], discover=lambda project: [a.reaper]) == 0
+    assert runner.main([], discover=lambda project, warn: [a.reaper]) == 0
     assert (hermetic / "home" / ".local" / "state" / "claude-reaper" / "a.stamp").is_file()
+
+
+def test_main_removes_nothing_when_one_scope_record_is_corrupt(hermetic, capsys):
+    from lib import config_root
+
+    scopes = config_root.agentctl_scopes_dir()
+    scopes.mkdir(parents=True)
+    (scopes / "broken-session.json").write_text("{not json", encoding="utf-8")
+    item = hermetic / "victim"
+    item.mkdir()
+    a = Fake("a", [rm(item)])
+    assert runner.main(["--force-run"], discover=lambda project, warn: [a.reaper]) == 0
+    assert a.removed == []
+    assert not (hermetic / "config" / "reaper" / "removed.jsonl").exists()
+
+
+def test_main_removes_nothing_when_discovery_skipped_a_module(hermetic):
+    item = hermetic / "victim"
+    item.mkdir()
+    a = Fake("a", [rm(item)])
+
+    def discover(project, warn):
+        warn("reaper: skipped /plugins/reapers/veto.py: import failed")
+        return [a.reaper]
+
+    assert runner.main(["--force-run"], discover=discover) == 0
+    assert a.removed == []
+
+
+def test_main_default_discovery_reports_a_broken_project_reaper_as_a_skip(hermetic, monkeypatch):
+    project_reapers = hermetic / "project" / ".claude" / "reapers"
+    project_reapers.mkdir(parents=True)
+    (project_reapers / "veto.py").write_text("raise ImportError('missing dep')\n", encoding="utf-8")
+    seen = {}
+
+    def spy(reapers, ctx, **kw):
+        seen["skipped"] = list(kw["skipped_modules"])
+
+    monkeypatch.setattr(runner, "execute_pass", spy)
+    assert runner.main(["--force-run"]) == 0
+    assert len(seen["skipped"]) == 1 and "veto.py" in seen["skipped"][0]
+
+
+def test_load_all_skips_a_corrupt_record_by_default_and_raises_when_strict(tmp_path):
+    from session_scope import registry as scope_registry
+
+    scope_registry.save(tmp_path, scope_registry.ScopeRecord(session_id="good"))
+    (tmp_path / "bad.json").write_text("{not json", encoding="utf-8")
+    assert [r.session_id for r in scope_registry.load_all(tmp_path)] == ["good"]
+    with pytest.raises(ValueError):
+        scope_registry.load_all(tmp_path, strict=True)
 
 
 def test_hook_script_lists_the_builtin_reaper(hermetic):

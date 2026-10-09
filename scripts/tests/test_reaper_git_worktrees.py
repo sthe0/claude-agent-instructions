@@ -162,6 +162,26 @@ def test_reaped_branch_is_logged_before_branch_delete_runs(repo, monkeypatch):
     assert not wt.exists()
 
 
+def test_reaped_branch_is_logged_before_the_worktree_is_removed(repo, monkeypatch):
+    wt = repo.add_worktree("first", branch="feat-first")
+    sha = repo.git(wt, "rev-parse", "HEAD").strip()
+    age(wt, 48)
+    ctx = make_ctx(repo)
+    real = gw._git_checked
+    log_at_worktree_remove = []
+
+    def watch(cwd, *args):
+        if args[:2] == ("worktree", "remove"):
+            log = ctx.deadletter_dir / gw.REAPED_BRANCHES_LOG
+            log_at_worktree_remove.append(log.read_text(encoding="utf-8") if log.exists() else "")
+        return real(cwd, *args)
+
+    monkeypatch.setattr(gw, "_git_checked", watch)
+    gw.remove(str(wt), ctx)
+    assert len(log_at_worktree_remove) == 1
+    assert f"feat-first {sha} {wt}" in log_at_worktree_remove[0]
+
+
 def test_remove_refuses_a_worktree_that_turned_dirty_after_the_scan(repo):
     wt = repo.add_worktree("late", branch="feat-late")
     age(wt, 48)
@@ -327,6 +347,40 @@ def test_symlinked_temp_root_matches_the_resolved_worktree_path(repo, monkeypatc
     repo.git(repo.main, "worktree", "add", "-q", "--detach", str(path), "main")
     age(path.resolve(), 48)
     assert verdicts_by_path(repo)[str(path.resolve())].action == REMOVE
+
+
+def test_detached_worktree_with_a_commit_not_in_trunk_is_kept(repo):
+    wt = detached_under_temp(repo, "unlanded")
+    repo.commit(wt, "scratch.txt", "scratch\n", "scratch work")
+    age(wt, 48)
+    verdict = verdicts_by_path(repo)[str(wt)]
+    assert (verdict.action, verdict.reason) == (KEEP, f"detached HEAD not in {gw.TRUNK_REF}")
+
+
+def test_detached_worktree_that_turned_dirty_after_the_scan_survives_the_pass(repo):
+    import io
+    import types
+
+    from reaper import registry, runner
+
+    wt = detached_under_temp(repo, "latedetached")
+    age(wt, 48)
+    ctx = make_ctx(repo)
+
+    def scan_then_dirty(scan_ctx):
+        verdicts = gw.scan(scan_ctx)
+        (wt / "base.txt").write_text("edited after scan\n", encoding="utf-8")
+        return verdicts
+
+    module = types.SimpleNamespace(NAME=gw.NAME, scan=scan_then_dirty, remove=gw.remove)
+    reaper = registry.Reaper(gw.NAME, "builtin", gw.__file__, module)
+    err = io.StringIO()
+    runner.execute_pass(
+        [reaper], ctx, dry_run=False, force_run=True, only=None,
+        stamps=repo.root / "stamps", log_path=repo.root / "removed.jsonl", out=io.StringIO(), err=err,
+    )
+    assert "FAILED to remove" in err.getvalue()
+    assert (wt / "base.txt").read_text(encoding="utf-8") == "edited after scan\n"
 
 
 def test_dirty_detached_worktree_is_kept_and_dead_lettered(repo):

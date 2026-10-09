@@ -11,9 +11,13 @@ One pass:
      THROTTLE_HOURS). ``--dry-run`` and ``--force-run`` make every selected reaper due;
      ``--only NAME`` selects one reaper and makes it due. Neither writes a stamp.
   2. Every discovered reaper's ``scan`` runs, due or not, so its KEEP verdicts always count.
-  3. Verdicts are joined by realpath. A path is removed only if every verdict on it is
-     remove (keep wins), a due selected reaper proposed it, and then once.
-  4. A scan exception cancels every removal of the pass and advances no stamp. A removal
+  3. Verdicts are joined by realpath. A path is removed only if no KEEP verdict names it,
+     a directory inside it, or a directory containing it (keep wins), a due selected
+     reaper proposed it, and then once.
+  4. The pass is cancelled — nothing removed, no stamp advanced, lines still printed —
+     when a scan raises, when a reaper module was skipped at discovery (its KEEP vetoes
+     are missing), or when a session-scope record could not be read (an owner may be
+     missing). A removal
      is logged to ``<config root>/reaper/removed.jsonl`` BEFORE it is attempted; a
      remove() exception keeps the path and leaves that reaper's stamp where it was.
   5. SessionStart mode (no flag) always exits 0.
@@ -29,7 +33,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, TextIO
+from typing import Callable, Sequence, TextIO
 
 from lib import config_root
 from reaper import registry
@@ -91,6 +95,11 @@ def _append_removal_log(log_path: Path, now: float, reaper: registry.Reaper, ver
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def _nested(real_a: str, real_b: str) -> bool:
+    """Same path, or one an ancestor of the other, compared component-wise."""
+    return os.path.commonpath([real_a, real_b]) in (real_a, real_b)
+
+
 def execute_pass(
     reapers: "list[registry.Reaper]",
     ctx: ReapContext,
@@ -102,8 +111,12 @@ def execute_pass(
     log_path: Path,
     out: TextIO,
     err: TextIO,
+    skipped_modules: "Sequence[str]" = (),
 ) -> None:
-    """Run one pass over ``reapers`` (every discovered reaper). See the module docstring."""
+    """Run one pass over ``reapers`` (every discovered reaper). See the module docstring.
+
+    ``skipped_modules`` are the discovery warnings for modules that did not load.
+    """
     now = ctx.now
     manual = dry_run or force_run or only is not None
     selected = [r for r in reapers if only in (None, r.name)]
@@ -120,27 +133,34 @@ def execute_pass(
         print(THROTTLED_SENTINEL, file=err)
         return
 
+    cancelled: "list[str]" = []
+    if ctx.scope_registry_error:
+        cancelled.append(f"scope registry unreadable: {ctx.scope_registry_error}")
+    if skipped_modules:
+        cancelled.append(f"{len(skipped_modules)} reaper module(s) skipped at discovery")
     scanned: "dict[str, list[Verdict]]" = {}
-    failed_scans: "list[str]" = []
     for reaper in reapers:
         try:
             scanned[reaper.name] = _normalize(reaper.module.scan(dataclasses.replace(ctx, due=reaper.name in due)))
         except Exception as exc:
             scanned[reaper.name] = []
-            failed_scans.append(reaper.name)
+            cancelled.append(f"scan of {reaper.name} failed")
             print(f"reaper {reaper.name}: scan failed: {type(exc).__name__}: {exc}", file=err)
 
     joined: "dict[str, list[tuple[registry.Reaper, Verdict]]]" = {}
     for reaper in reapers:
         for verdict in scanned[reaper.name]:
             joined.setdefault(os.path.realpath(verdict.path), []).append((reaper, verdict))
+    keepers = [
+        (os.path.realpath(v.path), r.name) for r in reapers for v in scanned[r.name] if v.action == KEEP
+    ]
 
     def blocker(real: str) -> "str | None":
-        if failed_scans:
-            return f"pass cancelled: scan of {failed_scans[0]} failed"
-        for reaper, verdict in joined[real]:
-            if verdict.action == KEEP:
-                return f"kept by {reaper.name}"
+        if cancelled:
+            return f"pass cancelled: {cancelled[0]}"
+        for held, name in keepers:
+            if _nested(real, held):
+                return f"kept by {name}"
         return None
 
     if dry_run:
@@ -186,23 +206,26 @@ def execute_pass(
         if line:
             print(line, file=out)
 
-    if not manual and not failed_scans:
+    if not manual and not cancelled:
         for name in due - failed_removals:
             _write_stamp(stamps, name, now)
 
 
 def build_context(*, now: float, dry_run: bool) -> ReapContext:
     project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    records: "list[scope_registry.ScopeRecord]" = []
+    error = None
     try:
-        records = scope_registry.load_all(config_root.agentctl_scopes_dir())
-    except Exception:
-        records = []
+        records = scope_registry.load_all(config_root.agentctl_scopes_dir(), strict=True)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
     return ReapContext(
         now=now,
         dry_run=dry_run,
         project_dir=Path(project),
         deadletter_dir=default_deadletter_dir(),
         scope_records=records,
+        scope_registry_error=error,
     )
 
 
@@ -211,14 +234,14 @@ def _list(reapers: "list[registry.Reaper]", out: TextIO) -> None:
         print(f"{reaper.name} {reaper.layer} {reaper.file}", file=out)
 
 
-def _discover_default(project_dir: Path) -> "list[registry.Reaper]":
-    return registry.discover(project_dir)
+def _discover_default(project_dir: Path, warn: "Callable[[str], None]") -> "list[registry.Reaper]":
+    return registry.discover(project_dir, warn=warn)
 
 
 def main(
     argv: "list[str] | None" = None,
     *,
-    discover: "Callable[[Path], list[registry.Reaper]]" = _discover_default,
+    discover: "Callable[[Path, Callable[[str], None]], list[registry.Reaper]]" = _discover_default,
 ) -> int:
     parser = argparse.ArgumentParser(description="Run the registered reapers (see docs/operations/reapers.md).")
     parser.add_argument("--dry-run", action="store_true", help="print one line per verdict; change nothing, touch no stamp")
@@ -231,7 +254,13 @@ def main(
     try:
         now = time.time()
         ctx = build_context(now=now, dry_run=args.dry_run)
-        reapers = discover(ctx.project_dir)
+        skipped: "list[str]" = []
+
+        def warn(line: str) -> None:
+            skipped.append(line)
+            print(line, file=sys.stderr)
+
+        reapers = discover(ctx.project_dir, warn)
         if args.list:
             _list(reapers, sys.stdout)
             return 0
@@ -242,6 +271,7 @@ def main(
             reapers, ctx,
             dry_run=args.dry_run, force_run=args.force_run, only=args.only,
             stamps=stamp_dir(), log_path=removal_log_path(), out=sys.stdout, err=sys.stderr,
+            skipped_modules=skipped,
         )
     except Exception as exc:
         print(f"reaper: runner error: {type(exc).__name__}: {exc}", file=sys.stderr)

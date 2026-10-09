@@ -12,13 +12,18 @@ scan() returns exactly one verdict for every `git worktree list --porcelain` ent
 the first (the main checkout). Two kinds of removal candidate:
 
   detached  under a temp root (/tmp/cc-scratch, $TMPDIR), older than MIN_AGE_HOURS,
-            unowned, clean. A dirty one is dead-lettered (a diff snapshot is written to
+            unowned, clean, and its HEAD an ancestor of origin/main (so no commit is
+            lost). A dirty one is dead-lettered (a diff snapshot is written to
             ctx.deadletter_dir), never removed.
   branch    anywhere, except branch main: older than MIN_AGE_HOURS, unowned, clean
             (`git status --porcelain` empty, untracked files count) and landed
-            (`git cherry origin/main <branch>` prints no '+' line). The worktree goes
-            first, then `<iso-time> <branch> <sha> <path>` is appended to
-            <dead-letter dir>/reaped-branches.log, and only then `git branch -D` runs.
+            (`git cherry origin/main <branch>` prints no '+' line). First
+            `<iso-time> <branch> <sha> <path>` is appended to
+            <dead-letter dir>/reaped-branches.log, then the worktree goes, and only
+            then `git branch -D` runs.
+
+Removal never passes --force: git itself refuses a worktree that turned dirty since the
+scan, and the runner keeps it.
 
 Stale unowned branch worktrees with unlanded commits or local changes are kept; once one
 is older than REPORT_AGE_HOURS it is flagged `report` and summary() names the count.
@@ -185,6 +190,14 @@ def _evaluate_branch(wt: WorktreeInfo, ctx: ReapContext, repo: str, age_h: float
     return Verdict(wt.path, REMOVE, "landed branch worktree, stale, unowned, clean")
 
 
+def head_in_trunk(path: str) -> bool:
+    """True if the worktree's HEAD is an ancestor of origin/main; raises if git cannot tell."""
+    out = _git(path, "merge-base", "--is-ancestor", "HEAD", TRUNK_REF)
+    if out.returncode not in (0, 1):
+        raise RuntimeError(f"git merge-base --is-ancestor failed: {out.stderr.strip()}")
+    return out.returncode == 0
+
+
 def _evaluate_detached(wt: WorktreeInfo, ctx: ReapContext, roots: "list[str]", age_h: float) -> Verdict:
     if not is_temp_root(wt.path, roots):
         return Verdict(wt.path, KEEP, "not under temp root")
@@ -192,6 +205,8 @@ def _evaluate_detached(wt: WorktreeInfo, ctx: ReapContext, roots: "list[str]", a
     verdict, reason = classify_detached(age_h, dirty, ctx.owned_path(wt.path))
     if verdict == KEEP and dirty and ctx.due and not ctx.dry_run:
         write_deadletter(wt, ctx)
+    if verdict == REMOVE and not head_in_trunk(wt.path):
+        return Verdict(wt.path, KEEP, f"detached HEAD not in {TRUNK_REF}")
     return Verdict(wt.path, verdict, reason)
 
 
@@ -260,14 +275,13 @@ def remove(path: str, ctx: ReapContext) -> None:
     if entry.branch == MAIN_BRANCH_REF:
         raise RuntimeError(f"{path} is on branch main")
     repo = entries[0].path
-    if not entry.branch:
-        _git_checked(repo, "worktree", "remove", "--force", entry.path)
-        return
+    branch = _short(entry.branch) if entry.branch else None
+    if branch:
+        _record_reaped_branch(ctx, branch, entry.head, entry.path)
     # No --force: git itself refuses a worktree that turned dirty since the scan.
     _git_checked(repo, "worktree", "remove", entry.path)
-    branch = _short(entry.branch)
-    _record_reaped_branch(ctx, branch, entry.head, entry.path)
-    _git_checked(repo, "branch", "-D", branch)
+    if branch:
+        _git_checked(repo, "branch", "-D", branch)
 
 
 def summary(verdicts: "list[Verdict]") -> "str | None":

@@ -11,12 +11,12 @@ A reaper is a Python module in one of the three layers below, defining:
 | Name | Meaning |
 |---|---|
 | `NAME` | unique string; the identity used for override, `--only`, stamps and the log |
-| `THROTTLE_HOURS` | minimum hours between real passes of this reaper (default 24) |
+| `THROTTLE_HOURS` | minimum hours between real passes of this reaper; a finite number above 0 (default 24) |
 | `scan(ctx) -> list[Verdict]` | one `Verdict(path, action, reason, report=False)` per item it has an opinion on; `action` is `remove` or `keep`. No side effect beyond best-effort bookkeeping that checks `ctx.dry_run` and `ctx.due` |
 | `remove(path, ctx)` | delete one item the runner approved. Raise, or return `False`, when it did not happen |
 | `summary(verdicts) -> str \| None` | optional; one line for the SessionStart notice (the `git-worktrees` reaper uses it for worktrees kept for over a week) |
 
-`ctx` (`scripts/reaper/contract.py: ReapContext`) carries `now`, `dry_run`, `due`, `project_dir`, `deadletter_dir` and two ownership queries: `ctx.owned_path(path)` and `ctx.owned_session(session_id)`. Both read the session-scope registry, compare real paths, and count a session as live when its pid is alive or its heartbeat is under 24 hours old.
+`ctx` (`scripts/reaper/contract.py: ReapContext`) carries `now`, `dry_run`, `due`, `project_dir`, `deadletter_dir` and the ownership query `ctx.owned_path(path)`. It reads the session-scope registry, compares real paths, and counts a session as live when its pid is alive or its heartbeat is under 24 hours old.
 
 A plugin or project module is executed under a synthetic package name, so it must use **absolute** imports (`from reaper.contract import Verdict`).
 
@@ -30,15 +30,17 @@ Discovery reads three layers in this order; a later layer's reaper with the **sa
 | Machine-local plugin | `${CLAUDE_REAPER_PLUGIN_DIR:-<config root>/reaper-plugins}/reapers/*.py` | a higher layer (an org, a personal machine); listed as the `reaper-plugins` seam in [org-portability.md](org-portability.md) |
 | Project | `<project>/.claude/reapers/*.py`, project = `$CLAUDE_PROJECT_DIR`, else the working directory | the project, shared through its git |
 
-Files starting with `_` are not reapers. A module that fails to import, calls `sys.exit`, or lacks `NAME` / `scan` / `remove` / a numeric `THROTTLE_HOURS` is skipped with one `reaper: skipped <file>: <why>` line on stderr, and the rest still run. `python3 scripts/hook-reaper.py --list` prints `NAME layer file` for each reaper actually in force.
+Files starting with `_` are not reapers. A module that fails to import, calls `sys.exit`, or lacks `NAME` / `scan` / `remove` / a finite positive `THROTTLE_HOURS` is skipped with one `reaper: skipped <file>: <why>` line on stderr. The rest still scan and print, but that pass removes nothing: the skipped module's `keep` verdicts are missing. `python3 scripts/hook-reaper.py --list` prints `NAME layer file` for each reaper actually in force.
+
+**Trust.** A project-layer reaper (`.claude/reapers/`) is Python executed at SessionStart from the project directory, with the same trust level as the project's own `.claude` hooks. A project reaper with the same `NAME` as a built-in replaces it, and with it the built-in's safety rules for that kind of residue; the runner's rules below still apply.
 
 ## What the runner guarantees
 
 1. **Throttle.** Each reaper has its own stamp, `~/.local/state/claude-reaper/<NAME>.stamp`. A pass starts when at least one selected reaper is due; if none is, the runner prints `throttled: within window` to stderr and does nothing.
 2. **Every reaper scans, due or not.** A reaper that is not due cannot remove anything, but its `keep` verdicts still count.
-3. **Keep wins.** Verdicts are joined by real path. A path is removed only if no reaper says `keep` for it, a due reaper proposed `remove`, and then **once**, even when two reapers propose it.
+3. **Keep wins.** Verdicts are joined by real path. A path is removed only if no reaper says `keep` for it, for anything inside it, or for a directory containing it (compared by path component, so `/a/item` does not contain `/a/item-2`), a due reaper proposed `remove`, and then **once**, even when two reapers propose it.
 4. **Log before removal.** Before each `remove`, one JSON line `{ts, reaper, layer, path, reason}` is appended to `<config root>/reaper/removed.jsonl`.
-5. **Error isolation.** A `scan` exception cancels **every** removal of the pass (a reaper that cannot see cannot be outvoted by one that can), prints one stderr line and advances no stamp. A `remove` exception, or a `False` return, keeps that path, prints one stderr line and leaves that reaper's stamp where it was; other reapers carry on.
+5. **Error isolation.** A `scan` exception cancels **every** removal of the pass (a reaper that cannot see cannot be outvoted by one that can), prints one stderr line and advances no stamp. The same cancellation applies when a module was skipped at discovery, and when a session-scope record could not be read (an owner may be missing; the registry is loaded strictly). A dry run then prints each `remove` as `KEEP ... (pass cancelled: <why>)`. A `remove` exception, or a `False` return, keeps that path, prints one stderr line and leaves that reaper's stamp where it was; other reapers carry on.
 6. **SessionStart mode always exits 0**, whatever a reaper or the runner does.
 
 ## Modes
@@ -58,8 +60,8 @@ Use `--dry-run` before anything else on a new machine or after writing a reaper.
 Source: `scripts/reaper/builtin/git_worktrees.py`. It looks at the repository that contains the reaper code and returns exactly one verdict for every `git worktree list --porcelain` entry except the first (the main checkout), with the reason in the verdict (`main branch`, `not under temp root`, `fresh`, `owned`, `missing directory`, `locked`, `dirty`, `unlanded <N>`, ...).
 
 - **Paths are compared by real path**: git prints resolved paths, while `$TMPDIR` or a session's working directory may be spelled through a symlink.
-- **Detached worktree**: removed when it is under a temp root (`/tmp/cc-scratch`, `$TMPDIR`), older than 24 hours, unowned and clean. A dirty one is kept, and a diff snapshot goes to `<config root>/orphan-worktree-deadletter/<name>-<ts>.diff` (not in a dry run, and not when the reaper is not due).
-- **Branch worktree** (anywhere, except the main checkout and a worktree on `main`): removed when it is older than 24 hours, unowned, clean (`git status --porcelain` empty, untracked files count) and landed (`git cherry origin/main <branch>` prints no `+` line, so a fast-forward, a merge and a rebase all count). The worktree is removed first with plain `git worktree remove` (no `--force`, so git itself refuses one that turned dirty since the scan); then `<iso-time> <branch> <sha> <path>` is appended to `reaped-branches.log` in the dead-letter directory; only then `git branch -D` runs, so a deleted branch can always be restored from the log line.
+- **Detached worktree**: removed when it is under a temp root (`/tmp/cc-scratch`, `$TMPDIR`), older than 24 hours, unowned, clean, and its `HEAD` is an ancestor of `origin/main` (`git merge-base --is-ancestor`), so no commit is lost; otherwise it is kept with `detached HEAD not in origin/main`. It is removed with plain `git worktree remove`, never `--force`. A dirty one is kept, and a diff snapshot goes to `<config root>/orphan-worktree-deadletter/<name>-<ts>.diff` (not in a dry run, and not when the reaper is not due).
+- **Branch worktree** (anywhere, except the main checkout and a worktree on `main`): removed when it is older than 24 hours, unowned, clean (`git status --porcelain` empty, untracked files count) and landed (`git cherry origin/main <branch>` prints no `+` line, so a fast-forward, a merge and a rebase all count). First `<iso-time> <branch> <sha> <path>` is appended to `reaped-branches.log` in the dead-letter directory; then the worktree is removed with plain `git worktree remove` (no `--force`, so git itself refuses one that turned dirty since the scan, and the runner keeps it); only then `git branch -D` runs, so a deleted branch can always be restored from the log line.
 - A stale unowned branch worktree with unlanded commits or local changes is **kept** (`unlanded <N>` / `dirty`). Once it is older than 7 days, `summary()` adds one SessionStart line naming how many there are and the command that lists them.
 - Any git failure for an entry is a keep for that entry. The main checkout, `refs/heads/main`, the working directory of the running process and the checkout holding the reaper code are never touched.
 
