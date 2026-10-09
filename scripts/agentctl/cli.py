@@ -54,6 +54,7 @@ from .plan import (
     acceptance_requirement_bindings,
     changed_parts,
     check_venue_warnings,
+    entries_grants_sha256,
     grants_sha256,
     load_plan,
     load_plan_with_digest,
@@ -70,6 +71,7 @@ from .plan import (
     plan_interface_digests,
     plan_meta_element_keys,
     plan_stage_digests,
+    refined_grant_entries,
     review_pairs,
     stage_element_baseline,
     stage_norm_keys,
@@ -416,19 +418,25 @@ def _snapshot_approved_plan(store: StateStore, state: SessionState) -> tuple[str
 def _refresh_approved_grant_snapshot(
     state: SessionState, store: StateStore, doc, data: bytes, digest: str,
 ) -> None:
-    """Re-snapshot the just-applied plan bytes and rebind `approved_grants_sha256` to
-    them, mirroring `cmd_approve`'s own snapshot+hash binding (see its "Bind the
-    approved grant set" comment) -- called from the `no_change` and `refinement`
-    branches of `cmd_replan`, which apply corrected bytes to an ALREADY-APPROVED
-    session in place, without requiring a fresh `approve`. A replan that moves no
-    grant keeps the stored hash and entries as they are: re-deriving them here would
-    bind a set that depends on the venue filesystem of this moment instead of the
-    one that was approved. Without this, those two
-    branches update `state.plan_path` but leave `plan_snapshot_path`/
-    `plan_snapshot_hash`/`approved_grants_sha256` pointed at the PRIOR approval's
-    bytes, so `_stage_grant_entries` either hash-mismatches on a corrected snapshot
-    that no longer matches the stale stamped hash, or silently keeps re-deriving
-    grants from plan content the session no longer runs.
+    """Re-snapshot the just-applied plan bytes and rebind the approved grant set
+    (`approved_grants_sha256` and the entries it covers) to them, mirroring
+    `cmd_approve`'s own snapshot+hash binding (see its "Bind the approved grant set"
+    comment) -- called from the `no_change` and `refinement` branches of `cmd_replan`,
+    which apply corrected bytes to an ALREADY-APPROVED session in place, without
+    requiring a fresh `approve`. Without this, those two branches update
+    `state.plan_path` but leave `plan_snapshot_path`/`plan_snapshot_hash`/
+    `approved_grants_sha256` pointed at the PRIOR approval's bytes, so
+    `_stage_grant_entries` either hash-mismatches on a corrected snapshot that no
+    longer matches the stale stamped hash, or silently keeps re-deriving grants from
+    plan content the session no longer runs.
+
+    The binding is not a re-derivation of every stage against the venue filesystem of
+    this moment: that set would depend on files the user never approved. A session with
+    stored entries gets `plan.refined_grant_entries` -- a stage whose grant inputs did
+    not move keeps its approved entries, a moved one admits only the plan's own change,
+    and venue drift is withheld and logged (`grant_drift_withheld`). A session bound
+    before entries were stored keeps the hash tracking `doc` and gets entries only when
+    `doc` still reproduces the hash it was approved under, as `--renormalize` requires.
 
     `doc`, `data` and `digest` are the ONE read `cmd_replan` took of `args.plan`
     (`load_plan_with_digest`) -- passed through rather than re-read here, so this
@@ -445,37 +453,49 @@ def _refresh_approved_grant_snapshot(
             f"{state.accepted_plan_digest!r} -- stamp accepted_plan_digest from "
             "this same buffer before refreshing the snapshot"
         )
-    grants_moved = _grants_moved_since_snapshot(state, doc)
+    replaced = _approved_snapshot_doc(state)
     snap = _write_plan_snapshot(store, state, data, digest)
     if snap:
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
-    if grants_moved or state.approved_grant_entries is None:
-        _bind_approved_grants(state, doc)
+    stored = state.approved_grant_entries
+    if stored is None:
+        reproduces = (bool(state.approved_grants_sha256)
+                      and grants_sha256(doc) == state.approved_grants_sha256)
+        state.approved_grants_sha256 = grants_sha256(doc)
+        state.approved_grant_entries = materialized_grant_entries(doc) if reproduces else None
+        return
+    entries, withheld = refined_grant_entries(stored, replaced, doc)
+    state.approved_grant_entries = entries
+    state.approved_grants_sha256 = entries_grants_sha256(entries)
+    if withheld:
+        state.log("grant_drift_withheld", stages=withheld)
 
 
-def _grants_moved_since_snapshot(state: SessionState, doc) -> bool:
-    """Whether `doc`'s effective grant set differs from that of the approved-plan
-    snapshot it is about to replace, both hashed now. True when the snapshot cannot be
-    read: nothing then shows the grants held still, so the binding is renewed."""
+def _approved_snapshot_doc(state: SessionState):
+    """The approved-plan snapshot as a plan, or None when it cannot be read."""
     snap_path = state.plan_snapshot_path
     if not snap_path or not Path(snap_path).exists():
-        return True
+        return None
     try:
-        return grants_sha256(load_plan(snap_path, strict=False)) != grants_sha256(doc)
+        return load_plan(snap_path, strict=False)
     except (OSError, PlanError):
-        return True
+        return None
 
 
 def _bind_approved_grants(state: SessionState, doc) -> None:
-    """Bind the effective grant set of `doc` to the session: its hash and the entries
-    that hash covers, materialized once. Dispatch reads the stored entries
-    (`_stage_grant_entries`); re-deriving them there made the hash depend on the engine
-    code and venue filesystem of the moment (#338). None/None when `doc` did not load,
-    so a prior approval's binding is never carried over to unrelated bytes."""
-    state.approved_grants_sha256 = grants_sha256(doc) if doc is not None else None
-    state.approved_grant_entries = (
-        materialized_grant_entries(doc) if doc is not None else None
-    )
+    """Bind the effective grant set of `doc` to the session at approval: the entries
+    materialized once, and the hash of those entries. Dispatch reads the stored entries
+    (`_stage_grant_entries`) after re-checking them against the hash; re-deriving them
+    there made the grant set depend on the engine code and venue filesystem of the
+    moment (#338). None/None when `doc` did not load, so a prior approval's binding is
+    never carried over to unrelated bytes."""
+    if doc is None:
+        state.approved_grants_sha256 = None
+        state.approved_grant_entries = None
+        return
+    entries = materialized_grant_entries(doc)
+    state.approved_grant_entries = entries
+    state.approved_grants_sha256 = entries_grants_sha256(entries)
 
 
 def _replan_baseline_path(state: SessionState) -> str | None:
@@ -5728,9 +5748,10 @@ def cmd_accept(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # against the order that plan declares, so with no plan there is nothing to record
     # against — and gates.resolution_blockers refuses the same shape from the other side.
     doc = None
+    plan_digest = ""
     if state.plan_path:
         try:
-            doc = load_plan(state.plan_path, strict=False)
+            doc, _data, plan_digest = load_plan_with_digest(state.plan_path, strict=False)
         except (OSError, PlanError):
             doc = None
     if doc is None:
@@ -5739,6 +5760,15 @@ def cmd_accept(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             "cannot read the plan to accept against "
             f"({state.plan_path or 'no plan_path on this session'}); acceptance compares the "
             "delivered product with the order that plan declares",
+        )
+    if state.accepted_plan_digest and plan_digest != state.accepted_plan_digest:
+        # The per-requirement binding below is computed from `doc`; a file that is not
+        # the accepted version would bind the review to bytes the engine never approved
+        # while stamping it with the accepted digest.
+        return Directive(
+            False, state.node, "noop",
+            f"plan edited since it was accepted ({state.plan_path}); replan first so the "
+            "engine's accepted version and the file agree, then accept against it",
         )
     order = doc.meta.order
     author = getattr(args, "author", "") or ""
@@ -7095,8 +7125,15 @@ def _stage_grant_entries(
     if state.approved_grant_entries is not None:
         # The entries bound when the hash was (see `_bind_approved_grants`): what was
         # approved, not a re-derivation against the engine code and venue filesystem of
-        # this moment. Only a session bound before they were stored falls through to
-        # the re-derive-and-compare below.
+        # this moment. The hash stays the guard -- it must still cover them -- so state
+        # corruption or a hand-edited hash withholds the derived grants as before. Only
+        # a session bound before they were stored falls through to the re-derive-and-
+        # compare below.
+        if entries_grants_sha256(state.approved_grant_entries) != state.approved_grants_sha256:
+            return declared_entries, derived_entries, dropped, (
+                "derived-grants hash mismatch: the stored approved grant entries no "
+                "longer reproduce approved_grants_sha256 -- derived grants withheld"
+            ), None
         stored = state.approved_grant_entries.get(str(stage_index)) or {}
         return (declared_entries, list(stored.get("derived") or []),
                 list(stored.get("dropped") or []), None, None)

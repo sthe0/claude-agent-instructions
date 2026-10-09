@@ -156,6 +156,9 @@ def test_a_moved_result_image_stales_only_the_requirement_covered_by_that_stage(
     d = _replan(store, _render(tmp_path / "v2.toml",
                                result="The seam refuses a plan restating its requirement, with a message."))
 
+    assert d.ok is True, d.detail
+    replans = [h for h in store.load("ns").history if h.get("event") == "replan"]
+    assert replans and replans[-1]["kind"] == "refinement", replans
     assert d.data.get("acceptance_stale") == ["R2"]
     blockers = _acceptance_blockers(store)
     assert blockers and "R2" in blockers[0] and "R1" not in blockers[0]
@@ -202,6 +205,69 @@ def test_a_final_check_edited_in_its_command_only_keeps_its_requirement_accepted
         tmp_path / "v3.toml",
         final_check='\n[[final_check]]\ncommand = "test -d ."\nexpected_exit = 1\n'))
     assert moved.data.get("acceptance_stale") == ["R3"]
+
+
+def test_a_failed_requirement_still_blocks_after_a_control_only_replan(store, tmp_path):
+    """Keeping the acceptance current must not launder its verdicts: a requirement the
+    customer verdicted `fail` is blocked by name both before and after a replan that
+    moves no binding -- not by the review having gone stale (which re-accepting would
+    clear), and not by nothing."""
+    plan = _render(tmp_path / "v1.toml")
+    rn._approved(store, plan, session="ns")
+    d = cli.cmd_accept(
+        ns(session="ns", author="user", verdict=["R1|pass", "R2|fail", "R3|pass"],
+           note="stage two does not refuse a restated requirement", bypass=False,
+           bypass_reason=""),
+        store=store, runner=_judge_yes,
+    )
+    assert d.ok is True, d.detail
+    before = _acceptance_blockers(store)
+    assert before and "non-pass" in before[0] and "R2" in before[0], before
+
+    d = _replan(store, _render(tmp_path / "v2.toml", stage2_verify="pytest -q -x"))
+
+    assert d.ok is True, d.detail
+    assert d.data.get("acceptance_stale") == []
+    after = _acceptance_blockers(store)
+    assert after and "non-pass" in after[0] and "R2" in after[0], after
+
+
+def test_accept_refuses_a_plan_file_edited_in_place_after_it_was_accepted(store, tmp_path):
+    """`accept` binds requirement digests from the plan it reads. The engine accepted the
+    bytes it digested at approve; a file rewritten in place since is not that plan, and a
+    review stamped with the accepted digest over bindings computed from other bytes
+    would read as current for a deliverable nobody saw."""
+    plan = _render(tmp_path / "v1.toml")
+    rn._approved(store, plan, session="ns")
+    _render(tmp_path / "v1.toml",
+            result="The seam refuses a plan restating its requirement, with a message.")
+
+    d = cli.cmd_accept(
+        ns(session="ns", author="user", verdict=["R1|pass", "R2|pass", "R3|pass"],
+           note="compared the delivered engine against each requirement",
+           bypass=False, bypass_reason=""),
+        store=store, runner=_judge_yes,
+    )
+
+    assert d.ok is False
+    assert "edited since it was accepted" in d.detail
+    assert store.load("ns").acceptance_review is None
+
+
+def test_an_acceptance_never_reads_current_over_a_plan_file_edited_in_place(
+    store, tmp_path,
+):
+    """The gate half: the review was recorded honestly, the file was then rewritten under
+    the same accepted digest (no replan ran), moving the result image R2 is covered by.
+    The digest the engine holds still equals the review's, so only comparing the bytes
+    the gate reads to that digest tells the two plans apart."""
+    plan = _accepted(store, tmp_path)
+    assert _acceptance_blockers(store) == []
+
+    _render(Path(plan), result="The seam refuses a plan restating its requirement, with a message.")
+
+    blockers = _acceptance_blockers(store)
+    assert blockers and "stale" in blockers[0], blockers
 
 
 def test_a_review_without_bindings_keeps_the_raw_digest_comparison(store, tmp_path):
@@ -305,6 +371,119 @@ def test_a_refinement_replan_that_moves_no_grant_keeps_the_approved_set(
     assert after == approved
 
 
+_ARTIFACT_LINE = {1: 'output_artifacts = ["mod.py"]\n',
+                  2: 'output_artifacts = ["tests/test_mod.py"]\n'}
+
+
+_WIDE_VERIFY = "pytest -q && git status"
+_NARROW_VERIFY = "pytest -q"
+_GIT_STATUS = "Bash(git status:*)"
+_RUN_MOD = "Bash(python3 mod.py:*)"
+
+
+def _two_stage_verifying(fixtures_dir, path: Path, stage: int, command: str) -> str:
+    """`plan_two_stage.toml` with a verify_command on one stage. Rewriting only a
+    verify_command to a subset of the segments it ran is the refinement that moves a
+    stage's derived grants (a declared `[stage.grants]` edit is substantive)."""
+    text = (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+    text = text.replace(_ARTIFACT_LINE[stage],
+                        f'verify_command = {json.dumps(command)}\nexpected_exit = 0\n'
+                        + _ARTIFACT_LINE[stage], 1)
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+def _marker_then_drift(store, fixtures_dir, tmp_path, monkeypatch, *, narrowed_stage: int):
+    """Approve with a package marker in the venue (so DR-O derives no
+    `python3 mod.py` for stage 1), remove it, then replan a refinement that only
+    narrows `narrowed_stage`'s verify_command. Returns (sid, state before)."""
+    monkeypatch.chdir(tmp_path)
+    marker = tmp_path / "__init__.py"
+    marker.write_text("")
+    sid = f"grants-drift-{narrowed_stage}"
+    v1 = _two_stage_verifying(fixtures_dir, tmp_path / "v1.toml", narrowed_stage, _WIDE_VERIFY)
+    _to_executing(store, sid, fixtures_dir, plan_path=v1)
+    before = store.load(sid)
+    approved, error = _derived(before, narrowed_stage)
+    assert error is None, error
+    assert _GIT_STATUS in {e["rule"] for e in approved}, approved
+    assert _RUN_MOD not in {e["rule"] for e in _derived(before, 1)[0]}
+
+    marker.unlink()
+    v2 = _two_stage_verifying(fixtures_dir, tmp_path / "v2.toml", narrowed_stage, _NARROW_VERIFY)
+    d = cli.cmd_replan(ns(session=sid, plan=v2), store=store)
+    assert d.action == "continue", d.detail
+    return sid, before
+
+
+def test_a_refinement_narrowing_another_stage_does_not_widen_this_one_with_venue_drift(
+    store, fixtures_dir, tmp_path, monkeypatch,
+):
+    """The refinement branch re-derived EVERY stage against today's venue. Stage 1's
+    grant inputs did not move, but the marker that kept `python3 mod.py` out of its
+    approved set was gone by then, so a refinement aimed at stage 2 handed stage 1 a
+    Bash grant the user never approved."""
+    sid, before = _marker_then_drift(store, fixtures_dir, tmp_path, monkeypatch,
+                                     narrowed_stage=2)
+
+    state = store.load(sid)
+    stage1, error = _derived(state, 1)
+    stage2, _ = _derived(state, 2)
+
+    assert error is None, error
+    assert _RUN_MOD not in {e["rule"] for e in stage1}, stage1
+    assert state.approved_grant_entries["1"] == before.approved_grant_entries["1"]
+    assert _GIT_STATUS not in {e["rule"] for e in stage2}, "the narrowing itself still lands"
+
+
+def test_a_refinement_narrowing_a_stage_withholds_venue_drift_from_that_stage_too(
+    store, fixtures_dir, tmp_path, monkeypatch,
+):
+    """When the narrowed stage is the drifting one, what the plan removed is removed but
+    the derived grant the approval never stored stays out, and the withholding is on the
+    record rather than silent."""
+    sid, _ = _marker_then_drift(store, fixtures_dir, tmp_path, monkeypatch, narrowed_stage=1)
+
+    state = store.load(sid)
+    stage1, error = _derived(state, 1)
+
+    assert error is None, error
+    rules = {e["rule"] for e in stage1}
+    assert _RUN_MOD not in rules, stage1
+    assert _GIT_STATUS not in rules, stage1
+    withheld = [h for h in state.history if h.get("event") == "grant_drift_withheld"]
+    assert withheld and _RUN_MOD in withheld[-1]["stages"]["1"], withheld
+
+
+def test_the_stored_entries_reproduce_the_hash_the_plan_derives(fixtures_dir):
+    """`approved_grants_sha256` is guarded at dispatch by hashing the stored entries, so
+    the entries hash and the plan hash must be one digest."""
+    from agentctl import plan as plan_mod
+
+    doc = plan_mod.load_plan(str(fixtures_dir / "plan_two_stage.toml"))
+
+    assert (plan_mod.entries_grants_sha256(plan_mod.materialized_grant_entries(doc))
+            == plan_mod.grants_sha256(doc))
+
+
+def test_stored_entries_that_no_longer_reproduce_the_approved_hash_withhold_the_derived(
+    store, fixtures_dir,
+):
+    """The hash stays the guard once entries are stored: a stored set that does not hash
+    to what was approved is reported, not trusted."""
+    sid = "grants-stored-mismatch"
+    _to_executing(store, sid, fixtures_dir)
+    state = store.load(sid)
+    assert state.approved_grant_entries
+    state.approved_grants_sha256 = "0" * 64
+    store.save(state)
+
+    derived, error = _derived(store.load(sid))
+
+    assert derived == []
+    assert error and "approved_grants_sha256" in error
+
+
 def test_a_session_bound_before_entries_were_stored_still_refuses_on_a_hash_mismatch(
     store, fixtures_dir,
 ):
@@ -322,6 +501,34 @@ def test_a_session_bound_before_entries_were_stored_still_refuses_on_a_hash_mism
 
     assert derived == []
     assert error and "derived-grants hash mismatch" in error
+
+
+def test_a_refinement_materializes_a_legacy_sessions_entries_only_when_its_hash_holds(
+    store, fixtures_dir, tmp_path, monkeypatch,
+):
+    """The refresh path adopts a session bound before entries were stored under the same
+    rule `--renormalize` applies: what is written down is what the user approved. A
+    re-derivation that reproduces the approved hash is that set; one that does not is
+    today's venue and engine, and writing it down as the approval would launder drift."""
+    monkeypatch.chdir(tmp_path)
+    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+
+    holds = "legacy-hash-holds"
+    _to_executing(store, holds, fixtures_dir)
+    state = store.load(holds)
+    state.approved_grant_entries = None
+    store.save(state)
+    cli.cmd_replan(ns(session=holds, plan=refined), store=store)
+    assert store.load(holds).approved_grant_entries, "the approved hash reproduces: stored"
+
+    drifted = "legacy-hash-drifted"
+    _to_executing(store, drifted, fixtures_dir)
+    state = store.load(drifted)
+    state.approved_grant_entries = None
+    state.approved_grants_sha256 = "0" * 64
+    store.save(state)
+    cli.cmd_replan(ns(session=drifted, plan=refined), store=store)
+    assert store.load(drifted).approved_grant_entries is None
 
 
 def test_a_grant_growing_replan_still_goes_back_for_approval(store, fixtures_dir):

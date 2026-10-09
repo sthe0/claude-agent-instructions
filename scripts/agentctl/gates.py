@@ -57,6 +57,7 @@ from .plan import (
     grants_place,
     grants_sha256,
     load_plan,
+    load_plan_with_digest,
     moved_interfaces,
     order_place,
     pair_binding,
@@ -206,41 +207,52 @@ def acceptance_staleness(review, doc, plan_digest: str) -> list[str] | None:
     return stale or None
 
 
-def _acceptance_review_check(
-    state: SessionState,
-) -> tuple[str, list[str], dict[str, str], list[str]]:
+class _AcceptanceCheck(NamedTuple):
+    status: str
+    requirement_ids: list[str]
+    verdicted: dict[str, str]
+    stale_ids: list[str]
+
+
+def _acceptance_review_check(state: SessionState) -> _AcceptanceCheck:
     """Shared guard chain behind both acceptance-review checks
     (_acceptance_review_resolution_blockers and failing_acceptance_requirements):
     resolves a status in {"inactive", "no_review", "stale", "unreadable", "ok"} plus,
     only when "ok", the current plan's declared requirement ids and the review's
     recorded verdicts, and, only when "stale", the requirement ids that went stale
-    (empty for a stale review of a plan that declares none). Each early-out mirrors a
-    distinct guard _acceptance_review_resolution_blockers already documents in full; this
-    helper exists so the two callers never drift on WHICH guard fired."""
+    (empty for a stale review of a plan that declares none, or of a plan file that is
+    not the accepted version). Each early-out mirrors a distinct guard
+    _acceptance_review_resolution_blockers already documents in full; this helper exists
+    so the two callers never drift on WHICH guard fired."""
     if not acceptance_active(state):
-        return "inactive", [], {}, []
+        return _AcceptanceCheck("inactive", [], {}, [])
     review = state.acceptance_review
     if review is None:
-        return "no_review", [], {}, []
+        return _AcceptanceCheck("no_review", [], {}, [])
     digest_moved = (review.plan_sha256 or "") != (state.accepted_plan_digest or "")
     if digest_moved and review.requirement_bindings is None:
-        return "stale", [], {}, []
+        return _AcceptanceCheck("stale", [], {}, [])
     doc = None
+    file_digest = ""
     if state.plan_path:
         try:
-            doc = load_plan(state.plan_path, strict=False)
+            doc, _data, file_digest = load_plan_with_digest(state.plan_path, strict=False)
         except (OSError, PlanError):
             doc = None
     if doc is None:
-        return "unreadable", [], {}, []
+        return _AcceptanceCheck("unreadable", [], {}, [])
+    if state.accepted_plan_digest and file_digest != state.accepted_plan_digest:
+        # Bindings and requirement ids are read from this file: bytes the engine never
+        # accepted cannot stand in for the version the review was recorded against.
+        return _AcceptanceCheck("stale", [], {}, [])
     if digest_moved:
         stale = acceptance_staleness(review, doc, state.accepted_plan_digest or "")
         if stale is not None:
-            return "stale", [], {}, stale
+            return _AcceptanceCheck("stale", [], {}, stale)
     order = doc.meta.order
     requirement_ids = [r.id for r in order.requirements] if order is not None else []
     verdicted = {v.requirement_id: v.verdict for v in review.verdicts}
-    return "ok", requirement_ids, verdicted, []
+    return _AcceptanceCheck("ok", requirement_ids, verdicted, [])
 
 
 def failing_acceptance_requirements(state: SessionState) -> list[str]:

@@ -2126,6 +2126,9 @@ class SessionState:
     # The effective grant entries the hash above covers, materialized when it was bound
     # (stage index -> {"declared", "derived", "dropped"}); dispatch reads these instead of
     # re-deriving from the venue filesystem. None on a session bound before schema 45.
+    # "derived" is authoritative for dispatch and is what the hash is re-checked against;
+    # "declared" is kept so the hash can be recomputed, but dispatch takes the declared
+    # half from the hash-verified plan snapshot, never from here.
     approved_grant_entries: dict[str, dict] | None = None
     planning_misses: list[dict] = field(default_factory=list)
     materialization_defects: list[dict] = field(default_factory=list)

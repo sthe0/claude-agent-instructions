@@ -2889,12 +2889,12 @@ def grants_sha256(doc: PlanDoc) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def materialized_grant_entries(doc: PlanDoc) -> dict[str, dict]:
+def materialized_grant_entries(doc: PlanDoc, *, venue: str | None = None) -> dict[str, dict]:
     """`{str(stage index): {"declared", "derived", "dropped"}}` -- the entry dicts a
     dispatch hands a child, derived once against `doc`'s venue. Bound next to
     `grants_sha256` so the set the hash covers is the set dispatch reads, instead of a
     re-derivation that depends on the engine code and venue filesystem of the moment."""
-    venue = _venue_for(doc)
+    venue = venue if venue is not None else _venue_for(doc)
     entries: dict[str, dict] = {}
     for stage in doc.stages:
         declared = stage.grants if getattr(stage, "grants", None) else StageGrants()
@@ -2907,6 +2907,90 @@ def materialized_grant_entries(doc: PlanDoc) -> dict[str, dict]:
             "dropped": list(dropped),
         }
     return entries
+
+
+def _entry_key(entry: dict) -> tuple:
+    """Identity of one stored grant entry, provenance label ignored (as
+    `StageGrants.effective_tuple` ignores it)."""
+    if "rule" in entry:
+        return ("rule", entry["rule"])
+    return ("dir", entry["path"], entry["mode"])
+
+
+def _effective_entry_keys(stage_entries: dict) -> frozenset:
+    return frozenset(
+        _entry_key(e) for e in list(stage_entries.get("declared") or [])
+        + list(stage_entries.get("derived") or [])
+    )
+
+
+def entries_grants_sha256(entries: dict[str, dict]) -> str:
+    """`grants_sha256` computed from stored entries instead of a plan: the digest of
+    their declared+derived rules and add_dirs. `materialized_grant_entries(doc)` yields
+    the same digest as `grants_sha256(doc)` (pinned by a test), so a stored set and the
+    hash bound next to it can be re-checked against each other at dispatch without
+    touching the venue filesystem. `declared` is read here -- the hash covers it -- while
+    dispatch itself takes the declared half from the hash-verified plan snapshot."""
+    def projection(stage_entries: dict) -> tuple:
+        every = list(stage_entries.get("declared") or []) + list(stage_entries.get("derived") or [])
+        return (tuple(sorted({e["rule"] for e in every if "rule" in e})),
+                tuple(sorted({(e["path"], e["mode"]) for e in every if "rule" not in e})))
+
+    payload = repr(tuple(
+        (int(idx), *projection(s))
+        for idx, s in sorted(entries.items(), key=lambda kv: int(kv[0]))
+    ))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def refined_grant_entries(
+    stored: dict[str, dict], old: PlanDoc | None, new: PlanDoc,
+) -> tuple[dict[str, dict], dict[str, list[str]]]:
+    """The entries to bind after a refinement replan applies `new` over `old` (the
+    snapshot it replaces) to a session whose approved entries are `stored`, plus
+    `{stage index: [rule/path withheld]}`.
+
+    Entries are re-derived against today's venue filesystem, which may have moved since
+    approval (#338). A stage's re-derived set is therefore split by cause:
+
+      * the stage's grant inputs did not move (`old` derives the same set as `new` for
+        it, both read now): the stored entries stay exactly as approved;
+      * they moved: what `new` derives and `old` did not is the plan's own change -- the
+        diff layer already classified it (growth is substantive, a relaxed verify
+        identity is admitted) -- and what `new` derives that `old` also derives but the
+        approval never stored is venue drift. The result keeps the stored entries `new`
+        still derives plus the plan's own additions; drift is withheld and reported.
+
+    `old` unreadable: nothing separates the plan's change from drift, so nothing new is
+    admitted -- stored entries `new` still derives, and declared grants from `new`."""
+    old_venue = _venue_for(old) if old is not None else None
+    new_venue = _venue_for(new)
+    now = materialized_grant_entries(new, venue=new_venue)
+    before = materialized_grant_entries(old, venue=old_venue) if old is not None else {}
+    out: dict[str, dict] = {}
+    withheld: dict[str, list[str]] = {}
+    for idx, n in now.items():
+        s = stored.get(idx)
+        o = before.get(idx)
+        if s is None:
+            out[idx] = n
+            continue
+        if o is not None and _effective_entry_keys(o) == _effective_entry_keys(n):
+            out[idx] = s
+            continue
+        admitted = {_entry_key(e) for e in s.get("derived") or []}
+        if o is not None:
+            admitted |= {_entry_key(e) for e in n["derived"]} - {_entry_key(e) for e in o["derived"]}
+        out[idx] = {
+            "declared": n["declared"],
+            "derived": [e for e in n["derived"] if _entry_key(e) in admitted],
+            "dropped": n["dropped"],
+        }
+        held = [e.get("rule") or e.get("path") for e in n["derived"]
+                if _entry_key(e) not in admitted]
+        if held:
+            withheld[idx] = held
+    return out, withheld
 
 
 def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = False) -> str:
