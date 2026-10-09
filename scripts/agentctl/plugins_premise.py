@@ -273,11 +273,8 @@ def enumeration_element_scope(bag, doc, stage_scope) -> dict[int, frozenset]:
     is nothing to narrow against and the whole-stage scope applies."""
     recorded = bag.get("enumerated_stage_elements") or {}
     delta = plan.norm_delta_from({"stages": recorded}, doc)
-    return {
-        index: delta.question_elements(index)
-        for index in stage_scope
-        if str(index) in recorded and delta.question_elements(index)
-    }
+    moved = {index: delta.question_elements(index) for index in stage_scope if str(index) in recorded}
+    return {index: elements for index, elements in moved.items() if elements}
 
 
 def _enumeration_in_flight(bag) -> bool:

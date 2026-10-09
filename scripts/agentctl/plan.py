@@ -2759,7 +2759,7 @@ def _grants_effective_map(doc: PlanDoc, *, venue: str | None = None) -> dict[int
     return {s.index: _effective_grants_for_stage(s, v).effective_tuple() for s in doc.stages}
 
 
-def _grants_grew(old: PlanDoc, new: PlanDoc) -> bool:
+def _grants_grew(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = False) -> bool:
     """Whether any stage's EFFECTIVE (declared+derived) grant set grew from `old` to
     `new` — a strictly wider Bash/Edit rule set, or a strictly wider set of add_dirs.
     A stage present only in `new` (an added stage) is compared against the empty
@@ -2776,7 +2776,11 @@ def _grants_grew(old: PlanDoc, new: PlanDoc) -> bool:
     `repo_root`/`delivery_worktree` relocation — already excluded from
     `_structural_signature` and (for `delivery_worktree`) from `diff_plans`' prose
     keys — as a rule that "grew" purely because the two literals differ textually,
-    not because anything the stage may touch actually widened."""
+    not because anything the stage may touch actually widened.
+
+    `relax_verify_identity` admits a rewritten verify_command that keeps its
+    `grants.bash_rule_identity`; the caller sets it only when the autonomy boundary
+    (`cli._kind_within_boundary`) will also judge the refinement."""
     shared_venue = _venue_for(new)
     old_map = _grants_effective_map(old, venue=shared_venue)
     new_map = _grants_effective_map(new, venue=shared_venue)
@@ -2789,7 +2793,7 @@ def _grants_grew(old: PlanDoc, new: PlanDoc) -> bool:
         criterion_only = (not delta.order_moved
                           and delta.elements.get(stage.index, frozenset())
                           <= CRITERION_CONFINED_ELEMENTS)
-        if grown_rules and stage.index in old_stages and criterion_only:
+        if relax_verify_identity and grown_rules and stage.index in old_stages and criterion_only:
             # DR-V derives one literal per verify_command segment, so rewriting a command
             # always adds literals; only a segment running a program/script the stage did
             # not already run is wider. See `grants.bash_rule_identity`. Applies only to a
@@ -2841,8 +2845,9 @@ def grants_sha256(doc: PlanDoc) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
-    """Return 'no_change' | 'refinement' | 'substantive'."""
+def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = False) -> str:
+    """Return 'no_change' | 'refinement' | 'substantive'. `relax_verify_identity`: see
+    `_grants_grew`."""
     if _structural_signature(old) != _structural_signature(new):
         return "substantive"
     # Structurally identical — any other change is a refinement. The means/method/
@@ -2932,15 +2937,16 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     # comparison, and unconditionally: grant edits and effective-set growth are
     # substantive. A `verify_command` edit is judged by what it lets the stage RUN,
     # not by its text: DR-V derives one literal per segment, so a rewritten command
-    # always adds literals, and `_grants_grew` counts one as growth only when its
-    # program (for an interpreter: its script) is new to the stage -- and only when the
-    # stage's norm delta is confined to its criterion. Arguments to an already-granted
-    # program are a refinement; the boundary check (`_kind_within_boundary`)
-    # still re-approves an unresolved or out-of-set command. "Did the EFFECTIVE grant
+    # always adds literals, and with `relax_verify_identity` `_grants_grew` counts one as
+    # growth only when its program (for an interpreter: its script) is new to the stage --
+    # and only when the stage's norm delta is confined to its criterion. Arguments to an
+    # already-granted program are then a refinement; the boundary check
+    # (`_kind_within_boundary`), which runs exactly when the caller sets the flag, still
+    # re-approves an unresolved or out-of-set command. "Did the EFFECTIVE grant
     # set grow" is not folded into `_structural_signature` itself because it is not a
     # pure function of the two docs' own bytes alone (it also calls the same deriver
     # dispatch will).
-    if _grants_grew(old, new):
+    if _grants_grew(old, new, relax_verify_identity=relax_verify_identity):
         return "substantive"
     if (_prose(old) != _prose(new) or old.meta.goal != new.meta.goal
             or old.meta.repo_root != new.meta.repo_root

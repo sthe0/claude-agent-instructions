@@ -766,6 +766,14 @@ def _kind_within_boundary(state: SessionState, kind: str, doc) -> str:
     return kind
 
 
+def _replan_kind(state: SessionState, old, new) -> str:
+    """The kind a replan from `old` to `new` applies as. The verify-identity relaxation
+    is admitted only for a ledgered order, the one case `_kind_within_boundary` judges."""
+    from .plan import diff_plans
+    ledgered = _ledgered_order_key(state) is not None
+    return _kind_within_boundary(state, diff_plans(old, new, relax_verify_identity=ledgered), new)
+
+
 def _autonomy_directive_data(state: SessionState, doc) -> dict:
     """The `data['autonomy']` block a plan-approval-bound Directive carries: the
     boundary verdict plus the action it routes to (self_approve inside, the user's
@@ -9476,8 +9484,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # block below, whose enumeration folding is destructive and PERSISTED —
     # nothing that may refuse can follow it; this command has still written
     # nothing to disk at this point.
-    auth_kind = _kind_within_boundary(
-        state, diff_plans(_load(_replan_baseline_path(state), strict=False), new), new)
+    auth_kind = _replan_kind(state, _load(_replan_baseline_path(state), strict=False), new)
     arblock = gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)
     _log_gate(state, "replan_authorization", arblock, passed=not arblock)
     if arblock:
@@ -9657,7 +9664,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         _log_normalize_event(state, factor=normalize_factor, level=normalize_level,
                              destination=None, in_diagnosis=(state.node == Node.DIAGNOSING.value))
 
-    kind = _kind_within_boundary(state, diff_plans(old, new), new)
+    kind = _replan_kind(state, old, new)
     # The replan-loop counterpart of cmd_approve's reset: a replan that gets this far has
     # applied a corrected plan, so the rounds spent arguing about the previous one are
     # settled and the next loop starts from zero. Placed here — past every refusal of this

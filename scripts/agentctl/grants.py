@@ -37,6 +37,8 @@ from pathlib import Path
 
 from lib import bash_write_targets, shell_tokens, widening_targets
 
+from . import tool_contracts
+
 # --- data shapes -------------------------------------------------------------
 
 
@@ -697,16 +699,25 @@ def top_level_segment_count(command: str) -> int | None:
     return len(segments)
 
 
+# Mirrors the one module `tool_contracts._resolve_interpreter` resolves (`-m pytest`).
+_IDENTITY_MODULES = frozenset({"pytest"})
+
+
 def bash_rule_identity(rule: str) -> tuple | None:
     """What a DR-V `Bash(<segment>:*)` rule lets a stage run, coarser than its text: the
     program, and for an interpreter the script it is pointed at (`-m <module>` counts as
     the script). Arguments after the script are not part of it, so a verify_command that
     only changes arguments keeps its identity.
 
-    `None` means "no identity", which the caller treats as a new grant: the rule does not
-    parse, a wrapper or env assignment hides the real program, or the interpreter's
+    Closed-world: only a program the engine has positively classified gets an identity --
+    an interpreter in `_INTERPRETERS` pointed at a script or at a module in
+    `_IDENTITY_MODULES`, or a program whose `tool_contracts.toml` entry the engine can
+    resolve (effect `none` or `resolver`). `None` means "no identity", which the caller
+    treats as a new grant: the rule does not parse, its program token is path-qualified,
+    a wrapper or env assignment hides the real program, the program is unclassified (an
+    unlisted interpreter or launcher, `strace`, `uv`, `make`), or the interpreter's
     leading flags cannot be read with confidence (an inline-code flag, a flag whose value
-    this module does not know, a launcher module). Never guess an identity that an
+    this module does not know, an unclassified module). Never guess an identity that an
     already-approved command could share."""
     parsed = rule_program_and_arg(rule)
     if parsed is None or parsed[0] != "Bash":
@@ -715,11 +726,20 @@ def bash_rule_identity(rule: str) -> tuple | None:
         tokens = shlex.split(bash_command_from_rule_arg(parsed[1]))
     except ValueError:
         return None
-    if not tokens or len(widening_targets.strip_wrappers(tokens)) != len(tokens):
+    if not tokens or "/" in tokens[0]:
         return None
-    ((name, operands),) = widening_targets.iter_candidate_programs(tokens)
-    if name not in _INTERPRETERS and not widening_targets.INTERPRETER_RE.match(name):
-        return (tokens[0],)
+    name, operands = widening_targets.program_name(tokens[0]).casefold(), tokens[1:]
+    if widening_targets.strip_wrappers([name, *operands]) != [name, *operands]:
+        return None
+    if name in _INTERPRETERS or widening_targets.INTERPRETER_RE.match(name):
+        return _interpreter_identity(name, operands)
+    entry = tool_contracts.load_contract_table().get(name)
+    if entry is None or entry.effect == "unresolved":
+        return None
+    return (name,)
+
+
+def _interpreter_identity(name: str, operands: list[str]) -> tuple | None:
     value_flags = _INTERPRETER_VALUE_FLAGS.get(name, frozenset())
     i = 0
     while i < len(operands):
@@ -731,12 +751,12 @@ def bash_rule_identity(rule: str) -> tuple | None:
             return None
         if tok == "-m":
             module = operands[i + 1] if i + 1 < len(operands) else None
-            if module is None or module in _LAUNCHER_MODULES:
+            if module not in _IDENTITY_MODULES:
                 return None
-            return (tokens[0], "-m", module)
+            return (name, "-m", module)
         if tok.startswith("-"):
             return None
-        return (tokens[0], tok)
+        return (name, tok)
     return None
 
 

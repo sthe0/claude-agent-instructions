@@ -11,21 +11,16 @@ this module collects on a tree that predates it."""
 from __future__ import annotations
 
 import json
-import os
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-# pytest trims a failure's message from the short summary at the terminal width; the stage's
-# negative control reads that message to tell an assertion from an error.
-os.environ.setdefault("COLUMNS", "200")
-
-from agentctl import cli, grants, order_approvals, plan, plan_resources, plugins, plugins_premise, premise, tool_contracts  # noqa: E402
-from agentctl.plan import diff_plans, load_plan  # noqa: E402
-from agentctl.state import SessionState  # noqa: E402
-from agentctl.text_shape import WHOLE_STAGE_ELEMENT  # noqa: E402
+from agentctl import cli, grants, order_approvals, plan, plan_resources, plugins, plugins_premise, premise, tool_contracts
+from agentctl.plan import diff_plans, load_plan
+from agentctl.state import Node, SessionState
+from agentctl.text_shape import WHOLE_STAGE_ELEMENT
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -107,8 +102,8 @@ def _bag(store, sid="s"):
     return store.load(sid).plugins["premise"]
 
 
-def _first_pass(store, tmp_path, stages=None):
-    plan_path = _write_plan(tmp_path / "plan.toml", stages or BASE)
+def _first_pass(store, tmp_path, stages=None, **plan_kwargs):
+    plan_path = _write_plan(tmp_path / "plan.toml", stages or BASE, **plan_kwargs)
     _state(store, plan_path)
     _enumerate(store, _runner(""))
     return plan_path
@@ -208,7 +203,9 @@ def test_plan_level_question_survives_a_stage_and_final_check_move(store, tmp_pa
 
 def test_final_check_only_edit_leaves_every_question_in_scope(store, tmp_path):
     """No stage moved, so there is nothing to narrow against: a question addressed to a
-    stage element and one addressed to the plan are both raised."""
+    stage element and one addressed to the plan are both raised. This is the deliberate
+    wider direction: a final_check-only move re-reads the whole plan instead of keeping
+    only the final_check control targets."""
     plan_path = _first_pass(store, tmp_path)
     _write_plan(plan_path, BASE, final_checks=["git status"])
     d = _enumerate(store, _runner(
@@ -216,6 +213,20 @@ def test_final_check_only_edit_leaves_every_question_in_scope(store, tmp_path):
 
     assert d.data["out_of_scope"] == []
     assert _candidate_targets(store) == {"plan.done_criterion", "stage:1.means"}
+
+
+def test_order_only_edit_reads_the_whole_plan(store, tmp_path):
+    """The order is part of the plan's meta, and a moved meta re-opens every stage's fit
+    to it: a question addressed to the plan and one addressed to an unmoved stage element
+    are both raised."""
+    plan_path = _first_pass(store, tmp_path, functional_place="one place")
+    _write_plan(plan_path, BASE, functional_place="another place")
+    d = _enumerate(store, _runner(
+        "plan.goal\tdoes the goal still serve the place?\nstage:1.means\tis the tool right?"))
+
+    assert d.data["whole_plan"] is True
+    assert d.data["out_of_scope"] == []
+    assert _candidate_targets(store) == {"plan.goal", "stage:1.means"}
 
 
 # --- the norm delta itself ---------------------------------------------------------
@@ -345,12 +356,14 @@ def _grantgrowth(command):
 
 
 def _verify_kind(old, new):
-    return diff_plans(_grantgrowth(old), _grantgrowth(new))
+    """The kind of a verify_command rewrite with the relaxation admitted, as for a
+    ledgered order."""
+    return diff_plans(_grantgrowth(old), _grantgrowth(new), relax_verify_identity=True)
 
 
 @pytest.mark.parametrize("old, new", [
     ("python3 mod.py", "python3 mod.py --strict"),
-    ("python3 -m a", "python3 -m a --x"),
+    ("python3 -m pytest a", "python3 -m pytest a --x"),
     ("python3 -W ignore mod.py", "python3 mod.py"),
     ("python3 mod.py", "python3 mod.py -m other"),
 ])
@@ -360,7 +373,7 @@ def test_same_program_and_script_with_other_arguments_is_a_refinement(old, new):
 
 @pytest.mark.parametrize("old, new", [
     ("python3 mod.py", "python3 other.py"),
-    ("python3 -m a", "python3 -m b"),
+    ("python3 -m pytest a", "python3 -m b"),
     ("python3 mod.py", "python3 -m mod"),
     ("python3 mod.py", "python3.11 -W ignore mod.py"),
     ("python3 mod.py", "python3 -u mod.py"),
@@ -377,24 +390,119 @@ def test_a_new_program_script_module_or_uncovered_flag_is_growth(old, new):
     ("Bash(python3 mod.py --strict:*)", ("python3", "mod.py")),
     ("Bash(python3 -W ignore mod.py:*)", ("python3", "mod.py")),
     ("Bash(python3 mod.py -m a:*)", ("python3", "mod.py")),
-    ("Bash(python3 -m a:*)", ("python3", "-m", "a")),
-    ("Bash(python3 -m a --x:*)", ("python3", "-m", "a")),
+    ("Bash(python3 -m pytest:*)", ("python3", "-m", "pytest")),
+    ("Bash(python3 -m pytest --x:*)", ("python3", "-m", "pytest")),
     ("Bash(pytest -q tests/a.py:*)", ("pytest",)),
     ("Bash(python3:*)", None),
     ("Bash(python3 -u:*)", None),
     ("Bash(python3 -u mod.py:*)", None),
     ("Bash(python3 -m:*)", None),
+    ("Bash(python3 -m a:*)", None),
     ("Bash(python3 -m pip install x:*)", None),
+    ("Bash(python3 -m cProfile a.py:*)", None),
+    ("Bash(python3 -m coverage run a.py:*)", None),
+    ("Bash(python3 -m timeit x:*)", None),
     ("Bash(python3 -c print:*)", None),
     ("Bash(python3.11 -W ignore x.py:*)", None),
     ("Bash(bash -o pipefail x.sh:*)", None),
     ("Bash(env python3 mod.py:*)", None),
+    ("Bash(/usr/bin/env python3 mod.py:*)", None),
+    ("Bash(/usr/bin/python3 mod.py:*)", None),
     ("Bash(timeout 5 python3 mod.py:*)", None),
     ("Bash(nice python3 mod.py:*)", None),
+    ("Bash(strace python3 mod.py:*)", None),
+    ("Bash(uv run mod.py:*)", None),
+    ("Bash(make -f x:*)", None),
+    ("Bash(ksh a.sh:*)", None),
+    ("Bash(fish a.fish:*)", None),
+    ("Bash(bun a.ts:*)", None),
+    ("Bash(deno run a.ts:*)", None),
+    ("Bash(php a.php:*)", None),
+    ("Bash(ruff check x:*)", None),
     ("Edit(//tmp/x/**)", None),
 ])
 def test_rule_identity_never_hands_a_new_executable_an_approved_identity(rule, identity):
+    """Identity is closed-world: a program not positively classified has none."""
     assert grants.bash_rule_identity(rule) == identity
+
+
+_UNCLASSIFIED_REWRITES = [
+    ("/usr/bin/env python3 a.py", "/usr/bin/env rm -rf build"),
+    ("ksh a.sh", "ksh b.sh"),
+    ("python3 -m cProfile a.py", "python3 -m cProfile b.py"),
+]
+
+
+@pytest.mark.parametrize("old, new", _UNCLASSIFIED_REWRITES)
+def test_unclassified_rewrite_is_substantive_with_or_without_the_relaxation(old, new):
+    assert diff_plans(_grantgrowth(old), _grantgrowth(new)) == "substantive"
+    assert diff_plans(_grantgrowth(old), _grantgrowth(new), relax_verify_identity=True) == "substantive"
+
+
+def test_unledgered_diff_keeps_the_plain_set_difference():
+    """Without the relaxation, a same-identity rewrite that grows the derived rules is
+    substantive, as before the relaxation existed."""
+    assert diff_plans(_grantgrowth("python3 mod.py"), _grantgrowth("python3 mod.py --strict")) == "substantive"
+
+
+def _replan_verify(store, tmp_path, old_verify, new_verify, *, ledgered, sid="rv"):
+    """Drive the real replan of stage 1's verify_command from `old_verify` to `new_verify`.
+    `ledgered`: the plan declares an order and its customer approves it, so the order has
+    a user-approved ledger record; otherwise the plan has no order at all."""
+    fixture = (FIXTURES / "plan_two_stage_verifyfix_grantgrowth.toml").read_text(encoding="utf-8")
+    fixture = fixture.replace('output_artifacts = ["mod.py"]',
+                              'output_artifacts = ["a.py", "b.py", "a.sh", "b.sh", "tests/a.py"]')
+    if ledgered:
+        fixture = fixture.replace("\n[[stage]]\n", '\n[meta.order]\ncustomer_id = "acme"\n'
+                                  'customer = "the asker"\nfunctional_place = "one place"\n\n[[stage]]\n', 1)
+    old, new = tmp_path / "old.toml", tmp_path / "new.toml"
+    for path, command in ((old, old_verify), (new, new_verify)):
+        path.write_text(fixture.replace('verify_command = "python3 mod.py"',
+                                        f"verify_command = {json.dumps(command)}"), encoding="utf-8")
+    cli.cmd_start(Namespace(session=sid, task="demo-norm-staleness", goal="", done_criterion="",
+                            criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(Namespace(session=sid, chat=False, changed_lines=200, files=5,
+                               wall_clock_min=60, tracker_key=None, architectural=True,
+                               external_effect=False, new_dependency=False,
+                               public_api_change=False), store=store)
+    cli.cmd_plan(Namespace(session=sid), store=store)
+    submitted = cli.cmd_submit_plan(Namespace(session=sid, plan=str(old)), store=store)
+    assert submitted.ok, submitted.detail
+    cli.cmd_approve(Namespace(session=sid, by="acme" if ledgered else "user"), store=store)
+    cli.cmd_partition(Namespace(session=sid, m1=False, m2=False, m3=False, m4=False,
+                                m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(Namespace(session=sid), store=store)
+    state = store.load(sid)
+    assert state.node == Node.EXECUTING.value
+    assert (cli._ledgered_order_key(state) is not None) is ledgered
+    return cli.cmd_replan(Namespace(session=sid, plan=str(new)), store=store)
+
+
+@pytest.mark.parametrize("old, new", _UNCLASSIFIED_REWRITES)
+def test_unledgered_replan_of_an_unclassified_rewrite_rearms_approval(store, tmp_path, monkeypatch, old, new):
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+    d = _replan_verify(store, tmp_path, old, new, ledgered=False)
+
+    assert d.marker == "PLAN-READY"
+
+
+def test_unledgered_replan_of_a_same_identity_rewrite_rearms_approval(store, tmp_path, monkeypatch):
+    """The relaxation is admitted only for a ledgered order: with no ledger the plain set
+    difference applies, so even a same-identity rewrite re-arms approval."""
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+    d = _replan_verify(store, tmp_path, "pytest -q tests/a.py", "pytest -q tests/a.py -x", ledgered=False)
+
+    assert d.marker == "PLAN-READY"
+
+
+def test_ledgered_replan_of_a_same_identity_rewrite_stays_a_refinement(store, tmp_path, monkeypatch):
+    """The ledgered counterpart: the same criterion-confined, same-identity rewrite resumes
+    execution without re-approval."""
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+    d = _replan_verify(store, tmp_path, "pytest -q tests/a.py", "pytest -q tests/a.py -x", ledgered=True)
+
+    assert d.action == "continue", d.detail
+    assert d.marker is None
 
 
 def test_rewrite_that_also_moves_the_interface_keeps_the_plain_set_difference():
@@ -403,7 +511,7 @@ def test_rewrite_that_also_moves_the_interface_keeps_the_plain_set_difference():
     new.stages[0].subject.result = "a different deliverable"
 
     assert "interface" in plan.norm_delta(old, new).elements[1]
-    assert diff_plans(old, new) == "substantive"
+    assert diff_plans(old, new, relax_verify_identity=True) == "substantive"
 
 
 def test_rewrite_that_also_moves_the_order_keeps_the_plain_set_difference(tmp_path):
@@ -412,7 +520,7 @@ def test_rewrite_that_also_moves_the_order_keeps_the_plain_set_difference(tmp_pa
     new = load_plan(_write_plan(tmp_path / "b.toml", BASE, verify={1: "python3 mod.py --strict"},
                                 functional_place="another place"))
 
-    assert diff_plans(old, new) == "substantive"
+    assert diff_plans(old, new, relax_verify_identity=True) == "substantive"
 
 
 # --- the autonomy boundary, through the real ledger -------------------------------------
@@ -434,11 +542,12 @@ def _approved_order(store, tmp_path, old_verify):
 
 
 def _replan_verdict(store, tmp_path, old_verify, new_verify):
-    """`(diff_plans kind, kind after the boundary)` of rewriting stage 1's verify_command."""
+    """`(diff_plans kind, kind the replan applies as)` of rewriting stage 1's verify_command
+    in a ledgered order."""
     state, venue = _approved_order(store, tmp_path, old_verify)
+    old = load_plan(state.plan_path)
     new = load_plan(str(_write_plan(tmp_path / "new.toml", BASE, verify={1: new_verify}, repo_root=venue)))
-    kind = diff_plans(load_plan(state.plan_path), new)
-    return kind, cli._kind_within_boundary(state, kind, new)
+    return diff_plans(old, new, relax_verify_identity=True), cli._replan_kind(state, old, new)
 
 
 def test_refinement_to_a_command_the_engine_cannot_resolve_goes_to_approval(store, tmp_path):

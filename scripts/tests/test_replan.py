@@ -150,7 +150,9 @@ def test_verify_command_change_is_judged_by_what_it_runs(fixtures_dir):
     program/script (new arguments), and substantive once it runs another script or a
     new interpreter-less program: DR-V derives one `Bash(<segment>:*)` literal per
     segment, so the rewritten text always adds a literal, and `_grants_grew` counts it
-    as growth only when its (program, script) identity is new to the stage.
+    as growth only when its (program, script) identity is new to the stage. That relaxation
+    is admitted only for a ledgered order (`relax_verify_identity`); without it the plain
+    set difference makes any rewrite substantive.
 
     Uses the `_grantgrowth` fixture (a real script-file operand, `python3 mod.py`) rather
     than the shared `plan_two_stage_verifyfix` pair, whose commands are inline
@@ -162,11 +164,14 @@ def test_verify_command_change_is_judged_by_what_it_runs(fixtures_dir):
         return doc
 
     base = with_command("python3 mod.py")
-    assert diff_plans(base, with_command("python3 mod.py --strict")) == "refinement"
-    assert diff_plans(base, with_command("python3 other.py")) == "substantive"
+    assert diff_plans(base, with_command("python3 mod.py --strict"),
+                      relax_verify_identity=True) == "refinement"
+    assert diff_plans(base, with_command("python3 mod.py --strict")) == "substantive"
+    assert diff_plans(base, with_command("python3 other.py"),
+                      relax_verify_identity=True) == "substantive"
     changed = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml"))
     assert diff_plans(load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml")),
-                      changed) == "substantive"
+                      changed, relax_verify_identity=True) == "substantive"
 
 
 def test_substantive_verify_command_change_carries_into_state(store, fixtures_dir):
