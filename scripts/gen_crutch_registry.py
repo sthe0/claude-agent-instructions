@@ -309,6 +309,16 @@ CODE_PARTITIONS = [
         "Channel adapter selection keyed on machine-local config identity, not "
         "free-text meaning.",
     ),
+    (
+        "scripts/reaper/**",
+        lambda f: f.startswith("scripts/reaper/"),
+        "structural",
+        "keep",
+        "The only regex rewrites a reaper's NAME into a stamp file name "
+        "(characters outside letters, digits, dot, underscore, hyphen become "
+        "underscore); removal decisions are made from verdicts that carry a "
+        "path, an action and a reason, never from matching free text.",
+    ),
     # Same purpose as the judge-guarded rows above: the catch-all's ground names
     # the regexes IT inspected (markdown headings, frontmatter delimiters, shell
     # command prefixes), so a file that parses something else inherits a ground
