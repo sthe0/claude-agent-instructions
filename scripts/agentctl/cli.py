@@ -753,11 +753,12 @@ def _record_first_thinker_verdict(state: SessionState, doc, review, scope: str) 
     })
 
 
-def _kind_within_boundary(state: SessionState, kind: str, doc) -> str:
+def _kind_within_boundary(state: SessionState, kind: str, doc, *, ledgered: bool) -> str:
     """A refinement that moves the order digest, adds a resource beyond the user's
     approved set, or changes a command the engine cannot resolve to a resource is not a
-    refinement: it re-enters the approval gate as substantive."""
-    if kind != "refinement" or _ledgered_order_key(state) is None:
+    refinement: it re-enters the approval gate as substantive. `ledgered`: the order has
+    a user-approved ledger record (`_ledgered_order_key`); without one nothing is judged."""
+    if kind != "refinement" or not ledgered:
         return kind
     verdict = _autonomy_for(state, doc)
     if (verdict["order_changed"] or verdict["extra_resources"]
@@ -771,7 +772,8 @@ def _replan_kind(state: SessionState, old, new) -> str:
     is admitted only for a ledgered order, the one case `_kind_within_boundary` judges."""
     from .plan import diff_plans
     ledgered = _ledgered_order_key(state) is not None
-    return _kind_within_boundary(state, diff_plans(old, new, relax_verify_identity=ledgered), new)
+    kind = diff_plans(old, new, relax_verify_identity=ledgered)
+    return _kind_within_boundary(state, kind, new, ledgered=ledgered)
 
 
 def _autonomy_directive_data(state: SessionState, doc) -> dict:

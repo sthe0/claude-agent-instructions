@@ -364,7 +364,6 @@ def _verify_kind(old, new):
 @pytest.mark.parametrize("old, new", [
     ("python3 mod.py", "python3 mod.py --strict"),
     ("python3 -m pytest a", "python3 -m pytest a --x"),
-    ("python3 -W ignore mod.py", "python3 mod.py"),
     ("python3 mod.py", "python3 mod.py -m other"),
 ])
 def test_same_program_and_script_with_other_arguments_is_a_refinement(old, new):
@@ -377,6 +376,9 @@ def test_same_program_and_script_with_other_arguments_is_a_refinement(old, new):
     ("python3 mod.py", "python3 -m mod"),
     ("python3 mod.py", "python3.11 -W ignore mod.py"),
     ("python3 mod.py", "python3 -u mod.py"),
+    ("python3 mod.py", "python3 -W ignore mod.py"),
+    ("node -r ./hook.js a.js", "node -r ./evil.js a.js"),
+    ("git status", "git push origin HEAD:main"),
     ("python3 mod.py", "env python3 mod.py"),
     ("python3 mod.py", "timeout 5 python3 mod.py"),
     ("bash x.sh", "bash -o pipefail x.sh"),
@@ -388,7 +390,12 @@ def test_a_new_program_script_module_or_uncovered_flag_is_growth(old, new):
 @pytest.mark.parametrize("rule, identity", [
     ("Bash(python3 mod.py:*)", ("python3", "mod.py")),
     ("Bash(python3 mod.py --strict:*)", ("python3", "mod.py")),
-    ("Bash(python3 -W ignore mod.py:*)", ("python3", "mod.py")),
+    ("Bash(python3 -W ignore mod.py:*)", None),
+    ("Bash(node -r ./hook.js a.js:*)", None),
+    ("Bash(perl -M Evil a.pl:*)", None),
+    ("Bash(git status:*)", None),
+    ("Bash(git push origin HEAD:main:*)", None),
+    ("Bash(git -C . status:*)", None),
     ("Bash(python3 mod.py -m a:*)", ("python3", "mod.py")),
     ("Bash(python3 -m pytest:*)", ("python3", "-m", "pytest")),
     ("Bash(python3 -m pytest --x:*)", ("python3", "-m", "pytest")),
@@ -525,12 +532,14 @@ def test_rewrite_that_also_moves_the_order_keeps_the_plain_set_difference(tmp_pa
 
 # --- the autonomy boundary, through the real ledger -------------------------------------
 
-def _approved_order(store, tmp_path, old_verify):
-    """A session whose order has a user-approved version holding `old_verify`; returns the
-    state and the venue the plans declare."""
+def _approved_order(store, tmp_path, old_verify, stage2_verify=None):
+    """A session whose order has a user-approved version holding `old_verify` (and
+    `stage2_verify` on stage 2, whose approved resources the order-wide boundary shares);
+    returns the state and the venue the plans declare."""
     venue = tmp_path / "venue"
     venue.mkdir()
-    base = _write_plan(tmp_path / "base.toml", BASE, verify={1: old_verify}, repo_root=venue)
+    verify = {1: old_verify} | ({2: stage2_verify} if stage2_verify else {})
+    base = _write_plan(tmp_path / "base.toml", BASE, verify=verify, repo_root=venue)
     doc = load_plan(str(base))
     key = plan.order_digest(doc)
     view = plan_resources.compute_boundary_view(doc, key)
@@ -541,12 +550,13 @@ def _approved_order(store, tmp_path, old_verify):
     return _state(store, base), venue
 
 
-def _replan_verdict(store, tmp_path, old_verify, new_verify):
+def _replan_verdict(store, tmp_path, old_verify, new_verify, stage2_verify=None):
     """`(diff_plans kind, kind the replan applies as)` of rewriting stage 1's verify_command
     in a ledgered order."""
-    state, venue = _approved_order(store, tmp_path, old_verify)
+    state, venue = _approved_order(store, tmp_path, old_verify, stage2_verify)
     old = load_plan(state.plan_path)
-    new = load_plan(str(_write_plan(tmp_path / "new.toml", BASE, verify={1: new_verify}, repo_root=venue)))
+    verify = {1: new_verify} | ({2: stage2_verify} if stage2_verify else {})
+    new = load_plan(str(_write_plan(tmp_path / "new.toml", BASE, verify=verify, repo_root=venue)))
     return diff_plans(old, new, relax_verify_identity=True), cli._replan_kind(state, old, new)
 
 
@@ -597,3 +607,14 @@ def test_command_substitution_is_unresolved(tmp_path):
     execution resolves to nothing, so the boundary escalates it."""
     resolution = tool_contracts.resolve_command("python3 $(echo mod.py)", str(tmp_path))
     assert resolution.status == "unresolved"
+
+
+def test_a_push_to_main_never_shares_an_identity_with_another_git_subcommand(store, tmp_path):
+    """The ledgered boundary's approved set is order-wide: stage 2 already holds an approved
+    push to main, so stage 1's `git status` -> `git push origin HEAD:main` is covered by
+    it. The edit still has to be substantive -- stage 1's own verify_command grew a push."""
+    push = "git push origin HEAD:main"
+    kind, bounded = _replan_verdict(store, tmp_path, "git status", push, stage2_verify=push)
+
+    assert kind == "substantive"
+    assert bounded == "substantive"

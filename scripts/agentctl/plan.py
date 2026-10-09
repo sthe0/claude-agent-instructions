@@ -2804,11 +2804,10 @@ def _grants_grew(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fa
                 for r in _derived_verify_rules(old_stages[stage.index], shared_venue)
             }
             verify_rules = {r.rule for r in _derived_verify_rules(stage, shared_venue)}
+            identities = {r: _grants.bash_rule_identity(r) for r in grown_rules if r in verify_rules}
             grown_rules = {
                 r for r in grown_rules
-                if r not in verify_rules
-                or _grants.bash_rule_identity(r) is None
-                or _grants.bash_rule_identity(r) not in known
+                if r not in verify_rules or identities[r] is None or identities[r] not in known
             }
         if grown_rules or (new_dirs - old_dirs):
             return True

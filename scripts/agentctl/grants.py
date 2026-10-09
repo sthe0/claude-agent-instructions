@@ -29,6 +29,7 @@ whose answer gates whether a stage is marked passed without ever asking.
 """
 from __future__ import annotations
 
+import functools
 import os
 import re
 import shlex
@@ -702,6 +703,16 @@ def top_level_segment_count(command: str) -> int | None:
 # Mirrors the one module `tool_contracts._resolve_interpreter` resolves (`-m pytest`).
 _IDENTITY_MODULES = frozenset({"pytest"})
 
+# The one resolver program whose resolution does not depend on its arguments (a write on the
+# whole venue subtree). Any other resolver (`git`: a subcommand decides the effect) shares no
+# program-only identity, since one approved subcommand would cover another.
+_IDENTITY_RESOLVERS = frozenset({"pytest"})
+
+
+@functools.lru_cache(maxsize=1)
+def _contract_table() -> dict:
+    return tool_contracts.load_contract_table()
+
 
 def bash_rule_identity(rule: str) -> tuple | None:
     """What a DR-V `Bash(<segment>:*)` rule lets a stage run, coarser than its text: the
@@ -710,14 +721,14 @@ def bash_rule_identity(rule: str) -> tuple | None:
     only changes arguments keeps its identity.
 
     Closed-world: only a program the engine has positively classified gets an identity --
-    an interpreter in `_INTERPRETERS` pointed at a script or at a module in
-    `_IDENTITY_MODULES`, or a program whose `tool_contracts.toml` entry the engine can
-    resolve (effect `none` or `resolver`). `None` means "no identity", which the caller
+    an interpreter in `_INTERPRETERS` whose first operand is a script or `-m` with a module
+    in `_IDENTITY_MODULES`, or a program whose `tool_contracts.toml` entry has effect `none`
+    or is a resolver in `_IDENTITY_RESOLVERS`. `None` means "no identity", which the caller
     treats as a new grant: the rule does not parse, its program token is path-qualified,
     a wrapper or env assignment hides the real program, the program is unclassified (an
     unlisted interpreter or launcher, `strace`, `uv`, `make`), or the interpreter's
-    leading flags cannot be read with confidence (an inline-code flag, a flag whose value
-    this module does not know, an unclassified module). Never guess an identity that an
+    leading flags cannot be read with confidence (any flag but `-m`, an unclassified module),
+    or the program is a resolver whose effect depends on its arguments (`git`). Never guess an identity that an
     already-approved command could share."""
     parsed = rule_program_and_arg(rule)
     if parsed is None or parsed[0] != "Bash":
@@ -733,31 +744,25 @@ def bash_rule_identity(rule: str) -> tuple | None:
         return None
     if name in _INTERPRETERS or widening_targets.INTERPRETER_RE.match(name):
         return _interpreter_identity(name, operands)
-    entry = tool_contracts.load_contract_table().get(name)
-    if entry is None or entry.effect == "unresolved":
+    entry = _contract_table().get(name)
+    if entry is None or not (entry.effect == "none" or name in _IDENTITY_RESOLVERS):
         return None
     return (name,)
 
 
 def _interpreter_identity(name: str, operands: list[str]) -> tuple | None:
-    value_flags = _INTERPRETER_VALUE_FLAGS.get(name, frozenset())
-    i = 0
-    while i < len(operands):
-        tok = operands[i]
-        if tok in value_flags:
-            i += 2
-            continue
-        if _interpreter_operand_is_dangerous([tok]):
-            return None
-        if tok == "-m":
-            module = operands[i + 1] if i + 1 < len(operands) else None
-            if module not in _IDENTITY_MODULES:
-                return None
-            return (name, "-m", module)
-        if tok.startswith("-"):
-            return None
-        return (name, tok)
-    return None
+    """Program + script (or `-m <module>`) from the leading operands; the same closed
+    grammar `tool_contracts._resolve_interpreter` reads: any other flag before the script
+    gives no identity."""
+    if not operands:
+        return None
+    tok = operands[0]
+    if tok == "-m":
+        module = operands[1] if len(operands) > 1 else None
+        return (name, "-m", module) if module in _IDENTITY_MODULES else None
+    if tok.startswith("-"):
+        return None
+    return (name, tok)
 
 
 def _in_venue(path: str, venue: str) -> bool:
