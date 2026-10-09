@@ -16,7 +16,7 @@ This means a fresh clone in another org needs **zero edits** to Core.
 
 ## The seams, at a glance
 
-Every org-specific facility attaches to Core through one of eight seams. Each is *mechanism in Core, data outside it* — Core ships the resolver, the neutral default and the contract; a higher layer (Personal, machine-local, or a project overlay) supplies the org half.
+Every org-specific facility attaches to Core through one of nine seams. Each is *mechanism in Core, data outside it* — Core ships the resolver, the neutral default and the contract; a higher layer (Personal, machine-local, or a project overlay) supplies the org half.
 
 | Seam | Core ships | A higher layer installs | Where |
 |---|---|---|---|
@@ -28,6 +28,7 @@ Every org-specific facility attaches to Core through one of eight seams. Each is
 | Term-lint ruleset | the matcher, the discovery order and the gates | the actual denylist of org-internal terms | `<config root>/term-rulesets/*.toml` (or `<project>/.claude/term-rulesets/`) |
 | Sandbox project composers | `scripts/instruction-sandbox.sh --project-mount`, the five-function contract and the generic project check | a composer that builds a project's `.claude/` into a sandbox-owned root | `${CLAUDE_INSTRUCTION_SANDBOX_PLUGIN_DIR:-<config root>/instruction-sandbox-plugins}/composers/<name>.sh` |
 | MCP server definitions | the registration mechanism (`scripts/apply-mcp-local.sh`, `scripts/lib/mcp_registration.py`) and the empty seam | `<name>.json` MCP server definitions (same shape as `mcp-local/<name>.json`); a personal `mcp-local/` entry wins on a name clash | `${CLAUDE_MCP_PLUGIN_DIR:-<config root>/mcp-plugins}/<name>.json` |
+| Reapers (stale-residue cleanup) | the runner (throttle, ownership, keep-wins, removal log, error isolation), the reaper contract and the `git-worktrees` built-in (`scripts/reaper/`, `docs/operations/reapers.md`) | cleanup modules for org-specific residue, each a `NAME` / `scan` / `remove` file; a project adds its own under `<project>/.claude/reapers/` | `${CLAUDE_REAPER_PLUGIN_DIR:-<config root>/reaper-plugins}/reapers/<name>.py` (`reaper-plugins`) |
 
 The shape repeats: **built-in name first, machine-local plugin second**. `scripts/project_entry/registry.sh` (`_registry_resolve`) does it for shell backends and `scripts/lib/plugin_dir.py` (`resolve_plugin_dir` + `load_plugin_module`) for the Python seams, so a new plugin *name* attaches with zero edits to Core. The sections below cover each seam in turn.
 
