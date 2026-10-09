@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: Specialization. TRIGGER when code has just been written or changed and needs a maintainability / readability / reusability review before it is considered done — most often as the developer's self-review pass before `COMPLETED:`, or when the manager wants an independent fresh-context review of a diff / PR. Invoke **inline** via the `Skill` tool for self-review on a diff already in context; **spawn** as a separate `claude -p` process (see CLAUDE.md § Spawning specialists) for an independent, unanchored review of larger or critical changes. SKIP for correctness bug-hunting (that is the developer's tests and the built-in `/code-review`), for trivial one-line changes, and for non-code work.
+description: Specialization. TRIGGER when code has just been written or changed and needs a maintainability / readability / reusability review before it is considered done — most often as the developer's self-review pass before `COMPLETED:`, or when the manager wants an independent fresh-context review of a diff / PR. Invoke **inline** via the `Skill` tool for self-review on a diff already in context; **spawn** as a separate `claude -p` process (see CLAUDE.md § Delegating to specialists & skills) for an independent, unanchored review of larger or critical changes. SKIP for correctness bug-hunting (that is the developer's tests and the built-in `/code-review`), for trivial one-line changes, and for non-code work.
 ---
 
 # Code-reviewer specialization
