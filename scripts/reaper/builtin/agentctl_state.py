@@ -5,11 +5,11 @@ classifies, and nothing deletes them, so the directory grows by one file per ses
 Almost all of them are sessions that stopped at node CLASSIFIED (a chat, a small change)
 and that no tool reads again.
 
-scan() looks only at plain `<session>.json` names (^[0-9A-Za-z_-]+\\.json$) and proposes
+scan() looks only at plain `<session>.json` names (a full match of [0-9A-Za-z_-]+\\.json) and proposes
 removal of a file whose top-level `node` is CLASSIFIED, whose mtime (the store keeps no
 update time, so mtime is the activity signal) is older than MIN_AGE_DAYS, and whose
 session no live session-scope record owns. Everything else matched is kept with a reason
-(`unreadable`, `node <X>`, `fresh`, `owned`). Other names are never looked at: approvals,
+(`symlink`, `unreadable`, `node <X>`, `fresh`, `owned`). Other names are never looked at: approvals,
 plan versions, delivery sidecars and backups outlive their session and have readers.
 
 remove() re-judges the file before unlinking it, so a session that moved on between scan
@@ -29,7 +29,7 @@ NAME = "agentctl-state"
 THROTTLE_HOURS = 24.0
 MIN_AGE_DAYS = 14.0
 RESIDUE_NODE = "CLASSIFIED"
-STATE_FILE_NAME = re.compile(r"^[0-9A-Za-z_-]+\.json$")
+STATE_FILE_NAME = re.compile(r"[0-9A-Za-z_-]+\.json")
 
 
 def state_dir() -> Path:
@@ -37,6 +37,8 @@ def state_dir() -> Path:
 
 
 def judge(path: Path, ctx: ReapContext) -> Verdict:
+    if path.is_symlink():
+        return Verdict(str(path), KEEP, "symlink")
     try:
         node = json.loads(path.read_text(encoding="utf-8")).get("node")
         mtime = path.stat().st_mtime
@@ -58,12 +60,12 @@ def scan(ctx: ReapContext) -> "list[Verdict]":
         names = sorted(os.listdir(root))
     except FileNotFoundError:
         return []
-    return [judge(root / name, ctx) for name in names if STATE_FILE_NAME.match(name)]
+    return [judge(root / name, ctx) for name in names if STATE_FILE_NAME.fullmatch(name)]
 
 
 def remove(path: str, ctx: ReapContext) -> bool:
     target = Path(path)
-    if not STATE_FILE_NAME.match(target.name) or judge(target, ctx).action != REMOVE:
+    if not STATE_FILE_NAME.fullmatch(target.name) or judge(target, ctx).action != REMOVE:
         return False
     target.unlink()
     return True

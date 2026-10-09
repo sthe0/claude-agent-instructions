@@ -197,13 +197,21 @@ CATALOGUE: "dict[str, Mutant]" = {
         ),
     ),
     "state-suffix-filter": Mutant(
-        AGENTCTL_STATE, 're.compile(r"^[0-9A-Za-z_-]+\\.json$")', 're.compile(r"^.+\\.json$")',
+        AGENTCTL_STATE, 're.compile(r"[0-9A-Za-z_-]+\\.json")', 're.compile(r".+\\.json")',
         _ids(
             T_STATE,
             "test_scan_never_looks_at_a_name_outside_the_plain_session_pattern",
             "test_pass_removes_exactly_the_residue_file_and_logs_it",
             "test_remove_refuses_a_name_outside_the_plain_session_pattern",
         ),
+    ),
+    "state-name-fullmatch": Mutant(
+        AGENTCTL_STATE, "if STATE_FILE_NAME.fullmatch(name)]", "if re.match(r\"[0-9A-Za-z_-]+\\.json$\", name)]",
+        _ids(T_STATE, "test_a_name_with_a_trailing_newline_is_not_a_state_file"),
+    ),
+    "state-symlink": Mutant(
+        AGENTCTL_STATE, "if path.is_symlink():", "if False:",
+        _ids(T_STATE, "test_a_symlinked_state_name_is_kept_in_scan_and_in_remove"),
     ),
     "state-session-owner": Mutant(
         AGENTCTL_STATE, "if ctx.owned_session(", "if False and ctx.owned_session(",

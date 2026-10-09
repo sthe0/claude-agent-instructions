@@ -156,6 +156,42 @@ def test_remove_refuses_a_name_outside_the_plain_session_pattern(state_dir):
     assert target.exists()
 
 
+def test_a_name_with_a_trailing_newline_is_not_a_state_file(state_dir):
+    _write(state_dir, "old-newline.json\n", _state("CLASSIFIED"), OLD)
+    seen = {Path(v.path).name for v in st.scan(make_ctx(state_dir))}
+    assert "old-newline.json\n" not in seen
+    assert st.remove(str(state_dir / "old-newline.json\n"), make_ctx(state_dir)) is False
+    assert (state_dir / "old-newline.json\n").exists()
+
+
+def test_a_symlinked_state_name_is_kept_in_scan_and_in_remove(state_dir, tmp_path):
+    outside = tmp_path / "elsewhere.json"
+    _write(tmp_path, "elsewhere.json", _state("CLASSIFIED"), OLD)
+    link = state_dir / "old-link.json"
+    link.symlink_to(outside)
+    verdicts = {Path(v.path).name: v for v in st.scan(make_ctx(state_dir))}
+    assert (verdicts["old-link.json"].action, verdicts["old-link.json"].reason) == (KEEP, "symlink")
+    assert st.remove(str(link), make_ctx(state_dir)) is False
+    assert link.is_symlink() and outside.exists()
+
+
+@pytest.mark.parametrize("body", [b'{"node": "CLASSIF', b"\xff\xfe{}", b'["CLASSIFIED"]', b'"CLASSIFIED"'])
+def test_unreadable_content_is_kept_as_unreadable(state_dir, body):
+    path = state_dir / "old-garbled.json"
+    path.write_bytes(body)
+    os.utime(path, (OLD, OLD))
+    verdict = st.judge(path, make_ctx(state_dir))
+    assert (verdict.action, verdict.reason) == (KEEP, "unreadable")
+
+
+def test_scan_keeps_a_file_whose_owner_record_carries_the_unsanitized_id(state_dir):
+    _write(state_dir, "rawid.json", _state("CLASSIFIED"), OLD)
+    ctx = make_ctx(state_dir)
+    ctx.scope_records.append(ScopeRecord(session_id="raw.id", heartbeat_ts=NOW - 3600.0, pid=DEAD_PID))
+    verdicts = {Path(v.path).name: v for v in st.scan(ctx)}
+    assert (verdicts["rawid.json"].action, verdicts["rawid.json"].reason) == (KEEP, "owned")
+
+
 def test_session_owned_by_live_pid_or_fresh_heartbeat_and_by_sanitized_id():
     records = owners()
     assert session_owned("owned-by-heartbeat", records, NOW)

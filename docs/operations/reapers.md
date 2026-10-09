@@ -69,9 +69,9 @@ Source: `scripts/reaper/builtin/git_worktrees.py`. It looks at the repository th
 
 Source: `scripts/reaper/builtin/agentctl_state.py`. agentctl writes `<config root>/agentctl/state/<session>.json` for every session it classifies and never deletes it; almost all of these files belong to sessions that stopped at the first node, `CLASSIFIED` (a chat, a small change), and nothing reads them again.
 
-- It looks only at plain `<session>.json` names (`^[0-9A-Za-z_-]+\.json$`). Every other file in the directory gets no verdict at all.
+- It looks only at plain `<session>.json` names (the whole name matches `[0-9A-Za-z_-]+\.json`). Every other file in the directory gets no verdict at all.
 - **Removed**: a file whose top-level `node` is `CLASSIFIED`, whose mtime is more than 14 days old (the state has no update-time field, so the mtime is the activity signal), and whose session no live scope record owns (`ctx.owned_session`).
-- **Kept**, with the reason: `unreadable` (not JSON, not an object, or not readable), `node <X>` (any other node), `fresh` (under 14 days), `owned`.
+- **Kept**, with the reason: `symlink` (the name is a symbolic link), `unreadable` (not UTF-8 JSON, not an object, or not readable), `node <X>` (any other node), `fresh` (under 14 days), `owned`.
 - `remove()` judges the file again before unlinking it, so a session that moved past `CLASSIFIED` between the scan and the removal is kept.
 
 What it deliberately keeps, and why:
