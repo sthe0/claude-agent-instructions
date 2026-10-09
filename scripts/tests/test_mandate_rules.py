@@ -541,3 +541,51 @@ def test_blank_lines_are_ignored():
 def test_every_offending_path_is_reported():
     verdict = reject("M\tgithooks/a", "M\tdocs/ok.md", "M\t.github/b")
     assert [p for p, _ in verdict.offending] == ["githooks/a", ".github/b"]
+
+
+@pytest.mark.parametrize("line", [
+    "M scripts/agentctl/mandate.py",
+    "R100 docs/a.md githooks/pre-commit",
+    "githooks/pre-commit",
+    "M    .github/workflows/x.yml",
+])
+def test_a_line_that_is_not_tab_separated_is_still_checked_field_by_field(line):
+    assert reject(line).reject
+
+
+def test_a_line_that_is_not_tab_separated_and_touches_nothing_listed_is_accepted():
+    assert not reject("M docs/readme.md", "docs/readme.md").reject
+
+
+def test_a_tab_separated_path_with_spaces_is_one_path():
+    assert not reject("M\tdocs/githooks notes.md").reject
+    assert reject("R100\tdocs/a b.md\tgithooks/x y.sh").reject
+
+
+# --- record validation and slugs -------------------------------------------------------
+
+def test_from_dict_validates_through_the_explicit_validate_call(monkeypatch):
+    calls = []
+    original = m.Mandate.validate
+    monkeypatch.setattr(m.Mandate, "validate", lambda self: (calls.append(self.id), original(self))[1])
+    m.Mandate.from_dict(mandate().to_dict())
+    assert calls == [mandate().id]
+
+
+@pytest.mark.parametrize("field,value", [("daily_usd", 0), ("max_items", 1.5), ("expires_at", "never")])
+def test_from_dict_refuses_a_record_with_a_bad_limit_or_timestamp(field, value):
+    data = mandate().to_dict()
+    data[field] = value
+    with pytest.raises(m.MandateError):
+        m.Mandate.from_dict(data)
+
+
+@pytest.mark.parametrize("value", ["core-debt", "a", "c1", "2026-10-09.run_1"])
+def test_require_slug_accepts_plain_slugs(value):
+    assert m.require_slug(value, "x") == value
+
+
+@pytest.mark.parametrize("value", ["", "..", "a/b", "../a", "a..b", ".hidden", "-lead", " ", None, 7])
+def test_require_slug_refuses_anything_that_could_leave_a_directory(value):
+    with pytest.raises(m.MandateError):
+        m.require_slug(value, "x")

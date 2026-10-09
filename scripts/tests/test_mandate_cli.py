@@ -5,6 +5,7 @@ process runner, so nothing here touches the real agent home, systemd or a live p
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import subprocess
@@ -181,7 +182,45 @@ def test_stop_pauses_and_disables_the_timer_without_killing_an_idle_mandate(env)
     assert env.runner.systemctl_calls == [["systemctl", "--user", "disable", "--now", store.TIMER_UNIT]]
     assert env.runner.kill_calls == []
     assert out["data"]["stop"]["cycle_running"] is False and out["data"]["stop"]["killed"] is None
+    assert "no running cycle" in out["detail"]
     assert store.read_events(ID)[-1]["event"] == "stopped"
+
+
+def test_stop_with_the_lock_file_missing_kills_nothing_and_says_so(env):
+    grant(env)
+    assert not store.path_of(ID, store.LOCK_FILE).exists()
+    rc, out = env.run("mandate-stop")
+    assert rc == 0 and env.runner.kill_calls == [] and "no running cycle" in out["detail"]
+
+
+def test_stop_survives_a_corrupt_record_and_still_disables_the_timer_and_kills_the_cycle(env):
+    grant(env)
+    store.path_of(ID, store.MANDATE_FILE).write_text("{not json")
+    with store.cycle_lock(ID):
+        rc, out = env.run("mandate-stop")
+    assert rc == 0
+    assert env.runner.systemctl_calls == [["systemctl", "--user", "disable", "--now", store.TIMER_UNIT]]
+    assert env.runner.kill_calls == [[sys.executable, str(store.KILL_TREE), str(os.getpid())]]
+    stop = out["data"]["stop"]
+    assert stop["paused"] is False and "pause_error" in stop
+    assert out["data"]["record_unreadable"] is True
+    assert store.read_events(ID)[-1]["event"] == "stopped"
+
+
+def test_stop_reports_an_unknown_holder_pid_instead_of_killing(env, monkeypatch):
+    grant(env)
+    monkeypatch.setattr(store, "PID_READ_DELAY_S", 0)
+    fd = os.open(store.path_of(ID, store.LOCK_FILE), os.O_RDWR | os.O_CREAT)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert store.probe_cycle(ID) == (True, None)
+        rc, out = env.run("mandate-stop")
+    finally:
+        os.close(fd)
+    assert rc == 0 and env.runner.kill_calls == []
+    stop = out["data"]["stop"]
+    assert stop["cycle_running"] is True and stop["killed"] is None
+    assert stop["pid"] is None and stop["reason"] == "holder pid unknown"
 
 
 def test_stop_kills_the_process_tree_of_a_running_cycle(env):
@@ -346,27 +385,188 @@ def test_jsonl_reader_skips_garbage_lines(env, tmp_path):
     assert store.read_jsonl(tmp_path / "absent.jsonl") == []
 
 
-def test_digest_and_label_records_round_trip(env):
-    delivered = datetime(2026, 10, 9, 8, 0, tzinfo=timezone.utc)
-    store.record_digest(ID, "c1", ok=True, notifier="telegram", delivered_at=delivered)
-    assert store.read_digests(ID) == {"c1": {"ok": True, "notifier": "telegram", "delivered_at": "2026-10-09T08:00:00Z"}}
-    store.append_label_row(ID, 7, "auto-ok", "c1", now=delivered)
+T0 = datetime(2026, 10, 9, 8, 0, tzinfo=timezone.utc)
+
+
+def test_label_rows_round_trip_with_author_and_reason(env):
+    store.append_label_row(ID, 7, "auto-ok", "c1", reason="small, tests exist", now=T0)
+    store.append_label_row(ID, 8, "no-auto", "", by="user", now=T0)
     assert store.read_label_rows(ID) == [
-        {"ts": "2026-10-09T08:00:00Z", "issue": 7, "label": "auto-ok", "by": "cycle", "cycle_id": "c1"},
+        {"ts": "2026-10-09T08:00:00Z", "issue": 7, "label": "auto-ok", "by": "cycle", "cycle_id": "c1",
+         "reason": "small, tests exist"},
+        {"ts": "2026-10-09T08:00:00Z", "issue": 8, "label": "no-auto", "by": "user", "cycle_id": "",
+         "reason": ""},
     ]
 
 
-def test_fingerprint_moves_with_any_state_file_and_not_with_the_lock(env):
+@pytest.mark.parametrize("by", ["agent", "", "User", None])
+def test_a_label_row_refuses_an_author_other_than_user_or_cycle(env, by):
+    with pytest.raises(rules.MandateError):
+        store.append_label_row(ID, 7, "auto-ok", "c1", by=by)
+    assert store.read_label_rows(ID) == []
+
+
+def test_item_rows_round_trip_and_enforce_the_enumerations(env):
+    row = {"cycle_id": "c1", "issue": "12", "outcome": "pr-opened", "branch": "mandate/12-20261009",
+           "pr_url": "https://example.test/pr/1", "cost_usd": 3.5, "duration_s": 600, "tests": "pass",
+           "review": "accept", "gates": {"constitution": "ok", "org_neutral": "ok", "lint": "ok"}}
+    stored = store.append_item_row(ID, row, now=T0)
+    assert stored["ts"] == "2026-10-09T08:00:00Z" and stored["issue"] == 12
+    store.append_item_row(ID, {"cycle_id": "c1", "issue": 13, "outcome": "limit"}, now=T0)
+    rows = store.read_item_rows(ID)
+    assert [r["issue"] for r in rows] == [12, 13] and rows[0]["pr_url"] == row["pr_url"]
+    assert rows[0]["gates"] == row["gates"]
+    for outcome in rules.OUTCOMES:
+        store.append_item_row(ID, {"cycle_id": "c2", "issue": 1, "outcome": outcome}, now=T0)
+    assert len(store.read_item_rows(ID)) == 2 + len(rules.OUTCOMES)
+
+
+@pytest.mark.parametrize("bad", [
+    {"cycle_id": "c1", "issue": 1, "outcome": "merged"},
+    {"cycle_id": "c1", "issue": 1, "outcome": "failed", "tests": "green"},
+    {"cycle_id": "c1", "issue": 1, "outcome": "failed", "review": "maybe"},
+    {"cycle_id": "c1", "issue": 1},
+    {"issue": 1, "outcome": "failed"},
+    {"cycle_id": "../x", "issue": 1, "outcome": "failed"},
+])
+def test_an_item_row_that_breaks_the_shape_is_refused_and_nothing_is_written(env, bad):
+    with pytest.raises(rules.MandateError):
+        store.append_item_row(ID, bad)
+    assert store.read_item_rows(ID) == []
+
+
+def test_cycle_rows_round_trip_and_fold_by_cycle_id(env):
+    store.append_cycle_row(ID, {"cycle_id": "c1", "started_at": "2026-10-09T01:00:00Z", "status": "done",
+                                "taken": [12], "triaged": [20, 21], "spend_24h": 4.0, "spend_7d": 9.0}, now=T0)
+    store.record_digest(ID, "c1", ok=True, notifier="telegram", delivered_at=T0)
+    store.append_cycle_row(ID, {"cycle_id": "c2", "status": "limit"}, now=T0)
+    rows = store.read_cycle_rows(ID)
+    assert [r["cycle_id"] for r in rows] == ["c1", "c1", "c2"]
+    records = store.read_cycle_records(ID)
+    assert records["c1"]["status"] == "done" and records["c1"]["taken"] == [12]
+    assert records["c1"]["digest"] == {"ok": True, "notifier": "telegram", "delivered_at": "2026-10-09T08:00:00Z"}
+    assert "digest" not in records["c2"]
+
+
+def test_the_digest_reader_returns_the_records_the_eligibility_rule_takes(env):
+    store.append_cycle_row(ID, {
+        "cycle_id": "c1", "digest": {"notifier": "telegram", "ok": True, "delivered_at": "2026-10-09T08:00:00Z"},
+    })
+    store.append_cycle_row(ID, {"cycle_id": "c2"})
+    store.record_digest(ID, "c3", ok=False, notifier="file", delivered_at=T0)
+    digests = store.read_digests(ID)
+    assert digests == {
+        "c1": {"notifier": "telegram", "ok": True, "delivered_at": "2026-10-09T08:00:00Z"},
+        "c3": {"notifier": "file", "ok": False, "delivered_at": "2026-10-09T08:00:00Z"},
+    }
+    issue = {"number": 7, "labels": ["backlog", "auto-ok"], "author": "owner", "created_at": ""}
+    store.append_label_row(ID, 7, "auto-ok", "c1", now=T0)
+    verdict = rules.evaluate_candidate(
+        issue, owner="owner", labels_cfg=rules.DEFAULT_LABELS, label_rows=store.read_label_rows(ID),
+        digests=digests, pr_refs=set(), veto_window_hours=24, now=T0 + timedelta(hours=25),
+    )
+    assert verdict.eligible and verdict.reason == "cycle-set-veto-window-passed"
+
+
+@pytest.mark.parametrize("digest", [
+    {"notifier": "telegram", "ok": True},
+    {"notifier": "telegram", "ok": "yes", "delivered_at": "2026-10-09T08:00:00Z"},
+    {"notifier": "telegram", "ok": True, "delivered_at": "yesterday"},
+    "delivered",
+])
+def test_a_cycle_row_with_a_malformed_digest_is_refused(env, digest):
+    with pytest.raises(rules.MandateError):
+        store.append_cycle_row(ID, {"cycle_id": "c1", "digest": digest})
+    assert store.read_cycle_rows(ID) == []
+
+
+def test_command_rows_round_trip_per_cycle(env):
+    store.append_command_row(ID, "c1", {"argv": ["gh", "issue", "list"], "cwd": "/w", "exit": 0}, now=T0)
+    store.append_command_row(ID, "c1", {"argv": ["git", "fetch"], "cwd": "/w", "exit": 1, "ts": "2026-10-09T09:00:00Z"})
+    store.append_command_row(ID, "c2", {"argv": ["true"], "cwd": "/w", "exit": 0}, now=T0)
+    assert store.read_command_rows(ID, "c1") == [
+        {"ts": "2026-10-09T08:00:00Z", "argv": ["gh", "issue", "list"], "cwd": "/w", "exit": 0},
+        {"ts": "2026-10-09T09:00:00Z", "argv": ["git", "fetch"], "cwd": "/w", "exit": 1},
+    ]
+    assert len(store.read_command_rows(ID, "c2")) == 1
+    assert store.read_command_rows(ID, "never") == []
+    assert (store.mandate_dir(ID) / "cycles" / "c1" / "commands.jsonl").is_file()
+
+
+@pytest.mark.parametrize("bad", [
+    {"argv": "git fetch", "cwd": "/w", "exit": 0},
+    {"argv": ["git"], "cwd": "/w"},
+])
+def test_a_command_row_that_breaks_the_shape_is_refused(env, bad):
+    with pytest.raises(rules.MandateError):
+        store.append_command_row(ID, "c1", bad)
+    assert store.read_command_rows(ID, "c1") == []
+
+
+@pytest.mark.parametrize("cycle_id", ["../escape", "a/b", "", ".."])
+def test_a_cycle_id_cannot_leave_the_mandate_directory(env, cycle_id):
+    with pytest.raises(rules.MandateError):
+        store.append_command_row(ID, cycle_id, {"argv": ["x"], "cwd": "/", "exit": 0})
+
+
+def test_open_breaker_persists_the_record_and_logs_the_reason(env):
+    grant(env)
+    tripped = store.open_breaker(ID, "tests: 3 newly failing", now=T0)
+    assert tripped.breaker_open and tripped.breaker_reason == "tests: 3 newly failing"
+    saved = store.load_mandate(ID)
+    assert saved.breaker_open and saved.breaker_reason == "tests: 3 newly failing"
+    event = store.read_events(ID)[-1]
+    assert event["event"] == "breaker-open" and event["detail"] == {"reason": "tests: 3 newly failing"}
+    _, out = env.run("mandate-status")
+    assert "breaker-open" in out["data"]["refusals"]
+
+
+def test_open_breaker_of_an_unknown_mandate_raises(env):
+    with pytest.raises(rules.MandateError):
+        store.open_breaker("ghost", "x")
+
+
+def test_events_record_who_acted(env):
+    grant(env, by="alice")
+    env.run("mandate-extend", "--days", "2", "--by", "alice")
+    env.run("mandate-resume", "--by", "alice")
+    assert [(e["event"], e["by"]) for e in store.read_events(ID)] == [
+        ("granted", "alice"), ("extended", "alice"), ("resumed", "alice"),
+    ]
+
+
+def test_fingerprint_moves_with_a_one_byte_edit_of_each_fingerprinted_file(env):
+    grant(env)
+    store.append_label_row(ID, 1, "auto-ok", "c1", now=T0)
+    assert store.FINGERPRINT_FILES == (store.MANDATE_FILE, store.EVENTS_FILE, store.LABELS_FILE)
+    for name in store.FINGERPRINT_FILES:
+        path = store.path_of(ID, name)
+        original = path.read_bytes()
+        before = store.state_fingerprint(ID)
+        path.write_bytes(original[:-2] + bytes([original[-2] ^ 0x01]) + original[-1:])
+        assert store.state_fingerprint(ID) != before, name
+        path.write_bytes(original)
+        assert store.state_fingerprint(ID) == before, name
+
+
+def test_fingerprint_marks_a_missing_file_distinctly_from_an_empty_one(env):
+    grant(env)
+    absent = store.state_fingerprint(ID)
+    store.path_of(ID, store.LABELS_FILE).write_bytes(b"")
+    assert store.state_fingerprint(ID) != absent
+
+
+def test_fingerprint_ignores_the_lock_and_the_cycle_logs(env):
     grant(env)
     first = store.state_fingerprint(ID)
-    assert store.state_fingerprint(ID) == first
     with store.cycle_lock(ID):
         assert store.state_fingerprint(ID) == first
+    store.append_item_row(ID, {"cycle_id": "c1", "issue": 1, "outcome": "failed"})
+    store.append_cycle_row(ID, {"cycle_id": "c1"})
+    store.append_command_row(ID, "c1", {"argv": ["x"], "cwd": "/", "exit": 0})
+    assert store.state_fingerprint(ID) == first
     store.append_label_row(ID, 1, "auto-ok", "c1")
-    second = store.state_fingerprint(ID)
-    assert second != first
-    store.record_digest(ID, "c1", ok=True, notifier="telegram")
-    assert store.state_fingerprint(ID) != second
+    assert store.state_fingerprint(ID) != first
 
 
 def test_spend_now_reads_the_cost_log_for_the_mandate_directory(env):

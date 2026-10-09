@@ -867,7 +867,7 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
-id = "abd11676335c1ecd"
+id = "bf823c957eeaa050"
 domain = "code"
 file = "scripts/agentctl/mandate.py"
 class = "structural"
@@ -875,7 +875,7 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
-id = "bf823c957eeaa050"
+id = "2d6c982ca95f96a7"
 domain = "code"
 file = "scripts/agentctl/mandate.py"
 class = "structural"

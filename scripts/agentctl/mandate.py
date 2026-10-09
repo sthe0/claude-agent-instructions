@@ -127,10 +127,15 @@ class Mandate:
         picked["labels"] = {**DEFAULT_LABELS, **dict(picked.get("labels") or {})}
         picked["constitution"] = tuple(picked.get("constitution") or DEFAULT_CONSTITUTION)
         mandate = cls(**picked)
-        mandate.limits
-        parse_ts(mandate.granted_at, strict=True)
-        parse_ts(mandate.expires_at, strict=True)
+        mandate.validate()
         return mandate
+
+    def validate(self) -> None:
+        """Raise MandateError unless every limit is a positive number and both timestamps
+        parse; a record that fails is never loaded, so a damaged file cannot grant defaults."""
+        MandateLimits(**{f.name: getattr(self, f.name) for f in fields(MandateLimits)})
+        parse_ts(self.granted_at, strict=True)
+        parse_ts(self.expires_at, strict=True)
 
 
 def parse_ts(value, *, strict: bool = False) -> "datetime | None":
@@ -153,6 +158,16 @@ def format_ts(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def require_slug(value, what: str) -> str:
+    """A value that becomes a path component must be a plain slug: no separator, no `..`."""
+    if not isinstance(value, str) or not _SLUG.fullmatch(value) or ".." in value:
+        raise MandateError(f"{what} must be a plain slug, got {value!r}")
+    return value
+
+
 # --- state transitions (each is the whole effect of one user-facing verb) -------------
 
 def new_mandate(
@@ -163,8 +178,7 @@ def new_mandate(
     *,
     term_days: float = DEFAULT_TERM_DAYS,
 ) -> Mandate:
-    if not mandate_id or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", mandate_id):
-        raise MandateError(f"mandate id must be a plain slug, got {mandate_id!r}")
+    require_slug(mandate_id, "mandate id")
     if term_days <= 0:
         raise MandateError(f"term must be positive, got {term_days!r}")
     return Mandate(
@@ -530,11 +544,19 @@ def _unquote(path: str) -> str:
 
 
 def _diff_paths(line: str) -> "list[str]":
-    """Every path a `git diff --name-status` line names: both sides of a rename or copy."""
+    """Every path a `git diff --name-status` line names: both sides of a rename or copy.
+
+    git separates the status from the paths with tabs. A line without one is not in that
+    shape, so rather than guess which field is the path, the whole line and each
+    whitespace-separated token are checked -- over-matching only rejects more.
+    """
     fields_ = line.rstrip("\r\n").split("\t")
-    if len(fields_) < 2:
-        return [_unquote(line.strip())] if line.strip() else []
-    return [_unquote(p) for p in fields_[1:] if p]
+    if len(fields_) >= 2:
+        return [_unquote(p) for p in fields_[1:] if p]
+    text = line.strip()
+    if not text:
+        return []
+    return [_unquote(text)] + [_unquote(token) for token in text.split() if token != text]
 
 
 def _normal(path: str) -> str:

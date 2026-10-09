@@ -8,13 +8,21 @@ a process lives here and nowhere else, so `mandate.py` keeps its purity contract
 Layout, one directory per mandate under ``mandates_root()``::
 
     mandate.json     the Mandate record (atomic replace)
-    events.jsonl     append-only audit log
-    labels.jsonl     which label the cycle (not the user) applied, per issue
-    digests.json     cycle_id -> delivery record of that cycle's digest
+    events.jsonl     append-only audit log: {ts, event, by, detail}
+    labels.jsonl     one row per label applied: {ts, issue, label, by: user|cycle, cycle_id, reason}
+    items.jsonl      one row per item taken: {ts, cycle_id, issue, outcome, branch, pr_url,
+                     cost_usd, duration_s, tests, review, gates, ...}; outcome is one of
+                     `rules.OUTCOMES`, tests is pass|fail|not-run, review accept|reject|not-run
+    cycles.jsonl     one row per cycle: {cycle_id, started_at, ended_at, status, spend_24h,
+                     spend_7d, taken, triaged, digest: {notifier, ok, delivered_at}, ...};
+                     rows with one cycle_id merge, later fields winning (`read_cycle_records`)
+    cycles/<cycle_id>/commands.jsonl
+                     one row per external command the driver ran: {ts, argv, cwd, exit}
     cycle.lock       flock held for a whole cycle; its text is the holder's pid
 
-``$AGENTCTL_MANDATE_DIR`` overrides the root; the test suite sets it so no test touches
-the real agent home.
+Item, cycle and command rows may carry fields beyond those named; the named ones are
+validated. ``$AGENTCTL_MANDATE_DIR`` overrides the root; the test suite sets it so no test
+touches the real agent home.
 """
 from __future__ import annotations
 
@@ -24,6 +32,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,9 +50,17 @@ KILL_TREE = Path(__file__).resolve().parents[1] / "kill-tree.py"
 MANDATE_FILE = "mandate.json"
 EVENTS_FILE = "events.jsonl"
 LABELS_FILE = "labels.jsonl"
-DIGESTS_FILE = "digests.json"
+ITEMS_FILE = "items.jsonl"
+CYCLES_FILE = "cycles.jsonl"
+COMMANDS_FILE = "commands.jsonl"
 LOCK_FILE = "cycle.lock"
-FINGERPRINT_FILES = (MANDATE_FILE, EVENTS_FILE, LABELS_FILE, DIGESTS_FILE)
+FINGERPRINT_FILES = (MANDATE_FILE, EVENTS_FILE, LABELS_FILE)
+
+LABEL_AUTHORS = ("user", "cycle")
+TEST_VERDICTS = ("pass", "fail", "not-run")
+REVIEW_VERDICTS = ("accept", "reject", "not-run")
+PID_READ_ATTEMPTS = 10
+PID_READ_DELAY_S = 0.02
 
 
 class CycleBusy(RuntimeError):
@@ -62,7 +79,7 @@ def mandates_root() -> Path:
 
 
 def mandate_dir(mandate_id: str) -> Path:
-    return mandates_root() / mandate_id
+    return mandates_root() / rules.require_slug(mandate_id, "mandate id")
 
 
 def path_of(mandate_id: str, name: str) -> Path:
@@ -134,6 +151,12 @@ def save_mandate(mandate: rules.Mandate) -> None:
     atomic_write_json(path_of(mandate.id, MANDATE_FILE), mandate.to_dict())
 
 
+def mandate_exists(mandate_id: str) -> bool:
+    """Whether a record file is present, without parsing it -- a corrupt record still
+    exists, and the verbs that must work on one (stop) need to tell it from a missing one."""
+    return path_of(mandate_id, MANDATE_FILE).is_file()
+
+
 def list_mandate_ids() -> "list[str]":
     root = mandates_root()
     if not root.is_dir():
@@ -143,10 +166,26 @@ def list_mandate_ids() -> "list[str]":
 
 # --- logs ------------------------------------------------------------------------------
 
-def append_event(mandate_id: str, event: str, detail: "dict | None" = None, *, now: "datetime | None" = None) -> dict:
-    row = {"ts": rules.format_ts(now or utcnow()), "event": event, "detail": detail or {}}
+def append_event(
+    mandate_id: str, event: str, detail: "dict | None" = None, *, by: str = "", now: "datetime | None" = None,
+) -> dict:
+    row = {"ts": rules.format_ts(now or utcnow()), "event": event, "by": by, "detail": detail or {}}
     append_jsonl(path_of(mandate_id, EVENTS_FILE), row)
     return row
+
+
+def open_breaker(
+    mandate_id: str, reason: str, *, by: str = "cycle", now: "datetime | None" = None,
+) -> rules.Mandate:
+    """Open the breaker on the persisted record and log it with the reason, in that order,
+    so a reader that sees the event can rely on the record being tripped."""
+    mandate = load_mandate(mandate_id)
+    if mandate is None:
+        raise rules.MandateError(f"no mandate {mandate_id!r}")
+    tripped = rules.breaker_opened(mandate, reason)
+    save_mandate(tripped)
+    append_event(mandate_id, "breaker-open", {"reason": reason}, by=by, now=now)
+    return tripped
 
 
 def read_events(mandate_id: str) -> "list[dict]":
@@ -154,14 +193,21 @@ def read_events(mandate_id: str) -> "list[dict]":
 
 
 def append_label_row(
-    mandate_id: str, issue: int, label: str, cycle_id: str, *, now: "datetime | None" = None,
+    mandate_id: str, issue: int, label: str, cycle_id: str, *,
+    by: str = "cycle", reason: str = "", now: "datetime | None" = None,
 ) -> dict:
+    """Log a label applied to `issue`. `by` says who set it -- `cycle` for the driver, `user`
+    for one it observed -- because the owner's account applies both and only this log can
+    tell them apart."""
+    if by not in LABEL_AUTHORS:
+        raise rules.MandateError(f"label author must be one of {LABEL_AUTHORS}, got {by!r}")
     row = {
         "ts": rules.format_ts(now or utcnow()),
         "issue": int(issue),
         "label": label,
-        "by": "cycle",
+        "by": by,
         "cycle_id": cycle_id,
+        "reason": str(reason),
     }
     append_jsonl(path_of(mandate_id, LABELS_FILE), row)
     return row
@@ -171,23 +217,115 @@ def read_label_rows(mandate_id: str) -> "list[dict]":
     return read_jsonl(path_of(mandate_id, LABELS_FILE))
 
 
-def read_digests(mandate_id: str) -> dict:
-    data = read_json(path_of(mandate_id, DIGESTS_FILE), {})
-    return data if isinstance(data, dict) else {}
+def _require_keys(row: dict, keys: Sequence[str], what: str) -> None:
+    missing = [key for key in keys if key not in row]
+    if missing:
+        raise rules.MandateError(f"{what} row lacks {', '.join(missing)}")
+
+
+def _stamped(row: dict, now: "datetime | None") -> dict:
+    stamped = dict(row)
+    stamped.setdefault("ts", rules.format_ts(now or utcnow()))
+    return stamped
+
+
+def _check_choice(row: dict, key: str, allowed: Sequence[str], what: str) -> None:
+    if key in row and row[key] not in allowed:
+        raise rules.MandateError(f"{what} {key} must be one of {tuple(allowed)}, got {row[key]!r}")
+
+
+def append_item_row(mandate_id: str, row: dict, *, now: "datetime | None" = None) -> dict:
+    """Log the outcome of one item. Requires cycle_id, issue and outcome; the enumerated
+    fields (outcome, tests, review) are checked, the rest is stored as given."""
+    _require_keys(row, ("cycle_id", "issue", "outcome"), "item")
+    rules.require_slug(row["cycle_id"], "cycle id")
+    _check_choice(row, "outcome", rules.OUTCOMES, "item")
+    _check_choice(row, "tests", TEST_VERDICTS, "item")
+    _check_choice(row, "review", REVIEW_VERDICTS, "item")
+    stamped = _stamped(row, now)
+    stamped["issue"] = int(stamped["issue"])
+    append_jsonl(path_of(mandate_id, ITEMS_FILE), stamped)
+    return stamped
+
+
+def read_item_rows(mandate_id: str) -> "list[dict]":
+    return read_jsonl(path_of(mandate_id, ITEMS_FILE))
+
+
+def _check_digest(digest) -> None:
+    if not isinstance(digest, dict):
+        raise rules.MandateError(f"cycle digest must be an object, got {digest!r}")
+    _require_keys(digest, ("notifier", "ok", "delivered_at"), "digest")
+    if not isinstance(digest["notifier"], str) or not isinstance(digest["ok"], bool):
+        raise rules.MandateError(f"digest needs a string notifier and a boolean ok, got {digest!r}")
+    rules.parse_ts(digest["delivered_at"], strict=True)
+
+
+def append_cycle_row(mandate_id: str, row: dict, *, now: "datetime | None" = None) -> dict:
+    """Log a cycle (or a later correction to one: rows of one cycle_id merge). Requires
+    cycle_id; a `digest` must be {notifier, ok, delivered_at}."""
+    _require_keys(row, ("cycle_id",), "cycle")
+    rules.require_slug(row["cycle_id"], "cycle id")
+    if "digest" in row:
+        _check_digest(row["digest"])
+    stamped = _stamped(row, now)
+    append_jsonl(path_of(mandate_id, CYCLES_FILE), stamped)
+    return stamped
+
+
+def read_cycle_rows(mandate_id: str) -> "list[dict]":
+    return read_jsonl(path_of(mandate_id, CYCLES_FILE))
+
+
+def read_cycle_records(mandate_id: str) -> "dict[str, dict]":
+    """cycle_id -> the cycle's rows folded in file order, a later field replacing an earlier."""
+    records: "dict[str, dict]" = {}
+    for row in read_cycle_rows(mandate_id):
+        cycle_id = row.get("cycle_id")
+        if isinstance(cycle_id, str):
+            records.setdefault(cycle_id, {}).update(row)
+    return records
 
 
 def record_digest(
     mandate_id: str, cycle_id: str, *, ok: bool, notifier: str, delivered_at: "datetime | None" = None,
 ) -> dict:
-    digests = read_digests(mandate_id)
-    record = {
+    """Record how a cycle's digest was delivered, as a cycles.jsonl row of its own."""
+    digest = {
         "ok": bool(ok),
         "notifier": notifier,
         "delivered_at": rules.format_ts(delivered_at or utcnow()),
     }
-    digests[cycle_id] = record
-    atomic_write_json(path_of(mandate_id, DIGESTS_FILE), digests)
-    return record
+    append_cycle_row(mandate_id, {"cycle_id": cycle_id, "digest": digest}, now=delivered_at)
+    return digest
+
+
+def read_digests(mandate_id: str) -> "dict[str, dict]":
+    """cycle_id -> {notifier, ok, delivered_at}: the input `rules.evaluate_candidate` takes.
+    A cycle with no delivered digest is absent, which the rule reads as not delivered."""
+    return {
+        cycle_id: record["digest"]
+        for cycle_id, record in read_cycle_records(mandate_id).items()
+        if isinstance(record.get("digest"), dict)
+    }
+
+
+def cycle_dir(mandate_id: str, cycle_id: str) -> Path:
+    return mandate_dir(mandate_id) / "cycles" / rules.require_slug(cycle_id, "cycle id")
+
+
+def append_command_row(mandate_id: str, cycle_id: str, row: dict, *, now: "datetime | None" = None) -> dict:
+    """Log one external command: {ts, argv, cwd, exit}."""
+    _require_keys(row, ("argv", "cwd", "exit"), "command")
+    if not isinstance(row["argv"], list) or not all(isinstance(a, str) for a in row["argv"]):
+        raise rules.MandateError(f"command argv must be a list of strings, got {row['argv']!r}")
+    stamped = _stamped(row, now)
+    append_jsonl(cycle_dir(mandate_id, cycle_id) / COMMANDS_FILE, stamped)
+    return stamped
+
+
+def read_command_rows(mandate_id: str, cycle_id: str) -> "list[dict]":
+    return read_jsonl(cycle_dir(mandate_id, cycle_id) / COMMANDS_FILE)
 
 
 def spend_now(mandate_id: str, now: "datetime | None" = None) -> rules.SpendWindows:
@@ -237,8 +375,10 @@ def cycle_lock(mandate_id: str) -> Iterator[int]:
 
 
 def probe_cycle(mandate_id: str) -> "tuple[bool, int | None]":
-    """Is a cycle running right now? A non-blocking try on the lock: acquiring it means
-    nobody holds it, and it is released again at once."""
+    """Is a cycle running right now, and which pid holds it? A non-blocking try on the lock:
+    acquiring it means nobody holds it, and it is released again at once. A holder takes
+    the flock before it writes its pid, so an empty file under a held lock is read again
+    briefly; if the pid never shows, the answer is (True, None)."""
     path = path_of(mandate_id, LOCK_FILE)
     try:
         fd = os.open(path, os.O_RDWR)
@@ -248,8 +388,13 @@ def probe_cycle(mandate_id: str) -> "tuple[bool, int | None]":
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raw = os.pread(fd, 32, 0).decode("ascii", "replace").strip()
-            return True, int(raw) if raw.isdigit() else None
+            for attempt in range(PID_READ_ATTEMPTS):
+                raw = os.pread(fd, 32, 0).decode("ascii", "replace").strip()
+                if raw.isdigit():
+                    return True, int(raw)
+                if attempt + 1 < PID_READ_ATTEMPTS:
+                    time.sleep(PID_READ_DELAY_S)
+            return True, None
         fcntl.flock(fd, fcntl.LOCK_UN)
         return False, None
     finally:
@@ -264,30 +409,49 @@ def _systemctl(run: Runner, action: str) -> dict:
     return {"argv": argv, "returncode": result.returncode, "stderr": (result.stderr or "").strip()[:200]}
 
 
-def stop_cycle(mandate_id: str, *, runner: "Runner | None" = None) -> dict:
+def stop_cycle(mandate_id: str, *, by: str = "", runner: "Runner | None" = None) -> dict:
     """Pause the mandate, disable the timer, and kill a running cycle's process tree.
 
-    The pause lands first, so a cycle that begins after this point is refused by its own
-    gate; an idle mandate (nobody holds the lock) is never killed.
+    The pause is tried first, so a cycle that begins after this point is refused by its own
+    gate, but it is best-effort: a record that will not load must not stand between the
+    user and the timer and the running cycle, so a failure is reported and the stop
+    goes on. An idle mandate (nobody holds the lock) is never killed.
     """
     run = runner or subprocess_runner
-    mandate = load_mandate(mandate_id)
-    if mandate is None:
+    if not mandate_exists(mandate_id):
         raise rules.MandateError(f"no mandate {mandate_id!r}")
-    save_mandate(rules.stopped(mandate))
+    paused, pause_error = False, None
+    try:
+        mandate = load_mandate(mandate_id)
+        if mandate is None:
+            pause_error = "mandate record present but not readable JSON"
+        else:
+            save_mandate(rules.stopped(mandate))
+            paused = True
+    except (rules.MandateError, OSError) as exc:
+        pause_error = str(exc)
     timer = _systemctl(run, "disable")
     held, pid = probe_cycle(mandate_id)
     killed = None
+    kill_skipped = None
     if held and pid:
         argv = [sys.executable, str(KILL_TREE), str(pid)]
         result = run(argv)
         killed = {"pid": pid, "returncode": result.returncode}
-    detail = {"timer": timer, "cycle_running": held, "killed": killed}
-    append_event(mandate_id, "stopped", detail)
+    elif held:
+        kill_skipped = "holder pid unknown"
+    detail = {
+        "timer": timer, "paused": paused, "cycle_running": held, "pid": pid, "killed": killed,
+    }
+    if pause_error:
+        detail["pause_error"] = pause_error
+    if kill_skipped:
+        detail["reason"] = kill_skipped
+    append_event(mandate_id, "stopped", detail, by=by)
     return detail
 
 
-def resume_cycle(mandate_id: str, *, runner: "Runner | None" = None) -> dict:
+def resume_cycle(mandate_id: str, *, by: str = "", runner: "Runner | None" = None) -> dict:
     """Unpause, close the breaker, and re-enable the timer (a missing timer is reported,
     not fatal)."""
     run = runner or subprocess_runner
@@ -297,5 +461,5 @@ def resume_cycle(mandate_id: str, *, runner: "Runner | None" = None) -> dict:
     save_mandate(rules.resumed(mandate))
     timer = _systemctl(run, "enable")
     detail = {"timer": timer}
-    append_event(mandate_id, "resumed", detail)
+    append_event(mandate_id, "resumed", detail, by=by)
     return detail

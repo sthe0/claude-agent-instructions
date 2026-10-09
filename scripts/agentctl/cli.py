@@ -1841,7 +1841,9 @@ def cmd_mandate_grant(args, *, store: StateStore, runner: Runner | None = None) 
         term_days=args.days if args.days is not None else mandate_rules.DEFAULT_TERM_DAYS,
     )
     mandate_store.save_mandate(mandate)
-    mandate_store.append_event(mandate.id, "granted", {"by": mandate.granted_by, "expires_at": mandate.expires_at}, now=now)
+    mandate_store.append_event(
+        mandate.id, "granted", {"expires_at": mandate.expires_at}, by=mandate.granted_by, now=now,
+    )
     return Directive(
         True, _MANDATE_NODE, "noop",
         f"mandate {mandate.id!r} granted by {mandate.granted_by} until {mandate.expires_at}",
@@ -1859,7 +1861,9 @@ def cmd_mandate_extend(args, *, store: StateStore, runner: Runner | None = None)
     now = mandate_store.utcnow()
     mandate = mandate_rules.extended(mandate, now, args.days)
     mandate_store.save_mandate(mandate)
-    mandate_store.append_event(mandate.id, "extended", {"by": args.by.strip(), "expires_at": mandate.expires_at}, now=now)
+    mandate_store.append_event(
+        mandate.id, "extended", {"expires_at": mandate.expires_at}, by=args.by.strip(), now=now,
+    )
     return Directive(
         True, _MANDATE_NODE, "noop",
         f"mandate {mandate.id!r} extended to {mandate.expires_at}",
@@ -1875,7 +1879,7 @@ def cmd_mandate_resume(args, *, store: StateStore, runner: Runner | None = None)
         return refusal
     if mandate_store.load_mandate(args.mandate_id) is None:
         return Directive(False, _MANDATE_NODE, "noop", f"no mandate {args.mandate_id!r}")
-    detail = mandate_store.resume_cycle(args.mandate_id, runner=runner)
+    detail = mandate_store.resume_cycle(args.mandate_id, by=args.by.strip(), runner=runner)
     now = mandate_store.utcnow()
     return Directive(
         True, _MANDATE_NODE, "noop",
@@ -1887,15 +1891,23 @@ def cmd_mandate_resume(args, *, store: StateStore, runner: Runner | None = None)
 def cmd_mandate_stop(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Pause the mandate, disable its timer and kill a running cycle. Open to the agent:
     stopping only ever narrows authority."""
-    if mandate_store.load_mandate(args.mandate_id) is None:
+    if not mandate_store.mandate_exists(args.mandate_id):
         return Directive(False, _MANDATE_NODE, "noop", f"no mandate {args.mandate_id!r}")
     detail = mandate_store.stop_cycle(args.mandate_id, runner=runner)
-    now = mandate_store.utcnow()
+    if detail["killed"]:
+        outcome = f"killed cycle pid {detail['killed']['pid']}"
+    elif detail["cycle_running"]:
+        outcome = "a cycle holds the lock but its pid is unknown, nothing killed"
+    else:
+        outcome = "no running cycle"
+    try:
+        view = _mandate_view(mandate_store.load_mandate(args.mandate_id), mandate_store.utcnow())
+    except (mandate_rules.MandateError, AttributeError):
+        view = {"mandate": None, "record_unreadable": True}
     return Directive(
         True, _MANDATE_NODE, "noop",
-        f"mandate {args.mandate_id!r} stopped"
-        + (f"; killed cycle pid {detail['killed']['pid']}" if detail["killed"] else "; no cycle was running"),
-        data={**_mandate_view(mandate_store.load_mandate(args.mandate_id), now), "stop": detail},
+        f"mandate {args.mandate_id!r} stopped; {outcome}",
+        data={**view, "stop": detail},
     )
 
 
