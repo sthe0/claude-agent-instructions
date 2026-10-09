@@ -28,7 +28,7 @@ from pathlib import Path
 import proc_tree
 from lib import argv_text, config_root, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -1785,6 +1785,130 @@ def cmd_task_reset(args, *, store: StateStore, runner: Runner | None = None) -> 
         True, "(task-scoped)", "noop",
         f"cross-session task accumulator reset for task {args.task!r} by {by}: {args.reason}",
         data={"task": args.task, "reason": args.reason, "by": by},
+    )
+
+
+_MANDATE_NODE = "(mandate-scoped)"
+
+
+def _mandate_by_refusal(args) -> Directive | None:
+    by = (args.by or "").strip()
+    if by and by.casefold() != AGENT_ACTOR:
+        return None
+    return Directive(
+        False, _MANDATE_NODE, "noop",
+        f"{args.command} is a user decision: --by must name the customer, not {AGENT_ACTOR!r}",
+        marker=DIRECTIVE_ESCALATE_TO_USER,
+        data={"mandate": args.mandate_id, "by": by},
+    )
+
+
+def _mandate_view(mandate: mandate_rules.Mandate, now: dt.datetime) -> dict:
+    spend = mandate_store.spend_now(mandate.id, now)
+    verdict_ = mandate_rules.gate(mandate, now, spend)
+    held, pid = mandate_store.probe_cycle(mandate.id)
+    return {
+        "mandate": mandate.to_dict(),
+        "spend": {"day_usd": spend.day_usd, "week_usd": spend.week_usd},
+        "may_start": verdict_.may_start,
+        "refusals": list(verdict_.reasons),
+        "cycle_running": held,
+        "cycle_pid": pid,
+    }
+
+
+def cmd_mandate_grant(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Create a standing mandate: the user's one-time grant of bounded authority to the
+    background debt cycle. Refused for `--by agent`, and for an id that already has a
+    record (extend or resume that one instead)."""
+    refusal = _mandate_by_refusal(args)
+    if refusal:
+        return refusal
+    if mandate_store.load_mandate(args.mandate_id) is not None:
+        return Directive(
+            False, _MANDATE_NODE, "noop",
+            f"mandate {args.mandate_id!r} already exists; use mandate-extend or mandate-resume",
+            data={"mandate": args.mandate_id},
+        )
+    defaults = mandate_rules.MandateLimits()
+    limits = mandate_rules.MandateLimits(**{
+        name: (getattr(args, name) if getattr(args, name) is not None else getattr(defaults, name))
+        for name in mandate_rules.LIMIT_FIELDS
+    })
+    now = mandate_store.utcnow()
+    mandate = mandate_rules.new_mandate(
+        args.mandate_id, args.by.strip(), now, limits,
+        term_days=args.days if args.days is not None else mandate_rules.DEFAULT_TERM_DAYS,
+    )
+    mandate_store.save_mandate(mandate)
+    mandate_store.append_event(mandate.id, "granted", {"by": mandate.granted_by, "expires_at": mandate.expires_at}, now=now)
+    return Directive(
+        True, _MANDATE_NODE, "noop",
+        f"mandate {mandate.id!r} granted by {mandate.granted_by} until {mandate.expires_at}",
+        data=_mandate_view(mandate, now),
+    )
+
+
+def cmd_mandate_extend(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    refusal = _mandate_by_refusal(args)
+    if refusal:
+        return refusal
+    mandate = mandate_store.load_mandate(args.mandate_id)
+    if mandate is None:
+        return Directive(False, _MANDATE_NODE, "noop", f"no mandate {args.mandate_id!r}")
+    now = mandate_store.utcnow()
+    mandate = mandate_rules.extended(mandate, now, args.days)
+    mandate_store.save_mandate(mandate)
+    mandate_store.append_event(mandate.id, "extended", {"by": args.by.strip(), "expires_at": mandate.expires_at}, now=now)
+    return Directive(
+        True, _MANDATE_NODE, "noop",
+        f"mandate {mandate.id!r} extended to {mandate.expires_at}",
+        data=_mandate_view(mandate, now),
+    )
+
+
+def cmd_mandate_resume(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Unpause a stopped mandate and close an open breaker -- a user decision, since the
+    breaker opens exactly when the cycle's own judgement failed."""
+    refusal = _mandate_by_refusal(args)
+    if refusal:
+        return refusal
+    if mandate_store.load_mandate(args.mandate_id) is None:
+        return Directive(False, _MANDATE_NODE, "noop", f"no mandate {args.mandate_id!r}")
+    detail = mandate_store.resume_cycle(args.mandate_id, runner=runner)
+    now = mandate_store.utcnow()
+    return Directive(
+        True, _MANDATE_NODE, "noop",
+        f"mandate {args.mandate_id!r} resumed by {args.by.strip()}",
+        data={**_mandate_view(mandate_store.load_mandate(args.mandate_id), now), "resume": detail},
+    )
+
+
+def cmd_mandate_stop(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Pause the mandate, disable its timer and kill a running cycle. Open to the agent:
+    stopping only ever narrows authority."""
+    if mandate_store.load_mandate(args.mandate_id) is None:
+        return Directive(False, _MANDATE_NODE, "noop", f"no mandate {args.mandate_id!r}")
+    detail = mandate_store.stop_cycle(args.mandate_id, runner=runner)
+    now = mandate_store.utcnow()
+    return Directive(
+        True, _MANDATE_NODE, "noop",
+        f"mandate {args.mandate_id!r} stopped"
+        + (f"; killed cycle pid {detail['killed']['pid']}" if detail["killed"] else "; no cycle was running"),
+        data={**_mandate_view(mandate_store.load_mandate(args.mandate_id), now), "stop": detail},
+    )
+
+
+def cmd_mandate_status(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    mandate = mandate_store.load_mandate(args.mandate_id)
+    if mandate is None:
+        return Directive(False, _MANDATE_NODE, "noop", f"no mandate {args.mandate_id!r}")
+    now = mandate_store.utcnow()
+    view = _mandate_view(mandate, now)
+    return Directive(
+        True, _MANDATE_NODE, "noop",
+        f"mandate {mandate.id!r}: " + ("may start a cycle" if view["may_start"] else "refused: " + ", ".join(view["refusals"])),
+        data=view,
     )
 
 
@@ -10677,6 +10801,11 @@ COMMANDS = {
     "push-subplan": cmd_push_subplan,
     "pop-subplan": cmd_pop_subplan,
     "task-reset": cmd_task_reset,
+    "mandate-grant": cmd_mandate_grant,
+    "mandate-extend": cmd_mandate_extend,
+    "mandate-resume": cmd_mandate_resume,
+    "mandate-stop": cmd_mandate_stop,
+    "mandate-status": cmd_mandate_status,
 }
 
 
@@ -10723,6 +10852,7 @@ _SESSION_COMMANDS = (
     "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
     "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status",
     "drive", "close", "push-subplan", "pop-subplan", "task-reset",
+    "mandate-grant", "mandate-extend", "mandate-resume", "mandate-stop", "mandate-status",
 )
 
 # (dest, subcommands that declare it)
@@ -10809,8 +10939,11 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "comma-separated stage indices the launcher narrowed the pass to"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
+    ("mandate_id", ("mandate-grant", "mandate-extend", "mandate-resume", "mandate-stop",
+                    "mandate-status"),
+     "mandate slug the state directory is keyed by"),
     ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge", "resolve-permission",
-            "task-reset"),
+            "task-reset", "mandate-grant", "mandate-extend", "mandate-resume"),
      "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
      "identity token like any other --by, not free text)"),
     # --decision is NOT listed here: argparse `choices=` already makes it a non-candidate
@@ -11581,6 +11714,33 @@ def build_parser() -> argparse.ArgumentParser:
                     help="why this task's accumulated cross-session friction is being forgiven")
     sp.add_argument("--by", required=True,
                     help="the customer authorizing the reset; the coordinator is refused")
+
+    def add_mandate(name: str, help_: str, *, by: bool = False) -> argparse.ArgumentParser:
+        sub = add(name, help=help_)
+        sub.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+        sub.add_argument("--id", dest="mandate_id", default=mandate_rules.DEFAULT_MANDATE_ID,
+                         help="mandate slug (default: %(default)s)")
+        if by:
+            sub.add_argument("--by", required=True,
+                             help="the customer authorizing this; the coordinator is refused")
+        return sub
+
+    sp = add_mandate("mandate-grant", "create the standing mandate for the background debt cycle", by=True)
+    sp.add_argument("--days", type=float, default=None, help="term length in days")
+    for limit, unit in (
+        ("daily_usd", "USD"), ("weekly_usd", "USD"), ("item_usd_cap", "USD"),
+        ("item_minutes_cap", "minutes"), ("cycle_minutes_cap", "minutes"),
+        ("veto_window_hours", "hours"),
+    ):
+        sp.add_argument(f"--{limit.replace('_', '-')}", dest=limit, type=float, default=None,
+                        help=f"override the default ({unit})")
+    sp.add_argument("--max-items", dest="max_items", type=int, default=None,
+                    help="items taken per cycle")
+    sp = add_mandate("mandate-extend", "push the mandate's expiry out", by=True)
+    sp.add_argument("--days", type=float, required=True, help="days to add past the later of now and expiry")
+    add_mandate("mandate-resume", "unpause the mandate and close its breaker", by=True)
+    add_mandate("mandate-stop", "pause the mandate, disable its timer, kill a running cycle")
+    add_mandate("mandate-status", "show the mandate, its spend windows and whether a cycle may start")
     return p
 
 

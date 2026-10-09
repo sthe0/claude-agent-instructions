@@ -711,6 +711,26 @@ The mandated reviews are in the estimate deliberately: they are derivable from t
 
 **Round-release override.** When the review-round budget is spent (`gates.plan_review_round_release_active` / the cross-axis friction release) `plan-review --verdict override --reviewer agent` records the coordinator's own decision, never counts as the first thinker verdict for the boundary, and the next present/`PLAN-READY` Directive carries `data["agent_review_override"]` so the user sees it.
 
+## Mandate
+
+A **mandate** is the user's one-time, bounded grant of authority to the background debt cycle (a timer-driven worker that triages the backlog, fixes eligible issues and opens review-gated pull requests). It is not a session and has no node in the state machine: it is a standing record under `~/.claude-agent/agentctl/mandates/<id>/` (override: `$AGENTCTL_MANDATE_DIR`, which the tests set), and the `mandate-*` verbs are session-independent in the way `task-reset` is (`--session` is accepted and ignored so the default-session injection does not crash argparse).
+
+*Difficulty removed:* an authority granted once and used unattended is only as safe as its bounds, and a bound enforced by a model's judgement is a suggestion. The split is the engine's usual one. **`mandate.py` holds every decidable bound as a pure function** (no filesystem, process or clock; `now` is a parameter, and a test pins the import list): the gate (expired / paused / breaker open / daily and weekly spend over a rolling 24 h and 7 × 24 h window / per-cycle minutes), issue eligibility, the triage filter, selection, the baseline-relative test verdict, per-item overrun, the breaker policy, and the constitution classifier. **`mandate_store.py` is the I/O half**: atomic JSON, append-only logs, the `cycle.lock` flock whose text is the holder's pid, the state fingerprint, and stop/resume. The model supplies only perception (triage verdicts, the fix, the review).
+
+State files, one directory per mandate: `mandate.json` (the record), `events.jsonl` (audit log), `labels.jsonl` (which label the cycle, not the user, applied — the repo owner's account applies every label, so only this log can tell the two apart), `digests.json` (cycle id → delivery record of that cycle's digest), `cycle.lock`.
+
+| Verb | Authority | Effect |
+|---|---|---|
+| `mandate-grant --by <user> [--days N] [limit flags]` | user only (`AGENTCTL_USER_AUTHORITY_VERBS`; `--by agent` is refused) | creates the record; refuses an id that exists |
+| `mandate-extend --days N --by <user>` | user only | pushes expiry past the later of now and the current expiry |
+| `mandate-resume --by <user>` | user only | unpauses, closes the breaker, re-enables `agent-debt-cycle.timer` |
+| `mandate-stop` | open to the agent (it only narrows authority) | pauses first, then disables the timer, then kills the cycle's process tree **only if** the lock is held — an idle mandate is never killed |
+| `mandate-status` | read-only | the record, the spend windows, the gate verdict with every refusal reason, whether a cycle is running |
+
+The bounds, as they are decided: a cycle may start only while the mandate is unexpired, unpaused, its breaker closed, and both spend windows below their caps; spend is the sum of spawn-cost rows whose `plan_path` lies under the mandate directory plus `judge-cost` and `overrun-charge` events, and an unreadable timestamp counts in both windows. An issue is eligible only if the repo owner authored it, it is in the backlog or difficulty domain, no open pull request references it, and nothing vetoes it (`no-auto`, `auto-no`, `process-umbrella`). A user-set `auto-ok` is eligible at once; a cycle-set one never is for `severity:high`, and otherwise only after a *delivered non-file* digest plus the veto window. A diff touching a constitution path — on either side of a rename or copy — or any `settings*.json` is rejected; the default list names the mandate machinery itself, the permission and widening tables, the hooks and the verification scripts.
+
+Each bound has an entry in [`../tests/mandate_mutation_control.py`](../tests/mandate_mutation_control.py): an exact textual mutation of the production line and the test ids that must go red, run in-suite by `test_mandate_mutation_catalogue.py` (the first run of a new catalogue goes through `scripts/cap-run.sh`).
+
 ## Cost tracking
 
 `record-result` attributes spawn-stage cost from `~/.local/log/claude-spawn-costs.jsonl` (written by `spawn-specialist.py`) and stamps `cost_usd / duration_ms / spawn_count` on each spawn stage's `Outcome`. In-thread and main-session tokens are **not** split per stage — use `scripts/cost-report.py` for the whole-session estimate.
