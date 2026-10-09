@@ -59,7 +59,11 @@ KEPT_VALUE_FLAGS = frozenset(
     {"--resume", "-r", "--model", "--permission-mode", "--effort", "--add-dir", "--agent",
      "--session-id", "--name", "-n"}
 )
-_BOOT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# Flags that take every following non-flag argument as a value.
+VARIADIC_FLAGS = frozenset({"--add-dir"})
+# Same-second collision suffix; '~' sorts after '.', so "<ts>~01.json" is newer than "<ts>.json".
+COLLISION_SEP = "~"
+_BOOT_ID_RE =re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def proc_root() -> Path:
@@ -89,7 +93,10 @@ def current_boot_id() -> str:
     override = os.environ.get("CLAUDE_RECOVER_BOOT_ID")
     if override:
         return override
-    return (proc_root() / "sys/kernel/random/boot_id").read_text().strip()
+    try:
+        return (proc_root() / "sys/kernel/random/boot_id").read_text().strip()
+    except OSError as exc:
+        raise SystemExit(f"claude-recover: cannot read boot id: {exc}")
 
 
 def boot_time() -> int | None:
@@ -106,17 +113,33 @@ def iso_ts(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def mkdir_private(path: Path) -> None:
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.chmod(0o700)
+
+
 def write_atomic(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    mkdir_private(path.parent)
     tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
-    with open(tmp, "w") as fh:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
         fh.write(text)
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, path)
 
 
+def remove_stale_tmp(state: Path) -> None:
+    """Leftovers of a writer killed between create and rename; callers hold the lock."""
+    for stale in [*state.glob(".*.tmp.*"), *(state / "snapshots").glob("*/.*.tmp.*")]:
+        stale.unlink(missing_ok=True)
+
+
 # --- reading the live world -------------------------------------------------------------
+
+
+class TmuxError(RuntimeError):
+    """tmux could not be asked (binary missing, timeout, no server) — not the same as no panes."""
 
 
 def list_panes() -> list[dict]:
@@ -126,10 +149,10 @@ def list_panes() -> list[dict]:
             [tmux, "list-panes", "-a", "-F", TMUX_FORMAT],
             capture_output=True, text=True, timeout=10,
         )
-    except (OSError, subprocess.SubprocessError):
-        return []
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise TmuxError(f"{tmux} list-panes failed: {exc}")
     if res.returncode != 0:
-        return []
+        raise TmuxError(f"{tmux} list-panes exited {res.returncode}: {res.stderr.strip()[:200]}")
     panes = []
     for line in res.stdout.splitlines():
         parts = line.split("\t")
@@ -198,9 +221,10 @@ def strip_prompt(argv: list[str]) -> list[str]:
             kept.append(Path(arg).name)
             continue
         if skip_value_of is not None and not arg.startswith("-"):
-            if skip_value_of == "keep":
+            if skip_value_of in ("keep", "keep-many"):
                 kept.append(arg)
-            skip_value_of = None
+            if skip_value_of != "keep-many":
+                skip_value_of = None
             continue
         skip_value_of = None
         if arg.startswith("-"):
@@ -212,7 +236,10 @@ def strip_prompt(argv: list[str]) -> list[str]:
                     kept.append(name)
                 continue
             kept.append(arg)
-            skip_value_of = "keep" if arg in KEPT_VALUE_FLAGS else "drop"
+            if arg in VARIADIC_FLAGS:
+                skip_value_of = "keep-many"
+            else:
+                skip_value_of = "keep" if arg in KEPT_VALUE_FLAGS else "drop"
             continue
         # a positional argument is the prompt
     return kept
@@ -311,6 +338,13 @@ def live_sessions() -> list[dict]:
     return collect_sessions(list_panes(), load_session_files())
 
 
+def read_snapshot(path: Path) -> dict:
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict) or not isinstance(data.get("sessions"), list):
+        raise ValueError("not a snapshot")
+    return data
+
+
 def build_snapshot() -> dict:
     panes = list_panes()
     return {
@@ -383,8 +417,13 @@ def rotate(state: Path, boot_id: str) -> None:
         _rmdir_quiet(bdir)
     for _newest, bdir in prev[-KEEP_PREV_BOOTS:]:
         files = sorted(bdir.glob("*.json"), key=lambda p: p.name)
-        for stale in files[:-1]:
-            stale.unlink()
+        keep = set(files[-1:])
+        newest_nonempty = next((f for f in reversed(files) if _has_sessions(f)), None)
+        if newest_nonempty is not None:
+            keep.add(newest_nonempty)
+        for stale in files:
+            if stale not in keep:
+                stale.unlink()
 
 
 def _rmdir_quiet(path: Path) -> None:
@@ -415,7 +454,7 @@ def _guard_not_fuse(state: Path) -> None:
 
 class _Lock:
     def __init__(self, state: Path):
-        state.mkdir(parents=True, exist_ok=True)
+        mkdir_private(state)
         self._fh = open(state / ".lock", "w")
 
     def __enter__(self):
@@ -438,14 +477,19 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     _guard_not_fuse(sd)
     ts = now()
     with _Lock(sd):
-        snap = build_snapshot()
+        remove_stale_tmp(sd)
+        try:
+            snap = build_snapshot()
+        except TmuxError as exc:
+            print(f"claude-recover: snapshot not taken: {exc}", file=sys.stderr)
+            return 1
         snap["sha256"] = content_hash(snap)
         existing = boot_snapshots(sd, boot_id)
         previous_sha = None
         if existing:
             try:
                 previous_sha = json.loads(existing[-1].read_text()).get("sha256")
-            except (OSError, ValueError):
+            except (OSError, ValueError, AttributeError):
                 previous_sha = None
         written = None
         if args.force or snap["sha256"] != previous_sha:
@@ -454,7 +498,7 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
             target = snapshots_root(sd) / boot_id / f"{name}.json"
             n = 1
             while target.exists():
-                target = target.with_name(f"{name}-{n:02d}.json")
+                target = target.with_name(f"{name}{COLLISION_SEP}{n:02d}.json")
                 n += 1
             write_atomic(target, json.dumps(snap, indent=2, sort_keys=True) + "\n")
             written = str(target)
@@ -474,8 +518,14 @@ def cmd_status(args: argparse.Namespace) -> int:
     boot_id = current_boot_id()
     stamp = read_stamp(sd)
     snaps = boot_snapshots(sd, boot_id)
-    latest = json.loads(snaps[-1].read_text()) if snaps else None
-    live_ids = {s["sessionId"] for s in live_sessions()}
+    try:
+        latest = read_snapshot(snaps[-1]) if snaps else None
+    except (OSError, ValueError) as exc:
+        return _fail(f"latest snapshot {snaps[-1].name} is unreadable: {exc}")
+    try:
+        live_ids = {s["sessionId"] for s in live_sessions()}
+    except TmuxError as exc:
+        return _fail(str(exc))
     snap_ids = {s["sessionId"] for s in latest["sessions"]} if latest else set()
     if args.check_fresh is None:
         print(json.dumps({

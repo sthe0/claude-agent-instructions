@@ -41,8 +41,8 @@ MUTANTS: dict[str, tuple[str, str, str]] = {
     ),
     "rotation-drops-prev-boot": (
         "rotation deletes the last snapshot of previous boots too",
-        "for stale in files[:-1]:",
-        "for stale in files:",
+        "        keep = set(files[-1:])\n",
+        "        keep = set()\n",
     ),
     "check-fresh-ignores-age": (
         "an arbitrarily old last-ok stamp counts as fresh",
@@ -58,6 +58,46 @@ MUTANTS: dict[str, tuple[str, str, str]] = {
         "the last-ok stamp is refreshed only when a new snapshot file was written",
         "touch_stamp(sd, ts)\n    print(",
         "if written:\n            touch_stamp(sd, ts)\n    print(",
+    ),
+    "tmux-failure-writes-empty": (
+        "a failing tmux is read as 'no panes', so an empty snapshot is written and the stamp refreshed",
+        'raise TmuxError(f"{tmux} list-panes exited {res.returncode}: {res.stderr.strip()[:200]}")',
+        "return []",
+    ),
+    "collision-suffix-order": (
+        "same-second collision suffix sorts before the original file name",
+        'COLLISION_SEP = "~"',
+        'COLLISION_SEP = "-"',
+    ),
+    "rotation-drops-nonempty": (
+        "rotation keeps only the newest snapshot of a previous boot even if it is empty",
+        "        if newest_nonempty is not None:\n            keep.add(newest_nonempty)\n",
+        "",
+    ),
+    "write-not-atomic": (
+        "files are written in place instead of via a temp file and rename",
+        'tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")',
+        "tmp = path",
+    ),
+    "status-corrupt-raises": (
+        "a corrupt latest snapshot makes status crash instead of failing",
+        "except (OSError, ValueError) as exc:\n        return _fail(f\"latest snapshot",
+        "except OSError as exc:\n        return _fail(f\"latest snapshot",
+    ),
+    "variadic-flag-single-value": (
+        "--add-dir keeps only its first value",
+        "skip_value_of = \"keep-many\"",
+        "skip_value_of = \"keep\"",
+    ),
+    "state-dir-world-readable": (
+        "state directories are created with default permissions",
+        "path.mkdir(mode=0o700, parents=True, exist_ok=True)\n    path.chmod(0o700)",
+        "path.mkdir(parents=True, exist_ok=True)",
+    ),
+    "stale-tmp-kept": (
+        "leftover temp files are never cleaned",
+        "        remove_stale_tmp(sd)\n",
+        "",
     ),
 }
 

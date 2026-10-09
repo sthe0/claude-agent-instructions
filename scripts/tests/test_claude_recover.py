@@ -187,10 +187,91 @@ def test_snapshot_file_is_written_atomically_without_leftovers(world):
 
 
 def test_snapshot_refuses_state_dir_under_fuse_mount(world):
-    world.state = Path("/home/u/task-mounts/reboot-recovery/state")
+    fuse_mnt = world.root / "fuse-mnt"
+    with open(world.proc / "self/mountinfo", "a") as fh:
+        fh.write(f"50 22 0:50 / {fuse_mnt} rw,relatime shared:30 - fuse.examplefs examplefs rw\n")
+    world.state = fuse_mnt / "state"
     res = world.run("snapshot")
     assert res.returncode != 0
     assert "FUSE" in res.stderr
+    assert not world.state.exists()
+
+
+def test_snapshot_tmux_failure_writes_nothing_and_keeps_stamp(world):
+    world.run("snapshot", now=T0)
+    stamp_before = (world.state / "last-ok").read_text()
+    world.tmux.write_text('#!/bin/sh\necho "no server running" >&2\nexit 1\n')
+    res = world.run("snapshot", now=T0 + 600)
+    assert res.returncode != 0
+    assert "Traceback" not in res.stderr
+    assert len(world.snapshots()) == 1
+    assert (world.state / "last-ok").read_text() == stamp_before
+
+
+def test_snapshot_missing_tmux_binary_writes_nothing(world):
+    world.tmux.unlink()
+    res = world.run("snapshot")
+    assert res.returncode != 0
+    assert not (world.state / "last-ok").exists()
+    assert not (world.state / "snapshots").exists()
+
+
+def test_snapshot_same_second_collision_sorts_after_original(world):
+    world.run("snapshot", now=T0)
+    world.set_status("sess-aaa", "busy")
+    assert world.run("snapshot", "--force", now=T0).returncode == 0
+    snaps = world.snapshots()
+    assert len(snaps) == 2
+    newest = {s["sessionId"]: s for s in world.last_snapshot()["sessions"]}
+    assert newest["sess-aaa"]["status"] == "busy"
+    chosen = world.run("select", "--any-boot")
+    assert Path(chosen.stdout.strip()) == snaps[-1]
+
+
+def test_snapshot_files_and_state_dir_are_private(world):
+    world.run("snapshot")
+    assert (world.state.stat().st_mode & 0o777) == 0o700
+    assert (world.state / "snapshots" / "boot-1").stat().st_mode & 0o777 == 0o700
+    assert world.snapshots()[-1].stat().st_mode & 0o777 == 0o600
+    assert (world.state / "last-ok").stat().st_mode & 0o777 == 0o600
+
+
+def test_snapshot_removes_stale_tmp_files(world):
+    boot_dir = world.state / "snapshots" / "boot-1"
+    boot_dir.mkdir(parents=True)
+    stale = [world.state / ".last-ok.tmp.4242", boot_dir / ".20260101T000000Z.json.tmp.4242"]
+    for path in stale:
+        path.write_text("partial")
+    world.run("snapshot")
+    assert [p.exists() for p in stale] == [False, False]
+
+
+def test_write_atomic_replaces_via_rename_of_a_sibling_file(tmp_path, monkeypatch):
+    mod = load_module()
+    target = tmp_path / "out.json"
+    target.write_text("old")
+    seen = []
+    real_replace = os.replace
+
+    def spy(src, dst):
+        seen.append((Path(src), Path(dst), Path(src).read_text(), Path(dst).read_text()))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(mod.os, "replace", spy)
+    mod.write_atomic(target, "new")
+    assert len(seen) == 1
+    src, dst, src_text, dst_text = seen[0]
+    assert src != dst and src.parent == dst.parent
+    assert (src_text, dst_text) == ("new", "old")
+    assert target.read_text() == "new"
+
+
+def test_strip_prompt_keeps_every_value_of_variadic_flags():
+    mod = load_module()
+    argv = ["/usr/bin/claude", "--add-dir", "/a", "/b", "--model", "opus", "--resume", "sid",
+            "SECRET-PROMPT"]
+    assert mod.strip_prompt(argv) == [
+        "claude", "--add-dir", "/a", "/b", "--model", "opus", "--resume", "sid"]
 
 
 def test_snapshot_rotation_keeps_fifty_per_boot(world):
@@ -215,6 +296,19 @@ def test_snapshot_rotation_keeps_last_snapshot_of_three_previous_boots(world):
         "boot-1", "old-boot-3", "old-boot-4", "old-boot-5"]
     for i in (3, 4, 5):
         assert [p.name for p in (snaps / f"old-boot-{i}").iterdir()] == [f"2026010{i}T000002Z.json"]
+
+
+def test_snapshot_rotation_keeps_newest_nonempty_snapshot_of_previous_boot(world):
+    bdir = world.state / "snapshots" / "old-boot"
+    bdir.mkdir(parents=True)
+    bodies = {"20260101T000000Z": '{"sessions": [{"sessionId": "s1"}]}',
+              "20260101T000001Z": '{"sessions": []}',
+              "20260101T000002Z": '{"sessions": []}'}
+    for stem, body in bodies.items():
+        (bdir / f"{stem}.json").write_text(body)
+    world.run("snapshot", now=T0)
+    assert sorted(p.name for p in bdir.iterdir()) == [
+        "20260101T000000Z.json", "20260101T000002Z.json"]
 
 
 def test_select_takes_other_boot_even_when_current_boot_is_newer(tmp_path):
@@ -305,6 +399,30 @@ def test_status_unchanged_snapshot_run_still_refreshes_freshness(world):
     world.run("snapshot", now=T0 + 600)
     assert len(world.snapshots()) == 1
     assert world.run("status", "--check-fresh", "180", now=T0 + 600).returncode == 0
+
+
+@pytest.mark.parametrize("args", [("--check-fresh", "180"), ()])
+def test_status_corrupt_latest_snapshot_fails_without_traceback(world, args):
+    world.run("snapshot", now=T0)
+    world.snapshots()[-1].write_text("{not json")
+    res = world.run("status", *args, now=T0 + 5)
+    assert res.returncode == 1
+    assert "Traceback" not in res.stderr
+
+
+def test_status_tmux_failure_is_not_fresh(world):
+    world.run("snapshot", now=T0)
+    world.tmux.write_text("#!/bin/sh\nexit 1\n")
+    res = world.run("status", "--check-fresh", "180", now=T0 + 5)
+    assert res.returncode == 1
+    assert "Traceback" not in res.stderr
+
+
+def test_unreadable_boot_id_fails_cleanly(world):
+    (world.proc / "sys/kernel/random/boot_id").unlink()
+    res = world.run("status", boot="")
+    assert res.returncode != 0
+    assert "Traceback" not in res.stderr
 
 
 def test_status_without_check_fresh_reports_and_exits_zero(world):
