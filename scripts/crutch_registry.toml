@@ -7546,6 +7546,38 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "6d8bcaf155f6e6cf"
+domain = "code"
+file = "scripts/tests/test_install_claude_recover_systemd.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "cf91f4d2ba299b67"
+domain = "code"
+file = "scripts/tests/test_install_claude_recover_systemd.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "d991d308e51e7faf"
+domain = "code"
+file = "scripts/tests/test_install_claude_recover_systemd.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "695394ed2d39581e"
+domain = "code"
+file = "scripts/tests/test_install_claude_recover_systemd.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "6a31bd8578c7ae66"
 domain = "code"
 file = "scripts/tests/test_install_reminder_hooks_prune.py"
@@ -14877,6 +14909,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "e352b1ea5c9c4398"
 domain = "code_file_rollup"
 file = "scripts/tests/test_improvement_scan_telemetry.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "90220c3c30645b03"
+domain = "code_file_rollup"
+file = "scripts/tests/test_install_claude_recover_systemd.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
