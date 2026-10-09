@@ -256,6 +256,7 @@ def test_cmd_stage_grants_surfaces_derived_hash_mismatch_error(store, fixtures_d
     _to_executing(store, sid, fixtures_dir)
     state = store.load(sid)
     state.approved_grants_sha256 = "0" * 64
+    state.approved_grant_entries = None  # bound before entries were stored
     store.save(state)
 
     directive = cli.cmd_stage_grants(ns(session=sid, stage=1, json=False), store=store)
@@ -289,6 +290,7 @@ def test_stage_grant_entries_legacy_session_reports_advisory_note_not_error(
     assert note_hashed is None
 
     state.approved_grants_sha256 = None
+    state.approved_grant_entries = None  # approved before hashing: nothing stored either
     store.save(state)
     state = store.load(sid)
 
@@ -403,6 +405,7 @@ def test_dispatch_refuses_when_derived_only_stage_has_hash_mismatch(store, fixtu
     assert not _declares  # the fixture premise: nothing DECLARED to lose
     assert cli._stage_would_derive_grants(state, 1)  # but something DERIVED
     state.approved_grants_sha256 = "0" * 64  # forces the derived-grants hash mismatch
+    state.approved_grant_entries = None  # on a session bound before entries were stored
     store.save(state)
 
     def _runner(argv, cwd=None):

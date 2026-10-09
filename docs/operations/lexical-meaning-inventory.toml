@@ -294,6 +294,12 @@ ground = "grammar.pattern.match matches a coverage control name against the engi
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/plan.py::acceptance_requirement_bindings.token::pattern.match"]
+class = "structural"
+ground = "grammar.pattern.match matches a coverage control name against the engine's own control-name grammars, to bind a requirement to the deliverable the control names."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/agentctl/plan.py::_strip_first_heredoc_body::pattern.match"]
 class = "structural"
 ground = "_HEREDOC_START.match recognises the shell here-document introducer '<<TAG' in a command."

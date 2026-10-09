@@ -2640,6 +2640,51 @@ def final_check_digest(doc: PlanDoc) -> str:
     return hashlib.sha256(repr(_final_check_place(doc)).encode("utf-8")).hexdigest()
 
 
+def _final_check_identity(check) -> tuple:
+    """A final check's identity: what it verifies and where, not the command that does."""
+    return (check.label, _normalize_string(check.kind), _normalize_string(check.venue),
+            check.expected_exit, check.landed)
+
+
+def acceptance_requirement_bindings(doc: PlanDoc) -> dict[str, str]:
+    """`{requirement id: digest}` of what each order requirement is accepted against: its
+    text and, per coverage entry (order-insensitive), the deliverable the entry names -- the
+    interface token of a named stage, the identity of a named final check, the entry's own
+    text for any other control. A control-only edit (a verify command, a method) moves no
+    binding; a moved deliverable, requirement text or coverage entry moves exactly the
+    requirements it concerns. Empty when the plan declares no order."""
+    from .controls import COVERAGE_GRAMMARS, FINAL_CHECK
+    from .stage_norm import interface_token
+    order = doc.meta.order
+    if order is None:
+        return {}
+    stages = {s.index: s for s in doc.stages}
+    checks = doc.meta.final_check
+
+    def token(entry: str) -> tuple:
+        for grammar in COVERAGE_GRAMMARS:
+            match = grammar.pattern.match(entry)
+            if match is None:
+                continue
+            n = int(match.group(1))
+            if grammar is FINAL_CHECK:
+                if 1 <= n <= len(checks):
+                    return ("final_check", _final_check_identity(checks[n - 1]))
+                return ("final_check", n, "missing")
+            stage = stages.get(n)
+            if stage is None:
+                return ("stage", n, "missing")
+            return ("stage", n, interface_token(stage))
+        return ("entry", entry)
+
+    bindings: dict[str, str] = {}
+    for req in order.requirements:
+        tokens = sorted(repr(token(e)) for e in order.coverage.get(req.id, ()))
+        payload = repr((req.text, tuple(tokens)))
+        bindings[req.id] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return bindings
+
+
 def stage_element_baseline(doc: PlanDoc) -> dict[str, dict[str, str]]:
     """`{str(stage index): {element: key}}` -- what a record keeps so a later `norm_delta_from`
     can name the elements that moved, not just the stages."""
@@ -2842,6 +2887,26 @@ def grants_sha256(doc: PlanDoc) -> str:
         for idx, (rules, dirs) in sorted(_grants_effective_map(doc).items())
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def materialized_grant_entries(doc: PlanDoc) -> dict[str, dict]:
+    """`{str(stage index): {"declared", "derived", "dropped"}}` -- the entry dicts a
+    dispatch hands a child, derived once against `doc`'s venue. Bound next to
+    `grants_sha256` so the set the hash covers is the set dispatch reads, instead of a
+    re-derivation that depends on the engine code and venue filesystem of the moment."""
+    venue = _venue_for(doc)
+    entries: dict[str, dict] = {}
+    for stage in doc.stages:
+        declared = stage.grants if getattr(stage, "grants", None) else StageGrants()
+        derived, dropped = _grants.derive_stage_grants(stage, venue=venue)
+        entries[str(stage.index)] = {
+            "declared": [r.to_dict() for r in declared.allow]
+            + [a.to_dict() for a in declared.add_dirs],
+            "derived": [r.to_dict() for r in derived.allow]
+            + [a.to_dict() for a in derived.add_dirs],
+            "dropped": list(dropped),
+        }
+    return entries
 
 
 def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = False) -> str:

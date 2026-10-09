@@ -50,6 +50,7 @@ from .config import Thresholds
 from .plan import (
     PlanError,
     SEVERITY_BLOCKING,
+    acceptance_requirement_bindings,
     changed_parts,
     consumers,
     effects_place,
@@ -182,21 +183,48 @@ def plan_asserts_landing(state: SessionState) -> bool:
     return asserts_landing(state.stages, state.final_check)
 
 
-def _acceptance_review_check(state: SessionState) -> tuple[str, list[str], dict[str, str]]:
+def acceptance_staleness(review, doc, plan_digest: str) -> list[str] | None:
+    """Whether `review` no longer describes the product `doc` (accepted at `plan_digest`)
+    declares: `None` when it still does, else the requirement ids that went stale.
+
+    A review that carries per-requirement bindings is stale only where a binding moved --
+    an accepted requirement whose text, coverage entries or named deliverables changed --
+    or where the plan declares a requirement the review never saw; a requirement the plan
+    no longer declares stales nothing. A review without bindings (written before they
+    existed) keeps the raw plan-digest comparison, and then every declared requirement is
+    named. One function, read by the resolution gate and by `replan`, so the two cannot
+    disagree about which acceptance a plan edit invalidated."""
+    order = doc.meta.order
+    declared = [r.id for r in order.requirements] if order is not None else []
+    if review.requirement_bindings is None:
+        if (review.plan_sha256 or "") == (plan_digest or ""):
+            return None
+        return declared
+    current = acceptance_requirement_bindings(doc)
+    stale = [rid for rid in declared
+             if review.requirement_bindings.get(rid) != current.get(rid)]
+    return stale or None
+
+
+def _acceptance_review_check(
+    state: SessionState,
+) -> tuple[str, list[str], dict[str, str], list[str]]:
     """Shared guard chain behind both acceptance-review checks
     (_acceptance_review_resolution_blockers and failing_acceptance_requirements):
     resolves a status in {"inactive", "no_review", "stale", "unreadable", "ok"} plus,
     only when "ok", the current plan's declared requirement ids and the review's
-    recorded verdicts. Each early-out mirrors a distinct guard
-    _acceptance_review_resolution_blockers already documents in full; this helper
-    exists so the two callers never drift on WHICH guard fired."""
+    recorded verdicts, and, only when "stale", the requirement ids that went stale
+    (empty for a stale review of a plan that declares none). Each early-out mirrors a
+    distinct guard _acceptance_review_resolution_blockers already documents in full; this
+    helper exists so the two callers never drift on WHICH guard fired."""
     if not acceptance_active(state):
-        return "inactive", [], {}
+        return "inactive", [], {}, []
     review = state.acceptance_review
     if review is None:
-        return "no_review", [], {}
-    if (review.plan_sha256 or "") != (state.accepted_plan_digest or ""):
-        return "stale", [], {}
+        return "no_review", [], {}, []
+    digest_moved = (review.plan_sha256 or "") != (state.accepted_plan_digest or "")
+    if digest_moved and review.requirement_bindings is None:
+        return "stale", [], {}, []
     doc = None
     if state.plan_path:
         try:
@@ -204,11 +232,15 @@ def _acceptance_review_check(state: SessionState) -> tuple[str, list[str], dict[
         except (OSError, PlanError):
             doc = None
     if doc is None:
-        return "unreadable", [], {}
+        return "unreadable", [], {}, []
+    if digest_moved:
+        stale = acceptance_staleness(review, doc, state.accepted_plan_digest or "")
+        if stale is not None:
+            return "stale", [], {}, stale
     order = doc.meta.order
     requirement_ids = [r.id for r in order.requirements] if order is not None else []
     verdicted = {v.requirement_id: v.verdict for v in review.verdicts}
-    return "ok", requirement_ids, verdicted
+    return "ok", requirement_ids, verdicted, []
 
 
 def failing_acceptance_requirements(state: SessionState) -> list[str]:
@@ -219,7 +251,7 @@ def failing_acceptance_requirements(state: SessionState) -> list[str]:
     that is a genuine difficulty (a customer rejection) from the other three,
     which are ordinary in-progress states that must keep their existing passive
     'not ready yet' refusal — see cmd_verify_final's early-blockers branch."""
-    status, requirement_ids, verdicted = _acceptance_review_check(state)
+    status, requirement_ids, verdicted, _ = _acceptance_review_check(state)
     if status != "ok":
         return []
     missing = [rid for rid in requirement_ids if rid not in verdicted]
@@ -241,11 +273,13 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
     checks, in order:
       - a review must exist — else blocked (fail-CLOSED: an all-PASSED session with
         no acceptance is not resolved, only controlled);
-      - review.plan_sha256 must equal state.accepted_plan_digest — a mismatch means
-        the plan was replaced (accept, then approve/replan on a new plan) since the
-        review was written, so the review is STALE and is treated as though absent
-        (same blocker as the missing-review case, not a distinct message — the
-        session's observable state is "no current acceptance" either way);
+      - review.plan_sha256 must equal state.accepted_plan_digest, or — for a review
+        carrying per-requirement bindings — no accepted requirement's binding may
+        have moved and the plan may declare no requirement the review lacks
+        (`acceptance_staleness`): a control-only replan moves the digest and no
+        binding. A stale review is treated as though absent (same blocker as the
+        missing-review case, naming the stale requirement ids — the session's
+        observable state is "no current acceptance" either way);
       - the CURRENT plan must be READABLE — an absent plan_path, or bytes that no
         longer load, means the order this review claims to have satisfied cannot be
         re-read, and the two checks below would then run against an empty requirement
@@ -267,7 +301,7 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
     Deliberately never reads state.acceptance_bypass: a bypass is a resolution
     OUTCOME the engine surfaces (verify-final), never a resolution PRECONDITION the
     engine evaluates — see AcceptanceBypass's docstring for why."""
-    status, requirement_ids, verdicted = _acceptance_review_check(state)
+    status, requirement_ids, verdicted, stale_ids = _acceptance_review_check(state)
     if status == "inactive":
         return []
     if status == "no_review":
@@ -276,10 +310,13 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
             "acceptance (agentctl accept) before resolution"
         ]
     if status == "stale":
+        which = (f"requirement id(s) {stale_ids} were accepted against deliverables "
+                 "the currently accepted plan has since moved" if stale_ids else
+                 "it was written against a different plan version than the one "
+                 "currently accepted")
         return [
-            "no AcceptanceReview recorded — the recorded review is stale (it was "
-            "written against a different plan version than the one currently "
-            "accepted) and is treated as absent; re-run accept on the current plan"
+            f"no AcceptanceReview recorded — the recorded review is stale ({which}) "
+            "and is treated as absent; re-run accept on the current plan"
         ]
     if status == "unreadable":
         return [

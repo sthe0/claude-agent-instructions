@@ -25,7 +25,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 44  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 45  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -61,6 +61,10 @@ SCHEMA_VERSION = 44  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # 44: PlanReview/PlanPairReview gain per-concern severities,
                      # effective severities, raw_verdict, part_digests and stable ids;
                      # SessionState gains concern_ledger (blocking/note severity model)
+                     # 45: AcceptanceReview gains requirement_bindings (per-requirement
+                     # digest of the deliverables it was accepted against);
+                     # SessionState gains approved_grant_entries (the materialized
+                     # effective grant set bound at approve / snapshot refresh)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1101,6 +1105,10 @@ class AcceptanceReview:
     verdicts: list[RequirementVerdict] = field(default_factory=list)
     note: str = ""
     plan_sha256: str = ""
+    # requirement id -> digest of what that requirement was accepted against (its text,
+    # its coverage entries' deliverables). None on a review written before schema 45: such
+    # a review is stale on any plan-sha movement, as before.
+    requirement_bindings: dict[str, str] | None = None
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "AcceptanceReview | None":
@@ -2115,6 +2123,10 @@ class SessionState:
     # that predates these fields.
     runtime_grants: dict[str, list[dict]] = field(default_factory=dict)
     approved_grants_sha256: str | None = None
+    # The effective grant entries the hash above covers, materialized when it was bound
+    # (stage index -> {"declared", "derived", "dropped"}); dispatch reads these instead of
+    # re-deriving from the venue filesystem. None on a session bound before schema 45.
+    approved_grant_entries: dict[str, dict] | None = None
     planning_misses: list[dict] = field(default_factory=list)
     materialization_defects: list[dict] = field(default_factory=list)
     settings_drift: list[dict] = field(default_factory=list)

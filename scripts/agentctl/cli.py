@@ -51,11 +51,13 @@ from .plan import (
     PlanError,
     SEVERITY_BLOCKING,
     SEVERITY_NOTE,
+    acceptance_requirement_bindings,
     changed_parts,
     check_venue_warnings,
     grants_sha256,
     load_plan,
     load_plan_with_digest,
+    materialized_grant_entries,
     order_digest,
     pair_binding,
     pair_part_tokens,
@@ -418,7 +420,10 @@ def _refresh_approved_grant_snapshot(
     them, mirroring `cmd_approve`'s own snapshot+hash binding (see its "Bind the
     approved grant set" comment) -- called from the `no_change` and `refinement`
     branches of `cmd_replan`, which apply corrected bytes to an ALREADY-APPROVED
-    session in place, without requiring a fresh `approve`. Without this, those two
+    session in place, without requiring a fresh `approve`. A replan that moves no
+    grant keeps the stored hash and entries as they are: re-deriving them here would
+    bind a set that depends on the venue filesystem of this moment instead of the
+    one that was approved. Without this, those two
     branches update `state.plan_path` but leave `plan_snapshot_path`/
     `plan_snapshot_hash`/`approved_grants_sha256` pointed at the PRIOR approval's
     bytes, so `_stage_grant_entries` either hash-mismatches on a corrected snapshot
@@ -440,10 +445,37 @@ def _refresh_approved_grant_snapshot(
             f"{state.accepted_plan_digest!r} -- stamp accepted_plan_digest from "
             "this same buffer before refreshing the snapshot"
         )
+    grants_moved = _grants_moved_since_snapshot(state, doc)
     snap = _write_plan_snapshot(store, state, data, digest)
     if snap:
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
-    state.approved_grants_sha256 = grants_sha256(doc)
+    if grants_moved or state.approved_grant_entries is None:
+        _bind_approved_grants(state, doc)
+
+
+def _grants_moved_since_snapshot(state: SessionState, doc) -> bool:
+    """Whether `doc`'s effective grant set differs from that of the approved-plan
+    snapshot it is about to replace, both hashed now. True when the snapshot cannot be
+    read: nothing then shows the grants held still, so the binding is renewed."""
+    snap_path = state.plan_snapshot_path
+    if not snap_path or not Path(snap_path).exists():
+        return True
+    try:
+        return grants_sha256(load_plan(snap_path, strict=False)) != grants_sha256(doc)
+    except (OSError, PlanError):
+        return True
+
+
+def _bind_approved_grants(state: SessionState, doc) -> None:
+    """Bind the effective grant set of `doc` to the session: its hash and the entries
+    that hash covers, materialized once. Dispatch reads the stored entries
+    (`_stage_grant_entries`); re-deriving them there made the hash depend on the engine
+    code and venue filesystem of the moment (#338). None/None when `doc` did not load,
+    so a prior approval's binding is never carried over to unrelated bytes."""
+    state.approved_grants_sha256 = grants_sha256(doc) if doc is not None else None
+    state.approved_grant_entries = (
+        materialized_grant_entries(doc) if doc is not None else None
+    )
 
 
 def _replan_baseline_path(state: SessionState) -> str | None:
@@ -5764,9 +5796,14 @@ def cmd_accept(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                 "corroboration>'",
                 data={"reason": judge_reason},
             )
+    verdicted_ids = {v.requirement_id for v in verdicts}
     state.acceptance_review = AcceptanceReview(
         author=author, verdicts=verdicts, note=note,
         plan_sha256=state.accepted_plan_digest or "",
+        requirement_bindings={
+            rid: binding for rid, binding in acceptance_requirement_bindings(doc).items()
+            if rid in verdicted_ids
+        },
     )
     if bypass:
         state.acceptance_bypass = AcceptanceBypass(
@@ -5927,9 +5964,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # receives without a fresh approve. None (rather than a stale prior digest) on
     # a plan that failed to load or grants nothing, matching grants_approval_
     # blockers' own fail-open reading of the same two conditions.
-    state.approved_grants_sha256 = (
-        grants_sha256(_approved_doc) if _approved_doc is not None else None
-    )
+    _bind_approved_grants(state, _approved_doc)
     if _approved_doc is not None:
         _rekey_runtime_grants(state, _approved_doc)
     # Terminal-pass custody: a fresh approval cycle starts with no pass on
@@ -7057,6 +7092,14 @@ def _stage_grant_entries(
         else _grants.StageGrants()
     declared_entries = [r.to_dict() for r in declared.allow] + \
         [a.to_dict() for a in declared.add_dirs]
+    if state.approved_grant_entries is not None:
+        # The entries bound when the hash was (see `_bind_approved_grants`): what was
+        # approved, not a re-derivation against the engine code and venue filesystem of
+        # this moment. Only a session bound before they were stored falls through to
+        # the re-derive-and-compare below.
+        stored = state.approved_grant_entries.get(str(stage_index)) or {}
+        return (declared_entries, list(stored.get("derived") or []),
+                list(stored.get("dropped") or []), None, None)
     if not state.approved_grants_sha256:
         # Legacy session (approved before grant hashing existed): derived grants
         # stay withheld exactly as before -- there is no hash to trust them
@@ -9054,10 +9097,10 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
       authority the plan gave him.
 
     It DOES re-stamp `accepted_plan_digest`: that field must name the bytes the session
-    is executing, and after this call those are `args.plan`'s. The one consequence is
-    that an AcceptanceReview recorded before a renormalization goes stale — the
-    fail-closed direction, and nearly unreachable in practice since an acceptance is
-    recorded once every stage has already passed."""
+    is executing, and after this call those are `args.plan`'s. An AcceptanceReview
+    carrying per-requirement bindings stays current (a procedure is no deliverable of
+    any requirement); one written before bindings existed goes stale on the digest
+    move. The directive names the requirement ids that went stale, if any."""
     from .plan import load_plan as _load
 
     # Backfill a snapshot for a legacy (pre-snapshot) session BEFORE this path rewrites
@@ -9111,6 +9154,14 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
         cur.means.procedure = ns.means.procedure
     state.plan_path = args.plan
     state.accepted_plan_digest = _new_plan_digest
+    # The approved snapshot deliberately stays on the APPROVED bytes (see above), so the
+    # binding is never moved here: stored entries stay as approved. A session bound
+    # before entries were stored gets them materialized, but only when `new` still
+    # reproduces the approved hash -- a procedure that changes what the stage derives is
+    # not covered by the approval the binding records, and the hash is never moved here.
+    if (state.approved_grants_sha256 and state.approved_grant_entries is None
+            and grants_sha256(new) == state.approved_grants_sha256):
+        state.approved_grant_entries = materialized_grant_entries(new)
     # renormalize is one of the replan kinds every submitted version is
     # content-addressed for, despite logging a distinct event name (see the class
     # docstring above on why it's `renormalize`, not `replan`).
@@ -9157,7 +9208,31 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     advisories = _replan_spelling_advisories(args.plan)
     if advisories:
         d.data.setdefault("advisories", []).extend(advisories)
+    _report_acceptance_staleness(d, args, store)
     return d
+
+
+def _report_acceptance_staleness(d: Directive, args, store: StateStore) -> None:
+    """Name, on an applied replan of every kind, the requirement ids whose recorded
+    acceptance the plan it carries has invalidated (`acceptance_stale`, empty when none) --
+    the same `gates.acceptance_staleness` the resolution gate reads, so the author learns
+    at the edit what verify-final would otherwise refuse later. Silent when no
+    AcceptanceReview exists or the replan was refused."""
+    if not d.ok:
+        return
+    state = store.load(args.session)
+    review = state.acceptance_review if state is not None else None
+    if review is None:
+        return
+    try:
+        doc, _data, digest = load_plan_with_digest(args.plan)
+    except (OSError, PlanError):
+        return
+    stale = gates.acceptance_staleness(review, doc, digest) or []
+    d.data["acceptance_stale"] = stale
+    if stale:
+        d.detail += (f"; the recorded acceptance is stale for requirement id(s) {stale} — "
+                     "re-run accept before resolution")
 
 
 def _replan_spelling_advisories(plan_path: str) -> list[str]:
