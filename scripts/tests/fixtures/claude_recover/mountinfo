@@ -1,0 +1,5 @@
+22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/vda1 rw
+40 22 0:35 / /home/u/task-mounts/reboot-recovery rw,nosuid,nodev,relatime shared:20 - fuse.examplefs examplefs rw,user_id=1000,group_id=1000,allow_other
+41 22 0:36 / /home/u/mnt/with\040space rw,nosuid,nodev,relatime shared:21 - fuse.examplefs examplefs rw,user_id=1000
+42 22 0:37 / /srv/elsewhere rw,nosuid,nodev,relatime shared:22 - fuse.examplefs examplefs rw
+43 22 0:38 / /home/u/tmpfs rw,relatime shared:23 - tmpfs tmpfs rw
