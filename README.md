@@ -106,6 +106,7 @@ The manual `cd ~/my-project && claude-agent` flow still works — `claude-task` 
 - **Skills** — a packaged procedure or role under `skills/`. Flat skills run inline; specializations are spawned per plan step. The full, machine-checked inventory of both kinds lives in [docs/components/skills.md](docs/components/skills.md).
 - **Agents** — the specialization roles the manager delegates to, and how each is spawned: [docs/components/agents.md](docs/components/agents.md). No shipped Task-spawned subagents currently; machine-local ones go in `agents-local/`, project-local ones in `<project_cwd>/.claude/agents/`.
 - **Git workflow** — pull before editing, commit after a change, push only after explicit confirmation: [docs/operations/git-workflow.md](docs/operations/git-workflow.md).
+- **Background debt mandate** — an opt-in, bounded, revocable authority for nightly backlog work that ends in pull requests for you to review: [docs/operations/background-mandate.md](docs/operations/background-mandate.md).
 
 ### Not in this repository
 

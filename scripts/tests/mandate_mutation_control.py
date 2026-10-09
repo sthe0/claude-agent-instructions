@@ -41,6 +41,10 @@ STORE = "agentctl/mandate_store.py"
 WIDENING = "lib/widening_targets.py"
 T_RULES = "tests/test_mandate_rules.py"
 T_CLI = "tests/test_mandate_cli.py"
+DRIVER = "mandate_cycle/driver.py"
+NOTIFIERS = "mandate_cycle/notifiers.py"
+T_CYCLE = "tests/test_mandate_cycle.py"
+T_NOTIFIER = "tests/test_mandate_notifier.py"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
 CONTROL_RED = 7
@@ -157,6 +161,94 @@ CATALOGUE: "dict[str, Mutant]" = {
             T_CLI,
             "test_stop_pauses_and_disables_the_timer_without_killing_an_idle_mandate",
             "test_stop_does_not_kill_for_a_stale_pid_left_in_an_unheld_lock_file",
+        ),
+    ),
+    "baseline-relative-tests": Mutant(
+        DRIVER,
+        "        failing = rules.failing_ids(baseline.passed, item_suite.passed)\n"
+        "        if failing:\n"
+        '            rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))\n'
+        "            green = rules.passes_after_rerun(baseline.passed, item_suite.passed, rerun.passed)\n",
+        "        failing = rules.failing_ids(baseline.seen, item_suite.passed)\n"
+        "        if failing:\n"
+        '            rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))\n'
+        "            green = rules.passes_after_rerun(baseline.seen, item_suite.passed, rerun.passed)\n",
+        _ids(T_CYCLE, "test_a_test_failing_on_the_baseline_does_not_count_against_the_item"),
+    ),
+    "no-trunk-push": Mutant(
+        DRIVER,
+        "if not branch.startswith(BRANCH_PREFIX) or branch == TRUNK:",
+        "if False:",
+        _ids(T_CYCLE, "test_push_refspec_refuses_trunk_and_non_mandate_branches"),
+    ),
+    "digest-delivery-eligibility": Mutant(
+        DRIVER,
+        "ok=delivery.ok, notifier=delivery.notifier, delivered_at=cycle.now())",
+        'ok=delivery.ok, notifier="plugin", delivered_at=cycle.now())',
+        _ids(T_CYCLE, "test_a_file_digest_never_makes_a_cycle_set_label_eligible"),
+    ),
+    "notifier-precedence": Mutant(
+        NOTIFIERS,
+        "return plugins[0] if plugins else file_notifier(digests_dir, cycle_id)",
+        "return file_notifier(digests_dir, cycle_id)",
+        _ids(
+            T_NOTIFIER,
+            "test_a_loadable_plugin_is_preferred_over_the_file_notifier",
+            "test_notify_test_reports_a_plugin_and_that_it_counts",
+        ),
+    ),
+    "overrun-not-breaker": Mutant(
+        DRIVER,
+        "elif rules.opens_breaker(outcome):",
+        "elif True:",
+        _ids(
+            T_CYCLE,
+            "test_an_overrun_does_not_open_the_breaker_and_the_cycle_continues",
+            "test_a_killed_spawn_with_no_cost_row_is_charged_the_whole_item_cap",
+        ),
+    ),
+    "single-instance-lock": Mutant(
+        DRIVER,
+        "with store.cycle_lock(cfg.mandate_id):",
+        'with __import__("contextlib").nullcontext():',
+        _ids(T_CYCLE, "test_a_second_cycle_while_one_holds_the_lock_exits_busy_and_records_nothing"),
+    ),
+    "triage-label-logged": Mutant(
+        DRIVER,
+        'store.append_label_row(self.mid, number, label, self.id, by="cycle", reason=reason, now=self.now())',
+        "None",
+        _ids(
+            T_CYCLE,
+            "test_triage_logs_the_label_row_before_the_label_is_applied",
+            "test_a_cycle_set_label_becomes_eligible_only_after_a_delivered_digest_and_the_veto_window",
+        ),
+    ),
+    "no-issue-create": Mutant(
+        DRIVER,
+        'argv = ["gh", "issue", "comment", str(number), "--body-file", str(body)]',
+        'argv = ["gh", "issue", "create", str(number), "--body-file", str(body)]',
+        _ids(T_CYCLE, "test_no_gh_issue_create_is_invoked_across_triage_decline_and_pull_request"),
+    ),
+    "no-user-authority-calls": Mutant(
+        DRIVER,
+        'store.open_breaker(self.mid, reason, by="cycle", now=self.now())',
+        'store.resume_cycle(self.mid, by="cycle")',
+        _ids(T_CYCLE, "test_the_driver_never_references_a_user_authority_transition"),
+    ),
+    "mandate-state-tamper": Mutant(
+        DRIVER,
+        "return store.state_fingerprint(self.mid) != before",
+        "return False",
+        _ids(T_CYCLE, "test_a_spawn_that_touches_the_mandate_state_fails_the_item_and_opens_the_breaker"),
+    ),
+    "triage-org-neutral": Mutant(
+        DRIVER,
+        "if code == 0:",
+        "if True:",
+        _ids(
+            T_CYCLE,
+            "test_a_triage_comment_is_not_posted_unless_the_org_neutral_check_is_clean[1]",
+            "test_a_triage_comment_is_not_posted_unless_the_org_neutral_check_is_clean[2]",
         ),
     ),
 }

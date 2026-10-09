@@ -20,6 +20,9 @@ EXPECTED_ENTRIES = (
     "severity-high-user-only", "file-notifier-excluded", "expiry", "breaker-open", "daily-budget",
     "weekly-budget", "triage-filter", "user-authority-verbs", "cycle-minutes-cap",
     "any-open-pr-excluded", "owner-authored-only", "stop-idle-no-kill",
+    "baseline-relative-tests", "no-trunk-push", "digest-delivery-eligibility", "notifier-precedence",
+    "overrun-not-breaker", "single-instance-lock", "triage-label-logged", "no-issue-create",
+    "no-user-authority-calls", "mandate-state-tamper", "triage-org-neutral",
 )
 
 

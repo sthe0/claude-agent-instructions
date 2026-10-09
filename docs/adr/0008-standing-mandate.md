@@ -1,0 +1,29 @@
+# ADR-0008: The standing mandate — a bounded, revocable authority for background debt work
+
+- Status: Accepted 2026-10-10
+- Plan: `background-debt-mandate.toml`
+
+## Context
+
+Core accumulates small, well-understood debt (labelled `backlog` / `difficulty` issues) faster than a session with a user in it gets to it. Every item waits for the user to open a session, point at the issue and approve the plan. The user's attention is the scarce resource; the work itself is routine.
+
+Granting an agent a blanket "fix the backlog overnight" authority is the opposite failure: an unattended process with write access to the repository and to the forge, whose every bound lives in a prompt. A bound a model is asked to respect is a suggestion. The authority has to be bounded by code, observable, and revocable by a single command that works while a cycle is mid-flight.
+
+## Decision
+
+1. **One object, one grant.** A *mandate* (`scripts/agentctl/mandate.py`) records who granted it, when, its expiry (grant + 14 days), a daily and a weekly USD budget, an items-per-cycle cap, a per-item USD and wall-clock cap, a per-cycle wall-clock cap, a veto window, the three label names and the *constitution* — the list of paths no cycle may change. It is created, extended and resumed only by the user (`agentctl mandate-grant|-extend|-resume`, `--by user`); the cycle may open its own circuit breaker but can never close it.
+2. **Rule and perception are split along the module boundary.** `mandate.py` is pure (no filesystem, subprocess, network or clock; `now` is a parameter) and holds every decidable bound: the start gate, spend windows, candidate eligibility, the veto window, the constitution classifier, baseline-relative test verdicts, the overrun and breaker rules. `mandate_store.py` is the I/O half. The cycle driver (`scripts/mandate_cycle/driver.py`) only orchestrates them. The model supplies perception at exactly three points: a triage verdict from an isolated judge, the fix (a `developer` spawn) and its review (a `code-reviewer` spawn).
+3. **Authority comes from the owner's label, or from a delivered digest and a veto window.** An issue is taken only when it is owner-authored, in the backlog domain, carries `auto-ok`, has no open PR and no `no-auto`. When the user set the label, it counts at once. When a cycle set it, it counts only after a digest announcing it was **delivered by a non-file notifier** and the veto window has passed. A digest written to a file is not a delivery: with no notifier plugin installed the cycle still fixes what the user labelled and triages the rest, but its own labels never become eligible. `severity:high` is never cycle-eligible.
+4. **A fix is a PR, never a merge.** Each item gets its own temp worktree and a `mandate/<issue>-<date>` branch cut from `origin/main`. The cycle pushes only that branch (`push_refspec` refuses trunk and any non-`mandate/` ref), opens a PR against `main`, and links it on the issue. Before anything is pushed: tests are compared **to a baseline run** (a test failing on trunk is not the item's fault; a baseline-green test that fails is, after one rerun); the two gate scripts are compared the same way; the diff is classified against the constitution; the commit messages, the added lines and the PR text pass the org-neutral checker; and an independent reviewer returns `VERDICT: accept`. A spawn never receives `--add-dir`, and its brief carries only the owner-authored issue text.
+5. **Failure is closed, overrun is not a failure.** A failed item (tests, review rejection, constitution touch, permission request, org-neutral hit, tampered mandate state) opens the breaker and stops the cycle until the user resumes it. A cap overrun is charged at the cap and logged, does not open the breaker and does not stop the next item: a slow item is information, a rule violation is a stop. A killed spawn with no cost row is charged the whole item cap.
+6. **Revocation works mid-cycle.** `agentctl mandate-stop` pauses the mandate, disables the timer and kills a running cycle's process tree. The cycle re-checks the gate before every item. A change to `mandate.json`, `events.jsonl` or `labels.jsonl` made by anything other than the driver while a spawn ran fails that item as `state-tampered` — which is also what a concurrent `mandate-stop` looks like from inside, and is deliberately treated as a stop rather than a race to be reconciled.
+7. **Delivery is a seam, not a dependency.** A digest goes through a notifier. Core ships the `file` notifier; a machine-local plugin dir (`${CLAUDE_MANDATE_PLUGIN_DIR:-<config root>/mandate-plugins}/notifiers/<name>.py`) may add any transport with a `send(text) -> bool` function. Core names no particular messenger.
+8. **No new issues.** The cycle comments on existing issues and opens PRs. It never runs `gh issue create`; a finding with no issue is left in the digest for the user.
+
+## Consequences
+
+- What an unattended run can do is the set of `gh` / `git` commands the driver names, and tests scan its source and its behaviour: no issue creation and no reference to any user-authority transition are mutation-pinned (`scripts/tests/mandate_mutation_control.py`, 27 entries, one per bound).
+- The user's attention is spent once, on a morning digest and a list of PRs to review; the cost of the unattended work is a daily budget bound by code, not by trust.
+- The constitution is defence in depth, not a proof of containment: it stops the cycle from editing the machinery that bounds it, but a PR the user merges is still a PR the user reviewed. The user's merge is the final gate, as everywhere else.
+- A user who edits the mandate directory by hand while a cycle runs will fail that cycle's item. That is the intended fail-closed direction.
+- Wall-clock (`cycle_minutes_cap`) is checked between items, not inside a spawn: an item is bounded by its own cap, a cycle by the sum of at most `max_items` of them.
