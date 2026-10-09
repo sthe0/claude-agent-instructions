@@ -603,6 +603,24 @@ DEVELOPER_SETTINGS_ALLOW = [
     "Bash(python3 scripts/check-live-run-evidence.py:*)",
     "Bash(python3 _ptg_scratch/probe/launch_probe.py:*)",
     "Bash(claude -p:*)",
+    # DEEPAGENT-516 stage 2 (VM-unavailability alert: poller script + a
+    # `systemd --user` timer + Yandex Messenger delivery) needs three command
+    # classes acceptEdits does not cover on its own: managing its own
+    # user-scope systemd units, one read-only GET to the internal Infra
+    # Events API, and the corporate Messenger-bot CLI. Same narrow / named /
+    # temporary static-addition pattern as the grants above — no per-plan
+    # grant mechanism exists yet (see the note above this list). `--user`
+    # scope means these verbs can never touch system-wide systemd state.
+    # User-authorized 2026-09-15.
+    "Bash(systemctl --user daemon-reload)",
+    "Bash(systemctl --user enable:*)",
+    "Bash(systemctl --user start:*)",
+    "Bash(systemctl --user stop:*)",
+    "Bash(systemctl --user cat:*)",
+    "Bash(systemctl --user show:*)",
+    "Bash(systemctl --user is-active:*)",
+    "Bash(curl -fsS --max-time 10 https://infra-api.yandex-team.ru/v1/events:*)",
+    "Bash(python3 /home/the0/task-mounts/main/ai/artifacts/skills/community/ya-messenger/scripts/messenger_client.py:*)",
 ]
 
 # The plan-artifact directory (lib.config_root.plans_dir()) is where a
