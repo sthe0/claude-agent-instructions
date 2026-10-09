@@ -19,8 +19,9 @@ State: $CLAUDE_RECOVER_STATE_DIR (default ~/.local/state/claude-recover):
                                         plus the last snapshot of the three previous boots
     last-ok                             epoch seconds of the last successful snapshot run
                                         (refreshed even when the snapshot was unchanged)
-    recover.log                         restore log (rotated by size); last-plan.json is the plan
+    recover.log                         restore log (rotated by size); restore-plan.json is the plan
                                         of the latest real restore
+    hooks.log                           what the recover.d hooks append via $RECOVER_LOG
     done-<boot_id>                      marker: `restore --auto` already ran in this boot
     pending-confirm.txt                 commands that need a human decision (written by --auto)
 
@@ -41,7 +42,7 @@ Test seams (all optional): TMUX_BIN, DF_BIN, MOUNTPOINT_BIN, PROC_ROOT,
 CLAUDE_RECOVER_STATE_DIR, CLAUDE_RECOVER_CONFIG_DIRS (os.pathsep-separated),
 CLAUDE_RECOVER_NOW (epoch seconds), CLAUDE_RECOVER_BOOT_ID, CLAUDE_RECOVER_HOOKS_DIR,
 CLAUDE_RECOVER_ESSENTIAL_FILE, CLAUDE_RECOVER_TMUX_SESSION, CLAUDE_RECOVER_MODE,
-CLAUDE_RECOVER_CLAUDE_BIN, CLAUDE_RECOVER_SWEEP_BIN, CLAUDE_RECOVER_CONTINUE_PROMPT,
+CLAUDE_RECOVER_CLAUDE_BIN, CLAUDE_RECOVER_CONTINUE_PROMPT,
 CLAUDE_RECOVER_{DEADLINE_S,TMUX_WAIT_S,SESSION_PAUSE_S,RETRY_PAUSE_S,MIN_MEM_GIB,
 LOG_MAX_BYTES}, HOME.
 
@@ -539,6 +540,7 @@ SESSION_PAUSE_S = 20
 HOOK_RETRIES = 3
 HOOK_RETRY_PAUSE_S = 30
 HOOK_EXIT_NOTHING = 10
+HOOK_PLAN_OUTPUT_CHARS = 500
 MIN_MEM_GIB = 8.0
 LOG_MAX_BYTES = 1 << 20
 DISK_HARD_GIB = 10
@@ -552,8 +554,6 @@ DEFAULT_CONTINUE_PROMPT = (
 OPEN_ACTIONS = ("resume", "reopen")
 # Commands that need a human decision; recover prints them and never runs them.
 CONFIRM_COMMANDS = (
-    ("arc gc", "object-cache GC: preview with `arc gc --dry-run`, never in parallel on a shared store"),
-    ("arc unmount --forget <mount>", "irreversible: deletes the mount's registered storage"),
     ("docker system prune -a", "removes every unused image, container and network"),
     ("docker image prune -a", "removes every image not used by a container"),
 )
@@ -625,18 +625,14 @@ def measure_disk() -> dict:
 
 
 def disk_actions(level: str) -> list[dict]:
-    """The cleanup menu for a level below ok, by class; ya/arc commands run inside the hooks
-    (they need the mounted anchor), the rest is run by recover itself."""
+    """The cleanup menu for a level below ok, by class. Core carries only generic docker rows;
+    anything machine- or org-specific is done by the recover.d hooks in the disk-pre/disk-post
+    phases, which read RECOVER_DISK_LEVEL to decide how far to go."""
     if level == "ok":
         return []
-    sweep = os.environ.get("CLAUDE_RECOVER_SWEEP_BIN") or str(Path(home_dir()) / "bin" / "agent-hygiene-sweep.sh")
     rows = [
         ("disk-pre", "run", "core", ["docker", "image", "prune", "-f"]),
         ("disk-pre", "run", "core", ["docker", "builder", "prune", "-f"]),
-        ("disk-pre", "run", "core", [sweep]),
-        ("disk-post", "run", "hook", ["ya", "gc", "cache"]),
-        ("disk-post", "report", "hook", ["arc", "gc", "--dry-run"]),
-        ("disk-post", "report", "hook", ["arc-mounts-gc.sh", "--dry-run"]),
     ]
     actions = [{"cmd": shlex.join(argv), "class": klass, "status": "planned", "phase": phase, "owner": owner}
                for phase, klass, owner, argv in rows]
@@ -866,7 +862,8 @@ class Restorer:
         self.plan_path = plan_path
         self.hook_log = hook_log
         self.hook_files = hook_files
-        self.deadline = Deadline(env_float("CLAUDE_RECOVER_DEADLINE_S", DEADLINE_S))
+        # An override may only shorten the budget: systemd's RuntimeMaxSec sits just above DEADLINE_S.
+        self.deadline = Deadline(min(env_float("CLAUDE_RECOVER_DEADLINE_S", DEADLINE_S), DEADLINE_S))
         self.cleanup_spent = 0.0
 
     # -- helpers
@@ -920,7 +917,7 @@ class Restorer:
                 self.cleanup_spent += time.monotonic() - started
             exits.append(rc)
             self.plan["hook_runs"].append({"phase": phase, "hook": hook.name, "exit": rc,
-                                           "output": tail_text(out)})
+                                           "output": tail_text(out, HOOK_PLAN_OUTPUT_CHARS)})
             self.log(f"hook {hook.name} phase={phase} exit={rc}",
                      "INFO" if rc in (0, HOOK_EXIT_NOTHING) else "WARNING")
             for line in out.splitlines()[-40:]:
@@ -1263,7 +1260,7 @@ def _restore_config(args: argparse.Namespace, snap_path: Path, hook_files: list[
     warnings = []
     if not hook_files:
         warnings.append(f"no recover.d hooks in {hooks_dir()}: mounts are not restored and disk cleanup "
-                        "beyond docker/hygiene is skipped")
+                        "beyond docker is skipped")
     return {
         "dry_run": args.dry_run,
         "snapshot_path": str(snap_path),
@@ -1350,7 +1347,7 @@ def cmd_restore(args: argparse.Namespace) -> int:
         log = RunLog(log_path, args.auto)
         log(f"restore start: snapshot={snap_path} mode={args.mode} auto={args.auto}")
         started = time.monotonic()
-        restorer = Restorer(plan, snapshot, config, args, log, sd / "restore-plan.json", log_path, hook_files)
+        restorer = Restorer(plan, snapshot, config, args, log, sd / "restore-plan.json", sd / "hooks.log", hook_files)
         restorer.run()
         plan["summary"] = summarize(plan, time.monotonic() - started)
         restorer.write_plan()

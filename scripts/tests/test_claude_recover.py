@@ -6,6 +6,7 @@ catalogue points it at a mutated copy) and defaults to the sibling script.
 """
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import os
@@ -160,7 +161,7 @@ def test_snapshot_records_fuse_mounts_under_home_only(world):
     world.run("snapshot")
     mounts = world.last_snapshot()["mounts"]
     assert [m["mountpoint"] for m in mounts] == [
-        "/home/u/mnt/with space", "/home/u/task-mounts/reboot-recovery"]
+        "/home/u/mnt/with space", "/home/u/mounts/reboot-recovery"]
     assert {m["fstype"] for m in mounts} == {"fuse.examplefs"}
 
 
@@ -500,7 +501,7 @@ def test_snapshot_status_select_help_exit_zero(world, sub):
 
 PHASES = ["disk-pre", "mounts", "compose", "disk-post", "sessions"]
 HOOK_PHASES = PHASES[:4]
-MOUNT_A = "/home/u/task-mounts/reboot-recovery"
+MOUNT_A = "/home/u/mounts/reboot-recovery"
 MOUNT_B = "/home/u/mnt/with space"
 GIB_KIB = 1024 * 1024
 ALL_SKIPS = {"skip-mounted", "skip-hard-disk", "skip-alive", "skip-no-transcript", "skip-unmounted"}
@@ -559,7 +560,7 @@ class RWorld(World):
         super().__init__(root)
         for name, body in (("mountpoint", FAKE_MOUNTPOINT), ("df", FAKE_DF)):
             self.script(self.bin / name, body)
-        for name in ("docker", "ya", "arc", "systemctl", "sweep"):
+        for name in ("docker", "systemctl"):
             self.script(self.bin / name, FAKE_TOOL)
         self.script(self.hooks / "20-mount.sh", FAKE_HOOK)
         (self.hooks / "essential-mounts.txt").write_text(f"# essential\n{MOUNT_A}\n")
@@ -605,7 +606,6 @@ class RWorld(World):
             "DF_BIN": str(self.bin / "df"),
             "MOUNTPOINT_BIN": str(self.bin / "mountpoint"),
             "CLAUDE_RECOVER_HOOKS_DIR": str(self.hooks),
-            "CLAUDE_RECOVER_SWEEP_BIN": str(self.bin / "sweep"),
             "CLAUDE_RECOVER_SESSION_PAUSE_S": "0",
             "CLAUDE_RECOVER_RETRY_PAUSE_S": "0",
             "CLAUDE_RECOVER_TMUX_WAIT_S": "0",
@@ -665,7 +665,7 @@ def new_windows(world: RWorld) -> list[str]:
 
 def mutating_calls(world: RWorld) -> list[str]:
     return [c for c in world.calls()
-            if c.split()[0] in ("docker", "ya", "arc", "sweep", "systemctl", "mount")
+            if c.split()[0] in ("docker", "systemctl", "mount")
             or c.startswith("tmux new-")]
 
 
@@ -792,7 +792,7 @@ def test_malformed_snapshot_entries_are_dropped_not_fatal(rw, bad):
 
 def test_fixture_snapshot_with_unmounted_target_plans_a_mount(rw):
     plan = rw.plan("--dry-run", "--snapshot", str(FIXTURES / "snapshot-unmounted.json"))
-    target = "/home/the0/task-mounts/__recover-fixture-not-mounted"
+    target = "/home/user/mounts/__recover-fixture-not-mounted"
     assert by(plan, "mounts", "target")[target]["action"] == "mount"
     assert plan["sessions"][0]["action"] == "reopen"
 
@@ -926,10 +926,71 @@ def test_cleanup_actions_have_classes_and_hard_level_lists_confirm_commands(rw):
     rw.reboot()
     acts = rw.plan("--dry-run")["disk"]["actions"]
     classes = {a["class"] for a in acts}
-    assert classes == {"run", "report", "confirm"}
+    assert classes == {"run", "confirm"}
     assert any(a["cmd"] == "docker system prune -a" and a["class"] == "confirm" for a in acts)
-    assert any(a["cmd"] == "arc gc --dry-run" and a["class"] == "report" for a in acts)
-    assert not any(a["cmd"] == "arc gc" and a["class"] != "confirm" for a in acts)
+    assert any(a["cmd"] == "docker image prune -f" and a["class"] == "run" for a in acts)
+
+
+def test_core_cleanup_menu_names_only_generic_tools(rw):
+    """Org- or machine-specific cleanup belongs to the recover.d hooks, never to Core's menu."""
+    rw.set_disk(5)
+    rw.reboot()
+    acts = rw.plan("--dry-run")["disk"]["actions"]
+    assert {a["cmd"].split()[0] for a in acts} == {"docker"}
+    assert all(a["owner"] == "core" for a in acts)
+
+
+def test_hooks_get_the_disk_level_in_both_disk_phases(rw):
+    rw.set_disk(5)
+    rw.reboot()
+    rw.plan()
+    hook_calls = [c for c in rw.calls() if c.startswith("hook ")]
+    assert "hook disk-pre dry=0 level=hard" in hook_calls
+    assert "hook disk-post dry=0 level=hard" in hook_calls
+
+
+CHATTY_HOOK = """#!/bin/bash
+echo "HOOKMARK $RECOVER_PHASE" >> "$RECOVER_LOG"
+python3 -c "print('x' * 3000)"
+"""
+
+
+def test_hook_log_is_a_separate_file_and_not_logged_twice(rw):
+    rw.script(rw.hooks / "30-chatty.sh", CHATTY_HOOK)
+    rw.reboot()
+    rw.plan()
+    hooks_log = (rw.state / "hooks.log").read_text()
+    assert hooks_log.count("HOOKMARK mounts") == 1
+    assert "HOOKMARK" not in (rw.state / "recover.log").read_text()
+
+
+def test_plan_stores_at_most_500_chars_of_hook_output(rw):
+    rw.script(rw.hooks / "30-chatty.sh", CHATTY_HOOK)
+    rw.reboot()
+    plan = rw.plan()
+    runs = [r for r in plan["hook_runs"] if r["hook"] == "30-chatty.sh"]
+    assert runs and all(0 < len(r["output"]) <= 501 for r in runs)
+    assert (rw.state / "restore-plan.json").exists()
+
+
+def test_deadline_override_is_clamped_to_the_constant():
+    mod = load_module()
+    args = argparse.Namespace(auto=False, dry_run=True)
+    plan = {"disk": {"level": "ok", "actions": []}, "hook_runs": []}
+    def build():
+        return mod.Restorer(plan, {}, {}, args, lambda *a, **k: None, Path("/nonexistent/p.json"),
+                            Path("/nonexistent/h.log"), [])
+    old = os.environ.get("CLAUDE_RECOVER_DEADLINE_S")
+    try:
+        os.environ["CLAUDE_RECOVER_DEADLINE_S"] = str(mod.DEADLINE_S * 10)
+        assert build().deadline.remaining() <= mod.DEADLINE_S
+        os.environ["CLAUDE_RECOVER_DEADLINE_S"] = "60"
+        assert build().deadline.remaining() <= 60
+    finally:
+        if old is None:
+            os.environ.pop("CLAUDE_RECOVER_DEADLINE_S", None)
+        else:
+            os.environ["CLAUDE_RECOVER_DEADLINE_S"] = old
 
 
 def test_cleanup_runs_before_mounts_and_a_recovered_disk_lifts_hard_mode(rw):
@@ -951,7 +1012,7 @@ def test_confirm_commands_are_never_executed(rw):
     res = rw.run("--format", "json", boot="boot-2")
     plan = json.loads(res.stdout)
     calls = "\n".join(rw.calls())
-    for banned in ("docker system prune", "docker image prune -a", "arc gc", "arc unmount", "ya gc"):
+    for banned in ("docker system prune", "docker image prune -a"):
         assert banned not in calls
     confirm = [a for a in plan["disk"]["actions"] if a["class"] == "confirm"]
     assert confirm and {a["status"] for a in confirm} == {"skipped"}

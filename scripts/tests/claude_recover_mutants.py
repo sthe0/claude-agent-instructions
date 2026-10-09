@@ -144,6 +144,21 @@ MUTANTS: dict[str, tuple[str, str, str]] = {
         'PHASES = ("disk-pre", "mounts"',
         'PHASES = ("disk", "mounts"',
     ),
+    "deadline-override-unclamped": (
+        "CLAUDE_RECOVER_DEADLINE_S may exceed the DEADLINE_S constant",
+        'Deadline(min(env_float("CLAUDE_RECOVER_DEADLINE_S", DEADLINE_S), DEADLINE_S))',
+        'Deadline(env_float("CLAUDE_RECOVER_DEADLINE_S", DEADLINE_S))',
+    ),
+    "hook-log-is-recover-log": (
+        "hooks append to recover.log, so their output is logged twice",
+        'sd / "restore-plan.json", sd / "hooks.log", hook_files)',
+        'sd / "restore-plan.json", log_path, hook_files)',
+    ),
+    "hook-output-untruncated-in-plan": (
+        "the plan keeps 2000 chars of hook output instead of 500",
+        "tail_text(out, HOOK_PLAN_OUTPUT_CHARS)",
+        "tail_text(out)",
+    ),
 }
 
 
