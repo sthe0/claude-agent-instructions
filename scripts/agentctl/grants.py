@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import functools
 import os
+import posixpath
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -38,7 +39,7 @@ from pathlib import Path
 
 from lib import bash_write_targets, shell_tokens, widening_targets
 
-from . import tool_contracts
+from . import script_effects, tool_contracts
 
 # --- data shapes -------------------------------------------------------------
 
@@ -703,9 +704,10 @@ def top_level_segment_count(command: str) -> int | None:
 # Mirrors the one module `tool_contracts._resolve_interpreter` resolves (`-m pytest`).
 _IDENTITY_MODULES = frozenset({"pytest"})
 
-# The one resolver program whose resolution does not depend on its arguments (a write on the
-# whole venue subtree). Any other resolver (`git`: a subcommand decides the effect) shares no
-# program-only identity, since one approved subcommand would cover another.
+# The one resolver program whose resolved resource never depends on its arguments (a write on
+# the whole venue subtree); unreviewed forms are unresolved and the autonomy boundary escalates
+# them. Any other resolver (`git`: a subcommand decides the effect) shares no program-only
+# identity, since one approved subcommand would cover another.
 _IDENTITY_RESOLVERS = frozenset({"pytest"})
 
 
@@ -728,8 +730,13 @@ def bash_rule_identity(rule: str) -> tuple | None:
     a wrapper or env assignment hides the real program, the program is unclassified (an
     unlisted interpreter or launcher, `strace`, `uv`, `make`), or the interpreter's
     leading flags cannot be read with confidence (any flag but `-m`, an unclassified module),
-    or the program is a resolver whose effect depends on its arguments (`git`). Never guess an identity that an
-    already-approved command could share."""
+    the script has a `script_effects.toml` entry (its resolution depends on its arguments:
+    `land-branch.py --check` resolves to nothing, `--keep-branch --remote-only` to a push),
+    or the program is a resolver whose effect depends on its arguments (`git`). Plan-declared
+    `[[stage.effects]]` do not reach `resolve_command` today, so the registry check covers
+    every script whose resolution is argument-dependent; a future stage-effects resolution
+    path must extend it. Never guess an identity that an already-approved command could
+    share."""
     parsed = rule_program_and_arg(rule)
     if parsed is None or parsed[0] != "Bash":
         return None
@@ -760,9 +767,24 @@ def _interpreter_identity(name: str, operands: list[str]) -> tuple | None:
     if tok == "-m":
         module = operands[1] if len(operands) > 1 else None
         return (name, "-m", module) if module in _IDENTITY_MODULES else None
-    if tok.startswith("-"):
+    if tok.startswith("-") or _is_registry_script(tok):
         return None
     return (name, tok)
+
+
+def _is_registry_script(token: str) -> bool:
+    """True when `token` could name a `script_effects.toml` script: matched on the
+    normalized path and on the basename, because `script_effects.resolve_script` matches by
+    realpath against the venue, which this module cannot see. Fail-closed: an unreadable
+    registry counts every script as registered."""
+    try:
+        registered = [entry.path for entry in script_effects.load_script_effects_table().values()]
+    except Exception:
+        return True
+    path = posixpath.normpath(token).casefold()
+    base = posixpath.basename(path)
+    return any(path == known.casefold() or base == posixpath.basename(known).casefold()
+               for known in registered)
 
 
 def _in_venue(path: str, venue: str) -> bool:

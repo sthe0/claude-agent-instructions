@@ -11,6 +11,7 @@ this module collects on a tree that predates it."""
 from __future__ import annotations
 
 import json
+import shutil
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ from agentctl.state import Node, SessionState
 from agentctl.text_shape import WHOLE_STAGE_ELEMENT
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+LAND_BRANCH = Path(__file__).resolve().parents[1] / "land-branch.py"
 
 
 def _runner(stdout):
@@ -537,7 +539,8 @@ def _approved_order(store, tmp_path, old_verify, stage2_verify=None):
     `stage2_verify` on stage 2, whose approved resources the order-wide boundary shares);
     returns the state and the venue the plans declare."""
     venue = tmp_path / "venue"
-    venue.mkdir()
+    (venue / "scripts").mkdir(parents=True)
+    shutil.copy(LAND_BRANCH, venue / "scripts" / "land-branch.py")
     verify = {1: old_verify} | ({2: stage2_verify} if stage2_verify else {})
     base = _write_plan(tmp_path / "base.toml", BASE, verify=verify, repo_root=venue)
     doc = load_plan(str(base))
@@ -617,4 +620,53 @@ def test_a_push_to_main_never_shares_an_identity_with_another_git_subcommand(sto
     kind, bounded = _replan_verdict(store, tmp_path, "git status", push, stage2_verify=push)
 
     assert kind == "substantive"
+    assert bounded == "substantive"
+
+
+LAND_CHECK = "python3 scripts/land-branch.py --check"
+LAND_PUSH = "python3 scripts/land-branch.py --keep-branch --remote-only --branch norm-staleness"
+
+
+def test_g1_a_registry_script_push_form_is_substantive_though_its_check_form_is_approved(store, tmp_path):
+    """`land-branch.py --check` resolves to nothing and `--keep-branch --remote-only` to a
+    push to origin/main: one script, two resolved resources. The order-wide approved set
+    already holds the push (stage 2), so only the diff layer can call stage 1's edit
+    growth."""
+    kind, bounded = _replan_verdict(store, tmp_path, LAND_CHECK, LAND_PUSH, stage2_verify=LAND_PUSH)
+
+    assert kind == "substantive"
+    assert bounded == "substantive"
+
+
+@pytest.mark.parametrize("script", [
+    "scripts/land-branch.py", "./scripts/land-branch.py", "scripts//land-branch.py",
+    "elsewhere/land-branch.py", "../x/Land-Branch.py",
+])
+def test_g1_a_registry_script_has_no_identity_by_path_or_basename(script):
+    assert grants.bash_rule_identity(f"Bash(python3 {script} --check:*)") is None
+
+
+def test_g1_an_unregistered_script_keeps_its_identity():
+    assert grants.bash_rule_identity("Bash(python3 scripts/other.py --check:*)") == ("python3", "scripts/other.py")
+
+
+def test_g1_an_unreadable_registry_gives_no_script_an_identity(monkeypatch):
+    def broken():
+        raise ValueError("duplicate entry")
+    monkeypatch.setattr(grants.script_effects, "load_script_effects_table", broken)
+
+    assert grants.bash_rule_identity("Bash(python3 mod.py:*)") is None
+
+
+def test_g2_a_new_pytest_argument_is_a_refinement_the_boundary_escalates(store, tmp_path):
+    kind, bounded = _replan_verdict(store, tmp_path, "pytest -q tests/a.py", "pytest -q tests/a.py -p evil")
+
+    assert kind == "refinement"
+    assert bounded == "substantive"
+
+
+def test_g3_a_new_argument_of_an_effect_none_program_is_a_refinement_the_boundary_escalates(store, tmp_path):
+    kind, bounded = _replan_verdict(store, tmp_path, "rg foo", "rg --pre ./evil foo")
+
+    assert kind == "refinement"
     assert bounded == "substantive"
