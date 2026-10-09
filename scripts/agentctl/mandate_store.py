@@ -54,7 +54,7 @@ ITEMS_FILE = "items.jsonl"
 CYCLES_FILE = "cycles.jsonl"
 COMMANDS_FILE = "commands.jsonl"
 LOCK_FILE = "cycle.lock"
-FINGERPRINT_FILES = (MANDATE_FILE, EVENTS_FILE, LABELS_FILE)
+FINGERPRINT_FILES = (MANDATE_FILE, EVENTS_FILE, LABELS_FILE, CYCLES_FILE, ITEMS_FILE)
 
 LABEL_AUTHORS = ("user", "cycle")
 TEST_VERDICTS = ("pass", "fail", "not-run")

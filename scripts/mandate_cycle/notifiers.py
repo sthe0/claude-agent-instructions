@@ -9,7 +9,8 @@ machine-local layer fills.
 A plugin is ``<plugin dir>/notifiers/<name>.py`` exposing ``NAME`` (str) and ``send(text) ->
 bool``. The plugin dir is ``$CLAUDE_MANDATE_PLUGIN_DIR`` else ``<agent home>/mandate-plugins``.
 Plugins are tried in filename order and the first one that loads is the notifier; a plugin
-that fails to import or lacks ``send`` is skipped. With none loaded the `file` notifier is used.
+that fails to import or lacks ``send`` is skipped, as is one named `file` (that name is the
+built-in's, which never counts as delivered). With none loaded the `file` notifier is used.
 """
 from __future__ import annotations
 
@@ -59,7 +60,10 @@ def discover_plugins(root: "Path | None" = None) -> "list[Notifier]":
         if module is None or not callable(send):
             continue
         name = getattr(module, "NAME", None)
-        found.append(Notifier(name if isinstance(name, str) and name else path.stem, send))
+        name = name if isinstance(name, str) and name else path.stem
+        if name == FILE_NOTIFIER:
+            continue
+        found.append(Notifier(name, send))
     return found
 
 

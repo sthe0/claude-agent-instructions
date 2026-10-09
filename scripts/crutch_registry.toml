@@ -2835,6 +2835,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "5cc8a108a0eb67ee"
+domain = "code"
+file = "scripts/mandate_cycle/driver.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "292503c8963ef76a"
 domain = "code"
 file = "scripts/mandate_cycle/driver.py"
@@ -7955,6 +7963,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "2a18f34be31fb177"
+domain = "code"
+file = "scripts/tests/test_mandate_cycle.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3afc917159430890"
+domain = "code"
+file = "scripts/tests/test_mandate_cycle.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "f4dc446b01cb8691"
 domain = "code"
 file = "scripts/tests/test_mandate_cycle.py"
@@ -7971,7 +7995,23 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
-id = "c679552c0f9e913f"
+id = "6f71d0f2840e66c5"
+domain = "code"
+file = "scripts/tests/test_mandate_cycle.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "7bcc194f7d6ddb60"
+domain = "code"
+file = "scripts/tests/test_mandate_cycle.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3dd5e4009c2fa869"
 domain = "code"
 file = "scripts/tests/test_mandate_cycle.py"
 class = "not-a-gate"

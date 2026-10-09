@@ -22,8 +22,8 @@ Granting an agent a blanket "fix the backlog overnight" authority is the opposit
 
 ## Consequences
 
-- What an unattended run can do is the set of `gh` / `git` commands the driver names, and tests scan its source and its behaviour: no issue creation and no reference to any user-authority transition are mutation-pinned (`scripts/tests/mandate_mutation_control.py`, 27 entries, one per bound).
+- What an unattended run can do is the set of `gh` / `git` commands the driver names, and tests scan its source and its behaviour: no issue creation and no reference to any user-authority transition are mutation-pinned (`scripts/tests/mandate_mutation_control.py`, 38 entries, one per bound).
 - The user's attention is spent once, on a morning digest and a list of PRs to review; the cost of the unattended work is a daily budget bound by code, not by trust.
 - The constitution is defence in depth, not a proof of containment: it stops the cycle from editing the machinery that bounds it, but a PR the user merges is still a PR the user reviewed. The user's merge is the final gate, as everywhere else.
 - A user who edits the mandate directory by hand while a cycle runs will fail that cycle's item. That is the intended fail-closed direction.
-- Wall-clock (`cycle_minutes_cap`) is checked between items, not inside a spawn: an item is bounded by its own cap, a cycle by the sum of at most `max_items` of them.
+- Wall-clock is bounded twice: `cycle_minutes_cap` is checked between items, and each spawn's timeout is the smaller of what is left of the item's cap and what is left of the cycle's. A spawn killed at the cycle's bound is recorded as an overrun with reason `cycle-minutes-cap` (at the item's, `item-minutes-cap`); like any overrun it does not open the breaker.

@@ -538,7 +538,11 @@ def test_events_record_who_acted(env):
 def test_fingerprint_moves_with_a_one_byte_edit_of_each_fingerprinted_file(env):
     grant(env)
     store.append_label_row(ID, 1, "auto-ok", "c1", now=T0)
-    assert store.FINGERPRINT_FILES == (store.MANDATE_FILE, store.EVENTS_FILE, store.LABELS_FILE)
+    store.append_item_row(ID, {"cycle_id": "c1", "issue": 1, "outcome": "failed"}, now=T0)
+    store.append_cycle_row(ID, {"cycle_id": "c1"}, now=T0)
+    assert store.FINGERPRINT_FILES == (
+        store.MANDATE_FILE, store.EVENTS_FILE, store.LABELS_FILE, store.CYCLES_FILE, store.ITEMS_FILE,
+    )
     for name in store.FINGERPRINT_FILES:
         path = store.path_of(ID, name)
         original = path.read_bytes()
@@ -556,17 +560,21 @@ def test_fingerprint_marks_a_missing_file_distinctly_from_an_empty_one(env):
     assert store.state_fingerprint(ID) != absent
 
 
-def test_fingerprint_ignores_the_lock_and_the_cycle_logs(env):
+def test_fingerprint_ignores_the_lock_and_the_command_log_but_not_the_outcome_records(env):
     grant(env)
     first = store.state_fingerprint(ID)
     with store.cycle_lock(ID):
         assert store.state_fingerprint(ID) == first
-    store.append_item_row(ID, {"cycle_id": "c1", "issue": 1, "outcome": "failed"})
-    store.append_cycle_row(ID, {"cycle_id": "c1"})
     store.append_command_row(ID, "c1", {"argv": ["x"], "cwd": "/", "exit": 0})
     assert store.state_fingerprint(ID) == first
+    store.append_item_row(ID, {"cycle_id": "c1", "issue": 1, "outcome": "failed"})
+    after_item = store.state_fingerprint(ID)
+    assert after_item != first
+    store.append_cycle_row(ID, {"cycle_id": "c1"})
+    after_cycle = store.state_fingerprint(ID)
+    assert after_cycle != after_item
     store.append_label_row(ID, 1, "auto-ok", "c1")
-    assert store.state_fingerprint(ID) != first
+    assert store.state_fingerprint(ID) != after_cycle
 
 
 def test_spend_now_reads_the_cost_log_for_the_mandate_directory(env):

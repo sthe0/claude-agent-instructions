@@ -255,6 +255,20 @@ def _spend_amounts(
     return amounts
 
 
+def item_cost_rows(cost_rows: Iterable[Mapping], item_dir: str) -> "tuple[float, int]":
+    """Total cost and row count of the cost rows whose plan path lies under one item directory."""
+    total, count = 0.0, 0
+    for row in cost_rows:
+        if row.get("event") == "refused":
+            continue
+        plan_path, cost = row.get("plan_path"), row.get("cost_usd")
+        if not isinstance(plan_path, str) or isinstance(cost, bool) or not isinstance(cost, (int, float)):
+            continue
+        if _under(plan_path, item_dir):
+            total, count = total + float(cost), count + 1
+    return total, count
+
+
 def compute_spend(
     cost_rows: Iterable[Mapping],
     events: Iterable[Mapping],

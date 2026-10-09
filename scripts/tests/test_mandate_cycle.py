@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import subprocess
 import sys
 import textwrap
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,7 +23,7 @@ import pytest
 
 from agentctl import cost, mandate as rules, mandate_store as store
 from agentctl.dispatch import RunResult
-from mandate_cycle import driver
+from mandate_cycle import driver, notifiers
 from session_scope import registry as scopes
 
 ID = "core-debt"
@@ -83,6 +85,11 @@ class World:
         self.pr_url = "https://example.test/owner/repo/pull/7"
         self.calls: "list[list[str]]" = []
         self.on_edit = None
+        self.on_suite = None
+        self.head = "a" * 40
+        self.status = ""
+        # Files a fresh worktree holds: the junit class `scripts.tests.test_a` maps to the first.
+        self.worktree_files = ["scripts/tests/test_a.py"]
 
     def run(self, argv, cwd=None, timeout=None):
         self.calls.append(list(argv))
@@ -107,6 +114,12 @@ class World:
             return ok()
         if a[:3] == ["git", "worktree", "list"]:
             return ok("\n".join(self.blocks.values()))
+        if a[:3] == ["git", "worktree", "add"]:
+            root = Path(a[-2])
+            for relative in self.worktree_files:
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                (root / relative).write_text("", encoding="utf-8")
+            return ok()
         if a[:3] == ["git", "worktree", "remove"]:
             self.blocks.pop(a[-1], None)
             return ok()
@@ -115,7 +128,9 @@ class World:
         if a[:2] == ["git", "ls-remote"]:
             return ok(self.remote_heads)
         if a[:2] == ["git", "status"]:
-            return ok("")
+            return ok(self.status)
+        if a[:3] == ["git", "rev-parse", "HEAD"]:
+            return ok(self.head + "\n")
         if a[:2] == ["git", "diff"]:
             return ok(self.name_status if "--name-status" in a else "+++ b/scripts/foo.py\n+a new line\n")
         if a[:2] == ["git", "log"]:
@@ -124,6 +139,8 @@ class World:
             target = next(x for x in a if x.startswith("--junitxml="))[len("--junitxml="):]
             passed, failed = self.suites[Path(target).name]
             Path(target).write_text(junit(passed, failed), encoding="utf-8")
+            if self.on_suite:
+                self.on_suite(Path(target).name)
             return ok()
         if a[0] == sys.executable and a[1].endswith("check-org-neutral.py"):
             return RunResult(self.neutral(Path(a[2]).read_text(encoding="utf-8")))
@@ -236,6 +253,12 @@ def item_rows():
     return store.read_item_rows(ID)
 
 
+def only_cycle_id():
+    ids = list(store.read_cycle_records(ID))
+    assert len(ids) == 1
+    return ids[0]
+
+
 def events(name=None):
     rows = store.read_events(ID)
     return [r for r in rows if name is None or r["event"] == name]
@@ -336,7 +359,7 @@ def test_an_eligible_issue_becomes_a_pull_request_through_every_gate(env):
     original = env.spawner.developer
 
     def developer(argv, cwd):
-        seen_scopes.append([r.pid for r in scopes.load_all(env.scopes_dir)])
+        seen_scopes.append([(r.session_id, r.pid) for r in scopes.load_all(env.scopes_dir)])
         return original(argv, cwd)
 
     env.spawner.developer = developer
@@ -350,7 +373,7 @@ def test_an_eligible_issue_becomes_a_pull_request_through_every_gate(env):
     assert row["branch"].startswith("mandate/7-")
 
     pushes = env.world.calls_with("git", "push")
-    assert len(pushes) == 1 and pushes[0][2:] == ["origin", f"HEAD:refs/heads/{row['branch']}"]
+    assert len(pushes) == 1 and pushes[0][2:] == ["origin", f"{env.world.head}:refs/heads/{row['branch']}"]
     created = env.world.calls_with("gh", "pr", "create")[0]
     assert created[created.index("--base") + 1] == "main"
     assert created[created.index("--head") + 1] == row["branch"]
@@ -366,7 +389,7 @@ def test_an_eligible_issue_becomes_a_pull_request_through_every_gate(env):
         assert call["cwd"].startswith(str(env.temp_root))
         assert Path(env.plan_of(call["argv"])).is_relative_to(store.mandate_dir(ID))
         assert 0 < call["seconds"] <= store.load_mandate(ID).item_minutes_cap * 60
-    assert any(s.startswith("mandate-") for s in env.spawner.live_scopes[0])
+    assert seen_scopes == [[(f"mandate-{row['cycle_id']}-7", os.getpid())]]
     assert list(env.scopes_dir.iterdir()) == []
     assert env.world.calls_with("git", "worktree", "remove")[-1][-1] == str(
         env.temp_root / f"{row['cycle_id']}-7"
@@ -380,6 +403,287 @@ def test_an_eligible_issue_becomes_a_pull_request_through_every_gate(env):
     assert logged and all({"argv", "cwd", "exit", "ts"} <= set(r) for r in logged)
     assert [e["event"] for e in events()][0] == "cycle-start"
     assert events()[-1]["event"] == "cycle-end"
+
+
+MOVED = "b" * 40
+
+
+def test_a_commit_made_while_the_suite_runs_is_never_pushed(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.on_suite = lambda name: setattr(env.world, "head", MOVED) if name == "item.xml" else None
+    env.cycle()
+    row = item_rows()[0]
+    assert (row["outcome"], row["failure_kind"]) == ("failed", "state-tampered")
+    assert env.world.calls_with("git", "push") == [] and env.world.calls_with("gh", "pr", "create") == []
+    assert env.spawner.of("code-reviewer") == []
+    mandate = store.load_mandate(ID)
+    assert mandate.breaker_open and mandate.breaker_reason == "state-tampered"
+
+
+def test_a_commit_made_during_the_review_is_never_pushed(env):
+    env.grant()
+    eligible(env, 1)
+
+    def reviewer(argv, cwd):
+        env.world.head = MOVED
+        return driver.SpawnResult(0, "No blocking findings.\nVERDICT: accept\n")
+
+    env.spawner.reviewer = reviewer
+    env.cycle()
+    row = item_rows()[0]
+    assert (row["outcome"], row["failure_kind"]) == ("failed", "state-tampered")
+    assert env.world.calls_with("git", "push") == [] and env.world.calls_with("gh", "pr", "create") == []
+    assert store.load_mandate(ID).breaker_open
+
+
+def test_a_file_changed_during_the_review_is_never_pushed(env):
+    env.grant()
+    eligible(env, 1)
+
+    def reviewer(argv, cwd):
+        env.world.status = " M scripts/foo.py"
+        return driver.SpawnResult(0, "No blocking findings.\nVERDICT: accept\n")
+
+    env.spawner.reviewer = reviewer
+    env.cycle()
+    assert item_rows()[0]["failure_kind"] == "state-tampered"
+    assert env.world.calls_with("git", "push") == []
+
+
+def test_work_the_developer_left_uncommitted_is_committed_before_it_is_checked(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.status = " M scripts/foo.py"
+    env.cycle()
+    assert env.world.calls_with("git", "add", "-A") and env.world.calls_with("git", "commit")
+    assert item_rows()[0]["outcome"] == "pr-opened"
+
+
+# --- the records every outcome leaves ---------------------------------------------------
+
+R6_FIELDS = {"cycle_id", "issue", "branch", "pr_url", "outcome", "tests", "review", "gates", "cost_usd", "duration_s"}
+GATE_NAMES = {"constitution", "org_neutral", "lint"}
+
+
+def only_row(**expected):
+    rows = item_rows()
+    assert len(rows) == 1
+    row = rows[0]
+    assert R6_FIELDS <= set(row), R6_FIELDS - set(row)
+    assert set(row["gates"]) == GATE_NAMES
+    assert isinstance(row["cost_usd"], float) and isinstance(row["duration_s"], float)
+    for key, value in expected.items():
+        assert row[key] == value, key
+    return row
+
+
+def test_a_pull_request_row_carries_every_field_and_its_measured_cost_and_duration(env):
+    env.grant()
+    eligible(env, 1)
+
+    def developer(argv, cwd):
+        env.add_cost(1.5, env.plan_of(argv))
+        env.clock.advance(seconds=90)
+        return driver.SpawnResult(0, "COMPLETED:\nok\n")
+
+    env.spawner.developer = developer
+    env.cycle()
+    row = only_row(
+        issue=1, outcome="pr-opened", tests="pass", review="accept", pr_url=env.world.pr_url,
+        gates={"constitution": "pass", "org_neutral": "pass", "lint": "pass"}, cost_usd=1.5, duration_s=90.0,
+    )
+    assert row["branch"].startswith("mandate/1-")
+
+
+def test_a_failed_row_says_which_gates_ran_and_has_no_pull_request(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.suites["item.xml"] = (["t1"], ["t2"])
+    env.world.suites["rerun.xml"] = (["t1"], ["t2"])
+    env.cycle()
+    row = only_row(
+        issue=1, outcome="failed", failure_kind="tests", tests="fail", review="not-run", pr_url=None,
+        gates={"constitution": "pass", "org_neutral": "pass", "lint": "pass"},
+    )
+    assert row["branch"].startswith("mandate/1-")
+
+
+def test_an_overrun_row_stops_at_the_spawn_that_overran(env):
+    env.grant(item_usd_cap=2.0)
+    eligible(env, 1)
+
+    def developer(argv, cwd):
+        env.add_cost(3.0, env.plan_of(argv))
+        return driver.SpawnResult(0, "COMPLETED:\nok\n")
+
+    env.spawner.developer = developer
+    env.cycle()
+    row = only_row(
+        issue=1, outcome="overrun", tests="not-run", review="not-run", pr_url=None, cost_usd=3.0,
+        gates={"constitution": "not-run", "org_neutral": "not-run", "lint": "not-run"},
+    )
+    assert row["overrun_reasons"] == ["item-usd-cap"]
+
+
+def test_a_declined_row_has_a_branch_and_no_pull_request(env):
+    env.grant()
+    eligible(env, 1)
+    env.spawner.developer = lambda argv, cwd: driver.SpawnResult(0, "ESCALATE:\nNeeds a decision.\n")
+    env.cycle()
+    row = only_row(
+        issue=1, outcome="declined", marker="ESCALATE", tests="not-run", review="not-run", pr_url=None,
+        gates={"constitution": "not-run", "org_neutral": "not-run", "lint": "not-run"},
+    )
+    assert row["branch"].startswith("mandate/1-")
+
+
+def test_a_limit_row_names_the_reasons_and_no_branch(env):
+    env.grant(max_items=2, daily_usd=5.0)
+    eligible(env, 1, day=1)
+    eligible(env, 2, day=2)
+
+    def developer(argv, cwd):
+        env.add_cost(6.0, env.plan_of(argv))
+        return driver.SpawnResult(0, "COMPLETED:\nok\n")
+
+    env.spawner.developer = developer
+    env.cycle()
+    row = item_rows()[1]
+    assert R6_FIELDS <= set(row)
+    assert (row["issue"], row["outcome"], row["reasons"]) == (2, "limit", ["daily-budget"])
+    assert (row["branch"], row["pr_url"], row["tests"], row["review"]) == (None, None, "not-run", "not-run")
+    assert (row["cost_usd"], row["duration_s"]) == (0.0, 0.0)
+    assert set(row["gates"]) == GATE_NAMES
+
+
+def test_a_constitution_row_marks_only_that_gate(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.name_status = "M\tscripts/agentctl/mandate.py\n"
+    env.cycle()
+    only_row(
+        failure_kind="constitution", tests="not-run",
+        gates={"constitution": "fail", "org_neutral": "not-run", "lint": "not-run"},
+    )
+
+
+# --- wall-clock and budget limits mid-cycle ---------------------------------------------
+
+def test_the_cycle_wall_clock_cap_stops_the_next_item_with_a_limit_event(env):
+    env.grant(max_items=2, item_minutes_cap=100.0, cycle_minutes_cap=30.0)
+    eligible(env, 1, day=1)
+    eligible(env, 2, day=2)
+
+    def developer(argv, cwd):
+        env.clock.advance(minutes=31)
+        return driver.SpawnResult(0, "COMPLETED:\nok\n")
+
+    env.spawner.developer = developer
+    env.cycle()
+    assert [(r["issue"], r["outcome"]) for r in item_rows()] == [(1, "pr-opened"), (2, "limit")]
+    assert events("limit")[-1]["detail"] == {"reasons": ["cycle-minutes-cap"], "phase": "item", "issue": 2}
+    assert len(env.spawner.of("developer")) == 1
+    assert not store.load_mandate(ID).breaker_open
+
+
+def test_the_weekly_budget_stops_the_next_item_with_a_limit_event(env):
+    env.grant(max_items=2, daily_usd=50.0, weekly_usd=5.0)
+    eligible(env, 1, day=1)
+    eligible(env, 2, day=2)
+
+    def developer(argv, cwd):
+        env.add_cost(6.0, env.plan_of(argv))
+        return driver.SpawnResult(0, "COMPLETED:\nok\n")
+
+    env.spawner.developer = developer
+    env.cycle()
+    assert [(r["issue"], r["outcome"]) for r in item_rows()] == [(1, "pr-opened"), (2, "limit")]
+    assert events("limit")[-1]["detail"]["reasons"] == ["weekly-budget"]
+    assert len(env.spawner.of("developer")) == 1
+    assert not store.load_mandate(ID).breaker_open
+
+
+def test_a_spawn_killed_at_the_cycle_bound_is_charged_as_a_cycle_minutes_overrun(env):
+    env.grant(item_usd_cap=4.0, item_minutes_cap=100.0, cycle_minutes_cap=30.0)
+    eligible(env, 1)
+    env.spawner.developer = lambda argv, cwd: driver.SpawnResult(-9, "", "", killed=True)
+    env.cycle()
+    row = item_rows()[0]
+    assert row["outcome"] == "overrun" and row["overrun_reasons"] == ["cycle-minutes-cap"]
+    assert not store.load_mandate(ID).breaker_open
+    assert env.spawner.calls[0]["seconds"] == pytest.approx(30 * 60, abs=5)
+
+
+def test_a_spawn_runs_no_longer_than_what_is_left_of_the_item_cap(env):
+    env.grant(item_minutes_cap=10.0, cycle_minutes_cap=100.0)
+    eligible(env, 1)
+    env.cycle()
+    assert env.spawner.calls[0]["seconds"] == pytest.approx(10 * 60, abs=5)
+
+
+# --- a scope record that stays live, and a log of every external command ----------------
+
+def test_the_scope_record_is_heartbeated_while_an_item_works(env):
+    env.grant()
+    eligible(env, 1)
+    seen = []
+
+    def developer(argv, cwd):
+        first = scopes.load_all(env.scopes_dir)[0]
+        last = first.heartbeat_ts
+        deadline = time.monotonic() + 10
+        while last <= first.heartbeat_ts and time.monotonic() < deadline:
+            time.sleep(0.02)
+            last = scopes.load_all(env.scopes_dir)[0].heartbeat_ts
+        seen.append((first.pid, first.heartbeat_ts, last))
+        return driver.SpawnResult(0, "COMPLETED:\nok\n")
+
+    env.spawner.developer = developer
+    env.cycle(heartbeat_s=0.05)
+    pid, first, last = seen[0]
+    assert pid == os.getpid() and last > first
+    assert list(env.scopes_dir.iterdir()) == []
+
+
+def test_every_external_command_is_logged_with_its_argv_and_exit_code(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.gate_rc = {"scripts/verify-all.py": 1}
+    env.cycle()
+    cycle_id = item_rows()[0]["cycle_id"]
+    logged = store.read_command_rows(ID, cycle_id)
+    expected = env.world.calls + [c["argv"] for c in env.spawner.calls]
+    assert sorted(r["argv"] for r in logged) == sorted(expected)
+    gate_exits = {r["exit"] for r in logged if r["argv"][1:2] == ["scripts/verify-all.py"]}
+    assert gate_exits == {1}
+    assert {r["exit"] for r in logged if r["argv"][1:2] != ["scripts/verify-all.py"]} == {0}
+    assert [r["argv"][0] for r in logged].count("git") >= 5
+    assert any(r["argv"][:3] == ["git", "push", "origin"] for r in logged)
+
+
+def test_a_cycle_that_reruns_a_failing_test_runs_only_the_module_that_holds_it(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.suites["item.xml"] = (["t1"], ["t2"])
+    env.world.suites["rerun.xml"] = (["t1", "t2"], [])
+    env.cycle()
+    assert item_rows()[0]["outcome"] == "pr-opened"
+    reruns = [c for c in env.world.calls if any(x.endswith("rerun.xml") for x in c)]
+    assert len(reruns) == 1 and "scripts/tests/test_a.py" in reruns[0]
+    assert "scripts/tests" not in reruns[0]
+
+
+def test_a_failing_test_that_maps_to_no_module_is_not_rerun_and_fails_the_item(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.worktree_files = []
+    env.world.suites["item.xml"] = (["t1"], ["t2"])
+    env.world.suites["rerun.xml"] = (["t1", "t2"], [])
+    env.cycle()
+    row = item_rows()[0]
+    assert (row["outcome"], row["failure_kind"], row["tests"]) == ("failed", "tests", "fail")
+    assert not any(x.endswith("rerun.xml") for c in env.world.calls for x in c)
 
 
 def test_a_cycle_fixes_before_it_triages(env):
@@ -485,6 +789,7 @@ def test_a_gate_script_the_item_breaks_fails_it(env):
     env.cycle()
     row = item_rows()[0]
     assert (row["outcome"], row["failure_kind"]) == ("failed", "tests")
+    assert row["gates"]["lint"] == "fail" and row["gate_exit_codes"]["scripts/lint-prose-length.py"] == 1
 
 
 # --- what a diff may not touch, what may not be published -------------------------------
@@ -606,7 +911,8 @@ def test_a_killed_spawn_with_no_cost_row_is_charged_the_whole_item_cap(env):
     row = item_rows()[0]
     assert row["outcome"] == "overrun" and "item-minutes-cap" in row["overrun_reasons"]
     assert not store.load_mandate(ID).breaker_open
-    assert store.spend_now(ID, env.clock()).day_usd == pytest.approx(4.0)
+    spend = store.spend_now(ID, env.clock())
+    assert (spend.day_usd, spend.week_usd) == (pytest.approx(4.0), pytest.approx(4.0))
 
 
 def test_a_killed_spawn_that_left_a_cost_row_is_not_charged_twice(env):
@@ -620,7 +926,8 @@ def test_a_killed_spawn_that_left_a_cost_row_is_not_charged_twice(env):
     env.spawner.developer = developer
     env.cycle()
     assert events("overrun-charge") == []
-    assert store.spend_now(ID, env.clock()).day_usd == pytest.approx(1.5)
+    spend = store.spend_now(ID, env.clock())
+    assert (spend.day_usd, spend.week_usd) == (pytest.approx(1.5), pytest.approx(1.5))
 
 
 def test_a_failed_item_opens_the_breaker_and_no_further_item_is_taken(env):
@@ -710,11 +1017,13 @@ def test_triage_logs_the_label_row_before_the_label_is_applied(env):
 def test_triage_goes_through_the_judge_in_batches_of_ten_oldest_first(env):
     env.grant()
     for n in range(1, 26):
-        env.world.issues.append(raw_issue(n, labels=("backlog",), day=(n % 28) + 1 if n > 20 else n))
+        env.world.issues.append(raw_issue(n, labels=("backlog",), day=26 - n))
     env.cycle()
     batches = [[int(x) for x in re.findall(r'<issue number="(\d+)">', p)] for p in env.judge.prompts]
     assert [len(b) for b in batches] == [10, 10, 5]
-    assert sorted(sum(batches, [])) == list(range(1, 26))
+    assert [sorted(b) for b in batches] == [
+        list(range(16, 26)), list(range(6, 16)), list(range(1, 6)),
+    ]
     assert len(events("judge-cost")) == 3
     assert {r["issue"] for r in store.read_label_rows(ID)} == set(range(1, 26))
 
@@ -761,6 +1070,17 @@ def test_a_judge_that_raises_is_charged_a_flat_amount_and_labels_nothing(env):
     assert env.cycle() == 0
     assert [e["detail"]["cost_usd"] for e in events("judge-cost")] == [driver.JUDGE_FLAT_CHARGE_USD]
     assert store.read_label_rows(ID) == []
+    judged = [r for r in store.read_command_rows(ID, only_cycle_id()) if r["argv"][0] == "judge"]
+    assert [(r["argv"], r["exit"]) for r in judged] == [(["judge", "triage", "#1"], 1)]
+
+
+def test_a_judge_call_is_logged_with_the_issues_it_judged(env):
+    env.grant()
+    env.world.issues.append(raw_issue(5, labels=("backlog",)))
+    env.world.issues.append(raw_issue(6, labels=("backlog",), day=2))
+    env.cycle()
+    judged = [r for r in store.read_command_rows(ID, only_cycle_id()) if r["argv"][0] == "judge"]
+    assert [(r["argv"], r["exit"]) for r in judged] == [(["judge", "triage", "#5", "#6"], 0)]
 
 
 @pytest.mark.parametrize("code", [1, 2])
@@ -834,6 +1154,88 @@ def test_the_digest_reports_items_triage_and_the_veto_instruction(env):
     assert "no-auto" in text and "non-file notifier" in text
 
 
+def digest_text():
+    return next((store.mandate_dir(ID) / "digests").glob("*.md")).read_text(encoding="utf-8")
+
+
+def digest_section(text, title):
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(f"## {title}"))
+    body = []
+    for line in lines[start + 1:]:
+        if line.startswith("## "):
+            break
+        if line.startswith("- "):
+            body.append(line)
+    return body
+
+
+def test_the_digest_carries_every_item_the_owner_needs_to_audit_a_cycle(env):
+    env.grant(max_items=3, item_usd_cap=2.0, weekly_usd=3.0)
+    for n in (1, 2, 3):
+        eligible(env, n, day=n)
+    env.world.open_prs = [{
+        "number": 9, "title": "t", "body": "", "headRefName": "mandate/9-20260101",
+        "url": "https://example.test/owner/repo/pull/9",
+    }]
+    env.world.remote_heads = "aaa\trefs/heads/mandate/8-20260101\n"
+    calls = {"n": 0}
+
+    def developer(argv, cwd):
+        calls["n"] += 1
+        env.add_cost(0.5 if calls["n"] == 1 else 3.0, env.plan_of(argv))
+        return driver.SpawnResult(0, "COMPLETED:\nok\n")
+
+    env.spawner.developer = developer
+    env.cycle()
+    text = digest_text()
+    mandate = store.load_mandate(ID)
+
+    assert f"Mandate expires {mandate.expires_at}." in text
+    assert "Kill switch: `agentctl mandate-stop`." in text
+    items = digest_section(text, "Items")
+    assert items[0].startswith("- #1: pr-opened") and env.world.pr_url in items[0]
+    assert items[1].startswith("- #2: overrun")
+    assert items[2].startswith("- #3: limit")
+    assert digest_section(text, "Overruns") == ["- #2: item-usd-cap"]
+    assert digest_section(text, "Limits hit") == ["- item (#3): weekly-budget"]
+    assert digest_section(text, "Open mandate pull requests") == [
+        f"- {env.world.pr_url}", "- https://example.test/owner/repo/pull/9",
+    ]
+    assert digest_section(text, "Remote `mandate/*` branches") == ["- mandate/8-20260101"]
+    assert digest_section(text, "Labels applied this cycle") == ["- none"]
+    assert digest_section(text, "Triage comments skipped") == ["- none"]
+    assert "Breaker: closed." in text
+
+
+def test_the_digest_lists_the_labels_applied_and_the_comments_the_neutral_check_held_back(env):
+    env.grant()
+    env.world.issues.append(raw_issue(3, labels=("backlog",), day=3))
+    env.world.issues.append(raw_issue(4, labels=("backlog",), day=4))
+    env.judge.text = json.dumps([
+        {"issue": 3, "verdict": "auto-ok", "reason": "fine"},
+        {"issue": 4, "verdict": "auto-ok", "reason": "LEAKY"},
+    ])
+    env.world.neutral = lambda text: 1 if "LEAKY" in text else 0
+    env.cycle()
+    text = digest_text()
+    assert digest_section(text, "Labels applied this cycle") == ["- #3: `auto-ok` -- fine"]
+    assert digest_section(text, "Triage comments skipped") == ["- #4: org-neutral-hit"]
+    assert digest_section(text, "Triage (1)") == ["- #3: auto-ok -- fine"]
+    assert "`no-auto`" in text
+
+
+def test_the_digest_states_the_open_breaker_and_how_to_close_it(env):
+    env.grant()
+    eligible(env, 1)
+    env.spawner.developer = lambda argv, cwd: driver.SpawnResult(0, "PERMISSION-REQUEST:\nAction: x\n")
+    env.cycle()
+    text = digest_text()
+    assert "**Breaker open**: failed:permission on #1." in text
+    assert "`agentctl mandate-resume`" in text
+    assert "- #1: failed (permission)" in text
+
+
 def test_a_user_set_label_is_eligible_without_any_digest(env):
     env.grant()
     eligible(env, 1)
@@ -868,14 +1270,22 @@ def string_constants(source):
     return [n.value for n in ast.walk(ast.parse(source)) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
 
 
-def test_the_driver_source_never_names_issue_create():
-    tree = ast.parse(DRIVER_SOURCE)
-    for node in ast.walk(tree):
+CYCLE_SOURCES = {
+    "driver": DRIVER_SOURCE,
+    "notifiers": Path(notifiers.__file__).read_text(encoding="utf-8"),
+    "cli": (Path(driver.__file__).resolve().parents[1] / "mandate-cycle.py").read_text(encoding="utf-8"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(CYCLE_SOURCES))
+def test_no_cycle_source_names_issue_create(name):
+    source = CYCLE_SOURCES[name]
+    for node in ast.walk(ast.parse(source)):
         if isinstance(node, (ast.List, ast.Tuple)):
             words = [e.value for e in node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
             assert not ("issue" in words and "create" in words), ast.dump(node)[:120]
-    assert "gh issue create" not in DRIVER_SOURCE
-    assert "file-difficulty" not in DRIVER_SOURCE
+    assert "gh issue create" not in source
+    assert "file-difficulty" not in source
 
 
 FORBIDDEN_NAMES = {
@@ -884,20 +1294,41 @@ FORBIDDEN_NAMES = {
 }
 
 
-def test_the_driver_never_references_a_user_authority_transition():
-    tree = ast.parse(DRIVER_SOURCE)
+@pytest.mark.parametrize("name", sorted(CYCLE_SOURCES))
+def test_no_cycle_source_references_a_user_authority_transition(name):
+    source = CYCLE_SOURCES[name]
+    tree = ast.parse(source)
     names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
     names |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
     assert not (names & FORBIDDEN_NAMES), names & FORBIDDEN_NAMES
-    for text in string_constants(DRIVER_SOURCE):
+    for text in string_constants(source):
         assert not re.fullmatch(r"mandate-(grant|extend|resume|stop)", text), text
 
 
-def test_push_refspec_refuses_trunk_and_non_mandate_branches():
-    assert driver.push_refspec("mandate/12-20261009") == "HEAD:refs/heads/mandate/12-20261009"
+def test_push_refspec_pushes_the_given_commit_to_a_mandate_branch_only():
+    assert driver.push_refspec("mandate/12-20261009", "c" * 40) == f"{'c' * 40}:refs/heads/mandate/12-20261009"
     for branch in ("main", "master", "release-1", "mandate", "feature/x", ""):
         with pytest.raises(driver.DriverError):
-            driver.push_refspec(branch)
+            driver.push_refspec(branch, "c" * 40)
+    for sha in ("HEAD", "main", "", "c" * 39, "C" * 40, "c" * 40 + "\n"):
+        with pytest.raises(driver.DriverError):
+            driver.push_refspec("mandate/12-20261009", sha)
+
+
+def test_real_spawn_returns_when_a_killed_process_will_not_close_its_pipes(monkeypatch):
+    class Stuck:
+        pid, returncode = 1, None
+
+        def communicate(self, timeout=None):
+            raise subprocess.TimeoutExpired("stuck", timeout)
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: Stuck())
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: None)
+    result = driver.real_spawn(["stuck"], ".", 1)
+    assert (result.returncode, result.killed, result.stdout, result.stderr) == (-9, True, "", "")
 
 
 # --- reaping ----------------------------------------------------------------------------
@@ -910,7 +1341,7 @@ def test_a_cycle_reaps_what_a_killed_one_left_and_reports_orphan_remote_branches
     scopes.save(env.scopes_dir, scopes.ScopeRecord(
         session_id="mandate-old-1", heartbeat_ts=1.0, cwd=str(old), pid=dead.pid))
     scopes.save(env.scopes_dir, scopes.ScopeRecord(
-        session_id="mandate-live-1", heartbeat_ts=1.0, cwd=str(live), pid=__import__("os").getpid()))
+        session_id="mandate-live-1", heartbeat_ts=1.0, cwd=str(live), pid=os.getpid()))
     scopes.save(env.scopes_dir, scopes.ScopeRecord(
         session_id="someone-else", heartbeat_ts=1.0, cwd="/x", pid=dead.pid))
     repo = env.tmp / "repo"

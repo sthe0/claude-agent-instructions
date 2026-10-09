@@ -66,6 +66,16 @@ def test_a_plugin_that_fails_to_import_is_skipped_for_the_next_one(tmp_path, plu
     assert deliver(tmp_path, plugins).notifier == "good"
 
 
+@pytest.mark.parametrize("by", ["name", "stem"])
+def test_a_plugin_named_file_cannot_take_the_built_in_notifiers_name(tmp_path, plugins, by):
+    if by == "name":
+        write_plugin(plugins, "chat", "NAME = 'file'\ndef send(text):\n    return True\n")
+    else:
+        write_plugin(plugins, "file", "def send(text):\n    return True\n")
+    assert notifiers.discover_plugins(plugins) == []
+    assert deliver(tmp_path, plugins).notifier == notifiers.FILE_NOTIFIER
+
+
 def test_a_plugin_that_raises_is_a_failed_delivery_not_a_crash(tmp_path, plugins):
     write_plugin(plugins, "chat", "NAME = 'chat'\ndef send(text):\n    raise OSError('down')\n")
     delivery = deliver(tmp_path, plugins)

@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -57,6 +58,8 @@ JUDGE_FLAT_CHARGE_USD = 0.5
 JUDGE_TIMEOUT_S = 300
 GH_LIST_LIMIT = 500
 SUITE_TIMEOUT_S = 3600
+REAP_TIMEOUT_S = 30
+HEARTBEAT_S = 60.0
 SUMMARY_CHARS = 3000
 REASON_CHARS = 300
 DEFAULT_SUITE = (sys.executable, "-m", "pytest", "-q", "-p", "no:xdist", "scripts/tests")
@@ -70,6 +73,9 @@ EXIT_OK, EXIT_ERROR, EXIT_BUSY = 0, 1, 3
 KIND_SPAWN_ERROR, KIND_INFRA = "spawn-error", "infra"
 VERDICT_LABEL = {"auto-ok": "ok", "auto-no": "no"}
 VERDICT_RE = re.compile(r"VERDICT:\s*(accept|reject)\b", re.IGNORECASE)
+SHA_RE = re.compile(r"[0-9a-f]{40}")
+ITEM_CAP, CYCLE_CAP = "item-minutes-cap", "cycle-minutes-cap"
+NOT_RUN, PASS, FAIL = "not-run", "pass", "fail"
 
 
 class DriverError(RuntimeError):
@@ -112,7 +118,10 @@ def real_spawn(argv, cwd, timeout_s) -> SpawnResult:
             proc.kill()
         except ProcessLookupError:
             pass
-        out, err = proc.communicate()
+        try:
+            out, err = proc.communicate(timeout=REAP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            out, err = "", ""
         return SpawnResult(-9, out or "", err or "", killed=True)
 
 
@@ -159,15 +168,19 @@ class Config:
     board_path: "Path | None" = None
     plugin_root: "Path | None" = None
     suite: "tuple[str, ...]" = DEFAULT_SUITE
+    heartbeat_s: float = HEARTBEAT_S
 
 
 # --- small pure helpers ---------------------------------------------------------------
 
-def push_refspec(branch: str) -> str:
-    """The only refspec the driver ever pushes: a `mandate/*` branch, never trunk."""
+def push_refspec(branch: str, sha: str) -> str:
+    """The only refspec the driver ever pushes: the checked commit to a `mandate/*` branch,
+    never trunk and never a moving `HEAD`."""
     if not branch.startswith(BRANCH_PREFIX) or branch == TRUNK:
         raise DriverError(f"refusing to push {branch!r}: only {BRANCH_PREFIX}* branches are pushed")
-    return f"HEAD:refs/heads/{branch}"
+    if not SHA_RE.fullmatch(sha):
+        raise DriverError(f"refusing to push {sha!r}: not a full commit sha")
+    return f"{sha}:refs/heads/{branch}"
 
 
 def branch_for(number: int, now: datetime) -> str:
@@ -209,7 +222,9 @@ def read_junit(path: Path) -> SuiteResult:
 
 
 def rerun_targets(failing: "list[str]", worktree: Path) -> "list[str]":
-    """Module files (relative to the worktree) behind failing junit ids, to rerun once."""
+    """Module files (relative to the worktree) behind failing junit ids, to rerun once. An id
+    that maps to no file contributes nothing; when none maps, nothing is rerun and the ids
+    stay failing."""
     files: "list[str]" = []
     for ident in failing:
         parts = ident.split("::")[0].split(".")
@@ -355,6 +370,30 @@ resolves the issue below without unrelated edits.
 REVIEW_CRITERION = "The reply ends with a line `VERDICT: accept` or `VERDICT: reject`."
 
 
+class Heartbeat:
+    """Keeps one session-scope record live while an item works, so a concurrent cycle's reaper
+    (or another session) sees the item's worktree as owned for as long as it really is."""
+
+    def __init__(self, scopes_dir, session_id: str, interval_s: float):
+        self.scopes_dir, self.session_id, self.interval_s = scopes_dir, session_id, max(0.01, interval_s)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name=f"heartbeat-{session_id}", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_s):
+            try:
+                scopes.heartbeat(self.session_id, time.time(), self.scopes_dir, pid=os.getpid())
+            except OSError:
+                pass
+
+
 # --- the cycle ------------------------------------------------------------------------
 
 class Cycle:
@@ -366,8 +405,11 @@ class Cycle:
         self.triaged: "list[dict]" = []
         self.orphans: "list[str]" = []
         self.reaped: dict = {}
-        self.notes: "list[str]" = []
+        self.skipped: "list[dict]" = []
+        self.limits: "list[dict]" = []
+        self.open_prs: "list[dict]" = []
         self.baseline_gates: "dict[str, int]" = {}
+        self._beat: "Heartbeat | None" = None
 
     # ---- plumbing
 
@@ -438,6 +480,7 @@ class Cycle:
             "--json", "number,title,body,headRefName,url",
         ]) or []
         raw_by_number = {int(r["number"]): r for r in raw_issues}
+        self.open_prs = [pr for pr in prs if str(pr.get("headRefName") or "").startswith(BRANCH_PREFIX)]
         return owner, raw_by_number, [rules.normalize_issue(r) for r in raw_issues], rules.pr_referenced_issues(prs)
 
     def evaluate(self, mandate, owner, issues, pr_refs) -> "list[rules.Candidate]":
@@ -511,6 +554,8 @@ class Cycle:
         return sorted(remote - {pr.get("headRefName") for pr in prs})
 
     def run_suite(self, worktree: Path, junit: Path, files=None) -> SuiteResult:
+        if files is not None and not files:
+            return SuiteResult()
         timeout = min(SUITE_TIMEOUT_S, max(60, int(self._remaining_seconds(None))))
         targets = list(files) if files else [self.cfg.suite[-1]]
         argv = ["bash", "scripts/cap-run.sh", "--timeout", str(timeout), "--", *self.cfg.suite[:-1], *targets,
@@ -555,6 +600,7 @@ class Cycle:
         problem = self.org_neutral_problem(text, tag)
         if problem:
             self.event("triage-skipped", {"issue": number, "reason": problem})
+            self.skipped.append({"issue": number, "reason": problem})
             return False
         store.append_label_row(self.mid, number, label, self.id, by="cycle", reason=reason, now=self.now())
         body = store.cycle_dir(self.mid, self.id) / "comments" / f"{number}.md"
@@ -570,24 +616,21 @@ class Cycle:
     # ---- one item
 
     def item_cost(self, item_dir: Path) -> "tuple[float, int]":
-        total, count = 0.0, 0
-        for row in cost.read_rows(cost.COST_LOG):
-            plan_path, usd = row.get("plan_path"), row.get("cost_usd")
-            if row.get("event") == "refused" or not isinstance(plan_path, str):
-                continue
-            if isinstance(usd, bool) or not isinstance(usd, (int, float)):
-                continue
-            if Path(plan_path).is_relative_to(item_dir):
-                total, count = total + float(usd), count + 1
-        return total, count
+        return rules.item_cost_rows(cost.read_rows(cost.COST_LOG), str(item_dir))
 
-    def _remaining_seconds(self, item_started: "datetime | None", mandate=None) -> float:
+    def time_bound(self, item_started: "datetime | None", mandate=None) -> "tuple[float, str]":
+        """Seconds a spawn may run and the cap that sets that bound."""
         mandate = mandate or store.load_mandate(self.mid)
         cycle_left = mandate.cycle_minutes_cap - self.elapsed_minutes()
-        item_left = cycle_left
-        if item_started is not None:
-            item_left = mandate.item_minutes_cap - (self.now() - item_started).total_seconds() / 60.0
-        return max(0.0, min(cycle_left, item_left) * 60.0)
+        if item_started is None:
+            return max(0.0, cycle_left * 60.0), CYCLE_CAP
+        item_left = mandate.item_minutes_cap - (self.now() - item_started).total_seconds() / 60.0
+        if cycle_left < item_left:
+            return max(0.0, cycle_left * 60.0), CYCLE_CAP
+        return max(0.0, item_left * 60.0), ITEM_CAP
+
+    def _remaining_seconds(self, item_started: "datetime | None", mandate=None) -> float:
+        return self.time_bound(item_started, mandate)[0]
 
     def spawn(self, argv, cwd, seconds) -> SpawnResult:
         result = self.seams.spawn([str(a) for a in argv], str(cwd), seconds)
@@ -602,13 +645,23 @@ class Cycle:
         mandate state or the item has overrun (the row then already says so)."""
         before = store.state_fingerprint(self.mid)
         rows_before = self.item_cost(item_dir)[1]
-        result = self.spawn(argv, worktree, self._remaining_seconds(started, mandate))
+        seconds, bound_by = self.time_bound(started, mandate)
+        result = self.spawn(argv, worktree, seconds)
         if self.tampered(before):
             row.update(outcome="failed", failure_kind="state-tampered")
             return None
-        if self.overrun(row, mandate, item_dir, started, result, rows_before):
+        if self.overrun(row, mandate, item_dir, started, result, rows_before, bound_by):
             return None
         return result
+
+    def worktree_state(self, worktree: Path) -> "tuple[str, str]":
+        """(HEAD sha, porcelain status); either part is a marker no real value equals on failure."""
+        head = self.sh(["git", "rev-parse", "HEAD"], cwd=worktree)
+        status = self.sh(["git", "status", "--porcelain"], cwd=worktree)
+        return (
+            head.stdout.strip() if head.returncode == 0 else "<rev-parse failed>",
+            status.stdout.strip() if status.returncode == 0 else "<status failed>",
+        )
 
     def spawn_argv(self, kind, brief, criterion, constraints, criterion_type, worktree, budget) -> "list[str]":
         argv = [
@@ -621,13 +674,25 @@ class Cycle:
         return argv
 
     def register_scope(self, session_id: str, worktree: Path) -> None:
+        """Record the item's worktree in the session-scope registry and keep it live until released."""
         record = scopes.ScopeRecord(
             session_id=session_id, heartbeat_ts=time.time(), cwd=str(worktree), repo_root=str(worktree),
             vcs="git", pid=os.getpid(),
         )
         scopes.save(self.cfg.scopes_dir, record)
+        self._beat = Heartbeat(self.cfg.scopes_dir, session_id, self.cfg.heartbeat_s)
+        self._beat.start()
 
-    def overrun(self, row: dict, mandate, item_dir: Path, started: datetime, spawn: "SpawnResult | None", rows_before: int) -> bool:
+    def release_scope(self, session_id: str) -> None:
+        if self._beat is not None:
+            self._beat.stop()
+            self._beat = None
+        scopes.delete(self.cfg.scopes_dir, session_id)
+
+    def overrun(
+        self, row: dict, mandate, item_dir: Path, started: datetime, spawn: "SpawnResult | None",
+        rows_before: int, bound_by: str = ITEM_CAP,
+    ) -> bool:
         usd, count = self.item_cost(item_dir)
         elapsed = (self.now() - started).total_seconds() / 60.0
         verdict = rules.check_overrun(
@@ -637,8 +702,8 @@ class Cycle:
         charge = 0.0
         if spawn is not None and spawn.killed:
             charge = rules.killed_spawn_charge(count > rows_before, mandate.item_usd_cap)
-            if "item-minutes-cap" not in reasons:
-                reasons.append("item-minutes-cap")
+            if bound_by not in reasons:
+                reasons.append(bound_by)
         if charge:
             self.event("overrun-charge", {"issue": row["issue"], "cost_usd": charge})
         if not reasons:
@@ -652,16 +717,22 @@ class Cycle:
         self.post_verdict(mandate, number, label, text, f"declined: {marker}", f"decline-{number}")
         row.update(outcome="declined", marker=marker)
 
+    def new_row(self, number: int, branch: "str | None") -> dict:
+        """An items.jsonl row with every R6 field present, defaulted to the not-run state."""
+        return {
+            "cycle_id": self.id, "issue": number, "branch": branch, "pr_url": None, "outcome": "failed",
+            "tests": NOT_RUN, "review": NOT_RUN,
+            "gates": {"constitution": NOT_RUN, "org_neutral": NOT_RUN, "lint": NOT_RUN},
+            "cost_usd": 0.0, "duration_s": 0.0,
+        }
+
     def take_item(self, mandate, baseline, number: int, raw: dict) -> dict:
         started = self.now()
         branch = branch_for(number, started)
         item_dir = store.cycle_dir(self.mid, self.id) / "items" / str(number)
         worktree = self.cfg.temp_root / f"{self.id}-{number}"
         session_id = f"{SESSION_PREFIX}{self.id}-{number}"
-        row = {
-            "cycle_id": self.id, "issue": number, "branch": branch, "outcome": "failed",
-            "tests": "not-run", "review": "not-run", "gates": {}, "cost_usd": 0.0,
-        }
+        row = self.new_row(number, branch)
         try:
             self._work_item(row, mandate, baseline, number, raw, branch, item_dir, worktree, session_id, started)
         except DriverError as exc:
@@ -669,7 +740,7 @@ class Cycle:
         finally:
             self.sh(["git", "worktree", "remove", "--force", str(worktree)], cwd=self.cfg.repo)
             self.sh(["git", "branch", "-D", branch], cwd=self.cfg.repo)
-            scopes.delete(self.cfg.scopes_dir, session_id)
+            self.release_scope(session_id)
         usd, _ = self.item_cost(item_dir)
         row["cost_usd"] = max(float(row.get("cost_usd") or 0.0), usd)
         row["duration_s"] = round((self.now() - started).total_seconds(), 1)
@@ -712,7 +783,10 @@ class Cycle:
         if self.sh(["git", "status", "--porcelain"], cwd=worktree).stdout.strip():
             self.sh(["git", "add", "-A"], cwd=worktree)
             self.sh(["git", "commit", "-m", f"mandate: changes for issue #{number}"], cwd=worktree)
-        diff = self.sh(["git", "diff", "--name-status", "-M", f"{REMOTE}/{TRUNK}...HEAD"], cwd=worktree)
+        checked = self.worktree_state(worktree)[0]
+        if not SHA_RE.fullmatch(checked):
+            raise DriverError(f"git rev-parse HEAD: no commit sha, got {checked!r}")
+        diff = self.sh(["git", "diff", "--name-status", "-M", f"{REMOTE}/{TRUNK}...{checked}"], cwd=worktree)
         if diff.returncode != 0:
             raise DriverError(f"git diff: {tail(diff.stderr)}")
         lines = [line for line in diff.stdout.splitlines() if line.strip()]
@@ -720,6 +794,7 @@ class Cycle:
             self.decline(row, mandate, number, "no-change", "The developer finished without changing any file.")
             return
         constitution = rules.classify_diff(lines, mandate.constitution)
+        row["gates"]["constitution"] = FAIL if constitution.reject else PASS
         if constitution.reject:
             row.update(outcome="failed", failure_kind="constitution",
                        detail=", ".join(path for path, _ in constitution.offending)[:REASON_CHARS])
@@ -728,13 +803,15 @@ class Cycle:
         pr_title = f"Fix #{number}: {title}"[:120]
         pr_body = PR_BODY.format(summary=summary, number=number, cycle=self.id, mandate=self.mid)
         pr_comment = PR_COMMENT.format(cycle=self.id, url="<pr>")
-        added = self.sh(["git", "diff", f"{REMOTE}/{TRUNK}...HEAD"], cwd=worktree).stdout
-        messages = self.sh(["git", "log", "--format=%B", f"{REMOTE}/{TRUNK}..HEAD"], cwd=worktree).stdout
+        added = self.sh(["git", "diff", f"{REMOTE}/{TRUNK}...{checked}"], cwd=worktree).stdout
+        messages = self.sh(["git", "log", "--format=%B", f"{REMOTE}/{TRUNK}..{checked}"], cwd=worktree).stdout
         published = "\n".join(
             [messages, *(l[1:] for l in added.splitlines() if l.startswith("+") and not l.startswith("+++")),
              pr_title, pr_body, pr_comment],
         )
-        if self.org_neutral_problem(published, f"item-{number}"):
+        neutral_problem = self.org_neutral_problem(published, f"item-{number}")
+        row["gates"]["org_neutral"] = FAIL if neutral_problem else PASS
+        if neutral_problem:
             row.update(outcome="failed", failure_kind="org-neutral")
             return
 
@@ -746,15 +823,21 @@ class Cycle:
         else:
             green = True
         gates = self.run_gates(worktree)
-        row["gates"] = gates
+        row["gate_exit_codes"] = gates
         regressed_gates = [g for g, code in gates.items() if code != 0 and self.baseline_gates.get(g, 1) == 0]
-        row["tests"] = "pass" if green and not regressed_gates else "fail"
+        row["gates"]["lint"] = FAIL if regressed_gates else PASS
+        row["tests"] = PASS if green and not regressed_gates else FAIL
         if self.overrun(row, mandate, item_dir, started, None, 0):
             return
-        if row["tests"] == "fail":
+        if row["tests"] == FAIL:
             row.update(outcome="failed", failure_kind="tests", detail=", ".join(failing[:10] + regressed_gates))
             return
 
+        pinned = self.worktree_state(worktree)
+        if pinned[0] != checked:
+            row.update(outcome="failed", failure_kind="state-tampered",
+                       detail="the worktree moved after its commit was checked")
+            return
         review_brief, review_criterion = item_dir / "review-brief.md", item_dir / "review-criterion.txt"
         review_brief.write_text(REVIEW_BRIEF.format(**fields), encoding="utf-8")
         review_criterion.write_text(REVIEW_CRITERION, encoding="utf-8")
@@ -772,7 +855,11 @@ class Cycle:
             row.update(outcome="failed", failure_kind="review-reject", detail=tail(review.stdout, REASON_CHARS))
             return
 
-        push = self.sh(["git", "push", REMOTE, push_refspec(branch)], cwd=worktree)
+        if self.worktree_state(worktree) != pinned:
+            row.update(outcome="failed", failure_kind="state-tampered",
+                       detail="the worktree moved after its commit was checked")
+            return
+        push = self.sh(["git", "push", REMOTE, push_refspec(branch, checked)], cwd=worktree)
         if push.returncode != 0:
             raise DriverError(f"git push: {tail(push.stderr)}")
         body_file = item_dir / "pr-body.md"
@@ -793,13 +880,20 @@ class Cycle:
 
     # ---- triage
 
+    def note_limit(self, reasons, phase: str, issue: "int | None" = None) -> None:
+        detail = {"reasons": list(reasons), "phase": phase}
+        if issue is not None:
+            detail["issue"] = issue
+        self.limits.append(detail)
+        self.event("limit", detail)
+
     def triage(self, mandate, owner, issues, raw_by_number) -> None:
         pending = [i for i in rules.triage_candidates(issues, owner=owner, labels_cfg=mandate.labels)]
         batches = [pending[i:i + TRIAGE_BATCH] for i in range(0, len(pending), TRIAGE_BATCH)]
         for batch in batches:
             gate, mandate = self.current_gate()
             if not gate.may_start:
-                self.event("limit", {"reasons": list(gate.reasons), "phase": "triage"})
+                self.note_limit(gate.reasons, "triage")
                 return
             numbers = {issue["number"] for issue in batch}
             blocks = "\n".join(
@@ -807,10 +901,13 @@ class Cycle:
                 f'{str(raw_by_number[n].get("body") or "")[:TRIAGE_BODY_CHARS]}\n</issue>'
                 for n in sorted(numbers)
             )
+            judge_argv = ["judge", "triage", *(f"#{n}" for n in sorted(numbers))]
             try:
                 text, usd = self.seams.judge(TRIAGE_PROMPT.format(issues=blocks))
+                self._log_command(judge_argv, self.cfg.repo, 0)
             except Exception as exc:
                 text, usd = "", JUDGE_FLAT_CHARGE_USD
+                self._log_command(judge_argv, self.cfg.repo, 1)
                 self.event("triage-skipped", {"issues": sorted(numbers), "reason": f"judge-error: {type(exc).__name__}"})
             self.event("judge-cost", {"cost_usd": usd, "issues": sorted(numbers)})
             verdicts = parse_verdicts(text, numbers)
@@ -832,19 +929,40 @@ class Cycle:
     # ---- digest
 
     def digest_text(self, status: str, spend: rules.SpendWindows, mandate) -> str:
-        lines = [
-            f"# Background debt cycle {self.id}",
-            f"mandate `{self.mid}` -- status **{status}** -- spend 24h ${spend.day_usd:.2f}, 7d ${spend.week_usd:.2f}",
-            "",
-            f"## Items ({len(self.items)})",
+        def section(title: str, entries: "list[str]") -> "list[str]":
+            return ["", f"## {title}", *(entries or ["- none"])]
+
+        applied = [
+            f"- #{r['issue']}: `{r['label']}`" + (f" -- {r['reason']}" if r.get("reason") else "")
+            for r in store.read_label_rows(self.mid)
+            if r.get("cycle_id") == self.id and r.get("by") == "cycle"
         ]
+        items = []
         for row in self.items:
             link = f" -- {row['pr_url']}" if row.get("pr_url") else ""
             kind = f" ({row['failure_kind']})" if row.get("failure_kind") else ""
-            lines.append(f"- #{row['issue']}: {row['outcome']}{kind}{link} -- ${row.get('cost_usd', 0):.2f}")
-        lines += ["", f"## Triage ({len(self.triaged)})"]
-        for entry in self.triaged:
-            lines.append(f"- #{entry['issue']}: {entry['verdict']} -- {entry['reason']}")
+            items.append(f"- #{row['issue']}: {row['outcome']}{kind}{link} -- ${row.get('cost_usd') or 0:.2f}")
+        overruns = [
+            f"- #{r['issue']}: {', '.join(r.get('overrun_reasons') or ['unknown'])}"
+            for r in self.items if r["outcome"] == "overrun"
+        ]
+        limits = [
+            f"- {l['phase']}" + (f" (#{l['issue']})" if "issue" in l else "") + f": {', '.join(l['reasons'])}"
+            for l in self.limits
+        ]
+        mandate_prs = {pr.get("url") or f"#{pr.get('number')}" for pr in self.open_prs}
+        mandate_prs |= {r["pr_url"] for r in self.items if r.get("pr_url")}
+        lines = [
+            f"# Background debt cycle {self.id}",
+            f"mandate `{self.mid}` -- status **{status}** -- spend 24h ${spend.day_usd:.2f}, 7d ${spend.week_usd:.2f}",
+            f"Mandate expires {mandate.expires_at}. Kill switch: `agentctl mandate-stop`.",
+        ]
+        lines += section(f"Items ({len(self.items)})", items)
+        lines += section(f"Labels applied this cycle ({len(applied)})", applied)
+        lines += section(
+            f"Triage ({len(self.triaged)})",
+            [f"- #{e['issue']}: {e['verdict']} -- {e['reason']}" for e in self.triaged],
+        )
         if self.triaged:
             lines += [
                 "",
@@ -852,12 +970,17 @@ class Cycle:
                 "An auto-ok label becomes actionable only after this digest has been delivered through a "
                 "non-file notifier and that window has passed.",
             ]
+        lines += section("Triage comments skipped by the org-neutral check", [
+            f"- #{s['issue']}: {s['reason']}" for s in self.skipped
+        ])
+        lines += section("Limits hit", limits)
+        lines += section("Overruns", overruns)
+        lines += section(f"Open mandate pull requests ({len(mandate_prs)})", [f"- {url}" for url in sorted(mandate_prs)])
+        lines += section("Remote `mandate/*` branches without a pull request", [f"- {b}" for b in self.orphans])
         if mandate.breaker_open:
             lines += ["", f"**Breaker open**: {mandate.breaker_reason}. `agentctl mandate-resume` re-arms it."]
-        if self.orphans:
-            lines += ["", "Remote `mandate/*` branches without a pull request: " + ", ".join(self.orphans)]
-        for note in self.notes:
-            lines += ["", note]
+        else:
+            lines += ["", "Breaker: closed."]
         return "\n".join(lines) + "\n"
 
 
@@ -961,9 +1084,8 @@ def _cycle_body(cycle: Cycle, mandate) -> str:
     for number in take:
         gate, mandate = cycle.current_gate()
         if not gate.may_start:
-            cycle.event("limit", {"reasons": list(gate.reasons), "issue": number, "phase": "item"})
-            cycle.record_item({"cycle_id": cycle.id, "issue": number, "outcome": "limit",
-                               "reasons": list(gate.reasons)})
+            cycle.note_limit(gate.reasons, "item", number)
+            cycle.record_item({**cycle.new_row(number, None), "outcome": "limit", "reasons": list(gate.reasons)})
             break
         row = cycle.take_item(mandate, baseline, number, raw_by_number[number])
         cycle.record_item(row)
