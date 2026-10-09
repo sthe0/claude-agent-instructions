@@ -2607,6 +2607,15 @@ def changed_parts(doc: PlanDoc, baseline_digests: dict) -> tuple[bool, set[int]]
 # consumer-facing identities of a stage, tracked beside the question vocabulary.
 PSEUDO_ELEMENTS = frozenset({INTERFACE_ELEMENT, CARRY_ELEMENT})
 
+# The names that move when only a stage's `criterion` fields do: the element itself, the
+# whole-stage keys (the reserved entry and the names sharing it) and the carry digest.
+# Any other name moving -- `interface` (title, result image, criterion type, done criterion,
+# output artifacts), `executor`, `material` (the edges) -- means the edit left the control.
+CRITERION_CONFINED_ELEMENTS = frozenset(
+    {"criterion", CARRY_ELEMENT, WHOLE_STAGE_ELEMENT}
+    | {name for name, fields in _ELEMENT_FIELDS.items() if fields is _WHOLE_STAGE_DEFINITION}
+)
+
 
 def stage_norm_keys(stage) -> dict[str, str]:
     """`stage_element_keys` plus the two identities a consumer of the stage relies on:
@@ -2637,11 +2646,15 @@ def stage_element_baseline(doc: PlanDoc) -> dict[str, dict[str, str]]:
     return {str(s.index): stage_norm_keys(s) for s in doc.stages}
 
 
+def _order_place_digest(doc: PlanDoc) -> str:
+    return hashlib.sha256(repr(order_place(doc.meta)).encode("utf-8")).hexdigest()
+
+
 def norm_baseline(doc: PlanDoc) -> dict:
     """Everything `norm_delta_from` compares a document against."""
     return {
         "meta": plan_meta_digest(doc),
-        "order": hashlib.sha256(repr(order_place(doc.meta)).encode("utf-8")).hexdigest(),
+        "order": _order_place_digest(doc),
         "final_check": final_check_digest(doc),
         "stages": stage_element_baseline(doc),
     }
@@ -2703,8 +2716,7 @@ def norm_delta_from(baseline: dict, doc: PlanDoc) -> NormDelta:
     removed = frozenset(int(k) for k in recorded if k not in present)
     return NormDelta(
         meta_moved=(baseline.get("meta") or "") != plan_meta_digest(doc),
-        order_moved=(baseline.get("order") or "")
-        != hashlib.sha256(repr(order_place(doc.meta)).encode("utf-8")).hexdigest(),
+        order_moved=(baseline.get("order") or "") != _order_place_digest(doc),
         final_check_moved=(baseline.get("final_check") or "") != final_check_digest(doc),
         added=frozenset(added),
         removed=removed,
@@ -2769,14 +2781,20 @@ def _grants_grew(old: PlanDoc, new: PlanDoc) -> bool:
     old_map = _grants_effective_map(old, venue=shared_venue)
     new_map = _grants_effective_map(new, venue=shared_venue)
     old_stages = {s.index: s for s in old.stages}
+    delta = norm_delta(old, new)
     for stage in new.stages:
         new_rules, new_dirs = new_map[stage.index]
         old_rules, old_dirs = old_map.get(stage.index, (frozenset(), frozenset()))
         grown_rules = new_rules - old_rules
-        if grown_rules and stage.index in old_stages:
+        criterion_only = (not delta.order_moved
+                          and delta.elements.get(stage.index, frozenset())
+                          <= CRITERION_CONFINED_ELEMENTS)
+        if grown_rules and stage.index in old_stages and criterion_only:
             # DR-V derives one literal per verify_command segment, so rewriting a command
             # always adds literals; only a segment running a program/script the stage did
-            # not already run is wider. See `grants.bash_rule_identity`.
+            # not already run is wider. See `grants.bash_rule_identity`. Applies only to a
+            # stage whose delta is confined to its criterion (and an unmoved order): any
+            # other move keeps the plain set difference.
             known = {
                 _grants.bash_rule_identity(r.rule)
                 for r in _derived_verify_rules(old_stages[stage.index], shared_venue)
@@ -2915,8 +2933,9 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     # substantive. A `verify_command` edit is judged by what it lets the stage RUN,
     # not by its text: DR-V derives one literal per segment, so a rewritten command
     # always adds literals, and `_grants_grew` counts one as growth only when its
-    # program (for an interpreter: its script) is new to the stage. Arguments to an
-    # already-granted program are a refinement; the boundary check (`_kind_within_boundary`)
+    # program (for an interpreter: its script) is new to the stage -- and only when the
+    # stage's norm delta is confined to its criterion. Arguments to an already-granted
+    # program are a refinement; the boundary check (`_kind_within_boundary`)
     # still re-approves an unresolved or out-of-set command. "Did the EFFECTIVE grant
     # set grow" is not folded into `_structural_signature` itself because it is not a
     # pure function of the two docs' own bytes alone (it also calls the same deriver

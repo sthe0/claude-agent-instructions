@@ -703,8 +703,11 @@ def bash_rule_identity(rule: str) -> tuple | None:
     the script). Arguments after the script are not part of it, so a verify_command that
     only changes arguments keeps its identity.
 
-    `None` when no script can be named (an interpreter given no script path) or the rule
-    does not parse: such a rule is always treated as a new grant by the caller."""
+    `None` means "no identity", which the caller treats as a new grant: the rule does not
+    parse, a wrapper or env assignment hides the real program, or the interpreter's
+    leading flags cannot be read with confidence (an inline-code flag, a flag whose value
+    this module does not know, a launcher module). Never guess an identity that an
+    already-approved command could share."""
     parsed = rule_program_and_arg(rule)
     if parsed is None or parsed[0] != "Bash":
         return None
@@ -712,17 +715,28 @@ def bash_rule_identity(rule: str) -> tuple | None:
         tokens = shlex.split(bash_command_from_rule_arg(parsed[1]))
     except ValueError:
         return None
-    if not tokens:
+    if not tokens or len(widening_targets.strip_wrappers(tokens)) != len(tokens):
         return None
-    prog, operands = tokens[0], tokens[1:]
-    if prog not in _INTERPRETERS and not widening_targets.INTERPRETER_RE.match(prog):
-        return (prog,)
-    module = _interpreter_operand_named_module(operands)
-    if module is not None:
-        return (prog, "-m", module)
-    for tok in _strip_interpreter_value_flags(prog, operands):
-        if not tok.startswith("-"):
-            return (prog, tok)
+    ((name, operands),) = widening_targets.iter_candidate_programs(tokens)
+    if name not in _INTERPRETERS and not widening_targets.INTERPRETER_RE.match(name):
+        return (tokens[0],)
+    value_flags = _INTERPRETER_VALUE_FLAGS.get(name, frozenset())
+    i = 0
+    while i < len(operands):
+        tok = operands[i]
+        if tok in value_flags:
+            i += 2
+            continue
+        if _interpreter_operand_is_dangerous([tok]):
+            return None
+        if tok == "-m":
+            module = operands[i + 1] if i + 1 < len(operands) else None
+            if module is None or module in _LAUNCHER_MODULES:
+                return None
+            return (tokens[0], "-m", module)
+        if tok.startswith("-"):
+            return None
+        return (tokens[0], tok)
     return None
 
 

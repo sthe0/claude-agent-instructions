@@ -276,7 +276,7 @@ def enumeration_element_scope(bag, doc, stage_scope) -> dict[int, frozenset]:
     return {
         index: delta.question_elements(index)
         for index in stage_scope
-        if str(index) in recorded
+        if str(index) in recorded and delta.question_elements(index)
     }
 
 
