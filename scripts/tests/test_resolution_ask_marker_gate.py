@@ -367,3 +367,40 @@ def test_scanner_orders_asks_and_distinguishes_unreadable_from_empty(tmp_path):
 
     assert transcript_turns.ask_user_question_calls(tmp_path / "missing.jsonl") is None
     assert transcript_turns.ask_user_question_calls(write_transcript(tmp_path, [], sid="empty")) == []
+
+
+def _predates(store, tmp_path):
+    at = verified_at(store)
+    write_transcript(tmp_path, [ask_entry("a1", at - 5, label=f"Resolve {RESOLUTION_ASK_MARKER}"),
+                                answer_entry("a1", at - 4)])
+
+
+def _missing_timestamp(store, tmp_path):
+    ask = ask_entry("a1", verified_at(store) + 5, label=f"Resolve {RESOLUTION_ASK_MARKER}")
+    ask.pop("timestamp")
+    write_transcript(tmp_path, [ask, answer_entry("a1", verified_at(store) + 6)])
+
+
+def _no_stamp(store, tmp_path):
+    state = store.load(SID)
+    for h in state.history:
+        if h["event"] == "verify_final":
+            h.pop("at", None)
+    store.save(state)
+    write_transcript(tmp_path, [ask_entry("a1", 4e9, label=RESOLUTION_ASK_MARKER),
+                                answer_entry("a1", 4e9 + 1)])
+
+
+@pytest.mark.parametrize("arrange", [_predates, _missing_timestamp, _no_stamp])
+def test_refusals_state_the_marker_rule(store, tmp_path, arrange):
+    to_resolution(store)
+    arrange(store, tmp_path)
+
+    d = resolve(store)
+    assert d.ok is False
+    blockers = ask_blockers(d)
+    assert blockers
+    for b in blockers:
+        assert "option label or description" in b
+        assert "land -> verify-final -> ask -> resolve" in b
+        assert cli.RESOLUTION_ASK_RULE_HINT in b
