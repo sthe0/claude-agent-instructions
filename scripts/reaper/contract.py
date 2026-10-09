@@ -68,6 +68,23 @@ def path_owned(
     return False
 
 
+def session_owned(
+    session_id: str,
+    records: "list[registry.ScopeRecord]",
+    now_ts: float,
+    heartbeat_ttl_hours: float = OWNER_HEARTBEAT_TTL_HOURS,
+) -> bool:
+    """True if a live session-scope record (same liveness rule as ``path_owned``) carries
+    ``session_id``. Ids are compared in the sanitized form both stores use as file names.
+    """
+    wanted = registry._safe(session_id)
+    ttl_s = heartbeat_ttl_hours * 3600.0
+    return any(
+        registry._safe(rec.session_id) == wanted and _record_alive(rec, now_ts, ttl_s)
+        for rec in records
+    )
+
+
 def _record_alive(rec: "registry.ScopeRecord", now_ts: float, ttl_s: float) -> bool:
     alive = rec.pid is not None and registry.pid_alive(rec.pid)
     return alive or (now_ts - rec.heartbeat_ts) <= ttl_s
@@ -94,3 +111,6 @@ class ReapContext:
 
     def owned_path(self, path: str) -> bool:
         return path_owned(path, self.scope_records, self.now, self.heartbeat_ttl_hours)
+
+    def owned_session(self, session_id: str) -> bool:
+        return session_owned(session_id, self.scope_records, self.now, self.heartbeat_ttl_hours)

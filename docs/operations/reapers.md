@@ -16,7 +16,7 @@ A reaper is a Python module in one of the three layers below, defining:
 | `remove(path, ctx)` | delete one item the runner approved. Raise, or return `False`, when it did not happen |
 | `summary(verdicts) -> str \| None` | optional; one line for the SessionStart notice (the `git-worktrees` reaper uses it for worktrees kept for over a week) |
 
-`ctx` (`scripts/reaper/contract.py: ReapContext`) carries `now`, `dry_run`, `due`, `project_dir`, `deadletter_dir` and the ownership query `ctx.owned_path(path)`. It reads the session-scope registry, compares real paths, and counts a session as live when its pid is alive or its heartbeat is under 24 hours old.
+`ctx` (`scripts/reaper/contract.py: ReapContext`) carries `now`, `dry_run`, `due`, `project_dir`, `deadletter_dir` and two ownership queries over the session-scope registry: `ctx.owned_path(path)` compares real paths against each record's working directory and repo root, `ctx.owned_session(session_id)` compares session ids (in the sanitized form both stores use as file names). Both count a session as live when its pid is alive or its heartbeat is under 24 hours old.
 
 A plugin or project module is executed under a synthetic package name, so it must use **absolute** imports (`from reaper.contract import Verdict`).
 
@@ -65,11 +65,29 @@ Source: `scripts/reaper/builtin/git_worktrees.py`. It looks at the repository th
 - A stale unowned branch worktree with unlanded commits or local changes is **kept** (`unlanded <N>` / `dirty`). Once it is older than 7 days, `summary()` adds one SessionStart line naming how many there are and the command that lists them.
 - Any git failure for an entry is a keep for that entry. The main checkout, `refs/heads/main`, the working directory of the running process and the checkout holding the reaper code are never touched.
 
+## The `agentctl-state` reaper
+
+Source: `scripts/reaper/builtin/agentctl_state.py`. agentctl writes `<config root>/agentctl/state/<session>.json` for every session it classifies and never deletes it; almost all of these files belong to sessions that stopped at the first node, `CLASSIFIED` (a chat, a small change), and nothing reads them again.
+
+- It looks only at plain `<session>.json` names (`^[0-9A-Za-z_-]+\.json$`). Every other file in the directory gets no verdict at all.
+- **Removed**: a file whose top-level `node` is `CLASSIFIED`, whose mtime is more than 14 days old (the state has no update-time field, so the mtime is the activity signal), and whose session no live scope record owns (`ctx.owned_session`).
+- **Kept**, with the reason: `unreadable` (not JSON, not an object, or not readable), `node <X>` (any other node), `fresh` (under 14 days), `owned`.
+- `remove()` judges the file again before unlinking it, so a session that moved past `CLASSIFIED` between the scan and the removal is kept.
+
+What it deliberately keeps, and why:
+
+| Kept | Why |
+|---|---|
+| State files at any node other than `CLASSIFIED`, `RESOLVED` included | `agentctl reset --reopen-reason` reopens a resolved session from its file, and reports such as the escape-hatch report read the history of past sessions |
+| `plan-approved-<digest>.toml`, `plan-version-*.toml` | approvals and plan versions are accumulators keyed by plan content; they outlive the session that wrote them |
+| `<session>.delivery.json` sidecars | the delivery record of a session is read after the session ends |
+| `.bak-*`, `.SUPERSEDED.json`, `.PHANTOM-backup.json` and other dotted names | hand-made backups and repair records; whoever made them decides when they go |
+
 ## Tests and the mutation catalogue
 
-`scripts/tests/test_reaper_runner.py` and `scripts/tests/test_reaper_git_worktrees.py` are hermetic: throw-away git repositories, and `HOME`, the config root, the plugin dir, the project dir and `TMPDIR` redirected under `tmp_path`. A test never runs the real runner against a real checkout.
+`scripts/tests/test_reaper_runner.py`, `scripts/tests/test_reaper_git_worktrees.py` and `scripts/tests/test_reaper_agentctl_state.py` are hermetic: throw-away git repositories, and `HOME`, the config root, the plugin dir, the project dir and `TMPDIR` redirected under `tmp_path`. A test never runs the real runner against a real checkout.
 
-`scripts/tests/reaper_mutation_control.py` holds a catalogue of named wrong versions of production lines (`keep-wins`, `error-isolation`, `removal-log-before-remove`, `realpath`, `landed-check`, ...). `--mutant NAME` applies one to a scratch copy of `scripts/` and runs only its listed tests; exit **1** means killed (the anchor matched once and every listed test failed in its call phase), **0** survived, **3** anchor miss, **4** collection error, **5** a listed test was missing, errored or skipped, **6** unhandled exception. `--control` runs the same tests on the unmutated copy. The in-suite test runs the whole catalogue (about half a minute); the child runs set `REAPER_MUTATION_CHILD=1` so it skips itself. Run the first trial of the catalogue through `scripts/cap-run.sh`: it spawns a pytest per mutant.
+`scripts/tests/reaper_mutation_control.py` holds a catalogue of named wrong versions of production lines (`keep-wins`, `error-isolation`, `removal-log-before-remove`, `realpath`, `landed-check`, `state-node-filter`, `state-age-floor`, `state-suffix-filter`, ...). `--mutant NAME` applies one to a scratch copy of `scripts/` and runs only its listed tests; exit **1** means killed (the anchor matched once and every listed test failed in its call phase), **0** survived, **3** anchor miss, **4** collection error, **5** a listed test was missing, errored or skipped, **6** unhandled exception. `--control` runs the same tests on the unmutated copy. The in-suite test runs the whole catalogue (about half a minute); the child runs set `REAPER_MUTATION_CHILD=1` so it skips itself. Run the first trial of the catalogue through `scripts/cap-run.sh`: it spawns a pytest per mutant.
 
 ## Adding a reaper
 

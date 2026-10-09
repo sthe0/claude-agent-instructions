@@ -21,7 +21,7 @@ Exit codes of --mutant:
 Exit codes of --control: 0 all listed ids green on the unmutated copy, 7 otherwise.
 
 The child pytest runs only the listed ids, serially, with REAPER_MUTATION_CHILD=1 so the
-in-suite catalogue test does not recurse. Stage 2 appends its state-reaper mutants here.
+in-suite catalogue test does not recurse.
 """
 from __future__ import annotations
 
@@ -42,6 +42,8 @@ CONTRACT = "reaper/contract.py"
 SCOPE_REGISTRY = "session_scope/registry.py"
 T_RUNNER = "tests/test_reaper_runner.py"
 T_GIT = "tests/test_reaper_git_worktrees.py"
+AGENTCTL_STATE = "reaper/builtin/agentctl_state.py"
+T_STATE = "tests/test_reaper_agentctl_state.py"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
 CONTROL_RED = 7
@@ -175,6 +177,48 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_keep_on_a_directory_vetoes_a_remove_of_a_path_inside_it",
             "test_keep_on_a_path_vetoes_a_remove_of_a_directory_containing_it",
         ),
+    ),
+    "state-node-filter": Mutant(
+        AGENTCTL_STATE, "if node != RESIDUE_NODE:", "if node is None:",
+        _ids(
+            T_STATE,
+            "test_scan_proposes_only_the_old_unowned_classified_plain_file",
+            "test_pass_removes_exactly_the_residue_file_and_logs_it",
+            "test_dry_run_removes_nothing_and_prints_the_removal",
+        ),
+    ),
+    "state-age-floor": Mutant(
+        AGENTCTL_STATE, "if age_days < MIN_AGE_DAYS:", "if age_days < 0:",
+        _ids(
+            T_STATE,
+            "test_scan_proposes_only_the_old_unowned_classified_plain_file",
+            "test_fresh_classified_file_is_kept_below_the_age_floor",
+            "test_pass_removes_exactly_the_residue_file_and_logs_it",
+        ),
+    ),
+    "state-suffix-filter": Mutant(
+        AGENTCTL_STATE, 're.compile(r"^[0-9A-Za-z_-]+\\.json$")', 're.compile(r"^.+\\.json$")',
+        _ids(
+            T_STATE,
+            "test_scan_never_looks_at_a_name_outside_the_plain_session_pattern",
+            "test_pass_removes_exactly_the_residue_file_and_logs_it",
+            "test_remove_refuses_a_name_outside_the_plain_session_pattern",
+        ),
+    ),
+    "state-session-owner": Mutant(
+        AGENTCTL_STATE, "if ctx.owned_session(", "if False and ctx.owned_session(",
+        _ids(
+            T_STATE,
+            "test_scan_proposes_only_the_old_unowned_classified_plain_file",
+            "test_pass_removes_exactly_the_residue_file_and_logs_it",
+        ),
+    ),
+    "session-owner-liveness": Mutant(
+        CONTRACT,
+        "registry._safe(rec.session_id) == wanted and _record_alive(rec, now_ts, ttl_s)",
+        "registry._safe(rec.session_id) == wanted",
+        _ids(T_STATE, "test_session_owned_by_live_pid_or_fresh_heartbeat_and_by_sanitized_id",
+             "test_session_ownership_ends_when_the_heartbeat_passes_the_ttl"),
     ),
 }
 
