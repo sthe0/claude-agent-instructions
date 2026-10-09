@@ -2800,11 +2800,11 @@ def _grants_grew(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fa
             # stage whose delta is confined to its criterion (and an unmoved order): any
             # other move keeps the plain set difference.
             known = {
-                _grants.bash_rule_identity(r.rule)
+                _grants.bash_rule_identity(r.rule, shared_venue)
                 for r in _derived_verify_rules(old_stages[stage.index], shared_venue)
             }
             verify_rules = {r.rule for r in _derived_verify_rules(stage, shared_venue)}
-            identities = {r: _grants.bash_rule_identity(r) for r in grown_rules if r in verify_rules}
+            identities = {r: _grants.bash_rule_identity(r, shared_venue) for r in grown_rules if r in verify_rules}
             grown_rules = {
                 r for r in grown_rules
                 if r not in verify_rules or identities[r] is None or identities[r] not in known

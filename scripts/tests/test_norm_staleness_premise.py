@@ -541,6 +541,7 @@ def _approved_order(store, tmp_path, old_verify, stage2_verify=None):
     venue = tmp_path / "venue"
     (venue / "scripts").mkdir(parents=True)
     shutil.copy(LAND_BRANCH, venue / "scripts" / "land-branch.py")
+    (venue / "lb.py").symlink_to("scripts/land-branch.py")
     verify = {1: old_verify} | ({2: stage2_verify} if stage2_verify else {})
     base = _write_plan(tmp_path / "base.toml", BASE, verify=verify, repo_root=venue)
     doc = load_plan(str(base))
@@ -644,6 +645,28 @@ def test_g1_a_registry_script_push_form_is_substantive_though_its_check_form_is_
 ])
 def test_g1_a_registry_script_has_no_identity_by_path_or_basename(script):
     assert grants.bash_rule_identity(f"Bash(python3 {script} --check:*)") is None
+
+
+def test_g1_a_symlink_alias_of_a_registry_script_has_no_identity(tmp_path):
+    """`resolve_script` matches by realpath against the venue, so `lb.py` resolves exactly
+    as `scripts/land-branch.py` does; a text/basename match alone would miss the alias."""
+    (tmp_path / "scripts").mkdir()
+    shutil.copy(LAND_BRANCH, tmp_path / "scripts" / "land-branch.py")
+    (tmp_path / "lb.py").symlink_to("scripts/land-branch.py")
+
+    assert grants.bash_rule_identity("Bash(python3 lb.py --check:*)", str(tmp_path)) is None
+    assert grants.bash_rule_identity("Bash(python3 other.py --check:*)", str(tmp_path)) == ("python3", "other.py")
+
+
+def test_g1_a_symlink_alias_check_to_push_is_substantive(store, tmp_path):
+    """Through the real ledger: the push is already approved order-wide (stage 2), and the
+    alias spelling must not let stage 1's `--check` -> push edit pass as a refinement."""
+    alias_check = "python3 lb.py --check"
+    alias_push = "python3 lb.py --keep-branch --remote-only --branch norm-staleness"
+    kind, bounded = _replan_verdict(store, tmp_path, alias_check, alias_push, stage2_verify=LAND_PUSH)
+
+    assert kind == "substantive"
+    assert bounded == "substantive"
 
 
 def test_g1_an_unregistered_script_keeps_its_identity():
