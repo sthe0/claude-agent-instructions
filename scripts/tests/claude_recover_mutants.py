@@ -99,6 +99,41 @@ MUTANTS: dict[str, tuple[str, str, str]] = {
         "        remove_stale_tmp(sd)\n",
         "",
     ),
+    "mount-no-skip": (
+        "an already mounted target is planned for mounting again",
+        "        if target in mounted:\n",
+        "        if False:\n",
+    ),
+    "dry-run-executes": (
+        "a dry run runs the cleanup commands",
+        'elif act["owner"] == "core" and not self.dry_run:',
+        'elif act["owner"] == "core":',
+    ),
+    "confirm-executes": (
+        "commands that need a human decision are run",
+        '            if act["class"] == "confirm":\n',
+        "            if False:\n",
+    ),
+    "hard-mode-mounts-all": (
+        "with a nearly full disk every mount is restored, not only the essential ones",
+        'elif level == "hard" and not is_essential:',
+        "elif False:",
+    ),
+    "alive-not-skipped": (
+        "a session that is already running is opened a second time",
+        "        if sid in alive:\n",
+        "        if False:\n",
+    ),
+    "starts-tmux-server": (
+        "waiting for the tmux session starts a tmux server",
+        "    end = time.monotonic() + wait_s\n",
+        '    tmux_run(["start-server"])\n    end = time.monotonic() + wait_s\n',
+    ),
+    "phase-name-drift": (
+        "the first phase is named disk instead of disk-pre",
+        'PHASES = ("disk-pre", "mounts"',
+        'PHASES = ("disk", "mounts"',
+    ),
 }
 
 

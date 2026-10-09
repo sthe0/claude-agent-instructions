@@ -12,19 +12,42 @@ Usage:
                                                last-ok stamp is <= N seconds old and the last
                                                snapshot's sessionId set equals the live one
     claude-recover.py select [--any-boot]      print the snapshot a restore would use
+    claude-recover.py [restore] [--dry-run] …  rebuild the pre-crash state (the default command)
 
 State: $CLAUDE_RECOVER_STATE_DIR (default ~/.local/state/claude-recover):
     snapshots/<boot_id>/<UTC ts>.json   one directory per boot, 50 newest kept per boot,
                                         plus the last snapshot of the three previous boots
     last-ok                             epoch seconds of the last successful snapshot run
                                         (refreshed even when the snapshot was unchanged)
+    recover.log                         restore log (rotated by size); last-plan.json is the plan
+                                        of the latest real restore
+    done-<boot_id>                      marker: `restore --auto` already ran in this boot
+    pending-confirm.txt                 commands that need a human decision (written by --auto)
 
-Test seams (all optional): TMUX_BIN, PROC_ROOT, CLAUDE_RECOVER_STATE_DIR,
-CLAUDE_RECOVER_CONFIG_DIRS (os.pathsep-separated), CLAUDE_RECOVER_NOW (epoch seconds),
-CLAUDE_RECOVER_BOOT_ID, HOME.
+Restore runs one plan, built by build_plan() from the chosen snapshot, the live state and the
+disk level, through five phases in order: disk-pre, mounts, compose, disk-post, sessions. The
+first four call the machine-local hooks ~/.config/claude/recover.d/<NN>-*.sh; the last opens one
+tmux window per session with `claude --resume`. A dry run prints the plan and calls the hooks
+with RECOVER_DRY_RUN=1; nothing of Core's own is executed. Restore never starts a tmux server
+and never touches the unit that owns it; it only adds windows to an existing tmux session.
 
-Nothing is deleted outside the state dir. The snapshot carries no token or key: the process
-environment is reduced to a whitelist and the command line to flags without the prompt.
+Hook contract: env RECOVER_PHASE (disk-pre|mounts|compose|disk-post), RECOVER_DRY_RUN (0|1),
+RECOVER_PLAN (JSON of the plan; the mounts hook mounts exactly the entries with
+action=mount), RECOVER_LOG, RECOVER_DISK_LEVEL (ok|warn|hard). Exit 0 = done, 10 = nothing to
+do, anything else = the phase failed. After the mounts phase every target is re-checked with
+`mountpoint -q`; sessions under a target that is still unmounted are skipped.
+
+Test seams (all optional): TMUX_BIN, DF_BIN, MOUNTPOINT_BIN, PROC_ROOT,
+CLAUDE_RECOVER_STATE_DIR, CLAUDE_RECOVER_CONFIG_DIRS (os.pathsep-separated),
+CLAUDE_RECOVER_NOW (epoch seconds), CLAUDE_RECOVER_BOOT_ID, CLAUDE_RECOVER_HOOKS_DIR,
+CLAUDE_RECOVER_ESSENTIAL_FILE, CLAUDE_RECOVER_TMUX_SESSION, CLAUDE_RECOVER_MODE,
+CLAUDE_RECOVER_CLAUDE_BIN, CLAUDE_RECOVER_SWEEP_BIN, CLAUDE_RECOVER_CONTINUE_PROMPT,
+CLAUDE_RECOVER_{DEADLINE_S,TMUX_WAIT_S,SESSION_PAUSE_S,RETRY_PAUSE_S,MIN_MEM_GIB,
+LOG_MAX_BYTES}, HOME.
+
+Nothing is deleted outside the state dir except by the safe cleanup commands of the disk phases.
+The snapshot carries no token or key: the process environment is reduced to a whitelist and
+the command line to flags without the prompt.
 """
 from __future__ import annotations
 
@@ -34,9 +57,13 @@ import hashlib
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -465,6 +492,612 @@ class _Lock:
         self._fh.close()
 
 
+# --- restore: plan ----------------------------------------------------------------------
+
+SUBCOMMANDS = ("snapshot", "status", "select", "restore")
+PHASES = ("disk-pre", "mounts", "compose", "disk-post", "sessions")
+# The kernel's overall budget: up to 12 mounts x 2 min + 15 min cleanup + 15 sessions x 20 s +
+# 2 min tmux wait is about 46 min; the systemd unit's RuntimeMaxSec must stay above this.
+DEADLINE_S = 45 * 60
+MOUNT_TIMEOUT_S = 120
+TMUX_WAIT_S = 120
+CLEANUP_CAP_S = 15 * 60
+COMPOSE_CAP_S = 10 * 60
+SESSION_PAUSE_S = 20
+HOOK_RETRIES = 3
+HOOK_RETRY_PAUSE_S = 30
+HOOK_EXIT_NOTHING = 10
+MIN_MEM_GIB = 8.0
+LOG_MAX_BYTES = 1 << 20
+DISK_HARD_GIB = 10
+DISK_WARN_GIB = 50
+DISK_WARN_PCT = 15
+DEFAULT_TMUX_SESSION = "ccgram"
+DEFAULT_CONTINUE_PROMPT = (
+    "The VM was rebooted and the mounts were restored; check the state (agentctl status) "
+    "and continue."
+)
+OPEN_ACTIONS = ("resume", "reopen")
+# Commands that need a human decision; recover prints them and never runs them.
+CONFIRM_COMMANDS = (
+    ("arc gc", "object-cache GC: preview with `arc gc --dry-run`, never in parallel on a shared store"),
+    ("arc unmount --forget <mount>", "irreversible: deletes the mount's registered storage"),
+    ("docker system prune -a", "removes every unused image, container and network"),
+    ("docker image prune -a", "removes every image not used by a container"),
+)
+
+
+def env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    try:
+        return float(raw) if raw else float(default)
+    except ValueError:
+        return float(default)
+
+
+def tmux_bin() -> str:
+    return os.environ.get("TMUX_BIN", "tmux")
+
+
+def home_dir() -> str:
+    return os.environ.get("HOME") or str(Path.home())
+
+
+def hooks_dir() -> Path:
+    override = os.environ.get("CLAUDE_RECOVER_HOOKS_DIR")
+    return Path(override) if override else Path(home_dir()) / ".config" / "claude" / "recover.d"
+
+
+def list_hooks(directory: Path) -> list[Path]:
+    try:
+        return sorted(p for p in directory.glob("*.sh") if p.is_file())
+    except OSError:
+        return []
+
+
+def read_essential(path: Path) -> list[str]:
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return []
+    return [ln.strip().rstrip("/") for ln in lines if ln.strip() and not ln.lstrip().startswith("#")]
+
+
+def disk_level(free_gib: float, free_pct: float) -> str:
+    if free_gib < DISK_HARD_GIB:
+        return "hard"
+    if free_gib < DISK_WARN_GIB or free_pct < DISK_WARN_PCT:
+        return "warn"
+    return "ok"
+
+
+def measure_disk() -> dict:
+    path = home_dir()
+    used = avail = None
+    try:
+        res = subprocess.run([os.environ.get("DF_BIN", "df"), "-Pk", path],
+                             capture_output=True, text=True, timeout=30)
+        if res.returncode == 0:
+            row = res.stdout.strip().splitlines()[-1].split()
+            used, avail = int(row[2]), int(row[3])
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        pass
+    if avail is None:
+        usage = shutil.disk_usage(path)
+        used, avail = usage.used // 1024, usage.free // 1024
+    total = used + avail
+    free_gib = avail / 1024 / 1024
+    free_pct = 100.0 * avail / total if total else 0.0
+    return {"free_gib": round(free_gib, 2), "free_pct": round(free_pct, 1),
+            "level": disk_level(free_gib, free_pct)}
+
+
+def disk_actions(level: str) -> list[dict]:
+    """The cleanup menu for a level below ok, by class; ya/arc commands run inside the hooks
+    (they need the mounted anchor), the rest is run by recover itself."""
+    if level == "ok":
+        return []
+    sweep = os.environ.get("CLAUDE_RECOVER_SWEEP_BIN") or str(Path(home_dir()) / "bin" / "agent-hygiene-sweep.sh")
+    rows = [
+        ("disk-pre", "run", "core", ["docker", "image", "prune", "-f"]),
+        ("disk-pre", "run", "core", ["docker", "builder", "prune", "-f"]),
+        ("disk-pre", "run", "core", [sweep]),
+        ("disk-post", "run", "hook", ["ya", "gc", "cache"]),
+        ("disk-post", "report", "hook", ["arc", "gc", "--dry-run"]),
+        ("disk-post", "report", "hook", ["arc-mounts-gc.sh", "--dry-run"]),
+    ]
+    actions = [{"cmd": shlex.join(argv), "class": klass, "status": "planned", "phase": phase, "owner": owner}
+               for phase, klass, owner, argv in rows]
+    actions += [{"cmd": cmd, "class": "confirm", "status": "planned", "phase": "disk-post", "owner": "core"}
+                for cmd, _why in CONFIRM_COMMANDS]
+    return actions
+
+
+def _under(path: str, root: str) -> bool:
+    root = root.rstrip("/")
+    return path == root or path.startswith(root + "/")
+
+
+def decide_mounts(snap_mounts: list[dict], mounted: set[str], level: str, essential: list[str]) -> list[dict]:
+    out = []
+    for m in snap_mounts:
+        target = m["mountpoint"]
+        is_essential = target.rstrip("/") in essential
+        if target in mounted:
+            action = "skip-mounted"
+        elif level == "hard" and not is_essential:
+            action = "skip-hard-disk"
+        else:
+            action = "mount"
+        out.append({"target": target, "essential": is_essential, "action": action,
+                    "status": "planned" if action == "mount" else "skipped"})
+    rank = {t: i for i, t in enumerate(essential)}
+    out.sort(key=lambda e: (rank.get(e["target"].rstrip("/"), len(rank)), e["target"]))
+    return out
+
+
+def session_command(sess: dict, name: str, prompt: str | None, config: dict) -> list[str]:
+    env = sess.get("env") or {}
+    assigns = [f"{k}={shlex.quote(env[k])}" for k in ENV_WHITELIST if k in env]
+    claude = [config["claude_bin"], "--resume", sess["sessionId"]] + ([prompt] if prompt else [])
+    inner = " ".join(["env", *assigns, *(shlex.quote(a) for a in claude)])
+    shell = f"{inner}; echo EXITED; sleep 3600"
+    return [config["tmux_bin"], "new-window", "-d", "-t", f"{config['tmux_session']}:",
+            "-n", name, "-c", sess.get("cwd") or home_dir(), shell]
+
+
+def decide_sessions(snap_sessions: list[dict], alive: set[str], mounts: list[dict],
+                    usable: set[str], config: dict) -> list[dict]:
+    targets = [m["target"] for m in mounts]
+    out = []
+    for sess in snap_sessions:
+        sid = sess["sessionId"]
+        cwd = sess.get("cwd") or ""
+        name = (sess.get("pane") or {}).get("window_name") or sid[:8]
+        prompt = None
+        detail = ""
+        transcript = sess.get("transcript")
+        if sid in alive:
+            action, detail = "skip-alive", "the session is running"
+        elif transcript and not config["transcript_exists"](transcript):
+            action, detail = "skip-no-transcript", f"no transcript at {transcript}"
+        elif any(_under(cwd, t) and t not in usable for t in targets):
+            action, detail = "skip-unmounted", "its mount is not available"
+        else:
+            if config["mode"] == "continue" and sess.get("status") == "busy":
+                prompt = config["continue_prompt"]
+            action = "resume" if prompt else "reopen"
+        entry = {"session_id": sid, "cwd": cwd, "name": name, "action": action,
+                 "command": session_command(sess, name, prompt, config) if action in OPEN_ACTIONS else [],
+                 "status": "planned" if action in OPEN_ACTIONS else "skipped",
+                 "with_prompt": prompt is not None}
+        if detail:
+            entry["detail"] = detail
+        out.append(entry)
+    return out
+
+
+def build_plan(snapshot: dict, live: dict, disk: dict, config: dict) -> dict:
+    mounts = decide_mounts(snapshot.get("mounts", []), live["mounted"], disk["level"], config["essential"])
+    usable = {m["target"] for m in mounts if m["action"] in ("mount", "skip-mounted")}
+    sessions = decide_sessions(snapshot.get("sessions", []), live["alive"], mounts, usable, config)
+    warnings = list(config["warnings"])
+    foreign = sorted({(s.get("pane") or {}).get("session_name") for s in snapshot.get("sessions", [])}
+                     - {None, config["tmux_session"]})
+    if foreign:
+        warnings.append(f"snapshot sessions lived in tmux session(s) {foreign}; "
+                        f"they are reopened in {config['tmux_session']!r}")
+    return {
+        "dry_run": config["dry_run"],
+        "snapshot": config["snapshot_path"],
+        "snapshot_boot_id": snapshot.get("boot_id"),
+        "current_boot_id": config["current_boot_id"],
+        "mode": config["mode"],
+        "simulate_reboot": config["simulate_reboot"],
+        "tmux_session": config["tmux_session"],
+        "phases": list(PHASES),
+        "disk": {**disk, "initial_level": disk["level"], "actions": disk_actions(disk["level"])},
+        "mounts": mounts,
+        "sessions": sessions,
+        "hooks": config["hooks"],
+        "hook_runs": [],
+        "warnings": warnings,
+        "summary": {},
+    }
+
+
+# --- restore: live state ----------------------------------------------------------------
+
+
+def is_mounted(path: str) -> bool:
+    try:
+        res = subprocess.run([os.environ.get("MOUNTPOINT_BIN", "mountpoint"), "-q", path],
+                             capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return res.returncode == 0
+
+
+def mounted_set(targets: list[str]) -> set[str]:
+    return {t for t in targets if is_mounted(t)}
+
+
+def alive_session_ids(wanted: set[str]) -> set[str]:
+    """Session ids that are running now: a live claude in a registry file, or the id on the
+    command line of a tmux pane's process or its direct child."""
+    alive: set[str] = set()
+    btime = boot_time()
+    for rec in load_session_files():
+        started = rec.get("startedAt")
+        if isinstance(started, (int, float)) and btime and started / 1000 < btime - 5:
+            continue
+        pid = rec["pid"]
+        if read_ppid(pid) is not None and "claude" in " ".join(read_argv(pid)):
+            alive.add(rec["sessionId"])
+    try:
+        pane_pids = {p["pane_pid"] for p in list_panes()}
+    except TmuxError:
+        pane_pids = set()
+    if pane_pids:
+        try:
+            pids = [int(p.name) for p in proc_root().iterdir() if p.name.isdigit()]
+        except OSError:
+            pids = []
+        for pid in pids:
+            if pid in pane_pids or read_ppid(pid) in pane_pids:
+                cmdline = " ".join(read_argv(pid))
+                alive.update(sid for sid in wanted if sid in cmdline)
+    return alive
+
+
+def mem_available_gib() -> float | None:
+    try:
+        for line in (proc_root() / "meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 1024 / 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def tmux_run(argv: list[str], timeout: float = 30) -> tuple[int, str]:
+    try:
+        res = subprocess.run([tmux_bin(), *argv], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 127, str(exc)
+    return res.returncode, (res.stderr or res.stdout).strip()
+
+
+def wait_for_tmux_session(target: str, wait_s: float) -> bool:
+    """Wait for an existing tmux session; never creates one or starts a server."""
+    end = time.monotonic() + wait_s
+    while True:
+        if tmux_run(["has-session", "-t", target])[0] == 0:
+            return True
+        if time.monotonic() >= end:
+            return False
+        time.sleep(min(2.0, max(0.05, end - time.monotonic())))
+
+
+# --- restore: execution -----------------------------------------------------------------
+
+
+class Deadline:
+    def __init__(self, seconds: float):
+        self._end = time.monotonic() + seconds
+
+    def remaining(self) -> float:
+        return max(0.0, self._end - time.monotonic())
+
+    def expired(self) -> bool:
+        return self.remaining() <= 0
+
+
+class RunLog:
+    """recover.log (rotated by size) plus stderr; a dry run logs nowhere but stderr stays quiet."""
+
+    def __init__(self, path: Path | None, auto: bool):
+        self.path = path
+        self.auto = auto
+        if path is not None:
+            mkdir_private(path.parent)
+            limit = int(env_float("CLAUDE_RECOVER_LOG_MAX_BYTES", LOG_MAX_BYTES))
+            try:
+                if path.stat().st_size > limit:
+                    os.replace(path, path.with_name(path.name + ".1"))
+            except OSError:
+                pass
+
+    def __call__(self, message: str, level: str = "INFO") -> None:
+        if self.path is None:
+            return
+        line = f"{iso_ts(now())} {level} {message}"
+        with open(self.path, "a") as fh:
+            fh.write(line + "\n")
+        prefix = "<4>" if self.auto and level == "WARNING" else ""
+        print(prefix + line, file=sys.stderr)
+
+
+def tail_text(text: str, limit: int = 2000) -> str:
+    return text if len(text) <= limit else "…" + text[-limit:]
+
+
+class Restorer:
+    def __init__(self, plan: dict, snapshot: dict, config: dict, args: argparse.Namespace,
+                 log: RunLog, plan_path: Path, hook_log: Path, hook_files: list[Path]):
+        self.plan = plan
+        self.snapshot = snapshot
+        self.config = config
+        self.auto = args.auto
+        self.dry_run = args.dry_run
+        self.log = log
+        self.plan_path = plan_path
+        self.hook_log = hook_log
+        self.hook_files = hook_files
+        self.deadline = Deadline(env_float("CLAUDE_RECOVER_DEADLINE_S", DEADLINE_S))
+        self.cleanup_spent = 0.0
+
+    # -- helpers
+    def cleanup_left(self) -> float:
+        return max(0.0, CLEANUP_CAP_S - self.cleanup_spent)
+
+    def write_plan(self) -> None:
+        write_atomic(self.plan_path, json.dumps(self.plan, indent=2) + "\n")
+
+    def live_mounted(self) -> set[str]:
+        return mounted_set([m["mountpoint"] for m in self.snapshot.get("mounts", [])])
+
+    def redecide(self, mounted: set[str], mounts_phase_over: bool = False) -> None:
+        """Recompute mount and session decisions from the current disk level and live state;
+        once the mounts phase is over, only what is really mounted counts as usable."""
+        level = self.plan["disk"]["level"]
+        mounts = decide_mounts(self.snapshot.get("mounts", []), mounted, level, self.config["essential"])
+        usable_actions = ("skip-mounted",) if mounts_phase_over else ("mount", "skip-mounted")
+        usable = {m["target"] for m in mounts if m["action"] in usable_actions}
+        self.plan["mounts"] = mounts
+        self.plan["sessions"] = decide_sessions(self.snapshot.get("sessions", []), self.alive(),
+                                                mounts, usable, self.config)
+
+    def alive(self) -> set[str]:
+        return alive_session_ids({s["sessionId"] for s in self.snapshot.get("sessions", [])})
+
+    # -- hooks
+    def run_hooks(self, phase: str, cap_s: float, disk_phase: bool = False) -> list[int | str]:
+        self.write_plan()
+        exits: list[int | str] = []
+        for hook in self.hook_files:
+            cap = min(self.deadline.remaining(), cap_s, self.cleanup_left() if disk_phase else cap_s)
+            env = dict(os.environ,
+                       RECOVER_PHASE=phase, RECOVER_DRY_RUN="1" if self.dry_run else "0",
+                       RECOVER_PLAN=str(self.plan_path), RECOVER_LOG=str(self.hook_log),
+                       RECOVER_DISK_LEVEL=self.plan["disk"]["level"])
+            started = time.monotonic()
+            if cap <= 0:
+                rc, out = "skipped", "no time left"
+            else:
+                try:
+                    res = subprocess.run(["bash", str(hook)], env=env, cwd=tempfile.gettempdir(),
+                                         capture_output=True, text=True, timeout=cap)
+                    rc, out = res.returncode, (res.stdout + res.stderr)
+                except subprocess.TimeoutExpired as exc:
+                    partial = exc.stdout or ""
+                    rc, out = "timeout", (partial.decode(errors="replace") if isinstance(partial, bytes) else partial)
+                except OSError as exc:
+                    rc, out = "error", str(exc)
+            if disk_phase:
+                self.cleanup_spent += time.monotonic() - started
+            exits.append(rc)
+            self.plan["hook_runs"].append({"phase": phase, "hook": hook.name, "exit": rc,
+                                           "output": tail_text(out)})
+            self.log(f"hook {hook.name} phase={phase} exit={rc}",
+                     "INFO" if rc in (0, HOOK_EXIT_NOTHING) else "WARNING")
+            for line in out.splitlines()[-40:]:
+                self.log(f"  {hook.name}: {line}")
+        return exits
+
+    @staticmethod
+    def hooks_ok(exits: list[int | str]) -> bool:
+        return all(rc in (0, HOOK_EXIT_NOTHING) for rc in exits)
+
+    # -- phases
+    def phase_disk(self, phase: str) -> None:
+        for act in self.plan["disk"]["actions"]:
+            if act["phase"] != phase:
+                continue
+            if act["class"] == "confirm":
+                if not self.dry_run:
+                    act["status"], act["detail"] = "skipped", "needs your decision; recover never runs it"
+            elif act["owner"] == "core" and not self.dry_run:
+                self.run_core_action(act)
+        exits = self.run_hooks(phase, CLEANUP_CAP_S, disk_phase=True)
+        for act in self.plan["disk"]["actions"]:
+            if act["phase"] == phase and act["owner"] == "hook" and not self.dry_run:
+                if not self.hook_files:
+                    act["status"], act["detail"] = "skipped", "no recover.d hook installed"
+                elif not self.hooks_ok(exits):
+                    act["status"] = "failed"
+                elif all(rc == HOOK_EXIT_NOTHING for rc in exits):
+                    act["status"], act["detail"] = "skipped", "hooks had nothing to do"
+                else:
+                    act["status"] = "done"
+        if not self.dry_run:
+            self.plan["disk"].update(measure_disk())
+            self.log(f"disk after {phase}: {self.plan['disk']['free_gib']} GiB free, "
+                     f"level={self.plan['disk']['level']}")
+            if phase == "disk-pre":
+                self.redecide(self.live_mounted())
+
+    def run_core_action(self, act: dict) -> None:
+        argv = shlex.split(act["cmd"])
+        cap = min(self.deadline.remaining(), self.cleanup_left())
+        if not shutil.which(argv[0]):
+            act["status"], act["detail"] = "skipped", f"{argv[0]} not found"
+        elif cap <= 0:
+            act["status"], act["detail"] = "skipped", "cleanup time cap or deadline reached"
+        else:
+            started = time.monotonic()
+            try:
+                res = subprocess.run(argv, capture_output=True, text=True, timeout=cap)
+                act["status"] = "done" if res.returncode == 0 else "failed"
+                if res.returncode:
+                    act["detail"] = f"exit {res.returncode}"
+            except subprocess.TimeoutExpired:
+                act["status"], act["detail"] = "failed", "timeout"
+            except OSError as exc:
+                act["status"], act["detail"] = "failed", str(exc)
+            self.cleanup_spent += time.monotonic() - started
+        self.log(f"disk action {act['cmd']}: {act['status']}", "INFO" if act["status"] != "failed" else "WARNING")
+
+    def phase_mounts(self) -> None:
+        pending = sum(1 for m in self.plan["mounts"] if m["action"] == "mount")
+        cap = MOUNT_TIMEOUT_S * max(1, pending) + 60
+        if self.dry_run:
+            self.run_hooks("mounts", cap)
+            return
+        done_by_us: set[str] = set()
+        attempts = 1 + (HOOK_RETRIES if self.auto else 0)
+        for attempt in range(attempts):
+            before = self.live_mounted()
+            self.redecide(before)
+            todo = {m["target"] for m in self.plan["mounts"] if m["action"] == "mount"}
+            exits = self.run_hooks("mounts", cap)
+            after = self.live_mounted()
+            done_by_us |= todo & after
+            if self.hooks_ok(exits) or attempt == attempts - 1 or self.deadline.expired():
+                break
+            self.log(f"mounts phase failed (attempt {attempt + 1}/{attempts}); retrying", "WARNING")
+            time.sleep(min(env_float("CLAUDE_RECOVER_RETRY_PAUSE_S", HOOK_RETRY_PAUSE_S),
+                           self.deadline.remaining()))
+        self.redecide(self.live_mounted(), mounts_phase_over=True)
+        for entry in self.plan["mounts"]:
+            if entry["target"] in done_by_us:
+                entry["action"], entry["status"] = "mount", "done"
+            elif entry["action"] == "mount":
+                entry["status"] = "failed"
+            self.log(f"mount {entry['target']}: {entry['action']} -> {entry['status']}",
+                     "WARNING" if entry["status"] == "failed" else "INFO")
+
+    def phase_sessions(self) -> None:
+        pending = [s for s in self.plan["sessions"] if s["action"] in OPEN_ACTIONS]
+        if self.dry_run or not pending:
+            return
+        target = self.config["tmux_session"]
+        if not wait_for_tmux_session(target, env_float("CLAUDE_RECOVER_TMUX_WAIT_S", TMUX_WAIT_S)):
+            self.log(f"tmux session {target!r} did not appear; sessions are not reopened", "WARNING")
+            for sess in pending:
+                sess["status"], sess["detail"] = "skipped", f"tmux session {target!r} not found"
+            return
+        pause = env_float("CLAUDE_RECOVER_SESSION_PAUSE_S", SESSION_PAUSE_S)
+        min_mem = env_float("CLAUDE_RECOVER_MIN_MEM_GIB", MIN_MEM_GIB)
+        for i, sess in enumerate(pending):
+            if self.deadline.expired():
+                sess["status"], sess["detail"] = "skipped", "deadline reached"
+            elif sess["session_id"] in self.alive():
+                sess["action"], sess["status"], sess["command"] = "skip-alive", "skipped", []
+                sess["detail"] = "the session appeared while recovering"
+            elif (mem := mem_available_gib()) is not None and mem < min_mem:
+                sess["status"], sess["detail"] = "skipped", f"MemAvailable {mem:.1f} GiB < {min_mem:g}"
+            else:
+                rc, msg = tmux_run(sess["command"][1:])
+                sess["status"] = "done" if rc == 0 else "failed"
+                if rc:
+                    sess["detail"] = tail_text(msg, 300)
+                if i + 1 < len(pending):
+                    time.sleep(min(pause, self.deadline.remaining()))
+            self.log(f"session {sess['session_id']} ({sess['name']}) {sess['cwd']}: "
+                     f"{sess['action']} -> {sess['status']}"
+                     + (f" ({sess['detail']})" if sess.get("detail") else ""),
+                     "WARNING" if sess["status"] == "failed" else "INFO")
+
+    def run(self) -> None:
+        for phase in PHASES:
+            if self.deadline.expired():
+                break
+            if phase in ("disk-pre", "disk-post"):
+                self.phase_disk(phase)
+            elif phase == "mounts":
+                self.phase_mounts()
+            elif phase == "compose":
+                self.run_hooks(phase, COMPOSE_CAP_S)
+            else:
+                self.phase_sessions()
+        if not self.dry_run:
+            self.expire_remaining()
+
+    def expire_remaining(self) -> None:
+        for act in self.plan["disk"]["actions"]:
+            if act["status"] == "planned":
+                act["status"], act["detail"] = "skipped", "deadline reached"
+        for entry in [*self.plan["mounts"], *self.plan["sessions"]]:
+            if entry["status"] == "planned":
+                entry["status"], entry["detail"] = "skipped", "deadline reached"
+
+
+def summarize(plan: dict, elapsed_s: float) -> dict:
+    statuses = Counter(x["status"] for x in [*plan["disk"]["actions"], *plan["mounts"], *plan["sessions"]])
+    return {
+        "mounts": dict(Counter(m["action"] for m in plan["mounts"])),
+        "sessions": dict(Counter(s["action"] for s in plan["sessions"])),
+        "statuses": dict(statuses),
+        "failed": statuses.get("failed", 0),
+        "elapsed_s": round(elapsed_s, 1),
+    }
+
+
+def confirm_block(plan: dict) -> str:
+    disk = plan["disk"]
+    lines = [f"Needs your decision: disk level is {disk['level']} "
+             f"({disk['free_gib']:.1f} GiB free, {disk['free_pct']:.1f}%).",
+             "Recover does not run these; run them yourself if you agree:"]
+    lines += [f"  {cmd}    # {why}" for cmd, why in CONFIRM_COMMANDS]
+    return "\n".join(lines)
+
+
+def render_text(plan: dict) -> str:
+    out = [f"claude-recover {'dry-run' if plan['dry_run'] else 'restore'} "
+           f"(mode={plan['mode']}{', simulated reboot' if plan['simulate_reboot'] else ''})",
+           f"snapshot: {plan['snapshot']} (boot {plan['snapshot_boot_id']}; now {plan['current_boot_id']})"]
+    d = plan["disk"]
+    runs = plan["hook_runs"]
+
+    def hook_lines(phase):
+        for r in runs:
+            if r["phase"] == phase:
+                out.append(f"    hook {r['hook']} exit={r['exit']}")
+                out.extend(f"      {ln}" for ln in r["output"].splitlines()[:30])
+
+    def actions(phase):
+        for a in d["actions"]:
+            if a["phase"] == phase:
+                note = f" ({a['detail']})" if a.get("detail") else ""
+                out.append(f"  [{a['class']}] {a['cmd']}: {a['status']}{note}")
+
+    out.append(f"phase disk-pre: {d['free_gib']:.1f} GiB free ({d['free_pct']:.1f}%), "
+               f"level={d['initial_level']}")
+    actions("disk-pre")
+    hook_lines("disk-pre")
+    out.append("phase mounts:")
+    for m in plan["mounts"]:
+        out.append(f"  {m['action']:<15} {m['target']}{' [essential]' if m['essential'] else ''}: {m['status']}")
+    hook_lines("mounts")
+    out.append("phase compose:")
+    hook_lines("compose")
+    out.append(f"phase disk-post: level={d['level']}")
+    actions("disk-post")
+    hook_lines("disk-post")
+    out.append("phase sessions:")
+    for s in plan["sessions"]:
+        note = f" ({s['detail']})" if s.get("detail") else ""
+        out.append(f"  {s['action']:<18} {s['name']} {s['session_id']} {s['cwd']}: {s['status']}{note}")
+        if s["command"]:
+            out.append(f"      {shlex.join(s['command'])}")
+    out.extend(f"warning: {w}" for w in plan["warnings"])
+    sm = plan["summary"]
+    out.append(f"summary: mounts {sm.get('mounts')}, sessions {sm.get('sessions')}, "
+               f"statuses {sm.get('statuses')}")
+    return "\n".join(out)
+
+
 # --- commands ---------------------------------------------------------------------------
 
 
@@ -558,9 +1191,139 @@ def cmd_select(args: argparse.Namespace) -> int:
     return 0
 
 
+def _restore_config(args: argparse.Namespace, snap_path: Path, hook_files: list[Path]) -> dict:
+    warnings = []
+    if not hook_files:
+        warnings.append(f"no recover.d hooks in {hooks_dir()}: mounts are not restored and disk cleanup "
+                        "beyond docker/hygiene is skipped")
+    return {
+        "dry_run": args.dry_run,
+        "snapshot_path": str(snap_path),
+        "current_boot_id": current_boot_id(),
+        "mode": args.mode,
+        "simulate_reboot": args.simulate_reboot,
+        "tmux_session": os.environ.get("CLAUDE_RECOVER_TMUX_SESSION", DEFAULT_TMUX_SESSION),
+        "tmux_bin": tmux_bin(),
+        "claude_bin": os.environ.get("CLAUDE_RECOVER_CLAUDE_BIN", "claude"),
+        "continue_prompt": os.environ.get("CLAUDE_RECOVER_CONTINUE_PROMPT", DEFAULT_CONTINUE_PROMPT),
+        "transcript_exists": os.path.exists,
+        "essential": read_essential(hooks_dir() / "essential-mounts.txt"),
+        "hooks": [h.name for h in hook_files],
+        "warnings": warnings,
+    }
+
+
+def _emit(plan: dict, fmt: str) -> None:
+    print(json.dumps(plan, indent=2) if fmt == "json" else render_text(plan))
+
+
+def cmd_restore(args: argparse.Namespace) -> int:
+    if args.simulate_reboot and not args.dry_run:
+        print("claude-recover: --simulate-reboot is only allowed with --dry-run", file=sys.stderr)
+        return 2
+    sd = state_dir()
+    boot_id = current_boot_id()
+    if not _BOOT_ID_RE.match(boot_id):
+        print(f"claude-recover: unsafe boot id {boot_id!r}", file=sys.stderr)
+        return 2
+    marker = sd / f"done-{boot_id}"
+    if args.auto and marker.exists():
+        print(f"claude-recover: already restored on this boot ({marker.name})", file=sys.stderr)
+        return 0
+    if args.snapshot:
+        snap_path = Path(args.snapshot)
+    else:
+        snap_path = select_snapshot(sd, boot_id, any_boot=args.any_boot or args.simulate_reboot)
+        if snap_path is None:
+            print("claude-recover: no snapshot to restore from", file=sys.stderr)
+            return 0 if args.auto else 1
+    try:
+        snapshot = read_snapshot(snap_path)
+    except (OSError, ValueError) as exc:
+        print(f"claude-recover: snapshot {snap_path} is unreadable: {exc}", file=sys.stderr)
+        return 1
+    if "sha256" in snapshot and snapshot["sha256"] != content_hash(snapshot):
+        print(f"claude-recover: snapshot {snap_path} fails its sha256 check", file=sys.stderr)
+        return 1
+
+    hook_files = list_hooks(hooks_dir())
+    config = _restore_config(args, snap_path, hook_files)
+    live = {"mounted": set(), "alive": set()}
+    if not args.simulate_reboot:
+        live["mounted"] = mounted_set([m["mountpoint"] for m in snapshot.get("mounts", [])])
+        live["alive"] = alive_session_ids({s["sessionId"] for s in snapshot.get("sessions", [])})
+    plan = build_plan(snapshot, live, measure_disk(), config)
+
+    if args.dry_run:
+        with tempfile.TemporaryDirectory(prefix="claude-recover-dry-") as tmp:
+            scratch = Path(tmp)
+            Restorer(plan, snapshot, config, args, RunLog(None, False), scratch / "plan.json",
+                     scratch / "hooks.log", hook_files).run()
+            plan["summary"] = summarize(plan, 0.0)
+        _emit(plan, args.format)
+        return 0
+
+    _guard_not_fuse(sd)
+    mkdir_private(sd)
+    lock = open(sd / "restore.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("claude-recover: another restore is running", file=sys.stderr)
+        return 0 if args.auto else 1
+    try:
+        log_path = sd / "recover.log"
+        log = RunLog(log_path, args.auto)
+        log(f"restore start: snapshot={snap_path} mode={args.mode} auto={args.auto}")
+        started = time.monotonic()
+        restorer = Restorer(plan, snapshot, config, args, log, sd / "restore-plan.json", log_path, hook_files)
+        restorer.run()
+        plan["summary"] = summarize(plan, time.monotonic() - started)
+        restorer.write_plan()
+        pending = sd / "pending-confirm.txt"
+        if plan["disk"]["level"] != "ok":
+            block = confirm_block(plan)
+            if args.auto:
+                write_atomic(pending, block + "\n")
+                for line in block.splitlines():
+                    log(line, "WARNING")
+            else:
+                print(block, file=sys.stderr)
+        elif pending.exists():
+            pending.unlink()
+        for w in plan["warnings"]:
+            log(w, "WARNING")
+        log(f"restore done: {json.dumps(plan['summary'], sort_keys=True)}")
+        if args.auto and plan["summary"]["failed"] == 0:
+            write_atomic(marker, f"{iso_ts(now())}\n")
+        _emit(plan, args.format)
+        return 1 if plan["summary"]["failed"] else 0
+    finally:
+        lock.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="claude-recover", description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(
+        prog="claude-recover", description=__doc__.split("\n\n")[0],
+        epilog="With no subcommand, `restore` runs: `claude-recover --dry-run` is "
+               "`claude-recover restore --dry-run`.")
     sub = parser.add_subparsers(dest="cmd", required=True)
+    p_rest = sub.add_parser("restore", help="after a reboot: clean the disk, remount, reopen sessions "
+                                            "(the default command)")
+    p_rest.add_argument("--dry-run", action="store_true",
+                        help="print the plan; run nothing (hooks are called with RECOVER_DRY_RUN=1)")
+    p_rest.add_argument("--snapshot", metavar="PATH", help="restore from this snapshot file")
+    p_rest.add_argument("--mode", choices=("open", "continue"), default="open",
+                        help="open: reopen sessions and wait (default); continue: also send a "
+                             "prompt to sessions that were busy")
+    p_rest.add_argument("--simulate-reboot", action="store_true",
+                        help="plan as if nothing is mounted or running (requires --dry-run; "
+                             "implies --any-boot)")
+    p_rest.add_argument("--any-boot", action="store_true", help="use the newest snapshot of any boot")
+    p_rest.add_argument("--auto", action="store_true",
+                        help="unattended boot run: once per boot (marker), retries the mounts phase")
+    p_rest.add_argument("--format", choices=("text", "json"), default="text")
+    p_rest.set_defaults(func=cmd_restore)
     p_snap = sub.add_parser("snapshot", help="take a snapshot of live sessions and FUSE mounts")
     p_snap.add_argument("--force", action="store_true", help="write even if nothing changed")
     p_snap.set_defaults(func=cmd_snapshot)
@@ -576,6 +1339,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or (argv[0] not in SUBCOMMANDS and argv[0] not in ("-h", "--help")):
+        argv.insert(0, "restore")
     args = build_parser().parse_args(argv)
     return args.func(args)
 
