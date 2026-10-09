@@ -24,7 +24,7 @@ from session_scope.registry import ScopeRecord  # noqa: E402
 
 NOW = 2_000_000_000.0
 DAY = 86400.0
-OLD = NOW - 30 * DAY
+OLD = NOW - 45 * DAY
 DEAD_PID = 2**22 + 12345
 
 REMOVABLE = "old-unowned-classified.json"

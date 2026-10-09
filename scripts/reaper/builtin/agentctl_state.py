@@ -27,7 +27,7 @@ from reaper.contract import KEEP, REMOVE, ReapContext, Verdict
 
 NAME = "agentctl-state"
 THROTTLE_HOURS = 24.0
-MIN_AGE_DAYS = 14.0
+MIN_AGE_DAYS = 30.0
 RESIDUE_NODE = "CLASSIFIED"
 STATE_FILE_NAME = re.compile(r"[0-9A-Za-z_-]+\.json")
 
