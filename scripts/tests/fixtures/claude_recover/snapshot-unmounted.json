@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "boot_id": "fixture-boot",
+  "btime": 1759990000,
+  "taken_at": 1760000000,
+  "tmux_panes": [],
+  "sessions": [
+    {
+      "sessionId": "fixture-sess",
+      "pid": 1,
+      "cwd": "/home/user/mounts/__recover-fixture-not-mounted/work",
+      "config_dir": "/home/user/.claude",
+      "pane": {
+        "session_name": "ccgram",
+        "window_id": "@1",
+        "pane_id": "%1",
+        "pane_pid": 1,
+        "window_name": "fixture",
+        "pane_current_path": "/home/user/mounts/__recover-fixture-not-mounted/work"
+      },
+      "env": {},
+      "argv": ["claude", "--resume", "fixture-sess"],
+      "status": "idle",
+      "waitingFor": null,
+      "transcript": null
+    }
+  ],
+  "mounts": [
+    {
+      "mountpoint": "/home/user/mounts/__recover-fixture-not-mounted",
+      "fstype": "fuse.examplefs",
+      "source": "examplefs"
+    }
+  ]
+}
