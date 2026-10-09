@@ -159,7 +159,34 @@ def write_atomic(path: Path, text: str) -> None:
 def remove_stale_tmp(state: Path) -> None:
     """Leftovers of a writer killed between create and rename; callers hold the lock."""
     for stale in [*state.glob(".*.tmp.*"), *(state / "snapshots").glob("*/.*.tmp.*")]:
+        if _tmp_in_use(stale):
+            continue
         stale.unlink(missing_ok=True)
+
+
+STALE_TMP_AGE_S = 300
+
+
+def _tmp_in_use(path: Path) -> bool:
+    """A temp file whose pid suffix is a live process and that is younger than STALE_TMP_AGE_S.
+
+    A concurrent restore writes its plan/marker with the same temp-name scheme and holds no
+    snapshot lock, so a snapshot run must not delete a file that writer is about to rename.
+    The age bound covers a pid that was reused after the writer died.
+    """
+    try:
+        pid = int(path.name.rsplit(".", 1)[1])
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    except (ValueError, IndexError, OverflowError):
+        return False
+    try:
+        return time.time() - path.stat().st_mtime <= STALE_TMP_AGE_S
+    except OSError:
+        return False
 
 
 # --- reading the live world -------------------------------------------------------------
@@ -239,6 +266,11 @@ def whitelist_env(environ: dict[str, str]) -> dict:
     return out
 
 
+def _looks_like_path(arg: str) -> bool:
+    """A value of a variadic flag (--add-dir a b) vs the trailing positional prompt."""
+    return arg.startswith(("/", "~", ".")) and not any(c.isspace() for c in arg)
+
+
 def strip_prompt(argv: list[str]) -> list[str]:
     """Keep the executable and flags; keep a flag's value only for KEPT_VALUE_FLAGS."""
     kept = []
@@ -248,7 +280,7 @@ def strip_prompt(argv: list[str]) -> list[str]:
             kept.append(Path(arg).name)
             continue
         if skip_value_of is not None and not arg.startswith("-"):
-            if skip_value_of in ("keep", "keep-many"):
+            if skip_value_of == "keep" or (skip_value_of == "keep-many" and _looks_like_path(arg)):
                 kept.append(arg)
             if skip_value_of != "keep-many":
                 skip_value_of = None
@@ -1101,6 +1133,37 @@ def render_text(plan: dict) -> str:
 # --- commands ---------------------------------------------------------------------------
 
 
+# A snapshot of the current boot must not be written while this boot's restore is still
+# pending: the timer fires ~2 min after boot, `restore --auto` then reopens sessions for up to
+# DEADLINE_S, and a second reboot in that window would make select_snapshot prefer the partial
+# new-boot snapshot (newer, non-empty) over the original full one. Rule: skip the snapshot when
+# (a) restore.lock is held (a restore is running now), or (b) the newest previous-boot snapshot
+# has sessions, this boot has no done-<boot> marker, and the boot is younger than
+# PENDING_RESTORE_WINDOW_S (restore was expected; the window bounds the pause when a restore
+# never completes, e.g. failed sessions leave no marker). With no previous sessions to
+# restore, or an older boot, snapshots proceed as before.
+PENDING_RESTORE_WINDOW_S = DEADLINE_S + 15 * 60
+
+
+def restore_pending(sd: Path, boot_id: str) -> str | None:
+    lock_path = sd / "restore.lock"
+    if lock_path.exists():
+        with open(lock_path, "w") as fh:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return "restore in progress (restore.lock held)"
+    if (sd / f"done-{boot_id}").exists():
+        return None
+    prev = select_snapshot(sd, boot_id)
+    if prev is None or not _has_sessions(prev):
+        return None
+    btime = boot_time()
+    if btime is None or now() - btime > PENDING_RESTORE_WINDOW_S:
+        return None
+    return f"restore of {prev.parent.name} pending for this boot"
+
+
 def cmd_snapshot(args: argparse.Namespace) -> int:
     sd = state_dir()
     boot_id = current_boot_id()
@@ -1111,6 +1174,11 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     ts = now()
     with _Lock(sd):
         remove_stale_tmp(sd)
+        reason = restore_pending(sd, boot_id)
+        if reason:
+            # Not touching the snapshots keeps select_snapshot on the pre-crash one.
+            print(json.dumps({"written": None, "skipped": reason}))
+            return 0
         try:
             snap = build_snapshot()
         except TmuxError as exc:
@@ -1300,7 +1368,10 @@ def cmd_restore(args: argparse.Namespace) -> int:
         for w in plan["warnings"]:
             log(w, "WARNING")
         log(f"restore done: {json.dumps(plan['summary'], sort_keys=True)}")
-        if args.auto and plan["summary"]["failed"] == 0:
+        # A session skipped for lack of tmux or time was not reopened: leave the next run a chance.
+        unfinished = [x for x in plan["sessions"] if x.get("status") == "skipped" and (
+            x.get("detail") == "deadline reached" or str(x.get("detail", "")).startswith("tmux session "))]
+        if args.auto and plan["summary"]["failed"] == 0 and not unfinished:
             write_atomic(marker, f"{iso_ts(now())}\n")
         _emit(plan, args.format)
         return 1 if plan["summary"]["failed"] else 0

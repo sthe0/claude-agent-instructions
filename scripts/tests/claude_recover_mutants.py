@@ -129,6 +129,16 @@ MUTANTS: dict[str, tuple[str, str, str]] = {
         "    end = time.monotonic() + wait_s\n",
         '    tmux_run(["start-server"])\n    end = time.monotonic() + wait_s\n',
     ),
+    "snapshot-during-restore": (
+        "a snapshot of the new boot is written while this boot's restore is pending or running",
+        "        reason = restore_pending(sd, boot_id)\n",
+        "        reason = None\n",
+    ),
+    "stale-tmp-kills-live": (
+        "a temp file of a live writer is deleted as stale",
+        "        if _tmp_in_use(stale):\n",
+        "        if False:\n",
+    ),
     "phase-name-drift": (
         "the first phase is named disk instead of disk-pre",
         'PHASES = ("disk-pre", "mounts"',

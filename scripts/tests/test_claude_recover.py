@@ -246,6 +246,17 @@ def test_snapshot_removes_stale_tmp_files(world):
     assert [p.exists() for p in stale] == [False, False]
 
 
+def test_snapshot_keeps_tmp_file_of_a_live_writer(world):
+    live = world.state / f".restore-plan.json.tmp.{os.getpid()}"
+    old = world.state / f".old.json.tmp.{os.getpid()}"
+    world.state.mkdir(parents=True)
+    live.write_text("in flight")
+    old.write_text("pid reused")
+    os.utime(old, (T0, T0))
+    world.run("snapshot")
+    assert live.exists() and not old.exists()
+
+
 def test_write_atomic_replaces_via_rename_of_a_sibling_file(tmp_path, monkeypatch):
     mod = load_module()
     target = tmp_path / "out.json"
@@ -264,6 +275,13 @@ def test_write_atomic_replaces_via_rename_of_a_sibling_file(tmp_path, monkeypatc
     assert src != dst and src.parent == dst.parent
     assert (src_text, dst_text) == ("new", "old")
     assert target.read_text() == "new"
+
+
+def test_strip_prompt_drops_positional_prompt_after_variadic_flag():
+    mod = load_module()
+    argv = ["/usr/bin/claude", "--add-dir", "/a", "~/b", "prompt text", "plainword"]
+    assert mod.strip_prompt(argv) == ["claude", "--add-dir", "/a", "~/b"]
+    assert mod.strip_prompt(["claude", "--add-dir", "/a", "do this"]) == ["claude", "--add-dir", "/a"]
 
 
 def test_strip_prompt_keeps_every_value_of_variadic_flags():
@@ -355,6 +373,45 @@ def test_select_after_reboot_returns_pre_crash_snapshot(world):
     assert Path(chosen.stdout.strip()) == pre_crash
     newest = world.run("select", "--any-boot", boot="boot-2")
     assert Path(newest.stdout.strip()).parent.name == "boot-2"
+
+
+BOOT1_AT = 1759990000  # the fixture's btime; "just after boot" is this + 120 s
+
+
+def test_snapshot_does_not_replace_pending_restore_source_on_second_reboot(world):
+    world.run("snapshot", boot="boot-1", now=T0)
+    full = world.snapshots("boot-1")[-1]
+    # boot-2 is young, its restore has not finished: the timer's snapshot must not land
+    res = world.run("snapshot", boot="boot-2", now=BOOT1_AT + 120, config_dirs=str(world.root / "partial"))
+    assert res.returncode == 0 and "pending" in res.stdout
+    assert world.snapshots("boot-2") == []
+    # second reboot mid-restore: the original full snapshot is still the selection
+    chosen = world.run("select", boot="boot-3", now=BOOT1_AT + 600)
+    assert Path(chosen.stdout.strip()) == full
+
+
+def test_snapshot_skips_while_restore_lock_is_held(world):
+    import fcntl
+    world.run("snapshot", boot="boot-1", now=T0)
+    world.state.mkdir(parents=True, exist_ok=True)
+    with open(world.state / "restore.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        res = world.run("snapshot", boot="boot-1", now=T0 + 5000, config_dirs=str(world.root / "other"))
+    assert res.returncode == 0 and "restore.lock" in res.stdout
+    assert len(world.snapshots("boot-1")) == 1
+
+
+def test_snapshot_proceeds_when_no_restore_is_pending(world):
+    # no previous-boot snapshot at all
+    assert world.run("snapshot", boot="boot-1", now=BOOT1_AT + 120).returncode == 0
+    assert len(world.snapshots("boot-1")) == 1
+    # previous snapshot exists, but this boot already restored
+    (world.state / "done-boot-2").write_text("x\n")
+    world.run("snapshot", boot="boot-2", now=BOOT1_AT + 120)
+    assert len(world.snapshots("boot-2")) == 1
+    # previous snapshot exists, restore pending, but the boot is old (restore never completed)
+    world.run("snapshot", boot="boot-3", now=BOOT1_AT + 5 * 3600)
+    assert len(world.snapshots("boot-3")) == 1
 
 
 def test_select_cli_fails_when_nothing_to_restore(world):
@@ -937,6 +994,24 @@ def test_failed_auto_run_leaves_no_marker(rw):
     res = subprocess.run([sys.executable, str(MODULE_PATH), "--auto"], capture_output=True, text=True,
                          env={**rw.env(boot="boot-2"), "HOOK_FAIL_FIRST": "99"}, timeout=60)
     assert res.returncode == 1
+    assert not (rw.state / "done-boot-2").exists()
+
+
+def test_auto_marker_not_written_when_tmux_session_missing(rw):
+    rw.reboot()
+    Path(str(rw.tmux) + ".session").unlink()
+    res = rw.run("--auto", "--format", "json", boot="boot-2")
+    assert res.returncode == 0
+    details = {s["detail"] for s in json.loads(res.stdout)["sessions"]}
+    assert any("not found" in d for d in details)
+    assert not (rw.state / "done-boot-2").exists()
+
+
+def test_auto_marker_not_written_when_deadline_skipped_sessions(rw):
+    rw.reboot()
+    res = subprocess.run([sys.executable, str(MODULE_PATH), "--auto"], capture_output=True, text=True,
+                         timeout=60, env={**rw.env(boot="boot-2"), "CLAUDE_RECOVER_DEADLINE_S": "0"})
+    assert res.returncode == 0
     assert not (rw.state / "done-boot-2").exists()
 
 
