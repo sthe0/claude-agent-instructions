@@ -1245,6 +1245,12 @@ def cmd_restore(args: argparse.Namespace) -> int:
     if "sha256" in snapshot and snapshot["sha256"] != content_hash(snapshot):
         print(f"claude-recover: snapshot {snap_path} fails its sha256 check", file=sys.stderr)
         return 1
+    # An unattended boot-time restore must survive one bad entry: keep only well-formed ones.
+    snapshot["sessions"] = [s for s in snapshot["sessions"]
+                            if isinstance(s, dict) and isinstance(s.get("sessionId"), str)]
+    mounts = snapshot.get("mounts")
+    snapshot["mounts"] = ([m for m in mounts if isinstance(m, dict) and isinstance(m.get("mountpoint"), str)]
+                          if isinstance(mounts, list) else [])
 
     hook_files = list_hooks(hooks_dir())
     config = _restore_config(args, snap_path, hook_files)

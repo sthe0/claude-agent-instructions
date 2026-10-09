@@ -718,6 +718,21 @@ def test_snapshot_with_wrong_checksum_is_refused(rw):
     assert res.returncode == 1 and "sha256" in res.stderr
 
 
+@pytest.mark.parametrize("bad", [
+    {"sessions": [{"cwd": "/x"}]},
+    {"sessions": [None]},
+    {"mounts": [{"x": 1}]},
+    {"mounts": None},
+])
+def test_malformed_snapshot_entries_are_dropped_not_fatal(rw, bad):
+    rw.reboot()
+    path = rw.edit_snapshot(lambda s: (s.update(bad), s.pop("sha256", None)))
+    res = rw.run("--dry-run", "--snapshot", str(path), "--format", "json", boot="boot-2")
+    assert res.returncode == 0 and "Traceback" not in res.stderr
+    plan = json.loads(res.stdout)
+    assert all(isinstance(s["session_id"], str) for s in plan["sessions"])
+
+
 def test_fixture_snapshot_with_unmounted_target_plans_a_mount(rw):
     plan = rw.plan("--dry-run", "--snapshot", str(FIXTURES / "snapshot-unmounted.json"))
     target = "/home/the0/task-mounts/__recover-fixture-not-mounted"
