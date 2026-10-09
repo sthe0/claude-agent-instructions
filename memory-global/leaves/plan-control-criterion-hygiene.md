@@ -4,7 +4,7 @@ description: Fourteen plan-authoring norms for a stage's control criterion — d
 type: feedback
 schema: leaf/v1
 created: 2026-08-31
-last_verified: 2026-09-18
+last_verified: 2026-09-23
 ---
 
 # Plan control-criterion hygiene
@@ -94,6 +94,30 @@ The **corollary on refs**: a fact the stage must *read* belongs in
 `knowledge_refs`; an artifact the stage *produces or mutates* belongs in
 `material_refs`. Putting a read-only fact in the material list turns background
 knowledge into a deliverable the criterion then demands.
+
+> **Observed — a user decision that rewrites a prior plan fact carries the
+> same risk as an authored one.** DEEPAGENT-575: a 2026-09-19 user decision on
+> a notification-channel architecture was transcribed into `done_criterion`
+> as settled fact, and a downstream `final_check` then hard-coded a specific
+> runtime namespace-resolution behaviour as its assertion — without the
+> premise underneath it (does the project participate in the runtime channel
+> resolve, or does resolve go by channel name alone) ever being checked
+> against the actual source. Three independent thinker plan-review rounds
+> missed it, including the coordinator's own edit of that same
+> `done_criterion` later in the same session. A fourth round caught it,
+> naming the mechanism directly: an empty premise-bag on that question was
+> not evidence there were no premises, only evidence this one was never
+> raised. [[question-provenance-gate]]'s materiality test and
+> `CLAUDE.md`'s own-research-precedes-escalation rule already covered this
+> case — the gap was non-application, not a missing norm: recording a live
+> user decision was treated as closing the question rather than as the
+> trigger to ask what unverified premise the rewrite depends on. The
+> actionable habit this adds to the norm: the moment a user decision is about
+> to be transcribed into `done_criterion` or a `final_check` as settled fact,
+> name the technical premise it rests on and run `question-raise` → research
+> → `question-dispose` on it **before** the transcription — the plan asserts
+> the claim on its own authority once written down, regardless of whether a
+> user or the author supplied it.
 
 ### 3. A criterion's number comes from an explicitly bounded invocation
 
