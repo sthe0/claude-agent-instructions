@@ -26,6 +26,7 @@ CHECKS: list[str] = [
     "verify-experience-leaf",
     "verify-leaf-structure",
     "verify-agentctl",
+    "verify-cursor-hook-registry",
     "verify-readme",
     "verify-memory-index",
     "lint-hooks-executable",

@@ -200,20 +200,12 @@ def check_cognitive_leaves(names: list[str], skills_root: Path) -> list[str]:
     return problems
 
 
-def parse_desired_hooks(install_script_text: str) -> set[str]:
-    """Hook basenames listed in the DESIRED block of install-reminder-hooks.sh."""
-    hooks: set[str] = set()
-    in_desired = False
-    for line in install_script_text.splitlines():
-        if re.match(r"\s*DESIRED\s*=\s*\[", line):
-            in_desired = True
-            continue
-        if in_desired:
-            if line.strip().startswith("]"):
-                break
-            for m in re.finditer(r'"([^"]*?\.py)(?:\s[^"]*)?"', line):
-                hooks.add(Path(m.group(1)).name)
-    return hooks
+def parse_desired_hooks(install_script_text: str | None = None) -> set[str]:
+    """Hook basenames listed in the shared registry's Claude-mapped rows."""
+    del install_script_text
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    from lib.hook_registry import claude_hook_basenames
+    return claude_hook_basenames()
 
 
 def check_gate_guardians(gate_to_hook: dict, desired_hooks: set[str]) -> list[str]:
@@ -222,6 +214,13 @@ def check_gate_guardians(gate_to_hook: dict, desired_hooks: set[str]) -> list[st
         if hook not in desired_hooks:
             problems.append(f"gate {gate!r} has no guardian hook {hook!r} wired in DESIRED")
     return problems
+
+
+def check_cursor_gate_guardians() -> list[str]:
+    """Guardian hooks must be Cursor-mapped in the shared registry."""
+    from lib.hook_registry import check_cursor_guardians
+
+    return check_cursor_guardians()
 
 
 # Plugins that must be registered at import (importing the plugins module pulls
@@ -883,6 +882,7 @@ def main(argv: list[str] | None = None) -> int:
         problems.append(f"engine gate(s) with no guardian-hook mapping: {unmapped}")
     desired = parse_desired_hooks(INSTALL_SCRIPT.read_text(encoding="utf-8"))
     problems += check_gate_guardians(GATE_TO_HOOK, desired)
+    problems += check_cursor_gate_guardians()
 
     problems += check_plugins()
     problems += check_control_precondition()

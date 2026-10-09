@@ -70,6 +70,14 @@ fi
 
 warn "agent CLI smoke test skipped (non-destructive doctor only)"
 
+_hooks_json="${CURSOR_HOOKS_JSON:-$HOME/.cursor/hooks.json}"
+if _hook_check_out="$(cd "$REPO/scripts" && python3 verify-cursor-hook-registry.py --check-install "$_hooks_json" 2>&1)"; then
+  pass "Cursor hooks.json matches registry-derived managed entries ($_hooks_json)"
+else
+  printf '%s\n' "$_hook_check_out" | sed 's/^/    /'
+  fail "Cursor hooks.json missing managed entries — run scripts/install-cursor-hooks.py ($_hooks_json)"
+fi
+
 echo
 if [[ "$FAIL" -eq 0 ]]; then
   echo "Cursor host ready."

@@ -79,7 +79,7 @@ A **difficulty** is a divergence between reality and the plan — either a step'
 
 **SKIP** when work is progressing as expected, or a one-off retry will obviously succeed.
 
-**Proactive, not only reactive.** `~/claude-agent-instructions/scripts/self-diagnose.py` mechanically scans the agent's own memory/instructions for self-friction (oversized index, dangling pointer, file near its ceiling); Cursor has no SessionStart hook to auto-run it, so periodically run it yourself and work any non-empty worklist through this same cycle.
+**Proactive, not only reactive.** `~/claude-agent-instructions/scripts/self-diagnose.py` mechanically scans the agent's own memory/instructions for self-friction (oversized index, dangling pointer, file near its ceiling). With native Cursor hooks installed (`install-cursor-hooks.py`), `hook-self-diagnose-due.py` runs once per session via `sessionStart`; without that install, run it yourself periodically and work any non-empty worklist through this same cycle.
 
 When triggered → read `~/.claude-agent/skills/overcome-difficulty/SKILL.md` and work through declaration → investigation → critique → handoff a replanning task back to yourself (still the root); apply the corrected plan and resume the original task.
 
@@ -95,7 +95,7 @@ When triggered → read `~/.claude-agent/skills/overcome-difficulty/SKILL.md` an
 
 **Also self-initiated:** a non-empty `self-diagnose.py` worklist worked to a re-norming task by `overcome-difficulty` is authored here, through the normal gate below — not only user feedback.
 
-When triggered → read `~/.claude-agent/skills/self-improvement/SKILL.md` (and `policy.md` for process-as-code / cache-aware editing / instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply. In Claude Code the end-of-turn `Stop` gate (`hook-turn-end-gate.py`) blocks the turn when a feedback signal is present but neither skill ran; **in Cursor those hooks do not run** — same obligation, prose-enforced: engage the skill or state why it does not apply.
+When triggered → read `~/.claude-agent/skills/self-improvement/SKILL.md` (and `policy.md` for process-as-code / cache-aware editing / instruction-language / file-structure / git-sync rules) and follow them in the **same turn** as the trigger, before the final reply. In Claude Code the end-of-turn `Stop` gate (`hook-turn-end-gate.py`) blocks the turn when a feedback signal is present but neither skill ran; **with native Cursor hooks installed**, the same hook logic runs at `stop` as bounded follow-up (not a hard block); **without hooks**, the obligation is prose-enforced: engage the skill or state why it does not apply.
 
 Editing the agent's own config / instructions / skills is **state-changing production work** — it rides the standard plan-approval gate like any task (the skill's beat-1 `AskUserQuestion` *is* that gate); **only memory writes** (project + global) bypass it.
 
@@ -176,9 +176,13 @@ The recursive escape inside `overcome-difficulty/SKILL.md` spawns `claude -p`. *
 Do not attempt to invoke `claude` from Bash as a workaround. The gate is unconditional.
 
 
-## Hookless Cursor obligations
+## Cursor native hooks (when installed)
 
-Cursor has no SessionStart/Stop/PreToolUse hooks — the same rules apply, **prose-enforced**. **Substantive** tasks: run **`agentctl classify`** (add **`--host cursor`** when this host is Cursor) at task start when the engine is available. **Production Edit/Write** only after plan approval and an execution node (mirror § Acting without asking = `hook-state-gate.py` equivalent). **End-of-turn:** run **`self-improvement`** when feedback warrants it and put the **resolution ask** in the same reply — hooks do not block. Use **AskQuestion** for fixed-choice confirms when attached; a prose menu at the end is not a substitute. Periodically run **`~/claude-agent-instructions/scripts/self-diagnose.py`** (no SessionStart auto-run). **Backlog approval ≠ plan approval** — «сделай все P0–P3» authorizes scope, not execution. Present goal + staged plan + verification in this chat and get explicit OK before production Edit or Task delegation (engine-down hand-walk included).
+Shared hook policy lives in one registry (`~/claude-agent-instructions/scripts/hooks/desired.json`). **Install:** `python3 ~/claude-agent-instructions/scripts/install-cursor-hooks.py` merges managed rows into `~/.cursor/hooks.json` and preserves unrelated entries (for example Arcadia `beforeShellExecution` guards). **Adapter:** `hook-cursor-adapt.py` translates Cursor stdin/stdout to the existing Claude `hook-*.py` scripts — policy is not forked per host. **Session context:** `hook-cursor-memory-context.py` injects MEMORY.md indexes, the `config.md` key/value table, and a compact skill catalog via `sessionStart` `additional_context` (indexes only — no leaf or skill bodies). **Readiness:** `cursor/scripts/cursor-doctor.sh` and `verify-cursor-hook-registry.py` detect missing mappings or a stale install.
+
+**Irreducible host gaps (named skips in the registry):** no native Skill tool (read `SKILL.md` inline); no native auto-memory extractor (write-path reminders only); `stop` hooks emit bounded follow-up, not Claude's hard block; `sessionStart` is fire-and-forget. Keep Cursor **Third-party imports** disabled — the adapter is the supported path.
+
+**Hookless fallback:** when `~/.cursor/hooks.json` has no managed install, the same coordination rules apply **prose-enforced**: run **`agentctl classify`** with **`--host cursor`** on substantive tasks; **Edit/Write** only after plan approval; run **`self-improvement`** on feedback and put the **resolution ask** in the same reply; periodically run **`self-diagnose.py`**. Use **AskQuestion** for fixed-choice confirms when attached. **Backlog approval ≠ plan approval.**
 
 ## Instructions repository (git)
 
@@ -188,4 +192,4 @@ Edit policy for `~/claude-agent-instructions/`: `sync-instructions-repo.sh pull`
 
 There is no global org-specific rule file or single shared monorepo mount. Project-specific gates (Tracker workflows, mount procedures, runbooks) live **inside each project's own `.claude/`** tree — `rules/*.mdc` (Cursor project rules, symlinked into `<project>/.cursor/rules/`), `agent-memory/` (project memory), `agents/` and `skills/` (project-local). When you open a project, those apply alongside this global rule.
 
-**Not mirrored in Cursor:** the `Skill` tool (invoke skills by reading `SKILL.md`), native auto-memory writing (write memory files directly), and the `@~/.claude-agent/memory-global/MEMORY.md` import (read it directly when relevant).
+**Not mirrored in Cursor:** the `Skill` tool (invoke skills by reading `SKILL.md`), native auto-memory **extraction** (write memory files directly when triggered; sessionStart injects indexes only), and the `@~/.claude-agent/memory-global/MEMORY.md` import (read the index when relevant — or rely on installed sessionStart injection).

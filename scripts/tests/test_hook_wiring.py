@@ -562,11 +562,12 @@ def test_registry_is_a_subset_of_installer_intent():
     """Third direction: the registry is a second hand-maintained list over the
     installer's domain. An entry the installer never intends to wire would make
     the SessionStart check warn about it on every machine, forever."""
-    desired = (SCRIPTS / "install-reminder-hooks.sh").read_text(encoding="utf-8")
-    block = desired.split("DESIRED = [", 1)[1].split("\n]", 1)[0]
-    missing = sorted(n for n in _REGISTERED if f'"{n}"' not in block)
+    from lib.hook_registry import claude_hook_basenames
+
+    intended = claude_hook_basenames()
+    missing = sorted(n for n in _REGISTERED if n not in intended)
     assert not missing, (
-        "registry entries absent from install-reminder-hooks.sh's DESIRED block: "
+        "registry entries absent from scripts/hooks/desired.json Claude rows: "
         f"{missing}"
     )
 
@@ -802,12 +803,10 @@ def test_timeout_requirements_scope_matches_every_judge_caller():
 # regression in any single copy.
 
 def _desired_rows() -> "list[tuple]":
-    """Every 4-tuple in install-reminder-hooks.sh's DESIRED block, parsed as
-    data (`ast.literal_eval`) rather than grepped as text — so a row's timeout
-    is read as the number it actually is, not inferred from a substring match."""
-    text = (SCRIPTS / "install-reminder-hooks.sh").read_text(encoding="utf-8")
-    block = text.split("DESIRED = [", 1)[1].split("\n]", 1)[0]
-    return ast.literal_eval("[" + block + "\n]")
+    """Every Claude-mapped 4-tuple in the shared hook registry."""
+    from lib.hook_registry import claude_desired_tuples
+
+    return claude_desired_tuples()
 
 
 def _load_hook_module(name: str):
