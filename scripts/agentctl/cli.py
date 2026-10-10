@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
 from lib import argv_text, config_root, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
@@ -879,6 +879,13 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     pre-edit bytes while its siblings track the file is a discrepancy with no
     reason behind it.
 
+    The set must cover every field `StageNorm.from_stage` reads as well: a
+    `stage:<n>` norm target is snapshotted from the LIVE stage and compared against
+    stages loaded from plan files, so a norm field left stale here makes an unedited
+    stage read as moved, or an edited one as unchanged.
+    `test_apply_refined_stage_fields_covers_every_norm_field` derives that field set
+    from `StageNorm` itself.
+
     Some of the copied fields (executor, supplies, done_criterion, criterion_type)
     are `_structural_signature`'s per-stage tuple, so a change to one classifies the
     replan substantive: copying them is a no-op for the two replan callers and
@@ -902,7 +909,10 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     for field in fields(Criterion):
         if field.name not in _CRITERION_ENGINE_WRITTEN_FIELDS:
             setattr(cur.criterion, field.name, getattr(refined.criterion, field.name))
+    cur.principle = replace(refined.principle) if refined.principle is not None else None
+    cur.output_artifacts = list(refined.output_artifacts)
     cur.actor.executor = refined.actor.executor
+    cur.actor.capability_required = refined.actor.capability_required
     cur.actor.cost_tier = refined.actor.cost_tier
     cur.actor.guard_exempt_paths = list(refined.actor.guard_exempt_paths)
     cur.supplies = list(refined.supplies)
@@ -8500,11 +8510,9 @@ def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[lis
     """The `norm_targets` entries for a нормативное critique's --norm-target values, or
     the first refusal. A stage target is snapshotted from the live state's stage -- the
     stage that actually ran, which refinement replans rebuild and `--renormalize` patches
-    -- never from a plan file, which is editable while DIAGNOSING. The approved snapshot
-    is the fallback for a stage the state no longer holds."""
-    from .plan import PlanError, load_plan as _load
-
-    baseline_path = _replan_baseline_path(state)
+    -- never from a plan file, which is editable while DIAGNOSING. A stage the state does
+    not hold is refused, not read from the approved snapshot, which `--renormalize`
+    leaves on the approved bytes."""
     entries: list[dict] = []
     for raw in targets:
         raw = (raw or "").strip()
@@ -8516,14 +8524,6 @@ def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[lis
             try:
                 stage = state.stage(index)
             except KeyError:
-                stage = None
-                if baseline_path:
-                    try:
-                        stage = next((s for s in _load(baseline_path, strict=False).stages
-                                      if s.index == index), None)
-                    except (OSError, PlanError):
-                        stage = None
-            if stage is None:
                 return [], f"--norm-target {raw!r}: the current plan has no stage {index}"
             entries.append({"target": f"stage:{index}", "kind": "stage",
                             "baseline": gates.stage_norm_digest(stage), "source": "critique"})
@@ -8576,6 +8576,14 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
         return Directive(False, state.node, "critique", refusal)
     inherited = [t for t in state.difficulty.norm_targets if t.get("source", "critique") != "critique"]
     held = {t.get("target") for t in inherited}
+    # A re-critique naming a stage again keeps the baseline of the first snapshot: the
+    # bar is the norm as it stood when the fault was first routed to it.
+    first_baselines = {t.get("target"): t.get("baseline")
+                       for t in state.difficulty.norm_targets
+                       if t.get("kind") == "stage" and t.get("source", "critique") == "critique"}
+    for t in snapshots:
+        if t["kind"] == "stage" and t["target"] in first_baselines:
+            t["baseline"] = first_baselines[t["target"]]
     state.difficulty.norm_targets = (
         [t for t in snapshots if t["target"] not in held] + inherited)
     state.difficulty.critique = Critique(

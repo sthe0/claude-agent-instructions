@@ -10,6 +10,9 @@ import hashlib
 import json
 import subprocess
 from argparse import Namespace
+from copy import deepcopy
+from dataclasses import fields as dc_fields
+from dataclasses import is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,7 +22,10 @@ from agentctl import cli, gates
 from agentctl.dispatch import RunResult
 from agentctl.plan import PlanError, load_plan
 from agentctl.stage_norm import StageNorm
-from agentctl.state import SCHEMA_VERSION, Node, SessionState, StageStatus
+from agentctl.state import (
+    SCHEMA_VERSION, Actor, Criterion, LandedSpec, Means, Node, Principle, SessionState,
+    Stage, StageStatus, Subject, Supply,
+)
 from conftest import STAGE_OBSERVATIONS
 from test_re_attest import _dev_stage, _Mem, _reattest_stash, _runner
 from test_re_attest import _state as _reattest_state
@@ -351,6 +357,50 @@ def test_recritique_replaces_own_targets_and_keeps_inherited(store, plans, norms
         "BEHAVIOUR: a re-critique re-sourced an inherited target as its own"
 
 
+def _edit_state_stage(store, sid, index, **fields):
+    path = store.path(sid)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for stage in data["stages"]:
+        if stage["index"] == index:
+            stage.update(fields)
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def test_recritique_keeps_the_first_baseline_of_a_stage_target_it_names_again(store, plans):
+    """A stage edited between two critiques must not become the bar the second critique
+    sets: the edit would then read as the unchanged stage the closing plan must move."""
+    base = plans("base")
+    _diagnosing(store, "s3", base)
+    assert _critique(store, "s3", "нормативное", ["stage:1"]).ok is True
+    (first,) = store.load("s3").difficulty.norm_targets
+    _edit_state_stage(store, "s3", 1, title="Scaffold module, edited")
+    assert gates.stage_norm_digest(store.load("s3").stage(1)) != first["baseline"], \
+        "setup: the edit did not move the live stage's digest"
+    assert _critique(store, "s3", "нормативное", ["stage:1"]).ok is True
+    (again,) = store.load("s3").difficulty.norm_targets
+    assert again["baseline"] == first["baseline"], \
+        "BEHAVIOUR: a re-critique re-based a stage target on the stage as already edited"
+
+
+def test_stage_the_current_plan_lacks_is_refused_not_read_from_the_snapshot(store, plans):
+    """The approved snapshot still holds stage 2, but the state's current plan does not:
+    `--renormalize` leaves the snapshot on the approved bytes, so a baseline read from it
+    is the digest of a stage the session no longer runs."""
+    base = plans("base")
+    _diagnosing(store, "s4", base)
+    state = store.load("s4")
+    snapshot = load_plan(state.plan_snapshot_path, strict=False)
+    assert any(s.index == 2 for s in snapshot.stages), "setup: the snapshot lacks stage 2"
+    path = store.path("s4")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["stages"] = [s for s in data["stages"] if s["index"] != 2]
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    d = _critique(store, "s4", "нормативное", ["stage:2"])
+    assert d.ok is False, "BEHAVIOUR: a stage target the current plan lacks was accepted"
+    assert "the current plan has no stage 2" in d.detail
+    assert store.load("s4").difficulty.norm_targets == []
+
+
 # --- the norm digest and `renorms` -------------------------------------------
 
 def test_norm_digest_is_index_free_and_moves_on_edit(plans):
@@ -665,17 +715,113 @@ def test_plan_drafted_in_place_before_the_critique_is_not_a_false_block(store, p
         f"BEHAVIOUR: a corrected plan drafted in place was blocked as unchanged: {d.detail}"
 
 
-def test_live_stage_digest_is_like_for_like_with_the_plan_file_it_came_from(store, plans):
-    """The baseline (read from the state's stage) and the replan's comparison (read from
-    the plan file) must be one digest of one stage, or an unchanged stage reads as moved."""
-    base = plans("base", _stages(s1={"method": "mirror the working caller",
-                                      "procedure": "1. read 2. edit"}))
-    _diagnosing(store, "l1", base)
-    state = store.load("l1")
-    from_file = {s.index: s for s in load_plan(base, strict=False).stages}
-    for stage in state.stages:
-        assert gates.stage_norm_digest(stage) == gates.stage_norm_digest(from_file[stage.index]), \
-            "BEHAVIOUR: a state stage and the plan file's stage digest differently"
+def _populated_stage():
+    """A stage with every norm-bearing leaf set to a distinct non-empty value."""
+    return Stage(
+        index=1,
+        title="title",
+        subject=Subject(material="material", result="result", invariants="invariants",
+                        material_refs=["material-ref"], knowledge_refs=["knowledge-ref"]),
+        means=Means(means="means", method="method", procedure="procedure"),
+        actor=Actor(executor="spawn:developer", capability_required="capability",
+                    cost_tier="small", guard_exempt_paths=["exempt/path"]),
+        criterion=Criterion(criterion_type="measurable", done_criterion="done",
+                            verify_command="verify", expected_exit=3, observation="seen",
+                            verify_venue="delivery", verify_kind="shell",
+                            landed=LandedSpec(target="main", delivered_stage=1),
+                            verify_venue_at_final="repo_root",
+                            negative_control="negative", negative_control_waiver="waiver"),
+        principle=Principle(statement="statement", source="source", derivation="derivation",
+                            confidence="high", refutation="refutation"),
+        conditions="conditions",
+        preconditions="preconditions",
+        knowledge="knowledge",
+        supplies=[Supply(on=2, element="element", artifact="artifact", delivery="report")],
+        output_artifacts=["out/artifact"],
+        ephemeral_artifacts_waiver="ephemeral",
+        renorms=["/norm/file"],
+        control="control",
+    )
+
+
+def _leaf_paths(obj, prefix=()):
+    """Every settable leaf under a dataclass tree; an empty list is itself a leaf."""
+    if is_dataclass(obj):
+        for f in dc_fields(obj):
+            yield from _leaf_paths(getattr(obj, f.name), prefix + (f.name,))
+    elif isinstance(obj, list) and obj:
+        for i, item in enumerate(obj):
+            yield from _leaf_paths(item, prefix + (i,))
+    else:
+        yield prefix
+
+
+def _step(parent, key):
+    return parent[key] if isinstance(key, int) else getattr(parent, key)
+
+
+def _get_leaf(root, path):
+    for key in path:
+        root = _step(root, key)
+    return root
+
+
+def _set_leaf(root, path, value):
+    parent = root
+    for key in path[:-1]:
+        parent = _step(parent, key)
+    if isinstance(path[-1], int):
+        parent[path[-1]] = value
+    else:
+        setattr(parent, path[-1], value)
+
+
+def _edited(value, path):
+    if isinstance(value, str):
+        return value + "-edited"
+    if isinstance(value, int):
+        return value + 1
+    if value == []:
+        return ["edited"]
+    raise AssertionError(f"no edit is defined for the leaf {path} ({value!r}): populate it "
+                         f"in _populated_stage or teach _edited its type")
+
+
+def test_apply_refined_stage_fields_covers_every_norm_field():
+    """The relation, not one instance of it: for every stage leaf `StageNorm.from_stage`
+    reads, a replan that edits only that leaf must leave the live stage's norm equal to
+    the norm of the stage loaded from the plan file. A `stage:<n>` norm target is
+    snapshotted from the live stage and later compared with file-loaded stages, so a leaf
+    `_apply_refined_stage_fields` fails to copy makes an unedited stage read as moved.
+
+    The leaf set is not listed: each leaf of a fully populated stage is edited in turn and
+    kept when the edit moves the `StageNorm`, so a field a later change makes the norm
+    read is checked here without being named."""
+    base = _populated_stage()
+    base_norm = StageNorm.from_stage(base)
+    norm_read, left_stale = [], []
+    for path in _leaf_paths(base):
+        if path == ("index",) or path[0] == "outcome":
+            continue  # the key a live stage is matched by; the execution record
+        value = _get_leaf(base, path)
+        if value is None:
+            assert path == ("grants",), f"populate {path} in _populated_stage"
+            continue
+        edited = deepcopy(base)
+        _set_leaf(edited, path, _edited(value, path))
+        if StageNorm.from_stage(edited) == base_norm:
+            continue
+        norm_read.append(path)
+        live = deepcopy(base)
+        cli._apply_refined_stage_fields(live, edited)
+        if StageNorm.from_stage(live) != StageNorm.from_stage(edited):
+            left_stale.append(path)
+
+    for path in (("title",), ("actor", "capability_required"), ("principle", "statement"),
+                 ("output_artifacts", 0)):
+        assert path in norm_read, f"the walk no longer finds {path} norm-bearing"
+    assert not left_stale, (
+        f"BEHAVIOUR: _apply_refined_stage_fields leaves norm-read leaves stale: {left_stale}")
 
 
 def _renormalized_then_failed(store, sid, plans, monkeypatch):
