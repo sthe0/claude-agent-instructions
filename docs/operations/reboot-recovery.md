@@ -40,6 +40,11 @@ The `disk-pre` and `disk-post` phases measure free space. Below the warn level (
 
 Executable files in `~/.config/claude/recover.d/<NN>-*.sh` run in every phase with `RECOVER_PHASE`, `RECOVER_PLAN`, `RECOVER_DISK_LEVEL` and `RECOVER_LOG` set. Exit code 10 means "nothing to do". A hook must honour `RECOVER_DRY_RUN=1`. Hook output goes to `hooks.log` in the state directory.
 
+## Behaviour worth knowing
+
+- **`snapshot` exits 1 when tmux fails (`TmuxError`).** The snapshot unit then shows as failed, no empty snapshot is written and the `last-ok` stamp is not refreshed, so `status --check-fresh` starts failing. This is deliberate: an empty snapshot would look newer than the real pre-crash one.
+- **The liveness check walks `/proc` for every session it opens and for every redecide.** `alive_session_ids` scans every `/proc/<pid>` whenever tmux has panes, once per session restore opens and once per redecide, not once per run. On a machine with thousands of processes and dozens of sessions the cost is noticeable.
+
 ## What recovery never does
 
 - starts or restarts the tmux server, or touches `ccgram`;
