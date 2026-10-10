@@ -46,6 +46,10 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPTS_DIR.parent
 REGISTRY_PATH = SCRIPTS_DIR / "crutch_registry.toml"
 
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+from lib import worktree_route
+
 
 def _load_inventory_module():
     path = SCRIPTS_DIR / "crutch-inventory.py"
@@ -793,6 +797,11 @@ def render_registry(entries: list[dict]) -> str:
 
 
 def main() -> int:
+    if worktree_route.should_route(REPO_ROOT):
+        return worktree_route.route_script(
+            REPO_ROOT, "scripts/gen_crutch_registry.py", sys.argv[1:],
+            "crutch-registry: regenerate",
+        )
     entries = build_entries()
     text = render_registry(entries)
     REGISTRY_PATH.write_text(text, encoding="utf-8")

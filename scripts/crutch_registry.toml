@@ -1427,6 +1427,14 @@ disposition = "keep"
 ground = "This generator's own `_ALREADY_MECHANIZED_RE` is a one-time authoring aid for the stage-2 perception pass (see module docstring), not a runtime gate; it reaches no hard-outcome sink."
 
 [[entry]]
+id = "9ea90f50f4a27561"
+domain = "code"
+file = "scripts/gen_crutch_registry.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "This generator's own `_ALREADY_MECHANIZED_RE` is a one-time authoring aid for the stage-2 perception pass (see module docstring), not a runtime gate; it reaches no hard-outcome sink."
+
+[[entry]]
 id = "14e441f0266b3bf3"
 domain = "code"
 file = "scripts/hook-deferring-disposition-gate.py"
@@ -2819,6 +2827,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "c1915b4931cc5511"
+domain = "code"
+file = "scripts/permissions-cli.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "1d4f7bd1e9f15d96"
 domain = "code"
 file = "scripts/plan-review-topological.py"
@@ -3691,6 +3707,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "0fe5202b40df993a"
+domain = "code"
+file = "scripts/stamp-memory-dates.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "a37502e55d1cc598"
 domain = "code"
 file = "scripts/stamp-memory-dates.py"
@@ -4094,6 +4118,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "26d0c52633bb9194"
 domain = "code"
 file = "scripts/tests/test_budget_calibration.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "9d168cb20152001a"
+domain = "code"
+file = "scripts/tests/test_canon_writers_routing.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -13547,6 +13579,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "a48c5e7042a44f2c"
+domain = "code"
+file = "scripts/verify-readme.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "cb67f532c09488a2"
 domain = "code"
 file = "scripts/verify-tests-accompany-code.py"
@@ -14283,6 +14323,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "749b0edb4b563424"
+domain = "code_file_rollup"
+file = "scripts/permissions-cli.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "802b67a5bbb6c75c"
 domain = "code_file_rollup"
 file = "scripts/plan-review-topological.py"
@@ -14558,6 +14606,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "221b251415b51cc9"
 domain = "code_file_rollup"
 file = "scripts/tests/test_budget_calibration.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "d74be1468ba6ec92"
+domain = "code_file_rollup"
+file = "scripts/tests/test_canon_writers_routing.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

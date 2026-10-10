@@ -14,7 +14,10 @@ import re
 import sys
 from pathlib import Path
 
-REGIONS = ("scripts", "skills", "specializations")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import worktree_route
+
+REGIONS =("scripts", "skills", "specializations")
 
 # Source file (repo-relative) each sentinel region lives in. The scripts inventory
 # is heavy and operational, so it lives in scripts/README.md, not the conceptual root README.
@@ -182,6 +185,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = args.root if args.root is not None else Path(__file__).resolve().parent.parent
+
+    if (args.fix and root.resolve() == Path(__file__).resolve().parent.parent
+            and worktree_route.should_route(root)):
+        return worktree_route.route_script(
+            root, "scripts/verify-readme.py",
+            sys.argv[1:] if argv is None else list(argv),
+            "readme: verify-readme --fix",
+            path_options=("--root",),
+        )
 
     if args.fix:
         by_file: dict[str, list[str]] = {}
