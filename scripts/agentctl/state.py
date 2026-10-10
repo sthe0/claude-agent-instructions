@@ -576,7 +576,7 @@ class PlanReview:
     # Per-stage interface digests (`plan.plan_interface_digests`) at record time, and per
     # pair the sha256 of its `plan.pair_currency_keys` digests. Both are empty/None on a
     # record written before they were kept, which reads as: every moved stage's interface
-    # moved, and a pair is measured by its seven-digest `reviewed_pair_bindings` hash.
+    # moved, and every pair is walk-stale (`gates.walk_stale_pairs`).
     reviewed_interface_keys: dict[str, str] = field(default_factory=dict)
     reviewed_pair_currency: "dict[str, str] | None" = None
     # Schema 46: per unit id (`plan.review_units`) the unit's currency hash
