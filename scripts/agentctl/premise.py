@@ -713,7 +713,7 @@ def record_dismissed_hash(
 def forget_dismissed_hash(dismissed_hashes: dict, content_hash: str, target: str) -> None:
     """Remove the `(content_hash, target)` record from `bag['dismissed_hashes']`,
     used when a dismissal is overturned — disposed as something other than
-    'dismissed', or reopened via `question-enumerate --reopen-dismissed` — so it
+    'dismissed', or reopened via the retired `question-enumerate --reopen-dismissed` — so it
     stops silently carrying forward a ruling that no longer holds. A legacy
     target-less record is dropped outright along with it: it cannot be attributed
     to one target with any confidence, so keeping it around once ANY dismissal for

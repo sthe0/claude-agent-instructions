@@ -2401,7 +2401,7 @@ def cmd_question_dispose(args, *, store: StateStore, runner: Runner | None = Non
     `--plan` names the plan `disposed_at_key` is stamped against, defaulting to
     `state.plan_path` so every pre-existing invocation is byte-identical — see
     `_bound_stage_key`. An empty `--plan` is rejected rather than silently falling
-    back, mirroring `question-enumerate --plan`'s `0fc6313` fix (#48(b))."""
+    back, mirroring the (since retired) `question-enumerate --plan`'s `0fc6313` fix (#48(b))."""
     state, bag = _question_bag(store, args.session)
     if bag is None:
         return Directive(False, state.node, "noop", "plugin 'premise' is not active")

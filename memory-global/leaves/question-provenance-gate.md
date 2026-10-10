@@ -7,6 +7,14 @@ created: 2026-07-20
 last_verified: 2026-08-26
 ---
 
+> **Retired route (task `norm-staleness`).** The standalone enumeration cross-check — `question-enumerate`,
+> the `enumerated` flag, the runner-health gate and its escape, edit-scoped narrowing and carried
+> dismissals — is retired. Customer questions now come from the review acts (`plan-review
+> --customer-question` → `qrev-` candidates, blocking approve until dispositioned). Sections below that
+> describe the enumeration cross-check (the `enumerated` row, F3b, "THE ORDER IS UNENUMERATED",
+> "Edit-scoped enumeration…", the enumeration escape budget) are kept as the history of the retired route;
+> the disposition, order-coverage and materiality rules stand.
+
 ## Difficulty
 
 An ungrounded planning leap — "the reporter says it reproduces", "the goal is agreed", "that path exists" — dissolves in confident prose and is never addressable by a reviewer: there is no NAMED record, bound to a NAMED plan element, carrying a NAMED source and an asserted inference. The ledger closes this on the *resolution* axis (every load-bearing claim in the deliverable grounded), but a plan is approved and executed long before resolution; a false premise baked in at plan-approval time has already cost the execution before any claim ledger runs. The plan_approval boundary needs its own provenance gate, and — like enumeration for the ledger — *which questions exist* is perception the engine must not regex-extract, while *whether the recorded set is structurally dispositioned* is a decidable form the engine owns.

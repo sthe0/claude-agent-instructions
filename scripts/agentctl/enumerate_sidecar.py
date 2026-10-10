@@ -66,7 +66,7 @@ def read_discarding_superseded(
     the fold just raised persists nothing, so the next `approve` must be able to
     read the same payload again. An unlink-on-read here instead left the session
     with candidates that existed nowhere on disk and no sidecar to re-fold, and
-    `_ENUMERATE_NOT_RUN` forever after (there is no launch site on the approve
+    the (since retired) `_ENUMERATE_NOT_RUN` forever after (there is no launch site on the approve
     path) -- the whole point of detaching, undone.
 
     Sidecars for OTHER digests ARE removed: a result computed against an abandoned
