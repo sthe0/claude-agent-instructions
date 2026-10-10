@@ -59,11 +59,14 @@ from .plan import (
     load_plan,
     load_plan_with_digest,
     materialized_grant_entries,
+    is_unit_id,
     order_digest,
     pair_binding,
+    pair_content,
     pair_part_tokens,
     parse_concern,
     parse_pair,
+    parse_unit,
     part_digest_map,
     plan_has_any_grants,
     plan_meta_digest,
@@ -72,12 +75,13 @@ from .plan import (
     plan_meta_element_keys,
     plan_stage_digests,
     refined_grant_entries,
-    review_pairs,
+    review_ids,
     stage_element_baseline,
     stage_norm_keys,
     stage_part,
     stage_question_key,
     stage_reattest_digest,
+    unit_currency_hash,
     verify_command_reachability_blockers,
     verify_command_scope_warnings,
     _venue_for,
@@ -4727,7 +4731,10 @@ def _cmd_plan_review_pair(
         )
     try:
         doc, _, live = load_plan_with_digest(target)
-        parse_pair(doc, pair)
+        if is_unit_id(pair):
+            parse_unit(doc, pair)
+        else:
+            parse_pair(doc, pair)
     except (OSError, PlanError, ValueError) as e:
         return refuse(f"--scope 'topo:{pair}' cannot be recorded against {target}: {e}")
     verdict = args.verdict
@@ -4775,7 +4782,6 @@ def _cmd_plan_review_pair(
                 f"--regression-command did not demonstrate a regression (exit "
                 f"{regression_exit!r}): the current pass for pair {pair!r} stands"
             )
-    base, service = parse_pair(doc, pair)
     ledger_scope = plan_review_scope_for_pair(pair)
     cp = _plan_concern_severity(
         state, doc, ledger_scope, pair_part_tokens(pair), state.plan_pair_reviews.get(pair),
@@ -4783,10 +4789,20 @@ def _cmd_plan_review_pair(
         evidence=bool(regression_exit), may_promote=True,
     )
     concerns = cp.bodies
+    if is_unit_id(pair):
+        node_fields = {
+            "base": parse_unit(doc, pair), "service": "",
+            "unit_norm": unit_currency_hash(doc, pair),
+        }
+    else:
+        base, service = parse_pair(doc, pair)
+        node_fields = {
+            "base": base, "service": service, **pair_binding(doc, pair), **pair_content(doc, pair),
+        }
     review = PlanPairReview(
-        pair=pair, base=base, service=service, verdict=verdict, reviewer=reviewer,
+        pair=pair, verdict=verdict, reviewer=reviewer,
         concerns=concerns, note=note, plan_path=target, plan_sha256=attested,
-        record_seq=_next_record_seq(state), **pair_binding(doc, pair),
+        record_seq=_next_record_seq(state), **node_fields,
     )
     _stamp_concern_plan(review, cp, verdict)
     review.concern_ids = _commit_concern_ledger(
@@ -4837,18 +4853,21 @@ def _next_record_seq(state) -> int:
 
 def _stamp_whole_plan_baseline(state, review: PlanReview, doc) -> None:
     """Give a whole-plan record its place in the review-record order and, when its
-    plan loads, the per-pair binding hashes the walk-stale set is later measured
-    against. A plan whose pairs cannot be enumerated leaves the bindings unset,
-    which the gate reads as every pair being stale."""
+    plan loads, the per-pair binding hashes and per-unit and per-pair currency hashes
+    the walk-stale sets are later measured against. A plan whose pairs cannot be
+    enumerated leaves them unset, which the gate reads as every unit and pair being
+    stale."""
     review.record_seq = _next_record_seq(state)
     if doc is None:
         return
     try:
         review.reviewed_pair_bindings = gates.pair_baseline_bindings(doc)
         review.reviewed_pair_currency = gates.pair_baseline_currency(doc)
+        review.reviewed_unit_currency = gates.unit_baseline_currency(doc)
     except PlanError:
         review.reviewed_pair_bindings = None
         review.reviewed_pair_currency = None
+        review.reviewed_unit_currency = None
 
 
 def _count_plan_review_round(state: SessionState, target: str) -> None:
@@ -5409,9 +5428,12 @@ def cmd_plan_review_pair_history(args, *, store: StateStore, runner: Runner | No
     pair = args.pair
     try:
         doc = load_plan(target)
-        parse_pair(doc, pair)
+        if is_unit_id(pair):
+            parse_unit(doc, pair)
+        else:
+            parse_pair(doc, pair)
     except (OSError, PlanError, ValueError) as e:
-        return Directive(False, state.node, "noop", f"pair history for {pair!r} in {target}: {e}")
+        return Directive(False, state.node, "noop", f"history for {pair!r} in {target}: {e}")
     events = [
         e for e in state.history
         if e.get("event") == "plan_pair_review" and e.get("pair") == pair and e.get("target") == target
@@ -5464,10 +5486,11 @@ def _walk_target(args, state: SessionState) -> "str | None":
 
 
 def cmd_plan_review_walk(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
-    """Read-only: every review pair of the plan in dependency order (base before
-    service), with its status, advisory readiness and the commands that spawn its
-    reviewer and record its verdict. `--target` walks a plan file other than the
-    session's own, computing every digest and depth from it. Writes nothing."""
+    """Read-only: every review unit and pair of the plan in dependency order (base
+    before service; each node's unit before its pairs), with its status, advisory
+    readiness and the commands that spawn its reviewer and record its verdict.
+    `--target` walks a plan file other than the session's own, computing every digest
+    and depth from it. Writes nothing."""
     state = _require(store, args.session)
     target = _walk_target(args, state)
     if not target:
@@ -5498,7 +5521,7 @@ def cmd_plan_review_walk(args, *, store: StateStore, runner: Runner | None = Non
     }
     if getattr(args, "format", "text") == "json":
         return Directive(True, state.node, "inspect", json.dumps(walk, indent=2), data=walk)
-    lines = [f"review pairs of {target} (base before service; readiness is advisory):"]
+    lines = [f"review units and pairs of {target} (base before service; readiness is advisory):"]
     for depth, level in enumerate(levels):
         lines.append(f"level {depth}:")
         for row in level:
@@ -5510,8 +5533,8 @@ def cmd_plan_review_walk(args, *, store: StateStore, runner: Runner | None = Non
 
 
 def cmd_plan_review_compose(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
-    """Compose the pair records into one ordinary whole-plan pass, written only when
-    EVERY pair of `plan.review_pairs` is current or override against `--target` (the
+    """Compose the unit and pair records into one ordinary whole-plan pass, written
+    only when EVERY id of `plan.review_ids` is current or override against `--target` (the
     session's plan by default). Readiness is not consulted. When every pair is a
     pass (none override-satisfied) the composed record is the first thinker verdict
     the autonomy boundary requires and goes to the order ledger; a compose that
@@ -5523,7 +5546,7 @@ def cmd_plan_review_compose(args, *, store: StateStore, runner: Runner | None = 
         return Directive(False, state.node, "noop", "no plan to compose: submit a plan first, or pass --target <plan.toml>")
     try:
         doc, _, live = load_plan_with_digest(target)
-        pairs = review_pairs(doc)
+        pairs = review_ids(doc)
     except (OSError, PlanError) as e:
         return Directive(False, state.node, "noop", f"{target} cannot be composed: {e}")
     status = {pid: gates.pair_status(state, doc, target, pid) for pid in pairs}
@@ -10946,7 +10969,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("target", ("question-raise", "plan-review", "plan-review-walk", "plan-review-compose",
                 "plan-review-pair-history"),
      "plan element address or plan file path"),
-    ("pair", ("plan-review-pair-history",), "review pair id (`<base>-<service>`) — an id, not narrative"),
+    ("pair", ("plan-review-pair-history",), "review pair id (`<base>-<service>`) or unit id (`unit:<node>`) — an id, not narrative"),
     ("control", ("question-raise",),
      "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
      "grammar-bound name, never the prose --control of record-result/close"),
@@ -10978,7 +11001,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "the escape is --note, which is RESOLVE"),
     ("reviewer", ("plan-review", "stage-review", "code-review"), "reviewer name"),
     ("plan_digest", ("plan-review",), "sha256 the review binds to"),
-    ("scope", ("plan-review", "risk-accept"), "'' or 'stage:<n>' or 'topo:<pair>' — the review's binding, not narrative"),
+    ("scope", ("plan-review", "risk-accept"), "'' or 'stage:<n>' or 'topo:<pair-or-unit>' — the review's binding, not narrative"),
     ("concern_ids", ("plan-review",),
      "explicit stable ids for --concern, positionally paired — ids, not narrative"),
     ("concern_id", ("risk-accept",), "the concern id this acceptance answers — an id, not narrative"),
@@ -11365,8 +11388,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "it — a reviewer that could not read the plan cannot attest.")
     sp.add_argument("--scope", default=None,
                     help="'stage:<n>' to bind this review to one stage instead of the "
-                         "whole plan, or 'topo:<pair>' (e.g. topo:3-1, topo:plan-7, "
-                         "topo:base-plan) to record one reliance-pair review; omitted "
+                         "whole plan, or 'topo:<id>' (a pair, e.g. topo:3-1 or "
+                         "topo:base-2; a unit, e.g. topo:unit:base or topo:unit:3) to "
+                         "record one pair or unit review; omitted "
                          "(or '') means whole-plan, the only kind that existed before stage 5")
     sp.add_argument("--findings-blocking", dest="findings_blocking", type=int, default=None,
                     help="count of blocking findings this round produced (audit trail)")

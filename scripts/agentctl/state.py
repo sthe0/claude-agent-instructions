@@ -687,21 +687,24 @@ def plan_review_pair_scope(scope: str) -> "str | None":
     return scope[len(_PLAN_REVIEW_PAIR_SCOPE_PREFIX):] or None
 
 
-# One thinker review of a single base-service PAIR (b, s) -- one reliance edge, base
-# b relying on service s; the nodes are stage indices plus the synthetic `plan` and
-# `base` (see plan.review_pairs). Recorded by cmd_plan_review's `--scope topo:<pair>`
-# branch, kept in SessionState.plan_pair_reviews keyed by pair id (never in
-# plan_review / plan_stage_reviews / plan_review_passes, which stay reserved for
-# whole-plan and stage:<n> records). ONE record type serves every pair, the order
-# pair (`base-plan`) and the plan-coverage pairs (`plan-<s>`) included: `base` and
-# `service` hold a stage index, "plan" or "base", and only plan.pair_binding's node
-# keys differ.
+# One thinker review of a single UNIT (`unit:base` / `unit:<n>`, reviewed alone) or a
+# single base-service PAIR (b, s) -- one reliance edge, base b relying on service s;
+# the nodes are stage indices plus the order node `base` (see plan.review_units,
+# plan.review_pairs). Recorded by cmd_plan_review's `--scope topo:<id>` branch, kept in
+# SessionState.plan_pair_reviews keyed by review id (never in plan_review /
+# plan_stage_reviews / plan_review_passes, which stay reserved for whole-plan and
+# stage:<n> records). ONE record type serves every unit and pair: a unit has
+# `service == ""` and holds its currency in `unit_norm`; a pair holds `base` and
+# `service` (a stage index or "base"). Records written for the retired ids `plan-<s>`,
+# `base-plan` and `unit:plan` still load and count as stale (plan.is_legacy_review_id).
 #
-# A pair record binds to exactly the bytes its reviewer could see: the seven digests
-# of plan.pair_binding, recomputed by the engine from a fresh load of the evaluated
-# plan at record time (never read off the materialized view files or state.stages).
-# `plan_sha256` is audit only -- currency is decided by the binding digests via
-# gates.pair_status, never by the whole-plan sha.
+# A record binds to the content its reviewer was shown: the digests of
+# plan.unit_currency_hash / plan.pair_content (`PAIR_CONTENT_KEYS`), recomputed by the
+# engine from a fresh load of the evaluated plan at record time (never read off the
+# materialized view files or state.stages). A record written before those digests
+# carries the seven legacy digests of plan.pair_binding instead (`PAIR_BINDING_KEYS`).
+# `plan_sha256` is audit only -- currency is decided by gates.pair_status, never by the
+# whole-plan sha.
 #
 # `plan_path` is the path this record was computed against (the session's registered
 # plan, or a --target override) -- a record for a different path counts as `missing`

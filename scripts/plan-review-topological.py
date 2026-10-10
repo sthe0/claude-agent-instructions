@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Drive a topological plan review: one thinker spawn per base-service pair, level by level.
+"""Drive a topological plan review: one thinker spawn per unit and per base-service pair, level by level.
 
 Difficulty removed: a plan too large for one whole-plan review spawn has no single
-command that walks every reliance pair, records each verdict and composes the pass; the
-operator would hand-run `plan-review-walk`, one `spawn-specialist.py --review-topo`
-per pair and one `plan-review` per verdict, and could neither see what the review cost
-nor whether the reviewers ever pulled the service file.
+command that walks every unit and reliance pair, records each verdict and composes the
+pass; the operator would hand-run `plan-review-walk`, one `spawn-specialist.py
+--review-topo` per unit or pair and one `plan-review` per verdict, and could neither
+see what the review cost nor whether the reviewers ever pulled the service file.
 
 The driver orchestrates and never judges. Order and readiness come from
 `agentctl plan-review-walk`, verdicts are recorded and composed by `agentctl`, and the
-only text it parses is the fixed protocol tokens of a pair review. A pair that already
-has a record is re-reviewed with `agentctl plan-review-pair-history` handed to the
-spawner (`--review-topo-history`). Cost, duration and pull counts are printed as
+only text it parses is the fixed protocol tokens of a review. Within a level the
+units (`unit:base`, `unit:<n>`) are reviewed before the pairs. A unit or pair that
+already has a record is re-reviewed with `agentctl plan-review-pair-history` handed to
+the spawner (`--review-topo-history`). Cost, duration and pull counts are printed as
 telemetry; nothing is gated on them.
 
   plan-review-topological.py --session <sid> --plan <plan.toml>
@@ -126,8 +127,10 @@ def run_agentctl(argv: list[str], env: dict) -> dict:
 
 def done_criterion(pair: str) -> str:
     conditions = f"{plan.CONDITION_MARKERS[0].rstrip(':')}-{plan.CONDITION_MARKERS[-1].rstrip(':')}"
+    what = f"the unit {pair}" if plan.is_unit_id(pair) else f"the base-service pair {pair}"
     return (
-        f"Review the base-service pair {pair}: decide conditions {conditions} for this one pair "
+        f"Review {what}: decide conditions {conditions} for this one "
+        f"{'unit' if plan.is_unit_id(pair) else 'pair'} "
         f"and answer with the {plan.REVIEW_MARKER} block your starting prompt specifies."
     )
 
@@ -378,7 +381,7 @@ def pair_telemetry(launched: Launched, pair: str) -> tuple["float | None", "int 
         duration = int(duration_found.group(1)) if duration_found else None
     candidates = [stderr_path, row.get("transcript_path") if row else None]
     transcript = next((c for c in candidates if c and os.path.isfile(c)), None)
-    pulls = count_pulls(transcript, view_dir_for(pair, launched.plan_sha))
+    pulls = 0 if plan.is_unit_id(pair) else count_pulls(transcript, view_dir_for(pair, launched.plan_sha))
     return (round(float(cost), 4) if cost is not None else None,
             int(duration) if duration is not None else None, pulls, transcript)
 
@@ -431,7 +434,7 @@ class Driver:
         with self.history_lock:
             if self.history_dir is None:
                 self.history_dir = tempfile.mkdtemp(prefix="topo-history-")
-        path = Path(self.history_dir) / f"{row['pair']}.json"
+        path = Path(self.history_dir) / f"{row['pair'].replace(':', '-')}.json"
         path.write_text(json.dumps(data), encoding="utf-8")
         return str(path)
 
@@ -489,8 +492,8 @@ class Driver:
             self.level_revise = True
 
     def run_level(self, rows: list[dict]) -> None:
-        batch: list[dict] = []
-        review_unready = not self.args.early_stop
+        units: list[dict] = []
+        pairs: list[dict] = []
         for row in rows:
             pair = row["pair"]
             if self.named is not None and pair not in self.named:
@@ -499,10 +502,28 @@ class Driver:
                 continue
             if row["status"] in SATISFIED:
                 emit(f"TOPO-CURRENT: pair={pair}")
-            elif review_unready or row["ready"] or self.named is not None:
+            elif row.get("kind") == "unit":
+                units.append(row)
+            else:
+                pairs.append(row)
+        units = self.ready_rows(units)
+        self.run_batch(units)
+        if units and pairs:
+            self.refresh_readiness(pairs)
+        self.run_batch(self.ready_rows(pairs))
+
+    def ready_rows(self, rows: list[dict]) -> list[dict]:
+        """The rows to spawn now: every open row by default, only the ready ones under
+        --early-stop (a row named with --pairs is reviewed either way)."""
+        batch = []
+        for row in rows:
+            if not self.args.early_stop or row["ready"] or self.named is not None:
                 batch.append(row)
             else:
-                emit(f"TOPO-WAITING: pair={pair} waiting={','.join(row['waiting'])}")
+                emit(f"TOPO-WAITING: pair={row['pair']} waiting={','.join(row['waiting'])}")
+        return batch
+
+    def run_batch(self, batch: list[dict]) -> None:
         width = resolve_parallel(self.args.parallel, len(batch))
         if width <= 1:
             for row in batch:
@@ -512,6 +533,15 @@ class Driver:
             launched = list(pool.map(self.launch, batch))
         for row, outcome in zip(batch, launched):
             self.settle(row["pair"], outcome)
+
+    def refresh_readiness(self, rows: list[dict]) -> None:
+        """Re-read the walk after a level's units settled, so a pair is not left
+        waiting on a unit that was reviewed a moment ago."""
+        fresh = {row["pair"]: row for level in self.read_walk()["levels"] for row in level}
+        for row in rows:
+            current = fresh.get(row["pair"])
+            if current is not None:
+                row.update(ready=current["ready"], waiting=current["waiting"], status=current["status"])
 
     def dry_run(self, walk: dict) -> None:
         for depth, rows in enumerate(walk["levels"]):
