@@ -660,8 +660,13 @@ def _autonomy_for(state: SessionState, doc) -> dict:
         ledger_dir=str(order_approvals._root(None)),
     )
     view = plan_resources.compute_boundary_view(doc, order_digest(doc), venue=_venue_for(doc))
+    # A decline this session holds is enforced where the stage is carried and at the agent's
+    # approval; the ledger's copy is what a session that never saw the decline (a new session,
+    # a reset) is held to, so only the stages the session does not already know are offered.
+    known = gates.declined_issue_set(state)
     return gates.autonomy_boundary(
         ledger, view, ledger.get("first_thinker_verdicts"), protected=protected,
+        live_optional=[s for s in doc.stages if s.backlog_issue not in known],
     )
 
 
@@ -6221,6 +6226,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                 by=args.by,
                 at=dt.datetime.now(dt.timezone.utc).isoformat(),
                 effort_estimate=armed_estimate,
+                declined_issues=sorted(state.declined_issues),
             )
             state.order_effort_frozen = armed_estimate
             actual_now = effort.actual(state)

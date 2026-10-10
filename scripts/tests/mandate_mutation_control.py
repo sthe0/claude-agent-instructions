@@ -417,6 +417,18 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_declined_live_optional_is_keyed_by_issue_and_ignores_skipped_stages",
         ),
     ),
+    "declined-in-ledger": Mutant(
+        GATES,
+        '    out["declined_live_optional"] = declined_live_optional(stages, _oa.declined_issues_of(last))\n',
+        '    out["declined_live_optional"] = []\n',
+        _ids(
+            T_OPTIONAL,
+            "test_a_new_session_cannot_self_approve_the_stage_the_customer_declined[keeps-it-declined]",
+            "test_a_new_session_cannot_self_approve_the_stage_the_customer_declined[takes-it]",
+            "test_a_reset_session_on_the_same_order_cannot_self_approve_the_declined_stage",
+            "test_the_boundary_reads_the_decline_from_the_record_by_issue",
+        ),
+    ),
 }
 
 

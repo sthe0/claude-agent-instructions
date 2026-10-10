@@ -26,11 +26,19 @@ cross-machine ledger directory::
           "resources": [{"kind": "file", "path": "...", "mode": "write"}, ...],
           "unresolved_identities": [[...], ...],
           "stage_effects": [{"path": "...", "sha256": "..."}, ...],
+          "declined_issues": ["owner/repo#7", ...],
           "by": "alice",
           "at": "2026-09-29T12:00:00Z"
         }
       ]
     }
+
+`declined_issues` holds the backlog issues of the optional stages the customer
+declined (`approve --skip-optional`) at that approval. It lives on the approval record
+because that is the carrier the autonomy boundary already checks the agent against: a
+new session or a `reset` of the same order starts with no session state, and only this
+record still says the customer turned the stage down. A record without the key (written
+before it existed) declines nothing.
 
 Two writers, both customer-authored (never `AGENT_ACTOR`):
   * `cmd_approve` calls `record_approval()` once per successful approve for
@@ -251,6 +259,7 @@ def record_approval(
     by: str,
     at: str,
     effort_estimate: dict | None = None,
+    declined_issues: list[str] | None = None,
     root: Path | None = None,
 ) -> dict:
     """Append one approval record, stamped by `cmd_approve` for the customer
@@ -275,6 +284,7 @@ def record_approval(
         "resources": [resource_to_dict(r) for r in resources],
         "unresolved_identities": [list(identity) for identity in unresolved_identities],
         "stage_effects": stage_effects,
+        "declined_issues": sorted({str(i) for i in (declined_issues or [])}),
         "by": by,
         "at": at,
         "effort_estimate": effort_estimate,
@@ -308,6 +318,7 @@ def record_customer_grant(
         "resources": [resource_to_dict(resource)],
         "unresolved_identities": [],
         "stage_effects": [],
+        "declined_issues": [],
         "by": by,
         "at": at,
     }
@@ -336,6 +347,15 @@ def latest_user_approved_of(snapshot: dict) -> dict | None:
         if record.get("plan_sha256"):
             return record
     return None
+
+
+def declined_issues_of(record: dict | None) -> list[str]:
+    """The backlog issues one approval record declines; `[]` for a record that predates
+    the field, for a malformed value, and for no record at all."""
+    raw = (record or {}).get("declined_issues")
+    if not isinstance(raw, list):
+        return []
+    return sorted({i for i in raw if isinstance(i, str) and i})
 
 
 def flush_effort(

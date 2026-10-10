@@ -1310,3 +1310,128 @@ def test_a_stored_state_without_the_decline_fields_loads_as_not_declined(eng):
     loaded = SessionState.from_dict(stored)
     assert loaded.declined_issues == []
     assert [s.outcome.declined for s in loaded.stages] == [False, False, False]
+
+
+# --- the decline lives on the customer's approval record --------------------------------
+
+def _declined_order(eng, *, skip=(3,)):
+    """The customer approves the optional-third-stage plan in session `u1`, declining `skip`."""
+    plan = eng.write(_optional_third_stage_plan(), "first.toml")
+    assert eng.open("u1", plan)["marker"] == "PLAN-READY"
+    accepted = eng.run("approve", session="u1", by="user", skip_optional=list(skip))
+    assert accepted["ok"] is True, accepted
+    return plan
+
+
+def _boundary_refusal(directive) -> list[str]:
+    return [b for b in directive["data"]["blockers"]
+            if gates.AUTONOMY_REASON_DECLINED_STAGE in b]
+
+
+def test_a_customer_approval_stamps_the_decline_on_the_ledger_and_the_session_agrees(eng):
+    plan = _declined_order(eng)
+    assert eng.ledger(plan)["records"][-1]["declined_issues"] == [ISSUE]
+    assert eng.state("u1").declined_issues == [ISSUE]
+
+
+@pytest.mark.parametrize("user_skips", [[3], []], ids=["keeps-it-declined", "takes-it"])
+def test_a_new_session_cannot_self_approve_the_stage_the_customer_declined(eng, user_skips):
+    plan = _declined_order(eng)
+
+    opened = eng.open("a2", plan)
+    assert eng.state("a2").declined_issues == []  # the session never saw the decline
+    assert opened["data"]["autonomy"]["action"] == "await_user_approval", opened
+    assert opened["data"]["autonomy"]["declined_live_optional"] == [3]
+    refused = eng.run("approve", session="a2", by="agent")
+    assert refused["ok"] is False
+    assert _boundary_refusal(refused), refused
+    assert "stage 3 (" + ISSUE + ")" in _boundary_refusal(refused)[0]
+    assert eng.state("a2").node == Node.PLAN_READY.value
+
+    accepted = eng.run("approve", session="a2", by="user", skip_optional=user_skips)
+    assert accepted["ok"] is True, accepted
+    state = eng.state("a2")
+    assert state.stage(3).outcome.status == ("SKIPPED" if user_skips else "PENDING")
+    stamped = eng.ledger(plan)["records"][-1]["declined_issues"]
+    assert stamped == sorted(state.declined_issues) == ([ISSUE] if user_skips else [])
+
+
+def test_a_reset_session_on_the_same_order_cannot_self_approve_the_declined_stage(eng):
+    plan = _declined_order(eng)
+    reset = eng.run("reset", session="u1", task="task-u1-again", goal="g", done_criterion="dc",
+                    force=True)
+    assert reset["ok"] is True, reset
+    assert eng.state("u1").declined_issues == []
+    eng.run("classify", session="u1", architectural=True, files=5, changed_lines=200,
+            wall_clock_min=60)
+    eng.run("plan", session="u1")
+    assert eng.run("submit_plan", session="u1", plan=plan)["marker"] == "PLAN-READY"
+
+    refused = eng.run("approve", session="u1", by="agent")
+    assert refused["ok"] is False
+    assert _boundary_refusal(refused), refused
+
+
+def test_once_the_customer_chose_to_keep_the_stage_a_new_session_may_self_approve(eng):
+    plan = _declined_order(eng)
+    eng.open("a2", plan)
+    assert eng.run("approve", session="a2", by="user", skip_optional=[])["ok"] is True
+    assert eng.ledger(plan)["records"][-1]["declined_issues"] == []
+
+    opened = eng.open("a3", plan)
+    assert opened["data"]["autonomy"]["action"] == "self_approve", opened
+    assert eng.run("approve", session="a3", by="agent")["ok"] is True
+
+
+def test_a_ledger_record_without_the_field_declines_nothing(eng):
+    import json
+
+    from agentctl import order_approvals as oa
+    from agentctl.plan import order_digest
+
+    plan = _declined_order(eng)
+    path = oa._path(order_digest(load_plan(plan, strict=False)), None)
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    for record in stored["records"]:
+        record.pop("declined_issues", None)
+    path.write_text(json.dumps(stored), encoding="utf-8")
+
+    assert oa.declined_issues_of(eng.ledger(plan)["records"][-1]) == []
+    opened = eng.open("a2", plan)
+    assert opened["data"]["autonomy"]["action"] == "self_approve", opened
+    assert eng.run("approve", session="a2", by="agent")["ok"] is True
+
+
+def test_a_replan_inside_the_session_that_holds_the_decline_still_self_approves(eng):
+    _declined_order(eng)
+    eng.fail_stage("u1")
+    eng.diagnose("u1")
+    second = eng.write(_optional_third_stage_plan(fourth=True), "second.toml")
+    d = eng.run("replan", session="u1", plan=second)
+    assert d["data"]["autonomy"]["action"] == "self_approve", d
+    assert d["data"]["autonomy"]["declined_live_optional"] == []
+
+
+def test_the_boundary_reads_the_decline_from_the_record_by_issue(tmp_path):
+    from agentctl.plan_resources import BoundaryView
+
+    doc = _load(tmp_path, _plan_text(_stage(1), _opt(2, [1]), _opt(3, [1], issue="owner/repo#9")))
+    view = BoundaryView(order_sha256="o")
+
+    def ledger(**record_extra):
+        return {"order_sha256": "o", "records": [
+            {"plan_sha256": "p", "resources": [], "unresolved_identities": [], **record_extra}]}
+
+    declined = gates.autonomy_boundary(ledger(declined_issues=[ISSUE]), view, live_optional=doc.stages)
+    assert declined["eligible"] is False
+    assert declined["declined_live_optional"] == [2]
+    assert gates.AUTONOMY_REASON_DECLINED_STAGE in declined["reasons"][0]
+
+    for snapshot, live in [
+        (ledger(), doc.stages),                                  # a record that declines nothing
+        (ledger(declined_issues=[ISSUE]), None),                 # nothing offered to the check
+        (ledger(declined_issues=[ISSUE]), [doc.stages[0], doc.stages[2]]),  # the issue is not on offer
+    ]:
+        verdict = gates.autonomy_boundary(snapshot, view, live_optional=live)
+        assert verdict["declined_live_optional"] == []
+        assert verdict["eligible"] is True, verdict

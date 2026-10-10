@@ -2910,6 +2910,9 @@ def blockers(state: SessionState, gate_name: str) -> list[str]:
 AUTONOMY_REASON_NO_VERSION = "no user-approved version for this order"
 AUTONOMY_REASON_ORDER_CHANGED = "the order itself changed since the user's approval"
 AUTONOMY_REASON_OPEN_FIRE = "open spend/wall-clock fire owed to the user"
+AUTONOMY_REASON_DECLINED_STAGE = (
+    "an optional stage the customer declined at their approval is live in this plan"
+)
 
 
 def _identity_key(identity) -> str:
@@ -2924,13 +2927,19 @@ def _resource_name(data: dict) -> str:
 
 
 def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict | None = None,
-                      *, protected: list[str] | None = None) -> dict:
+                      *, protected: list[str] | None = None,
+                      live_optional=None) -> dict:
     """Whether the coordinator may approve `resolved_plan` (a `plan_resources.
     BoundaryView`) on the user's behalf, given the order's ledger snapshot: the same
     order, no resource outside what the user approved for it, no changed command of
     unknown effect without a first passing thinker review, no open fire owed to the
-    user. Pure: every input is a stored value; the reference is the last USER-approved
-    version, never the previous plan."""
+    user, and no optional stage live that the user declined at that approval.
+    Pure: every input is a stored value; the reference is the last USER-approved
+    version, never the previous plan.
+
+    `live_optional` is the plan's stages the caller holds as still on offer (a
+    `BoundaryView` carries no stages); the decline is read from the approval record,
+    keyed by `backlog_issue`, so a session that never saw the decline cannot lose it."""
     from . import order_approvals as _oa
 
     last = _oa.latest_user_approved_of(ledger_snapshot)
@@ -2939,7 +2948,7 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
         "reasons": [AUTONOMY_REASON_NO_VERSION],
         "order_changed": False, "extra_resources": [], "unresolved_changed_commands": [],
         "thinker_pass": None, "open_effort_fire": bool(ledger_snapshot.get("open_effort_fires")),
-        "first_verdict_key": None,
+        "first_verdict_key": None, "declined_live_optional": [],
     }
     if last is None:
         return out
@@ -2949,6 +2958,16 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
         reasons.append(AUTONOMY_REASON_ORDER_CHANGED)
     if out["open_effort_fire"]:
         reasons.append(AUTONOMY_REASON_OPEN_FIRE)
+
+    stages = list(live_optional or [])
+    out["declined_live_optional"] = declined_live_optional(stages, _oa.declined_issues_of(last))
+    if out["declined_live_optional"]:
+        issues = {s.index: s.backlog_issue for s in stages}
+        reasons.append(
+            AUTONOMY_REASON_DECLINED_STAGE + ": " + ", ".join(
+                f"stage {i} ({issues[i]})" for i in out["declined_live_optional"]
+            )
+        )
 
     approved = _oa.boundary_resources_of(ledger_snapshot)
     seen: set[str] = set()
