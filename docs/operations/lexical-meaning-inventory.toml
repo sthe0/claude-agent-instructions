@@ -2421,3 +2421,83 @@ class = "candidate-generation"
 ground = "rx.search over draft lines nominates rules (with hit lines) for judge_published_text_rules, the fail-open model judge in hook-published-text-writer-gate.py; a hit is never a violation by itself."
 hits = 1
 reviewed_by = "coordinator"
+
+[sites."scripts/claude-recover.py::<module>::re.compile"]
+class = "structural"
+ground = "_BOOT_ID_RE fixes the character set of a kernel boot id used as a state-directory name (path-safety syntax)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/claude-recover.py::_unescape_mountinfo::re.sub"]
+class = "structural"
+ground = "Decodes the octal escapes (\\NNN) of a /proc mountinfo field (fixed kernel encoding)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/claude-recover.py::cmd_restore::pattern.match"]
+class = "structural"
+ground = "_BOOT_ID_RE.match refuses a boot id outside the safe path character set before restore uses it as a directory name."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/claude-recover.py::cmd_snapshot::pattern.match"]
+class = "structural"
+ground = "_BOOT_ID_RE.match refuses a boot id outside the safe path character set before snapshot uses it as a directory name."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/claude-recover.py::transcript_path::re.sub"]
+class = "structural"
+ground = "Maps a cwd to the harness's project-directory name by replacing non-alphanumerics with '-' (fixed path encoding)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/builtin/agentctl_state.py::<module>::re.compile"]
+class = "structural"
+ground = "STATE_FILE_NAME fixes the file-name syntax of an agentctl session state file (<id>.json)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/builtin/agentctl_state.py::remove::pattern.fullmatch"]
+class = "structural"
+ground = "STATE_FILE_NAME.fullmatch refuses to remove a file whose name is not an agentctl state-file name."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/builtin/agentctl_state.py::scan::pattern.fullmatch"]
+class = "structural"
+ground = "STATE_FILE_NAME.fullmatch selects agentctl state files from a directory listing by file-name syntax."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/runner.py::_stamp_path::re.sub"]
+class = "structural"
+ground = "Replaces characters outside a safe file-name set when deriving a stamp file name (path sanitization)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/verify-canon-writers.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles fixed patterns for file-write primitives in Python/shell source (write_text, open-for-write, sed -i, git commit, tee, redirects); they match code syntax, not natural-language meaning."
+hits = 19
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "coordinator"
+
+[sites."scripts/verify-canon-writers.py::_is_shell::re.search"]
+class = "structural"
+ground = "Reads the interpreter name from a shebang line to tell shell scripts from others."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/verify-canon-writers.py::_redirect_writes_file::pattern.finditer"]
+class = "structural"
+ground = "Finds shell output redirects and their targets in one source line (shell syntax)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/verify-canon-writers.py::candidate_hits::pattern.search"]
+class = "structural"
+ground = "Applies the write-primitive syntax patterns line by line to list which writers a script contains; the writer inventory, not this match, records each file's verdict."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "coordinator"
