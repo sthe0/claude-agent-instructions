@@ -72,6 +72,7 @@ Reply with these lines, in this order:
 - one concern per line, written `blocking: [re:<concern-id>] <marker> <concern>` or `note: ...`, where <marker> is the condition the concern concerns (`C1:`, `C2:`, `C3:`, `C4:`); a condition-4 gap is a `C4:` line. An untagged concern line is refused.
   - `blocking:` keeps the plan from passing; `note:` is recorded and does not. A `Verdict: pass` carries `note:` lines only.
   - Block only on a part that changed since the last review of this pair, or on a part that still carries an unresolved blocker, re-raised as `re:<concern-id>` (the stable id of the earlier concern). A blocking concern on an unchanged part is recorded as advisory.
+- after the concerns, a line `Customer questions:` followed by one `Q: <question>` line per question only the customer can decide (a choice or a fact this pair depends on and the plan does not settle), or `Customer questions: none`. A question is not a plan remark: a flaw the coordinator can fix is a concern, not a question.
 The REVIEW: block is the last thing in your reply, with no other marker (COMPLETED:, REPLAN:, etc.) after it.
 
 Conditions:

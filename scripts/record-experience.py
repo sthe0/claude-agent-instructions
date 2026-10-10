@@ -43,7 +43,6 @@ import argparse
 import datetime as _dt
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -673,7 +672,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-ROUTED_ENV = "RECORD_EXPERIENCE_ROUTED"
+ROUTED_ENV = worktree_route.GUARD_ENV
 WRITE_COMMANDS = ("new", "extend", "ticket", "set-last-verified")
 
 
@@ -693,49 +692,18 @@ def needs_worktree(args) -> bool:
     return args.scope == "global"
 
 
-def rewrite_leaf_args(argv: list[str], worktree: Path) -> list[str]:
-    """Point every --leaf value under REPO_ROOT at the same path in `worktree`."""
-    def remap(value: str) -> str:
-        try:
-            return str(worktree / Path(value).resolve().relative_to(REPO_ROOT))
-        except ValueError:
-            return value
-
-    out: list[str] = []
-    expect_value = False
-    for tok in argv:
-        if expect_value:
-            tok, expect_value = remap(tok), False
-        elif tok == "--leaf":
-            expect_value = True
-        elif tok.startswith("--leaf="):
-            tok = "--leaf=" + remap(tok[len("--leaf="):])
-        out.append(tok)
-    return out
-
-
 def write_via_worktree(args, argv: list[str]) -> int:
     label = Path(args.leaf).name if hasattr(args, "leaf") else args.slug
-    message = f"experience: {args.cmd} {label}"
-
-    def run_child(worktree: Path) -> tuple[int, str]:
-        proc = subprocess.run(
-            [sys.executable, str(worktree / "scripts" / "record-experience.py"),
-             *rewrite_leaf_args(argv, worktree)],
-            cwd=str(worktree), capture_output=True, text=True,
-            env={**os.environ, ROUTED_ENV: "1"},
-        )
-        sys.stderr.write(proc.stderr.replace(str(worktree), str(REPO_ROOT)))
-        return proc.returncode, proc.stdout.replace(str(worktree), str(REPO_ROOT))
-
-    return worktree_route.run_routed(REPO_ROOT, run_child, message)
+    return worktree_route.route_script(
+        REPO_ROOT, "scripts/record-experience.py", argv,
+        f"experience: {args.cmd} {label}", path_options=("--leaf",),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
-    if needs_worktree(args) and not worktree_route.routing_disabled() \
-            and worktree_route.is_main_checkout(REPO_ROOT):
+    if needs_worktree(args) and worktree_route.should_route(REPO_ROOT):
         return write_via_worktree(args, argv)
     return args.func(args)
 

@@ -209,6 +209,8 @@ _LEGACY_REF_ALLOWLIST = {
     "scripts/lib/instruction-sandbox-canon-snapshot.sh": "hashes the personal root's "
                                              "settings.json to prove a sandbox build left it "
                                              "untouched — a canon target, not a fallback",
+    "scripts/claude-recover.py":             "scans BOTH roots for live CLI session files to "
+                                             "snapshot; overridable via CLAUDE_RECOVER_CONFIG_DIRS",
 }
 
 

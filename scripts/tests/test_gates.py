@@ -3,7 +3,6 @@ non-empty passes, and the guardian predicates report the expected blockers."""
 from argparse import Namespace
 
 from agentctl import cli, gates
-from agentctl.config import Thresholds
 from agentctl.state import (
     Actor,
     Criterion,
@@ -231,27 +230,13 @@ def test_coverage_missing_invariant_still_blocks_after_normalization():
     assert blockers and "keep idempotency" in blockers[0]
 
 
-# --- plan_enumerate_round_release_active ---
+# --- plan-enumerate axis in the cross-axis ceiling ---
 
-def test_enumerate_round_release_inactive_below_threshold():
-    """One lap below the threshold the staleness blocker still blocks normally.
-    RED arm: the release must NOT fire at threshold-minus-one."""
-    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 0}) is False
-    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 2}) is False
-
-
-def test_enumerate_round_release_active_at_and_past_threshold():
-    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 5}) is True
-    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 6}) is True
-
-
-def test_enumerate_round_release_none_bag_is_inactive():
-    assert gates.plan_enumerate_round_release_active(None) is False
-
-
-def test_enumerate_round_release_threshold_comes_from_config_not_a_literal():
-    """The predicate must read effort-replan-absolute, not embed a literal — the
-    same test the review twin carries, so both axes share one threshold key."""
-    retuned = Thresholds({"effort-replan-absolute": "2"})
-    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 2}, retuned) is True
-    assert gates.plan_enumerate_round_release_active({"enumerate_pass": 1}, retuned) is False
+def test_cross_axis_ceiling_still_counts_legacy_enumerate_passes():
+    """The standalone enumeration's own per-axis release is retired, but a legacy
+    bag's `enumerate_pass` still adds to the combined ceiling; a new plan's bag
+    (pass count 0) contributes nothing."""
+    legacy = SessionState(session_id="x", task_id="t", plugins={"premise": {"enumerate_pass": 5}})
+    fresh = SessionState(session_id="x", task_id="t", plugins={"premise": {"enumerate_pass": 0}})
+    assert gates.cross_axis_friction_release_active(legacy) is True
+    assert gates.cross_axis_friction_release_active(fresh) is False

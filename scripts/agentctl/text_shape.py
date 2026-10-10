@@ -85,3 +85,9 @@ ELEMENT_NAMES = frozenset(
 # because a question target must name at least one character, so nothing an author can
 # write ever collides with it.
 WHOLE_STAGE_ELEMENT = ""
+
+# The two consumer-facing identities a stage's norm map carries beside the question
+# vocabulary (plan.stage_norm_keys). Neither is a question target, so neither can collide
+# with a name in ELEMENT_NAMES.
+INTERFACE_ELEMENT = "interface"
+CARRY_ELEMENT = "carry"

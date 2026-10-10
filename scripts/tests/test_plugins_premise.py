@@ -10,10 +10,9 @@ Proves three things the ledger plugin's `resolution` arm has no analogue for:
   2. `premise` auto-activates for EVERY SUBSTANTIVE session on weight_class ALONE —
      the gap-2 arming fix — so an ordinary engineering plan (deliverable_kind unset)
      still gets the gate, unlike the reasoning-only ledger plugin.
-  3. the `plan_approval` gate blocks while any question is open or the enumeration
-     cross-check has not run against the CURRENT plan content, and a TOML
-     comment-only edit (invisible to tomllib) does not re-block a discharged
-     enumeration.
+  3. the `plan_approval` gate blocks while any question is open or a covered order
+     element's stage changed, and nothing waits on an enumeration cross-check (it is
+     retired, amendments-2.md E3) — a legacy enumeration record is carried and ignored.
 """
 from __future__ import annotations
 
@@ -178,8 +177,6 @@ def test_does_not_auto_activate_for_small_change(store):
 def test_gate_blocks_open_question():
     state = _new_state()
     plugins.activate(state, "premise")
-    # isolate the OPEN-question blocker from the enumeration blocker
-    state.plugins["premise"]["enumerated"] = True
     state.plugins["premise"]["questions"] = [
         {"id": "q1", "target": "plan.goal", "question": "is the goal even reachable?"},
     ]
@@ -195,27 +192,24 @@ def test_gate_blocks_open_question():
     assert plugins.plugin_gate_blockers(state, "plan_approval") == []
 
 
-def test_gate_blocks_when_not_enumerated():
+def test_gate_does_not_block_when_no_enumeration_ran():
     state = _new_state()
     plugins.activate(state, "premise")  # fresh bag: enumerated=False, no questions
-    blockers = plugins.plugin_gate_blockers(state, "plan_approval")
-    assert blockers == [f"[premise] {pp._ENUMERATE_NOT_RUN}"]
-    # the same gate name that the ledger plugin gates (resolution) is untouched here
+    assert plugins.plugin_gate_blockers(state, "plan_approval") == []
     assert plugins.plugin_gate_blockers(state, "resolution") == []
 
 
-def test_gate_blocks_stale_enumerated_at(fixtures_dir):
-    # with a submitted plan, an enumeration that ran against DIFFERENT content is stale
+def test_gate_ignores_a_legacy_enumerated_at_that_differs_from_the_plan(fixtures_dir):
+    # a legacy record whose enumeration ran against DIFFERENT content used to be stale
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
     state = _new_state(plan_path=plan_path)
     plugins.activate(state, "premise")
     _cover_the_order(state)
     state.plugins["premise"]["enumerated"] = True
     state.plugins["premise"]["enumerated_at"] = "a-digest-of-some-earlier-plan"
-    blockers = plugins.plugin_gate_blockers(state, "plan_approval")
-    assert blockers == [f"[premise] {pp._ENUMERATE_STALE}"]
+    assert plugins.plugin_gate_blockers(state, "plan_approval") == []
 
-    # stamping the enumeration against the CURRENT content clears the gate
+    # and one stamped against the CURRENT content reads the same
     current = pp._plan_content_digest(plan.load_plan(plan_path))
     state.plugins["premise"]["enumerated_at"] = current
     assert plugins.plugin_gate_blockers(state, "plan_approval") == []
@@ -224,8 +218,7 @@ def test_gate_blocks_stale_enumerated_at(fixtures_dir):
 def test_gate_blocks_when_covered_stage_content_changes(tmp_path, fixtures_dir):
     """An order element marked 'covered' by stage 1 is invalidated when stage 1's
     content changes on replan (#123) — the order-coverage twin of
-    test_stage_question_key_changes_when_principle_changes, run through the same
-    gate `test_gate_blocks_stale_enumerated_at` exercises."""
+    test_stage_question_key_changes_when_principle_changes."""
     src = (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
     plan_path = tmp_path / "plan.toml"
     plan_path.write_text(src, encoding="utf-8")
@@ -234,8 +227,6 @@ def test_gate_blocks_when_covered_stage_content_changes(tmp_path, fixtures_dir):
 
     state = _new_state(plan_path=str(plan_path))
     plugins.activate(state, "premise")
-    state.plugins["premise"]["enumerated"] = True
-    state.plugins["premise"]["enumerated_at"] = pp._plan_content_digest(doc)
     state.plugins["premise"]["order_elements"] = [{
         "id": "O1", "element": "the order this plan answers",
         "disposition": "covered", "stage": 1, "reason": "",
@@ -246,16 +237,15 @@ def test_gate_blocks_when_covered_stage_content_changes(tmp_path, fixtures_dir):
     # rewrite stage 1's title — moves stage 1's key, leaves stage 2's untouched
     edited_src = src.replace('title = "Scaffold module"', 'title = "Scaffold module (revised)"')
     plan_path.write_text(edited_src, encoding="utf-8")
-    edited_doc = plan.load_plan(str(plan_path))
-    state.plugins["premise"]["enumerated_at"] = pp._plan_content_digest(edited_doc)
 
     blockers = plugins.plugin_gate_blockers(state, "plan_approval")
     assert any("O1" in b and "stage 1" in b and "changed" in b for b in blockers)
 
 
-def test_comment_only_plan_edit_does_not_reblock_enumeration(tmp_path, fixtures_dir):
+def test_comment_only_plan_edit_leaves_the_content_digest_and_gate_unchanged(
+        tmp_path, fixtures_dir):
     # a TOML comment is invisible to tomllib, so a comment-only edit leaves the
-    # content digest byte-identical — a discharged enumeration must not re-block.
+    # content digest byte-identical and the gate clear.
     src = (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
     plan_path = tmp_path / "plan.toml"
     plan_path.write_text(src, encoding="utf-8")
@@ -272,9 +262,7 @@ def test_comment_only_plan_edit_does_not_reblock_enumeration(tmp_path, fixtures_
     plan_path.write_text(src + "\n# a note for a future reader, no field change\n", encoding="utf-8")
     digest_after = pp._plan_content_digest(plan.load_plan(str(plan_path)))
     assert digest_after == digest_before
-    blockers = plugins.plugin_gate_blockers(state, "plan_approval")
-    assert not any(pp._ENUMERATE_STALE in b for b in blockers)
-    assert blockers == []
+    assert plugins.plugin_gate_blockers(state, "plan_approval") == []
 
 
 # --- the order is plan content, so an order-only edit is a content change -------
@@ -330,8 +318,8 @@ def _with_order(tmp_path, fixtures_dir, name, order_toml=_ORDER):
 )
 def test_an_order_only_edit_moves_the_content_digest(edited, why, tmp_path, fixtures_dir):
     """A question is raised against the statement of what the plan is FOR, and the order is
-    now where that statement lives. So an edit confined to `[meta.order]` has to re-arm
-    `_ENUMERATE_STALE`, exactly as a goal or a stage edit does.
+    now where that statement lives. So an edit confined to `[meta.order]` has to move the
+    content digest, exactly as a goal or a stage edit does.
 
     Three edit classes, each failing differently. A re-wording changes only prose the scope
     key deliberately ignores, so a digest built from `order_scope` would miss it; an id or
@@ -349,9 +337,11 @@ def test_an_order_only_edit_moves_the_content_digest(edited, why, tmp_path, fixt
     assert before != after, f"an order-only edit left the digest unmoved — {why}"
 
 
-def test_an_order_only_edit_reblocks_a_discharged_enumeration(tmp_path, fixtures_dir):
-    """The digest difference above, carried through to the gate it exists to arm: an
-    enumeration discharged against the old order does not survive the new one."""
+def test_an_order_only_edit_no_longer_reblocks_a_legacy_enumeration(tmp_path, fixtures_dir):
+    """The digest difference above used to arm `_ENUMERATE_STALE` through the gate: an
+    enumeration discharged against the old order did not survive the new one. The
+    enumeration gate is retired (amendments-2.md E3), so the gate stays clear — the
+    digest itself still moves, and still keys the essence coverage block."""
     path = tmp_path / "plan.toml"
     src = (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
     path.write_text(src + _ORDER, encoding="utf-8")
@@ -368,16 +358,14 @@ def test_an_order_only_edit_reblocks_a_discharged_enumeration(tmp_path, fixtures
     # the replan rewrites the order and nothing else — same goal, same stages
     path.write_text(src + _ORDER.replace("R1", "R2"), encoding="utf-8")
 
-    assert plugins.plugin_gate_blockers(state, "plan_approval") == [
-        f"[premise] {pp._ENUMERATE_STALE}"
-    ]
+    assert plugins.plugin_gate_blockers(state, "plan_approval") == []
 
 
 def test_an_orderless_plan_s_digest_is_unchanged_by_the_order_field(tmp_path, fixtures_dir):
-    """The identity that makes the change above safe to ship. `enumerated_at` is PERSISTED
-    and compared across processes, so a contribution made unconditionally would re-arm
-    `_ENUMERATE_STALE` for every live session the moment this field arrived — a plan
-    nobody edited would suddenly need a re-run of `question-enumerate`.
+    """The identity that makes the change above safe to ship. The digest is PERSISTED
+    (legacy `enumerated_at`, essence receipts) and compared across processes, so a
+    contribution made unconditionally would move it for every live session the moment
+    this field arrived — a plan nobody edited would read as changed.
 
     Pinned as a literal digest rather than as `order_place(...) == ()`: the property is
     about the BYTES this function returns for an order-less plan, and a payload change that
@@ -396,12 +384,14 @@ def test_an_orderless_plan_s_digest_is_unchanged_by_the_order_field(tmp_path, fi
     )
 
 
-# --- enumerate round-release: staleness blocker collapses; others survive -------
+# --- the enumeration round budget and its staleness routing are retired ---------
+# (amendments-2.md E3): a legacy bag's `enumerate_pass` and `enumerated_at` are
+# carried and ignored, so no pass count turns a stale digest into a blocker.
 
-def _stale_bag_state(plan_path, *, passes=5):
-    """A substantive session with a stale enumeration (enumerated_at mismatches the
-    current plan content) and `enumerate_pass` set to `passes`. Question and order
-    halves are pre-satisfied so only the staleness branch can fire."""
+def _legacy_bag_state(plan_path, *, passes=5):
+    """A substantive session carrying a legacy enumeration record whose
+    `enumerated_at` mismatches the current plan content, with `enumerate_pass` set
+    to `passes`. Order half pre-satisfied so only a staleness branch could fire."""
     state = _new_state(plan_path=plan_path, weight_class=WeightClass.SUBSTANTIVE.value)
     plugins.activate(state, "premise")
     _cover_the_order(state)
@@ -412,73 +402,28 @@ def _stale_bag_state(plan_path, *, passes=5):
     return state, bag
 
 
-def test_staleness_still_blocks_below_threshold(fixtures_dir):
-    """RED arm: one pass below the threshold the routing message must NOT appear —
-    _ENUMERATE_STALE still blocks, byte-identical to before this stage."""
+@pytest.mark.parametrize("passes", [0, 4, 5, 6])
+def test_a_stale_legacy_enumeration_blocks_at_no_pass_count(fixtures_dir, passes):
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    state, _ = _stale_bag_state(plan_path, passes=4)  # threshold is 5
-    blockers = plugins.plugin_gate_blockers(state, "plan_approval")
-    assert blockers == [f"[premise] {pp._ENUMERATE_STALE}"]
+    state, _ = _legacy_bag_state(plan_path, passes=passes)
+    assert plugins.plugin_gate_blockers(state, "plan_approval") == []
 
 
-def test_staleness_blocker_collapses_to_routing_message_at_threshold(fixtures_dir):
-    """At threshold, the routing message replaces _ENUMERATE_STALE and names the
-    typed escape. The gate stays non-empty (never auto-approves)."""
+def test_other_premise_blockers_still_stand_beside_a_legacy_record(fixtures_dir):
+    """Dropping the enumeration gate leaves the question half alone: an
+    undispositioned question blocks, and only it."""
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    state, _ = _stale_bag_state(plan_path, passes=5)
-    blockers = plugins.plugin_gate_blockers(state, "plan_approval")
-    assert len(blockers) == 1
-    assert pp._ENUMERATE_STALE not in blockers[0]
-    assert "enumeration round budget exhausted" in blockers[0]
-    assert f"--reason {premise.ESCAPE_ENUMERATE_ROUNDS_EXHAUSTED}" in blockers[0]
-    assert "at pass 5" in blockers[0]
-
-
-def test_staleness_routing_message_carries_live_pass_count(fixtures_dir):
-    """The message contains the LIVE count, not a threshold-shaped literal."""
-    plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    state, _ = _stale_bag_state(plan_path, passes=6)
-    blockers = plugins.plugin_gate_blockers(state, "plan_approval")
-    assert "at pass 6" in blockers[0]
-
-
-def test_other_premise_blockers_survive_active_release(fixtures_dir):
-    """The release collapses ONLY the staleness blocker — an undispositioned question
-    still blocks, mirroring the invariant that the release never approves by itself."""
-    plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    state, bag = _stale_bag_state(plan_path, passes=5)
+    state, bag = _legacy_bag_state(plan_path, passes=5)
     bag["questions"] = [{
         "id": "Q1", "target": "plan.goal", "statement": "what is the goal?",
         "disposition": "open", "reason": "",
     }]
     blockers = plugins.plugin_gate_blockers(state, "plan_approval")
-    question_blocker = any("Q1" in b for b in blockers)
-    routing_blocker = any("enumeration round budget" in b for b in blockers)
-    assert question_blocker, f"expected open-question blocker, got: {blockers}"
-    assert routing_blocker, f"expected staleness routing message, got: {blockers}"
+    assert any("Q1" in b for b in blockers), blockers
+    assert not any("enumerat" in b for b in blockers), blockers
 
 
-def test_staleness_cleared_after_escape_recorded(fixtures_dir, store):
-    """Once the user records the typed escape, premise_blockers clears the staleness
-    branch. Other blockers still stand — the escape is not a global approve."""
-    from argparse import Namespace
-    plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    state, bag = _stale_bag_state(plan_path, passes=5)
-    store.save(state)
-
-    d = cli.cmd_question_enumerate_escape(
-        Namespace(session="s", reason=premise.ESCAPE_ENUMERATE_ROUNDS_EXHAUSTED,
-                  note="the plan is acceptable at this pass count", plan=None),
-        store=store)
-    assert d.ok, d.detail
-
-    state2 = store.load("s")
-    blockers = plugins.plugin_gate_blockers(state2, "plan_approval")
-    assert not any("enumeration round budget" in b for b in blockers), blockers
-    assert not any(pp._ENUMERATE_STALE in b for b in blockers), blockers
-
-
-# --- #60 residual: disclose an in-flight enumeration in the essence coverage block
+# --- the in-flight disclosure line is retired with the launch it described ------
 
 def _armed_bag(plan_path, **overrides):
     state = _new_state(plan_path=plan_path)
@@ -489,80 +434,24 @@ def _armed_bag(plan_path, **overrides):
     return state, bag
 
 
-def test_enumeration_in_flight_false_with_no_launch(fixtures_dir):
-    plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    _, bag = _armed_bag(plan_path)
-    assert pp._enumeration_in_flight(bag) is False
+def test_the_in_flight_helper_and_gate_texts_are_gone():
+    for name in ("_enumeration_in_flight", "_ENUMERATE_NOT_RUN", "_ENUMERATE_STALE",
+                 "escape_recorded", "stale_enumeration_parts", "enumeration_run_scope"):
+        assert not hasattr(pp, name), name
 
 
-def test_enumeration_in_flight_true_while_outstanding(fixtures_dir):
-    plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    _, bag = _armed_bag(
-        plan_path, enumerate_launch=1, enumerated=False,
-        enumerate_deadline=time.time() + 100,
-    )
-    assert pp._enumeration_in_flight(bag) is True
-
-
-def test_enumeration_in_flight_false_once_landed(fixtures_dir):
-    """A launch is on record, but the pass already landed — no window is open."""
-    plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    _, bag = _armed_bag(
-        plan_path, enumerate_launch=1, enumerated=True,
-        enumerate_deadline=time.time() + 100,
-    )
-    assert pp._enumeration_in_flight(bag) is False
-
-
-def test_enumeration_in_flight_false_past_deadline(fixtures_dir):
-    """The deadline elapsed with nothing landed — that is `enumeration_not_landed`'s
-    window to name via the escape, not this disclosure line's; claiming "in flight"
-    for a launch that has gone missing would misstate what is actually happening."""
-    plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    _, bag = _armed_bag(
-        plan_path, enumerate_launch=1, enumerated=False,
-        enumerate_deadline=time.time() - 1,
-    )
-    assert pp._enumeration_in_flight(bag) is False
-
-
-def test_enumeration_in_flight_false_with_no_deadline_stamped():
-    """A bag minted before enumerate_deadline existed reads as not-in-flight, never
-    raises on the None -> float comparison."""
-    assert pp._enumeration_in_flight({"enumerate_launch": 1, "enumerated": False,
-                                      "enumerate_deadline": None}) is False
-
-
-def test_coverage_block_omits_the_line_with_no_launch_outstanding(fixtures_dir):
+def test_coverage_block_never_discloses_an_enumeration_in_flight(fixtures_dir):
+    """A legacy bag still carrying a launch counter and a live deadline renders the
+    same block as one without: nothing launches an enumeration any more, so the
+    line that disclosed one would assert something that cannot be true."""
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
     state, bag = _armed_bag(plan_path)
-    block = pp.coverage_block(state, bag)
-    assert "enumeration in flight" not in block
+    plain = pp.coverage_block(state, bag)
 
+    bag.update(enumerate_launch=2, enumerated=False,
+               enumerate_deadline=time.time() + 100)
+    legacy = pp.coverage_block(state, bag)
 
-def test_coverage_block_carries_the_line_while_a_launch_is_outstanding(fixtures_dir):
-    plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    state, bag = _armed_bag(
-        plan_path, enumerate_launch=2, enumerated=False,
-        enumerate_deadline=time.time() + 100,
-    )
-    block = pp.coverage_block(state, bag)
-    [line] = [ln for ln in block.splitlines() if "enumeration in flight" in ln]
-    assert "launch 2" in line
-    assert "question-enumerate" in line
-
-
-def test_coverage_block_missing_lines_picks_up_the_in_flight_line(fixtures_dir):
-    """The same mechanical containment check every other coverage-block line rides:
-    an essence presented BEFORE the launch went out no longer carries the line, so
-    the gate must name it missing — proving the new line is wired into the existing
-    #60 essence-must-carry-the-block mechanism, not a parallel one."""
-    plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    state, bag = _armed_bag(plan_path)
-    rendering = pp.coverage_block(state, bag)  # presented before the launch
-
-    bag["enumerate_launch"] = 1
-    bag["enumerate_deadline"] = time.time() + 100
-    live_block = pp.coverage_block(state, bag)
-    missing = pp.coverage_block_missing_lines(live_block, rendering)
-    assert any("enumeration in flight" in m for m in missing)
+    assert "enumeration in flight" not in legacy
+    assert legacy == plain
+    assert pp.coverage_block_missing_lines(legacy, plain) == []

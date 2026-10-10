@@ -11,10 +11,13 @@ gate on those two: minting them would deadlock `resolution` (`record_experience`
 fires blocking on the `resolve` event ITSELF, so a fail-closed ledger entry for
 it could never discharge before the event that would clear it).
 
-Both `_DISCHARGE` oracles reuse the existing reactive gates verbatim
+Both `_DISCHARGE` oracles defer to the existing reactive gates
 (`gates.plan_review_blockers`, `gates.code_review_blockers`) rather than
 re-deriving the precondition, so the ledger and the gate it mirrors can never
-disagree about whether an obligation is still owed — the same discipline
+disagree about whether an obligation is still owed (the plan-review oracle
+first accepts an approved plan whose execution has begun; that latch is inferred
+from state for every session -- "approved and a stage has left PENDING" -- never
+stored at `approve`) — the same discipline
 `plugins_review_dispatch`'s two observers already follow for the PROACTIVE
 trigger; this plugin adds the missing REACTIVE-at-resolution backstop in case
 the proactive trigger was ever missed (a spawn that never happened, a
@@ -25,7 +28,7 @@ import os
 
 from . import gates
 from .plugins import Plugin, register
-from .state import WeightClass
+from .state import StageStatus, WeightClass
 
 
 def _auto_activate(state) -> bool:
@@ -43,6 +46,17 @@ def _auto_activate(state) -> bool:
 
 
 def _discharge_plan_review(state, ob) -> bool:
+    # The review is a precondition of `approve`/`replan`, not of resolution: once the
+    # plan was approved and a stage has left PENDING it was discharged, however the
+    # plan's content moved since. No latch is stored at `approve`; "approved and a
+    # stage has left PENDING" is the inferred latch for EVERY session (one approved
+    # before this rule included), and until a stage leaves PENDING the obligation
+    # stays the live check below. A substantive replan resets the approval, which
+    # sends the obligation back to that live check.
+    approval = getattr(state, "approval", None)
+    if approval is not None and approval.passed and any(
+            s.outcome.status != StageStatus.PENDING.value for s in state.stages):
+        return True
     return not gates.plan_review_blockers(state, getattr(state, "plan_path", None))
 
 

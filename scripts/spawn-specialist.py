@@ -38,12 +38,20 @@ from typing import NamedTuple, Sequence
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from agentctl import grants  # the sole validator every materialized rule/add_dir passes through
-from agentctl.plan import PlanError, load_plan, load_plan_with_digest, parse_pair  # parse the TOML plan for a single-stage brief projection
+from agentctl.plan import (  # parse the TOML plan for a single-stage brief projection
+    PlanError,
+    is_unit_id,
+    load_plan,
+    load_plan_with_digest,
+    parse_pair,
+    parse_unit,
+)
 from agentctl.render import (  # pure PlanDoc(+index) -> markdown; TopoUnitsCorrupt/materialize_topo_units do the one bit of I/O
     TopoUnitsCorrupt,
     materialize_topo_units,
     render_pair_review_bundle,
     render_stage_brief,
+    render_unit_review_bundle,
     topo_pair_view,
     topo_pair_view_dirname,
 )
@@ -234,7 +242,7 @@ def assemble_prompt(
     resolved_plan = None if topo_bundle is not None else brief_plan_path(args)
     if topo_bundle is not None:
         plan_label = (
-            "## Working plan — topological review pair "
+            "## Working plan — topological review unit or pair "
             "(projected; the full plan is never inlined for --review-topo — "
             "see § File-access scope for the per-pair view directory)"
         )
@@ -2051,7 +2059,10 @@ def main(argv: list[str] | None = None) -> int:
             log_refused("review-topo-plan-error", {"kind": args.kind, "review_pair": topo_pair})
             return 2
         try:
-            parse_pair(topo_doc, topo_pair)
+            if is_unit_id(topo_pair):
+                parse_unit(topo_doc, topo_pair)
+            else:
+                parse_pair(topo_doc, topo_pair)
         except ValueError as exc:
             print(f"error: --review-topo {topo_pair}: {exc}", file=sys.stderr)
             log_refused(
@@ -2071,8 +2082,11 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
         topo_units_override = os.environ.get("AGENTCTL_TOPO_UNITS_DIR")
         topo_root = Path(topo_units_override) if topo_units_override else agentctl_topo_units_dir()
-        topo_view_dir = topo_root / topo_plan_sha256 / topo_pair_view_dirname(topo_pair)
-        if not args.dry_run:
+        # A unit bundle is self-contained: the unit has no view directory, no
+        # Read grant and nothing to materialize.
+        if not is_unit_id(topo_pair):
+            topo_view_dir = topo_root / topo_plan_sha256 / topo_pair_view_dirname(topo_pair)
+        if topo_view_dir is not None and not args.dry_run:
             # Materialization is real I/O (writes the whole plan-version topo
             # tree); --dry-run must write nothing, so it only computes the path
             # above and prints the intended TOPO-VIEW line below, never
@@ -2118,9 +2132,11 @@ def main(argv: list[str] | None = None) -> int:
     add_dir_argv: list[str] = []
     if topo_pair is not None:
         # --review-topo withholds the plans-directory grant entirely -- the
-        # child gets only its one-pair view directory below, never the whole
-        # plans_dir() a --plan-brief/whole-plan thinker spawn would carry.
-        add_dir_argv.extend(["--add-dir", str(topo_view_dir)])
+        # child gets only its one-pair view directory below (none for a unit),
+        # never the whole plans_dir() a --plan-brief/whole-plan thinker spawn
+        # would carry.
+        if topo_view_dir is not None:
+            add_dir_argv.extend(["--add-dir", str(topo_view_dir)])
     else:
         add_dir_argv.extend(plans_add_dir_args(args.kind, plans_directory))
     add_dir_argv.extend(repo_root_add_dir_args(args.kind, workdir))
@@ -2135,10 +2151,15 @@ def main(argv: list[str] | None = None) -> int:
     perms = permissions_digest(args.project_permissions)
     topo_bundle: "str | None" = None
     if topo_pair is not None:
-        topo_bundle = render_pair_review_bundle(
-            topo_doc, topo_pair, plan_sha256=topo_plan_sha256, view_dir=topo_view_dir,
-            history=topo_history,
-        )
+        if topo_view_dir is None:
+            topo_bundle = render_unit_review_bundle(
+                topo_doc, topo_pair, plan_sha256=topo_plan_sha256, history=topo_history,
+            )
+        else:
+            topo_bundle = render_pair_review_bundle(
+                topo_doc, topo_pair, plan_sha256=topo_plan_sha256, view_dir=topo_view_dir,
+                history=topo_history,
+            )
     try:
         prompt = assemble_prompt(
             args,
@@ -2208,7 +2229,7 @@ def main(argv: list[str] | None = None) -> int:
         log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
         return 2
 
-    if topo_pair is not None:
+    if topo_view_dir is not None:
         # The plans-directory grant was withheld above; grant the one-pair
         # view directory instead (Read allow + Edit deny, same directional
         # pair plans_permission_rules uses for its own read kinds).
@@ -2248,9 +2269,11 @@ def main(argv: list[str] | None = None) -> int:
     # the launch below); `claude -p` reads its prompt from stdin.
 
     if args.dry_run:
-        if topo_pair is not None:
+        if topo_view_dir is not None:
             view_files = topo_pair_view(topo_doc, topo_pair)
             print(f"TOPO-VIEW: {topo_view_dir} files={','.join(view_files)}")
+        elif topo_pair is not None:
+            print("TOPO-VIEW: none files=")
         print("=== assembled prompt (delivered via stdin) ===")
         print(prompt)
         print("\n=== command (not executed) ===")

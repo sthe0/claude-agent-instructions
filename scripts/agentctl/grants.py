@@ -29,12 +29,18 @@ whose answer gates whether a stage is marked passed without ever asking.
 """
 from __future__ import annotations
 
+import functools
 import os
+import posixpath
 import re
+import shlex
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from lib import bash_write_targets, shell_tokens, widening_targets
+
+from . import script_effects, tool_contracts
 
 # --- data shapes -------------------------------------------------------------
 
@@ -694,6 +700,107 @@ def top_level_segment_count(command: str) -> int | None:
     if segments is None:
         return None
     return len(segments)
+
+
+# Mirrors the one module `tool_contracts._resolve_interpreter` resolves (`-m pytest`).
+_IDENTITY_MODULES = frozenset({"pytest"})
+
+# The one resolver program whose resolved resource never depends on its arguments (a write on
+# the whole venue subtree); unreviewed forms are unresolved and the autonomy boundary escalates
+# them. Any other resolver (`git`: a subcommand decides the effect) shares no program-only
+# identity, since one approved subcommand would cover another.
+_IDENTITY_RESOLVERS = frozenset({"pytest"})
+
+
+@functools.lru_cache(maxsize=1)
+def _contract_table() -> dict:
+    return tool_contracts.load_contract_table()
+
+
+def bash_rule_identity(rule: str, venue: str | None = None) -> tuple | None:
+    """What a DR-V `Bash(<segment>:*)` rule lets a stage run, coarser than its text: the
+    program, and for an interpreter the script it is pointed at (`-m <module>` counts as
+    the script). Arguments after the script are not part of it, so a verify_command that
+    only changes arguments keeps its identity.
+
+    Closed-world: only a program the engine has positively classified gets an identity --
+    an interpreter in `_INTERPRETERS` whose first operand is a script or `-m` with a module
+    in `_IDENTITY_MODULES`, or a program whose `tool_contracts.toml` entry has effect `none`
+    or is a resolver in `_IDENTITY_RESOLVERS`. `None` means "no identity", which the caller
+    treats as a new grant. It is returned when:
+
+    - the rule does not parse, or its program token is path-qualified;
+    - a wrapper or env assignment hides the real program;
+    - the program is unclassified (an unlisted interpreter or launcher, `strace`, `uv`,
+      `make`);
+    - the interpreter's leading flags cannot be read with confidence (any flag but `-m`,
+      an unclassified module);
+    - the script has a `script_effects.toml` entry, whose resolution depends on its
+      arguments (`land-branch.py --check` resolves to nothing, `--keep-branch
+      --remote-only` to a push); `venue` lets the match follow symlinks the way
+      `script_effects.resolve_script` does;
+    - the registry cannot be loaded (malformed). A missing registry file loads as empty,
+      so identities stay: `resolve_script` then leaves such a push unresolved and the
+      boundary escalates it;
+    - the program is a resolver whose effect depends on its arguments (`git`).
+
+    Plan-declared `[[stage.effects]]` do not reach `resolve_command` today, so the
+    registry check covers every script whose resolution is argument-dependent; a future
+    stage-effects resolution path must extend it. Never guess an identity that an
+    already-approved command could share."""
+    parsed = rule_program_and_arg(rule)
+    if parsed is None or parsed[0] != "Bash":
+        return None
+    try:
+        tokens = shlex.split(bash_command_from_rule_arg(parsed[1]))
+    except ValueError:
+        return None
+    if not tokens or "/" in tokens[0]:
+        return None
+    name, operands = widening_targets.program_name(tokens[0]).casefold(), tokens[1:]
+    if widening_targets.strip_wrappers([name, *operands]) != [name, *operands]:
+        return None
+    if name in _INTERPRETERS or widening_targets.INTERPRETER_RE.match(name):
+        return _interpreter_identity(name, operands, venue)
+    entry = _contract_table().get(name)
+    if entry is None or not (entry.effect == "none" or name in _IDENTITY_RESOLVERS):
+        return None
+    return (name,)
+
+
+def _interpreter_identity(name: str, operands: list[str], venue: str | None) -> tuple | None:
+    """Program + script (or `-m <module>`) from the leading operands; the same closed
+    grammar `tool_contracts._resolve_interpreter` reads: any other flag before the script
+    gives no identity."""
+    if not operands:
+        return None
+    tok = operands[0]
+    if tok == "-m":
+        module = operands[1] if len(operands) > 1 else None
+        return (name, "-m", module) if module in _IDENTITY_MODULES else None
+    if tok.startswith("-") or _is_registry_script(tok, venue):
+        return None
+    return (name, tok)
+
+
+def _is_registry_script(token: str, venue: str | None) -> bool:
+    """True when `token` could name a `script_effects.toml` script. With a `venue` the
+    match is `script_effects.registered_entry` -- the matcher `resolve_script` itself uses,
+    so a symlink alias cannot hide a registered script; the normalized-path and basename
+    comparison always runs as an extra conservative check (and is the only one without a
+    venue). Fail-closed: a registry that cannot be loaded counts every script as
+    registered. The registry is read on every call, not cached, so an edit to it is seen."""
+    try:
+        table = script_effects.load_script_effects_table()
+    except (OSError, ValueError, tomllib.TOMLDecodeError):
+        return True
+    if venue is not None and script_effects.registered_entry(
+            token, os.path.realpath(venue), table=table) is not None:
+        return True
+    path = posixpath.normpath(token).casefold()
+    base = posixpath.basename(path)
+    return any(path == known.casefold() or base == posixpath.basename(known).casefold()
+               for known in table)
 
 
 def _in_venue(path: str, venue: str) -> bool:

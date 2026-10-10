@@ -50,6 +50,8 @@ python3 scripts/crutch-inventory.py --check   # now clean
 
 `gen_crutch_registry.py` assigns the new site a class from its partition table (file-path-keyed, see the registry's own header comment) unless it needs a per-id override — a true regex-feeding-a-hard-sink pairing, or a CLAUDE.md statement with a distinct fate. Add the override in `gen_crutch_registry.py` itself (`CODE_ID_OVERRIDES` / `CLAUDE_MD_OVERRIDES`) with a ground that names *why*, not just *what*; re-run the script so the registry stays reproducible data rather than a hand edit.
 
+`gen_crutch_registry.py` rewrites a tracked file, so run from the canonical checkout it goes through `scripts/lib/worktree_route.py` (a fresh worktree from `origin/main`, committed and landed) instead of leaving an uncommitted edit there; it only lists git-tracked files, so `git add` a new script before regenerating.
+
 ## Justifying a `keep` versus reviewing a `defer`
 
 A `keep` ground should name the concrete thing that makes the class correct — for `structural`, what shape the regex actually reads (a stage marker, a command prefix, a mount path); for `semantic-guarded`, which judge call guards it and where. A ground that only restates the class name (e.g. "this is structural") is a rubber stamp, not a justification, and defeats the registry's purpose.

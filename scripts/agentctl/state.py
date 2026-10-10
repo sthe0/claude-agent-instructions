@@ -25,7 +25,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 44  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 46  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -61,6 +61,14 @@ SCHEMA_VERSION = 44  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # 44: PlanReview/PlanPairReview gain per-concern severities,
                      # effective severities, raw_verdict, part_digests and stable ids;
                      # SessionState gains concern_ledger (blocking/note severity model)
+                     # 45: AcceptanceReview gains requirement_bindings (per-requirement
+                     # digest of the deliverables it was accepted against);
+                     # SessionState gains approved_grant_entries (the materialized
+                     # effective grant set bound at approve / snapshot refresh)
+                     # 46: PlanPairReview gains content digests (base_norm/service_norm/
+                     # service_iface_norm/edge_norm) and unit_norm for unit records
+                     # (`unit:<node>` keys in plan_pair_reviews); PlanReview gains
+                     # reviewed_unit_currency
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -568,9 +576,14 @@ class PlanReview:
     # Per-stage interface digests (`plan.plan_interface_digests`) at record time, and per
     # pair the sha256 of its `plan.pair_currency_keys` digests. Both are empty/None on a
     # record written before they were kept, which reads as: every moved stage's interface
-    # moved, and a pair is measured by its seven-digest `reviewed_pair_bindings` hash.
+    # moved, and every pair is walk-stale (`gates.walk_stale_pairs`).
     reviewed_interface_keys: dict[str, str] = field(default_factory=dict)
     reviewed_pair_currency: "dict[str, str] | None" = None
+    # Schema 46: per unit id (`plan.review_units`) the unit's currency hash
+    # (`plan.unit_currency_hash`) at record time; `reviewed_pair_currency` now holds
+    # the content-keyed pair hash (`plan.pair_currency_hash`). None on a record
+    # written before units existed, which reads as: every unit is walk-stale.
+    reviewed_unit_currency: "dict[str, str] | None" = None
     # Schema 44: the severity the reviewer wrote on each concern (`blocking`/`note`,
     # positionally paired with `concerns`), the engine's effective severity after the
     # freeze rules (`blocking`/`note`/`advisory`), the reviewer's own verdict when the
@@ -614,6 +627,9 @@ class PlanReview:
             reviewed_pair_currency=(
                 dict(rpc) if isinstance(rpc := d.get("reviewed_pair_currency"), dict) else None
             ),
+            reviewed_unit_currency=(
+                dict(ruc) if isinstance(ruc := d.get("reviewed_unit_currency"), dict) else None
+            ),
             severities=list(d.get("severities", [])),
             effective_severities=list(d.get("effective_severities", [])),
             raw_verdict=d.get("raw_verdict", ""),
@@ -645,6 +661,11 @@ def plan_review_concern_ids(pr: "PlanReview") -> list[str]:
 
 _PLAN_REVIEW_PAIR_SCOPE_PREFIX = "topo:"
 
+# The content digests (`plan.pair_content`) a pair record written under schema 46 is
+# judged current by, in the order gates.pair_status reports the first moved one. A
+# record with `edge_norm` empty predates them and is judged by `PAIR_BINDING_KEYS`.
+PAIR_CONTENT_KEYS = ("edge_norm", "base_norm", "service_iface_norm", "service_norm")
+
 # The seven plan.pair_binding digests a pair record carries, in the fixed order
 # gates.pair_status reports the first moved one (`edge` right after `context`).
 PAIR_BINDING_KEYS = (
@@ -666,21 +687,24 @@ def plan_review_pair_scope(scope: str) -> "str | None":
     return scope[len(_PLAN_REVIEW_PAIR_SCOPE_PREFIX):] or None
 
 
-# One thinker review of a single base-service PAIR (b, s) -- one reliance edge, base
-# b relying on service s; the nodes are stage indices plus the synthetic `plan` and
-# `base` (see plan.review_pairs). Recorded by cmd_plan_review's `--scope topo:<pair>`
-# branch, kept in SessionState.plan_pair_reviews keyed by pair id (never in
-# plan_review / plan_stage_reviews / plan_review_passes, which stay reserved for
-# whole-plan and stage:<n> records). ONE record type serves every pair, the order
-# pair (`base-plan`) and the plan-coverage pairs (`plan-<s>`) included: `base` and
-# `service` hold a stage index, "plan" or "base", and only plan.pair_binding's node
-# keys differ.
+# One thinker review of a single UNIT (`unit:base` / `unit:<n>`, reviewed alone) or a
+# single base-service PAIR (b, s) -- one reliance edge, base b relying on service s;
+# the nodes are stage indices plus the order node `base` (see plan.review_units,
+# plan.review_pairs). Recorded by cmd_plan_review's `--scope topo:<id>` branch, kept in
+# SessionState.plan_pair_reviews keyed by review id (never in plan_review /
+# plan_stage_reviews / plan_review_passes, which stay reserved for whole-plan and
+# stage:<n> records). ONE record type serves every unit and pair: a unit has its node
+# in `base` and `service == ""`, and holds its currency in `unit_norm`; a pair holds
+# `base` and `service` (a stage index or "base"). Records written for the retired ids `plan-<s>`,
+# `base-plan` and `unit:plan` still load and count as stale (plan.is_legacy_review_id).
 #
-# A pair record binds to exactly the bytes its reviewer could see: the seven digests
-# of plan.pair_binding, recomputed by the engine from a fresh load of the evaluated
-# plan at record time (never read off the materialized view files or state.stages).
-# `plan_sha256` is audit only -- currency is decided by the binding digests via
-# gates.pair_status, never by the whole-plan sha.
+# A record binds to the content its reviewer was shown: the digests of
+# plan.unit_currency_hash / plan.pair_content (`PAIR_CONTENT_KEYS`), recomputed by the
+# engine from a fresh load of the evaluated plan at record time (never read off the
+# materialized view files or state.stages). A record written before those digests
+# carries the seven legacy digests of plan.pair_binding instead (`PAIR_BINDING_KEYS`).
+# `plan_sha256` is audit only -- currency is decided by gates.pair_status, never by the
+# whole-plan sha.
 #
 # `plan_path` is the path this record was computed against (the session's registered
 # plan, or a --target override) -- a record for a different path counts as `missing`
@@ -711,10 +735,31 @@ class PlanPairReview:
     effective_severities: list[str] = field(default_factory=list)
     raw_verdict: str = ""
     part_digests: dict[str, str] = field(default_factory=dict)
+    # Schema 46: the content digests of plan.pair_content (a pair) or the unit's
+    # plan.unit_currency_hash (`unit_norm`; a unit record has base = the node,
+    # service = "", and no pair digests). All "" on a record written before.
+    base_norm: str = ""
+    service_norm: str = ""
+    service_iface_norm: str = ""
+    edge_norm: str = ""
+    unit_norm: str = ""
+
+    @property
+    def is_unit(self) -> bool:
+        return self.pair.startswith("unit:")
+
+    @property
+    def is_content_keyed(self) -> bool:
+        """Whether the record carries the content digests it is judged current by."""
+        return bool(self.unit_norm if self.is_unit else self.edge_norm)
 
     def binding(self) -> dict[str, str]:
         """The stored digests, in the shape plan.pair_binding returns."""
         return {key: getattr(self, key) for key in PAIR_BINDING_KEYS}
+
+    def content(self) -> dict[str, str]:
+        """The stored content digests, in the shape plan.pair_content returns."""
+        return {key: getattr(self, key) for key in PAIR_CONTENT_KEYS}
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "PlanPairReview | None":
@@ -736,7 +781,9 @@ class PlanPairReview:
             effective_severities=list(d.get("effective_severities", [])),
             raw_verdict=d.get("raw_verdict", ""),
             part_digests=dict(pd) if isinstance(pd := d.get("part_digests"), dict) else {},
+            unit_norm=d.get("unit_norm", ""),
             **{key: d.get(key, "") for key in PAIR_BINDING_KEYS},
+            **{key: d.get(key, "") for key in PAIR_CONTENT_KEYS},
         )
 
 
@@ -1101,6 +1148,10 @@ class AcceptanceReview:
     verdicts: list[RequirementVerdict] = field(default_factory=list)
     note: str = ""
     plan_sha256: str = ""
+    # requirement id -> digest of what that requirement was accepted against (its text,
+    # its coverage entries' deliverables). None on a review written before schema 45: such
+    # a review is stale on any plan-sha movement, as before.
+    requirement_bindings: dict[str, str] | None = None
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "AcceptanceReview | None":
@@ -2115,6 +2166,13 @@ class SessionState:
     # that predates these fields.
     runtime_grants: dict[str, list[dict]] = field(default_factory=dict)
     approved_grants_sha256: str | None = None
+    # The effective grant entries the hash above covers, materialized when it was bound
+    # (stage index -> {"declared", "derived", "dropped"}); dispatch reads these instead of
+    # re-deriving from the venue filesystem. None on a session bound before schema 45.
+    # "derived" is authoritative for dispatch and is what the hash is re-checked against;
+    # "declared" is kept so the hash can be recomputed, but dispatch takes the declared
+    # half from the hash-verified plan snapshot, never from here.
+    approved_grant_entries: dict[str, dict] | None = None
     planning_misses: list[dict] = field(default_factory=list)
     materialization_defects: list[dict] = field(default_factory=list)
     settings_drift: list[dict] = field(default_factory=list)

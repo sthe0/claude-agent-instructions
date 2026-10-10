@@ -108,6 +108,19 @@ ground = "_LEGACY_ENUMERATION_ID.match tests an id for the qenum-N identifier sh
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/cli.py::_record_review_questions::re.compile"]
+class = "structural"
+ground = "Compiles the engine's own candidate-id shape qrev-<review id>-<N> so the next unused number can be read off the ids already on file; the question text is never matched."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_record_review_questions::pattern.fullmatch"]
+class = "structural"
+ground = "The qrev-<review id>-<N> id pattern's .fullmatch tells this review's candidate rows from every other row by id shape, to find the standing row and the highest number; the statement is compared by equality, not by pattern."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
 [sites."scripts/agentctl/conditions.py::<module>::re.compile"]
 class = "candidate-generation"
 ground = "_INDEXED_STAGE ('stage N'), _RELATIVE_STAGE ('previous stage') and _COMPLETION (done/merged/landed ...) only nominate stage conditions that may restate depends_on for judge_restatement, which decides (fail-open) on the submission path."
@@ -226,6 +239,12 @@ ground = "INTERPRETER_RE.match tests whether a program token names an interprete
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/grants.py::bash_rule_identity::pattern.match"]
+class = "structural"
+ground = "INTERPRETER_RE.match tests whether a program token names an interpreter, a shell-command token check."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/agentctl/plan.py::check_venue_warnings._first_cd_target::re.split"]
 class = "structural"
 ground = "re.split on '&&', ';' and '|' splits a shell command into segments."
@@ -240,9 +259,9 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/plan.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: _LANDED_REF_RE (git ref name shape), _EXECUTOR_RE (in_thread|spawn:<kind> vocabulary), _HEREDOC_START (shell here-document introducer), _CONCERN_RE (the engine's own `blocking:`/`note:` severity tag and `re:<id>` restatement reference)."
-hits = 4
-hit_classes = ["structural", "structural", "structural", "structural"]
+ground = "Compiles: _LANDED_REF_RE (git ref name shape), _EXECUTOR_RE (in_thread|spawn:<kind> vocabulary), _HEREDOC_START (shell here-document introducer), CUSTOMER_QUESTIONS_HEADER_RE (the engine's own `Customer questions:` field header, tolerant of case and emphasis), _CONCERN_RE (the engine's own `blocking:`/`note:` severity tag and `re:<id>` restatement reference)."
+hits = 5
+hit_classes = ["structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/plan.py::_parse_landed_spec::pattern.fullmatch"]
@@ -282,9 +301,27 @@ ground = "_EXECUTOR_RE.match validates the executor field against the engine's i
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/plan.py::plan_coverage_refs::pattern.match"]
+[sites."scripts/agentctl/plan.py::plan_coverage_entries::pattern.match"]
 class = "structural"
-ground = "grammar.pattern.match matches a coverage control name against the engine's own control-name grammars."
+ground = "grammar.pattern.match matches a coverage control name against the engine's own control-name grammars, to read which stage the control names."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan.py::customer_question_defect::pattern.match"]
+class = "structural"
+ground = "CUSTOMER_QUESTIONS_HEADER_RE.match tests whether a passed --customer-question is the reply's own `Customer questions:` field line, the engine's protocol header; it never reads what the question asks."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/render.py::_control_text::pattern.match"]
+class = "structural"
+ground = "grammar.pattern.match matches a coverage control name against the engine's own control-name grammars, to describe the part of the stage it names."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan.py::acceptance_requirement_bindings.token::pattern.match"]
+class = "structural"
+ground = "grammar.pattern.match matches a coverage control name against the engine's own control-name grammars, to bind a requirement to the deliverable the control names."
 hits = 1
 reviewed_by = "developer"
 
@@ -1108,7 +1145,20 @@ reviewed_by = "developer"
 
 [sites."scripts/lib/review_block.py::<module>::re.compile"]
 class = "structural"
-ground = "NUMBERING_RE matches a leading list numbering (1. / 2)) so a REVIEW line is compared to the engine's fixed REVIEW/Verdict/Plan digest markers without it."
+ground = "Compiles: NUMBERING_RE (a leading list numbering 1. / 2), so a REVIEW line is compared to the engine's fixed REVIEW/Verdict/Plan digest markers without it), LIST_ITEM_RE (a markdown bullet or numbered item) and _NUMBERED_QUESTION_RE (a near-miss spelling of the `Q:` field prefix); all fixed line syntax."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/review_block.py::ReviewBlock.questions::pattern.match"]
+class = "structural"
+ground = "_NUMBERED_QUESTION_RE.match recognises a line spelled `q:` / `Q2:` after a question as a second question written without the exact `Q:` prefix, so the reply is refused rather than the two recorded as one; it matches the prefix token, never what the question says."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/review_block.py::starts_list_item::pattern.match"]
+class = "structural"
+ground = "LIST_ITEM_RE.match detects a markdown bullet or numbered item at column 0, so a new list item is never read as the continuation of the question above it."
 hits = 1
 reviewed_by = "developer"
 
@@ -1126,8 +1176,9 @@ reviewed_by = "developer"
 
 [sites."scripts/lib/review_block.py::classify_line::pattern.match"]
 class = "structural"
-ground = "The tagged-concern grammar's .match decides only whether a line has the severity-tag + condition-marker shape; it never reads what the concern says."
-hits = 1
+ground = "Two .match calls: CUSTOMER_QUESTIONS_HEADER_RE tests for the engine's `Customer questions:` field header, and the tagged-concern grammar's .match decides only whether a line has the severity-tag + condition-marker shape; neither reads what the concern or question says."
+hits = 2
+hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/lib/review_block.py::classify_line::pattern.sub"]
@@ -1429,9 +1480,9 @@ reviewed_by = "developer"
 
 [sites."scripts/plan-review-topological.py::<module>::re.compile"]
 class = "structural"
-ground = "Seven patterns of fixed syntax: 64-hex digest, list-item bullet, spawner summary fields marker=/cost_usd=/duration_ms=, and dry-run # stdin and TOPO-VIEW lines."
-hits = 7
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Six patterns of fixed syntax: 64-hex digest, spawner summary fields marker=/cost_usd=/duration_ms=, and dry-run # stdin and TOPO-VIEW lines."
+hits = 6
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/plan-review-topological.py::_names::re.search"]
@@ -1445,12 +1496,6 @@ class = "structural"
 ground = "SUMMARY_COST_RE and SUMMARY_DURATION_RE extract cost_usd= and duration_ms= fields from the spawner summary line."
 hits = 2
 hit_classes = ["structural", "structural"]
-reviewed_by = "developer"
-
-[sites."scripts/plan-review-topological.py::_parse_concerns::pattern.match"]
-class = "structural"
-ground = "LIST_ITEM_RE detects a markdown bullet/numbered-list line to enforce the engine's condition-prefix output format."
-hits = 1
 reviewed_by = "developer"
 
 [sites."scripts/plan-review-topological.py::parse_review_output::pattern.fullmatch"]
@@ -2375,4 +2420,84 @@ reviewed_by = "coordinator"
 class = "candidate-generation"
 ground = "rx.search over draft lines nominates rules (with hit lines) for judge_published_text_rules, the fail-open model judge in hook-published-text-writer-gate.py; a hit is never a violation by itself."
 hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/claude-recover.py::<module>::re.compile"]
+class = "structural"
+ground = "_BOOT_ID_RE fixes the character set of a kernel boot id used as a state-directory name (path-safety syntax)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/claude-recover.py::_unescape_mountinfo::re.sub"]
+class = "structural"
+ground = "Decodes the octal escapes (\\NNN) of a /proc mountinfo field (fixed kernel encoding)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/claude-recover.py::cmd_restore::pattern.match"]
+class = "structural"
+ground = "_BOOT_ID_RE.match refuses a boot id outside the safe path character set before restore uses it as a directory name."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/claude-recover.py::cmd_snapshot::pattern.match"]
+class = "structural"
+ground = "_BOOT_ID_RE.match refuses a boot id outside the safe path character set before snapshot uses it as a directory name."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/claude-recover.py::transcript_path::re.sub"]
+class = "structural"
+ground = "Maps a cwd to the harness's project-directory name by replacing non-alphanumerics with '-' (fixed path encoding)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/builtin/agentctl_state.py::<module>::re.compile"]
+class = "structural"
+ground = "STATE_FILE_NAME fixes the file-name syntax of an agentctl session state file (<id>.json)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/builtin/agentctl_state.py::remove::pattern.fullmatch"]
+class = "structural"
+ground = "STATE_FILE_NAME.fullmatch refuses to remove a file whose name is not an agentctl state-file name."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/builtin/agentctl_state.py::scan::pattern.fullmatch"]
+class = "structural"
+ground = "STATE_FILE_NAME.fullmatch selects agentctl state files from a directory listing by file-name syntax."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/runner.py::_stamp_path::re.sub"]
+class = "structural"
+ground = "Replaces characters outside a safe file-name set when deriving a stamp file name (path sanitization)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/verify-canon-writers.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles fixed patterns for file-write primitives in Python/shell source (write_text, open-for-write, sed -i, git commit, tee, redirects); they match code syntax, not natural-language meaning."
+hits = 19
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "coordinator"
+
+[sites."scripts/verify-canon-writers.py::_is_shell::re.search"]
+class = "structural"
+ground = "Reads the interpreter name from a shebang line to tell shell scripts from others."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/verify-canon-writers.py::_redirect_writes_file::pattern.finditer"]
+class = "structural"
+ground = "Finds shell output redirects and their targets in one source line (shell syntax)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/verify-canon-writers.py::candidate_hits::pattern.search"]
+class = "structural"
+ground = "Applies the write-primitive syntax patterns line by line to list which writers a script contains; the writer inventory, not this match, records each file's verdict."
+hits = 2
+hit_classes = ["structural", "structural"]
 reviewed_by = "coordinator"
