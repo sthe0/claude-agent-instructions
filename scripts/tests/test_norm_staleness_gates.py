@@ -270,6 +270,37 @@ def test_an_acceptance_never_reads_current_over_a_plan_file_edited_in_place(
     assert blockers and "stale" in blockers[0], blockers
 
 
+def test_a_session_with_no_accepted_digest_refuses_to_accept_and_never_reads_current(
+    store, tmp_path,
+):
+    """An acceptance-active session whose accepted digest is empty has accepted no plan
+    version: `accept` has no version to bind to, and a review stamped with the same empty
+    digest must not read as current over whatever bytes the file holds."""
+    plan = _render(tmp_path / "v1.toml")
+    rn._approved(store, plan, session="ns")
+    state = store.load("ns")
+    state.accepted_plan_digest = ""
+    store.save(state)
+    verdict = ns(session="ns", author="user", verdict=["R1|pass", "R2|pass", "R3|pass"],
+                 note="compared the delivered engine against each requirement",
+                 bypass=False, bypass_reason="")
+
+    refused = cli.cmd_accept(verdict, store=store, runner=_judge_yes)
+
+    assert refused.ok is False
+    assert "no accepted plan version" in refused.detail
+    assert store.load("ns").acceptance_review is None
+
+    _accepted(store, tmp_path, sid="ns2")
+    state = store.load("ns2")
+    state.accepted_plan_digest = ""
+    state.acceptance_review.plan_sha256 = ""
+    store.save(state)
+
+    blockers = _acceptance_blockers(store, "ns2")
+    assert blockers and "stale" in blockers[0], blockers
+
+
 def test_a_review_without_bindings_keeps_the_raw_digest_comparison(store, tmp_path):
     """A review recorded before the binding existed carries no per-requirement digests;
     it must neither crash nor be waved through: any plan move still stales it, as it did."""
@@ -455,15 +486,64 @@ def test_a_refinement_narrowing_a_stage_withholds_venue_drift_from_that_stage_to
     assert withheld and _RUN_MOD in withheld[-1]["stages"]["1"], withheld
 
 
-def test_the_stored_entries_reproduce_the_hash_the_plan_derives(fixtures_dir):
+def test_a_refinement_relocating_the_venue_alone_admits_no_rule_the_new_venue_proposes(
+    store, fixtures_dir, tmp_path, monkeypatch,
+):
+    """DR-O proposes `python3 mod.py` where the venue has no package marker. Approved in
+    a venue WITH one (so the rule was never granted), a replan that only moves
+    `repo_root` to a venue without one must not hand the rule out: the plan changed no
+    stage's inputs, the new filesystem did."""
+    monkeypatch.chdir(tmp_path)
+    marked, bare = tmp_path / "marked", tmp_path / "bare"
+    marked.mkdir()
+    bare.mkdir()
+    (marked / "__init__.py").write_text("")
+    v1 = _repo_root_plan(fixtures_dir, tmp_path, str(marked), "v1.toml")
+    sid = "grants-relocated"
+    _to_executing(store, sid, fixtures_dir, plan_path=v1)
+    approved, error = _derived(store.load(sid))
+    assert error is None, error
+    assert _RUN_MOD not in {e["rule"] for e in approved}, approved
+
+    d = cli.cmd_replan(
+        ns(session=sid, plan=_repo_root_plan(fixtures_dir, tmp_path, str(bare), "v2.toml")),
+        store=store)
+    assert d.action == "continue", d.detail
+
+    state = store.load(sid)
+    after, error = _derived(state)
+    assert error is None, error
+    assert _RUN_MOD not in {e["rule"] for e in after}, after
+    assert after == approved
+
+
+def _repo_root_plan(fixtures_dir, tmp_path, repo_root: str, name: str) -> str:
+    text = (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+    text = text.replace('criterion_type = "measurable"\n',
+                        f'criterion_type = "measurable"\nrepo_root = {json.dumps(repo_root)}\n', 1)
+    out = tmp_path / name
+    out.write_text(text, encoding="utf-8")
+    return str(out)
+
+
+def test_the_stored_entries_reproduce_the_hash_the_plan_derives(fixtures_dir, tmp_path):
     """`approved_grants_sha256` is guarded at dispatch by hashing the stored entries, so
-    the entries hash and the plan hash must be one digest."""
+    the entries hash and the plan hash must be one digest -- over rules and over the
+    add_dirs (DR-R) the same plan derives."""
     from agentctl import plan as plan_mod
 
-    doc = plan_mod.load_plan(str(fixtures_dir / "plan_two_stage.toml"))
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    text = (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+    text = text.replace('output_artifacts = ["mod.py"]\n',
+                        f'output_artifacts = ["mod.py", "{outside}/out.txt"]\n', 1)
+    plan = tmp_path / "with_add_dir.toml"
+    plan.write_text(text, encoding="utf-8")
+    doc = plan_mod.load_plan(str(plan))
+    entries = plan_mod.materialized_grant_entries(doc)
+    assert any("path" in e for s in entries.values() for e in s["derived"]), entries
 
-    assert (plan_mod.entries_grants_sha256(plan_mod.materialized_grant_entries(doc))
-            == plan_mod.grants_sha256(doc))
+    assert plan_mod.entries_grants_sha256(entries) == plan_mod.grants_sha256(doc)
 
 
 def test_stored_entries_that_no_longer_reproduce_the_approved_hash_withhold_the_derived(
@@ -520,6 +600,8 @@ def test_a_refinement_materializes_a_legacy_sessions_entries_only_when_its_hash_
     store.save(state)
     cli.cmd_replan(ns(session=holds, plan=refined), store=store)
     assert store.load(holds).approved_grant_entries, "the approved hash reproduces: stored"
+    held_derived, held_error = _derived(store.load(holds))
+    assert held_error is None and held_derived
 
     drifted = "legacy-hash-drifted"
     _to_executing(store, drifted, fixtures_dir)
@@ -528,7 +610,12 @@ def test_a_refinement_materializes_a_legacy_sessions_entries_only_when_its_hash_
     state.approved_grants_sha256 = "0" * 64
     store.save(state)
     cli.cmd_replan(ns(session=drifted, plan=refined), store=store)
-    assert store.load(drifted).approved_grant_entries is None
+    after = store.load(drifted)
+    assert after.approved_grant_entries is None
+    assert after.approved_grants_sha256 == "0" * 64, "the refresh must not adopt drift"
+    withheld, error = _derived(after)
+    assert withheld == []
+    assert error and "derived-grants hash mismatch" in error
 
 
 def test_a_grant_growing_replan_still_goes_back_for_approval(store, fixtures_dir):

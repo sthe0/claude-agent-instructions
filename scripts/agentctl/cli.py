@@ -435,8 +435,9 @@ def _refresh_approved_grant_snapshot(
     stored entries gets `plan.refined_grant_entries` -- a stage whose grant inputs did
     not move keeps its approved entries, a moved one admits only the plan's own change,
     and venue drift is withheld and logged (`grant_drift_withheld`). A session bound
-    before entries were stored keeps the hash tracking `doc` and gets entries only when
-    `doc` still reproduces the hash it was approved under, as `--renormalize` requires.
+    before entries were stored gets entries only when `doc` still reproduces the hash it
+    was approved under; otherwise its hash is left untouched (as `--renormalize` does),
+    so dispatch keeps withholding what the live derivation no longer reproduces.
 
     `doc`, `data` and `digest` are the ONE read `cmd_replan` took of `args.plan`
     (`load_plan_with_digest`) -- passed through rather than re-read here, so this
@@ -459,10 +460,9 @@ def _refresh_approved_grant_snapshot(
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
     stored = state.approved_grant_entries
     if stored is None:
-        reproduces = (bool(state.approved_grants_sha256)
-                      and grants_sha256(doc) == state.approved_grants_sha256)
-        state.approved_grants_sha256 = grants_sha256(doc)
-        state.approved_grant_entries = materialized_grant_entries(doc) if reproduces else None
+        if (state.approved_grants_sha256
+                and grants_sha256(doc) == state.approved_grants_sha256):
+            state.approved_grant_entries = materialized_grant_entries(doc)
         return
     entries, withheld = refined_grant_entries(stored, replaced, doc)
     state.approved_grant_entries = entries
@@ -5761,14 +5761,19 @@ def cmd_accept(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             f"({state.plan_path or 'no plan_path on this session'}); acceptance compares the "
             "delivered product with the order that plan declares",
         )
-    if state.accepted_plan_digest and plan_digest != state.accepted_plan_digest:
+    accepted_digest = state.accepted_plan_digest or ""
+    if plan_digest != accepted_digest and (accepted_digest or gates.acceptance_active(state)):
         # The per-requirement binding below is computed from `doc`; a file that is not
         # the accepted version would bind the review to bytes the engine never approved
-        # while stamping it with the accepted digest.
+        # while stamping it with the accepted digest. An acceptance-active session with
+        # no accepted digest has no version to bind to, so it is refused the same way.
         return Directive(
             False, state.node, "noop",
             f"plan edited since it was accepted ({state.plan_path}); replan first so the "
-            "engine's accepted version and the file agree, then accept against it",
+            "engine's accepted version and the file agree, then accept against it"
+            if accepted_digest else
+            f"no accepted plan version is recorded for this session ({state.plan_path}); "
+            "submit and approve the plan before accepting against it",
         )
     order = doc.meta.order
     author = getattr(args, "author", "") or ""
@@ -9252,20 +9257,16 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
 def _report_acceptance_staleness(d: Directive, args, store: StateStore) -> None:
     """Name, on an applied replan of every kind, the requirement ids whose recorded
     acceptance the plan it carries has invalidated (`acceptance_stale`, empty when none) --
-    the same `gates.acceptance_staleness` the resolution gate reads, so the author learns
-    at the edit what verify-final would otherwise refuse later. Silent when no
+    the resolution gate's own check on the state the replan just saved
+    (`gates.acceptance_stale_requirements`), so the author learns at the edit what
+    verify-final would otherwise refuse later. Silent when acceptance is inactive, no
     AcceptanceReview exists or the replan was refused."""
     if not d.ok:
         return
     state = store.load(args.session)
-    review = state.acceptance_review if state is not None else None
-    if review is None:
+    if state is None or state.acceptance_review is None or not gates.acceptance_active(state):
         return
-    try:
-        doc, _data, digest = load_plan_with_digest(args.plan)
-    except (OSError, PlanError):
-        return
-    stale = gates.acceptance_staleness(review, doc, digest) or []
+    stale = gates.acceptance_stale_requirements(state) or []
     d.data["acceptance_stale"] = stale
     if stale:
         d.detail += (f"; the recorded acceptance is stale for requirement id(s) {stale} — "

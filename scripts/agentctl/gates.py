@@ -207,6 +207,27 @@ def acceptance_staleness(review, doc, plan_digest: str) -> list[str] | None:
     return stale or None
 
 
+def acceptance_stale_requirements(state: SessionState) -> list[str] | None:
+    """The requirement ids the session's recorded acceptance has gone stale for, by the
+    resolution gate's own check (`_acceptance_review_check`) -- `None` when acceptance is
+    inactive, absent, unreadable or current. A review without bindings that is stale names
+    every requirement the plan declares; a stale review whose plan file is not the
+    accepted version names none (the file's requirement ids cannot be trusted)."""
+    status, _ids, _verdicted, stale_ids = _acceptance_review_check(state)
+    if status != "stale":
+        return None
+    review = state.acceptance_review
+    if (stale_ids or review is None or review.requirement_bindings is not None
+            or not state.plan_path):
+        return list(stale_ids)
+    try:
+        doc, _data, _digest = load_plan_with_digest(state.plan_path, strict=False)
+    except (OSError, PlanError):
+        return []
+    order = doc.meta.order
+    return [r.id for r in order.requirements] if order is not None else []
+
+
 class _AcceptanceCheck(NamedTuple):
     status: str
     requirement_ids: list[str]
@@ -241,9 +262,10 @@ def _acceptance_review_check(state: SessionState) -> _AcceptanceCheck:
             doc = None
     if doc is None:
         return _AcceptanceCheck("unreadable", [], {}, [])
-    if state.accepted_plan_digest and file_digest != state.accepted_plan_digest:
+    if file_digest != (state.accepted_plan_digest or ""):
         # Bindings and requirement ids are read from this file: bytes the engine never
-        # accepted cannot stand in for the version the review was recorded against.
+        # accepted cannot stand in for the version the review was recorded against. A
+        # session with NO accepted digest has accepted none, so it fails closed here too.
         return _AcceptanceCheck("stale", [], {}, [])
     if digest_moved:
         stale = acceptance_staleness(review, doc, state.accepted_plan_digest or "")

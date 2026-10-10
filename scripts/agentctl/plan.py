@@ -2951,7 +2951,11 @@ def refined_grant_entries(
     `{stage index: [rule/path withheld]}`.
 
     Entries are re-derived against today's venue filesystem, which may have moved since
-    approval (#338). A stage's re-derived set is therefore split by cause:
+    approval (#338). Both `old` and `new` are derived against `new`'s venue -- the
+    `_grants_grew` / `diff_plans` convention -- so the comparison isolates what the plan
+    changed from what the filesystem did, and a relocation of `repo_root` /
+    `delivery_worktree` on its own moves no stage's inputs: it never admits a rule only
+    the new venue's filesystem proposes. A stage's re-derived set is split by cause:
 
       * the stage's grant inputs did not move (`old` derives the same set as `new` for
         it, both read now): the stored entries stay exactly as approved;
@@ -2960,13 +2964,15 @@ def refined_grant_entries(
         identity is admitted) -- and what `new` derives that `old` also derives but the
         approval never stored is venue drift. The result keeps the stored entries `new`
         still derives plus the plan's own additions; drift is withheld and reported.
+        A stored entry `new` no longer derives is dropped: a stage that moved AND whose
+        venue relocated loses its venue-path entries until it is re-approved (under-,
+        never over-granting).
 
     `old` unreadable: nothing separates the plan's change from drift, so nothing new is
     admitted -- stored entries `new` still derives, and declared grants from `new`."""
-    old_venue = _venue_for(old) if old is not None else None
     new_venue = _venue_for(new)
     now = materialized_grant_entries(new, venue=new_venue)
-    before = materialized_grant_entries(old, venue=old_venue) if old is not None else {}
+    before = materialized_grant_entries(old, venue=new_venue) if old is not None else {}
     out: dict[str, dict] = {}
     withheld: dict[str, list[str]] = {}
     for idx, n in now.items():
@@ -2986,7 +2992,7 @@ def refined_grant_entries(
             "derived": [e for e in n["derived"] if _entry_key(e) in admitted],
             "dropped": n["dropped"],
         }
-        held = [e.get("rule") or e.get("path") for e in n["derived"]
+        held = [e.get("rule") or f"{e['path']} ({e['mode']})" for e in n["derived"]
                 if _entry_key(e) not in admitted]
         if held:
             withheld[idx] = held
