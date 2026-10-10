@@ -2983,8 +2983,8 @@ def norm_baseline(doc: PlanDoc) -> dict:
 
 @dataclass(frozen=True)
 class NormDelta:
-    """How a plan's norm moved against a baseline: the one answer every consumer of "what
-    changed" reads instead of diffing the documents itself.
+    """How a plan's norm moved against a baseline. Its one caller today is `_grants_grew`;
+    the other consumers key on content digests built from the same per-element keys.
 
     `elements` holds, per stage present in the document, the names whose key moved (the
     question vocabulary, the reserved whole-stage entry, and `interface` / `carry`); a stage

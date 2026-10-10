@@ -1,5 +1,8 @@
 """Atomic sidecar files for the detached enumeration worker's result payload.
 
+Retired route: the enumerator no longer launches for new plans; the only remaining
+caller is discard_all_for_session. The text below describes the route as it ran.
+
 The detached enumeration child (cmd_question_enumerate_worker) must NEVER call
 store.save() -- FileStateStore.save() is an unlocked, whole-state truncating
 write (store.py:49-52), and the child's write racing against whatever

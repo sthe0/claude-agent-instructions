@@ -10521,7 +10521,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("question-check"); sp.add_argument("--session", required=True)
     sp = add("question-enumerate"); sp.add_argument("--session", required=True)
     sp.add_argument("--plan", default=None,
-                    help="enumerate against this plan instead of the session's current "
+                    help="Retired — the verb exits 2. Was: enumerate against this plan "
+                         "instead of the session's current "
                          "plan_path (use when preparing a CORRECTED plan for replan)")
     sp.add_argument("--reopen-dismissed", action="store_true",
                     help="re-raise a candidate whose text was previously carried forward as "
@@ -10530,7 +10531,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("question-enumerate-escape"); sp.add_argument("--session", required=True)
     sp.add_argument("--reason", required=True, choices=list(premise.ENUMERATION_ESCAPE_REASONS),
-                    help="why the mandatory enumeration cross-check is being discharged "
+                    help="Retired — the verb exits 2. Was: why the mandatory enumeration "
+                         "cross-check is being discharged "
                          "without a healthy run — a closed set, so the escapes aggregate")
     sp.add_argument("--note", required=True,
                     help="what actually happened, for the reader of one row (the reason "
@@ -10541,7 +10543,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("question-enumerate-worker"); sp.add_argument("--session", required=True)
     sp.add_argument("--plan", required=True,
-                    help="plan file to enumerate — this detached worker never touches "
+                    help="Retired — the verb exits 2. Was: plan file to enumerate — this "
+                         "detached worker never touches "
                          "session state, so the launcher names it explicitly")
     sp.add_argument("--digest", required=True,
                     help="plan content digest the launcher computed (plugins_premise."

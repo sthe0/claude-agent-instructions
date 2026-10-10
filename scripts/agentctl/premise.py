@@ -66,6 +66,8 @@ _KEY_BOUND_DISPOSITIONS = frozenset({"researched", "escalated", "assumed"})
 TARGET_RE = re.compile(r"^stage:(\d+)\.([a-z_]+)$")
 
 # --- typed escapes from the mandatory enumeration cross-check ------------------
+# Retired with the enumerator: kept so recorded escapes still load. The text below
+# describes the route as it ran.
 # The cross-check used to discharge itself fail-open: the flag flipped because the
 # pass RAN, whatever it returned. A runner failure now blocks approve until one of
 # these is recorded — typed rather than left to the free-text `note`, for the same
