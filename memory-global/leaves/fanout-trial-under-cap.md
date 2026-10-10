@@ -4,7 +4,7 @@ description: Before trialing any mechanism that spawns processes per invocation 
 type: feedback
 schema: leaf/v1
 created: 2026-10-07
-last_verified: 2026-10-07
+last_verified: 2026-10-10
 ---
 
 ## Difficulty
@@ -23,6 +23,5 @@ Apply the same two steps to a self-devised wrapper around a spawner (an `Agent` 
 
 ## See also
 
-- [[xdist-auto-parallel-fork-bomb]] — the incident and the xdist-specific guard.
-- [Core #304](https://github.com/sthe0/claude-agent-instructions/issues/304) — the fix the incident requires before auto-parallel tests land.
+- [Core #304](https://github.com/sthe0/claude-agent-instructions/issues/304) — closed: the guard (`scripts/tests/_xdist_auto.py`, pinned by `test_conftest_auto_parallel.py`) is in place and the suite now runs in parallel by default. This leaf is about the FIRST trial of a NEW fan-out mechanism, not a ban on parallel test runs: running the existing suite in parallel needs neither the cap nor a serial fallback. Opt out only with a stated reason (`-n 0`, `-p no:xdist`).
 - [[universal-negative-control-via-mutation-catalogue]] — the regression test that pins the guard must go RED when the worker exit is removed.
