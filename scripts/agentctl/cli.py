@@ -663,10 +663,14 @@ def _autonomy_for(state: SessionState, doc) -> dict:
     # A decline this session holds is enforced where the stage is carried and at the agent's
     # approval; the ledger's copy is what a session that never saw the decline (a new session,
     # a reset) is held to, so only the stages the session does not already know are offered.
-    known = gates.declined_issue_set(state)
+    known_issues = gates.declined_issue_set(state)
+    known_titles = gates.declined_title_set(state)
     return gates.autonomy_boundary(
         ledger, view, ledger.get("first_thinker_verdicts"), protected=protected,
-        live_optional=[s for s in doc.stages if s.backlog_issue not in known],
+        live_optional=[
+            s for s in doc.stages
+            if not gates.is_declined_stage(s, known_issues, known_titles)
+        ],
     )
 
 
@@ -916,24 +920,6 @@ def _stamp_accepted_plan_digest(state: SessionState, plan_path: str) -> None:
         return
 
 
-def _declined_titles(stages) -> set[str]:
-    """Titles of the stages the customer declined (SKIPPED, or offered again and still marked)."""
-    return {s.title for s in stages if s.outcome.declined or is_skipped(s)}
-
-
-def _declined_by_identity(stage, declined_issues: set[str], declined_titles: set[str]) -> bool:
-    """Whether a freshly materialized stage is work the customer declined.
-
-    An optional stage is identified by its `backlog_issue`, never by its index. A stage that
-    stopped being optional has no issue left to name (the loader forbids one), so it is
-    matched by title against the stages the session held as declined: a required stage with
-    a declined stage's title is offered to the customer again, which only ever adds a
-    refusal for the agent's approval."""
-    if stage.optional:
-        return gates.declined_by_issue(stage, declined_issues)
-    return stage.title in declined_titles
-
-
 def _refresh_caches_from_plan_path(
     state: SessionState,
     *,
@@ -1000,7 +986,7 @@ def _refresh_caches_from_plan_path(
     carried = {rs.index: stage_carried(state.stages, refreshed.stages, rs.index)
                for rs in refreshed.stages}
     declined_issues = gates.declined_issue_set(state)
-    declined_titles = _declined_titles(state.stages)
+    declined_titles = gates.declined_title_set(state)
     rebuilt: list[Stage] = []
     for rs in refreshed.stages:
         try:
@@ -1023,7 +1009,7 @@ def _refresh_caches_from_plan_path(
         rebuilt.append(cur)
     for s in rebuilt:
         s.outcome.declined = is_skipped(s) or (
-            not is_settled(s) and _declined_by_identity(s, declined_issues, declined_titles))
+            not is_settled(s) and gates.is_declined_stage(s, declined_issues, declined_titles))
     state.stages = rebuilt
     state.final_check = refreshed.meta.final_check
     _sync_venue_from_plan(state, refreshed)
@@ -6054,7 +6040,8 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # customer approval re-offers the choice.
         revived = sorted(
             {s.index for s in state.stages if s.outcome.declined and not is_skipped(s)}
-            | set(gates.declined_live_optional(state.stages, gates.declined_issue_set(state)))
+            | set(gates.declined_live_optional(
+                state.stages, gates.declined_issue_set(state), gates.declined_title_set(state)))
         )
         if revived:
             blockers = blockers + [
@@ -6217,9 +6204,10 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                 scale: float((state.effort_estimate or {}).get(scale) or 0.0)
                 for scale in effort.RATIO_SCALES
             }
+            previous = order_approvals.latest_user_approved_record(order_key)
             order_approvals.record_approval(
-                order_digest(_approved_doc),
-                plan_sha256=_approved_digest or "",
+                order_key,
+                plan_sha256=_approved_digest or state.accepted_plan_digest or "",
                 resources=all_resources,
                 unresolved_identities=all_unresolved,
                 stage_effects=all_stage_effects,
@@ -6227,6 +6215,8 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                 at=dt.datetime.now(dt.timezone.utc).isoformat(),
                 effort_estimate=armed_estimate,
                 declined_issues=sorted(state.declined_issues),
+                declined_stages=gates.declined_stage_entries(
+                    state, order_approvals.declined_stages_of(previous)),
             )
             state.order_effort_frozen = armed_estimate
             actual_now = effort.actual(state)
@@ -10152,7 +10142,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         ))
     state.reattest_stash = reattest_stash
     declined_issues = gates.declined_issue_set(state)
-    declined_titles = _declined_titles(state.stages)
+    declined_titles = gates.declined_title_set(state)
     for ns in new.stages:
         prev = live_by_index.get(ns.index)
         if prev is not None and stage_carried(state.stages, new.stages, ns.index):
@@ -10167,7 +10157,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # and outlives a reset to PENDING: `approve --by agent` refuses while a declined
         # stage is live, so only a customer approval can bring it back.
         if is_skipped(ns) or (
-            not is_settled(ns) and _declined_by_identity(ns, declined_issues, declined_titles)
+            not is_settled(ns) and gates.is_declined_stage(ns, declined_issues, declined_titles)
         ):
             ns.outcome.declined = True
     state.stages = new.stages

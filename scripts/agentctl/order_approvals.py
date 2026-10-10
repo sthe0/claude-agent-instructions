@@ -27,6 +27,7 @@ cross-machine ledger directory::
           "unresolved_identities": [[...], ...],
           "stage_effects": [{"path": "...", "sha256": "..."}, ...],
           "declined_issues": ["owner/repo#7", ...],
+          "declined_stages": [{"issue": "owner/repo#7", "title": "Wire CI"}, ...],
           "by": "alice",
           "at": "2026-09-29T12:00:00Z"
         }
@@ -34,11 +35,14 @@ cross-machine ledger directory::
     }
 
 `declined_issues` holds the backlog issues of the optional stages the customer
-declined (`approve --skip-optional`) at that approval. It lives on the approval record
+declined (`approve --skip-optional`) at that approval; `declined_stages` pairs each
+issue with the stage's title, which is what still names the stage once a plan stops
+declaring it optional (the loader forbids an issue on a required stage). Both are sorted
+and de-duplicated, `[]` when nothing was declined. They live on the approval record
 because that is the carrier the autonomy boundary already checks the agent against: a
 new session or a `reset` of the same order starts with no session state, and only this
-record still says the customer turned the stage down. A record without the key (written
-before it existed) declines nothing.
+record still says the customer turned the stage down. A record without either key
+(written before it existed) declines nothing.
 
 Two writers, both customer-authored (never `AGENT_ACTOR`):
   * `cmd_approve` calls `record_approval()` once per successful approve for
@@ -260,6 +264,7 @@ def record_approval(
     at: str,
     effort_estimate: dict | None = None,
     declined_issues: list[str] | None = None,
+    declined_stages: list[dict] | None = None,
     root: Path | None = None,
 ) -> dict:
     """Append one approval record, stamped by `cmd_approve` for the customer
@@ -279,12 +284,18 @@ def record_approval(
     again (see `first_thinker_verdict_key`)."""
     if by.strip().casefold() == AGENT_ACTOR:
         raise ValueError(f"order_approvals.record_approval refuses by={AGENT_ACTOR!r}")
+    if not plan_sha256:
+        # `latest_user_approved_of` keys a user-approved record on a non-empty digest, so
+        # an empty one would be stored and then never read: the approval, and the decline
+        # it carries, would silently vanish from the boundary.
+        raise ValueError("order_approvals.record_approval refuses an empty plan_sha256")
     record = {
         "plan_sha256": plan_sha256,
         "resources": [resource_to_dict(r) for r in resources],
         "unresolved_identities": [list(identity) for identity in unresolved_identities],
         "stage_effects": stage_effects,
         "declined_issues": sorted({str(i) for i in (declined_issues or [])}),
+        "declined_stages": normalize_declined_stages(declined_stages),
         "by": by,
         "at": at,
         "effort_estimate": effort_estimate,
@@ -319,6 +330,7 @@ def record_customer_grant(
         "unresolved_identities": [],
         "stage_effects": [],
         "declined_issues": [],
+        "declined_stages": [],
         "by": by,
         "at": at,
     }
@@ -356,6 +368,34 @@ def declined_issues_of(record: dict | None) -> list[str]:
     if not isinstance(raw, list):
         return []
     return sorted({i for i in raw if isinstance(i, str) and i})
+
+
+def normalize_declined_stages(raw) -> list[dict]:
+    """`declined_stages` entries as sorted, de-duplicated `{"issue", "title"}` dicts.
+
+    Tolerant like the other readers: anything that is not a list of dicts with a non-empty
+    string `issue` and `title` is dropped, so a malformed value declines nothing."""
+    if not isinstance(raw, list):
+        return []
+    pairs = {
+        (e["issue"], e["title"]) for e in raw
+        if isinstance(e, dict)
+        and isinstance(e.get("issue"), str) and e["issue"]
+        and isinstance(e.get("title"), str) and e["title"]
+    }
+    return [{"issue": issue, "title": title} for issue, title in sorted(pairs)]
+
+
+def declined_stages_of(record: dict | None) -> list[dict]:
+    """The `{"issue", "title"}` pairs one approval record declines; `[]` for a record that
+    predates the field, for a malformed value, and for no record at all."""
+    return normalize_declined_stages((record or {}).get("declined_stages"))
+
+
+def declined_titles_of(record: dict | None) -> list[str]:
+    """The titles of the stages one approval record declines -- the identity of a declined
+    stage that has become required, which has no issue left to be matched by."""
+    return sorted({e["title"] for e in declined_stages_of(record)})
 
 
 def flush_effort(

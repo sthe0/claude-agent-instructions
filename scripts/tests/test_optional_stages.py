@@ -1394,9 +1394,11 @@ def test_a_ledger_record_without_the_field_declines_nothing(eng):
     stored = json.loads(path.read_text(encoding="utf-8"))
     for record in stored["records"]:
         record.pop("declined_issues", None)
+        record.pop("declined_stages", None)
     path.write_text(json.dumps(stored), encoding="utf-8")
 
     assert oa.declined_issues_of(eng.ledger(plan)["records"][-1]) == []
+    assert oa.declined_titles_of(eng.ledger(plan)["records"][-1]) == []
     opened = eng.open("a2", plan)
     assert opened["data"]["autonomy"]["action"] == "self_approve", opened
     assert eng.run("approve", session="a2", by="agent")["ok"] is True
@@ -1410,6 +1412,132 @@ def test_a_replan_inside_the_session_that_holds_the_decline_still_self_approves(
     d = eng.run("replan", session="u1", plan=second)
     assert d["data"]["autonomy"]["action"] == "self_approve", d
     assert d["data"]["autonomy"]["declined_live_optional"] == []
+
+
+# --- one identity rule: the ledger names a declined stage by title once it is required ----
+
+def _required_variant(eng):
+    return eng.write(_optional_third_stage_plan(required=True), "required.toml")
+
+
+def _stage_3_title(eng, plan):
+    return next(s.title for s in load_plan(plan, strict=False).stages if s.index == 3)
+
+
+def test_a_customer_approval_stamps_the_declined_stage_by_issue_and_title(eng):
+    plan = _declined_order(eng)
+    record = eng.ledger(plan)["records"][-1]
+    assert record["declined_stages"] == [{"issue": ISSUE, "title": _stage_3_title(eng, plan)}]
+    assert record["declined_issues"] == [ISSUE]
+
+
+def test_a_new_session_cannot_self_approve_a_declined_stage_that_became_required(eng):
+    plan = _declined_order(eng)
+    title = _stage_3_title(eng, plan)
+    required = _required_variant(eng)
+
+    opened = eng.open("a2", required)
+    assert eng.state("a2").declined_issues == []  # the session never saw the decline
+    assert opened["data"]["autonomy"]["action"] == "await_user_approval", opened
+    assert opened["data"]["autonomy"]["declined_live_optional"] == [3]
+    refused = eng.run("approve", session="a2", by="agent")
+    assert refused["ok"] is False
+    reason = _boundary_refusal(refused)
+    assert reason, refused
+    assert f"stage 3 ({title})" in reason[0]
+    assert eng.state("a2").node == Node.PLAN_READY.value
+
+    accepted = eng.run("approve", session="a2", by="user")
+    assert accepted["ok"] is True, accepted
+    assert eng.state("a2").stage(3).outcome.status == "PENDING"
+    latest = eng.ledger(plan)["records"][-1]
+    assert latest["declined_stages"] == [] and latest["declined_issues"] == []  # the customer took it
+
+    assert eng.open("a3", required)["data"]["autonomy"]["action"] == "self_approve"
+
+
+def test_a_reset_session_cannot_self_approve_a_declined_stage_that_became_required(eng):
+    plan = _declined_order(eng)
+    required = _required_variant(eng)
+    assert eng.run("reset", session="u1", task="task-u1-again", goal="g", done_criterion="dc",
+                   force=True)["ok"] is True
+    eng.run("classify", session="u1", architectural=True, files=5, changed_lines=200,
+            wall_clock_min=60)
+    eng.run("plan", session="u1")
+    assert eng.run("submit_plan", session="u1", plan=required)["marker"] == "PLAN-READY"
+
+    refused = eng.run("approve", session="u1", by="agent")
+    assert refused["ok"] is False
+    assert _boundary_refusal(refused), refused
+    assert eng.ledger(plan)["records"][-1]["declined_stages"][0]["issue"] == ISSUE
+
+
+def test_a_declined_stage_is_matched_by_issue_while_optional_and_by_title_once_required(tmp_path):
+    doc = _load(tmp_path, _plan_text(_stage(1), _opt(2, [1]), _stage(3, depends=[1])))
+    optional, required = doc.stages[1], doc.stages[2]
+    assert gates.is_declined_stage(optional, {ISSUE}, set())
+    assert not gates.is_declined_stage(optional, set(), {optional.title})  # title never names an optional one
+    assert gates.is_declined_stage(required, set(), {required.title})
+    assert not gates.is_declined_stage(required, {ISSUE}, set())  # a required stage has no issue
+    assert gates.declined_live_optional(doc, [ISSUE], [required.title]) == [2, 3]
+    assert gates.declined_live_optional(doc, [], [required.title]) == [3]
+
+
+def test_a_renamed_required_stage_is_not_matched_by_the_title_rule_the_accepted_limit(tmp_path):
+    doc = _load(tmp_path, _plan_text(_stage(1), _stage(2, depends=[1])))
+    assert gates.declined_live_optional(doc, [], ["Stage 2 renamed"]) == []
+
+
+def test_the_decline_entries_follow_the_stage_the_customer_actually_left_declined(tmp_path):
+    from agentctl.state import SessionState
+
+    doc = _load(tmp_path, _plan_text(_stage(1), _opt(2, [1], issue="o/r#1"), _stage(3, depends=[1])))
+    doc.stages[0].outcome.status = StageStatus.PASSED.value
+    doc.stages[1].outcome.status = StageStatus.SKIPPED.value
+    state = SessionState(session_id="s", task_id="t")
+    state.declined_issues = ["o/r#1", "o/r#2", "o/r#3"]
+    state.stages = doc.stages
+    # "Stage 3" is live and required: the customer approved it, so its old decline lapses.
+    prior = [{"issue": "o/r#2", "title": "Dropped since"}, {"issue": "o/r#3", "title": "Stage 3"}]
+    assert gates.declined_stage_entries(state, prior) == [
+        {"issue": "o/r#1", "title": "Stage 2"},
+        {"issue": "o/r#2", "title": "Dropped since"},
+    ]
+    assert gates.declined_stage_entries(state) == [{"issue": "o/r#1", "title": "Stage 2"}]
+
+
+def test_a_record_without_titles_or_with_malformed_ones_names_no_title():
+    from agentctl import order_approvals as oa
+
+    assert oa.declined_titles_of(None) == []
+    assert oa.declined_titles_of({"declined_issues": [ISSUE]}) == []
+    assert oa.declined_titles_of({"declined_stages": "Wire CI"}) == []
+    assert oa.declined_titles_of({"declined_stages": [
+        {"issue": ISSUE, "title": "B"}, {"issue": ISSUE, "title": "A"}, {"issue": ISSUE, "title": "A"},
+        {"issue": ISSUE}, {"title": "no issue"}, "junk",
+    ]}) == ["A", "B"]
+
+
+def test_an_approval_with_an_empty_plan_digest_is_refused_not_stored_unreadable(tmp_path):
+    from agentctl import order_approvals as oa
+
+    with pytest.raises(ValueError, match="empty plan_sha256"):
+        oa.record_approval(
+            "o", plan_sha256="", resources=[], unresolved_identities=[], stage_effects=[],
+            by="user", at="t", root=tmp_path,
+        )
+    assert not (tmp_path / "o.json").exists()
+
+
+def test_a_customer_approval_stamps_the_reread_digest_when_the_single_read_gave_none(eng, monkeypatch):
+    plan = eng.write(_optional_third_stage_plan(), "first.toml")
+    assert eng.open("u1", plan)["marker"] == "PLAN-READY"
+    real = cli.load_plan_with_digest
+    monkeypatch.setattr(cli, "load_plan_with_digest", lambda path: (*real(path)[:2], None))
+    assert eng.run("approve", session="u1", by="user", skip_optional=[3])["ok"] is True
+    stamped = eng.ledger(plan)["records"][-1]
+    assert stamped["plan_sha256"]
+    assert stamped["plan_sha256"] == eng.state("u1").accepted_plan_digest
 
 
 def test_the_boundary_reads_the_decline_from_the_record_by_issue(tmp_path):

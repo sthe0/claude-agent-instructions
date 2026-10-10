@@ -405,8 +405,9 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "declined-follows-identity": Mutant(
         GATES,
-        "    return stage.optional and stage.backlog_issue in declined_issues",
-        "    return False",
+        "    if stage.optional:\n        return stage.backlog_issue in declined_issues\n"
+        "    return stage.title in declined_titles\n",
+        "    return False\n",
         _ids(
             T_OPTIONAL,
             "test_a_renumbering_replan_keeps_the_decline_on_the_stage_by_its_issue",
@@ -419,7 +420,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "declined-in-ledger": Mutant(
         GATES,
-        '    out["declined_live_optional"] = declined_live_optional(stages, _oa.declined_issues_of(last))\n',
+        '    out["declined_live_optional"] = declined_live_optional(\n'
+        "        stages, _oa.declined_issues_of(last), _oa.declined_titles_of(last))\n",
         '    out["declined_live_optional"] = []\n',
         _ids(
             T_OPTIONAL,
@@ -427,6 +429,16 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_a_new_session_cannot_self_approve_the_stage_the_customer_declined[takes-it]",
             "test_a_reset_session_on_the_same_order_cannot_self_approve_the_declined_stage",
             "test_the_boundary_reads_the_decline_from_the_record_by_issue",
+        ),
+    ),
+    "declined-required-in-ledger": Mutant(
+        GATES,
+        "        stages, _oa.declined_issues_of(last), _oa.declined_titles_of(last))\n",
+        "        stages, _oa.declined_issues_of(last), ())\n",
+        _ids(
+            T_OPTIONAL,
+            "test_a_new_session_cannot_self_approve_a_declined_stage_that_became_required",
+            "test_a_reset_session_cannot_self_approve_a_declined_stage_that_became_required",
         ),
     ),
 }

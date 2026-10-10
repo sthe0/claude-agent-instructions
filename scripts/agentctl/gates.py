@@ -130,27 +130,66 @@ def declined_issue_set(state: SessionState) -> set[str]:
     return out
 
 
-def declined_by_issue(stage: _Stage, declined_issues: "set[str] | frozenset[str]") -> bool:
-    """Whether `stage` is an optional stage whose backlog issue the customer declined.
-
-    The one place the decline is matched to a stage, so the carry sites that set the
-    per-stage marker and the agent-approval blocker cannot disagree about identity."""
-    return stage.optional and stage.backlog_issue in declined_issues
+def declined_title_set(state: SessionState) -> set[str]:
+    """Titles of the stages this session holds as declined (SKIPPED, or offered again and
+    still marked) -- the identity of a declined stage that is no longer optional."""
+    return {s.title for s in state.stages if s.outcome.declined or is_skipped(s)}
 
 
-def declined_live_optional(doc_or_stages, declined_issues) -> list[int]:
-    """Indices of the optional stages that are still live although their issue was declined.
+def is_declined_stage(
+    stage: _Stage,
+    declined_issues: "set[str] | frozenset[str]",
+    declined_titles: "set[str] | frozenset[str]" = frozenset(),
+) -> bool:
+    """Whether `stage` is work the customer declined: the ONE identity rule.
 
-    Keyed by `backlog_issue`, the stage's identity: a replan or an in-place edit may
-    renumber, drop and re-add a stage, and the customer's decline follows the issue.
+    An optional stage is identified by its `backlog_issue`, never by its index (a replan
+    renumbers). A stage that stopped being optional has no issue left to name -- the loader
+    forbids one on a required stage -- so it is matched by title. A re-keyed issue or a
+    renamed required stage is a different stage: the accepted limit of both halves.
+
+    Every carry site, the agent-approval blocker and the autonomy boundary read the decline
+    through this function, whether the session or the approval record holds it, so they
+    cannot disagree about what a declined stage is."""
+    if stage.optional:
+        return stage.backlog_issue in declined_issues
+    return stage.title in declined_titles
+
+
+def declined_live_optional(doc_or_stages, declined_issues, declined_titles=()) -> list[int]:
+    """Indices of the stages that are still live although the customer declined them.
+
     `doc_or_stages` is a plan document or a list of stages; a stage that is SKIPPED is not
-    live. `declined_issues` is a plain collection, so a carrier other than the session
-    (an order-level record) can be passed in without touching this rule."""
+    live. The issues and titles are plain collections, so a carrier other than the session
+    (an order-level record) can be passed in without touching this rule; the identity
+    itself is `is_declined_stage`'s."""
     stages = getattr(doc_or_stages, "stages", doc_or_stages)
-    declined = set(declined_issues)
+    issues, titles = set(declined_issues), set(declined_titles)
     return sorted(
-        s.index for s in stages if declined_by_issue(s, declined) and not is_skipped(s)
+        s.index for s in stages if is_declined_stage(s, issues, titles) and not is_skipped(s)
     )
+
+
+def declined_stage_entries(
+    state: SessionState, prior_entries: "list[dict] | None" = None,
+) -> list[dict]:
+    """The `{"issue", "title"}` pairs a customer approval stamps on the order's record.
+
+    One per issue in `state.declined_issues` whose stage title is known: from a SKIPPED
+    stage of this session, else from `prior_entries` (the previous approval record), so an
+    issue whose stage the plan no longer holds keeps its title. A title the approved plan
+    holds as a live stage is dropped -- the customer just approved that stage, so the
+    decline of it lapses with that choice."""
+    titles = {e["issue"]: e["title"] for e in (prior_entries or [])}
+    titles.update({
+        s.backlog_issue: s.title for s in state.stages if is_skipped(s) and s.backlog_issue
+    })
+    live = {s.title for s in state.stages if not is_skipped(s)}
+    return [
+        {"issue": issue, "title": titles[issue]}
+        for issue in sorted(set(state.declined_issues))
+        if titles.get(issue) and titles[issue] not in live
+    ]
 
 
 def resolution_blockers(state: SessionState) -> list[str]:
@@ -2911,7 +2950,7 @@ AUTONOMY_REASON_NO_VERSION = "no user-approved version for this order"
 AUTONOMY_REASON_ORDER_CHANGED = "the order itself changed since the user's approval"
 AUTONOMY_REASON_OPEN_FIRE = "open spend/wall-clock fire owed to the user"
 AUTONOMY_REASON_DECLINED_STAGE = (
-    "an optional stage the customer declined at their approval is live in this plan"
+    "a stage the customer declined at their approval is live in this plan"
 )
 
 
@@ -2933,13 +2972,14 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
     BoundaryView`) on the user's behalf, given the order's ledger snapshot: the same
     order, no resource outside what the user approved for it, no changed command of
     unknown effect without a first passing thinker review, no open fire owed to the
-    user, and no optional stage live that the user declined at that approval.
+    user, and no stage live that the user declined at that approval.
     Pure: every input is a stored value; the reference is the last USER-approved
     version, never the previous plan.
 
     `live_optional` is the plan's stages the caller holds as still on offer (a
-    `BoundaryView` carries no stages); the decline is read from the approval record,
-    keyed by `backlog_issue`, so a session that never saw the decline cannot lose it."""
+    `BoundaryView` carries no stages); the decline is read from the approval record, by
+    `is_declined_stage`'s identity (issue while optional, title once required), so a
+    session that never saw the decline cannot lose it."""
     from . import order_approvals as _oa
 
     last = _oa.latest_user_approved_of(ledger_snapshot)
@@ -2960,12 +3000,13 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
         reasons.append(AUTONOMY_REASON_OPEN_FIRE)
 
     stages = list(live_optional or [])
-    out["declined_live_optional"] = declined_live_optional(stages, _oa.declined_issues_of(last))
+    out["declined_live_optional"] = declined_live_optional(
+        stages, _oa.declined_issues_of(last), _oa.declined_titles_of(last))
     if out["declined_live_optional"]:
-        issues = {s.index: s.backlog_issue for s in stages}
+        names = {s.index: s.backlog_issue or s.title for s in stages}
         reasons.append(
             AUTONOMY_REASON_DECLINED_STAGE + ": " + ", ".join(
-                f"stage {i} ({issues[i]})" for i in out["declined_live_optional"]
+                f"stage {i} ({names[i]})" for i in out["declined_live_optional"]
             )
         )
 

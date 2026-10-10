@@ -29,6 +29,7 @@ EXPECTED_ENTRIES = (
     "skipped-is-settled", "optional-not-depended", "optional-max-two", "optional-coverage-rule",
     "reject-spares-skipped", "reject-names-skipped-refused", "push-refuses-skipped-origin",
     "agent-cannot-revive-declined", "declined-follows-identity", "declined-in-ledger",
+    "declined-required-in-ledger",
 )
 
 
