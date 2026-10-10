@@ -330,7 +330,44 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
     )
     lines.append("")
 
-    s = stage
+    lines.extend(_stage_field_lines(doc, stage, dependency_blocks=True))
+
+    if m.final_check:
+        lines.append(
+            "## Final verification (labels only — this stage does not need the "
+            "commands; see the full plan file for those)"
+        )
+        lines.append("")
+        for i, fc in enumerate(m.final_check, start=1):
+            if fc.label:
+                lines.append(f"- {fc.label}")
+            else:
+                lines.append(f"- check {i} ({fc.kind})")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_stage_fields(doc: PlanDoc, stage_index: int) -> str:
+    """Pure: every field of ONE stage and nothing else — the stage's own heading
+    and declared fields as `render_stage_brief` shows them, without the plan header
+    (goal, done criterion, repo root, research), the final-check labels and the
+    supplier blocks under `Depends on` (a supplier's title, result image and output
+    artifacts, which belong to the supplier). A review of the stage alone is shown
+    exactly the content its currency keys on; the direct dependencies appear as
+    stage indices.
+
+    Raises ValueError if no stage in `doc` carries `stage_index`."""
+    stage = next((s for s in doc.stages if s.index == stage_index), None)
+    if stage is None:
+        raise ValueError(f"no stage with index {stage_index} in plan {doc.meta.task_id!r}")
+    return "\n".join(_stage_field_lines(doc, stage, dependency_blocks=False)).rstrip() + "\n"
+
+
+def _stage_field_lines(doc: PlanDoc, s, *, dependency_blocks: bool) -> list[str]:
+    """The stage section of `render_stage_brief`: heading and every non-empty field.
+    `dependency_blocks=False` lists the direct dependencies by index only."""
+    lines: list[str] = []
     lines.append(f"## Stage {s.index}: {s.title}")
     lines.append("")
     lines.append(f"- **Executor:** {s.actor.executor}")
@@ -385,7 +422,9 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
         lines.append(f"- **Output artifacts:** {', '.join(s.output_artifacts)}")
     if s.ephemeral_artifacts_waiver:
         lines.append(f"- **Ephemeral artifacts waived:** {s.ephemeral_artifacts_waiver}")
-    if s.depends_on:
+    if s.depends_on and not dependency_blocks:
+        lines.append(f"- **Depends on:** {', '.join(f'stage {d}' for d in sorted(s.depends_on))}")
+    elif s.depends_on:
         lines.append("- **Depends on** (direct dependencies only; see their own stage for detail):")
         for dep_index in sorted(s.depends_on):
             dep = next((d for d in doc.stages if d.index == dep_index), None)
@@ -418,21 +457,7 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
             f"confidence: {p.confidence}; refutation: {p.refutation})"
         )
     lines.append("")
-
-    if m.final_check:
-        lines.append(
-            "## Final verification (labels only — this stage does not need the "
-            "commands; see the full plan file for those)"
-        )
-        lines.append("")
-        for i, fc in enumerate(m.final_check, start=1):
-            if fc.label:
-                lines.append(f"- {fc.label}")
-            else:
-                lines.append(f"- check {i} ({fc.kind})")
-        lines.append("")
-
-    return "\n".join(lines).rstrip() + "\n"
+    return lines
 
 
 # --- Topological review: one reliance edge ("pair") reviewed per spawn,
@@ -801,10 +826,15 @@ def pair_service_text(doc: PlanDoc, service: "int | str", base: "int | str | Non
     service shows its contract interface — or, when it relies on nothing (a
     source stage), its full brief, so its own construction can be judged in
     this pair. For a `base-<s>` pair (`base` is `PAIR_BASE_NODE`) it is the
-    stage's declared product and, under it, the control each coverage entry
-    names, in the plan's own words."""
+    stage's declared product — for a blank-interface stage its own fields
+    (`render_stage_fields`), never the plan header or a supplier's block — and,
+    under it, the control each coverage entry names, in the plan's own words."""
     if base == PAIR_BASE_NODE:
-        lines = [render_stage_interface(doc, int(service), contract=True).rstrip("\n"), ""]
+        if interface_empty(next(s for s in doc.stages if s.index == int(service))):
+            product = render_stage_fields(doc, int(service))
+        else:
+            product = render_stage_interface(doc, int(service))
+        lines = [product.rstrip("\n"), ""]
         lines.append("**Controls named by the coverage entries:**")
         for req_id, control in plan_coverage_entries(doc).get(int(service), ()):
             lines.append(f"- {req_id} → `{control}`: {_control_text(doc, control)}")
@@ -1131,7 +1161,7 @@ def render_unit_review_bundle(
 
     lines.append("## Fields")
     lines.append("")
-    fields = unit_base_text(doc) if node == PAIR_BASE_NODE else render_stage_brief(doc, int(node))
+    fields = unit_base_text(doc) if node == PAIR_BASE_NODE else render_stage_fields(doc, int(node))
     lines.append(fields.rstrip("\n"))
     lines.append("")
 

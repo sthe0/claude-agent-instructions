@@ -617,7 +617,7 @@ def test_pc43_blank_interface_service_goes_stale_on_an_output_artifacts_edit_in_
     env = make_env(_covered_stage_one(blank_interface=True))
     env.record_ok("base-1")
     env.edit(_set(0, output_artifacts=["build/out.txt"]))
-    assert env.status("base-1").startswith("stale:")
+    assert env.status("base-1") == "stale:service"
 
 
 def test_pc44_declared_product_service_keeps_its_base_pair_on_an_edit_the_bundle_hides(make_env):
@@ -643,6 +643,61 @@ def test_pc46_base_pair_bundle_of_a_blank_interface_service_shows_the_edited_fie
     env.edit(_set(0, material="the files this stage reads, restated"))
     shown = render.pair_service_text(env.doc(), 1, PAIR_BASE_NODE)
     assert "the files this stage reads, restated" in shown
+
+
+def _blank_dependant() -> dict:
+    """Stage 2 is covered, has a blank interface and relies on stage 1: the base-2 bundle
+    shows stage 2 in full, so whatever stage 1 or the plan header carry would leak into
+    it if the bundle were the stage brief."""
+    data = _fan_in()
+    data["meta"] = _meta(coverage={"R1": ["stage 2 verify_command"]})
+    data["stage"] = [
+        _stage(1),
+        _stage(2, depends_on=[1], supplies=[{"on": 1, "element": "method"}],
+               expected_result_image=" ", done_criterion=" "),
+    ]
+    return data
+
+
+def _review_bundles(env: Env) -> dict[str, str]:
+    from agentctl import render
+    doc, digest = env.doc(), _sha(env.plan)
+    return {
+        "base-2": render.render_pair_review_bundle(doc, "base-2", plan_sha256=digest, view_dir="/tmp/v"),
+        "unit:2": render.render_unit_review_bundle(doc, "unit:2", plan_sha256=digest),
+    }
+
+
+def test_pc51_blank_interface_base_pair_and_unit_ignore_a_supplier_the_goal_and_a_final_check(make_env):
+    env = make_env(_blank_dependant())
+    env.record_ok("base-2", "unit:2")
+    assert env.status("base-2") == "current"
+    for bundle in _review_bundles(env).values():
+        assert "Stage 2" in bundle
+    edits = (
+        (lambda d: d["stage"][0].update(expected_result_image="SUPPLIER-IMAGE-REWORDED"),
+         "SUPPLIER-IMAGE-REWORDED"),
+        (lambda d: d["stage"][0].update(output_artifacts=["supplier/OUT-REWORDED.py"]),
+         "OUT-REWORDED"),
+        (lambda d: d["meta"].update(goal="GOAL-REWORDED"), "GOAL-REWORDED"),
+        (lambda d: d["final_check"][0].update(label="FINAL-CHECK-REWORDED"), "FINAL-CHECK-REWORDED"),
+    )
+    for edit, value in edits:
+        env.edit(edit)
+        assert env.status("base-2") == "current", value
+        assert env.status("unit:2") == "current", value
+        for name, bundle in _review_bundles(env).items():
+            assert value not in bundle, (name, value)
+
+
+def test_pc52_blank_interface_base_pair_and_unit_show_and_follow_the_stage_own_field(make_env):
+    env = make_env(_blank_dependant())
+    env.record_ok("base-2", "unit:2")
+    env.edit(_set(1, material="the files stage 2 reads, restated"))
+    assert env.status("base-2") == "stale:service"
+    assert env.status("unit:2") == "stale:unit"
+    for name, bundle in _review_bundles(env).items():
+        assert "the files stage 2 reads, restated" in bundle, name
 
 
 # --- the obligations backstop through the real verbs --------------------------------
@@ -697,8 +752,11 @@ class Engine:
         composed = cli.cmd_plan_review_compose(_ns(session=SID, target=str(plan)), store=self.store)
         assert composed.ok, composed.detail
 
+    def try_approve(self):
+        return self._run("approve", cli.cmd_approve, by="user")
+
     def approve(self) -> None:
-        d = self._run("approve", cli.cmd_approve, by="user")
+        d = self.try_approve()
         assert d.ok, d.detail
 
     def start_execution(self) -> None:
@@ -746,6 +804,11 @@ def test_pc47_submit_plan_mints_the_obligation_and_it_holds_until_the_review_is_
 
 def test_pc48_a_refinement_that_moves_a_pairs_service_leaves_the_started_plan_discharged(
         engine, monkeypatch):
+    """The replan's own review gate (a fresh review bound to the new bytes) is switched
+    off while the refinement is applied: this test pins the RESOLUTION-time backstop --
+    a plan whose unit and pair currency went stale after the approve that gated
+    execution still discharges -- and the replan gate would refuse the refinement
+    before that state could exist. The replan gate itself is pc49's."""
     plan = _started_session(engine)
     assert engine.state().stage(1).outcome.status != StageStatus.PENDING.value
     refined = _fan_in()
@@ -773,8 +836,14 @@ def test_pc49_a_substantive_replan_reopens_the_obligation_until_the_new_plan_is_
     assert not engine.state().approval.passed
     monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
     assert len(engine.guardian()) == 1
+    refused = engine.try_approve()
+    assert not refused.ok and not engine.state().approval.passed
+    state = engine.state()
+    review_blockers = gates.plan_review_blockers(state, state.plan_path)
+    assert review_blockers and set(review_blockers) <= set(refused.data["blockers"]), refused.data
     engine.review_every_id(bigger_plan)
     assert engine.guardian() == []
+    assert engine.try_approve().ok and engine.state().approval.passed
 
 
 def test_pc50_the_inferred_latch_is_a_stage_having_left_pending_not_a_stored_flag(engine):

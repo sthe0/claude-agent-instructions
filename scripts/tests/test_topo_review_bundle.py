@@ -54,6 +54,7 @@ from agentctl.render import (
     render_pair_review_bundle,
     render_plan_md,
     render_stage_brief,
+    render_stage_fields,
     render_stage_interface,
     render_unit_review_bundle,
     topo_node_files,
@@ -91,11 +92,14 @@ def _stage(index=1, **overrides):
     return base
 
 
-def _doc(stages, order=None, **meta_overrides):
+def _doc(stages, order=None, final_check=None, **meta_overrides):
     meta = {"task_id": "t", **meta_overrides}
     if order is not None:
         meta["order"] = order
-    return parse_plan({"meta": meta, "stage": stages})
+    data = {"meta": meta, "stage": stages}
+    if final_check is not None:
+        data["final_check"] = final_check
+    return parse_plan(data)
 
 
 def _doc_with_raw(stages, raw_depends_on):
@@ -1077,16 +1081,28 @@ def test_tb22_protocol_text_pins_markers_echo_concerns_and_per_pair_steps():
 def test_tb23_stage_unit_bundle_is_self_contained_fields_and_full_edge_set():
     doc = _doc(
         [
-            _stage(1),
+            _stage(
+                1, title="SUPPLIER-TITLE", expected_result_image="SUPPLIER-RESULT",
+                output_artifacts=["supplier/OUT-SENTINEL.py"],
+            ),
             _stage(2, depends_on=[1], supplies=[{"on": 1, "element": "e1"}]),
             _stage(3, depends_on=[2], supplies=[{"on": 2}]),
         ],
         order=_order(["R1"], {"R1": ["stage 3 verify_command"]}),
+        goal="GOAL-SENTINEL",
+        final_check=[{"command": "true", "expected_exit": 0, "label": "FINAL-CHECK-SENTINEL"}],
     )
     bundle = _unit_bundle(doc, "unit:2", sha="abc123")
     sections = _unit_sections(bundle)
     assert bundle.startswith("# Topological review unit: unit:2\n")
-    assert sections["## Fields"].rstrip("\n") == render_stage_brief(doc, 2).rstrip("\n")
+    assert sections["## Fields"].rstrip("\n") == render_stage_fields(doc, 2).rstrip("\n")
+    assert "- **Depends on:** stage 1" in sections["## Fields"].splitlines()
+    # The unit shows its own fields only: no plan header, no final checks, no supplier block.
+    for outside in (
+        "GOAL-SENTINEL", "FINAL-CHECK-SENTINEL", "SUPPLIER-TITLE", "SUPPLIER-RESULT",
+        "OUT-SENTINEL", "# Plan:", "PROJECTED BRIEF", "Final verification",
+    ):
+        assert outside not in bundle
     assert sections["## Edges"].splitlines() == [
         "Outbound — what this stage relies on:",
         "- stage 1 — supplies `e1`",
