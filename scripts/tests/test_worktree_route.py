@@ -195,6 +195,8 @@ def test_failure_at_child_step(canon):
     assert "-mem-" in proc.stderr
     assert snapshot(canon.repo) == before
     assert canon.origin_leaf() == SEED_LEAF
+    # a child that wrote nothing leaves no worktree behind (named departure from "always keep")
+    assert len(canon.worktrees()) == 1
 
 
 def test_failure_at_commit_step(canon):
