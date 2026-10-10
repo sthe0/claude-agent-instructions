@@ -60,19 +60,25 @@ from .plan import (
     load_plan_with_digest,
     moved_interfaces,
     order_place,
+    is_legacy_review_id,
+    is_unit_id,
     pair_binding,
+    pair_content,
     pair_currency_hash,
     pair_currency_keys,
-    pair_shows_declared_product_only,
     plan_has_any_grants,
     plan_interface_digests,
     review_pairs,
+    review_units,
     split_pair_id,
     stage_question_key,
+    unit_currency_hash,
+    unit_id,
+    unit_node,
 )
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
-from .state import CONCERN_OPEN, Node, PAIR_BINDING_KEYS, Route, SessionState, StageStatus, WeightClass
+from .state import CONCERN_OPEN, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
@@ -894,26 +900,40 @@ def plan_review_prior_pass(state: SessionState, scope: str, target_plan: str | N
 
 
 def pair_status(state: SessionState, doc, plan_path: str, pair: str) -> str:
-    """Whether review pair `pair` has been reviewed, and with what verdict — the one
-    currency rule every consumer of a `PlanPairReview` calls, so what makes a record
-    count cannot drift between them.
+    """Whether review id `pair` — a pair `<b>-<s>` or a unit `unit:<node>` — has been
+    reviewed, and with what verdict: the one currency rule every consumer of a
+    `PlanPairReview` calls, so what makes a record count cannot drift between them.
 
-    `missing` — no record, or one computed against a different plan path. Otherwise
-    the stored digests of `plan.pair_currency_keys` (the seven of `PAIR_BINDING_KEYS`,
-    less the service's construction when the reviewer saw only its declared product)
-    are compared, in `PAIR_BINDING_KEYS` order, with a fresh `plan.pair_binding(doc,
-    pair)`: the first that moved gives `stale:<key>` (the digest name without its
-    `_digest`/`_key` suffix, e.g. `stale:service_file`); with all current the verdict
-    is reported — `current` for a pass, `override`, or `revise`. Raises ValueError
-    for a pair `doc` does not have."""
+    `missing` — no record, or one computed against a different plan path. A legacy
+    id (`plan-<s>`, `base-plan`, `unit:plan`) with a record is `stale:legacy`, never
+    current. A unit is `stale:unit` when its stored `unit_norm` differs from
+    `plan.unit_currency_hash`. A content-keyed pair compares its stored
+    `PAIR_CONTENT_KEYS` with a fresh `plan.pair_content`, the first that moved giving
+    `stale:<key without _norm>` (`edge`, `base`, `service_iface`, `service`); a
+    pair record written before the content digests is judged by `plan.pair_currency_keys`
+    against `plan.pair_binding` (`stale:<key sans _digest/_key>`). With all current the
+    verdict is reported — `current` for a pass, `override`, or `revise`. Raises
+    ValueError for an id `doc` does not have."""
     record = state.plan_pair_reviews.get(pair)
     if record is None or record.plan_path != plan_path:
         return "missing"
-    fresh = pair_binding(doc, pair)
-    stored = record.binding()
-    for key in pair_currency_keys(doc, pair):
-        if stored[key] != fresh[key]:
-            return "stale:" + key.removesuffix("_digest").removesuffix("_key")
+    if is_legacy_review_id(pair):
+        return "stale:legacy"
+    if is_unit_id(pair):
+        if record.unit_norm != unit_currency_hash(doc, pair):
+            return "stale:unit"
+    elif record.is_content_keyed:
+        fresh_content = pair_content(doc, pair)
+        stored_content = record.content()
+        for key in PAIR_CONTENT_KEYS:
+            if stored_content[key] != fresh_content[key]:
+                return "stale:" + key.removesuffix("_norm")
+    else:
+        fresh = pair_binding(doc, pair)
+        stored = record.binding()
+        for key in pair_currency_keys(doc, pair):
+            if stored[key] != fresh[key]:
+                return "stale:" + key.removesuffix("_digest").removesuffix("_key")
     return "current" if record.verdict == _PLAN_REVIEW_PASS else record.verdict
 
 
@@ -936,16 +956,22 @@ def pair_baseline_currency(doc) -> "dict[str, str]":
     return {pid: pair_currency_hash(doc, pid) for pid in review_pairs(doc)}
 
 
+def unit_baseline_currency(doc) -> "dict[str, str]":
+    return {uid: unit_currency_hash(doc, uid) for uid in review_units(doc)}
+
+
 def pair_depths(doc) -> "dict[int | str, int]":
-    """Depth of every node in the graph whose edges are the review pairs (b -> s):
-    a node no pair serves is a root at 0, any other is 1 + the depth of the
-    deepest base that relies on it. Raises PlanError naming the cycle when the
-    graph has one."""
+    """Depth of every unit node (`base` and each stage) in the graph whose edges are
+    the review pairs (b -> s): a node no pair serves is a root at 0, any other is 1 +
+    the depth of the deepest base that relies on it. Raises PlanError naming the
+    cycle when the graph has one."""
     edges = [split_pair_id(pid) for pid in review_pairs(doc)]
     bases_of: "dict[int | str, list[int | str]]" = {}
     for b, s in edges:
         bases_of.setdefault(s, []).append(b)
         bases_of.setdefault(b, [])
+    for uid in review_units(doc):
+        bases_of.setdefault(unit_node(uid), [])
     depths: "dict[int | str, int]" = {}
     visiting: list = []
 
@@ -986,63 +1012,93 @@ def pair_prereqs(
 
 
 def pair_walk(state: SessionState, doc, plan_path: str) -> "list[dict]":
-    """One row per review pair — `pair`, `base`, `service`, `level`, `status`,
-    `ready`, `waiting` — in `review_pairs` order. Readiness is advisory: a pair is
-    ready once every prerequisite is current or override."""
+    """One row per review unit and pair — `pair` (the id), `kind` (`unit`/`pair`),
+    `base`, `service`, `level`, `status`, `ready`, `waiting` — units first (in
+    `review_units` order), then pairs (in `review_pairs` order). A unit's level is
+    its depth; a pair's level is its SERVICE's depth, so the service's unit is
+    reviewed before the pair at that level and the base's unit at an earlier one.
+    Readiness is advisory: a row is ready once every prerequisite — the units of a
+    unit's bases, the units of both a pair's ends, and the shallower pairs
+    `pair_prereqs` names — is current or override."""
     depths = pair_depths(doc)
+    units = review_units(doc)
     pairs = review_pairs(doc)
-    status = {pid: pair_status(state, doc, plan_path, pid) for pid in pairs}
+    status = {rid: pair_status(state, doc, plan_path, rid) for rid in units + pairs}
+    edges = [split_pair_id(pid) for pid in pairs]
     rows = []
+    for uid in units:
+        node = unit_node(uid)
+        bases = {unit_id(b) for b, s in edges if s == node}
+        waiting = [u for u in units if u in bases and status[u] not in PAIR_SATISFIED]
+        rows.append({
+            "pair": uid, "kind": "unit", "base": str(node), "service": "",
+            "level": depths[node], "status": status[uid], "ready": not waiting,
+            "waiting": waiting,
+        })
     for pid in pairs:
         b, s = split_pair_id(pid)
-        waiting = [p for p in pair_prereqs(doc, pid, depths, pairs) if status[p] not in PAIR_SATISFIED]
+        waiting = [u for u in (unit_id(b), unit_id(s)) if status[u] not in PAIR_SATISFIED]
+        waiting += [p for p in pair_prereqs(doc, pid, depths, pairs) if status[p] not in PAIR_SATISFIED]
         rows.append({
-            "pair": pid, "base": str(b), "service": str(s), "level": depths[b],
-            "status": status[pid], "ready": not waiting, "waiting": waiting,
+            "pair": pid, "kind": "pair", "base": str(b), "service": str(s),
+            "level": depths[s], "status": status[pid], "ready": not waiting,
+            "waiting": waiting,
         })
     return rows
 
 
 def has_pair_records_for(state: SessionState, target_plan: "str | None") -> bool:
+    """Whether a PAIR record (legacy ids included) exists for `target_plan`. A unit
+    record alone never counts: it must not switch a plan onto the coverage route."""
     return bool(target_plan) and any(
-        record.plan_path == target_plan for record in state.plan_pair_reviews.values()
+        record.plan_path == target_plan
+        for pid, record in state.plan_pair_reviews.items() if not is_unit_id(pid)
     )
 
 
+def _revised_since(state: SessionState, plan_path: str, rid: str, baseline) -> bool:
+    record = state.plan_pair_reviews.get(rid)
+    return (
+        record is not None and record.plan_path == plan_path
+        and record.verdict == _PLAN_REVIEW_REVISE and record.record_seq > baseline.record_seq
+    )
+
+
+def walk_stale_units(state: SessionState, doc, plan_path: str, baseline) -> "list[str]":
+    """The walk-stale units in `review_units` order: a unit whose currency hash
+    differs from `baseline`'s recorded one or that the baseline never recorded (every
+    unit when it recorded none: a baseline written before units existed), and a unit
+    not current/override whose own latest record is a revise written after the
+    baseline."""
+    units = review_units(doc)
+    currency = baseline.reviewed_unit_currency if baseline is not None else None
+    if not currency:
+        return list(units)
+    stale = []
+    for uid in units:
+        if currency.get(uid) != unit_currency_hash(doc, uid):
+            stale.append(uid)
+        elif (pair_status(state, doc, plan_path, uid) not in PAIR_SATISFIED
+              and _revised_since(state, plan_path, uid, baseline)):
+            stale.append(uid)
+    return stale
+
+
 def walk_stale_pairs(state: SessionState, doc, plan_path: str, baseline) -> "list[str]":
-    """The walk-stale set W in `review_pairs` order: pairs incident to a stage that
-    moved since `baseline` (a whole-plan record), pairs not current/override whose
-    live binding differs from the baseline's recorded one or whose own latest record
-    is a revise written after the baseline, and pairs the baseline never knew of.
-    A baseline with no recorded bindings makes W every pair."""
+    """The walk-stale set of pairs in `review_pairs` order: a pair whose content
+    currency hash (`plan.pair_currency_hash` — only the evidence the reviewer was
+    shown) differs from the one `baseline` (a whole-plan record) recorded, a pair the
+    baseline never recorded (every pair when it recorded no content-keyed currency),
+    and a pair not current/override whose own latest record is a revise written
+    after the baseline."""
     pairs = review_pairs(doc)
-    if baseline is None or not baseline.reviewed_pair_bindings:
-        return list(pairs)
-    recorded = baseline.reviewed_pair_bindings
-    _, moved = changed_parts(doc, _plan_review_baseline(baseline))
-    interface_moved = moved_interfaces(doc, baseline.reviewed_interface_keys, moved)
-    currency = baseline.reviewed_pair_currency or {}
+    currency = (baseline.reviewed_pair_currency if baseline is not None else None) or {}
     stale = []
     for pid in pairs:
-        b, s = split_pair_id(pid)
-        service_moved = (
-            s in interface_moved if pair_shows_declared_product_only(doc, pid) else s in moved
-        )
-        if b in moved or service_moved or pid not in recorded:
+        if currency.get(pid) != pair_currency_hash(doc, pid):
             stale.append(pid)
-            continue
-        if pair_status(state, doc, plan_path, pid) in PAIR_SATISFIED:
-            continue
-        record = state.plan_pair_reviews.get(pid)
-        revised_since = (
-            record is not None and record.plan_path == plan_path
-            and record.verdict == _PLAN_REVIEW_REVISE and record.record_seq > baseline.record_seq
-        )
-        binding_moved = (
-            pair_currency_hash(doc, pid) != currency[pid] if pid in currency
-            else pair_binding_hash(doc, pid) != recorded[pid]
-        )
-        if revised_since or binding_moved:
+        elif (pair_status(state, doc, plan_path, pid) not in PAIR_SATISFIED
+              and _revised_since(state, plan_path, pid, baseline)):
             stale.append(pid)
     return stale
 
@@ -1205,7 +1261,10 @@ def _pair_route(state: SessionState, doc, plan_path: "str | None") -> "_PairRout
     if scope.meta_moved or _plan_review_verdict_blockers(whole, state=state, doc=doc):
         return None
     try:
-        walk_stale = walk_stale_pairs(state, doc, plan_path, whole)
+        walk_stale = (
+            walk_stale_units(state, doc, plan_path, whole)
+            + walk_stale_pairs(state, doc, plan_path, whole)
+        )
     except PlanError as exc:
         return _PairRoute([], {}, False, scope, str(exc))
     status = {pid: pair_status(state, doc, plan_path, pid) for pid in walk_stale}
@@ -1266,11 +1325,13 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     for pid in route.walk_stale:
         if route.status[pid] in PAIR_SATISFIED:
             continue
-        scoped_ends = [x for x in split_pair_id(pid) if x in scope.stages]
+        ends = (unit_node(pid),) if is_unit_id(pid) else split_pair_id(pid)
+        scoped_ends = [x for x in ends if x in scope.stages]
         if scoped_ends and all(not stage_gaps[x] for x in scoped_ends):
             continue
+        kind = "unit" if is_unit_id(pid) else "pair"
         blockers.append(
-            f"review pair {pid} is {route.status[pid]} and is not covered by a stage-scoped "
+            f"review {kind} {pid} is {route.status[pid]} and is not covered by a stage-scoped "
             f"pass — run: plan-review-topological.py --pairs {pid}"
         )
     return blockers

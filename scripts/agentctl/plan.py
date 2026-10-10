@@ -153,6 +153,7 @@ from .state import (
     Order,
     Outcome,
     PAIR_BINDING_KEYS,
+    PAIR_CONTENT_KEYS,
     Principle,
     Stage,
     StageStatus,
@@ -2390,39 +2391,60 @@ def part_digest_map(doc: PlanDoc) -> dict[str, str]:
     return digests
 
 
+UNIT_ID_PREFIX = "unit:"
+
+
+def unit_id(node: "int | str") -> str:
+    """The review id of `node`'s unit: `unit:base` or `unit:<n>`."""
+    return f"{UNIT_ID_PREFIX}{node}"
+
+
+def is_unit_id(review_id: str) -> bool:
+    return review_id.startswith(UNIT_ID_PREFIX)
+
+
 def pair_part_tokens(pair_id: str) -> tuple[str, ...]:
-    """The parts a pair review judges: both nodes' parts, the `plan` and `base` nodes
-    standing for the meta and the order."""
+    """The parts a pair or unit review judges: its nodes' parts, the `base` node
+    standing for the meta and the order (the legacy `plan` node likewise)."""
+    nodes = (unit_node(pair_id),) if is_unit_id(pair_id) else split_pair_id(pair_id)
     tokens: list[str] = []
-    for node in split_pair_id(pair_id):
+    for node in nodes:
         own = (META_TOKEN, ORDER_TOKEN) if node in (PAIR_PLAN_NODE, PAIR_BASE_NODE) else (
             stage_token(node),)
         tokens.extend(t for t in own if t not in tokens)
     return tuple(tokens)
 
-def plan_coverage_refs(doc: PlanDoc) -> dict[int, tuple[str, ...]]:
-    """`{stage index: requirement ids}` for every stage a `[meta.order.coverage]`
-    control names through one of the stage-addressed coverage grammars
-    (`controls.COVERAGE_GRAMMARS`), requirement ids in coverage order. Empty
-    when the plan declares no order. Imports `controls` locally: it imports
-    this module."""
+
+def plan_coverage_entries(doc: PlanDoc) -> dict[int, tuple[tuple[str, str], ...]]:
+    """`{stage index: ((requirement id, control text), ...)}` for every stage a
+    `[meta.order.coverage]` control names through one of the stage-addressed
+    coverage grammars (`controls.COVERAGE_GRAMMARS`), entries in coverage order.
+    Each entry is an ordinary typed edge of `unit:base` on that stage: the
+    requirement is the element of base it supplies, the control the part of the
+    stage the entry names. Empty when the plan declares no order. Imports
+    `controls` locally: it imports this module."""
     from .controls import STAGE_LANDED_ASSERTION, STAGE_VERIFY_COMMAND
     order = doc.meta.order
     if order is None:
         return {}
     grammars = (STAGE_VERIFY_COMMAND, STAGE_LANDED_ASSERTION)
-    refs: dict[int, list[str]] = {}
+    entries: dict[int, list[tuple[str, str]]] = {}
     for req_id, controls in order.coverage.items():
         for control in controls:
             for grammar in grammars:
                 match = grammar.pattern.match(control)
                 if match is None:
                     continue
-                n = int(match.group(1))
-                if req_id not in refs.setdefault(n, []):
-                    refs[n].append(req_id)
+                entries.setdefault(int(match.group(1)), []).append((req_id, control))
                 break
-    return {n: tuple(ids) for n, ids in refs.items()}
+    return {n: tuple(rows) for n, rows in entries.items()}
+
+
+def plan_coverage_refs(doc: PlanDoc) -> dict[int, tuple[str, ...]]:
+    """`{stage index: requirement ids}` for every stage a coverage control names
+    (`plan_coverage_entries`), requirement ids in coverage order, each once."""
+    return {n: tuple(dict.fromkeys(req for req, _ in rows))
+            for n, rows in plan_coverage_entries(doc).items()}
 
 
 def plan_reliance_set(doc: PlanDoc) -> frozenset[int]:
@@ -2435,9 +2457,13 @@ def plan_reliance_set(doc: PlanDoc) -> frozenset[int]:
 
 
 def review_pairs(doc: PlanDoc) -> tuple[str, ...]:
-    """Every reliance edge of `doc` as a pair id `<b>-<s>` — `b` relies on
-    `s` — in review order: `base-plan` (only when an order is declared),
-    then `plan-<s>` by `s`, then `<n>-<s>` by `n` and then `s`.
+    """Every review pair of `doc` as an id `<b>-<s>` — `b` relies on `s` — in
+    review order: `base-<s>` by `s` for each stage a `[meta.order.coverage]`
+    entry names (`plan_coverage_refs`; the coverage entry is an ordinary edge of
+    `unit:base`), then `<n>-<s>` by `n` and then `s` for every reliance edge
+    between stages. There is no `plan-<s>` pair and no `base-plan`: a stage
+    nothing relies on and no requirement names is caught by its own unit review
+    (`review_units`).
 
     Raises PlanError for a dangling or cyclic raw reliance graph: the raw
     union `reliance_set` reads can cycle while the supplies-derived graph
@@ -2446,26 +2472,68 @@ def review_pairs(doc: PlanDoc) -> tuple[str, ...]:
     inherits the check."""
     for stage in doc.stages:
         reliance_closure(doc, stage.index)
-    pairs: list[str] = []
-    if doc.meta.order is not None:
-        pairs.append(f"{PAIR_BASE_NODE}-{PAIR_PLAN_NODE}")
-    pairs.extend(f"{PAIR_PLAN_NODE}-{s}" for s in sorted(plan_reliance_set(doc)))
+    valid = {s.index for s in doc.stages}
+    pairs = [f"{PAIR_BASE_NODE}-{s}" for s in sorted(set(plan_coverage_refs(doc)) & valid)]
     for stage in sorted(doc.stages, key=lambda st: st.index):
         pairs.extend(f"{stage.index}-{s}" for s in sorted(reliance_set(doc, stage.index)))
     return tuple(pairs)
 
 
+def review_units(doc: PlanDoc) -> tuple[str, ...]:
+    """Every unit of `doc` in review order: `unit:base` — always, an order-less
+    plan included — then `unit:<n>` by stage index. A unit is reviewed alone
+    (`render.render_unit_review_bundle`): `unit:base` holds the order (customer,
+    functional place, requirements, coverage) and the meta's goal, done criterion
+    and final checks; `unit:<n>` every field of stage `n` and its full edge set."""
+    return (unit_id(PAIR_BASE_NODE),) + tuple(
+        unit_id(s.index) for s in sorted(doc.stages, key=lambda st: st.index)
+    )
+
+
+def review_ids(doc: PlanDoc) -> tuple[str, ...]:
+    """Every id the walk demands: the units, then the pairs."""
+    return review_units(doc) + review_pairs(doc)
+
+
+def is_legacy_review_id(review_id: str) -> bool:
+    """A review id a stored record may still carry but no plan has any more:
+    `base-plan`, `plan-<n>` and `unit:plan`. Such a record loads and validates and
+    is stale, never current; nothing demands it."""
+    if review_id in (f"{PAIR_BASE_NODE}-{PAIR_PLAN_NODE}", unit_id(PAIR_PLAN_NODE)):
+        return True
+    head, _, tail = review_id.partition("-")
+    return head == PAIR_PLAN_NODE and tail.isdigit()
+
+
 def parse_pair(doc: PlanDoc, pair_id: str) -> tuple["int | str", "int | str"]:
-    """`(b, s)` for a pair id `doc` has — stage nodes as ints, the synthetic
-    nodes as `PAIR_PLAN_NODE` / `PAIR_BASE_NODE`. Splits on the first `-`.
-    Raises ValueError for any id outside `review_pairs(doc)`, including the
-    unit-shaped ids (`3`, `order`)."""
+    """`(b, s)` for a pair id `doc` has — stage nodes as ints, the order node as
+    `PAIR_BASE_NODE`. Splits on the first `-`. Raises ValueError for any id
+    outside `review_pairs(doc)`, including unit ids and legacy `plan-<s>` /
+    `base-plan`."""
     if pair_id not in review_pairs(doc):
         raise ValueError(
             f"no review pair {pair_id!r} in plan {doc.meta.task_id!r} "
             f"(valid pairs: {', '.join(review_pairs(doc)) or 'none'})"
         )
     return split_pair_id(pair_id)
+
+
+def parse_unit(doc: PlanDoc, review_id: str) -> "int | str":
+    """The node (`PAIR_BASE_NODE` or a stage index) of a unit id `doc` has.
+    Raises ValueError for any other id."""
+    if review_id not in review_units(doc):
+        raise ValueError(
+            f"no review unit {review_id!r} in plan {doc.meta.task_id!r} "
+            f"(valid units: {', '.join(review_units(doc))})"
+        )
+    return unit_node(review_id)
+
+
+def unit_node(review_id: str) -> "int | str":
+    """The node of a unit id already known to be in `review_units`, with no
+    membership check (`parse_unit` re-enumerates every unit per call)."""
+    node = review_id[len(UNIT_ID_PREFIX):]
+    return int(node) if node.isdigit() else node
 
 
 def split_pair_id(pair_id: str) -> tuple["int | str", "int | str"]:
@@ -2483,8 +2551,6 @@ def _pair_node_key(doc: PlanDoc, node: "int | str") -> str:
     from .render import node_file_text
     if node == PAIR_BASE_NODE:
         return _sha256_hex(node_file_text(doc, node))
-    if node == PAIR_PLAN_NODE:
-        return _sha256_hex(repr((plan_meta_digest(doc), order_extra_digest(doc.meta))))
     stage = _stage_by_index(doc, node)
     return _sha256_hex(repr((
         stage_element_keys(stage)[WHOLE_STAGE_ELEMENT],
@@ -2497,8 +2563,8 @@ def pair_binding(doc: PlanDoc, pair_id: str) -> dict:
     `doc`, recomputed fresh on every call. Together they cover what the
     reviewer was shown: the order context (`context_digest`, the base file's
     sha256), both nodes' identity keys, both nodes' file bytes, the exact
-    service-interface and edge sections of the bundle. For `base-plan` the
-    context, base key and base file digests are the same value by
+    service-interface and edge sections of the bundle. For a `base-<s>` pair
+    the context, base key and base file digests are the same value by
     construction. Raises ValueError for an unknown pair, PlanError for a
     dangling or cyclic reliance graph."""
     from .render import node_file_text, pair_edge_text, pair_service_text
@@ -2510,7 +2576,7 @@ def pair_binding(doc: PlanDoc, pair_id: str) -> dict:
         "service_key": _pair_node_key(doc, s),
         "base_file_digest": _sha256_hex(node_file_text(doc, b)),
         "service_file_digest": _sha256_hex(node_file_text(doc, s)),
-        "service_interface_digest": _sha256_hex(pair_service_text(doc, s)),
+        "service_interface_digest": _sha256_hex(pair_service_text(doc, s, b)),
         "edge_digest": _sha256_hex(pair_edge_text(doc, b, s)),
     }
 
@@ -2522,29 +2588,163 @@ def pair_shows_declared_product_only(doc: PlanDoc, pair_id: str) -> bool:
     """Whether the bundle of `pair_id` shows its service only as the declared product
     (`render.pair_service_text`): a stage service that relies on something and has a
     concrete interface. A source stage and an `interface_empty` stage are shown in
-    full, and the synthetic `plan` service has no separate construction."""
+    full."""
     _, s = parse_pair(doc, pair_id)
-    if s in (PAIR_PLAN_NODE, PAIR_BASE_NODE):
-        return False
+    return _service_shown_as_declared_product(doc, s)
+
+
+def _service_shown_as_declared_product(doc: PlanDoc, s: "int | str") -> bool:
     return bool(reliance_set(doc, int(s))) and not interface_empty(_stage_by_index(doc, int(s)))
 
 
 def pair_currency_keys(doc: PlanDoc, pair_id: str) -> tuple[str, ...]:
-    """The `PAIR_BINDING_KEYS` a record of `pair_id` is judged current by: all seven,
-    less the service's construction (`service_key`, `service_file_digest`) when the
-    reviewer was shown only its declared product -- that evidence is
-    `service_interface_digest` alone. The order is `PAIR_BINDING_KEYS`'."""
-    if not pair_shows_declared_product_only(doc, pair_id):
-        return PAIR_BINDING_KEYS
-    return tuple(k for k in PAIR_BINDING_KEYS if k not in PAIR_SERVICE_CONSTRUCTION_KEYS)
+    """The `PAIR_BINDING_KEYS` a LEGACY record of `pair_id` (one written before the
+    content digests, `PlanPairReview.is_content_keyed`) is judged current by -- the
+    content-derived pair of its seven digests, so an upgrade does not stale a record
+    whose plan content is unchanged: the base's `base_key` and the service's
+    `service_key`, or its `service_interface_digest` when the reviewer was shown
+    only its declared product (the construction digests are then not evidence).
+    The rendered-text digests (`context_digest`, `edge_digest`, the file digests)
+    are not consulted: a render-code change must not stale a record."""
+    if pair_shows_declared_product_only(doc, pair_id):
+        return ("base_key", "service_interface_digest")
+    return ("base_key", "service_key")
+
+
+def _element_digest(stage: Stage, keys: dict[str, str], element: "str | None") -> str:
+    """The digest of one element of `stage`: the element's own key, or the
+    whole-stage key for an element-less edge (the whole stage is supplied) and for a
+    name the key family does not know (the wider answer)."""
+    if element is None or element not in keys:
+        return keys[WHOLE_STAGE_ELEMENT]
+    return keys[element]
+
+
+def _supplied_by(doc: PlanDoc, b: int, s: int) -> tuple[Supply, ...]:
+    """The typed edges of stage `b` on stage `s`."""
+    return tuple(sup for sup in _stage_by_index(doc, b).supplies if sup.on == s)
+
+
+def _edge_rows(doc: PlanDoc, b: int, s: int) -> tuple:
+    """The pair's edge set as a comparable value: the (element, artifact, delivery)
+    of every typed edge of `b` on `s`, and whether the reliance is also a raw
+    `depends_on` that no typed edge restates."""
+    rows = tuple(sorted(
+        (sup.element or "", sup.artifact or "", sup.delivery or "")
+        for sup in _supplied_by(doc, b, s)
+    ))
+    return rows, s in doc.raw_depends_on.get(b, ())
+
+
+def pair_content(doc: PlanDoc, pair_id: str) -> dict[str, str]:
+    """The four content digests a CURRENT review of `pair_id` must match, from plan
+    content alone (StageNorm / meta / order digests, never rendered text, so a
+    render-code change with unchanged plan content moves none of them):
+
+    - `base_norm`: the elements of the base node the edges supply -- for a stage
+      base, the element keys the typed edges name (the whole-stage key when an edge
+      is element-less); for `base-<s>`, the (id, text, derivation) of the
+      requirements the coverage entries on `s` name.
+    - `service_iface_norm`: the service's `interface_token` (full carry digest for a
+      source or blank-interface stage).
+    - `service_norm`: the service's construction -- the whole-stage key when the
+      bundle shows it in full (a source or blank-interface stage); for `base-<s>`
+      the `criterion` key of `s`, the part the coverage entries name; empty when
+      the reviewer was shown only the declared product.
+    - `edge_norm`: the pair's edge set -- (element, artifact, delivery) per typed
+      edge, or (requirement id, control) per coverage entry.
+
+    Raises ValueError for an unknown pair, PlanError for a cyclic reliance graph."""
+    from .stage_norm import interface_token
+    b, s = parse_pair(doc, pair_id)
+    service = _stage_by_index(doc, int(s))
+    service_keys = stage_element_keys(service)
+    iface = interface_token(service)
+    if b == PAIR_BASE_NODE:
+        entries = plan_coverage_entries(doc).get(int(s), ())
+        wanted = {req_id for req_id, _ in entries}
+        order = doc.meta.order
+        requirements = tuple(
+            (r.id, r.text, r.derivation)
+            for r in (order.requirements if order is not None else ())
+            if r.id in wanted
+        )
+        return {
+            "base_norm": _sha256_hex(repr(("requirements", requirements))),
+            "service_iface_norm": iface,
+            "service_norm": service_keys["criterion"],
+            "edge_norm": _sha256_hex(repr(("coverage", entries))),
+        }
+    base = _stage_by_index(doc, int(b))
+    base_keys = stage_element_keys(base)
+    supplied = _supplied_by(doc, int(b), int(s))
+    elements = sorted({_element_digest(base, base_keys, sup.element) for sup in supplied})
+    if not supplied or any(sup.element is None for sup in supplied):
+        elements = sorted(set(elements) | {base_keys[WHOLE_STAGE_ELEMENT]})
+    return {
+        "base_norm": _sha256_hex(repr(("elements", tuple(elements)))),
+        "service_iface_norm": iface,
+        "service_norm": (
+            "" if _service_shown_as_declared_product(doc, s)
+            else service_keys[WHOLE_STAGE_ELEMENT]
+        ),
+        "edge_norm": _sha256_hex(repr(("edges", _edge_rows(doc, int(b), int(s))))),
+    }
 
 
 def pair_currency_hash(doc: PlanDoc, pair_id: str) -> str:
-    """sha256 of the `pair_currency_keys` digests of `pair_id` -- what a whole-plan
-    record keeps per pair in `reviewed_pair_currency`."""
-    binding = pair_binding(doc, pair_id)
-    text = "\n".join(f"{key}={binding[key]}" for key in pair_currency_keys(doc, pair_id))
-    return _sha256_hex(text)
+    """sha256 of the `pair_content` digests of `pair_id` -- what a whole-plan record
+    keeps per pair in `reviewed_pair_currency`."""
+    content = pair_content(doc, pair_id)
+    return _sha256_hex("\n".join(f"{k}={content[k]}" for k in PAIR_CONTENT_KEYS))
+
+
+def unit_content(doc: PlanDoc, node: "int | str") -> dict:
+    """What a CURRENT review of the unit of `node` was shown, from plan content
+    alone: `unit:base` -- the meta's goal, done criterion, final checks and the
+    order; `unit:<n>` -- every field of stage `n` (its whole-stage key) and its full
+    edge set, outbound (what it supplies from, its raw `depends_on`) and inbound
+    (what other stages' typed edges and the coverage entries take from it)."""
+    if node == PAIR_BASE_NODE:
+        return {"meta": plan_meta_digest(doc), "extra": order_extra_digest(doc.meta)}
+    n = int(node)
+    stage = _stage_by_index(doc, n)
+    outbound = tuple(sorted(
+        (sup.on, sup.element or "", sup.artifact or "", sup.delivery or "")
+        for sup in stage.supplies
+    ))
+    inbound = tuple(sorted(
+        (s.index, sup.element or "", sup.artifact or "", sup.delivery or "")
+        for s in doc.stages for sup in s.supplies if sup.on == n
+    ))
+    reliance = tuple(sorted(doc.raw_depends_on.get(n, ())))
+    consumed = tuple(sorted(
+        s.index for s in doc.stages if n in doc.raw_depends_on.get(s.index, ())
+    ))
+    return {
+        "stage": stage_element_keys(stage)[WHOLE_STAGE_ELEMENT],
+        "outbound": outbound,
+        "depends_on": reliance,
+        "inbound": inbound,
+        "depended_on_by": consumed,
+        "coverage": plan_coverage_entries(doc).get(n, ()),
+    }
+
+
+def unit_currency_hash(doc: PlanDoc, unit: str) -> str:
+    """sha256 of `unit_content` for the unit id `unit` -- the currency value a unit
+    record and a whole-plan baseline keep. Raises ValueError for an unknown unit."""
+    node = parse_unit(doc, unit)
+    return _sha256_hex(repr((unit, sorted(unit_content(doc, node).items()))))
+
+
+def review_currency_hash(doc: PlanDoc, review_id: str) -> str:
+    """The currency hash of a unit or pair id, recomputed from `doc` alone (no
+    record). For a pair shown only as its declared product it ignores the
+    service's construction by construction (`pair_content`)."""
+    if is_unit_id(review_id):
+        return unit_currency_hash(doc, review_id)
+    return pair_currency_hash(doc, review_id)
 
 
 def plan_interface_digests(doc: PlanDoc, indices=None) -> dict[int, str]:

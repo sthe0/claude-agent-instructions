@@ -25,7 +25,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 45  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 46  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -65,6 +65,10 @@ SCHEMA_VERSION = 45  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # digest of the deliverables it was accepted against);
                      # SessionState gains approved_grant_entries (the materialized
                      # effective grant set bound at approve / snapshot refresh)
+                     # 46: PlanPairReview gains content digests (base_norm/service_norm/
+                     # service_iface_norm/edge_norm) and unit_norm for unit records
+                     # (`unit:<node>` keys in plan_pair_reviews); PlanReview gains
+                     # reviewed_unit_currency
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -575,6 +579,11 @@ class PlanReview:
     # moved, and a pair is measured by its seven-digest `reviewed_pair_bindings` hash.
     reviewed_interface_keys: dict[str, str] = field(default_factory=dict)
     reviewed_pair_currency: "dict[str, str] | None" = None
+    # Schema 46: per unit id (`plan.review_units`) the unit's currency hash
+    # (`plan.unit_currency_hash`) at record time; `reviewed_pair_currency` now holds
+    # the content-keyed pair hash (`plan.pair_currency_hash`). None on a record
+    # written before units existed, which reads as: every unit is walk-stale.
+    reviewed_unit_currency: "dict[str, str] | None" = None
     # Schema 44: the severity the reviewer wrote on each concern (`blocking`/`note`,
     # positionally paired with `concerns`), the engine's effective severity after the
     # freeze rules (`blocking`/`note`/`advisory`), the reviewer's own verdict when the
@@ -618,6 +627,9 @@ class PlanReview:
             reviewed_pair_currency=(
                 dict(rpc) if isinstance(rpc := d.get("reviewed_pair_currency"), dict) else None
             ),
+            reviewed_unit_currency=(
+                dict(ruc) if isinstance(ruc := d.get("reviewed_unit_currency"), dict) else None
+            ),
             severities=list(d.get("severities", [])),
             effective_severities=list(d.get("effective_severities", [])),
             raw_verdict=d.get("raw_verdict", ""),
@@ -648,6 +660,11 @@ def plan_review_concern_ids(pr: "PlanReview") -> list[str]:
 
 
 _PLAN_REVIEW_PAIR_SCOPE_PREFIX = "topo:"
+
+# The content digests (`plan.pair_content`) a pair record written under schema 46 is
+# judged current by, in the order gates.pair_status reports the first moved one. A
+# record with `edge_norm` empty predates them and is judged by `PAIR_BINDING_KEYS`.
+PAIR_CONTENT_KEYS = ("edge_norm", "base_norm", "service_iface_norm", "service_norm")
 
 # The seven plan.pair_binding digests a pair record carries, in the fixed order
 # gates.pair_status reports the first moved one (`edge` right after `context`).
@@ -715,10 +732,31 @@ class PlanPairReview:
     effective_severities: list[str] = field(default_factory=list)
     raw_verdict: str = ""
     part_digests: dict[str, str] = field(default_factory=dict)
+    # Schema 46: the content digests of plan.pair_content (a pair) or the unit's
+    # plan.unit_currency_hash (`unit_norm`; a unit record has base = the node,
+    # service = "", and no pair digests). All "" on a record written before.
+    base_norm: str = ""
+    service_norm: str = ""
+    service_iface_norm: str = ""
+    edge_norm: str = ""
+    unit_norm: str = ""
+
+    @property
+    def is_unit(self) -> bool:
+        return self.pair.startswith("unit:")
+
+    @property
+    def is_content_keyed(self) -> bool:
+        """Whether the record carries the content digests it is judged current by."""
+        return bool(self.unit_norm if self.is_unit else self.edge_norm)
 
     def binding(self) -> dict[str, str]:
         """The stored digests, in the shape plan.pair_binding returns."""
         return {key: getattr(self, key) for key in PAIR_BINDING_KEYS}
+
+    def content(self) -> dict[str, str]:
+        """The stored content digests, in the shape plan.pair_content returns."""
+        return {key: getattr(self, key) for key in PAIR_CONTENT_KEYS}
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "PlanPairReview | None":
@@ -740,7 +778,9 @@ class PlanPairReview:
             effective_severities=list(d.get("effective_severities", [])),
             raw_verdict=d.get("raw_verdict", ""),
             part_digests=dict(pd) if isinstance(pd := d.get("part_digests"), dict) else {},
+            unit_norm=d.get("unit_norm", ""),
             **{key: d.get(key, "") for key in PAIR_BINDING_KEYS},
+            **{key: d.get(key, "") for key in PAIR_CONTENT_KEYS},
         )
 
 
