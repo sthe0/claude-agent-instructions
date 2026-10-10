@@ -108,6 +108,19 @@ ground = "_LEGACY_ENUMERATION_ID.match tests an id for the qenum-N identifier sh
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/cli.py::_record_review_questions::re.compile"]
+class = "structural"
+ground = "Compiles the engine's own candidate-id shape qrev-<review id>-<N> so the next unused number can be read off the ids already on file; the question text is never matched."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_record_review_questions::pattern.fullmatch"]
+class = "structural"
+ground = "The qrev-<review id>-<N> id pattern's .fullmatch tells this review's candidate rows from every other row by id shape, to find the standing row and the highest number; the statement is compared by equality, not by pattern."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
 [sites."scripts/agentctl/conditions.py::<module>::re.compile"]
 class = "candidate-generation"
 ground = "_INDEXED_STAGE ('stage N'), _RELATIVE_STAGE ('previous stage') and _COMPLETION (done/merged/landed ...) only nominate stage conditions that may restate depends_on for judge_restatement, which decides (fail-open) on the submission path."
@@ -246,9 +259,9 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/plan.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: _LANDED_REF_RE (git ref name shape), _EXECUTOR_RE (in_thread|spawn:<kind> vocabulary), _HEREDOC_START (shell here-document introducer), _CONCERN_RE (the engine's own `blocking:`/`note:` severity tag and `re:<id>` restatement reference)."
-hits = 4
-hit_classes = ["structural", "structural", "structural", "structural"]
+ground = "Compiles: _LANDED_REF_RE (git ref name shape), _EXECUTOR_RE (in_thread|spawn:<kind> vocabulary), _HEREDOC_START (shell here-document introducer), CUSTOMER_QUESTIONS_HEADER_RE (the engine's own `Customer questions:` field header, tolerant of case and emphasis), _CONCERN_RE (the engine's own `blocking:`/`note:` severity tag and `re:<id>` restatement reference)."
+hits = 5
+hit_classes = ["structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/plan.py::_parse_landed_spec::pattern.fullmatch"]
@@ -288,9 +301,21 @@ ground = "_EXECUTOR_RE.match validates the executor field against the engine's i
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/plan.py::plan_coverage_refs::pattern.match"]
+[sites."scripts/agentctl/plan.py::plan_coverage_entries::pattern.match"]
 class = "structural"
-ground = "grammar.pattern.match matches a coverage control name against the engine's own control-name grammars."
+ground = "grammar.pattern.match matches a coverage control name against the engine's own control-name grammars, to read which stage the control names."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan.py::customer_question_defect::pattern.match"]
+class = "structural"
+ground = "CUSTOMER_QUESTIONS_HEADER_RE.match tests whether a passed --customer-question is the reply's own `Customer questions:` field line, the engine's protocol header; it never reads what the question asks."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/render.py::_control_text::pattern.match"]
+class = "structural"
+ground = "grammar.pattern.match matches a coverage control name against the engine's own control-name grammars, to describe the part of the stage it names."
 hits = 1
 reviewed_by = "developer"
 
@@ -1120,7 +1145,20 @@ reviewed_by = "developer"
 
 [sites."scripts/lib/review_block.py::<module>::re.compile"]
 class = "structural"
-ground = "NUMBERING_RE matches a leading list numbering (1. / 2)) so a REVIEW line is compared to the engine's fixed REVIEW/Verdict/Plan digest markers without it."
+ground = "Compiles: NUMBERING_RE (a leading list numbering 1. / 2), so a REVIEW line is compared to the engine's fixed REVIEW/Verdict/Plan digest markers without it), LIST_ITEM_RE (a markdown bullet or numbered item) and _NUMBERED_QUESTION_RE (a near-miss spelling of the `Q:` field prefix); all fixed line syntax."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/review_block.py::ReviewBlock.questions::pattern.match"]
+class = "structural"
+ground = "_NUMBERED_QUESTION_RE.match recognises a line spelled `q:` / `Q2:` after a question as a second question written without the exact `Q:` prefix, so the reply is refused rather than the two recorded as one; it matches the prefix token, never what the question says."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/review_block.py::starts_list_item::pattern.match"]
+class = "structural"
+ground = "LIST_ITEM_RE.match detects a markdown bullet or numbered item at column 0, so a new list item is never read as the continuation of the question above it."
 hits = 1
 reviewed_by = "developer"
 
@@ -1138,8 +1176,9 @@ reviewed_by = "developer"
 
 [sites."scripts/lib/review_block.py::classify_line::pattern.match"]
 class = "structural"
-ground = "The tagged-concern grammar's .match decides only whether a line has the severity-tag + condition-marker shape; it never reads what the concern says."
-hits = 1
+ground = "Two .match calls: CUSTOMER_QUESTIONS_HEADER_RE tests for the engine's `Customer questions:` field header, and the tagged-concern grammar's .match decides only whether a line has the severity-tag + condition-marker shape; neither reads what the concern or question says."
+hits = 2
+hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/lib/review_block.py::classify_line::pattern.sub"]
@@ -1441,9 +1480,9 @@ reviewed_by = "developer"
 
 [sites."scripts/plan-review-topological.py::<module>::re.compile"]
 class = "structural"
-ground = "Seven patterns of fixed syntax: 64-hex digest, list-item bullet, spawner summary fields marker=/cost_usd=/duration_ms=, and dry-run # stdin and TOPO-VIEW lines."
-hits = 7
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Six patterns of fixed syntax: 64-hex digest, spawner summary fields marker=/cost_usd=/duration_ms=, and dry-run # stdin and TOPO-VIEW lines."
+hits = 6
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/plan-review-topological.py::_names::re.search"]
@@ -1457,12 +1496,6 @@ class = "structural"
 ground = "SUMMARY_COST_RE and SUMMARY_DURATION_RE extract cost_usd= and duration_ms= fields from the spawner summary line."
 hits = 2
 hit_classes = ["structural", "structural"]
-reviewed_by = "developer"
-
-[sites."scripts/plan-review-topological.py::_parse_concerns::pattern.match"]
-class = "structural"
-ground = "LIST_ITEM_RE detects a markdown bullet/numbered-list line to enforce the engine's condition-prefix output format."
-hits = 1
 reviewed_by = "developer"
 
 [sites."scripts/plan-review-topological.py::parse_review_output::pattern.fullmatch"]

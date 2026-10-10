@@ -292,6 +292,10 @@ def test_premise_and_experience_obligations_never_populate_ledger():
     plugins.activate(state, "premise")
     plugins.activate(state, "experience")
     plugins.activate(state, "obligations")
+    # An un-dispositioned review question is what makes the premise gate block.
+    state.plugins["premise"]["candidates"].append(
+        {"id": "qrev-whole-1", "statement": "who owns the rollout?", "disposition": "raised"}
+    )
 
     fired_approve = _fire(state, "approve")
     assert any(p["plugin"] == "premise" and p["action"] == "close_questions" for p in fired_approve)
