@@ -2629,7 +2629,8 @@ def _reviewed_stage_keys(stage: Stage) -> dict[str, str]:
     stamp binds to the question vocabulary, which names none of these."""
     keys = stage_element_keys(stage)
     whole = keys[WHOLE_STAGE_ELEMENT]
-    rules, add_dirs = ((), ()) if not grants_place(stage) else grants_place(stage)[0]
+    grants = grants_place(stage)
+    rules, add_dirs = grants[0] if grants else ((), ())
     effects = effects_place(stage)
     extras = (
         tuple(stage.output_artifacts),
