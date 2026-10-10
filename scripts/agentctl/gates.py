@@ -504,6 +504,61 @@ def failure_address_blockers(state: SessionState) -> list[str]:
     return []
 
 
+def _nested_label(d) -> str:
+    mismatch = (d.declaration.mismatch if d.declaration is not None else "").strip()
+    head = f"{d.uid} (level {d.level}, origin {d.origin})"
+    return f"{head}: {mismatch[:120]}" if mismatch else head
+
+
+def difficulty_stack_blockers(state: SessionState) -> list[str]:
+    """Precondition guardian for `replan` inside DIAGNOSING: a nested difficulty
+    (`difficulty-open`) is a sub-cycle of the enclosing one, and replanning with one still
+    open would clear the whole stack and re-norm the plan on an unfinished sub-record.
+    INTERNAL command precondition -- absent from GUARDIANS like difficulty_blockers.
+    [] outside DIAGNOSING and with an empty stack."""
+    if state.node != Node.DIAGNOSING.value or not state.difficulty_stack:
+        return []
+    top = state.difficulty
+    open_label = _nested_label(top) if top is not None else "(undeclared nested record)"
+    return [
+        f"a nested difficulty is still open: {open_label} -- finish it (declare -> "
+        f"investigate -> critique -> normalize) and run difficulty-close before replan"
+    ]
+
+
+def difficulty_close_blockers(state: SessionState, waiver: str | None = None) -> list[str]:
+    """Precondition guardian for `difficulty-close`: the top (nested) record must be as
+    complete as a record closing through `replan` has to be -- difficulty_blockers (the
+    three sections, well-formed), a routed failure_address, and a recorded normalization.
+    A `waiver` stands in for the normalization only for a record that carries no norm
+    targets; one that names a norm the closing plan must change is closed on its real
+    record, as in `replan`. [] == may close."""
+    if state.node != Node.DIAGNOSING.value:
+        return [f"difficulty-close runs only in the DIAGNOSING cycle; node={state.node}"]
+    if not state.difficulty_stack:
+        return ["no nested difficulty is open -- the root difficulty closes with replan, "
+                "not difficulty-close"]
+    out = difficulty_blockers(state)
+    if out:
+        return out
+    out = failure_address_blockers(state)
+    if out:
+        return out
+    d = state.difficulty
+    out = normalization_blockers(state)
+    if not out:
+        return []
+    if waiver is None:
+        return out
+    if not waiver.strip():
+        return ["normalization waiver reason must not be empty"]
+    if d.norm_targets:
+        return ["the nested difficulty names norm target(s) the closing plan must change; a "
+                "--normalization-waiver is not accepted for it -- record the normalization "
+                "with normalize"]
+    return []
+
+
 def file_norm_digest(path: str) -> str | None:
     """sha256 of a norm file's bytes; None when it is missing or unreadable (a deleted
     norm file has moved, which is all `renorm` bookkeeping asks of it)."""

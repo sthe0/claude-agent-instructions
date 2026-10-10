@@ -187,9 +187,11 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     # plan_approval PLUGIN gate (stage 3: cmd_replan now composes
     # plugins.plugin_gate_blockers(state, "plan_approval") just as cmd_approve does —
     # vacuous here, premise force-off in the suite), then the replan_coverage check.
+    # Every replan also evaluates the nested-difficulty gate (an empty stack here,
+    # so it passes) right after the effort-fire precondition.
     assert gates_fired == ["effort_fire", "plan_approval",
-                           "effort_fire", "difficulty_blockers",
-                           "effort_fire", "difficulty_blockers",
+                           "effort_fire", "difficulty_stack", "difficulty_blockers",
+                           "effort_fire", "difficulty_stack", "difficulty_blockers",
                            "diagnosing_replan",
                            "normalization_blockers",
                            "failure_address_blockers", "plan_review",
@@ -199,13 +201,14 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     assert rows[0]["passed"] is True   # effort_fire: no fire yet, submit_plan
     assert rows[1]["passed"] is True   # plan_approval
     assert rows[2]["passed"] is True   # effort_fire: no fire, premature replan
-    assert rows[3]["passed"] is False  # premature: record incomplete
-    assert rows[4]["passed"] is True   # effort_fire: no fire, completed replan
-    assert rows[5]["passed"] is True   # cycle complete
-    assert rows[6]["passed"] is True   # diagnosing_replan evaluated (vacuous, below ceiling)
-    assert rows[7]["passed"] is True   # normalization recorded
-    assert rows[8]["passed"] is True   # failure_address routed
-    assert rows[9]["passed"] is True   # plan_review evaluated (vacuous, gate off)
-    assert rows[10]["passed"] is True  # replan_authorization evaluated (vacuous, DIAGNOSING exempt)
-    assert rows[11]["passed"] is True  # plan_approval_plugin evaluated (vacuous)
-    assert rows[12]["passed"] is True  # coverage satisfied
+    assert rows[3]["passed"] is True   # difficulty_stack: nothing nested
+    assert rows[4]["passed"] is False  # premature: record incomplete
+    assert rows[5]["passed"] is True   # effort_fire: no fire, completed replan
+    assert rows[6]["passed"] is True   # difficulty_stack: nothing nested
+    assert rows[7]["passed"] is True   # cycle complete
+    assert rows[8]["passed"] is True   # diagnosing_replan evaluated (vacuous, below ceiling)
+    assert rows[9]["passed"] is True   # normalization recorded
+    assert rows[10]["passed"] is True  # failure_address routed
+    assert rows[11]["passed"] is True  # plan_review evaluated (vacuous, gate off)
+    assert rows[12]["passed"] is True  # replan_authorization evaluated (vacuous, DIAGNOSING exempt)
+    assert rows[-1]["passed"] is True  # coverage satisfied

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import uuid
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from pathlib import Path
@@ -25,7 +26,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 47  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 48  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -73,6 +74,11 @@ SCHEMA_VERSION = 47  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # names for editing); Stage gains `renorms` (the files a re-norming
                      # stage edits); SessionState gains pending_renorms (norm-edit
                      # obligations that outlive the closing replan)
+                     # 48: Difficulty gains uid/parent_uid/level/origin/children (the
+                     # difficulty stack); SessionState gains difficulty_stack (suspended
+                     # ancestors), parent_difficulty (the spawning session's open record,
+                     # read from AGENTCTL_PARENT_DIFFICULTY) and closed_difficulties
+                     # (roots a closing replan archives, children included)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -489,6 +495,17 @@ class Difficulty:
     # Entry: {"target": as given, "kind": "file"|"stage", "baseline": digest,
     #         "source": "critique" | uid of the nested record it was inherited from}.
     norm_targets: list[dict] = field(default_factory=list)
+    # Stack identity (schema 48). `uid` is assigned once at creation and survives every
+    # re-declare / re-critique of the record, so a child's `parent_uid` and a norm target's
+    # `source` keep naming the same difficulty. `level` is the record's depth: 0 for a
+    # session's first difficulty, parent + 1 for a nested one, inherited parent session
+    # level + 1 for a root opened in a spawned child session. `origin` is why it exists.
+    # `children` holds the nested records closed under this one.
+    uid: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    parent_uid: str | None = None
+    level: int = 0
+    origin: str = "stage"
+    children: list["Difficulty"] = field(default_factory=list)
 
     def complete(self) -> bool:
         return (
@@ -513,6 +530,15 @@ class Difficulty:
             critique=Critique(**crit) if crit else None,
             normalization=Normalization(**norm) if norm else None,
             norm_targets=[dict(t) for t in (d.get("norm_targets") or [])],
+            # A record written before schema 48 carries no identity: it becomes a level-0
+            # stage-origin root with a fresh uid and no children.
+            uid=d.get("uid") or uuid.uuid4().hex[:12],
+            parent_uid=d.get("parent_uid"),
+            level=int(d.get("level") or 0),
+            origin=d.get("origin") or "stage",
+            children=[
+                c for c in (cls.from_dict(x) for x in (d.get("children") or [])) if c is not None
+            ],
         )
 
 
@@ -2202,6 +2228,17 @@ class SessionState:
     # Discharged when the file's digest moves; verify-final / resolve refuse while any
     # remains (gates.pending_renorm_final_blockers).
     pending_renorms: list[dict] = field(default_factory=list)
+    # The difficulty stack (schema 48). `difficulty` stays the TOP (open) record; this holds
+    # its suspended ancestors, outermost first. Non-empty only between `difficulty-open` and
+    # the matching `difficulty-close`; a replan is refused while it is.
+    difficulty_stack: list["Difficulty"] = field(default_factory=list)
+    # The spawning session's open difficulty, {"session", "uid", "level"}, read once from
+    # AGENTCTL_PARENT_DIFFICULTY at session creation. None for a session nobody spawned
+    # from inside a difficulty. A root record here is numbered from level + 1.
+    parent_difficulty: dict | None = None
+    # Root records a closing replan archived, each with its `children` — the one place a
+    # later reader finds a closed difficulty's nested history.
+    closed_difficulties: list[dict] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
     # Not a dataclass field (ClassVar): the number of history events that were already
     # present when this object was built — what store.stamp_new_history uses to tell a
@@ -2484,6 +2521,10 @@ class SessionState:
         pr = data.get("permission_request")
         data["permission_request"] = PermissionRequest(**pr) if pr else None
         data["difficulty"] = Difficulty.from_dict(data.get("difficulty"))
+        data["difficulty_stack"] = [
+            r for r in (Difficulty.from_dict(x) for x in (data.get("difficulty_stack") or []))
+            if r is not None
+        ]
         data["plan_review"] = PlanReview.from_dict(data.get("plan_review"))
         data["plan_stage_reviews"] = {
             scope: r for scope, v in (data.get("plan_stage_reviews") or {}).items()

@@ -1587,6 +1587,33 @@ def load_engine_stage_grants(
     return directive.data.get("grants", [])
 
 
+PARENT_DIFFICULTY_ENV = "AGENTCTL_PARENT_DIFFICULTY"
+
+
+def parent_difficulty_env_value(
+    session_id: "str | None",
+    state_root: "Path | None" = None,
+) -> "str | None":
+    """`<session>:<uid>:<level>` naming the open difficulty of the engine session this
+    spawn works for, or `None` when it has none (or the session cannot be read). The
+    child engine adopts it at classify, so a difficulty opened inside the child nests
+    under the one that caused the spawn and the depth cap holds across the process
+    boundary. Same in-process engine seam as load_engine_stage_grants; a missing or
+    unreadable session is no reason to fail the spawn."""
+    if not session_id:
+        return None
+    from agentctl.store import FileStateStore
+
+    store = FileStateStore(state_root) if state_root is not None else FileStateStore()
+    try:
+        state = store.load(session_id)
+    except (OSError, ValueError, KeyError):
+        return None
+    if state is None or state.difficulty is None:
+        return None
+    return f"{session_id}:{state.difficulty.uid}:{state.difficulty.level}"
+
+
 def load_or_create_evidence_dir(
     session_id: str,
     stage_index: int,
@@ -2295,6 +2322,12 @@ def main(argv: list[str] | None = None) -> int:
             os.environ.get("CLAUDE_CODE_SESSION_ID"),
         ),
     }
+    # Always overwritten: a value inherited from an ancestor names that ancestor's
+    # difficulty, not the one this spawn's own session has open.
+    env.pop(PARENT_DIFFICULTY_ENV, None)
+    parent_difficulty = parent_difficulty_env_value(args.session, args.state_root)
+    if parent_difficulty is not None:
+        env[PARENT_DIFFICULTY_ENV] = parent_difficulty
 
     # Snapshot existing transcripts BEFORE spawning so we can identify the
     # child's new jsonl (the parent manager's own live transcript would
