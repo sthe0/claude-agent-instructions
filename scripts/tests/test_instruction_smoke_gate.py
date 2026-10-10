@@ -500,6 +500,7 @@ def test_git_push_runs_the_hook_and_a_recorded_candidate_lands(world):
     landed = subprocess.run(push, capture_output=True, text=True)
     assert landed.returncode == 0, landed.stderr
     assert gate.admission_line(tip) in landed.stderr
+    assert f"pre-push: instruction smoke record admitted {tip}" in landed.stderr
     assert git(world.remote, "rev-parse", "main") == tip
 
 
@@ -590,10 +591,97 @@ def test_cli_run_exit_codes_and_waiver_banner(world, monkeypatch, capsys):
     assert cli.main(["run", "-C", str(world.work)]) == 0
     monkeypatch.setattr(gate, "default_runner", stub_runner({LIVE: gate.UNAVAILABLE}))
     assert cli.main(["run", "-C", str(world.work)]) == 1
-    assert cli.main(["run", "-C", str(world.work), "--waive-unavailable", "auth expired"]) == 0
+    assert cli.main(["run", "-C", str(world.work), "--waiver", "auth expired"]) == 0
     assert "WAIVER IN EFFECT" in capsys.readouterr().out
     monkeypatch.setattr(gate, "default_runner", stub_runner({LIVE: gate.FAIL}))
     assert cli.main(["run", "-C", str(world.work)]) == 1
+
+
+def test_cli_run_prints_the_record_path_as_its_last_line(world, monkeypatch, capsys):
+    cli = _cli()
+    tip = world.surface_commit()
+    expected = gate.record_path(world.work / ".git", tip)
+    cases = (({}, gate.PASS, 0), ({LIVE: gate.UNAVAILABLE}, gate.UNAVAILABLE, 1), ({LIVE: gate.FAIL}, gate.FAIL, 1))
+    for statuses, result, code in cases:
+        monkeypatch.setattr(gate, "default_runner", stub_runner(statuses))
+        assert cli.main(["run", "-C", str(world.work)]) == code
+        lines = capsys.readouterr().out.splitlines()
+        assert lines[-1] == f"RECORD: {expected.resolve()}"
+        assert gate.read_record(expected)["result"] == result
+
+
+def test_cli_run_prints_a_refusal_but_leaves_other_output_undefused(world, monkeypatch, capsys):
+    cli = _cli()
+    world.surface_commit()
+    runner = stub_runner(output=verify_text().replace("pass detail", "permission denied 403", 1))
+    monkeypatch.setattr(gate, "default_runner", runner)
+    assert cli.main(["run", "-C", str(world.work)]) == 0
+    assert "permission denied 403" in capsys.readouterr().out
+    monkeypatch.setattr(gate, "default_runner", stub_runner({LIVE: gate.FAIL}))
+    assert cli.main(["run", "-C", str(world.work)]) == 1
+    refused = [ln for ln in capsys.readouterr().out.splitlines() if "REFUSED" in ln]
+    assert refused and all(gate._PUSH_RIGHTS.search(ln) is None for ln in refused)
+
+
+def test_cli_waive_takes_sha_and_attaches_the_waiver(world, capsys):
+    cli = _cli()
+    tip = world.surface_commit()
+    world.store(world.record(candidate=tip, statuses={LIVE: gate.UNAVAILABLE}))
+    assert cli.main(["check", "-C", str(world.work), "--sha", tip, "--remote-sha", world.base]) == 1
+    assert cli.main(["waive", "-C", str(world.work), "--sha", tip, "--reason", "claude -p offline"]) == 0
+    assert cli.main(["check", "-C", str(world.work), "--sha", tip, "--remote-sha", world.base]) == 0
+    assert "ADMITTED" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        cli.main(["waive", "-C", str(world.work), "--ref", tip, "--reason", "x"])
+
+
+def _run_cli(world, *args):
+    return subprocess.run([sys.executable, str(CLI_PATH), *args, "-C", str(world.work)],
+                          capture_output=True, text=True)
+
+
+def test_cli_check_with_an_explicit_record_and_remote_sha_never_fetches(world, tmp_path):
+    tip = world.surface_commit()
+    git(world.work, "remote", "set-url", "origin", str(tmp_path / "no-such-remote.git"))
+    record_file = tmp_path / "elsewhere.json"
+    record_file.write_text(json.dumps(world.record(candidate=tip)), encoding="utf-8")
+    args = ("check", "--sha", tip, "--remote-sha", world.base, "--record", str(record_file))
+
+    admitted = _run_cli(world, *args)
+    assert admitted.returncode == 0, admitted.stdout + admitted.stderr
+    assert "ADMITTED" in admitted.stdout
+
+    unfetchable = _run_cli(world, "check", "--sha", tip)
+    assert unfetchable.returncode == 2
+
+
+def test_cli_check_refuses_every_corrupted_record_and_the_stale_inputs(world, tmp_path):
+    first = world.surface_commit()
+    tip = world.surface_commit()
+    good = world.record(candidate=tip)
+    waiver = {"reason": "negative control", "at": "2026-10-10T00:00:00Z"}
+    variants = {
+        "fail": world.record(candidate=tip, statuses={"static:lint-prose-length": gate.FAIL}),
+        "unavailable-no-waiver": world.record(candidate=tip, statuses={LIVE: gate.UNAVAILABLE}),
+        "waiver-over-static-fail": world.record(
+            candidate=tip, statuses={LIVE: gate.UNAVAILABLE, "static:lint-prose-length": gate.FAIL}, waiver=waiver),
+        "drop-live": {**good, "checks": [c for c in good["checks"] if c["name"] != LIVE]},
+        "sandbox-mismatch": {**good, "sandbox_core_sha": world.base},
+    }
+
+    def check(sha, remote, record):
+        path = tmp_path / "rec.json"
+        path.write_text(json.dumps(record), encoding="utf-8")
+        return _run_cli(world, "check", "--sha", sha, "--remote-sha", remote, "--record", str(path)).returncode
+
+    assert check(tip, world.base, good) == 0
+    for name, record in variants.items():
+        assert check(tip, world.base, record) == 1, name
+    assert check(tip, first, good) == 1  # stale base: the record was built on world.base, not on first
+    assert check(first, world.base, good) == 1  # a record bound to tip does not admit its parent
+    missing = _run_cli(world, "check", "--sha", tip, "--remote-sha", world.base,
+                       "--record", str(tmp_path / "absent.json"))
+    assert missing.returncode == 1
 
 
 def test_cli_check_and_pre_push(world, monkeypatch, capsys):

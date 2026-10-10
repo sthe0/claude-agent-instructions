@@ -35,7 +35,7 @@ DEFAULT_REMOTE = "origin"
 DEFAULT_TRUNK = "main"
 DEFAULT_TIMEOUT_S = 480  # instruction-sandbox-live.py's DEFAULT_TIMEOUT_S: one live launch
 BUILD_TIMEOUT_S = 600
-STATIC_BUDGET_S = 900
+STATIC_TIMEOUT_S = 900
 
 PASS, FAIL, UNAVAILABLE = "PASS", "FAIL", "UNAVAILABLE"
 STATUSES = (PASS, FAIL, UNAVAILABLE)
@@ -413,15 +413,22 @@ def decide(paths: Sequence[str], gate_applies: bool, record: object | None,
 
 
 def evaluate_landing(repo: str | Path, candidate_sha: str, remote_sha: str,
-                     common_dir: str | Path | None = None) -> Decision:
-    """Read the edges (trees, diff, record store) and decide; any error refuses."""
+                     common_dir: str | Path | None = None,
+                     record_file: str | Path | None = None) -> Decision:
+    """Read the edges (trees, diff, record) and decide; any error refuses.
+
+    The record comes from ``record_file`` when given, else from the store under the common dir.
+    """
     try:
         applies = _sandbox_script_in(repo, remote_sha) or _sandbox_script_in(repo, candidate_sha)
         paths = changed_paths(repo, remote_sha, candidate_sha) if applies else []
         record = None
         if applies and touches_surface(paths):
-            store = Path(common_dir) if common_dir else git_common_dir(repo)
-            record = load_record(store, candidate_sha)
+            if record_file is not None:
+                record = read_record(record_file)
+            else:
+                store = Path(common_dir) if common_dir else git_common_dir(repo)
+                record = load_record(store, candidate_sha)
     except GateError as exc:
         return Decision(False, REFUSED, f"cannot decide: {exc}")
     return decide(paths, applies, record, candidate_sha, remote_sha)
@@ -534,7 +541,7 @@ def default_runner(repo: Path, candidate_sha: str, root: Path, timeout_s: int) -
         raise GateError(f"sandbox.env unreadable: {exc}") from exc
     verify = _run_process(
         [str(scripts / "instruction-sandbox-verify.sh"), "--timeout", str(timeout_s), str(root)],
-        timeout_s + STATIC_BUDGET_S,
+        timeout_s + STATIC_TIMEOUT_S,
     )
     if verify.returncode not in VERIFY_EXIT.values():
         raise GateError(f"verify exited {verify.returncode}: {one_line(verify.stderr, 240)}")
