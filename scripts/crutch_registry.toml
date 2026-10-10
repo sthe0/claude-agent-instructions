@@ -1435,6 +1435,22 @@ disposition = "keep"
 ground = "This generator's own `_ALREADY_MECHANIZED_RE` is a one-time authoring aid for the stage-2 perception pass (see module docstring), not a runtime gate; it reaches no hard-outcome sink."
 
 [[entry]]
+id = "50039c759ef729a6"
+domain = "code"
+file = "scripts/hook-branch-backup.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "37ec9e09bb2eba95"
+domain = "code"
+file = "scripts/hook-branch-backup.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
 id = "14e441f0266b3bf3"
 domain = "code"
 file = "scripts/hook-deferring-disposition-gate.py"
@@ -6510,6 +6526,22 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "f2c62179b11458e7"
 domain = "code"
 file = "scripts/tests/test_history_capture.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "eb5e3b80ecd23929"
+domain = "code"
+file = "scripts/tests/test_hook_branch_backup.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "c6b3d97392f90975"
+domain = "code"
+file = "scripts/tests/test_hook_branch_backup.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -14083,6 +14115,14 @@ disposition = "keep"
 ground = "This generator's own `_ALREADY_MECHANIZED_RE` is a one-time authoring aid for the stage-2 perception pass (see module docstring), not a runtime gate; it reaches no hard-outcome sink. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "4847cc5490cfc4e5"
+domain = "code_file_rollup"
+file = "scripts/hook-branch-backup.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "c87c6eff5ae51086"
 domain = "code_file_rollup"
 file = "scripts/hook-deferring-disposition-gate.py"
@@ -15222,6 +15262,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "f21a79db70f64be8"
 domain = "code_file_rollup"
 file = "scripts/tests/test_history_capture.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "8b383bfdb377a355"
+domain = "code_file_rollup"
+file = "scripts/tests/test_hook_branch_backup.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
