@@ -111,6 +111,7 @@ from .state import (
     FAILURE_ADDRESS_VALUES,
     FinalCheck,
     Investigation,
+    is_skipped,
     JudgeBypass,
     LANDED_GIT_ERROR_EXIT,
     Partition,
@@ -822,7 +823,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.supplies = list(refined.supplies)
     cur.optional = refined.optional
     cur.backlog_issue = refined.backlog_issue
-    if cur.outcome.status == StageStatus.SKIPPED.value and not cur.optional:
+    if is_skipped(cur) and not cur.optional:
         cur.outcome.status = StageStatus.PENDING.value
 
 
@@ -5904,9 +5905,7 @@ def _stranded_dependency_problems(
     Declined = `newly_declined` plus every stage the session already holds SKIPPED. Run on
     every approve that has any declined stage, not only on `--skip-optional`: a replan can
     carry a SKIPPED stage forward and add a live optional stage that depends on it."""
-    declined = newly_declined | {
-        s.index for s in state.stages if s.outcome.status == StageStatus.SKIPPED.value
-    }
+    declined = newly_declined | {s.index for s in state.stages if is_skipped(s)}
     problems: list[str] = []
     for stage in doc.stages:
         stranded = sorted(d for d in stage.depends_on if d in declined)
@@ -5986,9 +5985,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                              "cannot approve: --skip-optional names stages that cannot be "
                              "declined (fix the indices and re-run approve)",
                              data={"problems": skip_problems})
-    elif _approved_doc is not None and any(
-        s.outcome.status == StageStatus.SKIPPED.value for s in state.stages
-    ):
+    elif _approved_doc is not None and any(is_skipped(s) for s in state.stages):
         stranded_problems = _stranded_dependency_problems(_approved_doc, state, set())
         if stranded_problems:
             return Directive(False, state.node, "fix_plan",
@@ -6012,6 +6009,19 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty approver: --by must name who approved"]
     elif by_agent:
+        # A stage the customer declined and that has since changed (or stopped being
+        # optional) is live again; the resource boundary below cannot see that, and
+        # `--skip-optional` is refused for the agent, so its approval would dispatch work
+        # the customer turned down. Only a customer approval re-offers the choice.
+        revived = sorted(
+            s.index for s in state.stages if s.outcome.declined and not is_skipped(s)
+        )
+        if revived:
+            blockers = blockers + [
+                f"--by {args.by!r} refused: stage(s) {revived} were declined by the customer "
+                "and have changed since -- the customer must choose again (approve by the "
+                "customer, with --skip-optional to keep them declined)"
+            ]
         # The coordinator approves only inside the boundary the user approved for this
         # order (a ledger entry and an eligible verdict on the CURRENT bytes); it never
         # stamps the ledger, so its approval is never a later boundary.
@@ -6059,7 +6069,11 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     for skipped_index in skip_optional:
         skipped = state.stage(skipped_index)
         skipped.outcome.status = StageStatus.SKIPPED.value
+        skipped.outcome.declined = True
         skipped.outcome.actual = "declined at approval (optional stage)"
+    for s in state.stages:
+        if not is_skipped(s):
+            s.outcome.declined = False
     if skip_optional:
         state.log("skip_optional", by=args.by, stages=skip_optional)
     effort.arm(state)  # opens the effort-divergence window — see effort.py's ARMED-ONLY
@@ -8482,7 +8496,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
     failures: list[str] = []
     for stage in state.stages:
-        if stage.outcome.status == StageStatus.SKIPPED.value:
+        if is_skipped(stage):
             continue
         crit = stage.criterion
         if crit.criterion_type == CriterionType.MEASURABLE.value and crit.verify_kind == CheckKind.LANDED.value:
@@ -8963,7 +8977,7 @@ def cmd_reject(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                     False, state.node, "noop",
                     f"reject --stage {idx} does not exist in the plan",
                 )
-            if target.outcome.status == StageStatus.SKIPPED.value:
+            if is_skipped(target):
                 return Directive(
                     False, state.node, "noop",
                     f"reject --stage {idx} names a SKIPPED stage; a declined optional stage "
@@ -8971,7 +8985,7 @@ def cmd_reject(args, *, store: StateStore, runner: Runner | None = None) -> Dire
                 )
             targets.append(target)
     else:
-        live = [s for s in state.stages if s.outcome.status != StageStatus.SKIPPED.value]
+        live = [s for s in state.stages if not is_skipped(s)]
         if not live:
             return Directive(False, state.node, "noop", "reject has no stages to re-open")
         targets = [max(live, key=lambda s: s.index)]  # default: the final non-declined stage
@@ -10088,13 +10102,19 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     state.reattest_stash = reattest_stash
     for ns in new.stages:
         prev = live_by_index.get(ns.index)
-        if prev is None or not stage_carried(state.stages, new.stages, ns.index):
+        if prev is None:
             continue
-        # A declined optional stage whose definition did not move stays declined, so an
-        # in-boundary self-approved replan does not silently revive work the user turned
-        # down; a changed one goes back to PENDING for a fresh choice at re-approval.
+        # The customer's decline outlives a reset to PENDING: `approve --by agent` refuses
+        # while a declined stage is live, so only a customer approval can bring it back.
+        if prev.outcome.declined or is_skipped(prev):
+            ns.outcome.declined = True
+        if not stage_carried(state.stages, new.stages, ns.index):
+            continue
+        # A declined optional stage whose definition did not move stays declined; a changed
+        # one goes back to PENDING (still marked declined) for a fresh choice at the
+        # customer's re-approval.
         if prev.outcome.status == StageStatus.PASSED.value or (
-            prev.outcome.status == StageStatus.SKIPPED.value and ns.optional
+            is_skipped(prev) and ns.optional
         ):
             ns.outcome = prev.outcome
     state.stages = new.stages
@@ -10398,6 +10418,16 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     originating = int(getattr(args, "originating_stage", None) or state.current_stage or 0)
     if not originating:
         return Directive(False, state.node, "noop", "cannot determine originating stage; pass --originating-stage")
+    try:
+        declined_origin = is_skipped(state.stage(originating))
+    except KeyError:
+        declined_origin = False
+    if declined_origin:
+        return Directive(
+            False, state.node, "noop",
+            f"push-subplan: originating stage {originating} is SKIPPED; a declined optional "
+            "stage is never run, so it cannot spawn a sub-plan",
+        )
     child_plan = args.plan
     child_task = getattr(args, "task", None) or f"sub:{Path(child_plan).stem}"
 
@@ -10586,7 +10616,7 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     # re-point at a stage this same call is about to mark PASSED.
     try:
         orig = state.stage(frame.originating_stage)
-        if orig.outcome.status != StageStatus.SKIPPED.value:
+        if not is_skipped(orig):
             orig.outcome.status = StageStatus.PASSED.value
             orig.control = f"satisfied by sub-plan {child_task_id}"
     except KeyError:

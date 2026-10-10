@@ -374,9 +374,33 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "reject-spares-skipped": Mutant(
         CLI,
-        "        live = [s for s in state.stages if s.outcome.status != StageStatus.SKIPPED.value]\n",
+        "        live = [s for s in state.stages if not is_skipped(s)]\n",
         "        live = list(state.stages)\n",
         _ids(T_OPTIONAL, "test_reject_without_a_stage_never_reopens_a_declined_stage"),
+    ),
+    "reject-names-skipped-refused": Mutant(
+        CLI,
+        "            if is_skipped(target):\n                return Directive(",
+        "            if False:\n                return Directive(",
+        _ids(T_OPTIONAL, "test_reject_refuses_to_name_a_declined_stage"),
+    ),
+    "push-refuses-skipped-origin": Mutant(
+        CLI,
+        "    if declined_origin:\n        return Directive(",
+        "    if False:\n        return Directive(",
+        _ids(T_OPTIONAL, "test_push_subplan_refuses_a_declined_originating_stage"),
+    ),
+    "agent-cannot-revive-declined": Mutant(
+        CLI,
+        "        if revived:\n            blockers = blockers + [",
+        "        if False:\n            blockers = blockers + [",
+        _ids(
+            T_OPTIONAL,
+            "test_the_agent_cannot_approve_a_declined_stage_back_in[changed-user-keeps-declined]",
+            "test_the_agent_cannot_approve_a_declined_stage_back_in[changed-user-takes-it]",
+            "test_the_agent_cannot_approve_a_declined_stage_back_in[made-required-user-takes-it]",
+            "test_the_agent_cannot_approve_a_declined_stage_back_in[edited-in-place-user-keeps-declined]",
+        ),
     ),
 }
 

@@ -448,15 +448,33 @@ def test_a_changed_declined_stage_is_offered_again_on_both_carry_paths(
     assert state.stage(3).outcome.status == StageStatus.PENDING.value  # changed: offered again
 
 
-def test_popping_a_subplan_never_revives_a_declined_originating_stage(store, optional_plan):
+def test_push_subplan_refuses_a_declined_originating_stage(store, optional_plan, tmp_path):
+    sid = "push-skipped"
+    _executing(store, sid, optional_plan, skip=[3])
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    d = cli.cmd_push_subplan(
+        ns(session=sid, plan=str(tmp_path / "child.toml"), task="child-task",
+           originating_stage=3), store=store)
+    assert d.ok is False and "SKIPPED" in d.detail
+    state = store.load(sid)
+    assert state.plan_stack == [] and state.node == Node.EXECUTING.value
+    assert state.stage(3).outcome.status == StageStatus.SKIPPED.value
+
+
+def test_popping_a_subplan_never_revives_a_declined_originating_stage(
+        store, optional_plan, tmp_path):
     from agentctl.state import Criterion, Means, Outcome, Stage, Subject, Actor, GateRecord
     sid = "pop-skipped"
     _executing(store, sid, optional_plan, skip=[3])
     cli.cmd_next_stage(ns(session=sid), store=store)
-    cli.cmd_push_subplan(
-        ns(session=sid, plan="/tmp/child.toml", task="child-task", originating_stage=3),
-        store=store)
+    d = cli.cmd_push_subplan(
+        ns(session=sid, plan=str(tmp_path / "child.toml"), task="child-task",
+           originating_stage=1), store=store)
+    assert d.ok is True, d.detail
     state = store.load(sid)
+    # a frame that already holds the originating stage as declined (a crafted or older
+    # frame): the pop guard is the second line behind the push refusal
+    state.plan_stack[-1].stages[0].outcome.status = StageStatus.SKIPPED.value
     state.stages = [Stage(
         index=1, title="child", subject=Subject(material="m", result="r"),
         means=Means(means="Edit", method="do"), actor=Actor(executor="in_thread"),
@@ -468,7 +486,7 @@ def test_popping_a_subplan_never_revives_a_declined_originating_stage(store, opt
     store.save(state)
 
     cli.cmd_pop_subplan(ns(session=sid), store=store)
-    assert store.load(sid).stage(3).outcome.status == StageStatus.SKIPPED.value
+    assert store.load(sid).stage(1).outcome.status == StageStatus.SKIPPED.value
 
 
 def test_an_optional_stage_not_declined_still_has_to_pass(store, optional_plan):
@@ -668,15 +686,39 @@ def _attribute_chain(node: ast.AST) -> "set[str]":
     return names
 
 
+_STATUS_LITERALS = frozenset(s.value for s in StageStatus)
+
+
+def _names_a_stage_status(value: "ast.AST | None") -> bool:
+    """The right side is a stage status: `StageStatus...` anywhere in it, or an exact
+    (upper-case) status literal; a lower-case "failed" is some other record's status."""
+    if value is None:
+        return False
+    if _mentions_stage_status(value):
+        return True
+    return (isinstance(value, ast.Constant) and isinstance(value.value, str)
+            and value.value in _STATUS_LITERALS)
+
+
+def _subscript_key(node: ast.AST) -> "str | None":
+    if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+        return node.slice.value if isinstance(node.slice.value, str) else None
+    return None
+
+
 def stage_status_write_sites(source: str) -> "set[str]":
     """Qualified names of the functions in `source` that WRITE a stage's status or outcome.
 
     The twin of `single_stage_sites` on the write side: a write is where a SKIPPED stage
-    could be turned into FAILED, ACTIVE or PENDING behind the customer's back. Shapes: an
-    assignment to `<...>.outcome.status` (or any `.status` whose right side names
-    StageStatus), an assignment to `<...>.outcome`, an assignment to a `["status"]`
-    subscript whose right side names StageStatus (a JSON state), and an `Outcome(status=...)`
-    construction."""
+    could be turned into FAILED, ACTIVE or PENDING behind the customer's back. Shapes:
+      * `<...>.outcome = ...`, and `<...>.status = ...` through an `outcome` chain or with a
+        right side that is a stage status (`StageStatus...` or a status literal, so an
+        aliased `o = s.outcome; o.status = "FAILED"` is found);
+      * a JSON state: `d["outcome"]["status"] = ...` whatever the right side, and
+        `d["status"] = ...` with a stage-status right side (an `d["outcome"] = ...` is NOT
+        a hit: "outcome" is also the key of unrelated records, e.g. a gate's audit row);
+      * `setattr(<x>, "status" | "outcome", ...)`;
+      * an `Outcome(status=...)` construction."""
     tree = ast.parse(source)
     owner = _owner_resolver(tree)
     found: "set[str]" = set()
@@ -688,16 +730,20 @@ def stage_status_write_sites(source: str) -> "set[str]":
                     found.add(owner(node.lineno))
                 elif target.attr == "status" and (
                     "outcome" in _attribute_chain(target.value)
-                    or (value is not None and _mentions_stage_status(value))
+                    or _names_a_stage_status(value)
                 ):
                     found.add(owner(node.lineno))
-            elif (isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant)
-                  and target.slice.value == "status" and value is not None
-                  and _mentions_stage_status(value)):
+            elif _subscript_key(target) == "status":
+                if _subscript_key(target.value) == "outcome" or _names_a_stage_status(value):
+                    found.add(owner(node.lineno))
+        if isinstance(node, ast.Call):
+            callee = getattr(node.func, "id", None)
+            if callee == "Outcome" and any(kw.arg == "status" for kw in node.keywords):
                 found.add(owner(node.lineno))
-        if (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Outcome"
-                and any(kw.arg == "status" for kw in node.keywords)):
-            found.add(owner(node.lineno))
+            elif (callee == "setattr" and len(node.args) == 3
+                  and isinstance(node.args[1], ast.Constant)
+                  and node.args[1].value in ("status", "outcome")):
+                found.add(owner(node.lineno))
     return found
 
 
@@ -826,21 +872,24 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "n/a: receives the stage a spawn just ran (ACTIVE) from its caller"
     ),
     ("agentctl/cli.py", "cmd_pop_subplan"): (
-        "guarded: marks the stage that opened the sub-plan PASSED unless it is SKIPPED (an "
-        "explicit --originating-stage can name any stage)"
+        "guarded: marks the stage that opened the sub-plan PASSED unless it is SKIPPED, behind "
+        "push-subplan, which refuses a SKIPPED originating stage (--originating-stage can "
+        "name any stage)"
     ),
     ("agentctl/cli.py", "_apply_refined_stage_fields"): (
         "guarded: its only status write moves a SKIPPED stage whose refined definition is "
         "no longer optional back to PENDING (a required stage cannot be declined)"
     ),
     ("agentctl/cli.py", "_refresh_caches_from_plan_path"): (
-        "guarded: resets only a CHANGED stage (PASSED or SKIPPED) to PENDING; an unchanged "
-        "declined stage keeps SKIPPED"
+        "guarded: resets only a CHANGED stage (PASSED or SKIPPED) to PENDING and keeps its "
+        "`declined` mark, which the agent's approve refuses; an unchanged declined stage "
+        "keeps SKIPPED"
     ),
     ("agentctl/cli.py", "_cmd_replan"): (
         "guarded: FAILED stages go back to PENDING (a SKIPPED one is never FAILED, see "
         "cmd_reject); the substantive carry copies the outcome of an unchanged PASSED or "
-        "SKIPPED stage and leaves a changed one PENDING"
+        "SKIPPED stage, and a changed one is left PENDING with `declined` set so only the "
+        "customer's approve can re-offer it"
     ),
     ("agentctl/plan.py", "parse_plan"): (
         "n/a: constructs every stage PENDING at load; SKIPPED exists only in session state"
@@ -905,6 +954,14 @@ PLANTED = {
         "def k(stage):\n    stage.outcome.status = StageStatus.PASSED.value\n",
         set(),
     ),
+    "a lower-case literal compare": (
+        "def m(s):\n    return s.status == 'passed'\n",
+        {"m"},
+    ),
+    "an identity test against the member": (
+        "def n(x):\n    return x is StageStatus.PASSED\n",
+        {"n"},
+    ),
 }
 
 
@@ -914,8 +971,143 @@ def test_the_enumerator_finds_planted_sites_and_only_those(case):
     assert single_stage_sites(source) == expected
 
 
+PLANTED_WRITES = {
+    "a direct status write": (
+        "def a(s):\n    s.outcome.status = StageStatus.FAILED.value\n",
+        {"a"},
+    ),
+    "a write through an alias of the outcome": (
+        "def b(s):\n    o = s.outcome\n    o.status = 'FAILED'\n",
+        {"b"},
+    ),
+    "a replaced outcome": (
+        "def c(s, fresh):\n    s.outcome = fresh\n",
+        {"c"},
+    ),
+    "a JSON state's nested status without the enum": (
+        "def d(doc):\n    doc['stages'][0]['outcome']['status'] = 'PENDING'\n",
+        {"d"},
+    ),
+    "a JSON stage's status from the enum": (
+        "def e(stage):\n    stage['status'] = StageStatus.ACTIVE.value\n",
+        {"e"},
+    ),
+    "setattr on the outcome": (
+        "def f(s):\n    setattr(s.outcome, 'status', 'PENDING')\n",
+        {"f"},
+    ),
+    "a constructed outcome": (
+        "def g(s):\n    s.attempt = Outcome(status='ACTIVE')\n",
+        {"g"},
+    ),
+    "a method write": (
+        "class Box:\n    def h(self, s):\n        s.outcome.status = 'SKIPPED'\n",
+        {"Box.h"},
+    ),
+    "an unrelated record's lower-case status is not a hit": (
+        "def i(job):\n    job.status = 'failed'\n    job['status'] = 'skipped'\n",
+        set(),
+    ),
+    "a read is not a write": (
+        "def j(s):\n    return s.outcome.status\n",
+        set(),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(PLANTED_WRITES))
+def test_the_write_enumerator_finds_planted_writes_and_only_those(case):
+    source, expected = PLANTED_WRITES[case]
+    assert stage_status_write_sites(source) == expected
+
+
 def test_the_enumerator_walks_real_files_and_finds_the_known_setters_free_of_noise(tmp_path):
     scripts = _scripts_under_review()
     assert SCRIPTS_DIR / "agentctl" / "cli.py" in scripts
     assert SCRIPTS_DIR / "hook-resolution-reminder.py" in scripts
     assert not any("tests" in p.parts for p in scripts)
+
+
+# --- the declined stage and the agent's approval --------------------------------------
+
+_OPTIONAL_STAGE_3 = f'optional = true\nbacklog_issue = "{ISSUE}"\n'
+
+
+_STAGE_4 = (
+    '\n[[stage]]\nindex = 4\ntitle = "Document"\nexecutor = "spawn:developer"\n'
+    'expected_result_image = "docs exist"\ncriterion_type = "measurable"\n'
+    'done_criterion = "docs on disk"\ndepends_on = [2]\n'
+)
+
+
+def _optional_third_stage_plan(
+        *, changed=False, required=False, retitled=False, fourth=False) -> str:
+    """The autonomy-boundary harness's three-stage plan with stage 3 optional, one axis varied."""
+    from test_replan_autonomy_boundary import plan_text
+
+    text = plan_text(stage3=True)
+    if changed:
+        text = text.replace("the CI config names test_mod", "the CI config names test_mod and lint")
+    if retitled:
+        text = text.replace('title = "Wire CI"', 'title = "Wire CI up"')
+    if not required:
+        text = text.rstrip("\n") + "\n" + _OPTIONAL_STAGE_3
+    return text + _STAGE_4 if fourth else text
+
+
+@pytest.fixture
+def eng(tmp_path, monkeypatch):
+    from test_replan_autonomy_boundary import Eng
+
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    return Eng(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("variant", "replanned", "user_skips", "final_status"),
+    [
+        ("replan-changes-stage", dict(changed=True), [3], "SKIPPED"),
+        ("replan-changes-stage", dict(changed=True), [], "PENDING"),
+        ("replan-makes-stage-required", dict(required=True), [], "PENDING"),
+        ("in-place-edit-at-plan-ready", dict(retitled=True, fourth=True), [3], "SKIPPED"),
+    ],
+    ids=["changed-user-keeps-declined", "changed-user-takes-it", "made-required-user-takes-it",
+         "edited-in-place-user-keeps-declined"],
+)
+def test_the_agent_cannot_approve_a_declined_stage_back_in(
+        eng, variant, replanned, user_skips, final_status):
+    sid = "revive"
+    plan = eng.write(_optional_third_stage_plan(), "first.toml")
+    assert eng.open(sid, plan)["marker"] == "PLAN-READY"
+    assert eng.run("approve", session=sid, by="user", skip_optional=[3])["ok"] is True
+    assert eng.state(sid).stage(3).outcome.status == "SKIPPED"
+    eng.fail_stage(sid)
+    in_place = variant == "in-place-edit-at-plan-ready"
+    eng.diagnose(sid, difference=in_place)
+
+    if in_place:
+        second = eng.write(_optional_third_stage_plan(fourth=True), "second.toml")
+        d = eng.run("replan", session=sid, plan=second)
+        assert d["data"]["autonomy"]["action"] == "self_approve", d
+        assert eng.state(sid).stage(3).outcome.status == "SKIPPED"
+        Path(second).write_text(_optional_third_stage_plan(**replanned), encoding="utf-8")
+    else:
+        second = eng.write(_optional_third_stage_plan(**replanned), "second.toml")
+        d = eng.run("replan", session=sid, plan=second)
+        assert d["data"]["autonomy"]["action"] == "self_approve", d
+
+    for _ in range(2):  # a second try must not slip through whatever the first one persisted
+        refused = eng.run("approve", session=sid, by="agent")
+        assert refused["ok"] is False
+        assert any("declined by the customer" in b for b in refused["data"]["blockers"]), refused
+        state = eng.state(sid)
+        assert state.stage(3).outcome.declined is True
+        assert state.node == Node.PLAN_READY.value
+        if not in_place:  # the replan's carry already reset it; an in-place edit is only read at approve
+            assert state.stage(3).outcome.status == "PENDING"
+
+    accepted = eng.run("approve", session=sid, by="user", skip_optional=user_skips)
+    assert accepted["ok"] is True, accepted
+    state = eng.state(sid)
+    assert state.stage(3).outcome.status == final_status
+    assert state.stage(3).outcome.declined is (final_status == "SKIPPED")

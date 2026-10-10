@@ -268,6 +268,11 @@ def is_settled(stage) -> bool:
     return stage.outcome.status in _SETTLED_STATUSES
 
 
+def is_skipped(stage) -> bool:
+    """True iff the stage is an optional stage the customer declined (status SKIPPED)."""
+    return stage.outcome.status == StageStatus.SKIPPED.value
+
+
 class Confidence(str, Enum):
     HIGH = "high"
     MEDIUM = "medium"
@@ -1626,6 +1631,11 @@ class Outcome:
     # attempt made against this stage, including ones a gate blocked before any
     # verification ran.
     record_attempts: int = 0
+    # The customer declined this stage at an approval (`approve --skip-optional`). Stays
+    # True when a changed definition sends the stage back to PENDING for a fresh choice, so
+    # `approve --by agent` can tell "never offered" from "offered, declined, since changed"
+    # and leaves the second to the customer; cleared by the next customer approval.
+    declined: bool = False
 
 
 @dataclass
