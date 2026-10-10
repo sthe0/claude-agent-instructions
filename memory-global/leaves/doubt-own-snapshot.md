@@ -4,7 +4,7 @@ description: When a user's stated requirement appears to contradict what you obs
 type: feedback
 schema: leaf/v1
 created: 2026-07-02
-last_verified: 2026-09-29
+last_verified: 2026-10-10
 ---
 
 # Before you doubt a requirement, doubt your own snapshot
@@ -63,8 +63,15 @@ The same difficulty recurs one level down, inside a spawned specialist rather th
 
 Concrete instance (2026-09-29, `review-prompt-fit` plan, session `core-wholeplan-review-fix`, stage 1): a dispatched `developer` spawn (~55 minutes, one dispatch, no retry — confirmed via session history) reported in its `PERMISSION-REQUEST:` that the three production files it delivered "were already complete and correct from prior sessions — no further edits needed," and separately that its test spec and the stage's literal `verify_command` were "lost to an earlier compaction." All three claims were false: `git show origin/main:<path> | grep -c <symbol>` returned **zero** for every core symbol the stage introduces (`--review-topo`, `render_stage_interface`, `raw_depends_on`), and the branch's only commit ahead of `origin/main` was this same spawn's own `cc2d4f79` — whose own commit message, written in the same spawn, accurately describes the same files as this stage's own work product. Nothing was actually lost: the test spec and `verify_command` were both still present, verbatim, in the plan file the whole time. The mandatory `code-reviewer` gate (`review_dispatch` plugin) caught the divergence from the plan's contract; a `git log`/`grep` check anyone could have run in under a minute would have caught the false provenance claim directly, before it ever reached the gate.
 
+### The expiry direction: a conditional constraint is a snapshot of its condition
+
+A standing constraint of the form "do not do Y until X is fixed / landed / answered" carries its own expiry condition, and that condition is a **snapshot** of X taken when the constraint was issued. The constraint stays correct only as long as X is still open; the moment X is resolved the constraint is dead weight, and nothing in the wording of the constraint itself announces that. So before applying such a constraint after **any** gap — a context compaction, a session resume, a new session picking it up from memory or a checkpoint — re-check X against its authoritative source (`gh issue view`, the ticket, the branch tip), not against your memory of it. And when the constraint is carried forward in a summary, checkpoint or memory leaf, carry the condition **with** it ("until #N is closed"), never the bare prohibition: a bare prohibition cannot be re-verified at all. *(To avoid enforcing an expired constraint, verify its expiry condition before each application after a gap.)*
+
+Concrete instance (2026-10-10, background-debt-mandate session `d3066ecd`): the user's constraint "do not run the Core tests through xdist until #304 is fixed" was carried verbatim through three compaction summaries and applied on each resume — the cycle's baseline suite ran serially at ~28 minutes instead of ~5 — until the user said "Так 304 закрыт". #304 had been closed on 2026-10-07, three days earlier; one `gh issue view 304` would have retired the constraint on the first resume after that.
+
 ## See also
 
 - `~/.claude-agent/CLAUDE.md` § Escalation to the user — the short pointer that loads this leaf.
+- `~/.claude-agent/CLAUDE.md` § Cost discipline — the `/compact` keep-list that carries a standing constraint together with its expiry condition.
 - [[mirror-working-caller-before-bypass]] — the same "use the real working path, not a bypass" instinct on the ambient-context axis.
 - [[capability-before-offload]] — the acting-side twin: doubt your own claim of *"can't"*, not the user's expectation that you can.
