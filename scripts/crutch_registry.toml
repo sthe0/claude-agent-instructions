@@ -1499,6 +1499,22 @@ disposition = "keep"
 ground = "This generator's own `_ALREADY_MECHANIZED_RE` is a one-time authoring aid for the stage-2 perception pass (see module docstring), not a runtime gate; it reaches no hard-outcome sink."
 
 [[entry]]
+id = "50039c759ef729a6"
+domain = "code"
+file = "scripts/hook-branch-backup.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "37ec9e09bb2eba95"
+domain = "code"
+file = "scripts/hook-branch-backup.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
 id = "14e441f0266b3bf3"
 domain = "code"
 file = "scripts/hook-deferring-disposition-gate.py"
@@ -3235,6 +3251,22 @@ disposition = "keep"
 ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output)."
 
 [[entry]]
+id = "3209f3c6d44b2086"
+domain = "code"
+file = "scripts/reaper/builtin/git_worktrees.py"
+class = "structural"
+disposition = "keep"
+ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output)."
+
+[[entry]]
+id = "0ec2f68d9d4751d6"
+domain = "code"
+file = "scripts/reaper/builtin/git_worktrees.py"
+class = "structural"
+disposition = "keep"
+ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output)."
+
+[[entry]]
 id = "d908fd2bdbece52d"
 domain = "code"
 file = "scripts/reaper/runner.py"
@@ -4406,6 +4438,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "e4a9f8c4eab0b8d9"
 domain = "code"
 file = "scripts/tests/test_claude_recover.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "ec5ae302d6f2889b"
+domain = "code"
+file = "scripts/tests/test_claude_recover_mutants.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -6774,6 +6814,22 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "f2c62179b11458e7"
 domain = "code"
 file = "scripts/tests/test_history_capture.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "eb5e3b80ecd23929"
+domain = "code"
+file = "scripts/tests/test_hook_branch_backup.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "c6b3d97392f90975"
+domain = "code"
+file = "scripts/tests/test_hook_branch_backup.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -11275,6 +11331,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "0723934e211611a5"
+domain = "code"
+file = "scripts/tests/test_reaper_git_worktrees.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "94f08046b65c4b22"
 domain = "code"
 file = "scripts/tests/test_record_experience_hints.py"
@@ -14339,6 +14403,14 @@ disposition = "keep"
 ground = "This generator's own `_ALREADY_MECHANIZED_RE` is a one-time authoring aid for the stage-2 perception pass (see module docstring), not a runtime gate; it reaches no hard-outcome sink. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "4847cc5490cfc4e5"
+domain = "code_file_rollup"
+file = "scripts/hook-branch-backup.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "c87c6eff5ae51086"
 domain = "code_file_rollup"
 file = "scripts/hook-deferring-disposition-gate.py"
@@ -14811,6 +14883,14 @@ disposition = "keep"
 ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output). (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "d6f8ba9c23d9d12f"
+domain = "code_file_rollup"
+file = "scripts/reaper/builtin/git_worktrees.py"
+class = "structural"
+disposition = "keep"
+ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output). (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "c8976493aa7dcb95"
 domain = "code_file_rollup"
 file = "scripts/reaper/runner.py"
@@ -15086,6 +15166,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "6a75646081cbaef6"
 domain = "code_file_rollup"
 file = "scripts/tests/test_claude_recover.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "9e1aa0068e5f9780"
+domain = "code_file_rollup"
+file = "scripts/tests/test_claude_recover_mutants.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -15486,6 +15574,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "f21a79db70f64be8"
 domain = "code_file_rollup"
 file = "scripts/tests/test_history_capture.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "8b383bfdb377a355"
+domain = "code_file_rollup"
+file = "scripts/tests/test_hook_branch_backup.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -16070,6 +16166,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "148410a0e3c1486a"
 domain = "code_file_rollup"
 file = "scripts/tests/test_re_attest.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "b06afdf08354967e"
+domain = "code_file_rollup"
+file = "scripts/tests/test_reaper_git_worktrees.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -18712,6 +18816,30 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "eb42602133c650d7"
+domain = "prose"
+file = "memory-global/leaves/doubt-own-snapshot.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "11dd2103d35239cf"
+domain = "prose"
+file = "memory-global/leaves/doubt-own-snapshot.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "caf9982069ed773b"
+domain = "prose"
+file = "memory-global/leaves/doubt-own-snapshot.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "cb3823d912434f7c"
 domain = "prose"
 file = "memory-global/leaves/doubt-own-snapshot.md"
 class = "perception"

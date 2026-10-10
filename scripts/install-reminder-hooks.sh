@@ -255,6 +255,12 @@ DESIRED = [
     # keep-wins, removal-log and error-isolation rules. Always exits 0. The timeout covers one git
     # status + cherry per stale worktree. Contract: docs/operations/reapers.md.
     ("SessionStart",     None,    "hook-reaper.py",                  60),
+    # Branch backup trigger: spawns `hook-reaper.py --upkeep-only --no-wait` detached (own session,
+    # output to ~/.local/state/claude-reaper/upkeep.log) and returns at once, so the git-worktrees
+    # reaper's push of unpushed worktree branches never waits on the network. Prints nothing,
+    # exits 0 on every path. Registered at both turn end and session start.
+    ("SessionStart",     None,    "hook-branch-backup.py",            5),
+    ("Stop",             None,    "hook-branch-backup.py",            5),
     # End-of-turn GATE (not advisory): a loop-safe shell running a registry of
     # pure turn-boundary guardians. Blocks a stop when any guardian reports an
     # unmet obligation (today: the last user message carried an agent-behavior-
