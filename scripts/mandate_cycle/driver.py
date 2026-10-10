@@ -207,14 +207,15 @@ class SuiteResult:
     ran: bool = False
 
 
-def read_junit(path: Path) -> SuiteResult:
+def read_junit(path: Path, worktree: "Path | None" = None) -> SuiteResult:
     try:
         root = ET.parse(path).getroot()
     except (OSError, ET.ParseError):
         return SuiteResult()
+    roots = (str(worktree), os.path.realpath(worktree)) if worktree else ()
     passed, seen = set(), set()
     for case in root.iter("testcase"):
-        ident = f"{case.get('classname', '')}::{case.get('name', '')}"
+        ident = rules.canonical_test_id(f"{case.get('classname', '')}::{case.get('name', '')}", roots)
         seen.add(ident)
         if all(case.find(tag) is None for tag in ("failure", "error", "skipped")):
             passed.add(ident)
@@ -562,7 +563,7 @@ class Cycle:
                 f"--junitxml={junit}"]
         junit.parent.mkdir(parents=True, exist_ok=True)
         self.sh(argv, cwd=worktree, timeout=timeout + 120)
-        return read_junit(junit)
+        return read_junit(junit, worktree)
 
     def run_gates(self, worktree: Path) -> "dict[str, int]":
         return {

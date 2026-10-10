@@ -496,6 +496,20 @@ def passes_after_rerun(
     return passes(baseline_passed, set(item_passed) | set(rerun_passed))
 
 
+WORKTREE_TOKEN = "<worktree>"
+
+
+def canonical_test_id(ident: str, worktree_roots: Iterable[str]) -> str:
+    """A junit id with every spelling of its run's worktree path replaced by one token, so a
+    parametrized id that embeds that path names the same test on the baseline and on the item
+    (the two runs live in different worktrees, and a symlinked temp root gives one worktree two
+    spellings)."""
+    roots = sorted({root.rstrip("/") for root in worktree_roots if root}, key=len, reverse=True)
+    for root in roots:
+        ident = ident.replace(root, WORKTREE_TOKEN)
+    return ident
+
+
 @dataclass(frozen=True)
 class OverrunVerdict:
     overrun: bool

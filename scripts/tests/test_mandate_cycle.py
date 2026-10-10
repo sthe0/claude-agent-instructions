@@ -139,7 +139,18 @@ class World:
         if a[:1] == ["bash"] and a[1].endswith("cap-run.sh"):
             target = next(x for x in a if x.startswith("--junitxml="))[len("--junitxml="):]
             passed, failed = self.suites[Path(target).name]
-            Path(target).write_text(junit(passed, failed), encoding="utf-8")
+            # A test id may embed the path of the worktree the suite ran in, in either spelling.
+            spellings = {"{worktree}": str(cwd), "{realpath}": os.path.realpath(cwd)}
+
+            def spelled(names):
+                out = []
+                for name in names:
+                    for placeholder, path in spellings.items():
+                        name = name.replace(placeholder, path)
+                    out.append(name)
+                return out
+
+            Path(target).write_text(junit(spelled(passed), spelled(failed)), encoding="utf-8")
             if self.on_suite:
                 self.on_suite(Path(target).name)
             return ok()
@@ -741,6 +752,44 @@ def test_a_test_failing_on_the_baseline_does_not_count_against_the_item(env):
     env.cycle()
     assert item_rows()[0]["outcome"] == "pr-opened"
     assert item_rows()[0]["tests"] == "pass"
+
+
+PATH_ID = "test_c[Bash(python3 {worktree}/scripts/agentctl-cli.py:*)]"
+PATH_ID_REAL = "test_c[Bash(python3 {realpath}/scripts/agentctl-cli.py:*)]"
+
+
+def link_temp_root(env) -> None:
+    """Reach the worktree root through a symlink, so a worktree has two spellings (the one the
+    driver passes and its realpath), as /var/tmp -> /place/vartmp gives it on the host."""
+    env.temp_root.mkdir(parents=True, exist_ok=True)
+    link = env.tmp / "worktrees-link"
+    link.symlink_to(env.temp_root, target_is_directory=True)
+    env.temp_root = link
+
+
+def test_a_test_id_that_embeds_the_worktree_path_is_the_same_test_on_the_item(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.suites["baseline.xml"] = (["t1", PATH_ID], [])
+    env.world.suites["item.xml"] = (["t1", PATH_ID_REAL], [])
+    link_temp_root(env)
+    env.cycle()
+    row = item_rows()[0]
+    assert (row["tests"], row["outcome"]) == ("pass", "pr-opened")
+    assert not any(x.endswith("rerun.xml") for c in env.world.calls for x in c)
+
+
+def test_a_path_embedding_test_that_passes_on_its_rerun_does_not_fail_the_item(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.suites["baseline.xml"] = (["t1", PATH_ID], [])
+    env.world.suites["item.xml"] = (["t1"], [PATH_ID])
+    env.world.suites["rerun.xml"] = (["t1", PATH_ID], [])
+    link_temp_root(env)
+    env.cycle()
+    row = item_rows()[0]
+    assert (row["tests"], row["outcome"]) == ("pass", "pr-opened")
+    assert any(x.endswith("rerun.xml") for c in env.world.calls for x in c)
 
 
 def test_a_baseline_passing_test_that_fails_on_the_item_fails_it_and_is_not_pushed(env):

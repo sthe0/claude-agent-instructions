@@ -467,6 +467,12 @@ CATALOGUE: "dict[str, Mutant]" = {
             "[as-required-after-reset]",
         ),
     ),
+    "worktree-canonical-ids": Mutant(
+        DRIVER,
+        "::{case.get('name', '')}\", roots)",
+        "::{case.get('name', '')}\", ())",
+        _ids(T_CYCLE, "test_a_test_id_that_embeds_the_worktree_path_is_the_same_test_on_the_item"),
+    ),
 }
 
 

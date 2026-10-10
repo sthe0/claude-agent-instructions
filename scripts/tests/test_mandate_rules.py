@@ -441,6 +441,18 @@ def test_one_rerun_can_clear_a_first_run_failure():
     assert not m.passes_after_rerun({"a", "b"}, {"a"}, set())
 
 
+def test_a_test_id_that_embeds_the_worktree_path_is_the_same_id_in_every_worktree():
+    canonical = "scripts.tests.test_b::test_c[Bash(python3 <worktree>/scripts/agentctl-cli.py:*)]"
+    item = "/var/tmp/agent-debt-cycle/c-339"
+    item_id = f"scripts.tests.test_b::test_c[Bash(python3 {item}/scripts/agentctl-cli.py:*)]"
+    assert m.canonical_test_id(item_id, (item, "/place/vartmp/agent-debt-cycle/c-339")) == canonical
+    baseline = "/place/vartmp/agent-debt-cycle/c-baseline"
+    baseline_id = f"scripts.tests.test_b::test_c[Bash(python3 {baseline}/scripts/agentctl-cli.py:*)]"
+    assert m.canonical_test_id(baseline_id, (baseline, baseline + "/")) == canonical
+    assert m.canonical_test_id("a::b", (item,)) == "a::b"
+    assert m.canonical_test_id(item_id, ()) == item_id
+
+
 def test_overrun_is_strictly_beyond_either_cap():
     assert not m.check_overrun(15.0, 125.0, usd_cap=15.0, minutes_cap=125.0).overrun
     assert m.check_overrun(15.01, 1.0, usd_cap=15.0, minutes_cap=125.0).reasons == ("item-usd-cap",)
