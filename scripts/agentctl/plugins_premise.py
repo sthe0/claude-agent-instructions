@@ -55,7 +55,11 @@ def _auto_activate(state) -> bool:
 
 
 def _tally(records) -> dict:
-    """Three buckets, counted SEPARATELY, because they are three different facts about
+    """LEGACY: tallies the escape records of the retired standalone enumeration — no
+    engine path writes a new one (amendments-2.md E3); a bag written by an earlier
+    engine still reports its history through this.
+
+    Three buckets, counted SEPARATELY, because they are three different facts about
     the fleet and each calls for a different fix. `runner_failure` — the pass landed and
     its runner broke — is an advisor-reliability work item. `not_landed` — no pass ever
     arrived — is a detachment-liveness one. `manual` — the pass failed AND a coordinator
@@ -88,7 +92,10 @@ def _tally(records) -> dict:
 
 
 def escape_counts(bag, content_digest) -> dict:
-    """How often this gate has been escaped, on two axes — the single derivation both
+    """LEGACY: the escape history of the retired enumeration gate; the gate and the
+    escape verb no longer exist, so a bag minted by this engine reads zero on both axes.
+
+    How often this gate has been escaped, on two axes — the single derivation both
     surfaces (`agentctl status` and the plan_approval directive) read, so neither can
     drift into its own idea of what an escape is. Always returns a dict — never None;
     only its `this_plan` entry can be (see below).

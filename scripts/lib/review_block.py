@@ -22,6 +22,18 @@ from agentctl import plan
 from lib import planner_plan_check
 
 NUMBERING_RE = re.compile(r"^\d+[.)]\s*")
+LIST_ITEM_RE = re.compile(r"^\s*(?:[-*]\s|\d+[.)]\s)")
+
+
+class QuestionFieldError(ValueError):
+    """The customer-questions field has a line the parser cannot place — raised by
+    ``ReviewBlock.questions`` so a reply is refused instead of losing the question."""
+
+
+def starts_list_item(raw: str) -> bool:
+    """A bullet or numbered item at column 0 — a new item, never the continuation of the
+    line above it."""
+    return LIST_ITEM_RE.match(raw) is not None and raw == raw.lstrip()
 
 @functools.lru_cache(maxsize=None)
 def _tagged_condition_re(markers: tuple[str, ...]) -> re.Pattern:
@@ -65,19 +77,60 @@ class ReviewBlock:
     @property
     def questions(self) -> list[str]:
         """The customer questions after the field header, in order; a block without
-        the field, or with `Customer questions: none`, has none. A line that is not a
-        new `Q:` line continues the question before it, until the closing marker."""
+        the field, or with `Customer questions: none`, has none.
+
+        Once the field starts, every line up to the closing marker is the header, a
+        `Q:` line, or the continuation of a `Q:` line (a line that is neither a new
+        question nor a column-0 list item). Anything else raises
+        ``QuestionFieldError`` — a question written on the header line, an item
+        without `Q:`, a concern after the field — rather than being dropped, so a
+        reply that asked the customer something never records an empty list."""
         if self.questions_at is None:
             return []
         found: list[str] = []
+        header_seen = declared_none = False
         for (kind, value), raw in self.entries[self.questions_at:]:
+            text = raw.strip()
             if kind == "review":
                 break
-            if kind == "question":
+            if text.startswith("```"):
+                continue
+            if kind == "questions":
+                if header_seen:
+                    raise QuestionFieldError(
+                        f"a second `{plan.CUSTOMER_QUESTIONS_MARKER}` line: "
+                        "the reply carries one customer-questions field")
+                header_seen = True
+                if value.strip().lower() == plan.CUSTOMER_QUESTIONS_NONE:
+                    declared_none = True
+                elif value.strip():
+                    raise QuestionFieldError(
+                        f"a question on the `{plan.CUSTOMER_QUESTIONS_MARKER}` line "
+                        f"({value.strip()[:80]!r}): write the header bare and each "
+                        f"question on its own `{plan.CUSTOMER_QUESTION_MARKER} <question>` line")
+            elif kind == "question":
+                if declared_none:
+                    raise QuestionFieldError(
+                        f"`{plan.CUSTOMER_QUESTIONS_MARKER} {plan.CUSTOMER_QUESTIONS_NONE}` "
+                        "followed by questions: write the header bare, then the "
+                        f"`{plan.CUSTOMER_QUESTION_MARKER}` lines, or `none` alone")
                 found.append(value)
-            elif kind == "other" and found and raw.strip() and not raw.strip().startswith("```"):
-                found[-1] = f"{found[-1]} {clean_value(raw.strip())}"
-        return [q for q in (q.strip() for q in found) if q]
+            elif kind == "other" and found and not starts_list_item(raw):
+                found[-1] = f"{found[-1]} {clean_value(text)}"
+            elif kind == "condition":
+                raise QuestionFieldError(
+                    f"a condition-prefixed concern after the customer-questions field "
+                    f"({text[:80]!r}): concerns come before `{plan.CUSTOMER_QUESTIONS_MARKER}`")
+            else:
+                raise QuestionFieldError(
+                    f"a line in the customer-questions field that is not a "
+                    f"`{plan.CUSTOMER_QUESTION_MARKER}` question ({text[:80]!r}): "
+                    f"write each question as `{plan.CUSTOMER_QUESTION_MARKER} <question>`")
+        questions = [q.strip() for q in found]
+        if any(not q for q in questions):
+            raise QuestionFieldError(
+                f"an empty `{plan.CUSTOMER_QUESTION_MARKER}` line in the customer-questions field")
+        return questions
 
     @property
     def followed_by_other_marker(self) -> bool:
@@ -152,8 +205,8 @@ def find_terminal_review_block(text: str) -> ReviewBlock | None:
     digest_at = next((i for i, ((k, _), _) in enumerate(entries) if k == "digest"), None)
     after = max(verdict_at, -1 if digest_at is None else digest_at) + 1
     questions_at = next(
-        (i for kind in ("questions", "question")
-         for i, ((k, _), _) in enumerate(entries) if i >= after and k == kind),
+        (i for i, ((k, _), _) in enumerate(entries)
+         if i >= after and k in ("questions", "question")),
         None,
     )
     return ReviewBlock(entries, verdict_at, digest_at, questions_at)

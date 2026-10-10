@@ -1620,6 +1620,29 @@ CUSTOMER_QUESTIONS_MARKER = "Customer questions:"
 CUSTOMER_QUESTION_MARKER = "Q:"
 CUSTOMER_QUESTIONS_NONE = "none"
 
+
+def customer_question_defect(text: str) -> str:
+    """Why `text` cannot be recorded as ONE customer question, or '' when it can.
+
+    The field's own syntax (the `Q:` prefix, the `Customer questions:` header, the
+    `none` value) belongs to the reply, not to a question: a caller that passes a raw
+    field line, a blank string or several lines would otherwise record a candidate the
+    customer cannot read, or none at all."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return "a customer question is blank"
+    if "\n" in stripped:
+        return "a customer question is one line; pass one --customer-question per question"
+    lowered = stripped.lower()
+    for marker in (CUSTOMER_QUESTIONS_MARKER, CUSTOMER_QUESTION_MARKER):
+        if lowered.startswith(marker.lower()):
+            return (f"a customer question is the text after `{CUSTOMER_QUESTION_MARKER}`, "
+                    f"not the reply's own field line (starts with {marker!r})")
+    if lowered == CUSTOMER_QUESTIONS_NONE:
+        return (f"`{CUSTOMER_QUESTIONS_NONE}` states there are no customer questions: "
+                "pass no --customer-question instead")
+    return ""
+
 # A reviewer's concern is `<severity>: [re:<concern-id>] <body>`; the engine stores the
 # body in `concerns` and the severity / restated id beside it, so the body keeps the
 # leading `cut:`/`add:` remedy tag, part token and `C1:`..`C4:` marker its readers key on.

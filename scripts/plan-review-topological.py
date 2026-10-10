@@ -58,7 +58,6 @@ COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
 
 SATISFIED = ("current", "override")
 DIGEST_RE = re.compile(r"[0-9a-f]{64}")
-LIST_ITEM_RE = re.compile(r"^\s*(?:[-*]\s|\d+[.)]\s)")
 SUMMARY_MARKER_RE = re.compile(r"\bmarker=(\S+)")
 SUMMARY_COST_RE = re.compile(r"\bcost_usd=([0-9.]+)")
 SUMMARY_DURATION_RE = re.compile(r"\bduration_ms=(\d+)")
@@ -198,7 +197,11 @@ def parse_review_output(stdout: str) -> ParsedReview:
         raise TopoRefused(f"{plan.PLAN_DIGEST_MARKER} is not 64 lowercase hex characters: {digest!r}")
     region = found.region
     concerns = _parse_concerns(region, verdict) if verdict == "revise" else _pass_notes(region)
-    return ParsedReview(verdict, digest, concerns, found.questions)
+    try:
+        questions = found.questions
+    except review_block.QuestionFieldError as exc:
+        raise TopoRefused(str(exc)) from exc
+    return ParsedReview(verdict, digest, concerns, questions)
 
 
 def _pass_notes(region) -> list[str]:
@@ -239,7 +242,7 @@ def _parse_concerns(region, verdict: str) -> list[str]:
             concerns.append(value)
         elif not concerns:
             raise TopoRefused("unprefixed concern")
-        elif LIST_ITEM_RE.match(raw) and raw == raw.lstrip():
+        elif review_block.starts_list_item(raw):
             raise TopoRefused("unprefixed concern")
         else:
             concerns[-1] = f"{concerns[-1]} {_clean_value(raw.strip())}"

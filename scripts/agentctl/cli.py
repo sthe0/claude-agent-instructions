@@ -53,6 +53,7 @@ from .plan import (
     acceptance_requirement_bindings,
     changed_parts,
     check_venue_warnings,
+    customer_question_defect,
     entries_grants_sha256,
     grants_sha256,
     load_plan,
@@ -2138,7 +2139,9 @@ def _question_bag(store: StateStore, session_id: str):
 
 
 def _enumeration_escape_counts(state, doc: "PlanDoc | None" = None) -> dict | None:
-    """plugins_premise.escape_counts for `state`, tolerant of the two states every
+    """LEGACY (the `enumeration_escapes` directive field): plugins_premise.escape_counts
+    for `state` — the history of the retired enumeration gate's escapes, kept so a bag
+    written by an earlier engine still reports it. Tolerant of the two states every
     surface reporting them must survive: NO PREMISE BAG (the plugin is not armed —
     most sessions, and the whole-surface not-applicable this function owns) and NO
     LOADABLE PLAN (nothing submitted yet, or a path that no longer parses — the
@@ -2858,7 +2861,8 @@ def _record_review_questions(state: SessionState, review_id: str, questions: lis
     re-review is not new work for the coordinator); a new statement takes the next
     unused number, so no earlier row is renumbered. Other review ids and the legacy
     `qenum-` rows are never touched. Returns [] when the premise plugin is not armed
-    — the questions are then recorded nowhere, the same as every other premise verb."""
+    — the questions are then recorded nowhere, the same as every other premise verb,
+    and the recording directive says so (`customer_questions_unrecorded`)."""
     bag = state.plugins.get("premise")
     texts = [q.strip() for q in questions or [] if q and q.strip()]
     if bag is None or not texts:
@@ -2907,7 +2911,9 @@ def _apply_enumeration_result(
     preserve_disposition: bool = False, stderr: str = "",
     honor_dismissed_hashes: bool = True,
 ) -> EnumerationApplyResult:
-    """Upsert `pairs` as legacy `qenum-<part>-N` QuestionCandidates (last-wins by a
+    """RETIRED; kept only as the legacy `qenum-` upsert (below).
+
+    Upsert `pairs` as legacy `qenum-<part>-N` QuestionCandidates (last-wins by a
     deterministic id) — 'raised', except that a pair the engine can see is addressed to
     no control of this plan is written 'dismissed' with the one countable immateriality
     reason (see `_candidate_immateriality`) — and stamp the bag's enumerated/
@@ -3922,6 +3928,28 @@ def _parse_review_concerns(state: SessionState, raw: list[str], verdict: str):
     return parsed, ""
 
 
+def _parse_review_questions(raw: list[str]):
+    """The `--customer-question` texts of one review, or the refusal text: a blank,
+    multi-line, field-syntax (`Q:` / `Customer questions:`) or `none` value is refused
+    before any record is written, never recorded as an unreadable candidate or dropped."""
+    for text in raw:
+        defect = customer_question_defect(text)
+        if defect:
+            return None, f"--customer-question {text.strip()[:80]!r}: {defect}"
+    return [text.strip() for text in raw], ""
+
+
+def _question_data(state: SessionState, args, question_ids: list[str]) -> dict:
+    """The directive fields for a review's customer questions: the candidate ids, and
+    `customer_questions_unrecorded` when questions were passed but the premise plugin
+    is not armed — they are recorded nowhere, which the caller must see."""
+    data: dict = {"customer_question_ids": question_ids}
+    passed = len(getattr(args, "customer_questions", None) or [])
+    if passed and state.plugins.get("premise") is None:
+        data["customer_questions_unrecorded"] = passed
+    return data
+
+
 def _concern_parts(body: str, own_parts) -> list[str]:
     token = gates._concern_part_token(body)
     if token is None:
@@ -4090,6 +4118,10 @@ def _cmd_plan_review_pair(
     parsed, parse_error = _parse_review_concerns(state, list(getattr(args, "concerns", None) or []), verdict)
     if parsed is None:
         return refuse(parse_error)
+    question_texts, question_error = _parse_review_questions(
+        list(getattr(args, "customer_questions", None) or []))
+    if question_texts is None:
+        return refuse(question_error)
     reviewer = (getattr(args, "reviewer", "") or "").strip()
     note = (getattr(args, "note", "") or "").strip()
     attested = (getattr(args, "plan_digest", None) or "").strip().lower()
@@ -4162,8 +4194,7 @@ def _cmd_plan_review_pair(
     elif verdict == gates._PLAN_REVIEW_OVERRIDE and prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE:
         ledger = _condition4_ledger_rows(state, doc, target, prev, prev.concerns, "false-alarm")
     state.plan_pair_reviews[pair] = review
-    question_ids = _record_review_questions(
-        state, pair, list(getattr(args, "customer_questions", None) or []))
+    question_ids = _record_review_questions(state, pair, question_texts)
     if _is_counted_review(review.verdict, reviewer):
         _count_review_round(state, live)
     _log_concerns_downgraded(state, cp, ledger_scope, verdict)
@@ -4181,7 +4212,7 @@ def _cmd_plan_review_pair(
         f"pair review recorded for {pair!r} against {target} (verdict={verdict}); "
         f"pair status: {status}",
         data={"pair": pair, "pair_status": status, "ledger_lines": len(ledger),
-              "concern_ids": review.concern_ids, "customer_question_ids": question_ids},
+              "concern_ids": review.concern_ids, **_question_data(state, args, question_ids)},
     )
 
 
@@ -4293,6 +4324,10 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     parsed, parse_error = _parse_review_concerns(state, list(getattr(args, "concerns", None) or []), args.verdict)
     if parsed is None:
         return Directive(False, state.node, "noop", parse_error)
+    question_texts, question_error = _parse_review_questions(
+        list(getattr(args, "customer_questions", None) or []))
+    if question_texts is None:
+        return Directive(False, state.node, "noop", question_error)
     # An override is the USER's escape from a reviewer's `revise` deadlock — the
     # reviewer who issued the blocking verdict cannot override themselves. Checked
     # here, before the record is overwritten and the prior reviewer's identity lost.
@@ -4403,8 +4438,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     review.stable_ids = _commit_concern_ledger(
         state, review, concern_plan, ledger_scope, plan_review_concern_ids(review),
         review.record_seq, record_only=unevidenced)
-    question_ids = _record_review_questions(
-        state, scope or "whole", list(getattr(args, "customer_questions", None) or []))
+    question_ids = _record_review_questions(state, scope or "whole", question_texts)
     if unevidenced:
         # The prior PASS stays authoritative — plan_review_passes is never
         # touched here, so gates.plan_review_prior_pass keeps reporting it as
@@ -4453,7 +4487,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             "prior_pass_reviewer": prior_pass.reviewer,
             "concerns": review.concerns,
             "concern_ids": review.stable_ids,
-            "customer_question_ids": question_ids,
+            **_question_data(state, args, question_ids),
             "remedy_tags": review.remedy_tags,
             "regression_command_error": regression_command_error,
         }
@@ -4546,7 +4580,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             data={
                 "blockers": blockers,
                 "concern_ids": review.stable_ids,
-                "customer_question_ids": question_ids,
+                **_question_data(state, args, question_ids),
                 "plan_review_round_release": round_release,
                 "regression_command_error": regression_command_error,
             },
@@ -4561,7 +4595,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         True, state.node, "continue",
         f"thinker review recorded for {target} (verdict={review.verdict}); "
         "the plan-review gate is now satisfied for this plan version" + out_of_scope_note,
-        data={"concern_ids": review.stable_ids, "customer_question_ids": question_ids},
+        data={"concern_ids": review.stable_ids, **_question_data(state, args, question_ids)},
     )
 
 
@@ -4867,7 +4901,8 @@ def cmd_plan_review_walk(args, *, store: StateStore, runner: Runner | None = Non
                       f"--plan {quoted}") if open_pair else None,
             "record": (f"agentctl plan-review --session {state.session_id} --target {quoted} "
                        f"--scope topo:{row['pair']} --reviewer thinker --verdict <pass|revise> "
-                       "--plan-digest <sha256 of the plan bytes read>") if open_pair else None,
+                       "--plan-digest <sha256 of the plan bytes read> "
+                       "[--customer-question <Q>]...") if open_pair else None,
         })
     walk = {
         "plan_path": target,
@@ -5312,10 +5347,8 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             ]
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
-        # The escape counts ride the REFUSAL specifically: the coordinator reading it
-        # is the one person who both can see the number and is about to decide what to
-        # do about it — and if the blocker below is the enumeration one, the decision
-        # is literally whether to add to that count.
+        # `enumeration_escapes` is LEGACY: the history of the retired enumeration gate,
+        # reported only from a bag an earlier engine wrote.
         round_release = _note_round_release(state, review_blockers, store)
         return _with_advisories(
             Directive(False, state.node, "fix_plan", "cannot approve", data={
@@ -9004,6 +9037,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                          "plan_approval premises (dispose open questions / rebind "
                          "stale per-stage bindings against the new plan)",
                          data={"blockers": pblock,
+                               # LEGACY field: the retired gate's escape history
                                "enumeration_escapes": _enumeration_escape_counts(
                                    state, new)})
     # #8: diff against the plan AS APPROVED (the immutable snapshot), not plan_path —
@@ -9603,9 +9637,10 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             "stages": [{"index": s.index, "status": s.outcome.status, "title": s.title} for s in state.stages],
             "approval_passed": state.approval.passed,
             "resolution_passed": state.resolution.passed,
-            # None when the premise plugin is not armed; `this_plan` None when no
-            # plan is submitted — see _enumeration_escape_counts on why neither is
-            # reported as a zero.
+            # LEGACY field (the retired enumeration gate's escape history). None when
+            # the premise plugin is not armed; `this_plan` None when no plan is
+            # submitted — see _enumeration_escape_counts on why neither is reported
+            # as a zero.
             "enumeration_escapes": _enumeration_escape_counts(state),
         },
     )
