@@ -429,11 +429,12 @@ def _no_ambient_project_dir(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _record_experience_no_worktree_routing(request, monkeypatch):
-    """Keep in-process record-experience main() tests off the real canon.
+def _no_worktree_routing_by_default(request, monkeypatch):
+    """Keep every test off the real canonical checkout: a writer script run from a
+    test would otherwise route a commit through a worktree cut from the real origin.
 
-    test_worktree_route.py sets its own environment."""
-    if request.module.__name__.startswith("test_record_experience_"):
+    Only the modules that build their own hermetic canon opt out."""
+    if request.module.__name__ not in ("test_worktree_route", "test_canon_writers_routing"):
         monkeypatch.setenv("WORKTREE_ROUTE_DISABLE", "1")
 
 

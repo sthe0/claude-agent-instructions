@@ -22,6 +22,17 @@ SEED_LEAF = (
     "---\nname: seed\ndescription: seed leaf\ncreated: 2026-01-01\n"
     "last_verified: 2026-01-01\n---\n## Difficulty\nx\n## Contexts\n### initial\nbody\n"
 )
+ROUTING_ANNOUNCE = "[worktree-route] routing"
+PROBE = """\
+import os, sys
+from pathlib import Path
+ROOT = Path(__file__).resolve().parents[1]
+if sys.argv[1] == "write":
+    (ROOT / "probe-out.txt").write_text("\\n".join(sys.argv[2:]) + "\\n")
+print("ROOT", ROOT)
+print("GUARD", os.environ.get("WORKTREE_ROUTED", ""))
+sys.stderr.write(f"child-err {ROOT}\\n")
+"""
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.com",
     "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.com",
@@ -72,6 +83,7 @@ class Canon:
             "tokenize = term_score = None\n")
         (scripts / "agentctl" / "__init__.py").write_text("")
         (scripts / "agentctl" / "edit_ledger.py").write_text("def stamp(*a, **k):\n    pass\n")
+        (scripts / "probe.py").write_text(PROBE)
         (seed / ".gitignore").write_text("__pycache__/\n")
         (seed / LEAF_REL).parent.mkdir(parents=True)
         (seed / LEAF_REL).write_text(SEED_LEAF)
@@ -140,18 +152,22 @@ def test_leaf_path_remapped(tmp_path):
     repo = re_mod.REPO_ROOT
     wt = tmp_path / "wt"
     inside = str(repo / LEAF_REL)
-    assert re_mod.rewrite_leaf_args(["extend", "--leaf", inside, "--plan", "p"], wt) == [
+    remap = worktree_route.remap_path_options
+    assert remap(["extend", "--leaf", inside, "--plan", "p"], ("--leaf",), repo, wt) == [
         "extend", "--leaf", str(wt / LEAF_REL), "--plan", "p"]
-    assert re_mod.rewrite_leaf_args([f"--leaf={inside}"], wt) == [f"--leaf={wt / LEAF_REL}"]
+    assert remap([f"--leaf={inside}"], ("--leaf",), repo, wt) == [f"--leaf={wt / LEAF_REL}"]
     outside = str(tmp_path / "elsewhere.md")
-    assert re_mod.rewrite_leaf_args(["--leaf", outside], wt) == ["--leaf", outside]
+    assert remap(["--leaf", outside], ("--leaf",), repo, wt) == ["--leaf", outside]
 
 
 def test_output_paths_mapped_back(canon):
     proc = canon.set_last_verified()
     assert proc.returncode == 0, proc.stderr
     assert f"on {canon.leaf}" in proc.stdout
-    assert "-mem-" not in proc.stdout + proc.stderr
+    child_output = proc.stdout + "".join(
+        ln for ln in proc.stderr.splitlines(keepends=True)
+        if not ln.startswith(ROUTING_ANNOUNCE))
+    assert "-mem-" not in child_output
 
 
 def test_fetch_failure_refuses(canon):
@@ -273,3 +289,79 @@ def test_project_scope_not_routed(tmp_path):
     assert not re_mod.needs_worktree(_parse(
         "extend", "--leaf", str(tmp_path / "leaf.md"), "--context-label", "l",
         "--context-where", "w", "--plan", "p"))
+
+
+def _route(canon, monkeypatch, *argv, path_options=()):
+    for key, val in GIT_ENV.items():
+        monkeypatch.setenv(key, val)
+    monkeypatch.delenv(worktree_route.GUARD_ENV, raising=False)
+    return worktree_route.route_script(
+        canon.repo, "scripts/probe.py", list(argv), "probe: write",
+        path_options=path_options)
+
+
+def _origin_file(canon, rel):
+    return git("--git-dir", str(canon.origin), "show", f"main:{rel}", cwd=canon.tmp)
+
+
+def test_route_script_runs_worktree_copy(canon, monkeypatch):
+    assert _route(canon, monkeypatch, "write", "payload") == 0
+    assert _origin_file(canon, "probe-out.txt") == "payload\n"
+    assert (canon.repo / "probe-out.txt").read_text() == "payload\n"
+    assert git("status", "--porcelain", cwd=canon.repo) == ""
+    assert len(canon.worktrees()) == 1
+
+
+def test_route_script_remaps_path_options(canon, monkeypatch, tmp_path):
+    inside = canon.repo / "a.txt"
+    outside = tmp_path / "elsewhere.txt"
+    code = _route(canon, monkeypatch, "write", "--target", str(inside),
+                  f"--target={inside}", "--other", str(outside),
+                  path_options=("--target",))
+    assert code == 0
+    lines = _origin_file(canon, "probe-out.txt").splitlines()
+    assert lines[1].startswith(f"{canon.repo}-mem-") and lines[1].endswith("/a.txt")
+    assert lines[2] == "--target=" + lines[1]
+    assert lines[4] == str(outside)
+
+
+def test_route_script_maps_output_back(canon, monkeypatch, capsys):
+    assert _route(canon, monkeypatch, "read") == 0
+    captured = capsys.readouterr()
+    assert f"ROOT {canon.repo}" in captured.out
+    assert f"child-err {canon.repo}" in captured.err
+    assert "-mem-" not in captured.out
+    assert all("-mem-" not in ln for ln in captured.err.splitlines()
+               if not ln.startswith(ROUTING_ANNOUNCE))
+
+
+def test_should_route_false_when_disabled(canon, monkeypatch):
+    monkeypatch.setenv(worktree_route.DISABLE_ENV, "1")
+    assert worktree_route.should_route(canon.repo) is False
+
+
+def test_should_route_false_in_linked_worktree(canon):
+    linked = canon.tmp / "linked"
+    git("worktree", "add", "-b", "work", str(linked), cwd=canon.repo)
+    assert worktree_route.should_route(canon.repo) is True
+    assert worktree_route.should_route(linked) is False
+
+
+def test_should_route_false_outside_git(canon, tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert worktree_route.should_route(canon.repo) is True
+    assert worktree_route.should_route(plain) is False
+
+
+def test_route_script_announces_route(canon, monkeypatch, capsys):
+    assert _route(canon, monkeypatch, "read") == 0
+    lines = [ln for ln in capsys.readouterr().err.splitlines()
+             if ln.startswith(ROUTING_ANNOUNCE)]
+    assert len(lines) == 1
+    assert f"{canon.repo}-mem-" in lines[0]
+
+
+def test_route_script_sets_recursion_guard(canon, monkeypatch, capsys):
+    assert _route(canon, monkeypatch, "read") == 0
+    assert "GUARD 1" in capsys.readouterr().out

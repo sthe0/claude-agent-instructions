@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Callable
 
 DISABLE_ENV = "WORKTREE_ROUTE_DISABLE"
+GUARD_ENV = "WORKTREE_ROUTED"
 CO_AUTHOR = "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ChildResult = tuple[int, str]
@@ -116,6 +117,7 @@ def run_routed(
               file=sys.stderr)
         return 1
 
+    print(f"[worktree-route] routing this write through worktree {worktree}", file=sys.stderr)
     code, out = run_child(worktree)
     sys.stdout.write(out)
     if code != 0:
@@ -158,3 +160,73 @@ def run_routed(
             print(f"[worktree-route] WARNING: could not remove {what}: "
                   f"{proc.stderr.strip()}", file=sys.stderr)
     return 0
+
+
+def should_route(repo) -> bool:
+    """True when a write from `repo` must go through a worktree: `repo` is the
+    primary checkout, routing is not disabled, and this process is not itself
+    the routed child."""
+    if routing_disabled() or os.environ.get(GUARD_ENV):
+        return False
+    return is_main_checkout(repo)
+
+
+def remap_path_options(argv: list[str], options, repo, worktree) -> list[str]:
+    """Point every value of `options` that resolves under `repo` at the same
+    path in `worktree`, in both `--opt value` and `--opt=value` forms."""
+    repo, worktree = Path(repo).resolve(), Path(worktree)
+
+    def remap(value: str) -> str:
+        try:
+            return str(worktree / Path(value).resolve().relative_to(repo))
+        except ValueError:
+            return value
+
+    out: list[str] = []
+    expect_value = False
+    for tok in argv:
+        if expect_value:
+            tok, expect_value = remap(tok), False
+        elif tok in options:
+            expect_value = True
+        else:
+            for opt in options:
+                if tok.startswith(opt + "="):
+                    tok = opt + "=" + remap(tok[len(opt) + 1:])
+                    break
+        out.append(tok)
+    return out
+
+
+def route_script(
+    repo,
+    script_rel: str,
+    argv: list[str],
+    message: str,
+    *,
+    path_options=(),
+    land_script: str | os.PathLike | None = None,
+) -> int:
+    """Run `<script_rel> argv` from a fresh worktree via `run_routed`.
+
+    The child is this interpreter running the worktree's copy of the script
+    (so the script's own repo-relative paths resolve inside the worktree);
+    `path_options` values under `repo` are remapped into it and worktree paths
+    in the child's output are mapped back to `repo`.
+    """
+    repo = Path(repo)
+
+    def run_child(worktree: Path) -> ChildResult:
+        if Path(worktree) == repo:
+            child_argv = list(argv)
+        else:
+            child_argv = remap_path_options(argv, path_options, repo, worktree)
+        proc = subprocess.run(
+            [sys.executable, str(Path(worktree) / script_rel), *child_argv],
+            cwd=str(worktree), capture_output=True, text=True,
+            env={**os.environ, GUARD_ENV: "1"},
+        )
+        sys.stderr.write(proc.stderr.replace(str(worktree), str(repo)))
+        return proc.returncode, proc.stdout.replace(str(worktree), str(repo))
+
+    return run_routed(repo, run_child, message, land_script=land_script)
