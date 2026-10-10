@@ -3942,9 +3942,13 @@ def _parse_review_questions(raw: list[str]):
 def _question_data(state: SessionState, args, question_ids: list[str]) -> dict:
     """The directive fields for a review's customer questions: the candidate ids, and
     `customer_questions_unrecorded` when questions were passed but the premise plugin
-    is not armed — they are recorded nowhere, which the caller must see."""
-    data: dict = {"customer_question_ids": question_ids}
+    is not armed — they are recorded nowhere, which the caller must see. A review
+    that passed no question carries neither field, so its directive keeps the shape
+    callers had before reviews returned questions."""
+    data: dict = {}
     passed = len(getattr(args, "customer_questions", None) or [])
+    if passed or question_ids:
+        data["customer_question_ids"] = question_ids
     if passed and state.plugins.get("premise") is None:
         data["customer_questions_unrecorded"] = passed
     return data
