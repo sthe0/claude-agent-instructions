@@ -2,7 +2,8 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 HOOKS="$REPO/githooks"
-chmod +x "$HOOKS/post-commit" "$HOOKS/pre-commit" "$HOOKS/commit-msg" \
+chmod +x "$HOOKS/post-commit" "$HOOKS/pre-commit" "$HOOKS/commit-msg" "$HOOKS/pre-push" \
+  "$REPO/scripts/instruction-smoke-gate.py" \
   "$REPO/scripts/sync-instructions-repo.sh" \
   "$REPO/scripts/verify-all.py" \
   "$REPO/scripts/verify-language.py" \

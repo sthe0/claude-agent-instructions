@@ -44,6 +44,17 @@ def test_probe_uses_dry_run_no_real_push():
     assert "--dry-run" in seen["cmd"] and "push" in seen["cmd"]
 
 
+def test_probe_skips_the_pre_push_hook():
+    seen = {}
+
+    def fake_runner(cmd):
+        seen["cmd"] = cmd
+        return 0
+
+    authority.probe_push_capability(runner=fake_runner)
+    assert "--no-verify" in seen["cmd"]
+
+
 def _fake_run(returncode=0, raises=None, seen=None):
     """Stand-in for subprocess.run on the DEFAULT runner path (no injected runner), so these
     tests exercise the real default rather than a stub of it."""

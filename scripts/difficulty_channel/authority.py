@@ -50,6 +50,9 @@ def probe_push_capability(
     answers non-zero, which ``is_author`` reads as "not an author" — the fail-safe direction.
     A caller needing a different budget still injects its own ``runner``; only the default stops
     being unbounded.
+
+    ``--no-verify``: git runs the pre-push hook on a dry run too, and the repository's smoke gate
+    refuses a push to main that has no smoke record — which would read as "no push rights".
     """
     def _default_runner(cmd: list[str]) -> int:
         try:
@@ -60,7 +63,7 @@ def probe_push_capability(
             return 1
 
     run = runner or _default_runner
-    return run(["git", "push", "--dry-run", remote, ref]) == 0
+    return run(["git", "push", "--dry-run", "--no-verify", remote, ref]) == 0
 
 
 def is_author(
