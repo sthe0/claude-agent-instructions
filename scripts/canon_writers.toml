@@ -61,7 +61,7 @@
 "scripts/agentctl/edit_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only ledger under ~/.local/log" }
 "scripts/agentctl/enumerate_sidecar.py" = { disposition = "not-canon", category = "not-canon", reason = "sidecar result files in the agentctl state dir" }
 "scripts/agentctl/order_approvals.py" = { disposition = "not-canon", category = "not-canon", reason = "approval records in the agentctl state dir" }
-"scripts/agentctl/plan_resources.py" = { disposition = "not-canon", category = "not-canon", reason = "writes only the caller-supplied --dump-commands / --report-json paths" }
+"scripts/agentctl/plan_resources.py" = { disposition = "not-canon", category = "not-canon", reason = "writes only the caller-supplied --dump-commands / --report-json paths; callers pass scratch paths, and no caller points them into the repo" }
 "scripts/agentctl/render.py" = { disposition = "not-canon", category = "not-canon", reason = "plan render directory in the agentctl state dir, built in a temp dir then swapped" }
 "scripts/agentctl/store.py" = { disposition = "not-canon", category = "not-canon", reason = "session state JSON in the agentctl state dir" }
 "scripts/agentctl/task_accumulator.py" = { disposition = "not-canon", category = "not-canon", reason = "per-task accumulator files in the agentctl state dir" }
