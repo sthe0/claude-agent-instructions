@@ -2102,6 +2102,12 @@ class SessionState:
     # so `dispatch --re-attest` has no observable and falls back to a normal
     # dispatch (fail-closed toward the more expensive, never the cheaper, path).
     reattest_stash: list[ReattestStash] = field(default_factory=list)
+    # The `backlog_issue` of every optional stage the customer declined, keyed by the stage's
+    # identity rather than its index (a replan renumbers; the issue does not). Written ONLY
+    # by a customer `approve` (`--skip-optional` adds, a customer approve that leaves the
+    # stage live removes), never by a replan, reject or agent approve. Absent on older
+    # states -> empty (dataclass default).
+    declined_issues: list[str] = field(default_factory=list)
     # Permission-grant model custody (schema 36) — grants.py is the sole validation/
     # coverage authority; these fields are the durable record of what it decided.
     # Plain dict-of-list-of-dict, same shape discipline as effort_fires/renegotiations

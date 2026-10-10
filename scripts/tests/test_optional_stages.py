@@ -1111,3 +1111,202 @@ def test_the_agent_cannot_approve_a_declined_stage_back_in(
     state = eng.state(sid)
     assert state.stage(3).outcome.status == final_status
     assert state.stage(3).outcome.declined is (final_status == "SKIPPED")
+
+
+# --- the decline follows the stage's issue, not its index ------------------------------
+
+def _block(index, title, depends, *, image, done, outputs=(), optional=False):
+    lines = ["", "[[stage]]", f"index = {index}", f'title = "{title}"',
+             'executor = "spawn:developer"', f'expected_result_image = "{image}"',
+             'criterion_type = "measurable"', f'done_criterion = "{done}"',
+             f"depends_on = {list(depends)}"]
+    if outputs:
+        lines.append("output_artifacts = [" + ", ".join(f'"{o}"' for o in outputs) + "]")
+    if optional:
+        lines += ["optional = true", f'backlog_issue = "{ISSUE}"']
+    return "\n".join(lines) + "\n"
+
+
+def _scaffold():
+    return _block(1, "Scaffold module", [], image="module file exists and imports cleanly",
+                  done="python -c 'import mod' exits 0", outputs=["mod.py"])
+
+
+def _add_tests():
+    return _block(2, "Add tests", [1], image="pytest green for the new module",
+                  done="pytest tests/test_mod.py green", outputs=["tests/test_mod.py"])
+
+
+def _wire_ci(index, depends, *, done="the CI config names test_mod"):
+    return _block(index, "Wire CI", depends, image="CI config runs the suite",
+                  done=done, optional=True)
+
+
+def _document(index, depends):
+    return _block(index, "Document", depends, image="docs exist", done="docs on disk")
+
+
+def _plan_of(*blocks):
+    from test_replan_autonomy_boundary import plan_text
+
+    return plan_text().partition("\n[[stage]]")[0] + "".join(blocks)
+
+
+def _declined_then_diagnosing(eng, sid, *, difference=True):
+    """Stage 3 (optional "Wire CI") declined by the customer, then stage 1 fails.
+
+    `difference=False` is for a replan that edits prose only: a named difference to remove
+    must be matched by a change of the plan's operative surface."""
+    plan = eng.write(_plan_of(_scaffold(), _add_tests(), _wire_ci(3, [2])), "first.toml")
+    assert eng.open(sid, plan)["marker"] == "PLAN-READY"
+    assert eng.run("approve", session=sid, by="user", skip_optional=[3])["ok"] is True
+    state = eng.state(sid)
+    assert state.stage(3).outcome.status == "SKIPPED"
+    assert state.declined_issues == [ISSUE]
+    eng.fail_stage(sid)
+    eng.diagnose(sid, difference=difference)
+
+
+def _replan_to(eng, sid, text, name):
+    d = eng.run("replan", session=sid, plan=eng.write(text, name))
+    assert d["ok"] is True, d
+    assert eng.state(sid).node == Node.PLAN_READY.value
+    return d
+
+
+def _refused_for_the_decline(eng, sid):
+    refused = eng.run("approve", session=sid, by="agent")
+    assert refused["ok"] is False
+    assert any("declined by the customer" in b for b in refused["data"]["blockers"]), refused
+    state = eng.state(sid)
+    assert state.node == Node.PLAN_READY.value
+    return state
+
+
+def test_a_renumbering_replan_keeps_the_decline_on_the_stage_by_its_issue(eng):
+    sid = "renumber"
+    _declined_then_diagnosing(eng, sid)
+    _replan_to(eng, sid, _plan_of(_scaffold(), _wire_ci(2, [1])), "second.toml")  # 3 -> 2
+
+    state = _refused_for_the_decline(eng, sid)
+    assert [s.index for s in state.stages] == [1, 2]
+    assert state.stage(2).outcome.declined is True
+    assert state.stage(2).outcome.status == "PENDING"
+    assert state.declined_issues == [ISSUE]
+
+    accepted = eng.run("approve", session=sid, by="user", skip_optional=[2])
+    assert accepted["ok"] is True, accepted
+    state = eng.state(sid)
+    assert state.stage(2).outcome.status == "SKIPPED"
+    assert state.declined_issues == [ISSUE]
+
+
+def test_the_customer_choosing_the_renumbered_stage_clears_the_recorded_decline(eng):
+    sid = "choose"
+    _declined_then_diagnosing(eng, sid)
+    _replan_to(eng, sid, _plan_of(_scaffold(), _wire_ci(2, [1])), "second.toml")
+    _refused_for_the_decline(eng, sid)
+
+    accepted = eng.run("approve", session=sid, by="user")
+    assert accepted["ok"] is True, accepted
+    state = eng.state(sid)
+    assert state.stage(2).outcome.status == "PENDING"
+    assert state.stage(2).outcome.declined is False
+    assert state.declined_issues == []
+
+
+def test_dropping_then_readding_a_declined_stage_across_two_replans_stays_declined(eng):
+    sid = "readd"
+    _declined_then_diagnosing(eng, sid)
+    _replan_to(eng, sid, _plan_of(_scaffold(), _add_tests()), "second.toml")
+    assert eng.state(sid).declined_issues == [ISSUE]
+    approved = eng.run("approve", session=sid, by="agent")
+    assert approved["ok"] is True, approved
+    assert eng.state(sid).declined_issues == [ISSUE]  # an agent approval never writes it
+
+    eng.fail_stage(sid)
+    eng.diagnose(sid, "b")
+    _replan_to(eng, sid, _plan_of(_scaffold(), _add_tests(), _wire_ci(3, [2])), "third.toml")
+
+    state = _refused_for_the_decline(eng, sid)
+    assert state.stage(3).outcome.declined is True
+    assert state.stage(3).outcome.status == "PENDING"
+
+
+def test_an_in_place_renumbering_at_plan_ready_leaves_no_orphan_skipped_stage(eng):
+    sid = "inplace"
+    _declined_then_diagnosing(eng, sid)
+    second = _plan_of(_scaffold(), _add_tests(), _wire_ci(3, [2]), _document(4, [2]))
+    _replan_to(eng, sid, second, "second.toml")
+    assert eng.state(sid).stage(3).outcome.status == "SKIPPED"  # unchanged stage: kept
+
+    renumbered = _plan_of(_scaffold(), _wire_ci(2, [1]))
+    Path(eng.tmp / "second.toml").write_text(renumbered, encoding="utf-8")
+    _refused_for_the_decline(eng, sid)
+
+    accepted = eng.run("approve", session=sid, by="user", skip_optional=[2])
+    assert accepted["ok"] is True, accepted
+    state = eng.state(sid)
+    assert [s.index for s in state.stages] == [1, 2]
+    assert [s.outcome.status for s in state.stages] == ["PENDING", "SKIPPED"]
+    assert state.stage(2).title == "Wire CI"
+    assert state.stage(2).outcome.declined is True
+    assert state.declined_issues == [ISSUE]
+
+
+def test_an_insertion_before_the_declined_stage_keeps_the_marker_on_the_right_stage(eng):
+    sid = "insert"
+    _declined_then_diagnosing(eng, sid)
+    inserted = _plan_of(_scaffold(), _add_tests(), _document(3, [2]), _wire_ci(4, [2]))
+    _replan_to(eng, sid, inserted, "second.toml")
+
+    state = _refused_for_the_decline(eng, sid)
+    assert state.stage(3).title == "Document"
+    assert state.stage(3).outcome.declined is False
+    assert state.stage(4).title == "Wire CI"
+    assert state.stage(4).outcome.declined is True
+
+    accepted = eng.run("approve", session=sid, by="user", skip_optional=[4])
+    assert accepted["ok"] is True, accepted
+    state = eng.state(sid)
+    assert [s.outcome.status for s in state.stages] == ["PENDING", "PENDING", "PENDING", "SKIPPED"]
+
+
+def test_the_agents_approval_reads_the_declined_issue_not_only_the_stage_marker(eng):
+    sid = "marker"
+    _declined_then_diagnosing(eng, sid, difference=False)
+    _replan_to(eng, sid,
+               _plan_of(_scaffold(), _add_tests(), _wire_ci(3, [2], done="the CI config names lint")),
+               "second.toml")
+    state = eng.state(sid)
+    state.stage(3).outcome.declined = False  # a state that predates the per-stage marker
+    eng.store.save(state)
+
+    state = _refused_for_the_decline(eng, sid)
+    assert state.declined_issues == [ISSUE]
+
+
+def test_declined_live_optional_is_keyed_by_issue_and_ignores_skipped_stages(tmp_path):
+    doc = _load(tmp_path, _plan_text(_stage(1), _opt(2, [1]), _opt(3, [1], issue="owner/repo#9")))
+    assert gates.declined_live_optional(doc, [ISSUE]) == [2]
+    assert gates.declined_live_optional(doc.stages, [ISSUE, "owner/repo#9"]) == [2, 3]
+    assert gates.declined_live_optional(doc, []) == []
+    doc.stages[1].outcome.status = StageStatus.SKIPPED.value
+    assert gates.declined_live_optional(doc, [ISSUE, "owner/repo#9"]) == [3]
+
+
+def test_a_stored_state_without_the_decline_fields_loads_as_not_declined(eng):
+    from agentctl.state import SessionState
+
+    sid = "legacy"
+    _declined_then_diagnosing(eng, sid)
+    stored = eng.state(sid).to_dict()
+    assert stored["declined_issues"] == [ISSUE]
+    assert stored["stages"][2]["outcome"]["declined"] is True
+    del stored["declined_issues"]
+    for stage in stored["stages"]:
+        del stage["outcome"]["declined"]
+
+    loaded = SessionState.from_dict(stored)
+    assert loaded.declined_issues == []
+    assert [s.outcome.declined for s in loaded.stages] == [False, False, False]

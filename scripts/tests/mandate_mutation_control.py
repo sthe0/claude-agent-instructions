@@ -48,6 +48,7 @@ T_NOTIFIER = "tests/test_mandate_notifier.py"
 STATE = "agentctl/state.py"
 PLAN = "agentctl/plan.py"
 CLI = "agentctl/cli.py"
+GATES = "agentctl/gates.py"
 T_OPTIONAL = "tests/test_optional_stages.py"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
@@ -400,6 +401,20 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_the_agent_cannot_approve_a_declined_stage_back_in[changed-user-takes-it]",
             "test_the_agent_cannot_approve_a_declined_stage_back_in[made-required-user-takes-it]",
             "test_the_agent_cannot_approve_a_declined_stage_back_in[edited-in-place-user-keeps-declined]",
+        ),
+    ),
+    "declined-follows-identity": Mutant(
+        GATES,
+        "    return stage.optional and stage.backlog_issue in declined_issues",
+        "    return False",
+        _ids(
+            T_OPTIONAL,
+            "test_a_renumbering_replan_keeps_the_decline_on_the_stage_by_its_issue",
+            "test_the_customer_choosing_the_renumbered_stage_clears_the_recorded_decline",
+            "test_dropping_then_readding_a_declined_stage_across_two_replans_stays_declined",
+            "test_an_in_place_renumbering_at_plan_ready_leaves_no_orphan_skipped_stage",
+            "test_an_insertion_before_the_declined_stage_keeps_the_marker_on_the_right_stage",
+            "test_declined_live_optional_is_keyed_by_issue_and_ignores_skipped_stages",
         ),
     ),
 }

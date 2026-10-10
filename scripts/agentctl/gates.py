@@ -78,7 +78,7 @@ from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESS
 from .state import PLAN_PRESENTATION_KIND_REPLAN_DIFF as _PLAN_PRESENTATION_KIND_REPLAN_DIFF
 from .state import Stage as _Stage
 from .state import asserts_landing
-from .state import is_settled
+from .state import is_settled, is_skipped
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
 from .text_shape import normalize_string as _normalize_string
 
@@ -114,6 +114,43 @@ def plan_approval_blockers(state: SessionState) -> list[str]:
     if not state.plan_verified:
         out.append("plan not verified (structure check failed or not run)")
     return out
+
+
+def declined_issue_set(state: SessionState) -> set[str]:
+    """The backlog issues the customer has declined in this session.
+
+    The recorded `declined_issues`, plus the issue of every stage that is SKIPPED or still
+    marked declined right now (a state written before the list existed holds the decline
+    only on the stage)."""
+    out = set(state.declined_issues)
+    out.update(
+        s.backlog_issue for s in state.stages
+        if (is_skipped(s) or s.outcome.declined) and s.backlog_issue
+    )
+    return out
+
+
+def declined_by_issue(stage: _Stage, declined_issues: "set[str] | frozenset[str]") -> bool:
+    """Whether `stage` is an optional stage whose backlog issue the customer declined.
+
+    The one place the decline is matched to a stage, so the carry sites that set the
+    per-stage marker and the agent-approval blocker cannot disagree about identity."""
+    return stage.optional and stage.backlog_issue in declined_issues
+
+
+def declined_live_optional(doc_or_stages, declined_issues) -> list[int]:
+    """Indices of the optional stages that are still live although their issue was declined.
+
+    Keyed by `backlog_issue`, the stage's identity: a replan or an in-place edit may
+    renumber, drop and re-add a stage, and the customer's decline follows the issue.
+    `doc_or_stages` is a plan document or a list of stages; a stage that is SKIPPED is not
+    live. `declined_issues` is a plain collection, so a carrier other than the session
+    (an order-level record) can be passed in without touching this rule."""
+    stages = getattr(doc_or_stages, "stages", doc_or_stages)
+    declined = set(declined_issues)
+    return sorted(
+        s.index for s in stages if declined_by_issue(s, declined) and not is_skipped(s)
+    )
 
 
 def resolution_blockers(state: SessionState) -> list[str]:

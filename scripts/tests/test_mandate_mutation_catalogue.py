@@ -28,7 +28,7 @@ EXPECTED_ENTRIES = (
     "no-user-authority-calls", "mandate-state-tamper", "triage-org-neutral",
     "skipped-is-settled", "optional-not-depended", "optional-max-two", "optional-coverage-rule",
     "reject-spares-skipped", "reject-names-skipped-refused", "push-refuses-skipped-origin",
-    "agent-cannot-revive-declined",
+    "agent-cannot-revive-declined", "declined-follows-identity",
 )
 
 

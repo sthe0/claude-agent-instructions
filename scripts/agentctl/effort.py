@@ -118,7 +118,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .config import Thresholds
-from .state import SessionState, StageStatus, WeightClass
+from .state import SessionState, WeightClass, is_skipped
 
 # --- the four scales ---------------------------------------------------------
 
@@ -266,7 +266,7 @@ def _mandated_reviews(state: SessionState) -> int:
     developers = sum(
         1 for s in state.stages
         if s.is_spawn() and s.spawn_kind() == _DEVELOPER_KIND
-        and s.outcome.status != StageStatus.SKIPPED.value
+        and not is_skipped(s)
     )
     return 1 + developers + _replans_since_baseline(state)
 
@@ -291,7 +291,7 @@ def estimate(state: SessionState, thr: Thresholds | None = None) -> dict:
     spend = 0.0
     minutes = 0.0
     for stage in state.stages:
-        if stage.outcome.status == StageStatus.SKIPPED.value:
+        if is_skipped(stage):
             continue
         tier = _stage_tier(stage)
         if stage.is_spawn():

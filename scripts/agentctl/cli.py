@@ -111,6 +111,7 @@ from .state import (
     FAILURE_ADDRESS_VALUES,
     FinalCheck,
     Investigation,
+    is_settled,
     is_skipped,
     JudgeBypass,
     LANDED_GIT_ERROR_EXIT,
@@ -910,6 +911,24 @@ def _stamp_accepted_plan_digest(state: SessionState, plan_path: str) -> None:
         return
 
 
+def _declined_titles(stages) -> set[str]:
+    """Titles of the stages the customer declined (SKIPPED, or offered again and still marked)."""
+    return {s.title for s in stages if s.outcome.declined or is_skipped(s)}
+
+
+def _declined_by_identity(stage, declined_issues: set[str], declined_titles: set[str]) -> bool:
+    """Whether a freshly materialized stage is work the customer declined.
+
+    An optional stage is identified by its `backlog_issue`, never by its index. A stage that
+    stopped being optional has no issue left to name (the loader forbids one), so it is
+    matched by title against the stages the session held as declined: a required stage with
+    a declined stage's title is offered to the customer again, which only ever adds a
+    refusal for the agent's approval."""
+    if stage.optional:
+        return gates.declined_by_issue(stage, declined_issues)
+    return stage.title in declined_titles
+
+
 def _refresh_caches_from_plan_path(
     state: SessionState,
     *,
@@ -975,10 +994,18 @@ def _refresh_caches_from_plan_path(
     # suppliers' pre-edit interfaces.
     carried = {rs.index: stage_carried(state.stages, refreshed.stages, rs.index)
                for rs in refreshed.stages}
+    declined_issues = gates.declined_issue_set(state)
+    declined_titles = _declined_titles(state.stages)
+    rebuilt: list[Stage] = []
     for rs in refreshed.stages:
         try:
             cur = state.stage(rs.index)
         except KeyError:
+            # An in-place edit may renumber or add a stage; the file is the plan, so the
+            # session's stage list is rebuilt from it and a stage the file no longer has
+            # leaves with it (an orphan SKIPPED stage would carry a decline for work that
+            # is no longer there).
+            rebuilt.append(rs)
             continue
         unchanged = carried[rs.index]
         _apply_refined_stage_fields(cur, rs)
@@ -988,6 +1015,11 @@ def _refresh_caches_from_plan_path(
             StageStatus.PASSED.value, StageStatus.SKIPPED.value,
         ):
             cur.outcome.status = StageStatus.PENDING.value
+        rebuilt.append(cur)
+    for s in rebuilt:
+        s.outcome.declined = is_skipped(s) or (
+            not is_settled(s) and _declined_by_identity(s, declined_issues, declined_titles))
+    state.stages = rebuilt
     state.final_check = refreshed.meta.final_check
     _sync_venue_from_plan(state, refreshed)
     # The digest is NOT stamped here. A clean submission is not yet an accepted plan at this
@@ -6009,12 +6041,15 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty approver: --by must name who approved"]
     elif by_agent:
-        # A stage the customer declined and that has since changed (or stopped being
-        # optional) is live again; the resource boundary below cannot see that, and
-        # `--skip-optional` is refused for the agent, so its approval would dispatch work
-        # the customer turned down. Only a customer approval re-offers the choice.
+        # A stage the customer declined and that has since changed, been renumbered or
+        # re-added (or stopped being optional) is live again; the resource boundary below
+        # cannot see that, and `--skip-optional` is refused for the agent, so its approval
+        # would dispatch work the customer turned down. Two lines of defence: the decline
+        # keyed by the stage's issue, and the marker the stage itself carries. Only a
+        # customer approval re-offers the choice.
         revived = sorted(
-            s.index for s in state.stages if s.outcome.declined and not is_skipped(s)
+            {s.index for s in state.stages if s.outcome.declined and not is_skipped(s)}
+            | set(gates.declined_live_optional(state.stages, gates.declined_issue_set(state)))
         )
         if revived:
             blockers = blockers + [
@@ -6074,6 +6109,16 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     for s in state.stages:
         if not is_skipped(s):
             s.outcome.declined = False
+    if not by_agent:
+        # The customer's own choice, made again: a stage left live is no longer declined; the
+        # issues of stages no longer in the plan stay, so re-adding one is still the
+        # customer's call.
+        kept = {s.backlog_issue for s in state.stages if is_skipped(s) and s.backlog_issue}
+        offered = {
+            s.backlog_issue for s in state.stages
+            if s.optional and s.backlog_issue and not is_skipped(s)
+        }
+        state.declined_issues = sorted((set(state.declined_issues) | kept) - offered)
     if skip_optional:
         state.log("skip_optional", by=args.by, stages=skip_optional)
     effort.arm(state)  # opens the effort-divergence window — see effort.py's ARMED-ONLY
@@ -10100,23 +10145,25 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             reattest_digest=stage_reattest_digest(ns),
         ))
     state.reattest_stash = reattest_stash
+    declined_issues = gates.declined_issue_set(state)
+    declined_titles = _declined_titles(state.stages)
     for ns in new.stages:
         prev = live_by_index.get(ns.index)
-        if prev is None:
-            continue
-        # The customer's decline outlives a reset to PENDING: `approve --by agent` refuses
-        # while a declined stage is live, so only a customer approval can bring it back.
-        if prev.outcome.declined or is_skipped(prev):
-            ns.outcome.declined = True
-        if not stage_carried(state.stages, new.stages, ns.index):
-            continue
-        # A declined optional stage whose definition did not move stays declined; a changed
-        # one goes back to PENDING (still marked declined) for a fresh choice at the
-        # customer's re-approval.
-        if prev.outcome.status == StageStatus.PASSED.value or (
-            is_skipped(prev) and ns.optional
+        if prev is not None and stage_carried(state.stages, new.stages, ns.index):
+            # A declined optional stage whose definition did not move stays declined; a
+            # changed one goes back to PENDING for a fresh choice at the customer's
+            # re-approval.
+            if prev.outcome.status == StageStatus.PASSED.value or (
+                is_skipped(prev) and ns.optional
+            ):
+                ns.outcome = prev.outcome
+        # The customer's decline follows the stage's identity (its issue), not its index,
+        # and outlives a reset to PENDING: `approve --by agent` refuses while a declined
+        # stage is live, so only a customer approval can bring it back.
+        if is_skipped(ns) or (
+            not is_settled(ns) and _declined_by_identity(ns, declined_issues, declined_titles)
         ):
-            ns.outcome = prev.outcome
+            ns.outcome.declined = True
     state.stages = new.stages
     _sync_venue_from_plan(state, new)
     state.final_check = new.meta.final_check
