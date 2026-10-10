@@ -146,6 +146,10 @@ def _diagnosing(store, sid, plan, *, fail_stage=1):
     if fail_stage == 2:
         _pass(store, sid, 1)
         cli.cmd_next_stage(ns(session=sid), store=store)
+    _fail_and_investigate(store, sid)
+
+
+def _fail_and_investigate(store, sid):
     cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
     cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
@@ -659,6 +663,59 @@ def test_plan_drafted_in_place_before_the_critique_is_not_a_false_block(store, p
     d = _replan(store, "b2", base)
     assert d.ok is True, \
         f"BEHAVIOUR: a corrected plan drafted in place was blocked as unchanged: {d.detail}"
+
+
+def test_live_stage_digest_is_like_for_like_with_the_plan_file_it_came_from(store, plans):
+    """The baseline (read from the state's stage) and the replan's comparison (read from
+    the plan file) must be one digest of one stage, or an unchanged stage reads as moved."""
+    base = plans("base", _stages(s1={"method": "mirror the working caller",
+                                      "procedure": "1. read 2. edit"}))
+    _diagnosing(store, "l1", base)
+    state = store.load("l1")
+    from_file = {s.index: s for s in load_plan(base, strict=False).stages}
+    for stage in state.stages:
+        assert gates.stage_norm_digest(stage) == gates.stage_norm_digest(from_file[stage.index]), \
+            "BEHAVIOUR: a state stage and the plan file's stage digest differently"
+
+
+def _renormalized_then_failed(store, sid, plans, monkeypatch):
+    """Approved with procedure P, `--renormalize`d to P', then stage 1 fails: the state's
+    stage runs P' while the approved snapshot still holds P."""
+    monkeypatch.setenv("AGENTCTL_ADVISOR", "0")
+    approved = plans("p", _stages(s1={"procedure": "1. read 2. edit"}))
+    _start(store, sid, approved)
+    renormalized = plans("p-prime", _stages(s1={"procedure": "1. edit 2. read"}))
+    d = _renormalize(store, sid, renormalized)
+    assert d.ok is True, f"setup: the renormalization was refused: {d.detail}"
+    _fail_and_investigate(store, sid)
+    return approved, renormalized
+
+
+def test_renormalized_stage_left_unchanged_is_not_a_false_discharge(store, plans, monkeypatch):
+    """`--renormalize` leaves the snapshot on P while the live stage runs P'. A baseline
+    taken from the snapshot made a closing plan that keeps P' read as an edit."""
+    _, renormalized = _renormalized_then_failed(store, "n1", plans, monkeypatch)
+    assert _critique(store, "n1", "нормативное", ["stage:1"]).ok is True
+    (entry,) = store.load("n1").difficulty.norm_targets
+    ran = next(s for s in load_plan(renormalized, strict=False).stages if s.index == 1)
+    assert entry["baseline"] == gates.stage_norm_digest(ran), \
+        "BEHAVIOUR: the baseline is not the digest of the stage that ran (P')"
+    _normalize(store, "n1")
+    d = _replan(store, "n1", renormalized)
+    assert d.ok is False, \
+        "BEHAVIOUR: a closing plan that leaves the failed renormalized stage unchanged passed"
+    assert "stage:1" in _blockers(d)
+
+
+def test_reverting_a_renormalized_stage_is_a_real_edit(store, plans, monkeypatch):
+    """The reverse of the false discharge: P is an edit relative to the P' that ran, even
+    though it equals what was approved."""
+    approved, _ = _renormalized_then_failed(store, "n2", plans, monkeypatch)
+    assert _critique(store, "n2", "нормативное", ["stage:1"]).ok is True
+    _normalize(store, "n2")
+    d = _replan(store, "n2", approved)
+    assert d.ok is True, \
+        f"BEHAVIOUR: reverting the renormalized stage was refused as unchanged: {d.detail}"
 
 
 # --- the plan file the replan installs is no norm -----------------------------

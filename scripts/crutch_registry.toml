@@ -6067,6 +6067,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "692256a9a0e5dc5b"
+domain = "code"
+file = "scripts/tests/test_failure_address_consequence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "603bbf2db723eba8"
 domain = "code"
 file = "scripts/tests/test_failure_address_consequence.py"

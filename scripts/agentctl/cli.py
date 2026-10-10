@@ -8498,8 +8498,10 @@ def _norm_file_refusal(state: SessionState, target: str) -> str | None:
 
 def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[list[dict], str | None]:
     """The `norm_targets` entries for a нормативное critique's --norm-target values, or
-    the first refusal. A stage target is snapshotted from the replan baseline (the approved
-    plan snapshot), never the live plan file, which is editable while DIAGNOSING."""
+    the first refusal. A stage target is snapshotted from the live state's stage -- the
+    stage that actually ran, which refinement replans rebuild and `--renormalize` patches
+    -- never from a plan file, which is editable while DIAGNOSING. The approved snapshot
+    is the fallback for a stage the state no longer holds."""
     from .plan import PlanError, load_plan as _load
 
     baseline_path = _replan_baseline_path(state)
@@ -8511,18 +8513,18 @@ def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[lis
                 index = int(raw[len("stage:"):])
             except ValueError:
                 return [], f"--norm-target {raw!r}: stage:<n> needs an integer stage index"
-            stage = None
-            if baseline_path:
-                try:
-                    stage = next((s for s in _load(baseline_path, strict=False).stages
-                                  if s.index == index), None)
-                except (OSError, PlanError):
-                    stage = None
+            try:
+                stage = state.stage(index)
+            except KeyError:
+                stage = None
+                if baseline_path:
+                    try:
+                        stage = next((s for s in _load(baseline_path, strict=False).stages
+                                      if s.index == index), None)
+                    except (OSError, PlanError):
+                        stage = None
             if stage is None:
-                try:
-                    stage = state.stage(index)
-                except KeyError:
-                    return [], f"--norm-target {raw!r}: the current plan has no stage {index}"
+                return [], f"--norm-target {raw!r}: the current plan has no stage {index}"
             entries.append({"target": f"stage:{index}", "kind": "stage",
                             "baseline": gates.stage_norm_digest(stage), "source": "critique"})
             continue
