@@ -47,6 +47,7 @@ T_CYCLE = "tests/test_mandate_cycle.py"
 T_NOTIFIER = "tests/test_mandate_notifier.py"
 STATE = "agentctl/state.py"
 PLAN = "agentctl/plan.py"
+CLI = "agentctl/cli.py"
 T_OPTIONAL = "tests/test_optional_stages.py"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
@@ -362,14 +363,20 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "optional-coverage-rule": Mutant(
         PLAN,
-        "    if optional:\n        out.extend(_optional_rest_violations(doc))",
-        "    if False:\n        out.extend(_optional_rest_violations(doc))",
+        "    if optional:\n        out.extend(optional_rest_violations(doc))",
+        "    if False:\n        out.extend(optional_rest_violations(doc))",
         _ids(
             T_OPTIONAL,
             "test_loader_rejects[a requirement covered only by an optional stage]",
             "test_loader_rejects[a requirement whose only landed assertion is on an optional stage]",
             "test_loader_rejects[a final_check resting on an optional stage]",
         ),
+    ),
+    "reject-spares-skipped": Mutant(
+        CLI,
+        "        live = [s for s in state.stages if s.outcome.status != StageStatus.SKIPPED.value]\n",
+        "        live = list(state.stages)\n",
+        _ids(T_OPTIONAL, "test_reject_without_a_stage_never_reopens_a_declined_stage"),
     ),
 }
 

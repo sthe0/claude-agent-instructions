@@ -2389,7 +2389,7 @@ class SessionState:
     def all_stages_settled(self) -> bool:
         return bool(self.stages) and all(is_settled(s) for s in self.stages)
 
-    all_stages_passed = all_stages_settled
+    all_stages_passed = all_stages_settled  # legacy name; means "settled" (PASSED or SKIPPED)
 
     def log(self, event: str, **fields) -> None:
         self.history.append({"event": event, **fields})

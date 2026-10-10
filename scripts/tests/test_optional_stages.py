@@ -344,6 +344,133 @@ def test_a_skipped_stage_resolves_the_plan(store, optional_plan):
     assert store.load(sid).node == Node.RESOLVED.value
 
 
+def _to_resolution(store, sid, plan_path, *, skip=()):
+    from conftest import STAGE_OBSERVATIONS
+    _executing(store, sid, plan_path, skip=skip)
+    for observation in STAGE_OBSERVATIONS[:2]:
+        _pass_next(store, sid, observation)
+    d = cli.cmd_verify_final(ns(session=sid), store=store)
+    assert d.ok is True, d.detail
+    cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="searched"), store=store)
+    cli.cmd_plugin_record(ns(session=sid, plugin="experience", phase="recorded"), store=store)
+    return store.load(sid)
+
+
+def _work_the_difficulty(store, sid):
+    cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
+    cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
+                           hypotheses=["h1", "h2"]), store=store)
+    cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
+                        failure_address="нормативное"), store=store)
+    cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
+
+
+def test_reject_without_a_stage_never_reopens_a_declined_stage(store, optional_plan, tmp_path):
+    sid = "reject-skipped"
+    state = _to_resolution(store, sid, optional_plan, skip=[3])
+    assert state.node == Node.RESOLUTION.value
+
+    d = cli.cmd_reject(ns(session=sid, reason="not what was asked", stage=None), store=store)
+    assert d.data["rejected_stages"] == [2]
+    state = store.load(sid)
+    assert [s.outcome.status for s in state.stages] == ["PASSED", "FAILED", "SKIPPED"]
+
+    _work_the_difficulty(store, sid)
+    refined = tmp_path / "refined.toml"
+    refined.write_text(
+        optional_plan.read_text(encoding="utf-8").replace('"Add tests"', '"Add the tests"'),
+        encoding="utf-8")
+    d = cli.cmd_replan(ns(session=sid, plan=str(refined)), store=store)
+    assert d.ok is True, d.detail
+
+    state = store.load(sid)
+    assert state.stage(3).outcome.status == StageStatus.SKIPPED.value
+    assert [s.index for s in state.ready_stages()] == [2]
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    assert store.load(sid).current_stage == 2
+
+
+def test_reject_refuses_to_name_a_declined_stage(store, optional_plan):
+    sid = "reject-named-skipped"
+    _to_resolution(store, sid, optional_plan, skip=[3])
+    d = cli.cmd_reject(ns(session=sid, reason="no", stage=["3"]), store=store)
+    assert d.ok is False and "SKIPPED" in d.detail
+    state = store.load(sid)
+    assert state.node == Node.RESOLUTION.value
+    assert state.stage(3).outcome.status == StageStatus.SKIPPED.value
+
+
+def test_a_replan_that_strands_a_stage_on_a_declined_one_is_refused_at_approve(store, tmp_path):
+    first = tmp_path / "first.toml"
+    first.write_text(_plan_text(_stage(1), _opt(2, [1]), _opt(3, [1])), encoding="utf-8")
+    sid = "strand-replan"
+    _executing(store, sid, first, skip=[2])
+    cli.cmd_next_stage(ns(session=sid), store=store)
+
+    second = tmp_path / "second.toml"
+    second.write_text(_plan_text(_stage(1), _opt(2, [1]), _opt(3, [2])), encoding="utf-8")
+    d = cli.cmd_replan(ns(session=sid, plan=str(second)), store=store)
+    assert d.marker == "PLAN-READY"
+    assert store.load(sid).stage(2).outcome.status == StageStatus.SKIPPED.value
+
+    d = _approve(store, sid)
+    assert d.ok is False and d.action == "fix_plan"
+    assert any("stage 3 depends on declined stage(s) [2]" in p for p in d.data["problems"])
+
+    assert _approve(store, sid, skip=[3]).ok is True
+    assert [s.outcome.status for s in store.load(sid).stages] == ["PENDING", "SKIPPED", "SKIPPED"]
+
+
+def test_a_changed_declined_stage_is_offered_again_on_both_carry_paths(
+        store, optional_plan, tmp_path):
+    text = optional_plan.read_text(encoding="utf-8")
+    sid = "carry-rule"
+    _executing(store, sid, optional_plan, skip=[3])
+    cli.cmd_next_stage(ns(session=sid), store=store)
+
+    bigger = tmp_path / "bigger.toml"
+    bigger.write_text(text + (
+        '\n[[stage]]\nindex = 4\ntitle = "Document"\nexecutor = "spawn:developer"\n'
+        'expected_result_image = "docs exist"\ncriterion_type = "measurable"\n'
+        'done_criterion = "docs on disk"\ndepends_on = [2]\noutput_artifacts = ["docs.md"]\n'),
+        encoding="utf-8")
+    d = cli.cmd_replan(ns(session=sid, plan=str(bigger)), store=store)
+    assert d.marker == "PLAN-READY"
+    assert store.load(sid).stage(3).outcome.status == StageStatus.SKIPPED.value  # unchanged: kept
+
+    bigger.write_text(bigger.read_text(encoding="utf-8").replace(
+        "CI config references test_mod", "CI config references test_mod and lint"),
+        encoding="utf-8")
+    d = _approve(store, sid)
+    assert d.ok is True, d.detail
+    state = store.load(sid)
+    assert state.stage(3).optional is True
+    assert state.stage(3).outcome.status == StageStatus.PENDING.value  # changed: offered again
+
+
+def test_popping_a_subplan_never_revives_a_declined_originating_stage(store, optional_plan):
+    from agentctl.state import Criterion, Means, Outcome, Stage, Subject, Actor, GateRecord
+    sid = "pop-skipped"
+    _executing(store, sid, optional_plan, skip=[3])
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    cli.cmd_push_subplan(
+        ns(session=sid, plan="/tmp/child.toml", task="child-task", originating_stage=3),
+        store=store)
+    state = store.load(sid)
+    state.stages = [Stage(
+        index=1, title="child", subject=Subject(material="m", result="r"),
+        means=Means(means="Edit", method="do"), actor=Actor(executor="in_thread"),
+        criterion=Criterion(criterion_type="measurable", done_criterion="done"),
+        outcome=Outcome(status=StageStatus.PASSED.value))]
+    state.resolution = GateRecord("resolution", armed=True, passed=True, by="tester")
+    state.node = Node.RESOLVED.value
+    state.current_stage = None
+    store.save(state)
+
+    cli.cmd_pop_subplan(ns(session=sid), store=store)
+    assert store.load(sid).stage(3).outcome.status == StageStatus.SKIPPED.value
+
+
 def test_an_optional_stage_not_declined_still_has_to_pass(store, optional_plan):
     from conftest import STAGE_OBSERVATIONS
     sid = "kept-optional"
@@ -460,13 +587,16 @@ def test_the_coverage_check_script_reports_the_optional_rule(tmp_path):
 
 # --- the enumerator: no unaccounted single-stage PASSED comparison -------------------
 
-_COMPARE_OPS = (ast.Eq, ast.NotEq, ast.In, ast.NotIn)
-_GREP = re.compile(r"""(==|!=|\bin\b|\bnot in\b).*["']PASSED["']|["']PASSED["'].*(==|!=)""")
+_COMPARE_OPS = (ast.Eq, ast.NotEq, ast.In, ast.NotIn, ast.Is, ast.IsNot)
+_GREP = re.compile(
+    r"""(==|!=|\bin\b|\bnot in\b|\bis\b).*["']passed["']|["']passed["'].*(==|!=)""",
+    re.IGNORECASE,
+)
 
 
 def _is_passed(node: ast.AST) -> bool:
     if isinstance(node, ast.Constant):
-        return node.value == "PASSED"
+        return isinstance(node.value, str) and node.value.upper() == "PASSED"
     if isinstance(node, ast.Attribute):
         if node.attr == "PASSED":
             return True
@@ -477,13 +607,8 @@ def _is_passed(node: ast.AST) -> bool:
     return False
 
 
-def single_stage_sites(source: str) -> "set[str]":
-    """Qualified names of the functions in `source` that compare something to PASSED.
-
-    Two nets over the same text so one cannot hide a site from the other: the AST finds
-    every comparison node whatever its spelling; the line grep finds a comparison written
-    in a shape the AST helper does not model, and is mapped to its function by line."""
-    tree = ast.parse(source)
+def _owner_resolver(tree: ast.AST):
+    """Map a line number to the qualified name of its innermost enclosing function/class."""
     spans: "list[tuple[int, int, str]]" = []
 
     def walk(node, prefix):
@@ -501,6 +626,17 @@ def single_stage_sites(source: str) -> "set[str]":
         enclosing = [s for s in spans if s[0] <= line <= s[1]]
         return max(enclosing, key=lambda s: s[0])[2] if enclosing else "<module>"
 
+    return owner
+
+
+def single_stage_sites(source: str) -> "set[str]":
+    """Qualified names of the functions in `source` that compare something to PASSED.
+
+    Two nets over the same text so one cannot hide a site from the other: the AST finds
+    every comparison node whatever its spelling; the line grep finds a comparison written
+    in a shape the AST helper does not model, and is mapped to its function by line."""
+    tree = ast.parse(source)
+    owner = _owner_resolver(tree)
     found: "set[str]" = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Compare) and any(isinstance(op, _COMPARE_OPS) for op in node.ops):
@@ -512,21 +648,77 @@ def single_stage_sites(source: str) -> "set[str]":
     return found
 
 
+def _mentions_stage_status(node: ast.AST) -> bool:
+    return any(isinstance(n, ast.Name) and n.id == "StageStatus" for n in ast.walk(node))
+
+
+def _targets_of(node: ast.AST) -> "list[ast.AST]":
+    if isinstance(node, ast.Assign):
+        return list(node.targets)
+    if isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+        return [node.target]
+    return []
+
+
+def _attribute_chain(node: ast.AST) -> "set[str]":
+    names: "set[str]" = set()
+    while isinstance(node, ast.Attribute):
+        names.add(node.attr)
+        node = node.value
+    return names
+
+
+def stage_status_write_sites(source: str) -> "set[str]":
+    """Qualified names of the functions in `source` that WRITE a stage's status or outcome.
+
+    The twin of `single_stage_sites` on the write side: a write is where a SKIPPED stage
+    could be turned into FAILED, ACTIVE or PENDING behind the customer's back. Shapes: an
+    assignment to `<...>.outcome.status` (or any `.status` whose right side names
+    StageStatus), an assignment to `<...>.outcome`, an assignment to a `["status"]`
+    subscript whose right side names StageStatus (a JSON state), and an `Outcome(status=...)`
+    construction."""
+    tree = ast.parse(source)
+    owner = _owner_resolver(tree)
+    found: "set[str]" = set()
+    for node in ast.walk(tree):
+        value = getattr(node, "value", None)
+        for target in _targets_of(node):
+            if isinstance(target, ast.Attribute):
+                if target.attr == "outcome":
+                    found.add(owner(node.lineno))
+                elif target.attr == "status" and (
+                    "outcome" in _attribute_chain(target.value)
+                    or (value is not None and _mentions_stage_status(value))
+                ):
+                    found.add(owner(node.lineno))
+            elif (isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant)
+                  and target.slice.value == "status" and value is not None
+                  and _mentions_stage_status(value)):
+                found.add(owner(node.lineno))
+        if (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Outcome"
+                and any(kw.arg == "status" for kw in node.keywords)):
+            found.add(owner(node.lineno))
+    return found
+
+
 def _scripts_under_review() -> "list[Path]":
-    roots = [SCRIPTS_DIR / "agentctl", SCRIPTS_DIR / "lib", SCRIPTS_DIR]
-    seen: "dict[Path, None]" = {}
-    for root in roots:
-        for path in sorted(root.glob("*.py")):
-            seen[path] = None
-    return list(seen)
+    return sorted(
+        p for p in SCRIPTS_DIR.rglob("*.py")
+        if "tests" not in p.relative_to(SCRIPTS_DIR).parts
+        and "__pycache__" not in p.parts
+    )
+
+
+def _sites(finder) -> "set[tuple[str, str]]":
+    out: "set[tuple[str, str]]" = set()
+    for path in _scripts_under_review():
+        for name in finder(path.read_text(encoding="utf-8")):
+            out.add((path.relative_to(SCRIPTS_DIR).as_posix(), name))
+    return out
 
 
 def _live_sites() -> "set[tuple[str, str]]":
-    out: "set[tuple[str, str]]" = set()
-    for path in _scripts_under_review():
-        for name in single_stage_sites(path.read_text(encoding="utf-8")):
-            out.add((path.relative_to(SCRIPTS_DIR).as_posix(), name))
-    return out
+    return _sites(single_stage_sites)
 
 
 # (file under scripts/, qualified function) -> why this site asks a question narrower
@@ -553,8 +745,36 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
     ("hook-resolution-reminder.py", "landing_pending"): (
         "KNOWN GAP, not a legitimate narrower question: it asks 'is every stage done?' of a "
         "state file read as JSON and so cannot import is_settled; the file is outside this "
-        "change's edit grant, so a declined stage keeps this ADVISORY nudge from firing. "
-        "Fix is the one-line `in (\"PASSED\", \"SKIPPED\")`; remove this entry with it"
+        "change's edit grant. With a SKIPPED stage at VERIFYING it fails to fire its nudge "
+        "AND its result switches off the PreToolUse landing-discipline judge (`decide()`), "
+        "which can then let an AskUserQuestion proposing a PR on a direct-push repo through; "
+        "at RESOLUTION `resolution_gate_open` takes over both paths. Fix is the one-line "
+        "`in (\"PASSED\", \"SKIPPED\")`; remove this entry with it"
+    ),
+    ("agentctl/cli.py", "cmd_record_result"): (
+        "`args.status == \"passed\"` is the incoming result's own verdict on the one stage "
+        "being recorded (--status passed|failed), not a read of the plan's stage statuses"
+    ),
+    ("agentctl/plugins_tracker.py", "_last_passed_stage_index"): (
+        "reads the plugin's own event history for the last record_result logged as passed; a "
+        "history row of one recorded stage, never a plan-wide completeness question"
+    ),
+    ("agentctl/plugins_tracker.py", "_terminal"): (
+        "lowercase hit on `getattr(state.resolution, \"passed\")`: the resolution gate's own "
+        "flag, which resolve sets only after resolution_blockers (settled-aware) clear"
+    ),
+    ("agentctl/plugins_experience.py", "_terminal"): (
+        "lowercase hit on `getattr(state.resolution, \"passed\")`: the resolution gate's own "
+        "flag, not a stage status"
+    ),
+    ("agentctl/plugins_ledger.py", "_terminal"): (
+        "lowercase hit on `getattr(state.resolution, \"passed\")`: the resolution gate's own "
+        "flag, not a stage status"
+    ),
+    ("hook-turn-end-gate.py", "resolution_turn_blockers"): (
+        "lowercase hit on `getattr(resolution, \"passed\")`: the resolution gate's own flag; "
+        "the stage-completeness question in this function goes through all_stages_passed, "
+        "which is the settled predicate under its legacy name"
     ),
 }
 
@@ -572,6 +792,91 @@ def test_every_single_stage_passed_comparison_is_accounted_for():
 
 def test_every_allowlist_entry_states_a_reason():
     assert all(len(reason.strip()) >= 20 for reason in ALLOWED_SINGLE_STAGE_SITES.values())
+
+
+# --- the write-side twin: every place a stage's status is set -----------------------
+
+# (file under scripts/, qualified function) -> how a SKIPPED stage is kept from being
+# re-opened here ("guarded") or why the stage written is never a declined one ("n/a").
+# Reads are universally quantified (the PASSED enumerator above); so are writes: a
+# declined stage written FAILED/PENDING/ACTIVE is dispatched again, which no read-side
+# net can see.
+ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
+    ("agentctl/cli.py", "cmd_approve"): (
+        "n/a: the ONLY writer of SKIPPED, and only for stages the plan declares optional "
+        "and the customer named in --skip-optional"
+    ),
+    ("agentctl/cli.py", "cmd_reject"): (
+        "guarded: the default target is the last stage that is not SKIPPED, and an explicit "
+        "--stage naming a SKIPPED stage is refused; FAILED is never written to a declined one"
+    ),
+    ("agentctl/cli.py", "cmd_next_stage"): (
+        "n/a: writes ACTIVE to ready[0], taken from ready_stages(), which lists PENDING "
+        "stages only"
+    ),
+    ("agentctl/cli.py", "cmd_record_result"): (
+        "n/a: writes PASSED/FAILED to state.active_stage() (current_stage), which only "
+        "next-stage sets, from ready_stages()"
+    ),
+    ("agentctl/cli.py", "_try_reattest"): (
+        "n/a: re-attests the stage under dispatch (current_stage), never a SKIPPED one; the "
+        "stash it reads holds PASSED prior outcomes only"
+    ),
+    ("agentctl/cli.py", "_diagnose_materialization_defect"): (
+        "n/a: receives the stage a spawn just ran (ACTIVE) from its caller"
+    ),
+    ("agentctl/cli.py", "cmd_pop_subplan"): (
+        "guarded: marks the stage that opened the sub-plan PASSED unless it is SKIPPED (an "
+        "explicit --originating-stage can name any stage)"
+    ),
+    ("agentctl/cli.py", "_apply_refined_stage_fields"): (
+        "guarded: its only status write moves a SKIPPED stage whose refined definition is "
+        "no longer optional back to PENDING (a required stage cannot be declined)"
+    ),
+    ("agentctl/cli.py", "_refresh_caches_from_plan_path"): (
+        "guarded: resets only a CHANGED stage (PASSED or SKIPPED) to PENDING; an unchanged "
+        "declined stage keeps SKIPPED"
+    ),
+    ("agentctl/cli.py", "_cmd_replan"): (
+        "guarded: FAILED stages go back to PENDING (a SKIPPED one is never FAILED, see "
+        "cmd_reject); the substantive carry copies the outcome of an unchanged PASSED or "
+        "SKIPPED stage and leaves a changed one PENDING"
+    ),
+    ("agentctl/plan.py", "parse_plan"): (
+        "n/a: constructs every stage PENDING at load; SKIPPED exists only in session state"
+    ),
+    ("agentctl/state.py", "Stage.from_dict"): (
+        "n/a: deserializes the persisted outcome verbatim, SKIPPED included"
+    ),
+    ("file-difficulty.py", "_Dedup.__init__"): (
+        "n/a: an unrelated `outcome` attribute on a difficulty-filing dedup record"
+    ),
+    ("verify-agentctl.py", "check_code_review_precondition._dev_stage"): (
+        "n/a: the verifier's own synthetic stage, built ACTIVE for one check"
+    ),
+    ("verify-agentctl.py", "check_control_precondition._dev_stage"): (
+        "n/a: the verifier's own synthetic stage, built ACTIVE for one check"
+    ),
+    ("verify-agentctl.py", "check_review_dispatch"): (
+        "n/a: the verifier's own synthetic stage, built ACTIVE for one check"
+    ),
+    ("verify-agentctl.py", "check_state_roundtrip"): (
+        "n/a: the verifier's own synthetic stage, built ACTIVE for one round-trip"
+    ),
+}
+
+
+def test_every_stage_status_write_is_accounted_for():
+    live = _sites(stage_status_write_sites)
+    allowed = set(ALLOWED_STATUS_WRITE_SITES)
+    unaccounted = sorted(live - allowed)
+    stale = sorted(allowed - live)
+    assert not unaccounted, (
+        "a write of a stage status outside the allowlist: make sure a SKIPPED stage cannot "
+        f"reach it (guard it) or say why it cannot, then list it: {unaccounted}"
+    )
+    assert not stale, f"write-allowlist entries that no longer match a site: {stale}"
+    assert all(len(r.strip()) >= 20 for r in ALLOWED_STATUS_WRITE_SITES.values())
 
 
 PLANTED = {

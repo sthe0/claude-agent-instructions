@@ -981,7 +981,11 @@ def _refresh_caches_from_plan_path(
             continue
         unchanged = carried[rs.index]
         _apply_refined_stage_fields(cur, rs)
-        if not unchanged and cur.outcome.status == StageStatus.PASSED.value:
+        # One rule shared with the substantive-replan carry: a changed stage loses its
+        # settled status, a declined one included, and is offered again for a fresh choice.
+        if not unchanged and cur.outcome.status in (
+            StageStatus.PASSED.value, StageStatus.SKIPPED.value,
+        ):
             cur.outcome.status = StageStatus.PENDING.value
     state.final_check = refreshed.meta.final_check
     _sync_venue_from_plan(state, refreshed)
@@ -5889,9 +5893,21 @@ def _skip_optional_problems(
             problems.append(f"stage {index} is not optional (only `optional = true` stages can be declined)")
     if problems:
         return problems
-    declined = set(indices) | {
+    return _stranded_dependency_problems(doc, state, set(indices))
+
+
+def _stranded_dependency_problems(
+    doc: "PlanDoc", state: SessionState, newly_declined: set[int],
+) -> list[str]:
+    """Stages that stay live but depend on a declined stage and so could never become ready.
+
+    Declined = `newly_declined` plus every stage the session already holds SKIPPED. Run on
+    every approve that has any declined stage, not only on `--skip-optional`: a replan can
+    carry a SKIPPED stage forward and add a live optional stage that depends on it."""
+    declined = newly_declined | {
         s.index for s in state.stages if s.outcome.status == StageStatus.SKIPPED.value
     }
+    problems: list[str] = []
     for stage in doc.stages:
         stranded = sorted(d for d in stage.depends_on if d in declined)
         if stage.index not in declined and stranded:
@@ -5970,6 +5986,16 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                              "cannot approve: --skip-optional names stages that cannot be "
                              "declined (fix the indices and re-run approve)",
                              data={"problems": skip_problems})
+    elif _approved_doc is not None and any(
+        s.outcome.status == StageStatus.SKIPPED.value for s in state.stages
+    ):
+        stranded_problems = _stranded_dependency_problems(_approved_doc, state, set())
+        if stranded_problems:
+            return Directive(False, state.node, "fix_plan",
+                             "cannot approve: a live stage depends on a declined (SKIPPED) "
+                             "stage and would never become ready (edit the plan and re-run "
+                             "approve)",
+                             data={"problems": stranded_problems})
     review_blockers = gates.plan_review_blockers(state, state.plan_path)
     blockers = (
         gates.blockers(state, "plan_approval")
@@ -8931,16 +8957,24 @@ def cmd_reject(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         targets: list[Stage] = []
         for idx in raw:
             try:
-                targets.append(state.stage(int(idx)))
+                target = state.stage(int(idx))
             except KeyError:
                 return Directive(
                     False, state.node, "noop",
                     f"reject --stage {idx} does not exist in the plan",
                 )
-    elif state.stages:
-        targets = [max(state.stages, key=lambda s: s.index)]  # default: the final stage
+            if target.outcome.status == StageStatus.SKIPPED.value:
+                return Directive(
+                    False, state.node, "noop",
+                    f"reject --stage {idx} names a SKIPPED stage; a declined optional stage "
+                    "is never re-opened (R8: SKIPPED is settled and is never dispatched)",
+                )
+            targets.append(target)
     else:
-        return Directive(False, state.node, "noop", "reject has no stages to re-open")
+        live = [s for s in state.stages if s.outcome.status != StageStatus.SKIPPED.value]
+        if not live:
+            return Directive(False, state.node, "noop", "reject has no stages to re-open")
+        targets = [max(live, key=lambda s: s.index)]  # default: the final non-declined stage
     state.node = transition(state.node, "reject")  # RESOLUTION -> DIAGNOSING
     for s in targets:
         s.outcome.status = StageStatus.FAILED.value
@@ -10552,8 +10586,9 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     # re-point at a stage this same call is about to mark PASSED.
     try:
         orig = state.stage(frame.originating_stage)
-        orig.outcome.status = StageStatus.PASSED.value
-        orig.control = f"satisfied by sub-plan {child_task_id}"
+        if orig.outcome.status != StageStatus.SKIPPED.value:
+            orig.outcome.status = StageStatus.PASSED.value
+            orig.control = f"satisfied by sub-plan {child_task_id}"
     except KeyError:
         pass
     _restore_current_stage(state)

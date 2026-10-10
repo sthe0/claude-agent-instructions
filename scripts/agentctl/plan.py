@@ -626,11 +626,11 @@ def optional_stage_violations(doc: PlanDoc) -> list[str]:
     if optional and len(optional) == len(stages):
         out.append("optional stages (R8/O4): every stage is optional; a plan needs a required one")
     if optional:
-        out.extend(_optional_rest_violations(doc))
+        out.extend(optional_rest_violations(doc))
     return out
 
 
-def _optional_rest_violations(doc: PlanDoc) -> list[str]:
+def optional_rest_violations(doc: PlanDoc) -> list[str]:
     """O5, split out so `check-order-coverage.py` reports it alongside its own findings."""
     from .controls import FINAL_CHECK, STAGE_LANDED_ASSERTION, STAGE_VERIFY_COMMAND
     by_index = {s.index: s for s in doc.stages}
