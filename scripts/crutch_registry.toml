@@ -7954,6 +7954,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "7f1ce1c1346d089e"
+domain = "code"
+file = "scripts/tests/test_norm_staleness_pair_currency.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "44cfe8c9b9ebf760"
 domain = "code"
 file = "scripts/tests/test_normalization_gate.py"
@@ -12202,7 +12210,23 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
-id = "2ce0f66ea8ffda00"
+id = "aee77426f8e7d36b"
+domain = "code"
+file = "scripts/tests/test_spawn_topo_review.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "56528484fd5895a9"
+domain = "code"
+file = "scripts/tests/test_spawn_topo_review.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3c9c98dbb82983b9"
 domain = "code"
 file = "scripts/tests/test_spawn_topo_review.py"
 class = "not-a-gate"
@@ -14861,6 +14885,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "b9877dabf75dedff"
 domain = "code_file_rollup"
 file = "scripts/tests/test_norm_staleness_gates.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "d5661047011445d7"
+domain = "code_file_rollup"
+file = "scripts/tests/test_norm_staleness_pair_currency.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

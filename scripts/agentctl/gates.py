@@ -1015,8 +1015,10 @@ def pair_walk(state: SessionState, doc, plan_path: str) -> "list[dict]":
     """One row per review unit and pair — `pair` (the id), `kind` (`unit`/`pair`),
     `base`, `service`, `level`, `status`, `ready`, `waiting` — units first (in
     `review_units` order), then pairs (in `review_pairs` order). A unit's level is
-    its depth; a pair's level is its SERVICE's depth, so the service's unit is
-    reviewed before the pair at that level and the base's unit at an earlier one.
+    its depth; a pair's level is its SERVICE's depth (so the service's unit is
+    reviewed before the pair and the base's unit at an earlier level), pushed one
+    past its deepest prerequisite pair when that shares the depth (two bases of
+    one service) — a level's rows share no input and may run in one batch.
     Readiness is advisory: a row is ready once every prerequisite — the units of a
     unit's bases, the units of both a pair's ends, and the shallower pairs
     `pair_prereqs` names — is current or override."""
@@ -1025,6 +1027,18 @@ def pair_walk(state: SessionState, doc, plan_path: str) -> "list[dict]":
     pairs = review_pairs(doc)
     status = {rid: pair_status(state, doc, plan_path, rid) for rid in units + pairs}
     edges = [split_pair_id(pid) for pid in pairs]
+    pair_levels: "dict[str, int]" = {}
+
+    def pair_level(pid: str) -> int:
+        # Prerequisites have a strictly shallower base, so the recursion is well-founded.
+        if pid not in pair_levels:
+            service = split_pair_id(pid)[1]
+            pair_levels[pid] = max(
+                [depths[service]]
+                + [pair_level(q) + 1 for q in pair_prereqs(doc, pid, depths, pairs)]
+            )
+        return pair_levels[pid]
+
     rows = []
     for uid in units:
         node = unit_node(uid)
@@ -1041,7 +1055,7 @@ def pair_walk(state: SessionState, doc, plan_path: str) -> "list[dict]":
         waiting += [p for p in pair_prereqs(doc, pid, depths, pairs) if status[p] not in PAIR_SATISFIED]
         rows.append({
             "pair": pid, "kind": "pair", "base": str(b), "service": str(s),
-            "level": depths[s], "status": status[pid], "ready": not waiting,
+            "level": pair_level(pid), "status": status[pid], "ready": not waiting,
             "waiting": waiting,
         })
     return rows

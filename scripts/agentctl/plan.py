@@ -2620,6 +2620,31 @@ def _element_digest(stage: Stage, keys: dict[str, str], element: "str | None") -
     return keys[element]
 
 
+def _reviewed_stage_keys(stage: Stage) -> dict[str, str]:
+    """`stage_element_keys` with every whole-stage entry widened to what a
+    reviewer is shown of `stage`: the declared fields its file renders that no
+    question-target name covers (output artifacts, cost tier, ephemeral-artifacts
+    waiver, grants, script effects) join the whole-stage digest. Unchanged for a
+    stage declaring none of them. `stage_question_key` is left alone: a premise
+    stamp binds to the question vocabulary, which names none of these."""
+    keys = stage_element_keys(stage)
+    whole = keys[WHOLE_STAGE_ELEMENT]
+    rules, add_dirs = ((), ()) if not grants_place(stage) else grants_place(stage)[0]
+    effects = effects_place(stage)
+    extras = (
+        tuple(stage.output_artifacts),
+        stage.actor.cost_tier,
+        stage.ephemeral_artifacts_waiver,
+        tuple(sorted(rules)),
+        tuple(sorted(add_dirs)),
+        tuple(sorted(effects[0])) if effects else (),
+    )
+    if not any(extras):
+        return keys
+    reviewed = _sha256_hex(repr((whole, extras)))
+    return {name: reviewed if key == whole else key for name, key in keys.items()}
+
+
 def _supplied_by(doc: PlanDoc, b: int, s: int) -> tuple[Supply, ...]:
     """The typed edges of stage `b` on stage `s`."""
     return tuple(sup for sup in _stage_by_index(doc, b).supplies if sup.on == s)
@@ -2658,7 +2683,7 @@ def pair_content(doc: PlanDoc, pair_id: str) -> dict[str, str]:
     from .stage_norm import interface_token
     b, s = parse_pair(doc, pair_id)
     service = _stage_by_index(doc, int(s))
-    service_keys = stage_element_keys(service)
+    service_keys = _reviewed_stage_keys(service)
     iface = interface_token(service)
     if b == PAIR_BASE_NODE:
         entries = plan_coverage_entries(doc).get(int(s), ())
@@ -2676,7 +2701,7 @@ def pair_content(doc: PlanDoc, pair_id: str) -> dict[str, str]:
             "edge_norm": _sha256_hex(repr(("coverage", entries))),
         }
     base = _stage_by_index(doc, int(b))
-    base_keys = stage_element_keys(base)
+    base_keys = _reviewed_stage_keys(base)
     supplied = _supplied_by(doc, int(b), int(s))
     elements = sorted({_element_digest(base, base_keys, sup.element) for sup in supplied})
     if not supplied or any(sup.element is None for sup in supplied):
@@ -2722,7 +2747,7 @@ def unit_content(doc: PlanDoc, node: "int | str") -> dict:
         s.index for s in doc.stages if n in doc.raw_depends_on.get(s.index, ())
     ))
     return {
-        "stage": stage_element_keys(stage)[WHOLE_STAGE_ELEMENT],
+        "stage": _reviewed_stage_keys(stage)[WHOLE_STAGE_ELEMENT],
         "outbound": outbound,
         "depends_on": reliance,
         "inbound": inbound,

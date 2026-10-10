@@ -242,7 +242,7 @@ def assemble_prompt(
     resolved_plan = None if topo_bundle is not None else brief_plan_path(args)
     if topo_bundle is not None:
         plan_label = (
-            "## Working plan — topological review pair "
+            "## Working plan — topological review unit or pair "
             "(projected; the full plan is never inlined for --review-topo — "
             "see § File-access scope for the per-pair view directory)"
         )
