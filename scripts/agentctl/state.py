@@ -15,6 +15,7 @@ dataclass — the seam store.py persists.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
 import uuid
@@ -480,6 +481,31 @@ class Normalization:
     destination: str | None = None
 
 
+PARENT_DIFFICULTY_ENV = "AGENTCTL_PARENT_DIFFICULTY"
+
+
+def format_parent_difficulty(session: str, uid: str, level: int) -> str:
+    """The `AGENTCTL_PARENT_DIFFICULTY` value a spawn hands its child: `<session>:<uid>:<level>`."""
+    return f"{session}:{uid}:{level}"
+
+
+def parse_parent_difficulty(raw: str) -> dict | None:
+    """Inverse of `format_parent_difficulty`: `{"session", "uid", "level"}`, or None when
+    `raw` is not of that shape. The session id may itself contain `:`, hence the right split."""
+    parts = (raw or "").strip().rsplit(":", 2)
+    if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2].isdigit():
+        return None
+    return {"session": parts[0], "uid": parts[1], "level": int(parts[2])}
+
+
+def _legacy_difficulty_uid(d: dict) -> str:
+    """A stable uid for a pre-schema-48 record, derived from the sections it already holds."""
+    payload = {k: d.get(k) for k in
+               ("declaration", "investigation", "critique", "normalization", "norm_targets")}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+
+
 @dataclass
 class Difficulty:
     """One active difficulty: a plan-vs-reality divergence being worked through.
@@ -506,6 +532,10 @@ class Difficulty:
     level: int = 0
     origin: str = "stage"
     children: list["Difficulty"] = field(default_factory=list)
+    # The reason `normalize --normalization-waiver` recorded for a one-off factor, kept on
+    # the record (not inside `Normalization`, which an older engine builds with `**`) so an
+    # archived nested record shows how it was closed without a normalization.
+    normalization_waiver: str | None = None
 
     def complete(self) -> bool:
         return (
@@ -530,9 +560,12 @@ class Difficulty:
             critique=Critique(**crit) if crit else None,
             normalization=Normalization(**norm) if norm else None,
             norm_targets=[dict(t) for t in (d.get("norm_targets") or [])],
+            normalization_waiver=d.get("normalization_waiver"),
             # A record written before schema 48 carries no identity: it becomes a level-0
-            # stage-origin root with a fresh uid and no children.
-            uid=d.get("uid") or uuid.uuid4().hex[:12],
+            # stage-origin root. Its uid is derived from its content, not drawn at random,
+            # so every load of the same unsaved legacy file names the record the same way
+            # (a spawn exports it before any command has had a chance to save it).
+            uid=d.get("uid") or _legacy_difficulty_uid(d),
             parent_uid=d.get("parent_uid"),
             level=int(d.get("level") or 0),
             origin=d.get("origin") or "stage",

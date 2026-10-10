@@ -526,13 +526,14 @@ def difficulty_stack_blockers(state: SessionState) -> list[str]:
     ]
 
 
-def difficulty_close_blockers(state: SessionState, waiver: str | None = None) -> list[str]:
+def difficulty_close_blockers(state: SessionState) -> list[str]:
     """Precondition guardian for `difficulty-close`: the top (nested) record must be as
     complete as a record closing through `replan` has to be -- difficulty_blockers (the
     three sections, well-formed), a routed failure_address, and a recorded normalization.
-    A `waiver` stands in for the normalization only for a record that carries no norm
-    targets; one that names a norm the closing plan must change is closed on its real
-    record, as in `replan`. [] == may close."""
+    The waiver `normalize --normalization-waiver` stored on the record stands in for the
+    normalization only while the record carries no norm targets; one that names a norm
+    the closing plan must change is closed on its real record, as in `replan`.
+    [] == may close."""
     if state.node != Node.DIAGNOSING.value:
         return [f"difficulty-close runs only in the DIAGNOSING cycle; node={state.node}"]
     if not state.difficulty_stack:
@@ -548,14 +549,12 @@ def difficulty_close_blockers(state: SessionState, waiver: str | None = None) ->
     out = normalization_blockers(state)
     if not out:
         return []
-    if waiver is None:
+    if not (d.normalization_waiver or "").strip():
         return out
-    if not waiver.strip():
-        return ["normalization waiver reason must not be empty"]
     if d.norm_targets:
-        return ["the nested difficulty names norm target(s) the closing plan must change; a "
-                "--normalization-waiver is not accepted for it -- record the normalization "
-                "with normalize"]
+        return ["the nested difficulty names norm target(s) the closing plan must change; its "
+                "--normalization-waiver is not accepted -- record the normalization with "
+                "normalize --factor"]
     return []
 
 

@@ -130,6 +130,8 @@ from .state import (
     NORMALIZATION_DESTINATIONS,
     NORMALIZATION_LEVELS,
     Outcome,
+    PARENT_DIFFICULTY_ENV,
+    parse_parent_difficulty,
     PermissionRequest,
     PLAN_PRESENTATION_KIND_ESSENCE,
     PLAN_PRESENTATION_KIND_FULL,
@@ -644,7 +646,6 @@ def _difficulty_id(difficulty) -> str | None:
 # `difficulty-open` -- so the depth cap and the "never silently discard a declared record"
 # rule have exactly one place to live.
 
-PARENT_DIFFICULTY_ENV = "AGENTCTL_PARENT_DIFFICULTY"
 NESTED_DIFFICULTY_ORIGINS = ("replan", "normalize", "stage")
 
 
@@ -722,13 +723,6 @@ def _archive_difficulty(state: SessionState) -> None:
     state.difficulty = None
 
 
-def _parse_parent_difficulty(raw: str) -> dict | None:
-    parts = raw.rsplit(":", 2)
-    if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2].isdigit():
-        return None
-    return {"session": parts[0], "uid": parts[1], "level": int(parts[2])}
-
-
 def _adopt_parent_difficulty(state: SessionState) -> None:
     """Record the spawning session's open difficulty from `AGENTCTL_PARENT_DIFFICULTY`
     (`<session>:<uid>:<level>`). Idempotent; a malformed value is logged and ignored,
@@ -738,7 +732,7 @@ def _adopt_parent_difficulty(state: SessionState) -> None:
     raw = os.environ.get(PARENT_DIFFICULTY_ENV, "").strip()
     if not raw:
         return
-    parsed = _parse_parent_difficulty(raw)
+    parsed = parse_parent_difficulty(raw)
     if parsed is None:
         state.log("parent_difficulty_ignored", value=raw[:200])
         print(f"agentctl: ignoring malformed {PARENT_DIFFICULTY_ENV}={raw[:200]!r} "
@@ -1943,6 +1937,10 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     )
     runtime_host.bind_runtime_host(new, getattr(args, "host", None), require=False)
     _adopt_parent_difficulty(new)
+    if new.parent_difficulty is None and prior is not None and prior.parent_difficulty:
+        # The session was spawned under that parent difficulty; a later `reset` runs
+        # without the spawn's env and must not turn it into a parentless root.
+        new.parent_difficulty = dict(prior.parent_difficulty)
     new.log("reset", task=new.task_id, prior_task=(prior.task_id if prior else None))
     if reopening:
         # Counted in the accumulator, which survives this command; logged on the new
@@ -8816,6 +8814,9 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
         return Directive(False, state.node, "declare",
                          "normalize is out of order: declaration, investigation, and "
                          "critique must come first")
+    waiver = getattr(args, "normalization_waiver", None)
+    if waiver is not None:
+        return _record_normalization_waiver(args, state, store, waiver)
     error, factor = _normalize_record_fields(
         getattr(args, "factor", None), getattr(args, "level", None), getattr(args, "destination", None))
     if error:
@@ -8829,6 +8830,37 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
                      "renorming recorded; replan is now unblocked")
 
 
+def _record_normalization_waiver(args, state: SessionState, store: StateStore,
+                                 waiver: str) -> Directive:
+    """`normalize --normalization-waiver <reason>` at DIAGNOSING: the open record is
+    declared to expose a genuinely one-off factor, so it carries the reason instead of a
+    Normalization. It is the only way a NESTED record closes (`difficulty-close`) without
+    a factor; the root record closes through `replan`'s own waiver. Refused for an empty
+    reason, alongside a `--factor`, and for a record that names norm targets -- those
+    must be delivered by the closing plan, not waived."""
+    d = state.difficulty
+    refusal = None
+    if not waiver.strip():
+        refusal = "normalization waiver reason must not be empty"
+    elif (getattr(args, "factor", None) or "").strip():
+        refusal = ("normalize takes either --factor (the re-norming record) or "
+                   "--normalization-waiver (a one-off factor), not both")
+    elif d.norm_targets:
+        refusal = ("the difficulty record names norm target(s) the closing plan must "
+                   "change; a --normalization-waiver is not accepted for it")
+    if refusal:
+        _log_gate(state, "normalization_waiver", [refusal], passed=False)
+        return Directive(False, state.node, "normalize", refusal, data={"blockers": [refusal]})
+    d.normalization_waiver = waiver.strip()
+    state.log("normalization_waived", reason=d.normalization_waiver, uid=d.uid)
+    _log_gate(state, "normalization_waiver", [], passed=True)
+    store.save(state)
+    return Directive(True, state.node, "replan",
+                     "one-off factor recorded on the open record as a normalization waiver; "
+                     "a nested record may now difficulty-close (the root record closes "
+                     "through replan, which takes its own --normalization-waiver)")
+
+
 def _cmd_normalize_outside_diagnosing(args, state: SessionState, store: StateStore) -> Directive:
     """The record-only sibling of cmd_normalize's DIAGNOSING branch -- runs at any
     node from CLASSIFIED up to, but not including, RESOLVED (a RESOLVED session has
@@ -8839,6 +8871,10 @@ def _cmd_normalize_outside_diagnosing(args, state: SessionState, store: StateSto
         return Directive(False, state.node, "continue",
                          "normalize outside a difficulty cannot record against a "
                          "RESOLVED session")
+    if getattr(args, "normalization_waiver", None) is not None:
+        return Directive(False, state.node, "normalize",
+                         "--normalization-waiver applies to a difficulty being closed; "
+                         "outside a difficulty cycle there is nothing to waive")
     error, factor = _normalize_record_fields(
         getattr(args, "factor", None), getattr(args, "level", None), getattr(args, "destination", None))
     if error:
@@ -8901,8 +8937,7 @@ def cmd_difficulty_close(args, *, store: StateStore, runner: Runner | None = Non
     still has to deliver every norm edit; the closed record joins the parent's `children`.
     The root difficulty has no parent to resume and closes with `replan`."""
     state = _require(store, args.session)
-    waiver = getattr(args, "normalization_waiver", None)
-    blockers = gates.difficulty_close_blockers(state, waiver)
+    blockers = gates.difficulty_close_blockers(state)
     _log_gate(state, "difficulty_close", blockers, passed=not blockers)
     if blockers:
         d = state.difficulty
@@ -8920,9 +8955,6 @@ def cmd_difficulty_close(args, *, store: StateStore, runner: Runner | None = Non
                          "difficulty-close refused: " + "; ".join(blockers),
                          data={"blockers": blockers})
     closed = state.difficulty
-    waived = gates.normalization_blockers(state)
-    if waived and waiver is not None:
-        state.log("normalization_waived", reason=waiver, blockers=list(waived))
     parent = state.difficulty_stack.pop()
     held = {t.get("target"): t for t in parent.norm_targets}
     moved: list[str] = []
@@ -8930,7 +8962,11 @@ def cmd_difficulty_close(args, *, store: StateStore, runner: Runner | None = Non
         entry = dict(t)
         entry["source"] = closed.uid
         if entry.get("target") in held:
-            held[entry["target"]]["source"] = closed.uid
+            # Both records named the target: the closing child's entry (baseline
+            # included) replaces the parent's -- the child's is the later snapshot, and
+            # keeping the parent's stale digest would hold the file to an edit the
+            # child's own cycle has already accounted for.
+            held[entry["target"]].update(entry)
         else:
             parent.norm_targets.append(entry)
         moved.append(entry.get("target", ""))
@@ -10751,7 +10787,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("landing_waiver", ("resolve", "close")),
     ("resolution_ask_unverifiable", ("resolve", "close")),
     ("coverage_waiver", ("replan",)),
-    ("normalization_waiver", ("replan", "difficulty-close")),
+    ("normalization_waiver", ("replan", "normalize")),
     ("renegotiation_note", ("replan",)),
     ("bypass_reason", ("accept",)),
     ("reopen_reason", ("reset",)),
@@ -11420,9 +11456,15 @@ def build_parser() -> argparse.ArgumentParser:
                          "the agent home's skills/ or plans/); the closing replan must "
                          "change it")
     sp = add("normalize"); sp.add_argument("--session", required=True)
-    sp.add_argument("--factor", required=True,
+    sp.add_argument("--factor", default=None,
                     help="the reproducible cause the difficulty exposed, being re-normed "
-                         "(the ACT is mandatory at closure)")
+                         "(the ACT is mandatory at closure); required unless "
+                         "--normalization-waiver is given")
+    sp.add_argument("--normalization-waiver", dest="normalization_waiver", default=None,
+                    help="record the open difficulty as exposing a genuinely one-off factor "
+                         "instead of a re-norming; a reason, stored on the record and what "
+                         "lets a nested difficulty close without a factor (refused if empty, "
+                         "alongside --factor, and for a record that names norm targets)")
     sp.add_argument("--level", dest="level", default=None, choices=list(NORMALIZATION_LEVELS),
                     help="recording level (payoff-gated by rediscovery-threshold-min); omit "
                          "for an in-head note below the leaf threshold")
@@ -11438,10 +11480,6 @@ def build_parser() -> argparse.ArgumentParser:
                          "(replan), while re-norming (normalize), or from the stage's "
                          "own work (stage)")
     sp = add("difficulty-close"); sp.add_argument("--session", required=True)
-    sp.add_argument("--normalization-waiver", dest="normalization_waiver", default=None,
-                    help="close the nested difficulty WITHOUT a re-norming record when its "
-                         "factor is genuinely one-off; a recorded reason (refused if empty, "
-                         "and for a record that names norm targets)")
     sp = add("verify-final"); sp.add_argument("--session", required=True)
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG)")

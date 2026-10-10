@@ -46,6 +46,7 @@ from agentctl.plan import (  # parse the TOML plan for a single-stage brief proj
     parse_pair,
     parse_unit,
 )
+from agentctl.state import PARENT_DIFFICULTY_ENV, format_parent_difficulty
 from agentctl.render import (  # pure PlanDoc(+index) -> markdown; TopoUnitsCorrupt/materialize_topo_units do the one bit of I/O
     TopoUnitsCorrupt,
     materialize_topo_units,
@@ -1587,9 +1588,6 @@ def load_engine_stage_grants(
     return directive.data.get("grants", [])
 
 
-PARENT_DIFFICULTY_ENV = "AGENTCTL_PARENT_DIFFICULTY"
-
-
 def parent_difficulty_env_value(
     session_id: "str | None",
     state_root: "Path | None" = None,
@@ -1597,9 +1595,10 @@ def parent_difficulty_env_value(
     """`<session>:<uid>:<level>` naming the open difficulty of the engine session this
     spawn works for, or `None` when it has none (or the session cannot be read). The
     child engine adopts it at classify, so a difficulty opened inside the child nests
-    under the one that caused the spawn and the depth cap holds across the process
-    boundary. Same in-process engine seam as load_engine_stage_grants; a missing or
-    unreadable session is no reason to fail the spawn."""
+    under the one that caused the spawn and the child's own difficulty levels continue
+    from the parent's. Same in-process engine seam as load_engine_stage_grants; a
+    missing or unreadable session -- whatever the way it is unreadable -- is no reason
+    to fail the spawn."""
     if not session_id:
         return None
     from agentctl.store import FileStateStore
@@ -1607,11 +1606,11 @@ def parent_difficulty_env_value(
     store = FileStateStore(state_root) if state_root is not None else FileStateStore()
     try:
         state = store.load(session_id)
-    except (OSError, ValueError, KeyError):
+    except Exception:
         return None
     if state is None or state.difficulty is None:
         return None
-    return f"{session_id}:{state.difficulty.uid}:{state.difficulty.level}"
+    return format_parent_difficulty(session_id, state.difficulty.uid, state.difficulty.level)
 
 
 def load_or_create_evidence_dir(

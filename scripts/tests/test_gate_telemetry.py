@@ -211,4 +211,11 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     assert rows[10]["passed"] is True  # failure_address routed
     assert rows[11]["passed"] is True  # plan_review evaluated (vacuous, gate off)
     assert rows[12]["passed"] is True  # replan_authorization evaluated (vacuous, DIAGNOSING exempt)
-    assert rows[-1]["passed"] is True  # coverage satisfied
+    by_name = {r["gate"]: r for r in rows if r["gate"] in (
+        "normative_edit", "renorm_retention", "plan_approval_plugin", "replan_coverage")}
+    assert set(by_name) == {"normative_edit", "renorm_retention", "plan_approval_plugin",
+                            "replan_coverage"}
+    assert by_name["normative_edit"]["passed"] is True       # vacuous, stage 1 is edited
+    assert by_name["renorm_retention"]["passed"] is True     # vacuous
+    assert by_name["plan_approval_plugin"]["passed"] is True # vacuous
+    assert by_name["replan_coverage"]["passed"] is True      # coverage satisfied

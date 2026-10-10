@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 from argparse import Namespace
 from dataclasses import asdict
 from pathlib import Path
@@ -17,7 +18,8 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli
-from agentctl.state import Node, SessionState, StageStatus
+from agentctl import state as state_module
+from agentctl.state import Difficulty, Node, SessionState, StageStatus
 
 PARENT_ENV = "AGENTCTL_PARENT_DIFFICULTY"
 ESCALATE = "ESCALATE_TO_USER"
@@ -98,6 +100,11 @@ def _normalize(store, sid, factor="reproducible cause"):
     return cli.cmd_normalize(ns(session=sid, factor=factor, level="note"), store=store)
 
 
+def _waive(store, sid, reason="one-off, not reproducible", factor=None):
+    return cli.cmd_normalize(ns(session=sid, factor=factor, level=None, destination=None,
+                                normalization_waiver=reason), store=store)
+
+
 def _work(store, sid, *, failure_address="ресурсное", targets=None, normalize=True):
     """Declare, investigate, critique and (by default) normalize the open record."""
     _declare(store, sid)
@@ -111,8 +118,12 @@ def _open(store, sid, origin="replan"):
     return cli.cmd_difficulty_open(ns(session=sid, origin=origin), store=store)
 
 
-def _close(store, sid, waiver=None):
-    return cli.cmd_difficulty_close(ns(session=sid, normalization_waiver=waiver), store=store)
+def _close(store, sid):
+    return cli.cmd_difficulty_close(ns(session=sid), store=store)
+
+
+def _replan(store, sid, plan, **kw):
+    return cli.cmd_replan(ns(session=sid, plan=str(plan), **kw), store=store)
 
 
 def _norm_file(tmp_path, name="norm.md", text="norm v1\n"):
@@ -124,6 +135,54 @@ def _norm_file(tmp_path, name="norm.md", text="norm v1\n"):
 
 def _digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _plan_variant(tmp_path, fixtures_dir, name, *edits, base="plan_two_stage.toml"):
+    """A copy of a fixture plan with each (old, new) text edit applied once."""
+    text = (fixtures_dir / base).read_text(encoding="utf-8")
+    for old, new in edits:
+        assert old in text, old
+        text = text.replace(old, new, 1)
+    path = tmp_path / "work" / f"{name}.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _stage2_only_edit(tmp_path, fixtures_dir, name="stage2-only"):
+    """A plan that edits stage 2's norm and leaves stage 1's untouched."""
+    return _plan_variant(tmp_path, fixtures_dir, name,
+                         ('title = "Add tests"', 'title = "Add more tests"'))
+
+
+def _renorms_plan(tmp_path, fixtures_dir, path, name="renorms"):
+    """The base plan with stage 1 declaring that it edits `path`."""
+    return _plan_variant(
+        tmp_path, fixtures_dir, name,
+        ('output_artifacts = ["mod.py"]',
+         f'output_artifacts = ["mod.py"]\nrenorms = {json.dumps([str(path)])}'))
+
+
+def _blockers(d) -> str:
+    return " | ".join((d.data or {}).get("blockers", []))
+
+
+def _with_child_target(store, tmp_path, fixtures_dir, sid, *, parent_address, edit_after=False):
+    """A DIAGNOSING session whose parent record was critiqued `parent_address` and whose
+    closed nested child named a norm file; returns (file, child_uid)."""
+    path = _norm_file(tmp_path)
+    _diagnosing(store, sid, fixtures_dir)
+    _declare(store, sid)
+    _investigate(store, sid)
+    assert _critique(store, sid, parent_address).ok is True
+    assert _open(store, sid).ok is True
+    child_uid = store.load(sid).difficulty.uid
+    _work(store, sid, failure_address="нормативное", targets=[str(path)])
+    if edit_after:
+        path.write_text("norm v2\n", encoding="utf-8")
+    d = _close(store, sid)
+    assert d.ok is True, d.detail
+    return path, child_uid
 
 
 # --- identity ----------------------------------------------------------------
@@ -145,8 +204,9 @@ def test_uid_is_stable_across_recritique(store, fixtures_dir):
     _critique(store, "id2")
     first = store.load("id2").difficulty.uid
     _critique(store, "id2")
-    assert store.load("id2").difficulty.uid == first
-    assert first
+    assert first, "BEHAVIOUR: a difficulty record carries a stable uid"
+    assert store.load("id2").difficulty.uid == first, \
+        "BEHAVIOUR: a re-critique changed the record's uid"
 
 
 # --- migration ---------------------------------------------------------------
@@ -161,7 +221,7 @@ def test_older_state_files_load_with_stack_defaults(store, fixtures_dir, version
     data = asdict(live)
     for key in ("difficulty_stack", "parent_difficulty", "closed_difficulties"):
         data.pop(key, None)
-    for key in ("uid", "parent_uid", "level", "origin", "children"):
+    for key in ("uid", "parent_uid", "level", "origin", "children", "normalization_waiver"):
         data["difficulty"].pop(key, None)
     data["schema_version"] = version
     data["pending_renorms"] = [{"target": "stage:2", "kind": "stage", "baseline": "b"}]
@@ -177,6 +237,24 @@ def test_older_state_files_load_with_stack_defaults(store, fixtures_dir, version
     assert loaded.pending_renorms == data["pending_renorms"]
 
 
+def test_legacy_record_gets_the_same_uid_on_every_load(store, fixtures_dir):
+    """negative control: a record written before schema 48 names itself the same way each
+    time it is loaded, so a spawn's exported uid is the one the next load finds."""
+    _diagnosing(store, "mig-uid", fixtures_dir)
+    _declare(store, "mig-uid")
+    legacy = asdict(store.load("mig-uid").difficulty)
+    for key in ("uid", "parent_uid", "level", "origin", "children", "normalization_waiver"):
+        legacy.pop(key, None)
+    first = Difficulty.from_dict(dict(legacy)).uid
+    second = Difficulty.from_dict(dict(legacy)).uid
+    assert first == second, \
+        "BEHAVIOUR: a legacy record was given a different uid on a second load"
+    other = dict(legacy)
+    other["declaration"] = {**legacy["declaration"], "mismatch": "another mismatch"}
+    assert Difficulty.from_dict(other).uid != first, \
+        "BEHAVIOUR: two different legacy records share one uid"
+
+
 # --- nesting -----------------------------------------------------------------
 
 def test_difficulty_open_nests_under_the_open_record(store, fixtures_dir):
@@ -186,20 +264,23 @@ def test_difficulty_open_nests_under_the_open_record(store, fixtures_dir):
     d = _open(store, "n1", "replan")
     assert d.ok, d.detail
     state = store.load("n1")
-    assert state.difficulty.level == 1
-    assert state.difficulty.parent_uid == root_uid
-    assert state.difficulty.origin == "replan"
+    assert state.difficulty.level == 1, "BEHAVIOUR: a nested record is one level below its parent"
+    assert state.difficulty.parent_uid == root_uid, "BEHAVIOUR: a nested record names its parent"
+    assert state.difficulty.origin == "replan", "BEHAVIOUR: a nested record carries its origin"
     assert state.difficulty.declaration is None
-    assert [r.uid for r in state.difficulty_stack] == [root_uid]
-    assert state.difficulty_stack[0].declaration is not None  # suspended, not overwritten
+    assert [r.uid for r in state.difficulty_stack] == [root_uid], \
+        "BEHAVIOUR: the parent was not suspended on the stack"
+    assert state.difficulty_stack[0].declaration is not None, \
+        "BEHAVIOUR: the suspended parent lost its declaration"
 
 
 def test_difficulty_open_refused_outside_diagnosing(store, fixtures_dir):
     _executing(store, "n2", fixtures_dir)
     before = asdict(store.load("n2"))
     d = _open(store, "n2")
-    assert d.ok is False
-    assert asdict(store.load("n2")) == before
+    assert d.ok is False, "BEHAVIOUR: difficulty-open was accepted outside DIAGNOSING"
+    assert asdict(store.load("n2")) == before, \
+        "BEHAVIOUR: a refused difficulty-open changed the state"
 
 
 def test_replan_refused_while_a_nested_difficulty_is_open(store, fixtures_dir):
@@ -207,11 +288,10 @@ def test_replan_refused_while_a_nested_difficulty_is_open(store, fixtures_dir):
     _work(store, "n3")
     _open(store, "n3", "normalize")
     nested_uid = store.load("n3").difficulty.uid
-    d = cli.cmd_replan(ns(session="n3", plan=str(fixtures_dir / "plan_two_stage_refined.toml")),
-                       store=store)
-    assert d.ok is False
+    d = _replan(store, "n3", fixtures_dir / "plan_two_stage_refined.toml")
+    assert d.ok is False, "BEHAVIOUR: replan ran with a nested difficulty still open"
     assert d.action == "difficulty_close"
-    assert nested_uid in " ".join(d.data["blockers"])
+    assert nested_uid in _blockers(d)
     assert store.load("n3").node == Node.DIAGNOSING.value
     assert len(store.load("n3").difficulty_stack) == 1
 
@@ -229,13 +309,38 @@ def test_close_moves_norm_targets_to_the_parent_and_resumes_it(store, fixtures_d
     d = _close(store, "c1")
     assert d.ok, d.detail
     state = store.load("c1")
-    assert state.difficulty.uid == parent_uid
+    assert state.difficulty.uid == parent_uid, "BEHAVIOUR: the parent was not resumed"
     assert state.difficulty_stack == []
-    assert [c.uid for c in state.difficulty.children] == [child_uid]
+    assert [c.uid for c in state.difficulty.children] == [child_uid], \
+        "BEHAVIOUR: the closed record did not join its parent's children"
     moved = [t for t in state.difficulty.norm_targets if t["target"] == "stage:1"]
-    assert len(moved) == 1
-    assert moved[0]["source"] == child_uid
+    assert len(moved) == 1, "BEHAVIOUR: the child's norm target did not move to the parent"
+    assert moved[0]["source"] == child_uid, \
+        "BEHAVIOUR: the moved target is not tagged with the closed record's uid"
     assert moved[0]["baseline"]
+
+
+def test_unedited_stage_target_from_a_child_blocks_the_closing_replan(store, fixtures_dir, tmp_path):
+    """negative control: the target the child named is the parent's to deliver -- a closing
+    replan that leaves stage 1's norm unedited is refused, one that edits it is applied."""
+    _diagnosing(store, "c1b", fixtures_dir)
+    _declare(store, "c1b")
+    _investigate(store, "c1b")
+    _open(store, "c1b")
+    _work(store, "c1b", failure_address="нормативное", targets=["stage:1"])
+    assert _close(store, "c1b").ok is True
+    _critique(store, "c1b", "ресурсное")
+    _normalize(store, "c1b", factor="root factor")
+    before = store.path("c1b").read_bytes()
+    d = _replan(store, "c1b", _stage2_only_edit(tmp_path, fixtures_dir))
+    assert d.ok is False, \
+        "BEHAVIOUR: a closing replan left the child's stage:1 target unedited and was applied"
+    assert "stage:1" in _blockers(d)
+    assert store.path("c1b").read_bytes() == before, \
+        "BEHAVIOUR: a refused closing replan changed the state file"
+    d = _replan(store, "c1b", fixtures_dir / "plan_two_stage_refined.toml")
+    assert d.ok is True, f"BEHAVIOUR: an edit of the targeted stage was refused: {d.detail}"
+    assert store.load("c1b").pending_renorms == []
 
 
 def test_close_moves_a_target_whose_norm_was_already_edited(store, fixtures_dir, tmp_path):
@@ -251,9 +356,31 @@ def test_close_moves_a_target_whose_norm_was_already_edited(store, fixtures_dir,
     d = _close(store, "c2")
     assert d.ok, d.detail
     moved = [t for t in store.load("c2").difficulty.norm_targets if t["target"] == str(path)]
-    assert len(moved) == 1
-    assert moved[0]["baseline"] == original
+    assert len(moved) == 1, "BEHAVIOUR: an already-edited target was not moved to the parent"
+    assert moved[0]["baseline"] == original, \
+        "BEHAVIOUR: the moved target's baseline is not the digest the child recorded"
     assert moved[0]["source"] == child_uid
+
+
+def test_already_edited_file_target_still_needs_a_renorms_reference(store, fixtures_dir, tmp_path):
+    path = _norm_file(tmp_path)
+    _diagnosing(store, "c2b", fixtures_dir)
+    _declare(store, "c2b")
+    _investigate(store, "c2b")
+    _open(store, "c2b")
+    _work(store, "c2b", failure_address="нормативное", targets=[str(path)])
+    path.write_text("norm v2\n", encoding="utf-8")
+    assert _close(store, "c2b").ok is True
+    _critique(store, "c2b", "ресурсное")
+    _normalize(store, "c2b", factor="root factor")
+    before = store.path("c2b").read_bytes()
+    d = _replan(store, "c2b", fixtures_dir / "plan_two_stage_refined.toml")
+    assert d.ok is False, \
+        "BEHAVIOUR: a closing replan with no renorms reference was applied for the child's file target"
+    assert store.path("c2b").read_bytes() == before
+    d = _replan(store, "c2b", _renorms_plan(tmp_path, fixtures_dir, path))
+    assert d.ok is True, f"BEHAVIOUR: a closing replan naming the file was refused: {d.detail}"
+    assert store.load("c2b").node == Node.VERIFYING.value
 
 
 def test_close_refused_for_an_incomplete_nested_record(store, fixtures_dir):
@@ -263,9 +390,9 @@ def test_close_refused_for_an_incomplete_nested_record(store, fixtures_dir):
     _declare(store, "c3")
     before = asdict(store.load("c3"))
     d = _close(store, "c3")
-    assert d.ok is False
+    assert d.ok is False, "BEHAVIOUR: an incomplete nested record was closed"
     assert d.data["blockers"]
-    assert asdict(store.load("c3")) == before
+    assert asdict(store.load("c3")) == before, "BEHAVIOUR: a refused close changed the state"
 
 
 def test_close_without_failure_address_or_normalization_is_refused(store, fixtures_dir):
@@ -277,7 +404,7 @@ def test_close_without_failure_address_or_normalization_is_refused(store, fixtur
     _critique(store, "c4", failure_address=None)
     _normalize(store, "c4")
     unrouted = _close(store, "c4")
-    assert unrouted.ok is False
+    assert unrouted.ok is False, "BEHAVIOUR: an unrouted nested record was closed"
     assert unrouted.action == "critique"
     assert len(store.load("c4").difficulty_stack) == 1
     _critique(store, "c4", failure_address="ресурсное")
@@ -290,7 +417,7 @@ def test_close_without_normalization_is_refused(store, fixtures_dir):
     _open(store, "c4b")
     _work(store, "c4b", normalize=False)
     unnormalized = _close(store, "c4b")
-    assert unnormalized.ok is False
+    assert unnormalized.ok is False, "BEHAVIOUR: a nested record without a normalization was closed"
     assert unnormalized.action == "normalize"
     assert len(store.load("c4b").difficulty_stack) == 1
 
@@ -299,32 +426,21 @@ def test_close_with_no_nested_record_points_to_replan(store, fixtures_dir):
     _diagnosing(store, "c5", fixtures_dir)
     _work(store, "c5")
     d = _close(store, "c5")
-    assert d.ok is False
+    assert d.ok is False, "BEHAVIOUR: difficulty-close accepted a root record"
     assert d.action == "replan"
     assert store.load("c5").difficulty is not None
 
 
-def test_waiver_is_refused_for_a_target_bearing_nested_record(store, fixtures_dir):
-    _diagnosing(store, "c6", fixtures_dir)
-    _declare(store, "c6")
-    _investigate(store, "c6")
-    _open(store, "c6")
-    _work(store, "c6", failure_address="нормативное", targets=["stage:1"], normalize=False)
-    refused = _close(store, "c6", waiver="one-off")
-    assert refused.ok is False
-    after = store.load("c6")
-    assert len(after.difficulty_stack) == 1
-    assert after.difficulty.norm_targets
-
-
-def test_waiver_is_accepted_for_a_target_less_nested_record(store, fixtures_dir):
-    _diagnosing(store, "c7", fixtures_dir)
-    _declare(store, "c7")
-    _investigate(store, "c7")
-    _open(store, "c7")
-    _work(store, "c7", normalize=False)
-    assert _close(store, "c7", waiver="one-off, not reproducible").ok is True
-    assert store.load("c7").difficulty_stack == []
+def test_close_outside_diagnosing_is_refused_and_changes_nothing(store, fixtures_dir):
+    _executing(store, "c5b", fixtures_dir)
+    before = asdict(store.load("c5b"))
+    d = _close(store, "c5b")
+    assert d.ok is False, "BEHAVIOUR: difficulty-close was accepted outside DIAGNOSING"
+    assert d.action == "noop"
+    assert "DIAGNOSING" in " ".join(d.data["blockers"])
+    after = asdict(store.load("c5b"))
+    after["history"] = before["history"]  # the refusal's own gate-log row is the only change
+    assert after == before
 
 
 def test_closing_replan_files_the_closed_root_with_its_children(store, fixtures_dir):
@@ -338,15 +454,166 @@ def test_closing_replan_files_the_closed_root_with_its_children(store, fixtures_
     assert _close(store, "c8").ok
     _critique(store, "c8")
     _normalize(store, "c8", factor="root factor")
-    d = cli.cmd_replan(ns(session="c8", plan=str(fixtures_dir / "plan_two_stage_refined.toml")),
-                       store=store)
+    d = _replan(store, "c8", fixtures_dir / "plan_two_stage_refined.toml")
     assert d.ok, d.detail
     state = store.load("c8")
     assert state.difficulty is None
     filed = [r for r in state.closed_difficulties if r["uid"] == root_uid]
-    assert len(filed) == 1
-    assert [c["uid"] for c in filed[0]["children"]] == [child_uid]
+    assert len(filed) == 1, "BEHAVIOUR: the closed root was not filed in closed_difficulties"
+    assert [c["uid"] for c in filed[0]["children"]] == [child_uid], \
+        "BEHAVIOUR: the filed root lost its closed child"
     assert state.stage(1).outcome.status == StageStatus.PENDING.value
+
+
+# --- a child's target on a parent critiqued without a norm --------------------
+
+@pytest.mark.parametrize("parent_address", ["ресурсное", "not_applicable"])
+def test_child_file_target_binds_a_parent_that_was_not_critiqued_normative(
+        store, fixtures_dir, tmp_path, parent_address):
+    """negative control: the gate keys on the record carrying a norm target, not on its
+    `failure_address` label. A parent critiqued `parent_address` that inherited a file
+    target from a closed child keeps it through a re-critique, and its closing replan
+    must name the file in `renorms` -- no `--normalization-waiver` gets around that."""
+    sid = f"f1-{parent_address}"
+    path, child_uid = _with_child_target(
+        store, tmp_path, fixtures_dir, sid, parent_address=parent_address)
+    assert _critique(store, sid, parent_address).ok is True
+    kept = [t for t in store.load(sid).difficulty.norm_targets if t["target"] == str(path)]
+    assert len(kept) == 1, "BEHAVIOUR: a re-critique dropped the inherited file target"
+    assert kept[0]["source"] == child_uid, \
+        "BEHAVIOUR: a re-critique re-sourced the inherited target as its own"
+    _normalize(store, sid, factor="root factor")
+
+    before = store.path(sid).read_bytes()
+    refined = fixtures_dir / "plan_two_stage_refined.toml"
+    d = _replan(store, sid, refined)
+    assert d.ok is False, \
+        "BEHAVIOUR: a closing replan with no renorms reference was applied for an inherited file target"
+    assert store.path(sid).read_bytes() == before, \
+        "BEHAVIOUR: a refused closing replan changed the state file"
+
+    d = _replan(store, sid, refined, normalization_waiver="genuinely one-off")
+    assert d.ok is False, "BEHAVIOUR: a normalization waiver closed a target-bearing record"
+    state = store.load(sid)
+    assert state.node == Node.DIAGNOSING.value
+    assert not any(h.get("event") == "normalization_waived" for h in state.history), \
+        "BEHAVIOUR: the refused waiver was recorded as taken"
+
+    d = _replan(store, sid, _renorms_plan(tmp_path, fixtures_dir, path))
+    assert d.ok is True, f"BEHAVIOUR: a closing replan naming the file was refused: {d.detail}"
+    bound = store.load(sid).pending_renorms
+    assert [e["target"] for e in bound] == [str(path)], \
+        "BEHAVIOUR: the inherited file target was not bound as an owed edit"
+
+
+# --- target collision ---------------------------------------------------------
+
+def test_collision_takes_the_childs_baseline(store, fixtures_dir, tmp_path):
+    """negative control: both records named the same file; the file moved between their
+    snapshots. The parent ends up holding the closing child's entry, baseline included."""
+    path = _norm_file(tmp_path)
+    first = _digest(path)
+    _diagnosing(store, "col", fixtures_dir)
+    _declare(store, "col")
+    _investigate(store, "col")
+    assert _critique(store, "col", "нормативное", [str(path)]).ok is True
+    held = {t["target"]: t for t in store.load("col").difficulty.norm_targets}
+    assert held[str(path)]["baseline"] == first
+    path.write_text("norm v2\n", encoding="utf-8")
+    second = _digest(path)
+    assert _open(store, "col").ok is True
+    child_uid = store.load("col").difficulty.uid
+    _work(store, "col", failure_address="нормативное", targets=[str(path)])
+    assert _close(store, "col").ok is True
+    entries = [t for t in store.load("col").difficulty.norm_targets if t["target"] == str(path)]
+    assert len(entries) == 1, "BEHAVIOUR: a colliding target was entered twice"
+    assert entries[0]["source"] == child_uid
+    assert entries[0]["baseline"] == second, \
+        "BEHAVIOUR: a colliding target kept the parent's stale baseline instead of the child's"
+
+
+# --- the normalization waiver --------------------------------------------------
+
+def test_waiver_is_refused_for_a_target_bearing_nested_record(store, fixtures_dir):
+    _diagnosing(store, "c6", fixtures_dir)
+    _declare(store, "c6")
+    _investigate(store, "c6")
+    _open(store, "c6")
+    _work(store, "c6", failure_address="нормативное", targets=["stage:1"], normalize=False)
+    refused = _waive(store, "c6")
+    assert refused.ok is False, "BEHAVIOUR: a waiver was recorded on a target-bearing record"
+    after = store.load("c6")
+    assert after.difficulty.normalization_waiver is None
+    assert _close(store, "c6").ok is False, \
+        "BEHAVIOUR: a target-bearing nested record closed without a normalization"
+    assert len(store.load("c6").difficulty_stack) == 1
+
+
+def test_waiver_recorded_before_a_target_appears_no_longer_closes(store, fixtures_dir):
+    _diagnosing(store, "c6b", fixtures_dir)
+    _declare(store, "c6b")
+    _investigate(store, "c6b")
+    _open(store, "c6b")
+    _work(store, "c6b", normalize=False)
+    assert _waive(store, "c6b").ok is True
+    assert _critique(store, "c6b", "нормативное", ["stage:1"]).ok is True
+    refused = _close(store, "c6b")
+    assert refused.ok is False, \
+        "BEHAVIOUR: a waiver taken earlier closed a record that then named a norm target"
+    assert "stage:1" in _blockers(refused) or "norm target" in _blockers(refused)
+    assert len(store.load("c6b").difficulty_stack) == 1
+
+
+def test_waiver_closes_a_target_less_nested_record_and_is_archived(store, fixtures_dir):
+    _diagnosing(store, "c7", fixtures_dir)
+    _declare(store, "c7")
+    _investigate(store, "c7")
+    root_uid = store.load("c7").difficulty.uid
+    _open(store, "c7")
+    child_uid = store.load("c7").difficulty.uid
+    _work(store, "c7", normalize=False)
+    assert _waive(store, "c7", "one-off, not reproducible").ok is True
+    assert any(h.get("event") == "normalization_waived" for h in store.load("c7").history)
+    d = _close(store, "c7")
+    assert d.ok is True, d.detail
+    state = store.load("c7")
+    assert state.difficulty_stack == []
+    child = next(c for c in state.difficulty.children if c.uid == child_uid)
+    assert child.normalization_waiver == "one-off, not reproducible", \
+        "BEHAVIOUR: the closed record does not carry the waiver it closed on"
+    _critique(store, "c7")
+    _normalize(store, "c7", factor="root factor")
+    d = _replan(store, "c7", fixtures_dir / "plan_two_stage_refined.toml")
+    assert d.ok is True, d.detail
+    filed = next(r for r in store.load("c7").closed_difficulties if r["uid"] == root_uid)
+    assert [c["normalization_waiver"] for c in filed["children"]] == ["one-off, not reproducible"], \
+        "BEHAVIOUR: the archived record does not show the waiver"
+
+
+def test_waiver_with_a_factor_or_empty_reason_is_refused(store, fixtures_dir):
+    _diagnosing(store, "c7b", fixtures_dir)
+    _work(store, "c7b", normalize=False)
+    assert _waive(store, "c7b", "reason", factor="a factor").ok is False, \
+        "BEHAVIOUR: normalize accepted a --factor together with a --normalization-waiver"
+    assert _waive(store, "c7b", "   ").ok is False, \
+        "BEHAVIOUR: an empty waiver reason was recorded"
+    assert store.load("c7b").difficulty.normalization_waiver is None
+
+
+def test_waiver_outside_a_difficulty_cycle_is_refused(store, fixtures_dir):
+    _executing(store, "c7c", fixtures_dir)
+    before = asdict(store.load("c7c"))
+    d = _waive(store, "c7c")
+    assert d.ok is False, "BEHAVIOUR: a normalization waiver was accepted outside DIAGNOSING"
+    assert asdict(store.load("c7c")) == before
+
+
+def test_difficulty_close_takes_no_waiver_argument():
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["difficulty-close", "--session", "s", "--normalization-waiver", "x"])
+    args = parser.parse_args(["normalize", "--session", "s", "--normalization-waiver", "x"])
+    assert args.normalization_waiver == "x"
 
 
 # --- the depth cap -----------------------------------------------------------
@@ -358,9 +625,10 @@ def test_difficulty_open_at_the_cap_leaves_state_unchanged(store, fixtures_dir):
     assert store.load("cap1").difficulty.level == _cap() - 1
     before = asdict(store.load("cap1"))
     d = _open(store, "cap1")
-    assert d.ok is False
+    assert d.ok is False, "BEHAVIOUR: a difficulty was opened at the depth cap"
     assert d.marker == ESCALATE
-    assert asdict(store.load("cap1")) == before
+    assert asdict(store.load("cap1")) == before, \
+        "BEHAVIOUR: a refused difficulty-open at the cap changed the state"
 
 
 def test_child_failed_result_at_cap_escalates(store, fixtures_dir, monkeypatch):
@@ -383,7 +651,7 @@ def test_declare_behind_a_withheld_record_is_refused_at_the_cap(store, fixtures_
     _executing(store, "cap3", fixtures_dir)
     _fail(store, "cap3")
     d = _declare(store, "cap3")
-    assert d.ok is False
+    assert d.ok is False, "BEHAVIOUR: declare opened a record at the depth cap"
     assert d.marker == ESCALATE
     assert store.load("cap3").difficulty is None
 
@@ -393,7 +661,8 @@ def test_child_below_the_cap_still_records_its_difficulty(store, fixtures_dir, m
     _executing(store, "cap4", fixtures_dir)
     d = _fail(store, "cap4")
     assert d.marker == "OVERCOME-DIFFICULTY"
-    assert store.load("cap4").difficulty.level == _cap() - 1
+    assert store.load("cap4").difficulty.level == _cap() - 1, \
+        "BEHAVIOUR: a child below the cap did not record its difficulty at the inherited level"
 
 
 # --- across a spawn ----------------------------------------------------------
@@ -410,7 +679,8 @@ def test_child_difficulty_inherits_parent_level(store, fixtures_dir, monkeypatch
     assert getattr(d, "parent_uid", None) == "abc123def456", \
         "BEHAVIOUR: a child's root names the spawning difficulty as its parent"
     inherited = getattr(store.load("ch1"), "parent_difficulty", None)
-    assert inherited == {"session": "parent-session", "uid": "abc123def456", "level": 1}
+    assert inherited == {"session": "parent-session", "uid": "abc123def456", "level": 1}, \
+        f"BEHAVIOUR: the spawning difficulty was not recorded on the child session: {inherited!r}"
 
 
 @pytest.mark.parametrize("raw", ["garbage", "a:b", "s:uid:notanumber", ":uid:2", "s::2"])
@@ -418,10 +688,34 @@ def test_malformed_parent_difficulty_is_ignored(store, fixtures_dir, monkeypatch
     monkeypatch.setenv(PARENT_ENV, raw)
     _diagnosing(store, "ch2", fixtures_dir)
     state = store.load("ch2")
-    assert state.difficulty.level == 0
+    assert state.difficulty.level == 0, "BEHAVIOUR: a malformed parent value shifted the level"
     assert state.difficulty.origin == "stage"
     assert getattr(state, "parent_difficulty", None) is None
-    assert PARENT_ENV in capsys.readouterr().err
+    assert PARENT_ENV in capsys.readouterr().err, \
+        "BEHAVIOUR: a malformed parent value was ignored silently"
+
+
+def test_reset_without_the_spawn_env_keeps_the_parent_link(store, fixtures_dir, monkeypatch):
+    """negative control: a session spawned under a parent difficulty stays under it across
+    a `reset`, which runs without the spawn's environment."""
+    monkeypatch.setenv(PARENT_ENV, "parent-session:abc123def456:1")
+    _diagnosing(store, "ch3", fixtures_dir)
+    monkeypatch.delenv(PARENT_ENV)
+    d = cli.cmd_reset(ns(session="ch3", task="difficulty-stack-2", goal="", done_criterion="",
+                         criterion_type="measurable", recursion_depth=0, force=True),
+                      store=store)
+    assert d.ok is True, d.detail
+    inherited = getattr(store.load("ch3"), "parent_difficulty", None)
+    assert inherited == {"session": "parent-session", "uid": "abc123def456", "level": 1}, \
+        f"BEHAVIOUR: a reset dropped the session's parent difficulty link: {inherited!r}"
+
+
+def test_env_format_and_parse_live_in_one_module():
+    assert cli.PARENT_DIFFICULTY_ENV == state_module.PARENT_DIFFICULTY_ENV == PARENT_ENV
+    assert SPAWN.PARENT_DIFFICULTY_ENV == state_module.PARENT_DIFFICULTY_ENV
+    raw = state_module.format_parent_difficulty("a:b", "uid1", 3)
+    assert state_module.parse_parent_difficulty(raw) == {"session": "a:b", "uid": "uid1", "level": 3}
+    assert state_module.parse_parent_difficulty("nonsense") is None
 
 
 class _Launched(Exception):
@@ -471,11 +765,27 @@ def test_spawn_without_an_open_difficulty_exports_nothing(store, fixtures_dir, t
     _executing(store, "sp2", fixtures_dir)
     env = _spawned_env(monkeypatch, tmp_path, fixtures_dir, "sp2",
                        inherited="grandparent:ffff00000000:0")
-    assert PARENT_ENV not in env  # a stale ancestor value is not passed on either
+    assert PARENT_ENV not in env, \
+        "BEHAVIOUR: a spawn with no open difficulty passed a stale ancestor value on"
 
 
 def test_spawn_for_an_unknown_session_still_launches(store, fixtures_dir, tmp_path, monkeypatch):
     env = _spawned_env(monkeypatch, tmp_path, fixtures_dir, "no-such-session")
+    assert PARENT_ENV not in env
+
+
+def test_spawn_for_an_unloadable_session_still_launches(store, fixtures_dir, tmp_path, monkeypatch):
+    """negative control: a state file the engine cannot build a SessionState from (here a
+    section with a field this engine does not know) must not fail the spawn."""
+    _diagnosing(store, "sp4", fixtures_dir)
+    _declare(store, "sp4")
+    path = store.path("sp4")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["difficulty"]["declaration"]["unknown_field"] = 1
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(Exception):
+        store.load("sp4")
+    env = _spawned_env(monkeypatch, tmp_path, fixtures_dir, "sp4")
     assert PARENT_ENV not in env
 
 
