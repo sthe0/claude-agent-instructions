@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import advisor, cli, dispatch, gates, permissions
+from agentctl import advisor, checkrun, cli, dispatch, gates, permissions
 from agentctl.dispatch import RunResult
 from agentctl.plan import load_plan
 
@@ -62,6 +62,8 @@ def spawned(monkeypatch, tmp_path):
 
     for module in (cli, advisor, dispatch, permissions):
         monkeypatch.setattr(module, "subprocess_runner", recorder)
+    # The stage-check observer falls back to a Popen runner when no runner is passed in.
+    monkeypatch.setattr(checkrun, "_default_runner", lambda timeout_s: recorder)
     monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
     monkeypatch.setenv("AGENTCTL_ADVISOR", "1")
     monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
@@ -264,10 +266,11 @@ def test_a_deliverable_changing_edit_stales_the_order_elements_and_the_acceptanc
 
     assert d.ok, d.detail
     assert d.data["acceptance_stale"] == STAGE_6_BOUND_REQUIREMENTS
-    for requirement in STAGE_6_BOUND_REQUIREMENTS:
-        assert requirement in d.detail
+    # Both texts render the id list as a whole, so "R1" cannot be satisfied by "R10".
+    rendered = str(STAGE_6_BOUND_REQUIREMENTS)
+    assert rendered in d.detail
     blockers = gates._acceptance_review_resolution_blockers(store.load(SID))
-    assert len(blockers) == 1 and all(r in blockers[0] for r in STAGE_6_BOUND_REQUIREMENTS)
+    assert len(blockers) == 1 and rendered in blockers[0]
     assert set(_stale(store, plan)) == {"unit:base", "unit:6", "base-6", "7-6"}
 
 
@@ -280,5 +283,6 @@ def test_no_real_runner_is_reachable_during_the_replay(
 
     for module in (cli, advisor, dispatch, permissions):
         module.subprocess_runner(["claude", "-p", module.__name__])
-    assert len(spawned) == 4
+    checkrun._default_runner(1.0)(["pytest"])
+    assert len(spawned) == 5
     spawned.clear()
