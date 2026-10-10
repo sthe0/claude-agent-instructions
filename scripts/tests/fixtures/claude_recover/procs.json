@@ -1,0 +1,21 @@
+{
+  "100": {"ppid": 1, "comm": "bash", "argv": ["-bash"], "environ": {}},
+  "101": {
+    "ppid": 100,
+    "comm": "claude",
+    "argv": ["/usr/bin/claude", "--dangerously-skip-permissions", "--resume", "sess-aaa", "--model", "opus", "--settings", "{\"apiKeyHelper\":\"SECRET-SETTINGS\"}", "fix the bug SECRET-PROMPT"],
+    "environ": {
+      "PATH": "/usr/bin",
+      "HOME": "/home/u",
+      "CLAUDE_PERSONAL": "1",
+      "CLAUDE_CONFIG_DIR": "/home/u/.claude-agent",
+      "ANTHROPIC_API_KEY": "SECRET-TOKEN-123",
+      "ANTHROPIC_CUSTOM_HEADERS": "X-Profile: work\nAuthorization: Bearer SECRET-HDR-VALUE"
+    }
+  },
+  "200": {"ppid": 1, "comm": "claude", "argv": ["claude"], "environ": {"CLAUDE_PERSONAL": "1"}},
+  "250": {"ppid": 200, "comm": "claude", "argv": ["claude", "-p", "nested job SECRET-NESTED"], "environ": {"CLAUDE_PERSONAL": "1"}},
+  "300": {"ppid": 1, "comm": "bash", "argv": ["-bash"], "environ": {}},
+  "301": {"ppid": 300, "comm": "claude", "argv": ["claude", "--resume=sess-ccc", "--append-system-prompt=SECRET-SYS"], "environ": {"CLAUDE_CONFIG_DIR": "/home/u/.claude-agent"}},
+  "900": {"ppid": 1, "comm": "claude", "argv": ["claude"], "environ": {}}
+}

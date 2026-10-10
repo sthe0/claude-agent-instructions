@@ -8031,6 +8031,9 @@ def _landing_gate(state: SessionState, args, runner: Runner | None) -> tuple[lis
 
 
 RESOLUTION_ASK_BLOCKER_PREFIX = "resolution ask: "
+RESOLUTION_ASK_RULE_HINT = ("the marker must be inside an option label or description (not the question text), "
+                            "and the order must be land -> verify-final -> ask -> resolve with no "
+                            "verify-final between the ask and resolve")
 
 
 def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
@@ -8053,7 +8056,8 @@ def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
     verified_at = stamps[-1].get("at") if stamps else None
     if not isinstance(verified_at, (int, float)):
         return [prefix + "no precise verify-final stamp is recorded for this session — "
-                         "re-run verify-final, then ask the resolution question"], record
+                         "re-run verify-final, then ask the resolution question; "
+                         + RESOLUTION_ASK_RULE_HINT], record
     path = _present_plan_transcript(state.session_id)
     calls = transcript_turns.ask_user_question_calls(path) if path is not None else None
     given = getattr(args, "resolution_ask_unverifiable", None)
@@ -8079,11 +8083,12 @@ def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
     if not after and any(ts is None for ts, _ in marked):
         return [prefix + f"a {RESOLUTION_ASK_MARKER!r} ask has a missing or unparsable timestamp "
                          "in the transcript, so its order against verify-final cannot be "
-                         "established — ask the resolution question again" + escape_note], record
+                         "established — ask the resolution question again; "
+                         + RESOLUTION_ASK_RULE_HINT + escape_note], record
     if not after:
         return [prefix + f"the {RESOLUTION_ASK_MARKER!r} ask predates the latest verify-final — "
-                         "ask the resolution question again now that final verification has passed"
-                         + escape_note], record
+                         "ask the resolution question again now that final verification has passed; "
+                         + RESOLUTION_ASK_RULE_HINT + escape_note], record
     if not any(after):
         return [prefix + f"the {RESOLUTION_ASK_MARKER!r} ask after verify-final has not been "
                          "answered — resolve only after the user answers it" + escape_note], record

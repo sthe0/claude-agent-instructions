@@ -62,6 +62,10 @@ claude-task() { _dispatch_agent claude default "$@"; }
 # once (or set CLAUDE_CONFIG_DIR=$CLAUDE_AGENT_HOME and run `claude /login`).
 claude-agent() { env CLAUDE_CONFIG_DIR="$CLAUDE_AGENT_HOME" claude "$@"; }
 
+# ── claude-recover (post-reboot restore of mounts and claude sessions) ────────
+# Delegates to claude-recover.py; with no subcommand that script runs `restore`.
+claude-recover() { python3 "$_LAUNCHERS_SCRIPTS_DIR/claude-recover.py" "$@"; }
+
 # ── claude-<P> (one per machine-local profile, induced at source time) ────────
 # On an unconfigured machine (_auth_list_ns claude returns only 'default'), this
 # loop defines no extra commands and only claude-task is available.

@@ -310,6 +310,19 @@ CODE_PARTITIONS = [
         "Channel adapter selection keyed on machine-local config identity, not "
         "free-text meaning.",
     ),
+    (
+        "scripts/reaper/**",
+        lambda f: f.startswith("scripts/reaper/"),
+        "structural",
+        "keep",
+        "The regexes here match machine-made names, never free text: the runner "
+        "rewrites a reaper's NAME into a stamp file name (characters outside "
+        "letters, digits, dot, underscore, hyphen become underscore), and the "
+        "agentctl-state reaper selects plain <session>.json file names written by "
+        "agentctl's own store. Removal decisions are made from verdicts that carry "
+        "a path, an action and a reason, and from structured fields (a JSON node "
+        "value, an mtime, git output).",
+    ),
     # Same purpose as the judge-guarded rows above: the catch-all's ground names
     # the regexes IT inspected (markdown headings, frontmatter delimiters, shell
     # command prefixes), so a file that parses something else inherits a ground

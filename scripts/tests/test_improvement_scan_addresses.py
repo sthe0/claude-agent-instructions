@@ -350,7 +350,7 @@ def test_unranked_item_with_addresses_yields_no_finding():
         [],
     )
 
-    assert findings == [] and no_urgency == ["ref-1"]
+    assert [f.source_ref for f in findings] == ["ref-1"] and no_urgency == ["ref-1"]
     assert board.items["ref-1"].addresses == (K1,)
 
 

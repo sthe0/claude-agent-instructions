@@ -250,6 +250,11 @@ DESIRED = [
     # says nothing about whether tomorrow's call population still fits under
     # it. Fail-open, never blocks.
     ("SessionStart",     None,    "hook-judge-ceiling-drift-due.py", 15),
+    # Stale-residue cleanup: runs every registered reaper (Core built-ins, the machine-local
+    # reaper-plugins dir, the project's .claude/reapers) under the shared throttle, ownership,
+    # keep-wins, removal-log and error-isolation rules. Always exits 0. The timeout covers one git
+    # status + cherry per stale worktree. Contract: docs/operations/reapers.md.
+    ("SessionStart",     None,    "hook-reaper.py",                  60),
     # End-of-turn GATE (not advisory): a loop-safe shell running a registry of
     # pure turn-boundary guardians. Blocks a stop when any guardian reports an
     # unmet obligation (today: the last user message carried an agent-behavior-

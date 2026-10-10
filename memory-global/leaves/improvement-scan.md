@@ -37,9 +37,18 @@ the script's own closed vocabularies gate.
   value; optional `addresses` — 12-hex telemetry store keys the item removes,
   shape-checked at phase B and joined to the cluster's measured cost at
   report time) and merges item metadata from `--worklist` (a gap exits 2 naming the ref),
-  scores and ranks via
-  `score(item) = breadth_weight × recurrence_mass / cost_to_resolve`, and
-  writes both the new board to the state file and `Finding` rows to the durable store.
+  keeps the old rubric score (breadth_weight × recurrence_mass / cost_to_resolve) as a
+  tie-break input only, and writes both the new board to the state file and `Finding` rows to
+  the durable store. Phase B also takes the loss fields the model judges: `signatures`,
+  `minutes_per_occurrence` with `minutes_basis`, `precision` with `precision_sample`, `family`,
+  `silent_estimate`.
+- **`loss` subcommand** — the third input, reading session transcripts. It counts the distinct
+  sessions per window that show an item's signature, adjusts by the judged precision, and ranks
+  the board by min/week (est sessions × min/occurrence ÷ (days/7)). A family of overlapping
+  items is one row whose loss is taken over the union of its members' sessions, never summed.
+  Items without a signature go to the silent lane with a qualitative estimate; items with
+  neither are listed as awaiting classification. Severity and fix cost are tie-break inputs
+  only. Counting rules, hit cache and flags: `docs/operations/improvement-scan.md`.
 - **`telemetry` subcommand** — scans recent session ledgers for recurring
   friction patterns. Two modes: scan mode (`--emit-evidence`) reads the policy
   ledger and spawn rows since the last cursor position and emits an evidence
@@ -81,6 +90,9 @@ dispatches a specialist, or picks an item to work on — asserted by
 Boundary): it hands the user one ranked report and stops; starting work on any
 one finding is a separate, later, explicit appeal naming that finding — the
 same invariant [[backlog-triage-practice]] states for its own procedure step 6.
+
+The `loss` subcommand stays inside this boundary: it reads transcripts and rewrites the board
+file and findings store, and it only ranks. It files nothing and selects no work.
 
 ### The due-hook is a nudge, not a trigger
 

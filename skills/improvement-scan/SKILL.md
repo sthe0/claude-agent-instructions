@@ -57,7 +57,14 @@ Procedure step 6).
    text per `backlog-triage-practice.md` § Priority rubric, never guessed.
    Do not copy the item's title, ground, severity, `severity_labeled`, evidence
    or digest: phase B merges them from the worklist. An item with no severity
-   label and no cluster-mate stays unscored as no-urgency-signal. Write
+   label is still placed in a lane (below), never dropped. Supply the loss
+   fields too: `signatures` (observable strings its failure leaves in a
+   transcript), `minutes_per_occurrence` with `minutes_basis`, `family` (a
+   shared id for items describing one failure), and for an item with no
+   observable signature a `silent_estimate` instead. An item already on the
+   board takes an amendment-only entry carrying just these keys (and
+   `addresses`); phase A's `loss_unclassified` lists board items that still
+   have neither signatures nor a silent estimate. Write
    `classifications.json` as `{"items": {<ref>: {...}}, "closed_refs": [...]}`
    with `worklist.json`'s `closed_refs`.
 
@@ -74,6 +81,18 @@ Procedure step 6).
    2 naming the ref; an out-of-vocabulary
    value is rejected before anything is written — fix the classification and
    rerun rather than loosening the vocabulary.
+
+4a. **Loss step** (count, then judge precision):
+   ```
+   python3 scripts/improvement-scan.py loss --emit-samples samples.json
+   ```
+   Counts, per item with signatures, the distinct sessions whose transcripts
+   hit a signature in the window, and ranks the board by min/week. For each
+   item in `samples.json` (precision missing or judged on another signature
+   set), judge the excerpts as real occurrence or not and amend the item with
+   `precision` and `precision_sample` `{n, true}`; rerun phase B with that
+   amendment, then `loss` again. Until judged, precision is 1 and shown as an
+   upper bound. Rule and edge cases: `docs/operations/improvement-scan.md`.
 
 5. **Telemetry producer, scan mode:**
    ```
@@ -108,12 +127,16 @@ Procedure step 6).
    ```
    python3 scripts/improvement-scan.py report --store <store> --format md
    ```
-   The renderer ranks cost-first across both producers and never interleaves
-   measured and unmeasured bands — present its output as-is, in the dialogue
+   The report opens with the measured-loss lane (min/week,
+   sessions/window, min/occurrence, basis; a family is one row); the measured
+   findings follow, then the silent lane (qualitative estimate, no
+   signature) and awaiting loss classification, then the unmeasured
+   findings. Findings are ranked cost-first, and measured and unmeasured
+   bands are never interleaved. Severity and fix cost are tie-break
+   inputs only. Present its output as-is, in the dialogue
    language, with the recommended next step already attached per finding. A
    backlog item ranked at an addressed cluster's cost carries a `via <key>`
-   note; keys matching no open telemetry row are listed as dangling. Items
-   without a rank (no-urgency-signal, unjudged) are not joined.
+   note; keys matching no open telemetry row are listed as dangling.
 
 9. **Optionally republish the board as a human-readable view** rendered from
    the state file (`Artifact action:"publish"`, the current `url:` named in
