@@ -2,7 +2,7 @@
 name: redispatch-continuity-check
 description: Before re-dispatching a stage that was dispatched before, check the repo's existing .claude/worktrees/* and run the stage's verify_command against them — agentctl dispatch forks a fresh worktree for an independent stage every time, so finished work is silently re-derived from zero.
 created: 2026-08-28
-last_verified: 2026-08-28
+last_verified: 2026-10-10
 schema: leaf/v1
 type: reference
 ---
@@ -58,6 +58,19 @@ Two mechanical facts that turn a re-dispatch into a *guaranteed* dead end:
 returned `None`. Read a declared field back through the loader — never trust the
 prose that claims it was written. (Instance of [[doubt-own-snapshot]] applied to an
 artifact you authored yourself.)
+
+**Re-attestation after a substantive replan is OPT-IN: `dispatch --re-attest`.**
+A substantive `replan` re-arms every PASSED stage to PENDING and builds a
+`reattest_stash` entry per stage (`operative_surface_matched`, prior outcome,
+digest). Plain `dispatch` NEVER consults that stash — `cli.py::cmd_dispatch` calls
+`_try_reattest` only under `if args.re_attest`, and otherwise runs the full,
+byte-identical developer spawn. Seen 2026-10-10: a plain `dispatch` on a re-armed
+stage 2 spawned a sonnet developer ($0.57, 5 min) that re-ran the verify command and
+changed nothing. Rule: after any substantive replan, dispatch a formerly-PASSED
+stage with `dispatch --session <s> --re-attest`; it re-runs the stage's own
+verify_command/landed check in its venue and returns PASSED without a spawn when
+the stash still matches (a declined re-attest logs `reattest_declined` and falls
+through to the normal spawn).
 
 ## See also
 
