@@ -428,6 +428,15 @@ def _no_ambient_project_dir(monkeypatch):
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _record_experience_no_worktree_routing(request, monkeypatch):
+    """Keep in-process record-experience main() tests off the real canon.
+
+    test_worktree_route.py sets its own environment."""
+    if request.module.__name__.startswith("test_record_experience_"):
+        monkeypatch.setenv("WORKTREE_ROUTE_DISABLE", "1")
+
+
 
 @pytest.fixture(autouse=True)
 def _default_claude_runtime_host(monkeypatch):
