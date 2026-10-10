@@ -693,9 +693,9 @@ def plan_review_pair_scope(scope: str) -> "str | None":
 # plan.review_pairs). Recorded by cmd_plan_review's `--scope topo:<id>` branch, kept in
 # SessionState.plan_pair_reviews keyed by review id (never in plan_review /
 # plan_stage_reviews / plan_review_passes, which stay reserved for whole-plan and
-# stage:<n> records). ONE record type serves every unit and pair: a unit has
-# `service == ""` and holds its currency in `unit_norm`; a pair holds `base` and
-# `service` (a stage index or "base"). Records written for the retired ids `plan-<s>`,
+# stage:<n> records). ONE record type serves every unit and pair: a unit has its node
+# in `base` and `service == ""`, and holds its currency in `unit_norm`; a pair holds
+# `base` and `service` (a stage index or "base"). Records written for the retired ids `plan-<s>`,
 # `base-plan` and `unit:plan` still load and count as stale (plan.is_legacy_review_id).
 #
 # A record binds to the content its reviewer was shown: the digests of

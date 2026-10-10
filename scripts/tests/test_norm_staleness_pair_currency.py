@@ -22,8 +22,9 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli, gates
+from agentctl import plugins_obligations as obligations
 from agentctl.plan import load_plan, pair_binding, review_pairs
-from agentctl.state import GateRecord, PlanPairReview, SessionState
+from agentctl.state import GateRecord, Node, PlanPairReview, SessionState, StageStatus
 from agentctl.store import FileStateStore
 
 SID = "currency-s"
@@ -592,3 +593,201 @@ def test_pc41_a_prerequisite_pair_sits_at_a_strictly_earlier_level_than_its_depe
         for prereq in gates.pair_prereqs(doc, pid):
             assert levels[prereq] < levels[pid], (pid, prereq)
     assert levels["4-1"] < levels["2-1"]
+
+
+# --- base-<s>: the evidence is what the bundle shows of s --------------------------
+
+
+def _covered_stage_one(*, blank_interface: bool) -> dict:
+    data = _fan_in()
+    data["meta"] = _meta(coverage={"R1": ["stage 1 verify_command"]})
+    if blank_interface:
+        data["stage"][0].update(expected_result_image=" ", done_criterion=" ")
+    return data
+
+
+def test_pc42_blank_interface_service_goes_stale_on_a_material_edit_in_its_base_pair(make_env):
+    env = make_env(_covered_stage_one(blank_interface=True))
+    env.record_ok("base-1")
+    env.edit(_set(0, material="the files this stage reads, restated"))
+    assert env.status("base-1") == "stale:service"
+
+
+def test_pc43_blank_interface_service_goes_stale_on_an_output_artifacts_edit_in_its_base_pair(make_env):
+    env = make_env(_covered_stage_one(blank_interface=True))
+    env.record_ok("base-1")
+    env.edit(_set(0, output_artifacts=["build/out.txt"]))
+    assert env.status("base-1").startswith("stale:")
+
+
+def test_pc44_declared_product_service_keeps_its_base_pair_on_an_edit_the_bundle_hides(make_env):
+    env = make_env(_covered_stage_one(blank_interface=False))
+    env.record_ok("base-1")
+    env.edit(_set(0, material="the files this stage reads, restated"))
+    assert env.status("base-1") == "current"
+    env.edit(_set(0, method="stage 1 method, rewritten"))
+    assert env.status("base-1") == "current"
+
+
+def test_pc45_declared_product_service_goes_stale_on_the_output_artifacts_its_bundle_shows(make_env):
+    env = make_env(_covered_stage_one(blank_interface=False))
+    env.record_ok("base-1")
+    env.edit(_set(0, output_artifacts=["build/out.txt"]))
+    assert env.status("base-1") == "stale:service_iface"
+
+
+def test_pc46_base_pair_bundle_of_a_blank_interface_service_shows_the_edited_field(make_env):
+    from agentctl import render
+    from agentctl.plan import PAIR_BASE_NODE
+    env = make_env(_covered_stage_one(blank_interface=True))
+    env.edit(_set(0, material="the files this stage reads, restated"))
+    shown = render.pair_service_text(env.doc(), 1, PAIR_BASE_NODE)
+    assert "the files this stage reads, restated" in shown
+
+
+# --- the obligations backstop through the real verbs --------------------------------
+
+
+def _ns(**kw) -> Namespace:
+    return Namespace(**kw)
+
+
+class Engine:
+    """One SUBSTANTIVE session driven through the engine's own verbs with the
+    plan-review gate live, so the plan-review obligation is minted by the real
+    `submit_plan` observer and the replan runs the real `cmd_replan`."""
+
+    def __init__(self, tmp_path: Path, store: FileStateStore):
+        self.tmp, self.store, self._n = tmp_path, store, 0
+
+    def plan_file(self, data: dict, *, at: Path | None = None) -> Path:
+        """Write `data` as a plan; with `at`, over that path, so a recorded review
+        keeps its plan path and only the content moved."""
+        self._n += 1
+        declared = copy.deepcopy(data)
+        declared["meta"]["weight_class"] = "small_change"
+        return _write(at or self.tmp / f"engine-plan-{self._n}.toml", declared)
+
+    def _run(self, command: str, fn, **kw):
+        """`cli.main`'s own sequence -- the verb, then the plugin event it fires --
+        without its argv parsing."""
+        args = _ns(command=command, session=SID, **kw)
+        directive = fn(args, store=self.store)
+        cli._fire_plugins(args, self.store, directive)
+        return directive
+
+    def open(self, plan: Path):
+        self._run("start", cli.cmd_start, task="t", goal="", done_criterion="",
+                  criterion_type="measurable", recursion_depth=0)
+        self._run("classify", cli.cmd_classify, chat=False, changed_lines=200, files=5,
+                  wall_clock_min=60, tracker_key=None, architectural=True,
+                  external_effect=False, new_dependency=False, public_api_change=False)
+        self._run("plan", cli.cmd_plan)
+        return self._run("submit-plan", cli.cmd_submit_plan, plan=str(plan))
+
+    def review_every_id(self, plan: Path) -> None:
+        from agentctl.plan import review_ids
+        for rid in review_ids(load_plan(plan)):
+            d = cli.cmd_plan_review(
+                _ns(session=SID, target=str(plan), scope=f"topo:{rid}", verdict="pass",
+                    reviewer="thinker", concerns=None, note="", plan_digest=_sha(plan),
+                    regression_command=None),
+                store=self.store)
+            assert d.ok, f"{rid}: {d.detail}"
+        composed = cli.cmd_plan_review_compose(_ns(session=SID, target=str(plan)), store=self.store)
+        assert composed.ok, composed.detail
+
+    def approve(self) -> None:
+        d = self._run("approve", cli.cmd_approve, by="user")
+        assert d.ok, d.detail
+
+    def start_execution(self) -> None:
+        self._run("partition", cli.cmd_partition, m1=False, m2=False, m3=False, m4=False,
+                  m3_severe=False, m4_severe=False)
+        self._run("next-stage", cli.cmd_next_stage)
+
+    def replan(self, plan: Path):
+        return self._run("replan", cli.cmd_replan, plan=str(plan))
+
+    def state(self) -> SessionState:
+        return self.store.load(SID)
+
+    def guardian(self) -> list[str]:
+        state = self.state()
+        return obligations._resolution_guardian(state, state.plugins["obligations"])
+
+
+@pytest.fixture
+def engine(tmp_path, store, monkeypatch) -> Engine:
+    monkeypatch.setenv("AGENTCTL_ESCALATION_LEDGER", str(tmp_path / "ledger.jsonl"))
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
+    monkeypatch.setenv("AGENTCTL_REVIEW_DISPATCH", "1")
+    monkeypatch.setenv("AGENTCTL_OBLIGATIONS", "1")
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+    return Engine(tmp_path, store)
+
+
+def _started_session(engine: Engine) -> Path:
+    plan = engine.plan_file(_fan_in())
+    engine.open(plan)
+    engine.review_every_id(plan)
+    engine.approve()
+    engine.start_execution()
+    return plan
+
+
+def test_pc47_submit_plan_mints_the_obligation_and_it_holds_until_the_review_is_current(engine):
+    plan = engine.plan_file(_fan_in())
+    engine.open(plan)
+    assert len(engine.guardian()) == 1
+    engine.review_every_id(plan)
+    assert engine.guardian() == []
+
+
+def test_pc48_a_refinement_that_moves_a_pairs_service_leaves_the_started_plan_discharged(
+        engine, monkeypatch):
+    plan = _started_session(engine)
+    assert engine.state().stage(1).outcome.status != StageStatus.PENDING.value
+    refined = _fan_in()
+    refined["stage"][0]["expected_result_image"] = "stage 1 image, reworded"
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "0")
+    d = engine.replan(engine.plan_file(refined, at=plan))
+    assert d.ok and d.action == "continue", d.detail
+    state = engine.state()
+    assert state.node == Node.EXECUTING.value and state.approval.passed
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
+    assert gates.pair_status(state, load_plan(state.plan_path), state.plan_path,
+                             "unit:1") == "stale:unit"
+    assert engine.guardian() == []
+
+
+def test_pc49_a_substantive_replan_reopens_the_obligation_until_the_new_plan_is_reviewed(
+        engine, monkeypatch):
+    _started_session(engine)
+    bigger = _fan_in()
+    bigger["stage"].append(_stage(4))
+    bigger_plan = engine.plan_file(bigger)
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "0")
+    d = engine.replan(bigger_plan)
+    assert d.marker == "PLAN-READY", d.detail
+    assert not engine.state().approval.passed
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
+    assert len(engine.guardian()) == 1
+    engine.review_every_id(bigger_plan)
+    assert engine.guardian() == []
+
+
+def test_pc50_the_inferred_latch_is_a_stage_having_left_pending_not_a_stored_flag(engine):
+    plan = engine.plan_file(_fan_in())
+    engine.open(plan)
+    engine.review_every_id(plan)
+    engine.approve()
+    assert all(s.outcome.status == StageStatus.PENDING.value for s in engine.state().stages)
+    state = engine.state()
+    state.plan_pair_reviews.clear()
+    state.plan_review = None
+    engine.store.save(state)
+    assert len(engine.guardian()) == 1
+    engine.start_execution()
+    assert engine.state().stage(1).outcome.status != StageStatus.PENDING.value
+    assert engine.guardian() == []

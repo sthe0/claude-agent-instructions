@@ -2675,8 +2675,10 @@ def pair_content(doc: PlanDoc, pair_id: str) -> dict[str, str]:
       source or blank-interface stage).
     - `service_norm`: the service's construction -- the whole-stage key when the
       bundle shows it in full (a source or blank-interface stage); for `base-<s>`
-      the `criterion` key of `s`, the part the coverage entries name; empty when
-      the reviewer was shown only the declared product.
+      the whole reviewed stage key when `s` is blank-interface (its bundle shows
+      the full brief), else the `criterion` key of `s`, the part the coverage
+      entries name; empty when a stage-stage reviewer was shown only the declared
+      product.
     - `edge_norm`: the pair's edge set -- (element, artifact, delivery) per typed
       edge, or (requirement id, control) per coverage entry.
 
@@ -2698,7 +2700,10 @@ def pair_content(doc: PlanDoc, pair_id: str) -> dict[str, str]:
         return {
             "base_norm": _sha256_hex(repr(("requirements", requirements))),
             "service_iface_norm": iface,
-            "service_norm": service_keys["criterion"],
+            "service_norm": (
+                service_keys[WHOLE_STAGE_ELEMENT] if interface_empty(service)
+                else service_keys["criterion"]
+            ),
             "edge_norm": _sha256_hex(repr(("coverage", entries))),
         }
     base = _stage_by_index(doc, int(b))

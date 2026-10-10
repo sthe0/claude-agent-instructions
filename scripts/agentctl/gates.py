@@ -1297,7 +1297,10 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     When a pair record exists for `target_plan`, the walk-stale set W
     (`walk_stale_pairs`) is computed whatever `changed_parts` reports: every moved
     stage's obligation discharges via pairs only if EVERY pair of W is current or
-    override, and each uncovered member of W adds a blocker naming its pair.
+    override, and each uncovered member of W adds a blocker naming its pair. W holds
+    unit records (`unit:base`, `unit:<n>`) beside the pairs, and an uncovered unit
+    adds a blocker naming it exactly as an uncovered pair does, so a stage no pair
+    names is still held to a review.
 
     A path that differs is excused by byte identity and by nothing weaker: the
     recorded meta/stage keys this function decides staleness by cover only what
