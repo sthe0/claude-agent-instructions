@@ -1451,7 +1451,10 @@ def test_a_new_session_cannot_self_approve_a_declined_stage_that_became_required
     assert accepted["ok"] is True, accepted
     assert eng.state("a2").stage(3).outcome.status == "PENDING"
     latest = eng.ledger(plan)["records"][-1]
-    assert latest["declined_stages"] == [] and latest["declined_issues"] == []  # the customer took it
+    # The customer took the stage: its title-half lapses. The issue-half stays, as it does
+    # inside a session, because no stage of this plan offers the issue to be chosen again.
+    assert latest["declined_stages"] == []
+    assert latest["declined_issues"] == [ISSUE]
 
     assert eng.open("a3", required)["data"]["autonomy"]["action"] == "self_approve"
 
@@ -1470,6 +1473,49 @@ def test_a_reset_session_cannot_self_approve_a_declined_stage_that_became_requir
     assert refused["ok"] is False
     assert _boundary_refusal(refused), refused
     assert eng.ledger(plan)["records"][-1]["declined_stages"][0]["issue"] == ISSUE
+
+
+def _submit_in_fresh_session(eng, sid, plan, *, reset, tag):
+    """Open `plan` in a session that holds no decline: a new one, or `sid` after a `reset`."""
+    if not reset:
+        return eng.open(sid, plan)
+    assert eng.run("reset", session=sid, task=f"task-{sid}-{tag}", goal="g",
+                   done_criterion="dc", force=True)["ok"] is True
+    eng.run("classify", session=sid, architectural=True, files=5, changed_lines=200,
+            wall_clock_min=60)
+    eng.run("plan", session=sid)
+    return eng.run("submit_plan", session=sid, plan=plan)
+
+
+@pytest.mark.parametrize("reset", [False, True], ids=["new-session", "after-reset"])
+@pytest.mark.parametrize("readded_required", [False, True], ids=["as-optional", "as-required"])
+def test_a_customer_approval_of_a_plan_without_the_stage_keeps_its_decline_across_sessions(
+        eng, readded_required, reset):
+    from test_replan_autonomy_boundary import plan_text
+
+    plan = _declined_order(eng)
+    title = _stage_3_title(eng, plan)
+    dropped = eng.write(plan_text(), "dropped.toml")
+    readded = _required_variant(eng) if readded_required else plan
+
+    first = _submit_in_fresh_session(eng, "a2", dropped, reset=reset, tag="drop")
+    assert eng.state("a2").node == Node.PLAN_READY.value, first
+    assert eng.state("a2").declined_issues == []  # the session never saw the decline
+    assert eng.run("approve", session="a2", by="user")["ok"] is True
+    middle = eng.ledger(plan)["records"][-1]
+    assert middle["declined_issues"] == [ISSUE]
+    assert middle["declined_stages"] == [{"issue": ISSUE, "title": title}]
+    assert eng.state("a2").declined_issues == [ISSUE]
+
+    sid = "a2" if reset else "a3"
+    opened = _submit_in_fresh_session(eng, sid, readded, reset=reset, tag="readd")
+    assert opened["marker"] == "PLAN-READY", opened
+    refused = eng.run("approve", session=sid, by="agent")
+    assert refused["ok"] is False, refused
+    assert f"stage 3 ({ISSUE if not readded_required else title})" in _boundary_refusal(refused)[0]
+    assert eng.state(sid).node == Node.PLAN_READY.value
+
+    assert eng.run("approve", session=sid, by="user")["ok"] is True
 
 
 def test_a_declined_stage_is_matched_by_issue_while_optional_and_by_title_once_required(tmp_path):
@@ -1527,17 +1573,6 @@ def test_an_approval_with_an_empty_plan_digest_is_refused_not_stored_unreadable(
             by="user", at="t", root=tmp_path,
         )
     assert not (tmp_path / "o.json").exists()
-
-
-def test_a_customer_approval_stamps_the_reread_digest_when_the_single_read_gave_none(eng, monkeypatch):
-    plan = eng.write(_optional_third_stage_plan(), "first.toml")
-    assert eng.open("u1", plan)["marker"] == "PLAN-READY"
-    real = cli.load_plan_with_digest
-    monkeypatch.setattr(cli, "load_plan_with_digest", lambda path: (*real(path)[:2], None))
-    assert eng.run("approve", session="u1", by="user", skip_optional=[3])["ok"] is True
-    stamped = eng.ledger(plan)["records"][-1]
-    assert stamped["plan_sha256"]
-    assert stamped["plan_sha256"] == eng.state("u1").accepted_plan_digest
 
 
 def test_the_boundary_reads_the_decline_from_the_record_by_issue(tmp_path):

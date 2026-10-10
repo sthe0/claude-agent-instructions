@@ -6101,16 +6101,24 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     for s in state.stages:
         if not is_skipped(s):
             s.outcome.declined = False
+    previous = (
+        order_approvals.latest_user_approved_record(order_digest(_approved_doc))
+        if _approved_doc is not None and _approved_doc.meta.order is not None else None
+    )
     if not by_agent:
         # The customer's own choice, made again: a stage left live is no longer declined; the
         # issues of stages no longer in the plan stay, so re-adding one is still the
-        # customer's call.
+        # customer's call. "Stay" includes the declines this session never saw: they are
+        # read from the order's last approval record, or the same act would keep a decline
+        # in the session that made it and erase it in any other.
         kept = {s.backlog_issue for s in state.stages if is_skipped(s) and s.backlog_issue}
         offered = {
             s.backlog_issue for s in state.stages
             if s.optional and s.backlog_issue and not is_skipped(s)
         }
-        state.declined_issues = sorted((set(state.declined_issues) | kept) - offered)
+        state.declined_issues = sorted(
+            (set(state.declined_issues) | set(order_approvals.declined_issues_of(previous)) | kept)
+            - offered)
     if skip_optional:
         state.log("skip_optional", by=args.by, stages=skip_optional)
     effort.arm(state)  # opens the effort-divergence window — see effort.py's ARMED-ONLY
@@ -6204,10 +6212,9 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                 scale: float((state.effort_estimate or {}).get(scale) or 0.0)
                 for scale in effort.RATIO_SCALES
             }
-            previous = order_approvals.latest_user_approved_record(order_key)
             order_approvals.record_approval(
                 order_key,
-                plan_sha256=_approved_digest or state.accepted_plan_digest or "",
+                plan_sha256=_approved_digest or "",
                 resources=all_resources,
                 unresolved_identities=all_unresolved,
                 stage_effects=all_stage_effects,

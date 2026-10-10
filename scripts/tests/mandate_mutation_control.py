@@ -441,6 +441,32 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_a_reset_session_cannot_self_approve_a_declined_stage_that_became_required",
         ),
     ),
+    "declined-title-half": Mutant(
+        GATES,
+        "    return stage.title in declined_titles\n",
+        "    return False\n",
+        _ids(
+            T_OPTIONAL,
+            "test_the_agent_cannot_approve_a_declined_stage_back_in[made-required-user-takes-it]",
+            "test_a_declined_stage_is_matched_by_issue_while_optional_and_by_title_once_required",
+        ),
+    ),
+    "declined-seeded-from-ledger": Mutant(
+        CLI,
+        " | set(order_approvals.declined_issues_of(previous))",
+        "",
+        _ids(
+            T_OPTIONAL,
+            "test_a_customer_approval_of_a_plan_without_the_stage_keeps_its_decline_across_sessions"
+            "[as-optional-new-session]",
+            "test_a_customer_approval_of_a_plan_without_the_stage_keeps_its_decline_across_sessions"
+            "[as-required-new-session]",
+            "test_a_customer_approval_of_a_plan_without_the_stage_keeps_its_decline_across_sessions"
+            "[as-optional-after-reset]",
+            "test_a_customer_approval_of_a_plan_without_the_stage_keeps_its_decline_across_sessions"
+            "[as-required-after-reset]",
+        ),
+    ),
 }
 
 
