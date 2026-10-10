@@ -484,6 +484,101 @@ def test_an_empty_q_line_is_refused():
     _field_error("Customer questions:", "Q:")
 
 
+@pytest.mark.parametrize("header", [
+    "Customer Questions:",
+    "customer questions:",
+    "CUSTOMER QUESTIONS:",
+    "Customer question:",
+    "**Customer questions:**",
+    "**Customer questions**:",
+    "`Customer questions`:",
+    "## Customer questions:",
+])
+def test_a_decorated_or_re_cased_header_still_opens_the_field_on_a_pass(header):
+    from lib.review_block import find_terminal_review_block
+    block = find_terminal_review_block(_reply(
+        "note: C2: wording could be tighter", header, "Q: Which region ships first?"))
+    assert list(block.questions) == ["Which region ships first?"]
+    assert [v for (k, v), _ in block.region if k == "condition"] == [
+        "note: C2: wording could be tighter"]
+
+
+@pytest.mark.parametrize("lines", [
+    ("**Customer questions**: Which region ships first?",),
+    ("customer questions: Which region ships first?",),
+    ("Customer question: Which region ships first?",),
+    ("customer questions:", "- Which region ships first?"),
+])
+def test_a_re_cased_header_with_an_inline_or_unprefixed_question_is_refused_on_a_pass(lines):
+    message = _field_error(*lines)
+    assert "Which region ships first?" in message
+
+
+def test_a_re_cased_header_question_reaches_the_driver_on_a_pass(rig):
+    from test_plan_review_topological import flags
+    rc, out, recorded = _drive(rig, "Customer Questions:", "Q: Which region ships first?")
+    assert recorded is not None, out
+    assert flags(recorded, "--customer-question") == ["Which region ships first?"]
+
+
+def test_a_questions_field_before_the_digest_line_is_refused_naming_the_placement():
+    from lib.review_block import QuestionFieldError, find_terminal_review_block
+    block = find_terminal_review_block("\n".join([
+        "REVIEW:", "Verdict: pass", "Customer questions:", "Q: Which region ships first?",
+        f"Plan digest: {'0' * 64}", "note: C2: wording could be tighter"]))
+    assert block is not None
+    with pytest.raises(QuestionFieldError) as exc:
+        block.questions
+    assert "before" in str(exc.value) and "Plan digest:" in str(exc.value)
+
+
+def test_a_q_line_before_the_verdict_is_refused_naming_the_placement():
+    from lib.review_block import QuestionFieldError, find_terminal_review_block
+    block = find_terminal_review_block("\n".join([
+        "REVIEW:", "Q: Which region ships first?", "Verdict: pass", f"Plan digest: {'0' * 64}"]))
+    assert block is not None
+    with pytest.raises(QuestionFieldError):
+        block.questions
+
+
+@pytest.mark.parametrize("lines", [
+    ("Customer questions: None.",),
+    ("Customer questions: (none)",),
+    ("Customer questions: NONE",),
+    ("**Customer questions:** none",),
+    ("Customer questions:", "none"),
+    ("Customer questions:", "None."),
+    ("Customer questions:", "- none"),
+    ("Customer questions:", "**none**"),
+])
+def test_a_decorated_none_is_no_questions(lines):
+    from lib.review_block import find_terminal_review_block
+    block = find_terminal_review_block(_reply(*lines))
+    assert list(block.questions) == []
+
+
+def test_a_decorated_none_does_not_stall_the_driver(rig):
+    from test_plan_review_topological import flags
+    rc, out, recorded = _drive(rig, "Customer questions:", "none")
+    assert recorded is not None, out
+    assert flags(recorded, "--customer-question") == []
+
+
+def test_a_lone_none_line_followed_by_a_question_is_refused():
+    _field_error("Customer questions:", "none", "Q: Which region ships first?")
+
+
+@pytest.mark.parametrize("second", ["Q :", "q:", "Q1:", "Q2 :", "q3:"])
+def test_a_near_miss_q_prefix_after_a_question_is_refused_not_merged(second):
+    message = _field_error(
+        "Customer questions:", "Q: Which region ships first?", f"{second} Is the legacy API in scope?")
+    assert "Is the legacy API in scope?" in message
+
+
+def test_a_near_miss_q_prefix_as_the_first_line_is_refused():
+    _field_error("Customer questions:", "q: Which region ships first?")
+
+
 def test_a_q_line_before_the_header_is_a_question_not_a_concern_continuation():
     from lib.review_block import find_terminal_review_block
     block = find_terminal_review_block(_reply(
@@ -553,6 +648,9 @@ def _state_slice(store) -> tuple:
     ("Q: Which region ships first?", "Q:"),
     ("Customer questions: Which region ships first?", "Customer questions:"),
     ("none", "none"),
+    ("(None.)", "none"),
+    ("customer questions: Which region ships first?", "Customer questions:"),
+    ("Customer question: Which region ships first?", "Customer questions:"),
 ])
 def test_plan_review_refuses_an_unreadable_customer_question_and_changes_nothing(
         store, session, scope, bad, phrase):

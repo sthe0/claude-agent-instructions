@@ -1619,6 +1619,17 @@ CONDITION_MARKERS = ("C1:", "C2:", "C3:", "C4:")
 CUSTOMER_QUESTIONS_MARKER = "Customer questions:"
 CUSTOMER_QUESTION_MARKER = "Q:"
 CUSTOMER_QUESTIONS_NONE = "none"
+# The header as a reviewer may decorate it: any case, singular, emphasis around the
+# colon (`**Customer questions**: ...`); group `rest` is what follows the colon.
+CUSTOMER_QUESTIONS_HEADER_RE = re.compile(
+    r"customer\s+questions?[\s*`_]*:[\s*`_]*(?P<rest>.*)", re.IGNORECASE | re.DOTALL)
+_NONE_DECORATION = "().,;:!*`_- "
+
+
+def declares_no_questions(text: str) -> bool:
+    """`none`, in any case, with the punctuation, parentheses or emphasis a reviewer
+    puts around it (`None.`, `(none)`, `**none**`)."""
+    return (text or "").strip(_NONE_DECORATION).lower() == CUSTOMER_QUESTIONS_NONE
 
 
 def customer_question_defect(text: str) -> str:
@@ -1634,11 +1645,14 @@ def customer_question_defect(text: str) -> str:
     if "\n" in stripped:
         return "a customer question is one line; pass one --customer-question per question"
     lowered = stripped.lower()
-    for marker in (CUSTOMER_QUESTIONS_MARKER, CUSTOMER_QUESTION_MARKER):
-        if lowered.startswith(marker.lower()):
-            return (f"a customer question is the text after `{CUSTOMER_QUESTION_MARKER}`, "
-                    f"not the reply's own field line (starts with {marker!r})")
-    if lowered == CUSTOMER_QUESTIONS_NONE:
+    field_line = (
+        CUSTOMER_QUESTIONS_MARKER if CUSTOMER_QUESTIONS_HEADER_RE.match(stripped)
+        else CUSTOMER_QUESTION_MARKER if lowered.startswith(CUSTOMER_QUESTION_MARKER.lower())
+        else None)
+    if field_line is not None:
+        return (f"a customer question is the text after `{CUSTOMER_QUESTION_MARKER}`, "
+                f"not the reply's own field line (starts with {field_line!r})")
+    if declares_no_questions(stripped):
         return (f"`{CUSTOMER_QUESTIONS_NONE}` states there are no customer questions: "
                 "pass no --customer-question instead")
     return ""
