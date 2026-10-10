@@ -128,7 +128,7 @@
 "scripts/project_entry/tests/verify-cursor-personal-live.sh" = { disposition = "not-canon", category = "not-canon", reason = "adds and removes a linked worktree only; canonical working tree untouched" }
 "scripts/project_entry/trackers/github.sh" = { disposition = "not-canon", category = "not-canon", reason = "tracker adapter; writes temp payload files, publishes through the tracker API" }
 "scripts/reaper/builtin/agentctl_state.py" = { disposition = "not-canon", category = "not-canon", reason = "removes stale agentctl state files" }
-"scripts/reaper/builtin/git_worktrees.py" = { disposition = "not-canon", category = "not-canon", reason = "removes stale linked worktrees and branches; canonical working tree untouched" }
+"scripts/reaper/builtin/git_worktrees.py" = { disposition = "not-canon", category = "not-canon", reason = "removes stale linked worktrees and branches and pushes branch refs to origin; canonical working tree untouched" }
 "scripts/reaper/runner.py" = { disposition = "not-canon", category = "not-canon", reason = "reaper reports and state under ~/.local/state" }
 "scripts/replay-permission-guard.py" = { disposition = "not-canon", category = "not-canon", reason = "replay output and temp files under /tmp" }
 "scripts/review-monitor.sh" = { disposition = "not-canon", category = "not-canon", reason = "appends markers to the caller-supplied --out log (a scratch path)" }

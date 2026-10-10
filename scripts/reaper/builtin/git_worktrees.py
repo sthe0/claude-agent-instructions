@@ -22,22 +22,39 @@ the first (the main checkout). Two kinds of removal candidate:
             <dead-letter dir>/reaped-branches.log, then the worktree goes, and only
             then `git branch -D` runs.
 
-Removal never passes --force: git itself refuses a worktree that turned dirty since the
+Removal is never forced: git itself refuses a worktree that turned dirty since the
 scan, and the runner keeps it.
 
 Stale unowned branch worktrees with unlanded commits or local changes are kept; once one
 is older than REPORT_AGE_HOURS it is flagged `report` and summary() names the count.
 Every per-item error resolves to keep. Paths are compared by realpath, because git prints
 resolved paths while a temp root or a session's cwd may be spelled through a symlink.
+
+Backup duty (``upkeep``, run only by ``runner --upkeep-only``): a worktree branch is the
+only copy of its commits, and a session that dies before landing takes it with the
+machine. Every branch of a worktree (main, master and release-* excepted) that holds
+commits origin lacks (`git cherry origin/main` prints a '+', and `refs/remotes/origin/<b>`
+is missing or not containing the tip) is pushed with a plain `git push origin
+refs/heads/<b>:refs/heads/<b>`: never forced, never a working-tree operation, so only
+committed work travels. A branch whose origin counterpart is not an ancestor of it
+(diverged) is reported and left alone. The outgoing patch is checked by
+check-org-neutral.py first. Every outcome is one JSON line in
+<agent home>/reaper/branch-backup.jsonl. Candidates come from local refs only; a
+successful push updates `refs/remotes/origin/<b>`, which is what makes a rerun a no-op.
 """
 from __future__ import annotations
 
+import dataclasses
+import json
 import os
+import signal
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from lib import config_root
 from reaper.contract import KEEP, REMOVE, ReapContext, Verdict
 
 NAME = "git-worktrees"
@@ -45,9 +62,15 @@ THROTTLE_HOURS = 24.0
 MIN_AGE_HOURS = 24.0
 REPORT_AGE_HOURS = 7 * 24.0
 GIT_TIMEOUT_S = 10
+PUSH_TIMEOUT_S = 60
+CHECK_TIMEOUT_S = 30
+SSH_CONNECT_TIMEOUT_S = 10
 TRUNK_REF = "origin/main"
 MAIN_BRANCH_REF = "refs/heads/main"
 REAPED_BRANCHES_LOG = "reaped-branches.log"
+BACKUP_LOG = "branch-backup.jsonl"
+CHECKER_RELPATH = "scripts/check-org-neutral.py"
+UNBACKED_TAG = "unbacked"
 
 REPO_ROOT = str(Path(__file__).resolve().parents[3])
 _RUNNER_CHECKOUT = REPO_ROOT
@@ -115,9 +138,9 @@ def age_hours(path: str, now_ts: float) -> float:
     return max(0.0, (now_ts - mtime) / 3600.0)
 
 
-def _git(repo: str, *args: str) -> subprocess.CompletedProcess:
+def _git(repo: str, *args: str, timeout: float = GIT_TIMEOUT_S) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", "-C", repo, *args], capture_output=True, text=True, timeout=GIT_TIMEOUT_S,
+        ["git", "-C", repo, *args], capture_output=True, text=True, timeout=timeout,
     )
 
 
@@ -238,10 +261,22 @@ def scan(ctx: ReapContext) -> "list[Verdict]":
     verdicts: "list[Verdict]" = []
     for wt in worktrees[1:]:
         try:
-            verdicts.append(_evaluate(wt, ctx, roots, repo))
+            verdicts.append(_tag_unbacked(repo, wt, _evaluate(wt, ctx, roots, repo)))
         except Exception as exc:
             verdicts.append(Verdict(wt.path, KEEP, f"error: {type(exc).__name__}: {exc}"))
     return verdicts
+
+
+def _tag_unbacked(repo: str, wt: WorktreeInfo, verdict: Verdict) -> Verdict:
+    if not wt.branch:
+        return verdict
+    try:
+        item = backup_state(repo, _short(wt.branch), wt.head)
+    except Exception:
+        return verdict
+    if item is None:
+        return verdict
+    return dataclasses.replace(verdict, tags=verdict.tags + (UNBACKED_TAG,))
 
 
 def write_deadletter(wt: WorktreeInfo, ctx: ReapContext) -> None:
@@ -278,18 +313,223 @@ def remove(path: str, ctx: ReapContext) -> None:
     branch = _short(entry.branch) if entry.branch else None
     if branch:
         _record_reaped_branch(ctx, branch, entry.head, entry.path)
-    # No --force: git itself refuses a worktree that turned dirty since the scan.
+    # Unforced on purpose: git itself refuses a worktree that turned dirty since the scan.
     _git_checked(repo, "worktree", "remove", entry.path)
     if branch:
         _git_checked(repo, "branch", "-D", branch)
 
 
-def summary(verdicts: "list[Verdict]") -> "str | None":
-    stale = sum(1 for v in verdicts if v.report)
-    if not stale:
+@dataclass
+class BackupItem:
+    branch: str
+    sha: str
+    diverged: bool = False
+    base: str = TRUNK_REF
+    error: str = ""
+
+
+def is_trunk_branch(name: str) -> bool:
+    return name in ("main", "master") or name.startswith(("release-", "release/"))
+
+
+def _is_ancestor(repo: str, ancestor: str, descendant: str) -> bool:
+    out = _git(repo, "merge-base", "--is-ancestor", ancestor, descendant)
+    if out.returncode not in (0, 1):
+        raise RuntimeError(f"git merge-base --is-ancestor failed: {out.stderr.strip()}")
+    return out.returncode == 0
+
+
+def _ref_exists(repo: str, ref: str) -> bool:
+    out = _git(repo, "rev-parse", "--verify", "--quiet", ref)
+    if out.returncode not in (0, 1):
+        raise RuntimeError(f"git rev-parse {ref} failed: {out.stderr.strip()}")
+    return out.returncode == 0
+
+
+def backup_state(repo: str, branch: str, sha: str) -> "BackupItem | None":
+    """The branch as a backup candidate, or None when it needs none (local refs only)."""
+    if is_trunk_branch(branch):
         return None
-    return (
-        f"git-worktrees: {stale} branch worktree(s) older than {REPORT_AGE_HOURS / 24:.0f} days hold "
-        "unlanded commits or local changes and are kept; list them with "
-        "`python3 scripts/hook-reaper.py --dry-run --only git-worktrees`"
+    if unlanded_count(repo, f"refs/heads/{branch}") == 0:
+        return None
+    remote = f"refs/remotes/origin/{branch}"
+    if not _ref_exists(repo, remote):
+        return BackupItem(branch, sha)
+    if _is_ancestor(repo, sha, remote):
+        return None
+    return BackupItem(branch, sha, diverged=not _is_ancestor(repo, remote, sha), base=f"origin/{branch}")
+
+
+def backup_candidates(repo: str) -> "list[BackupItem]":
+    entries = parse_worktree_porcelain(_git_checked(repo, "worktree", "list", "--porcelain"))
+    items: "list[BackupItem]" = []
+    seen: "set[str]" = set()
+    for wt in entries:
+        if wt.bare or wt.detached or not wt.branch or not wt.branch.startswith("refs/heads/"):
+            continue
+        branch = _short(wt.branch)
+        if branch in seen:
+            continue
+        seen.add(branch)
+        try:
+            item = backup_state(repo, branch, wt.head)
+        except Exception as exc:
+            item = BackupItem(branch, wt.head, error=f"{type(exc).__name__}: {exc}")
+        if item is not None:
+            items.append(item)
+    return items
+
+
+def _org_neutral_block(repo: str, item: BackupItem, checker: str) -> "str | None":
+    """None when the outgoing patch passes the org-neutral check, else the blocked detail."""
+    try:
+        patch = subprocess.run(
+            ["git", "-C", repo, "log", "-p", "--no-color", "--no-ext-diff", f"{item.base}..refs/heads/{item.branch}"],
+            capture_output=True, timeout=CHECK_TIMEOUT_S,
+        )
+        if patch.returncode != 0:
+            return "checker error"
+        verdict = subprocess.run(
+            [sys.executable or "python3", checker, "-"],
+            input=patch.stdout, capture_output=True, cwd=repo, timeout=CHECK_TIMEOUT_S,
+        )
+    except Exception:
+        return "checker error"
+    if verdict.returncode == 0:
+        return None
+    return "org-neutral" if verdict.returncode == 1 else "checker error"
+
+
+def push_env(repo: str) -> "dict[str, str]":
+    """Non-interactive push environment; a configured ssh command is extended, not replaced."""
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["LC_ALL"] = "C"
+    base = env.get("GIT_SSH_COMMAND", "").strip()
+    if not base:
+        try:
+            base = _git(repo, "config", "--get", "core.sshCommand").stdout.strip()
+        except Exception:
+            base = ""
+    if not base and env.get("GIT_SSH"):
+        return env
+    env["GIT_SSH_COMMAND"] = f"{base or 'ssh'} -o BatchMode=yes -o ConnectTimeout={SSH_CONNECT_TIMEOUT_S}"
+    return env
+
+
+def _run_bounded(argv: "list[str]", env: "dict[str, str]", timeout: float) -> subprocess.CompletedProcess:
+    """Run ``argv`` in its own process group and kill the whole group on timeout, so a
+    wedged ssh child cannot outlive the push."""
+    proc = subprocess.Popen(
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, env=env, start_new_session=True,
     )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            proc.communicate(timeout=GIT_TIMEOUT_S)
+        except Exception:
+            pass
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+
+def _push(repo: str, branch: str) -> "tuple[str, str]":
+    refspec = f"refs/heads/{branch}:refs/heads/{branch}"
+    try:
+        out = _run_bounded(["git", "-C", repo, "push", "origin", refspec], push_env(repo), PUSH_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return "timeout", f"push exceeded {PUSH_TIMEOUT_S}s"
+    if out.returncode == 0:
+        return "pushed", ""
+    lines = [line.strip() for line in (out.stderr or "").splitlines() if line.strip()]
+    refusal = next((line for line in lines if "rejected" in line), None)
+    detail = (refusal or (lines[-1] if lines else f"git push exited {out.returncode}"))[:300]
+    return ("rejected" if refusal else "error"), detail
+
+
+def _back_up(repo: str, ctx: ReapContext, item: BackupItem, checker: str) -> "tuple[str, str]":
+    if item.error:
+        return "error", item.error
+    if item.diverged:
+        return "diverged", "diverged, not force-pushed"
+    blocked = _org_neutral_block(repo, item, checker)
+    if blocked:
+        return "blocked", blocked
+    if ctx.dry_run:
+        return "would-push", ""
+    return _push(repo, item.branch)
+
+
+def backup_log_path() -> Path:
+    return config_root.agent_home() / "reaper" / BACKUP_LOG
+
+
+def _iso(ts: float) -> str:
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds")
+
+
+def _append_backup_log(log_path: Path, ctx: ReapContext, item: BackupItem, outcome: str, detail: str) -> None:
+    record = {"ts": _iso(ctx.now), "branch": item.branch, "sha": item.sha, "outcome": outcome, "detail": detail}
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _report_line(outcome: str, item: BackupItem, detail: str) -> str:
+    word = outcome.upper()
+    if outcome == "diverged":
+        return f"{NAME} {word} {item.branch}"
+    return f"{NAME} {word} {item.branch} {item.sha}" + (f" {detail}" if detail else "")
+
+
+def backup_push(
+    repo: str, ctx: ReapContext, *, checker: "str | None" = None, log_path: "Path | None" = None,
+) -> "list[str]":
+    """Back up every candidate of ``repo``; one report line per branch, never raises per branch."""
+    checker = checker or os.path.join(REPO_ROOT, CHECKER_RELPATH)
+    log_path = log_path or backup_log_path()
+    lines: "list[str]" = []
+    for item in backup_candidates(repo):
+        try:
+            outcome, detail = _back_up(repo, ctx, item, checker)
+        except Exception as exc:
+            outcome, detail = "error", f"{type(exc).__name__}: {exc}"
+        if not ctx.dry_run:
+            _append_backup_log(log_path, ctx, item, outcome, detail)
+        lines.append(_report_line(outcome, item, detail))
+    return lines
+
+
+def upkeep(ctx: ReapContext) -> "list[str]":
+    worktrees = list_worktrees()
+    if not worktrees:
+        return []
+    return backup_push(worktrees[0].path, ctx)
+
+
+def summary(verdicts: "list[Verdict]") -> "str | None":
+    notices = []
+    stale = sum(1 for v in verdicts if v.report)
+    if stale:
+        notices.append(
+            f"git-worktrees: {stale} branch worktree(s) older than {REPORT_AGE_HOURS / 24:.0f} days hold "
+            "unlanded commits or local changes and are kept; list them with "
+            "`python3 scripts/hook-reaper.py --dry-run --only git-worktrees`"
+        )
+    unbacked = sum(1 for v in verdicts if UNBACKED_TAG in v.tags)
+    if unbacked:
+        notices.append(
+            f"git-worktrees: {unbacked} worktree branch(es) hold commits origin lacks; the turn-end backup "
+            "pushes them, see reaper/branch-backup.jsonl for what it could not, or list with "
+            "`python3 scripts/hook-reaper.py --upkeep-only --dry-run --only git-worktrees`"
+        )
+    return "\n".join(notices) or None

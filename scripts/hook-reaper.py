@@ -12,6 +12,10 @@ and the project's .claude/reapers. Contract, flags and layers: docs/operations/r
   --force-run  run now, ignoring throttle stamps (and not writing them).
   --only NAME  restrict the run to one reaper; the others still veto.
   --list       print `<NAME> <layer> <file>` per discovered reaper.
+  --upkeep-only  run only each reaper's `upkeep` (git-worktrees: back up unpushed branches
+               to origin) under a lock; exits 0 unless argv is invalid. Started detached
+               by hook-branch-backup.py at turn end and session start.
+  --no-wait    with --upkeep-only: exit 0 at once if another upkeep run holds the lock.
 """
 from __future__ import annotations
 

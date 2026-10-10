@@ -3171,6 +3171,22 @@ disposition = "keep"
 ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output)."
 
 [[entry]]
+id = "3209f3c6d44b2086"
+domain = "code"
+file = "scripts/reaper/builtin/git_worktrees.py"
+class = "structural"
+disposition = "keep"
+ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output)."
+
+[[entry]]
+id = "0ec2f68d9d4751d6"
+domain = "code"
+file = "scripts/reaper/builtin/git_worktrees.py"
+class = "structural"
+disposition = "keep"
+ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output)."
+
+[[entry]]
 id = "d908fd2bdbece52d"
 domain = "code"
 file = "scripts/reaper/runner.py"
@@ -10995,6 +11011,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "0723934e211611a5"
+domain = "code"
+file = "scripts/tests/test_reaper_git_worktrees.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "94f08046b65c4b22"
 domain = "code"
 file = "scripts/tests/test_record_experience_hints.py"
@@ -14531,6 +14555,14 @@ disposition = "keep"
 ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output). (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "d6f8ba9c23d9d12f"
+domain = "code_file_rollup"
+file = "scripts/reaper/builtin/git_worktrees.py"
+class = "structural"
+disposition = "keep"
+ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output). (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "c8976493aa7dcb95"
 domain = "code_file_rollup"
 file = "scripts/reaper/runner.py"
@@ -15774,6 +15806,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "148410a0e3c1486a"
 domain = "code_file_rollup"
 file = "scripts/tests/test_re_attest.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "b06afdf08354967e"
+domain = "code_file_rollup"
+file = "scripts/tests/test_reaper_git_worktrees.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -18423,6 +18463,30 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "11dd2103d35239cf"
+domain = "prose"
+file = "memory-global/leaves/doubt-own-snapshot.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "caf9982069ed773b"
+domain = "prose"
+file = "memory-global/leaves/doubt-own-snapshot.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "cb3823d912434f7c"
+domain = "prose"
+file = "memory-global/leaves/doubt-own-snapshot.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "9b17e56cd51f28d0"
 domain = "prose"
 file = "memory-global/leaves/doubt-own-snapshot.md"
@@ -20648,6 +20712,14 @@ ground = "Experience leaves (difficulty/v1) are historical narrative records of 
 
 [[entry]]
 id = "3cefa3ac5e1b8c50"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "79c61e4e2bc00a97"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
 class = "not-normative"
@@ -26711,7 +26783,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "0345f05aa073503f"
+id = "6ae061b1149ce8df"
 domain = "prose"
 file = "memory-global/leaves/question-provenance-gate.md"
 class = "perception"
@@ -31200,6 +31272,14 @@ ground = "The statement's own text names a concrete enforcing artifact (a script
 
 [[entry]]
 id = "d7b7d3b6e6ab654c"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "65e9ed953829fb5b"
 domain = "prose"
 file = "skills/specializations/planner/policy.md"
 class = "perception"

@@ -7,6 +7,7 @@ scope registry or ~/.claude-agent.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -288,11 +289,11 @@ def test_summary_names_a_stale_unlanded_worktree_older_than_a_week(repo):
     assert line is not None and "1 branch worktree" in line
 
 
-def test_summary_is_silent_within_a_week(repo):
+def test_summary_has_no_stale_notice_within_a_week(repo):
     wt = repo.add_worktree("recent", branch="feat-recent")
     repo.commit(wt, "r.txt", "r\n", "r")
     age(wt, 3 * 24)
-    assert gw.summary(gw.scan(make_ctx(repo))) is None
+    assert "older than" not in (gw.summary(gw.scan(make_ctx(repo))) or "")
 
 
 # ── scan coverage ─────────────────────────────────────────────────────────
@@ -502,3 +503,376 @@ def test_path_owned_matches_subdirectory_cwd_and_repo_root():
 def test_classify_detached_verdict_table(age_h, dirty, owned, verdict, word):
     got, reason = gw.classify_detached(age_h, dirty, owned)
     assert got == verdict and word in reason
+
+
+# ── backup push (upkeep) ──────────────────────────────────────────────────
+
+def checker_exiting(code: int) -> str:
+    return f"import sys\nsys.stdin.read()\nsys.exit({code})\n"
+
+
+def checker_blocking_on(marker: str) -> str:
+    return (
+        "import sys\n"
+        f"sys.exit(1 if {marker!r} in sys.stdin.read() else 0)\n"
+    )
+
+
+def install_checker(repo: Repo, body: str) -> None:
+    path = repo.main / "scripts" / "check-org-neutral.py"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+
+@pytest.fixture
+def backup_repo(repo, monkeypatch) -> Repo:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(repo.root / "agent-home"))
+    install_checker(repo, checker_exiting(0))
+    return repo
+
+
+def unpushed_branch(repo: Repo, branch: str, filename: str = "f.txt", content: str = "f\n") -> "tuple[Path, str]":
+    wt = repo.add_worktree(branch, branch=branch)
+    return wt, repo.commit(wt, filename, content, f"work on {branch}")
+
+
+def remote_sha(repo: Repo, branch: str) -> str:
+    out = subprocess.run(
+        ["git", "-C", str(repo.origin), "rev-parse", "--verify", "-q", f"refs/heads/{branch}"],
+        capture_output=True, text=True,
+    )
+    return out.stdout.strip()
+
+
+def log_records(repo: Repo) -> "list[dict]":
+    path = repo.root / "agent-home" / "reaper" / gw.BACKUP_LOG
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def run_upkeep(repo: Repo, **kwargs) -> "list[str]":
+    return gw.upkeep(make_ctx(repo, **kwargs))
+
+
+def forbid_push(monkeypatch) -> "list[list[str]]":
+    calls: "list[list[str]]" = []
+
+    def spy(argv, env, timeout):
+        calls.append(list(argv))
+        raise AssertionError(f"unexpected push: {argv}")
+
+    monkeypatch.setattr(gw, "_run_bounded", spy)
+    return calls
+
+
+def test_unpushed_branch_is_pushed(backup_repo):
+    repo = backup_repo
+    wt, first = unpushed_branch(repo, "feat-a")
+    assert run_upkeep(repo) == [f"git-worktrees PUSHED feat-a {first}"]
+    second = repo.commit(wt, "g.txt", "g\n", "more")
+    assert run_upkeep(repo) == [f"git-worktrees PUSHED feat-a {second}"]
+    assert remote_sha(repo, "feat-a") == second
+
+
+def test_new_branch_gets_a_remote_ref(backup_repo):
+    repo = backup_repo
+    _, sha = unpushed_branch(repo, "feat-new")
+    assert remote_sha(repo, "feat-new") == ""
+    run_upkeep(repo)
+    assert remote_sha(repo, "feat-new") == sha
+    assert repo.git(repo.main, "rev-parse", "refs/remotes/origin/feat-new").strip() == sha
+
+
+def test_backed_up_branch_is_not_pushed_again(backup_repo, monkeypatch):
+    repo = backup_repo
+    unpushed_branch(repo, "feat-done")
+    run_upkeep(repo)
+    calls = forbid_push(monkeypatch)
+    assert run_upkeep(repo) == []
+    assert calls == []
+
+
+def test_trunk_named_branches_are_never_pushed(backup_repo):
+    repo = backup_repo
+    repo.git(repo.main, "checkout", "-q", "-b", "parking")
+    main_wt = repo.worktrees / "trunk-main"
+    repo.git(repo.main, "worktree", "add", "-q", str(main_wt), "main")
+    repo.commit(main_wt, "m.txt", "m\n", "local work on main")
+    for name in ("master", "release-1", "release/2"):
+        unpushed_branch(repo, name, filename=name.replace("/", "_") + ".txt")
+    origin_main = remote_sha(repo, "main")
+    assert run_upkeep(repo) == []
+    assert remote_sha(repo, "main") == origin_main
+    for name in ("master", "release-1", "release/2"):
+        assert remote_sha(repo, name) == ""
+
+
+def test_detached_worktree_is_never_pushed(backup_repo):
+    repo = backup_repo
+    wt = repo.add_worktree("detached")
+    repo.commit(wt, "d.txt", "d\n", "detached work")
+    assert run_upkeep(repo) == []
+    heads = repo.git(repo.origin, "for-each-ref", "--format=%(refname:short)", "refs/heads").split()
+    assert heads == ["main"]
+
+
+def test_branch_landed_by_rebase_is_not_resurrected(backup_repo):
+    repo = backup_repo
+    _, sha = unpushed_branch(repo, "feat-landed")
+    repo.land_by_cherry_pick(sha)
+    assert run_upkeep(repo) == []
+    assert remote_sha(repo, "feat-landed") == ""
+
+
+def test_branch_with_no_commits_of_its_own_is_not_pushed(backup_repo):
+    repo = backup_repo
+    repo.add_worktree("feat-empty", branch="feat-empty")
+    assert run_upkeep(repo) == []
+    assert remote_sha(repo, "feat-empty") == ""
+
+
+def test_uncommitted_and_untracked_files_stay_off_the_remote(backup_repo):
+    repo = backup_repo
+    wt, sha = unpushed_branch(repo, "feat-dirty", filename="t.txt", content="committed\n")
+    (wt / "t.txt").write_text("edited\n", encoding="utf-8")
+    (wt / "u.txt").write_text("untracked\n", encoding="utf-8")
+    before = repo.git(wt, "status", "--porcelain")
+    run_upkeep(repo)
+    assert repo.git(wt, "status", "--porcelain") == before != ""
+    assert remote_sha(repo, "feat-dirty") == sha
+    assert repo.git(repo.origin, "show", "refs/heads/feat-dirty:t.txt") == "committed\n"
+    assert "u.txt" not in repo.git(repo.origin, "ls-tree", "-r", "--name-only", "refs/heads/feat-dirty")
+
+
+def test_diverged_branch_is_reported_and_left_alone(backup_repo):
+    repo = backup_repo
+    wt, first = unpushed_branch(repo, "feat-div")
+    run_upkeep(repo)
+    repo.git(wt, "commit", "-q", "--amend", "-m", "rewritten")
+    assert run_upkeep(repo) == ["git-worktrees DIVERGED feat-div"]
+    assert remote_sha(repo, "feat-div") == first
+    last = log_records(repo)[-1]
+    assert (last["outcome"], last["detail"]) == ("diverged", "diverged, not force-pushed")
+
+
+def test_remote_that_moved_on_is_rejected_not_overwritten(backup_repo):
+    repo = backup_repo
+    wt, first = unpushed_branch(repo, "feat-race")
+    run_upkeep(repo)
+    other = repo.root / "other-clone"
+    repo.git(repo.root, "clone", "-q", str(repo.origin), str(other))
+    repo.git(other, "checkout", "-q", "feat-race")
+    elsewhere = repo.commit(other, "e.txt", "e\n", "pushed from another machine")
+    repo.git(other, "push", "-q", "origin", "feat-race")
+    repo.commit(wt, "g.txt", "g\n", "local follow-up")
+    lines = run_upkeep(repo)
+    assert len(lines) == 1 and lines[0].startswith("git-worktrees REJECTED feat-race ")
+    assert remote_sha(repo, "feat-race") == elsewhere
+    assert log_records(repo)[-1]["outcome"] == "rejected"
+
+
+def test_push_argv_is_the_plain_refspec_form(backup_repo, monkeypatch):
+    repo = backup_repo
+    unpushed_branch(repo, "feat-argv")
+    seen: "list[list[str]]" = []
+
+    def fake(argv, env, timeout):
+        seen.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(gw, "_run_bounded", fake)
+    run_upkeep(repo)
+    assert seen == [["git", "-C", str(repo.main), "push", "origin", "refs/heads/feat-argv:refs/heads/feat-argv"]]
+
+
+def test_remote_rejection_is_reported_logged_and_skipped(backup_repo):
+    repo = backup_repo
+    hook = repo.origin / "hooks" / "pre-receive"
+    hook.parent.mkdir(exist_ok=True)
+    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    unpushed_branch(repo, "feat-refused")
+    unpushed_branch(repo, "feat-other")
+    lines = run_upkeep(repo)
+    assert [line.split()[1] for line in lines] == ["REJECTED", "REJECTED"]
+    assert {r["outcome"] for r in log_records(repo)} == {"rejected"}
+    assert remote_sha(repo, "feat-refused") == ""
+
+
+def test_unreachable_remote_is_logged_as_an_error(backup_repo):
+    repo = backup_repo
+    unpushed_branch(repo, "feat-offline")
+    repo.git(repo.main, "remote", "set-url", "origin", str(repo.root / "nonexistent.git"))
+    lines = run_upkeep(repo)
+    assert len(lines) == 1 and lines[0].startswith("git-worktrees ERROR feat-offline ")
+    assert [r["outcome"] for r in log_records(repo)] == ["error"]
+
+
+def test_push_timeout_is_logged_and_the_run_goes_on(backup_repo, monkeypatch):
+    repo = backup_repo
+    unpushed_branch(repo, "feat-slow")
+
+    def hang(argv, env, timeout):
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    monkeypatch.setattr(gw, "_run_bounded", hang)
+    lines = run_upkeep(repo)
+    assert len(lines) == 1 and lines[0].startswith("git-worktrees TIMEOUT feat-slow ")
+    record = log_records(repo)[-1]
+    assert record["outcome"] == "timeout" and str(gw.PUSH_TIMEOUT_S) in record["detail"]
+
+
+@pytest.mark.parametrize("code, detail", [(1, "org-neutral"), (2, "checker error")])
+def test_checker_failure_skips_the_push_and_logs_blocked(backup_repo, code, detail):
+    repo = backup_repo
+    install_checker(repo, checker_exiting(code))
+    _, sha = unpushed_branch(repo, "feat-held")
+    assert run_upkeep(repo) == [f"git-worktrees BLOCKED feat-held {sha} {detail}"]
+    assert remote_sha(repo, "feat-held") == ""
+    record = log_records(repo)[-1]
+    assert (record["outcome"], record["detail"]) == ("blocked", detail)
+
+
+def test_missing_checker_blocks_instead_of_pushing_unchecked(backup_repo):
+    repo = backup_repo
+    (repo.main / "scripts" / "check-org-neutral.py").unlink()
+    unpushed_branch(repo, "feat-unchecked")
+    lines = run_upkeep(repo)
+    assert lines and "BLOCKED" in lines[0] and remote_sha(repo, "feat-unchecked") == ""
+
+
+def test_checker_receives_the_outgoing_patch_of_a_new_branch(backup_repo):
+    repo = backup_repo
+    install_checker(repo, checker_blocking_on("OWN-MARKER"))
+    unpushed_branch(repo, "feat-marked", content="OWN-MARKER\n")
+    lines = run_upkeep(repo)
+    assert len(lines) == 1 and "BLOCKED" in lines[0]
+    assert remote_sha(repo, "feat-marked") == ""
+
+
+def test_checker_sees_only_the_commits_origin_lacks(backup_repo):
+    repo = backup_repo
+    wt, _ = unpushed_branch(repo, "feat-two", content="ALREADY-PUSHED\n")
+    run_upkeep(repo)
+    install_checker(repo, checker_blocking_on("ALREADY-PUSHED"))
+    second = repo.commit(wt, "g.txt", "fresh\n", "second")
+    assert run_upkeep(repo) == [f"git-worktrees PUSHED feat-two {second}"]
+    install_checker(repo, checker_blocking_on("FRESH-MARKER"))
+    third = repo.commit(wt, "h.txt", "FRESH-MARKER\n", "third")
+    assert run_upkeep(repo) == [f"git-worktrees BLOCKED feat-two {third} org-neutral"]
+    assert remote_sha(repo, "feat-two") == second
+
+
+def capture_push(monkeypatch) -> "list[dict]":
+    seen: "list[dict]" = []
+
+    def fake(argv, env, timeout):
+        seen.append({"argv": list(argv), "env": dict(env), "timeout": timeout})
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(gw, "_run_bounded", fake)
+    return seen
+
+
+def test_push_is_bounded_and_non_interactive(backup_repo, monkeypatch):
+    repo = backup_repo
+    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
+    unpushed_branch(repo, "feat-env")
+    seen = capture_push(monkeypatch)
+    run_upkeep(repo)
+    assert seen[0]["timeout"] == gw.PUSH_TIMEOUT_S == 60
+    assert seen[0]["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    ssh = seen[0]["env"]["GIT_SSH_COMMAND"]
+    assert "BatchMode=yes" in ssh and f"ConnectTimeout={gw.SSH_CONNECT_TIMEOUT_S}" in ssh
+
+
+def test_an_existing_ssh_command_is_extended_not_replaced(backup_repo, monkeypatch):
+    repo = backup_repo
+    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i /keys/backup")
+    unpushed_branch(repo, "feat-ssh")
+    seen = capture_push(monkeypatch)
+    run_upkeep(repo)
+    ssh = seen[0]["env"]["GIT_SSH_COMMAND"]
+    assert ssh.startswith("ssh -i /keys/backup") and "BatchMode=yes" in ssh and "ConnectTimeout=10" in ssh
+
+
+def test_core_ssh_command_is_kept_when_the_environment_has_none(backup_repo, monkeypatch):
+    repo = backup_repo
+    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
+    repo.git(repo.main, "config", "core.sshCommand", "ssh -F /etc/backup-ssh-config")
+    unpushed_branch(repo, "feat-core-ssh")
+    seen = capture_push(monkeypatch)
+    run_upkeep(repo)
+    ssh = seen[0]["env"]["GIT_SSH_COMMAND"]
+    assert ssh.startswith("ssh -F /etc/backup-ssh-config") and "BatchMode=yes" in ssh and "ConnectTimeout=10" in ssh
+
+
+def test_one_branch_failing_does_not_stop_the_others(backup_repo, monkeypatch):
+    repo = backup_repo
+    _, a = unpushed_branch(repo, "feat-boom")
+    _, b = unpushed_branch(repo, "feat-fine")
+    real_push = gw._push
+
+    def flaky(repo_path, branch):
+        if branch == "feat-boom":
+            raise RuntimeError("boom")
+        return real_push(repo_path, branch)
+
+    monkeypatch.setattr(gw, "_push", flaky)
+    lines = run_upkeep(repo)
+    assert lines == [f"git-worktrees ERROR feat-boom {a} RuntimeError: boom", f"git-worktrees PUSHED feat-fine {b}"]
+    assert remote_sha(repo, "feat-fine") == b and remote_sha(repo, "feat-boom") == ""
+
+
+def test_each_live_outcome_is_one_json_line_with_the_documented_keys(backup_repo):
+    repo = backup_repo
+    _, pushed = unpushed_branch(repo, "feat-ok")
+    install_checker(repo, checker_blocking_on("BLOCK-ME"))
+    _, blocked = unpushed_branch(repo, "feat-blocked", content="BLOCK-ME\n")
+    run_upkeep(repo)
+    records = log_records(repo)
+    assert len(records) == 2
+    assert all(set(r) == {"ts", "branch", "sha", "outcome", "detail"} for r in records)
+    by_branch = {r["branch"]: r for r in records}
+    assert by_branch["feat-ok"]["sha"] == pushed and by_branch["feat-ok"]["outcome"] == "pushed"
+    assert by_branch["feat-blocked"]["sha"] == blocked and by_branch["feat-blocked"]["outcome"] == "blocked"
+
+
+def test_dry_run_pushes_nothing_logs_nothing_and_reports_the_partition(backup_repo):
+    repo = backup_repo
+    _, clean = unpushed_branch(repo, "feat-clean")
+    _, held = unpushed_branch(repo, "feat-held", content="BLOCK-ME\n")
+    wt, _ = unpushed_branch(repo, "feat-div")
+    run_upkeep(repo)
+    repo.git(wt, "commit", "-q", "--amend", "-m", "rewritten")
+    repo.git(repo.main, "push", "-q", "origin", "--delete", "feat-clean")
+    repo.git(repo.main, "update-ref", "-d", "refs/remotes/origin/feat-held")
+    install_checker(repo, checker_blocking_on("BLOCK-ME"))
+    log_before = log_records(repo)
+    lines = run_upkeep(repo, dry_run=True)
+    assert sorted(lines) == sorted([
+        f"git-worktrees WOULD-PUSH feat-clean {clean}",
+        f"git-worktrees BLOCKED feat-held {held} org-neutral",
+        "git-worktrees DIVERGED feat-div",
+    ])
+    assert remote_sha(repo, "feat-clean") == ""
+    assert log_records(repo) == log_before
+
+
+def test_summary_names_how_many_branches_origin_lacks(backup_repo):
+    repo = backup_repo
+    unpushed_branch(repo, "feat-x")
+    unpushed_branch(repo, "feat-y")
+    line = gw.summary(gw.scan(make_ctx(repo)))
+    assert line is not None and "2 worktree branch(es) hold commits origin lacks" in line
+    run_upkeep(repo)
+    assert gw.summary(gw.scan(make_ctx(repo))) is None
+
+
+def test_scan_leaves_the_remote_alone(backup_repo, monkeypatch):
+    repo = backup_repo
+    unpushed_branch(repo, "feat-scan")
+    forbid_push(monkeypatch)
+    gw.scan(make_ctx(repo))
+    assert remote_sha(repo, "feat-scan") == ""
