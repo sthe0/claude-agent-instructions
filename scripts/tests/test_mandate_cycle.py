@@ -721,6 +721,17 @@ def test_a_third_party_issue_never_reaches_a_spawn_or_the_judge(env):
 
 # --- tests relative to the baseline -----------------------------------------------------
 
+def test_the_suite_runs_under_the_conftest_auto_parallel_with_no_xdist_opt_out(env):
+    env.grant()
+    eligible(env, 1)
+    env.cycle()
+    suites = [c for c in env.world.calls_with("bash") if c[1].endswith("cap-run.sh")]
+    assert len(suites) >= 2, suites
+    for argv in suites:
+        opt_outs = [x for x in argv if x in ("no:xdist", "-n") or x.startswith("--dist")]
+        assert opt_outs == [], argv
+
+
 def test_a_test_failing_on_the_baseline_does_not_count_against_the_item(env):
     env.grant()
     eligible(env, 1)

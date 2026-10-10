@@ -62,7 +62,7 @@ REAP_TIMEOUT_S = 30
 HEARTBEAT_S = 60.0
 SUMMARY_CHARS = 3000
 REASON_CHARS = 300
-DEFAULT_SUITE = (sys.executable, "-m", "pytest", "-q", "-p", "no:xdist", "scripts/tests")
+DEFAULT_SUITE = (sys.executable, "-m", "pytest", "-q", "scripts/tests")
 GATE_SCRIPTS = ("scripts/verify-all.py", "scripts/lint-prose-length.py")
 
 EXIT_OK, EXIT_ERROR, EXIT_BUSY = 0, 1, 3
