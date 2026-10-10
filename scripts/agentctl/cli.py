@@ -7809,10 +7809,11 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
         )
     renorm_block = gates.pending_renorm_final_blockers(state)
     if renorm_block:
+        _log_gate(state, "renorm_final", renorm_block, passed=False)
         return Directive(False, state.node, "renorm",
                          "not ready for resolution: a нормативное difficulty's norm edit is "
                          "still owed", data={"blockers": renorm_block})
-    state.pending_renorms = []
+    state.pending_renorms = gates.open_renorms(state)
     blockers = gates.blockers(state, "resolution")
     _log_gate(state, "resolution", blockers, passed=not blockers)
     if blockers:
@@ -8162,7 +8163,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if blockers:
         return Directive(False, state.node, "fix_stages", "cannot resolve", data={"blockers": blockers})
     state.resolution = GateRecord("resolution", armed=True, passed=True, by=args.by)
-    state.pending_renorms = []
+    state.pending_renorms = gates.open_renorms(state)
     state.node = transition(state.node, "resolve")  # RESOLUTION -> RESOLVED
     cost_surface: dict = {}
     if state.cost is not None:
@@ -8450,9 +8451,12 @@ def _is_memory_path(rp: str) -> bool:
 
 
 def _session_plan_paths(state: SessionState) -> set[str]:
+    """Every plan file this session has installed or submitted: a norm target must not be
+    one, since its bytes move with the plan rather than with a norm edit."""
     paths = {state.plan_path, state.plan_snapshot_path,
-             *(f.plan_path for f in state.plan_stack)}
-    return {os.path.realpath(p) for p in paths if p}
+             *(f.plan_path for f in state.plan_stack),
+             *(e.get("plan") for e in state.history if isinstance(e, dict))}
+    return {os.path.realpath(p) for p in paths if p and isinstance(p, str)}
 
 
 def _norm_file_refusal(state: SessionState, target: str) -> str | None:
@@ -8494,9 +8498,11 @@ def _norm_file_refusal(state: SessionState, target: str) -> str | None:
 
 def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[list[dict], str | None]:
     """The `norm_targets` entries for a нормативное critique's --norm-target values, or
-    the first refusal. A stage target is snapshotted from the current plan's stage."""
+    the first refusal. A stage target is snapshotted from the replan baseline (the approved
+    plan snapshot), never the live plan file, which is editable while DIAGNOSING."""
     from .plan import PlanError, load_plan as _load
 
+    baseline_path = _replan_baseline_path(state)
     entries: list[dict] = []
     for raw in targets:
         raw = (raw or "").strip()
@@ -8506,9 +8512,9 @@ def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[lis
             except ValueError:
                 return [], f"--norm-target {raw!r}: stage:<n> needs an integer stage index"
             stage = None
-            if state.plan_path:
+            if baseline_path:
                 try:
-                    stage = next((s for s in _load(state.plan_path, strict=False).stages
+                    stage = next((s for s in _load(baseline_path, strict=False).stages
                                   if s.index == index), None)
                 except (OSError, PlanError):
                     stage = None
@@ -8522,7 +8528,7 @@ def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[lis
             continue
         if not raw:
             return [], "--norm-target must not be empty"
-        path = raw if os.path.isabs(raw) else os.path.abspath(raw)
+        path = os.path.normpath(raw if os.path.isabs(raw) else os.path.abspath(raw))
         refusal = _norm_file_refusal(state, path)
         if refusal:
             return [], refusal
@@ -8782,7 +8788,8 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
     rtblock = gates.renorm_retention_blockers(
         state, new,
         [ns.index for ns in new.stages
-         if live_status.get(ns.index) != StageStatus.PASSED.value])
+         if live_status.get(ns.index) != StageStatus.PASSED.value],
+        installing_plan_path=args.plan)
     _log_gate(state, "renorm_retention", rtblock, passed=not rtblock)
     if rtblock:
         return Directive(False, state.node, "replan",
@@ -9217,9 +9224,11 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # survive this one. Before the plan_approval plugin block below, whose dispositions
     # save can persist state, so a refusal here leaves the state file as it was.
     renorm_pending = _replan_pending_indices(state, new, auth_kind)
-    neblock = gates.normative_edit_blockers(state, new, renorm_pending)
+    neblock = gates.normative_edit_blockers(state, new, renorm_pending,
+                                            installing_plan_path=args.plan)
     _log_gate(state, "normative_edit", neblock, passed=not neblock)
-    rtblock = gates.renorm_retention_blockers(state, new, renorm_pending)
+    rtblock = gates.renorm_retention_blockers(state, new, renorm_pending,
+                                              installing_plan_path=args.plan)
     _log_gate(state, "renorm_retention", rtblock, passed=not rtblock)
     if neblock or rtblock:
         return Directive(False, state.node, "replan",
@@ -9344,7 +9353,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         _log_normalize_event(state, factor=normalize_factor, level=normalize_level,
                              destination=None, in_diagnosis=(state.node == Node.DIAGNOSING.value))
 
-    kind = _replan_kind(state, old, new)
+    kind = auth_kind
     state.pending_renorms = gates.bound_renorms(state, new, renorm_pending)
     # The replan-loop counterpart of cmd_approve's reset: a replan that gets this far has
     # applied a corrected plan, so the rounds spent arguing about the previous one are
@@ -9486,7 +9495,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                     s.outcome.status = StageStatus.PENDING.value
             state.difficulty = None
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
-            state.log("replan", kind="no_change", exited_diagnosing=True,
+            state.log("replan", kind="no_change", exited_diagnosing=True, plan=args.plan,
                       prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
                       **replan_cause)
             task_accumulator.add(
@@ -9532,7 +9541,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         if diagnosing:
             state.difficulty = None
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
-        state.log("replan", kind="refinement", exited_diagnosing=diagnosing,
+        state.log("replan", kind="refinement", exited_diagnosing=diagnosing, plan=args.plan,
                   prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
                   **replan_cause)
         task_accumulator.add(
@@ -9601,7 +9610,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     state.difficulty = None
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
-    state.log("replan", kind="substantive",
+    state.log("replan", kind="substantive", plan=args.plan,
               prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
               **replan_cause)
     task_accumulator.add(

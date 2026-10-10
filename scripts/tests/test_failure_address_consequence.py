@@ -16,10 +16,14 @@ from types import SimpleNamespace
 import pytest
 
 from agentctl import cli, gates
+from agentctl.dispatch import RunResult
 from agentctl.plan import PlanError, load_plan
 from agentctl.stage_norm import StageNorm
 from agentctl.state import SCHEMA_VERSION, Node, SessionState, StageStatus
 from conftest import STAGE_OBSERVATIONS
+from test_re_attest import _dev_stage, _Mem, _reattest_stash, _runner
+from test_re_attest import _state as _reattest_state
+from test_subplan import _make_frame
 
 
 def ns(**kw):
@@ -98,6 +102,8 @@ def _plan(path, stages):
                   f"output_artifacts = {json.dumps(s['outs'])}"]
         if "method" in s:
             lines.append(f"method = {json.dumps(s['method'])}")
+        if "procedure" in s:
+            lines.append(f"procedure = {json.dumps(s['procedure'])}")
         if "renorms" in s:
             lines.append(f"renorms = {json.dumps(s['renorms'])}")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -621,3 +627,283 @@ def test_previous_schema_state_loads_without_targets_or_obligations(store, plans
     assert restored.difficulty.norm_targets == []
     assert all(s.renorms == [] for s in restored.stages)
     assert restored.difficulty.complete() is False
+
+
+# --- the stage baseline: the approved snapshot, not the live plan file --------
+
+def test_stage_baseline_is_the_approved_snapshot_not_the_live_plan_file(store, plans):
+    """The plan file is editable while DIAGNOSING; a baseline read from it lets an edit
+    made before the critique become the bar, and a restore then pass as the "change"."""
+    base = plans("base")
+    approved = next(s for s in load_plan(base, strict=False).stages if s.index == 1)
+    _diagnosing(store, "b1", base)
+    assert store.load("b1").plan_snapshot_path, "setup: the session has no approved snapshot"
+    _plan(Path(base), _stages(s1={"method": "edited in place while DIAGNOSING"}))
+    assert _critique(store, "b1", "нормативное", ["stage:1"]).ok is True
+    (entry,) = store.load("b1").difficulty.norm_targets
+    assert entry["baseline"] == gates.stage_norm_digest(approved), \
+        "BEHAVIOUR: the stage baseline was read from the live (edited) plan file"
+    _plan(Path(base), _stages())
+    _normalize(store, "b1")
+    d = _replan(store, "b1", plans("restored"))
+    assert d.ok is False, "BEHAVIOUR: edit-critique-restore passed a stage:1 target unchanged"
+    assert "stage:1" in _blockers(d)
+
+
+def test_plan_drafted_in_place_before_the_critique_is_not_a_false_block(store, plans):
+    base = plans("base")
+    _diagnosing(store, "b2", base)
+    _plan(Path(base), _stages(s1={"method": "mirror the working caller"}))
+    assert _critique(store, "b2", "нормативное", ["stage:1"]).ok is True
+    _normalize(store, "b2")
+    d = _replan(store, "b2", base)
+    assert d.ok is True, \
+        f"BEHAVIOUR: a corrected plan drafted in place was blocked as unchanged: {d.detail}"
+
+
+# --- the plan file the replan installs is no norm -----------------------------
+
+def test_target_that_is_the_plan_the_replan_installs_is_refused(store, norms):
+    first = _plan(norms / "x.toml", _stages())
+    v2_path = norms / "x-v2.toml"
+    v2 = _plan(v2_path, _stages(s1={"renorms": [str(v2_path)]}))
+    _diagnosing(store, "i1", first)
+    assert _critique(store, "i1", "нормативное", [v2]).ok is True
+    _normalize(store, "i1")
+    before = store.path("i1").read_bytes()
+    d = _replan(store, "i1", v2)
+    assert d.ok is False, "BEHAVIOUR: a replan installing its own norm target as the plan applied"
+    assert "installs" in _blockers(d)
+    assert store.path("i1").read_bytes() == before
+
+
+def test_open_obligation_on_the_installed_plan_is_refused_even_after_its_bytes_moved(
+        store, plans, norms):
+    f = _plan(norms / "y.toml", _stages())
+    _bound_session(store, "i2", plans, f)
+    _plan(Path(f), _stages(s1={"renorms": [f]}))
+    before = store.path("i2").read_bytes()
+    d = _replan(store, "i2", f)
+    assert d.ok is False, \
+        "BEHAVIOUR: installing the obligation's file as the plan discharged it by moving it"
+    assert "installs" in _blockers(d)
+    assert store.path("i2").read_bytes() == before
+
+
+def test_every_plan_file_the_session_installed_is_refused_as_a_target(store, plans, norms):
+    _diagnosing(store, "i3", plans("v1"))
+    assert _critique(store, "i3", "ресурсное").ok is True
+    _normalize(store, "i3")
+    v2 = plans("v2", _stages(s1={"method": "second method"}))
+    assert _replan(store, "i3", v2).ok is True
+    v3 = plans("v3", _stages(s1={"method": "third method"}))
+    assert _replan(store, "i3", v3).ok is True
+    state = store.load("i3")
+    assert state.plan_path == v3
+    for earlier in (plans("v1"), v2):
+        assert Path(earlier).resolve() in {Path(p) for p in cli._session_plan_paths(state)}, \
+            "BEHAVIOUR: a plan file the session once installed is not recognised as a plan"
+
+
+# --- the sub-plan depth -------------------------------------------------------
+
+def _owed(path, *, stage=1, depth=0):
+    return {"target": path, "baseline": _digest(path), "stage": stage, "depth": depth}
+
+
+def test_depth_scopes_each_obligation_gate(norms):
+    f = _norm_file(norms)
+    state = SessionState(session_id="dp", task_id="dp")
+    state.pending_renorms = [_owed(f)]
+    no_reference = SimpleNamespace(stages=[SimpleNamespace(index=1, renorms=[])])
+    assert gates.pending_renorm_stage_blockers(state, 1)
+    assert gates.pending_renorm_final_blockers(state)
+    assert gates.renorm_retention_blockers(state, no_reference, [1])
+
+    state.plan_stack = [_make_frame(0)]
+    assert gates.pending_renorm_stage_blockers(state, 1) == [], \
+        "BEHAVIOUR: a parent plan's obligation bound a stage index of the child plan"
+    assert gates.pending_renorm_final_blockers(state) == [], \
+        "BEHAVIOUR: a parent plan's obligation blocked the child's verify-final"
+    assert gates.renorm_retention_blockers(state, no_reference, [1]) == [], \
+        "BEHAVIOUR: a child plan was held to retaining the parent's obligation"
+
+    rebinding = SimpleNamespace(stages=[SimpleNamespace(index=2, renorms=[f])])
+    (kept,) = gates.bound_renorms(state, rebinding, [2])
+    assert kept["stage"] == 1, "BEHAVIOUR: a child replan rebound the parent's obligation"
+    state.plan_stack = []
+    (rebound,) = gates.bound_renorms(state, rebinding, [2])
+    assert rebound["stage"] == 2
+
+
+def test_child_subplan_verifies_and_resolves_with_a_parent_obligation_open(
+        store, plans, norms):
+    f = _norm_file(norms)
+    _start(store, "d1", plans("base"))
+    _pass(store, "d1", 1)
+    cli.cmd_next_stage(ns(session="d1"), store=store)
+    _pass(store, "d1", 2)
+    state = store.load("d1")
+    owed = _owed(f, stage=2)
+    state.pending_renorms = [owed]
+    state.plan_stack = [_make_frame(0)]
+    store.save(state)
+
+    d = cli.cmd_verify_final(ns(session="d1"), store=store)
+    assert d.ok is True, f"BEHAVIOUR: the child's verify-final was held by the parent: {d.detail}"
+    assert store.load("d1").pending_renorms == [owed], \
+        "BEHAVIOUR: the child's verify-final dropped the parent's open obligation"
+    cli.cmd_plugin_record(ns(session="d1", plugin="experience", phase="searched"), store=store)
+    cli.cmd_plugin_record(ns(session="d1", plugin="experience", phase="recorded"), store=store)
+    d = cli.cmd_resolve(ns(session="d1", by="user", quality=5, quality_by="user-confirmed",
+                           quality_note=None), store=store)
+    assert d.ok is True, f"BEHAVIOUR: the child's resolve was held by the parent: {d.detail}"
+    assert store.load("d1").pending_renorms == [owed], \
+        "BEHAVIOUR: the child's resolve dropped the parent's open obligation"
+
+
+def test_verify_final_refusal_is_logged_as_a_gate(store, plans, norms, tmp_path, monkeypatch):
+    gate_log = tmp_path / "gates.jsonl"
+    monkeypatch.setattr(cli, "GATE_LOG", gate_log)
+    f = _norm_file(norms)
+    _start(store, "d2", plans("base"))
+    _pass(store, "d2", 1)
+    cli.cmd_next_stage(ns(session="d2"), store=store)
+    _pass(store, "d2", 2)
+    state = store.load("d2")
+    state.pending_renorms = [_owed(f, stage=2)]
+    store.save(state)
+    assert cli.cmd_verify_final(ns(session="d2"), store=store).ok is False
+    rows = [json.loads(line) for line in gate_log.read_text(encoding="utf-8").splitlines()]
+    (row,) = [r for r in rows if r["gate"] == "renorm_final"]
+    assert row["passed"] is False and f in " ".join(row["blockers"]), \
+        "BEHAVIOUR: the verify-final norm-edit refusal left no gate record"
+
+
+# --- --renormalize and re-attest keep the obligation --------------------------
+
+def _no_judge(argv, timeout=None):
+    return RunResult(1, "", "no such model")
+
+
+def _renormalize(store, sid, plan):
+    return cli.cmd_replan(
+        ns(session=sid, plan=plan, renormalize=True, coverage_waiver=None,
+           normalization_waiver=None, cost_log=None),
+        store=store, runner=_no_judge)
+
+
+def _with_obligation(store, sid, entry):
+    state = store.load(sid)
+    state.pending_renorms = [entry]
+    store.save(state)
+
+
+def test_renormalize_keeps_a_named_obligation_and_refuses_an_orphaned_one(
+        store, plans, norms, monkeypatch):
+    monkeypatch.setenv("AGENTCTL_ADVISOR", "0")
+    f = _norm_file(norms)
+    approved = plans("approved", _stages(s1={"renorms": [f], "procedure": "1. read 2. edit"}))
+    _start(store, "rn1", approved)
+    _with_obligation(store, "rn1", _owed(f))
+    d = _renormalize(store, "rn1", plans(
+        "resequenced", _stages(s1={"renorms": [f], "procedure": "1. edit 2. read"})))
+    assert d.ok is True, f"BEHAVIOUR: a procedure-only edit was refused: {d.detail}"
+    assert [e["target"] for e in store.load("rn1").pending_renorms] == [f], \
+        "BEHAVIOUR: --renormalize dropped an open obligation"
+
+    orphan = _norm_file(norms, "orphan.md")
+    _with_obligation(store, "rn1", _owed(orphan))
+    before = store.path("rn1").read_bytes()
+    d = _renormalize(store, "rn1", plans(
+        "resequenced-again", _stages(s1={"renorms": [f], "procedure": "1. edit 2. test"})))
+    assert d.ok is False, "BEHAVIOUR: --renormalize applied with an obligation no stage names"
+    assert orphan in _blockers(d)
+    assert store.path("rn1").read_bytes() == before
+
+
+def test_reattest_declines_a_stage_bound_to_an_unedited_norm(norms):
+    f = _norm_file(norms)
+    stage = _dev_stage()
+    store = _Mem(_reattest_state(stage, reattest_stash=[_reattest_stash(stage)]))
+    store.s.pending_renorms = [_owed(f, stage=stage.index)]
+    runner = _runner(control_returncode=0)
+
+    cli.cmd_dispatch(ns(session="ra", re_attest=True), store=store, runner=runner)
+
+    declined = [e for e in store.s.history if e["event"] == "reattest_declined"]
+    assert declined and "norm-edit obligation" in declined[-1]["reason"], \
+        "BEHAVIOUR: a re-attest was not declined for an unedited norm file"
+    assert store.s.stages[0].outcome.status == StageStatus.ACTIVE.value
+    assert [c[0] for c in runner.calls] == ["python3"], \
+        "BEHAVIOUR: the control was re-run for a stage whose norm edit is still owed"
+
+
+# --- paths and missing files ---------------------------------------------------
+
+def test_renorms_and_norm_target_compare_normalized(store, plans, norms):
+    f = _norm_file(norms)
+    messy_target = f"{norms}/./leaf.md"
+    messy_renorm = f"{norms}//leaf.md"
+    _diagnosing(store, "p1", plans("base"))
+    assert _critique(store, "p1", "нормативное", [messy_target]).ok is True
+    _normalize(store, "p1")
+    d = _replan(store, "p1", plans("renorm", _stages(s1={"renorms": [messy_renorm]})))
+    assert d.ok is True, f"BEHAVIOUR: equal paths written differently did not match: {d.detail}"
+    assert [e["target"] for e in store.load("p1").pending_renorms] == [f]
+
+
+def test_a_deleted_norm_file_counts_as_moved(store, plans, norms):
+    f = _norm_file(norms)
+    state = _bound_session(store, "p2", plans, f)
+    assert [e["target"] for e in gates.open_renorms(state)] == [f]
+    Path(f).unlink()
+    assert gates.open_renorms(store.load("p2")) == [], \
+        "BEHAVIOUR: a deleted norm file stayed an open obligation"
+    cli.cmd_next_stage(ns(session="p2"), store=store)
+    assert _pass(store, "p2", 1).ok is True
+
+
+# --- compatibility with a pre-change state file --------------------------------
+
+def _as_previous_schema(store, sid):
+    path = store.path(sid)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["schema_version"] = SCHEMA_VERSION - 1
+    data.pop("pending_renorms", None)
+    (data.get("difficulty") or {}).pop("norm_targets", None)
+    for stage in data.get("stages") or []:
+        stage.pop("renorms", None)
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def test_previous_schema_state_file_loads_through_the_store(store, plans):
+    _diagnosing(store, "m2", plans("base"))
+    _as_previous_schema(store, "m2")
+    state = store.load("m2")
+    assert state.pending_renorms == []
+    assert state.difficulty.norm_targets == []
+    assert all(s.renorms == [] for s in state.stages)
+    assert state.node == Node.DIAGNOSING.value
+
+
+def test_inflight_normative_record_without_targets_still_closes(store, fixtures_dir):
+    """A нормативное critique recorded before this change carries no targets: the closing
+    replan, and the waiver, behave as they did."""
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    _diagnosing(store, "m3", plan)
+    assert _critique(store, "m3", "ресурсное").ok is True
+    _seed(store, "m3", address="нормативное", targets=[])
+    _as_previous_schema(store, "m3")
+    _normalize(store, "m3")
+    d = _replan(store, "m3", refined)
+    assert d.ok is True, f"BEHAVIOUR: an in-flight нормативное record no longer closes: {d.detail}"
+    assert store.load("m3").pending_renorms == []
+
+    _diagnosing(store, "m4", plan)
+    assert _critique(store, "m4", "ресурсное").ok is True
+    _seed(store, "m4", address="нормативное", targets=[])
+    _as_previous_schema(store, "m4")
+    d = _replan(store, "m4", refined, normalization_waiver="genuinely one-off")
+    assert d.ok is True, f"BEHAVIOUR: the waiver regressed for an in-flight record: {d.detail}"

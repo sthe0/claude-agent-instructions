@@ -519,8 +519,10 @@ def stage_norm_digest(stage) -> str:
     return StageNorm.from_stage(stage).norm_digest()
 
 
-def _renorm_depth(state: SessionState) -> int:
-    return len(state.plan_stack)
+def _is_installing(target: str, installing_plan_path: str | None) -> bool:
+    """Whether `target` is the very file the replan is installing as the plan."""
+    return bool(installing_plan_path) and os.path.realpath(target) == os.path.realpath(
+        installing_plan_path)
 
 
 def _record_file_targets(state: SessionState) -> list[dict]:
@@ -534,7 +536,8 @@ def _stages_naming(new_plan, target: str) -> list[int]:
     return sorted(s.index for s in new_plan.stages if target in s.renorms)
 
 
-def normative_edit_blockers(state: SessionState, new_plan, pending_indices) -> list[str]:
+def normative_edit_blockers(state: SessionState, new_plan, pending_indices,
+                            installing_plan_path: str | None = None) -> list[str]:
     """Closure precondition of a DIAGNOSING replan whose difficulty record carries norm
     targets: the corrected plan must actually be the re-norming the critique named.
     Keyed on the record carrying targets, not on its failure_address label -- a record
@@ -549,7 +552,9 @@ def normative_edit_blockers(state: SessionState, new_plan, pending_indices) -> l
     PASSED stage is no consequence, that stage never runs again).
 
     `pending_indices` is the set of `new_plan` stage indices this replan does NOT carry
-    forward as PASSED -- supplied by the caller, which owns the carry decision."""
+    forward as PASSED -- supplied by the caller, which owns the carry decision.
+    `installing_plan_path` is the file the replan installs as the plan: a file target that
+    is that file is no norm, its bytes move with the replan itself."""
     if state.node != Node.DIAGNOSING.value:
         return []
     d = state.difficulty
@@ -568,6 +573,12 @@ def normative_edit_blockers(state: SessionState, new_plan, pending_indices) -> l
                     f"norm (title, result image, criterion, method, means, ...), "
                     f"not just its place in the plan"
                 )
+            continue
+        if _is_installing(target, installing_plan_path):
+            out.append(
+                f"norm target {target}: is the plan file this replan installs, whose bytes "
+                f"move with the replan itself -- name a plan norm as `stage:<n>`"
+            )
             continue
         naming = _stages_naming(new_plan, target)
         if not naming:
@@ -594,16 +605,27 @@ def open_renorms(state: SessionState) -> list[dict]:
             if file_norm_digest(e.get("target", "")) == e.get("baseline")]
 
 
-def renorm_retention_blockers(state: SessionState, new_plan, pending_indices) -> list[str]:
+def renorm_retention_blockers(state: SessionState, new_plan, pending_indices,
+                              installing_plan_path: str | None = None) -> list[str]:
     """An obligation outlives the replan that admitted it: every later replan (of any
     kind) must keep each still-open target of THIS plan frame named in `renorms` of a
     stage it leaves pending. Obligations bound at another plan depth are not judged here
-    -- their stage indices belong to a different plan."""
+    -- their stage indices belong to a different plan. An obligation whose file is the
+    plan being installed is refused whether or not its bytes moved: the replan itself
+    moves them, so the digest says nothing about a norm edit."""
     pending = set(pending_indices)
-    depth = _renorm_depth(state)
+    depth = len(state.plan_stack)
     out: list[str] = []
-    for e in open_renorms(state):
+    for e in state.pending_renorms:
         if e.get("depth", 0) != depth:
+            continue
+        if _is_installing(e["target"], installing_plan_path):
+            out.append(
+                f"open norm-edit obligation {e['target']}: is the plan file this replan "
+                f"installs, whose bytes move with the replan itself"
+            )
+            continue
+        if file_norm_digest(e["target"]) != e.get("baseline"):
             continue
         naming = _stages_naming(new_plan, e["target"])
         if not any(i in pending for i in naming):
@@ -621,7 +643,7 @@ def bound_renorms(state: SessionState, new_plan, pending_indices) -> list[dict]:
     moved obligations discharged, open ones rebound to the lowest-index pending stage
     naming them, and the closing record's unedited file targets admitted. Pure."""
     pending = set(pending_indices)
-    depth = _renorm_depth(state)
+    depth = len(state.plan_stack)
     out: list[dict] = []
     seen: set[str] = set()
     for e in open_renorms(state):
@@ -649,7 +671,7 @@ def bound_renorms(state: SessionState, new_plan, pending_indices) -> list[dict]:
 def pending_renorm_stage_blockers(state: SessionState, stage_index: int) -> list[str]:
     """record-result PASS gate: a stage bound to a still-open obligation does not pass
     while the norm file it was to edit has its baseline bytes."""
-    depth = _renorm_depth(state)
+    depth = len(state.plan_stack)
     return [
         f"stage {stage_index} is bound to norm target {e['target']}, which still has its "
         f"baseline bytes -- edit it (the re-norming act), then record the result"
@@ -659,12 +681,17 @@ def pending_renorm_stage_blockers(state: SessionState, stage_index: int) -> list
 
 
 def pending_renorm_final_blockers(state: SessionState) -> list[str]:
-    """verify-final / resolve gate: no open norm-edit obligation may remain."""
+    """verify-final / resolve gate: no open norm-edit obligation of THIS plan frame may
+    remain. A parent frame's obligation is not this frame's to close -- a service
+    sub-plan could otherwise never resolve and pop back to the stage that owes the edit;
+    the parent's own verify-final / resolve judge it once it is the live frame again."""
+    depth = len(state.plan_stack)
     return [
         f"norm target {e['target']} (bound to stage {e.get('stage')}) was named by a "
         f"нормативное critique and its file still has its baseline bytes -- edit it, "
         f"the re-norming act that closes the difficulty"
         for e in open_renorms(state)
+        if e.get("depth", 0) == depth
     ]
 
 

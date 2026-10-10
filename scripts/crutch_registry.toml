@@ -6003,7 +6003,39 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "ff10491ba4f40259"
+domain = "code"
+file = "scripts/tests/test_failure_address_consequence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "a3e334f86a056aed"
+domain = "code"
+file = "scripts/tests/test_failure_address_consequence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "26872118f34a28f2"
+domain = "code"
+file = "scripts/tests/test_failure_address_consequence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "528cbf6237bb0973"
+domain = "code"
+file = "scripts/tests/test_failure_address_consequence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "d8f9a5aab813657d"
 domain = "code"
 file = "scripts/tests/test_failure_address_consequence.py"
 class = "not-a-gate"
@@ -6027,6 +6059,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "ee4bbffdd9c44a7b"
+domain = "code"
+file = "scripts/tests/test_failure_address_consequence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "603bbf2db723eba8"
+domain = "code"
+file = "scripts/tests/test_failure_address_consequence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "5d7292cdbe899cd5"
 domain = "code"
 file = "scripts/tests/test_failure_address_consequence.py"
@@ -6036,6 +6084,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "6c13804cde39e86e"
+domain = "code"
+file = "scripts/tests/test_failure_address_consequence.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "44c6efa50edbfee2"
 domain = "code"
 file = "scripts/tests/test_failure_address_consequence.py"
 class = "not-a-gate"
@@ -17917,14 +17973,6 @@ file = "memory-global/leaves/coordination/MEMORY.md"
 class = "perception"
 disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
-
-[[entry]]
-id = "d9552dfb67f8032b"
-domain = "prose"
-file = "memory-global/leaves/coordination/MEMORY.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
 id = "d0a916372168cd5f"

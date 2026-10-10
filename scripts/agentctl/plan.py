@@ -55,8 +55,9 @@ TOML shape (minimal):
                                               # that neither exists yet nor is declared
                                               # here by some stage is unreachable-green.
     renorms = ["/abs/path/to/norm-file"]  # optional; the norm files this stage edits as a
-                                          # re-norming act, written exactly as given to
-                                          # `critique --norm-target`. Absolute paths only;
+                                          # re-norming act, as given to
+                                          # `critique --norm-target`. Absolute paths only
+                                          # (normalized before comparison);
                                           # a `stage:<n>` target is carried by editing that
                                           # stage, not listed here.
 
@@ -134,6 +135,7 @@ gate; wording-only edits (titles, expected-result prose) are refinements.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shlex
 import tomllib
@@ -541,8 +543,8 @@ def _validate_substantive_stage(s: dict, index: int) -> None:
 
 
 def _parse_renorms(raw: object, context: str) -> list[str]:
-    """The stage's `renorms`: absolute file paths exactly as given to
-    `critique --norm-target`. A `stage:<n>` target is carried by editing the stage
+    """The stage's `renorms`: absolute file paths, normalized (`os.path.normpath`) as the
+    `critique --norm-target` side is, so the two compare equal. A `stage:<n>` target is carried by editing the stage
     itself, so naming one here is refused; so is an empty, relative or non-string entry."""
     if raw is None:
         return []
@@ -561,10 +563,10 @@ def _parse_renorms(raw: object, context: str) -> list[str]:
             )
         if not entry.startswith("/"):
             raise PlanError(
-                f"{context}: renorms entry {entry!r} must be an absolute path, written "
-                f"exactly as given to `critique --norm-target`"
+                f"{context}: renorms entry {entry!r} must be an absolute path, as given "
+                f"to `critique --norm-target`"
             )
-        out.append(entry)
+        out.append(os.path.normpath(entry))
     return out
 
 
