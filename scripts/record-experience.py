@@ -28,19 +28,29 @@ Subcommands:
 Scope: --scope global (default; this repo's memory-global/leaves/experience)
 or --scope project --project-dir <dir> (<dir>/.claude/agent-memory/experience).
 
+Routing: the write subcommands (new, extend, ticket, set-last-verified) on the
+global scope never edit the canonical checkout in place. Run from the main
+checkout they write through a fresh worktree cut from origin/main, commit,
+land on origin/main, fast-forward the canonical checkout and remove the
+worktree (lib/worktree_route.py); run from a linked worktree they write there.
+search and promote-scan, and --scope project, are not routed.
+
 verify-experience-leaf.py enforces the shape this tool produces.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import edit_ledger  # noqa: E402
 from lib import semantic_join  # noqa: E402
+from lib import worktree_route  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "config.md"
@@ -663,8 +673,70 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+ROUTED_ENV = "RECORD_EXPERIENCE_ROUTED"
+WRITE_COMMANDS = ("new", "extend", "ticket", "set-last-verified")
+
+
+def _under_repo(path: str) -> bool:
+    try:
+        Path(path).resolve().relative_to(REPO_ROOT)
+    except ValueError:
+        return False
+    return True
+
+
+def needs_worktree(args) -> bool:
+    if args.cmd not in WRITE_COMMANDS or os.environ.get(ROUTED_ENV):
+        return False
+    if args.cmd in ("extend", "set-last-verified"):
+        return _under_repo(args.leaf)
+    return args.scope == "global"
+
+
+def rewrite_leaf_args(argv: list[str], worktree: Path) -> list[str]:
+    """Point every --leaf value under REPO_ROOT at the same path in `worktree`."""
+    def remap(value: str) -> str:
+        try:
+            return str(worktree / Path(value).resolve().relative_to(REPO_ROOT))
+        except ValueError:
+            return value
+
+    out: list[str] = []
+    expect_value = False
+    for tok in argv:
+        if expect_value:
+            tok, expect_value = remap(tok), False
+        elif tok == "--leaf":
+            expect_value = True
+        elif tok.startswith("--leaf="):
+            tok = "--leaf=" + remap(tok[len("--leaf="):])
+        out.append(tok)
+    return out
+
+
+def write_via_worktree(args, argv: list[str]) -> int:
+    label = Path(args.leaf).name if hasattr(args, "leaf") else args.slug
+    message = f"experience: {args.cmd} {label}"
+
+    def run_child(worktree: Path) -> tuple[int, str]:
+        proc = subprocess.run(
+            [sys.executable, str(worktree / "scripts" / "record-experience.py"),
+             *rewrite_leaf_args(argv, worktree)],
+            cwd=str(worktree), capture_output=True, text=True,
+            env={**os.environ, ROUTED_ENV: "1"},
+        )
+        sys.stderr.write(proc.stderr.replace(str(worktree), str(REPO_ROOT)))
+        return proc.returncode, proc.stdout.replace(str(worktree), str(REPO_ROOT))
+
+    return worktree_route.run_routed(REPO_ROOT, run_child, message)
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
+    if needs_worktree(args) and not worktree_route.routing_disabled() \
+            and worktree_route.is_main_checkout(REPO_ROOT):
+        return write_via_worktree(args, argv)
     return args.func(args)
 
 
