@@ -5147,6 +5147,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "057c2e5718232e7f"
+domain = "code"
+file = "scripts/tests/test_difficulty_stack.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "e18c1d69c33a87df"
 domain = "code"
 file = "scripts/tests/test_difficulty_stack.py"
@@ -30007,7 +30015,7 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
-id = "e43f172e459d9486"
+id = "989e98a0ada0bebb"
 domain = "prose"
 file = "skills/overcome-difficulty/SKILL.md"
 class = "already-mechanized"

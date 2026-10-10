@@ -712,10 +712,15 @@ def _difficulty_cap_directive(state: SessionState, cause: str, data: dict | None
     )
 
 
-def _archive_difficulty(state: SessionState) -> None:
+def _archive_difficulty(state: SessionState, waiver: str | None = None) -> None:
     """Leave the difficulty cycle: file the open record -- its closed children inside it,
     and any ancestor the stack still holds -- in `closed_difficulties`, where a later
-    reader finds it. An undeclared placeholder is not a difficulty and is dropped."""
+    reader finds it. An undeclared placeholder is not a difficulty and is dropped.
+    `waiver` is the `--normalization-waiver` reason the closing replan itself took; the
+    root record has no other way to carry it, and the filed record must show how it
+    closed the same way a nested one does."""
+    if waiver and state.difficulty is not None and not state.difficulty.normalization_waiver:
+        state.difficulty.normalization_waiver = waiver.strip()
     for rec in (*state.difficulty_stack, state.difficulty):
         if rec is not None and rec.declaration is not None:
             state.closed_difficulties.append(asdict(rec))
@@ -1937,9 +1942,14 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     )
     runtime_host.bind_runtime_host(new, getattr(args, "host", None), require=False)
     _adopt_parent_difficulty(new)
-    if new.parent_difficulty is None and prior is not None and prior.parent_difficulty:
-        # The session was spawned under that parent difficulty; a later `reset` runs
-        # without the spawn's env and must not turn it into a parentless root.
+    if (
+        new.parent_difficulty is None and prior is not None and prior.parent_difficulty
+        and prior.task_id == new.task_id
+    ):
+        # The session was spawned under that parent difficulty; a later `reset` of the
+        # same task runs without the spawn's env and must not turn it into a parentless
+        # root. A reset to a different task starts unrelated work, which must not stay
+        # nested under a parent record that may long since have closed.
         new.parent_difficulty = dict(prior.parent_difficulty)
     new.log("reset", task=new.task_id, prior_task=(prior.task_id if prior else None))
     if reopening:
@@ -8835,12 +8845,17 @@ def _record_normalization_waiver(args, state: SessionState, store: StateStore,
     """`normalize --normalization-waiver <reason>` at DIAGNOSING: the open record is
     declared to expose a genuinely one-off factor, so it carries the reason instead of a
     Normalization. It is the only way a NESTED record closes (`difficulty-close`) without
-    a factor; the root record closes through `replan`'s own waiver. Refused for an empty
-    reason, alongside a `--factor`, and for a record that names norm targets -- those
-    must be delivered by the closing plan, not waived."""
+    a factor; the root record closes through `replan`'s own waiver, which `replan` itself
+    files on the record. Refused for the root record (the stored field would be inert
+    there: `replan` never reads it), for an empty reason, alongside a `--factor`, and for
+    a record that names norm targets -- those must be delivered by the closing plan, not
+    waived."""
     d = state.difficulty
     refusal = None
-    if not waiver.strip():
+    if not state.difficulty_stack:
+        refusal = ("the open record is the root difficulty, which closes through replan: "
+                   "pass --normalization-waiver to `replan`, not to normalize")
+    elif not waiver.strip():
         refusal = "normalization waiver reason must not be empty"
     elif (getattr(args, "factor", None) or "").strip():
         refusal = ("normalize takes either --factor (the re-norming record) or "
@@ -8856,9 +8871,8 @@ def _record_normalization_waiver(args, state: SessionState, store: StateStore,
     _log_gate(state, "normalization_waiver", [], passed=True)
     store.save(state)
     return Directive(True, state.node, "replan",
-                     "one-off factor recorded on the open record as a normalization waiver; "
-                     "a nested record may now difficulty-close (the root record closes "
-                     "through replan, which takes its own --normalization-waiver)")
+                     "one-off factor recorded on the nested record as a normalization "
+                     "waiver; it may now difficulty-close")
 
 
 def _cmd_normalize_outside_diagnosing(args, state: SessionState, store: StateStore) -> Directive:
@@ -9380,7 +9394,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         )
     wtblock = gates.normalization_waiver_blockers(state, getattr(args, "normalization_waiver", None))
     if wtblock:
-        _log_gate(state, "normalization_waiver", ["record carries norm targets"], passed=False)
+        _log_gate(state, "normalization_waiver", wtblock, passed=False)
         return Directive(
             False, state.node, "normalize",
             "replan refused: the difficulty record names norm target(s) the closing plan "
@@ -9388,6 +9402,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             data={"blockers": wtblock},
         )
     nblock = gates.normalization_blockers(state, pending_factor=normalize_factor or None)
+    closing_waiver: str | None = None
     if nblock:
         waiver = getattr(args, "normalization_waiver", None)
         if waiver is None:
@@ -9404,6 +9419,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # of the difficulty-record completeness precondition checked above.
         state.log("normalization_waived", reason=waiver, blockers=list(nblock))
         _log_gate(state, "normalization_waiver", nblock, passed=True)
+        closing_waiver = waiver
     else:
         _log_gate(state, "normalization_blockers", nblock, passed=True)
 
@@ -9779,7 +9795,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             for s in state.stages:
                 if s.outcome.status == StageStatus.FAILED.value:
                     s.outcome.status = StageStatus.PENDING.value
-            _archive_difficulty(state)
+            _archive_difficulty(state, closing_waiver)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
             state.log("replan", kind="no_change", exited_diagnosing=True, plan=args.plan,
                       prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
@@ -9825,7 +9841,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         _sync_venue_from_plan(state, new)
         state.final_check = new.meta.final_check
         if diagnosing:
-            _archive_difficulty(state)
+            _archive_difficulty(state, closing_waiver)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
         state.log("replan", kind="refinement", exited_diagnosing=diagnosing, plan=args.plan,
                   prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
@@ -9893,7 +9909,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     state.plan_verified = True
     state.overall_done_criterion = new.meta.done_criterion or state.overall_done_criterion
     state.current_stage = None
-    _archive_difficulty(state)
+    _archive_difficulty(state, closing_waiver)
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
     state.log("replan", kind="substantive", plan=args.plan,

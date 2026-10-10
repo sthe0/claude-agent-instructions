@@ -614,12 +614,71 @@ def test_waiver_closes_a_target_less_nested_record_and_is_archived(store, fixtur
 
 def test_waiver_with_a_factor_or_empty_reason_is_refused(store, fixtures_dir):
     _diagnosing(store, "c7b", fixtures_dir)
+    _declare(store, "c7b")
+    _investigate(store, "c7b")
+    _open(store, "c7b")
     _work(store, "c7b", normalize=False)
     assert _waive(store, "c7b", "reason", factor="a factor").ok is False, \
         "BEHAVIOUR: normalize accepted a --factor together with a --normalization-waiver"
     assert _waive(store, "c7b", "   ").ok is False, \
         "BEHAVIOUR: an empty waiver reason was recorded"
     assert store.load("c7b").difficulty.normalization_waiver is None
+
+
+def test_waiver_is_refused_for_the_root_record_and_points_to_replan(store, fixtures_dir):
+    """The root record closes through `replan`, which never reads a stored waiver: taking
+    one on `normalize` would log a passed waiver that the closing replan then refuses."""
+    _diagnosing(store, "c7r", fixtures_dir)
+    _work(store, "c7r", normalize=False)
+    before = store.path("c7r").read_bytes()
+    d = _waive(store, "c7r")
+    assert d.ok is False, "BEHAVIOUR: normalize --normalization-waiver was accepted on the root record"
+    assert "replan" in _blockers(d), "BEHAVIOUR: the root-record refusal does not point to replan"
+    assert store.path("c7r").read_bytes() == before, \
+        "BEHAVIOUR: a refused root waiver changed the state file"
+
+
+def test_closing_replan_files_its_own_waiver_on_the_archived_root(store, fixtures_dir):
+    """The root's waiver is taken on `replan`; the filed record must show it the way a
+    nested record's waiver is shown."""
+    _diagnosing(store, "c7w", fixtures_dir)
+    _work(store, "c7w", normalize=False)
+    root_uid = store.load("c7w").difficulty.uid
+    d = _replan(store, "c7w", fixtures_dir / "plan_two_stage_refined.toml",
+                normalization_waiver="one-off root factor")
+    assert d.ok is True, d.detail
+    state = store.load("c7w")
+    filed = next(r for r in state.closed_difficulties if r["uid"] == root_uid)
+    assert filed["normalization_waiver"] == "one-off root factor", \
+        "BEHAVIOUR: the archived root does not show the waiver its closing replan took"
+    assert filed["normalization"] is None
+
+
+def test_closing_replan_with_a_factor_files_no_waiver_on_the_root(store, fixtures_dir):
+    _diagnosing(store, "c7x", fixtures_dir)
+    _work(store, "c7x")
+    root_uid = store.load("c7x").difficulty.uid
+    d = _replan(store, "c7x", fixtures_dir / "plan_two_stage_refined.toml",
+                normalization_waiver="not needed")
+    assert d.ok is True, d.detail
+    filed = next(r for r in store.load("c7x").closed_difficulties if r["uid"] == root_uid)
+    assert filed["normalization_waiver"] is None, \
+        "BEHAVIOUR: a waiver the replan did not need was filed on the root"
+
+
+def test_refused_waiver_gate_row_carries_the_blocker_text(store, fixtures_dir, tmp_path, monkeypatch):
+    log = tmp_path / "gate-log.jsonl"
+    monkeypatch.setattr(cli, "GATE_LOG", log)
+    sid = "c7g"
+    _with_child_target(store, tmp_path, fixtures_dir, sid, parent_address="ресурсное")
+    d = _replan(store, sid, fixtures_dir / "plan_two_stage_refined.toml",
+                normalization_waiver="genuinely one-off")
+    assert d.ok is False
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    waiver_rows = [r for r in rows if r["gate"] == "normalization_waiver" and r["passed"] is False]
+    assert waiver_rows, "BEHAVIOUR: the refused waiver left no gate row"
+    assert waiver_rows[-1]["blockers"] == d.data["blockers"], \
+        "BEHAVIOUR: the waiver gate row's blockers differ from the refusal's own text"
 
 
 def test_waiver_outside_a_difficulty_cycle_is_refused(store, fixtures_dir):
@@ -723,13 +782,27 @@ def test_reset_without_the_spawn_env_keeps_the_parent_link(store, fixtures_dir, 
     monkeypatch.setenv(PARENT_ENV, "parent-session:abc123def456:1")
     _diagnosing(store, "ch3", fixtures_dir)
     monkeypatch.delenv(PARENT_ENV)
-    d = cli.cmd_reset(ns(session="ch3", task="difficulty-stack-2", goal="", done_criterion="",
+    d = cli.cmd_reset(ns(session="ch3", task="difficulty-stack", goal="", done_criterion="",
                          criterion_type="measurable", recursion_depth=0, force=True),
                       store=store)
     assert d.ok is True, d.detail
     inherited = getattr(store.load("ch3"), "parent_difficulty", None)
     assert inherited == {"session": "parent-session", "uid": "abc123def456", "level": 1}, \
         f"BEHAVIOUR: a reset dropped the session's parent difficulty link: {inherited!r}"
+
+
+def test_reset_to_another_task_drops_the_parent_link(store, fixtures_dir, monkeypatch):
+    """A resumed child session that starts unrelated work is not nested under the parent
+    difficulty it was spawned for."""
+    monkeypatch.setenv(PARENT_ENV, "parent-session:abc123def456:1")
+    _diagnosing(store, "ch3b", fixtures_dir)
+    monkeypatch.delenv(PARENT_ENV)
+    d = cli.cmd_reset(ns(session="ch3b", task="an-unrelated-task", goal="", done_criterion="",
+                         criterion_type="measurable", recursion_depth=0, force=True),
+                      store=store)
+    assert d.ok is True, d.detail
+    assert store.load("ch3b").parent_difficulty is None, \
+        "BEHAVIOUR: a reset to a different task kept the old parent difficulty link"
 
 
 def test_env_format_and_parse_live_in_one_module():
