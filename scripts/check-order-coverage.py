@@ -50,7 +50,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from agentctl import controls  # noqa: E402
-from agentctl.plan import PlanError, load_plan  # noqa: E402
+from agentctl.plan import PlanError, _optional_rest_violations, load_plan  # noqa: E402
 
 
 def resolve_control(name: str, doc) -> str | None:
@@ -73,6 +73,7 @@ def coverage_violations(doc) -> list[str]:
             problem = resolve_control(control, doc)
             if problem:
                 out.append(f"requirement {req_id}: {problem}")
+    out.extend(_optional_rest_violations(doc))
     return out
 
 

@@ -131,3 +131,18 @@ python3 <scripts>/check-spawn-tool-run.py --list-denied --kind <kind>
 - **Genuinely reusable artifact that should also persist** (rare — e.g. a hand-curated anchor set meant to be read by every future run) → keep it committed, but make the plan state this explicitly as the stage's `Expected result image:` or a note, so a reviewer sees the classification was made on purpose rather than inherited from an existing convention.
 
 A convention already in the codebase (an existing `RESOURCES_DIR`/similar constant that writes pipeline output into a committed tree) is not evidence the destination is correct — it may itself be the uncorrected instance of this same difficulty. Do not defer this check to the developer stage or to code review: by the time either runs, the convention already exists and reads as settled. Second occurrence of this exact gap (2026-10-06, an internal project's `judge_calibration/` resources directory, ~54 MB of raw generation logs and run intermediates written by a pipeline CLI's own `RESOURCES_DIR` convention) found only via a direct user question, not via review — see [[committed-files-earn-their-place]] for the full incident.
+
+## Adjacent debt
+
+*Difficulty removed: while planning an order a planner often sees a nearby open backlog item the order does not ask for. Folding it in as a required stage is scope creep past the order; leaving it unmentioned loses the observation; asking the user a separate question for each one spends their attention on a side issue.*
+
+A plan may carry up to **two** stages marked `optional = true`, each naming the open issue it would close in `backlog_issue = "<repo>#<n>"` (`<repo>` may carry its owner: `owner/repo#<n>`). The user declines any of them at approval with `agentctl approve --skip-optional <stage index>` (repeatable); a declined stage becomes `SKIPPED`, is never dispatched and counts as settled for resolution. An optional stage not declined is an ordinary stage and has to pass.
+
+The loader enforces the bounds, so write the stage to fit them:
+
+- the stage traces to its `backlog_issue`, not to an order requirement — an optional stage is exempt from requirement traceability, and a required stage carries no `backlog_issue`;
+- **no required stage depends on an optional one** (an optional stage may depend on a required stage or on another optional one), so declining never strands work;
+- **no `[meta.order.coverage]` entry and no `[[final_check]]` rests only on an optional stage** — the order's requirements must be decided by required stages alone, because the user may decline every optional one;
+- at least one stage stays required.
+
+Use it for adjacent debt only: work the order does not need and that the user would plausibly want while the code is open. Not a place to park a requirement you are unsure of — that is an order question (§ Order), nor a way to make a stage "skippable" in the middle of the order's critical path.

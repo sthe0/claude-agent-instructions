@@ -820,6 +820,10 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.actor.cost_tier = refined.actor.cost_tier
     cur.actor.guard_exempt_paths = list(refined.actor.guard_exempt_paths)
     cur.supplies = list(refined.supplies)
+    cur.optional = refined.optional
+    cur.backlog_issue = refined.backlog_issue
+    if cur.outcome.status == StageStatus.SKIPPED.value and not cur.optional:
+        cur.outcome.status = StageStatus.PENDING.value
 
 
 def _sync_venue_from_plan(state: SessionState, doc: "PlanDoc | None" = None) -> None:
@@ -5867,6 +5871,37 @@ def cmd_accept(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     )
 
 
+def _skip_optional_problems(
+    indices: list[int], doc: "PlanDoc | None", state: SessionState, *, by_agent: bool,
+) -> list[str]:
+    """Why `approve --skip-optional <indices>` cannot be honoured; [] when it can."""
+    if by_agent:
+        return ["--skip-optional is the customer's decision and cannot be made with --by agent"]
+    if doc is None:
+        return ["--skip-optional needs a loadable plan at plan_path"]
+    by_index = {s.index: s for s in doc.stages}
+    problems: list[str] = []
+    for index in indices:
+        stage = by_index.get(index)
+        if stage is None:
+            problems.append(f"stage {index} does not exist")
+        elif not stage.optional:
+            problems.append(f"stage {index} is not optional (only `optional = true` stages can be declined)")
+    if problems:
+        return problems
+    declined = set(indices) | {
+        s.index for s in state.stages if s.outcome.status == StageStatus.SKIPPED.value
+    }
+    for stage in doc.stages:
+        stranded = sorted(d for d in stage.depends_on if d in declined)
+        if stage.index not in declined and stranded:
+            problems.append(
+                f"stage {stage.index} depends on declined stage(s) {stranded} — decline it too "
+                f"or keep them"
+            )
+    return problems
+
+
 def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     # plan_presentation_blockers is fail-open on the RECEIPT side (mirrors
     # plan_review_blockers) but fail-CLOSED on the DELIVERY side: approval — the
@@ -5925,8 +5960,17 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             # its own store.save() — so a fold left in memory would refuse the approve
             # while `question-candidate-dispose --id qenum-meta-1` had nothing to find.
             store.save(state)
-    review_blockers = gates.plan_review_blockers(state, state.plan_path)
+    skip_optional = sorted(set(getattr(args, "skip_optional", None) or []))
     by_agent = bool(args.by and args.by.strip().casefold() == AGENT_ACTOR)
+    if skip_optional:
+        skip_problems = _skip_optional_problems(
+            skip_optional, _approved_doc, state, by_agent=by_agent)
+        if skip_problems:
+            return Directive(False, state.node, "fix_plan",
+                             "cannot approve: --skip-optional names stages that cannot be "
+                             "declined (fix the indices and re-run approve)",
+                             data={"problems": skip_problems})
+    review_blockers = gates.plan_review_blockers(state, state.plan_path)
     blockers = (
         gates.blockers(state, "plan_approval")
         + plugins.plugin_gate_blockers(state, "plan_approval")
@@ -5984,6 +6028,14 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # The single-buffer read above failed (OSError/PlanError) -- fall back to
         # the legacy best-effort re-read rather than leaving the digest stale.
         _stamp_accepted_plan_digest(state, state.plan_path)
+    # Before arm: the effort estimate the window is armed against must not price work the
+    # user just declined.
+    for skipped_index in skip_optional:
+        skipped = state.stage(skipped_index)
+        skipped.outcome.status = StageStatus.SKIPPED.value
+        skipped.outcome.actual = "declined at approval (optional stage)"
+    if skip_optional:
+        state.log("skip_optional", by=args.by, stages=skip_optional)
     effort.arm(state)  # opens the effort-divergence window — see effort.py's ARMED-ONLY
     # Fold this session's review-round counts into the cross-session task accumulator
     # (item B) BEFORE the reset-to-0 below — approval is the reset point, so this is
@@ -6253,7 +6305,7 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
         # (every stage already PASSED); a genuine dependency problem (a non-ready,
         # non-PASSED stage) must NOT be silently finalized, so it keeps the prior
         # non-ok directive below.
-        if state.node == Node.PARTITIONED.value and state.all_stages_passed():
+        if state.node == Node.PARTITIONED.value and state.all_stages_settled():
             state.node = transition(state.node, "finalize_partitioned")
             state.log("finalize_partitioned")
             store.save(state)
@@ -6444,7 +6496,7 @@ def _try_reattest(
     state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
     state.log("reattest", stage=stage.index)
     store.save(state)
-    if state.all_stages_passed():
+    if state.all_stages_settled():
         return Directive(True, state.node, "verify_final",
                           f"stage {stage.index} re-attested; all stages passed")
     return Directive(True, state.node, "next_stage",
@@ -8289,7 +8341,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
             fire = _record_effort_fire(state, div, now=now)
             return _diagnose_effort_divergence(state, store, div, fire)
         store.save(state)
-        if state.all_stages_passed():
+        if state.all_stages_settled():
             d = Directive(True, state.node, "verify_final", f"stage {stage.index} passed; all stages passed")
         else:
             d = Directive(True, state.node, "next_stage", f"stage {stage.index} passed; more stages ready")
@@ -8404,6 +8456,8 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
     failures: list[str] = []
     for stage in state.stages:
+        if stage.outcome.status == StageStatus.SKIPPED.value:
+            continue
         crit = stage.criterion
         if crit.criterion_type == CriterionType.MEASURABLE.value and crit.verify_kind == CheckKind.LANDED.value:
             # No re-freeze here: verify-final re-checks the delivered_head each
@@ -10000,9 +10054,14 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     state.reattest_stash = reattest_stash
     for ns in new.stages:
         prev = live_by_index.get(ns.index)
-        if (prev is not None
-                and prev.outcome.status == StageStatus.PASSED.value
-                and stage_carried(state.stages, new.stages, ns.index)):
+        if prev is None or not stage_carried(state.stages, new.stages, ns.index):
+            continue
+        # A declined optional stage whose definition did not move stays declined, so an
+        # in-boundary self-approved replan does not silently revive work the user turned
+        # down; a changed one goes back to PENDING for a fresh choice at re-approval.
+        if prev.outcome.status == StageStatus.PASSED.value or (
+            prev.outcome.status == StageStatus.SKIPPED.value and ns.optional
+        ):
             ns.outcome = prev.outcome
     state.stages = new.stages
     _sync_venue_from_plan(state, new)
@@ -11450,6 +11509,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="why this acceptance stands without judge corroboration "
                          "(required with --bypass)")
     sp = add("approve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
+    sp.add_argument("--skip-optional", dest="skip_optional", type=int, action="append",
+                    default=[], metavar="INDEX",
+                    help="decline an `optional = true` stage at approval (repeatable); the "
+                         "stage is marked SKIPPED, never dispatched, and counts as settled")
     _UNIT_HELP = ("delivery unit as '<mode>|<stages csv>|<title>[|<ref>]' "
                   "(mode: inline|spawn|subtask); repeatable")
     sp = add("partition"); sp.add_argument("--session", required=True)

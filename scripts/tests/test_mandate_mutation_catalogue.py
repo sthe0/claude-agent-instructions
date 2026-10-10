@@ -26,6 +26,7 @@ EXPECTED_ENTRIES = (
     "digest-limits", "digest-skipped-comments", "digest-delivery-eligibility", "notifier-precedence",
     "overrun-not-breaker", "single-instance-lock", "triage-label-logged", "no-issue-create",
     "no-user-authority-calls", "mandate-state-tamper", "triage-org-neutral",
+    "skipped-is-settled", "optional-not-depended", "optional-max-two", "optional-coverage-rule",
 )
 
 

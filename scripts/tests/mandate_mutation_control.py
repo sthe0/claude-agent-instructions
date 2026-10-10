@@ -45,6 +45,9 @@ DRIVER = "mandate_cycle/driver.py"
 NOTIFIERS = "mandate_cycle/notifiers.py"
 T_CYCLE = "tests/test_mandate_cycle.py"
 T_NOTIFIER = "tests/test_mandate_notifier.py"
+STATE = "agentctl/state.py"
+PLAN = "agentctl/plan.py"
+T_OPTIONAL = "tests/test_optional_stages.py"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
 CONTROL_RED = 7
@@ -333,6 +336,41 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_a_triage_comment_is_not_posted_unless_the_org_neutral_check_is_clean[2]",
         ),
     ),
+    "skipped-is-settled": Mutant(
+        STATE,
+        "_SETTLED_STATUSES = frozenset({StageStatus.PASSED.value, StageStatus.SKIPPED.value})",
+        "_SETTLED_STATUSES = frozenset({StageStatus.PASSED.value})",
+        _ids(
+            T_OPTIONAL,
+            "test_the_settled_helper_is_exactly_passed_or_skipped",
+            "test_a_skipped_stage_resolves_the_plan",
+            "test_resolution_gate_counts_a_skipped_stage_as_settled",
+            "test_resolved_invariant_accepts_skipped_and_refuses_pending",
+        ),
+    ),
+    "optional-not-depended": Mutant(
+        PLAN,
+        "bad = sorted(d for d in s.depends_on if d in optional_ids)",
+        "bad = []",
+        _ids(T_OPTIONAL, "test_loader_rejects[a required stage depending on an optional one]"),
+    ),
+    "optional-max-two": Mutant(
+        PLAN,
+        "if len(optional) > MAX_OPTIONAL_STAGES:",
+        "if len(optional) > MAX_OPTIONAL_STAGES + 1:",
+        _ids(T_OPTIONAL, "test_loader_rejects[three optional stages]"),
+    ),
+    "optional-coverage-rule": Mutant(
+        PLAN,
+        "    if optional:\n        out.extend(_optional_rest_violations(doc))",
+        "    if False:\n        out.extend(_optional_rest_violations(doc))",
+        _ids(
+            T_OPTIONAL,
+            "test_loader_rejects[a requirement covered only by an optional stage]",
+            "test_loader_rejects[a requirement whose only landed assertion is on an optional stage]",
+            "test_loader_rejects[a final_check resting on an optional stage]",
+        ),
+    ),
 }
 
 
@@ -364,6 +402,7 @@ def _run_child(subject: Path, ids: "tuple[str, ...]", xml_path: Path) -> int:
 def _copy_subject(parent: Path) -> Path:
     subject = parent / "scripts"
     shutil.copytree(SCRIPTS_DIR, subject, symlinks=True, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
+    shutil.copy2(SCRIPTS_DIR.parent / "config.md", parent / "config.md")
     return subject
 
 

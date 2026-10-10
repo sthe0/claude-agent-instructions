@@ -711,6 +711,18 @@ The mandated reviews are in the estimate deliberately: they are derivable from t
 
 **Round-release override.** When the review-round budget is spent (`gates.plan_review_round_release_active` / the cross-axis friction release) `plan-review --verdict override --reviewer agent` records the coordinator's own decision, never counts as the first thinker verdict for the boundary, and the next present/`PLAN-READY` Directive carries `data["agent_review_override"]` so the user sees it.
 
+## Optional stages
+
+*Difficulty removed:* adjacent backlog debt a planner notices while planning an order either inflates the order's scope or goes unrecorded. A stage may declare `optional = true` and `backlog_issue = "<repo>#<n>"`; the user decides at approval whether it is done.
+
+- **Loader rules** (`plan.optional_stage_violations`, `plan._optional_rest_violations`): at most `plan.MAX_OPTIONAL_STAGES` (2) optional stages; each needs a well-formed `backlog_issue`, and a required stage may not carry one; no required stage depends on an optional one; at least one stage stays required; no `[meta.order.coverage]` entry and no `[[final_check]]` may rest only on optional stages (`check-order-coverage.py` reports the same rule). An optional stage is exempt from order-requirement traceability, since it traces to its issue. `optional` and `backlog_issue` are part of the stage's structural signature and the plan content digest (conditionally, so a plan with no optional stage digests as before).
+- **`approve --skip-optional <index>`** (repeatable) is the customer's decision: refused with `--by agent`, for an unknown or non-optional stage, and for a stage a kept stage depends on. Each declined stage gets `StageStatus.SKIPPED` and a `skip_optional` log event. A SKIPPED stage is never in `ready_stages`, so `dispatch` never picks it.
+- **Settled, not passed.** Every "the plan is finished" decision goes through `state.is_settled` / `SessionState.all_stages_settled` (PASSED or SKIPPED): the resolution gate and the RESOLVED invariant, `verify-final`, `next-stage`, the tracker progress summary, and the effort estimate (a SKIPPED stage is not priced). `all_stages_passed` remains as an alias for out-of-engine hooks. Reachability counts only non-optional producers, since an optional output may never be produced.
+- **Replan** keeps a stage SKIPPED only while its definition is unchanged and it is still optional.
+- `plan-render` marks optional stages with their backlog issue.
+
+*Universal quantification:* [`../tests/test_optional_stages.py`](../tests/test_optional_stages.py) carries an AST + line-grep enumerator over `scripts/` that fails on any single-stage `PASSED` comparison not on its allowlist (one reason per entry; a stale entry also fails). The four bounds above have catalogue entries `skipped-is-settled`, `optional-not-depended`, `optional-max-two` and `optional-coverage-rule` in [`../tests/mandate_mutation_control.py`](../tests/mandate_mutation_control.py).
+
 ## Mandate
 
 A **mandate** is the user's one-time, bounded grant of authority to the background debt cycle (a timer-driven worker that triages the backlog, fixes eligible issues and opens review-gated pull requests). It is not a session and has no node in the state machine: it is a standing record under `~/.claude-agent/agentctl/mandates/<id>/` (override: `$AGENTCTL_MANDATE_DIR`, which the tests set), and the `mandate-*` verbs are session-independent in the way `task-reset` is (`--session` is accepted and ignored so the default-session injection does not crash argparse).

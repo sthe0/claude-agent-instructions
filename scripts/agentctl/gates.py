@@ -70,7 +70,7 @@ from .plan import (
 )
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
-from .state import CONCERN_OPEN, Node, PAIR_BINDING_KEYS, Route, SessionState, StageStatus, WeightClass
+from .state import CONCERN_OPEN, Node, PAIR_BINDING_KEYS, Route, SessionState, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
@@ -78,6 +78,7 @@ from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESS
 from .state import PLAN_PRESENTATION_KIND_REPLAN_DIFF as _PLAN_PRESENTATION_KIND_REPLAN_DIFF
 from .state import Stage as _Stage
 from .state import asserts_landing
+from .state import is_settled
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
 from .text_shape import normalize_string as _normalize_string
 
@@ -119,7 +120,7 @@ def resolution_blockers(state: SessionState) -> list[str]:
     out: list[str] = []
     if not state.stages:
         out.append("no stages defined")
-    unpassed = [s.index for s in state.stages if s.outcome.status != StageStatus.PASSED.value]
+    unpassed = [s.index for s in state.stages if not is_settled(s)]
     if unpassed:
         out.append(f"stages not PASSED: {unpassed}")
     out.extend(_acceptance_review_resolution_blockers(state))
