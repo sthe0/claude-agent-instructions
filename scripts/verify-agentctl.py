@@ -758,9 +758,6 @@ ENUMERATION_WRITERS = {
     ("_apply_enumeration_result", "enumerate_pass"),
     ("_apply_enumeration_result", "enumerated_runner_ok"),
     ("_apply_enumeration_result", "enumerated_runner_stderr"),
-    ("_launch_enumeration", "enumerated"),
-    ("_launch_enumeration", "enumerated_at"),
-    ("_launch_enumeration", "enumerate_launch"),
     # The ledger's own bag, which carries no counters and gates nothing.
     ("cmd_ledger_enumerate", "enumerated"),
 }
@@ -826,15 +823,14 @@ def enumeration_bag_writers(tree: ast.AST) -> set[tuple[str, str]]:
 def check_enumeration_writers() -> list[str]:
     """Pin who may write the premise bag's enumeration fields.
 
-    An escape recorded at the plan_approval gate binds to `enumerate_launch` and
-    `enumerate_pass`, so a producer that sets `enumerated` without going through
-    `_apply_enumeration_result` leaves the counters behind and an escape from an
-    earlier pass silently discharges the blocker the new pass raised — the
-    fail-open class this whole path exists to close. `enumerated_runner_ok` is
-    pinned for the sharper version of the same class: it is the field the
-    runner-failure blocker reads, so a writer that flips it to True outside a real
-    pass discharges that blocker without one, and `enumerated_runner_stderr` is
-    what pre-selects the escape reason it would be discharged with.
+    The standalone enumeration is retired for new plans (amendments-2.md E3): the
+    detached launch and the sidecar fold that wrote `enumerate_launch` and the
+    deadline are gone, and `_apply_enumeration_result` survives only as the `qenum-`
+    upsert for legacy bags — no engine path calls it for a new plan. It stays the
+    ONE writer of `enumerated`, `enumerated_at`, `enumerate_pass`,
+    `enumerated_runner_ok` and `enumerated_runner_stderr`, so those legacy counters
+    and flags cannot be set by a producer that skips it. `enumerate_launch` keeps its
+    place in ENUMERATION_KEYS, so a new writer of it is refused as well.
     `cmd_ledger_enumerate` shows the bypass shape already exists in the module (on
     a different, ungated bag).
     """
@@ -843,10 +839,10 @@ def check_enumeration_writers() -> list[str]:
     problems: list[str] = []
     for scope, key in sorted(found - ENUMERATION_WRITERS):
         problems.append(
-            f"cli.py: {scope}() writes bag[{key!r}] outside _apply_enumeration_result/"
-            f"_launch_enumeration — an enumeration write that skips the pass counter "
-            f"lets a stale escape discharge a live blocker; route it through "
-            f"_apply_enumeration_result or add it to ENUMERATION_WRITERS deliberately"
+            f"cli.py: {scope}() writes bag[{key!r}] outside _apply_enumeration_result "
+            f"— an enumeration write that skips the pass counter lets a stale escape "
+            f"discharge a live blocker; route it through _apply_enumeration_result "
+            f"or add it to ENUMERATION_WRITERS deliberately"
         )
     for scope, key in sorted(ENUMERATION_WRITERS - found):
         problems.append(

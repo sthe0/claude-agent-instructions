@@ -1065,6 +1065,11 @@ def test_tb22_protocol_text_pins_markers_echo_concerns_and_per_pair_steps():
         "or `note: ...`, where <marker> is the condition the concern concerns "
         "(`C1:`, `C2:`, `C3:`, `C4:`); a condition-4 gap is a `C4:` line. "
         "An untagged concern line is refused.",
+        "- after the concerns, a line `Customer questions:` followed by one "
+        "`Q: <question>` line per question only the customer can decide (a choice or a "
+        "fact this pair depends on and the plan does not settle), or "
+        "`Customer questions: none`. A question is not a plan remark: a flaw the "
+        "coordinator can fix is a concern, not a question.",
     ]
     assert "  - Block only on a part that changed since the last review of this pair, or on " \
         "a part that still carries an unresolved blocker, re-raised as `re:<concern-id>` " \

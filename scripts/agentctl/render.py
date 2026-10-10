@@ -28,6 +28,9 @@ from . import grants as _grants
 from .directive import Directive
 from .plan import (
     CONDITION_MARKERS,
+    CUSTOMER_QUESTION_MARKER,
+    CUSTOMER_QUESTIONS_MARKER,
+    CUSTOMER_QUESTIONS_NONE,
     PLAN_DIGEST_MARKER,
     RESTATES_PREFIX,
     REVIEW_MARKER,
@@ -972,6 +975,13 @@ def _protocol_lines(history: "dict | None", noun: str) -> list[str]:
             f"unfixed, as `{RESTATES_PREFIX}<concern-id>`. Raise any other prior concern again "
             f"only as `{RESTATES_PREFIX}<concern-id>`; do not restate a settled concern as new."
         )
+    lines.append(
+        f"- after the concerns, a line `{CUSTOMER_QUESTIONS_MARKER}` followed by one "
+        f"`{CUSTOMER_QUESTION_MARKER} <question>` line per question only the customer can "
+        f"decide (a choice or a fact this {noun} depends on and the plan does not settle), or "
+        f"`{CUSTOMER_QUESTIONS_MARKER} {CUSTOMER_QUESTIONS_NONE}`. A question is not a plan "
+        f"remark: a flaw the coordinator can fix is a concern, not a question."
+    )
     lines.append(
         f"The {REVIEW_MARKER} block is the last thing in your reply, with no other "
         f"marker (COMPLETED:, REPLAN:, etc.) after it."

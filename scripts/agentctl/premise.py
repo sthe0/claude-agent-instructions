@@ -769,9 +769,9 @@ def question_candidates_to_dicts(candidates: list[QuestionCandidate]) -> list[di
 def validate_question_candidates(
     candidates: list[QuestionCandidate], questions: list[Question]
 ) -> list[str]:
-    """Pure: a candidate bag (raised by an enumeration cross-check pass, stage 5)
-    + the question bag it references -> blockers (empty iff every candidate is
-    dispositioned). Mirrors ledger.validate_candidates' FORM — a bare 'raised'
+    """Pure: a candidate bag (`qrev-` rows raised by review acts' customer questions,
+    or legacy `qenum-` rows of an enumeration cross-check pass) + the question bag
+    it references -> blockers (empty iff every candidate is dispositioned). Mirrors ledger.validate_candidates' FORM — a bare 'raised'
     candidate always blocks, 'dismissed' needs a reason, 'recorded' needs a
     pointer that resolves — but does not import ledger.Candidate: its `claim`
     field names the wrong referent for a question-enumeration candidate.

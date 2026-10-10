@@ -1,13 +1,13 @@
 """Stage 2 of norm-staleness: one norm delta read by every consumer of "what changed".
 
 The difficulty: a plan edit that left a stage's deliverable alone still re-opened work
-keyed on the whole stage definition -- the enumeration re-read every question target of a
-moved stage, a covered order element went stale on a change to HOW the stage proceeds, a
-verify_command rewrite that kept its program and script was judged substantive, and a
-refinement that changed a command the engine cannot resolve passed as inside the
-autonomy boundary. Each case is exercised here against the real `plan`/`cli`/`premise`
-code; the pure `plan.norm_delta` API is called at test time (not imported by name), so
-this module collects on a tree that predates it."""
+keyed on the whole stage definition -- a covered order element went stale on a change to
+HOW the stage proceeds, a verify_command rewrite that kept its program and script was
+judged substantive, and a refinement that changed a command the engine cannot resolve
+passed as inside the autonomy boundary. Each case is exercised here against the real
+`plan`/`cli`/`premise` code; the pure `plan.norm_delta` API is called at test time (not
+imported by name), so this module collects on a tree that predates it. (The enumeration
+narrowing this module once also covered went with the standalone enumerator.)"""
 from __future__ import annotations
 
 import json
@@ -25,17 +25,6 @@ from agentctl.text_shape import WHOLE_STAGE_ELEMENT
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 LAND_BRANCH = Path(__file__).resolve().parents[1] / "land-branch.py"
-
-
-def _runner(stdout):
-    prompts: list[str] = []
-
-    def run(argv, **kw):
-        prompts.append(kw.get("stdin", ""))
-        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
-
-    run.prompts = prompts
-    return run
 
 
 _STAGE_TMPL = """\
@@ -93,142 +82,6 @@ def _state(store, plan_path, sid="s"):
     state.plan_path = str(plan_path)
     store.save(state)
     return state
-
-
-def _enumerate(store, run, sid="s"):
-    return cli.cmd_question_enumerate(
-        Namespace(session=sid, reopen_dismissed=False), store=store, runner=run)
-
-
-def _bag(store, sid="s"):
-    return store.load(sid).plugins["premise"]
-
-
-def _first_pass(store, tmp_path, stages=None, **plan_kwargs):
-    plan_path = _write_plan(tmp_path / "plan.toml", stages or BASE, **plan_kwargs)
-    _state(store, plan_path)
-    _enumerate(store, _runner(""))
-    return plan_path
-
-
-def _candidate_targets(store):
-    return {c["target"] for c in _bag(store)["candidates"]}
-
-
-# --- enumeration narrowed to the moved elements of moved stages -------------------
-
-def test_unmoved_element_of_a_moved_stage_is_out_of_scope(store, tmp_path):
-    """Only the result image of stage 1 changed: a question addressed to its means is
-    listed as out of scope, a question addressed to its result is raised."""
-    plan_path = _first_pass(store, tmp_path)
-    _write_plan(plan_path, EDITED_RESULT)
-    d = _enumerate(store, _runner(
-        "stage:1.means\tis the tool right?\nstage:1.result\tis the image checkable?"))
-
-    assert _candidate_targets(store) == {"stage:1.result"}
-    assert d.data["out_of_scope"] == [
-        {"target": "stage:1.means", "question": "is the tool right?",
-         "reason": premise.CANDIDATE_UNMOVED_ELEMENT},
-    ]
-
-
-def test_moved_element_pair_survives(store, tmp_path):
-    """The pair addressed to the element that moved is an ordinary candidate."""
-    plan_path = _first_pass(store, tmp_path)
-    _write_plan(plan_path, EDITED_RESULT)
-    d = _enumerate(store, _runner("stage:1.result\tis the image checkable?"))
-
-    assert d.data["out_of_scope"] == []
-    assert _candidate_targets(store) == {"stage:1.result"}
-
-
-def test_whole_stage_mapped_element_survives_when_the_stage_moved(store, tmp_path):
-    """`order` shares the whole-stage key, so any move of the stage moves it."""
-    plan_path = _first_pass(store, tmp_path)
-    _write_plan(plan_path, EDITED_RESULT)
-    _enumerate(store, _runner("stage:1.order\tis the order of this stage right?"))
-
-    assert _candidate_targets(store) == {"stage:1.order"}
-
-
-def test_bag_without_element_baselines_keeps_whole_stage_scope(store, tmp_path):
-    """A bag written before element baselines existed cannot say which element moved:
-    every element of a moved stage stays in scope."""
-    plan_path = _first_pass(store, tmp_path)
-    state = store.load("s")
-    state.plugins["premise"].pop("enumerated_stage_elements", None)
-    store.save(state)
-    _write_plan(plan_path, EDITED_RESULT)
-    d = _enumerate(store, _runner(
-        "stage:1.means\tis the tool right?\nstage:1.result\tis the image checkable?"))
-
-    assert d.data["out_of_scope"] == []
-    assert _candidate_targets(store) == {"stage:1.means", "stage:1.result"}
-
-
-def test_pass_records_element_baselines_of_the_stages_it_read(store, tmp_path):
-    plan_path = _first_pass(store, tmp_path)
-    recorded = _bag(store).get("enumerated_stage_elements") or {}
-    assert set(recorded) == {"1", "2"}
-    assert recorded["1"]["result"] != recorded["2"]["result"]
-
-    _write_plan(plan_path, EDITED_RESULT)
-    _enumerate(store, _runner(""))
-    after = _bag(store)["enumerated_stage_elements"]
-    assert after["1"]["result"] != recorded["1"]["result"]
-    assert after["2"] == recorded["2"]
-
-
-def test_element_scope_leaves_out_a_stage_that_did_not_move(store, tmp_path):
-    """An in-scope stage with nothing moved has no entry: it is read whole, never as an
-    empty scope that would drop every question addressed to it."""
-    plan_path = _first_pass(store, tmp_path)
-    _write_plan(plan_path, EDITED_RESULT)
-    doc = load_plan(str(plan_path))
-
-    scope = plugins_premise.enumeration_element_scope(_bag(store), doc, {1, 2})
-    assert set(scope) == {1}
-    assert "result" in scope[1]
-
-
-def test_plan_level_question_survives_a_stage_and_final_check_move(store, tmp_path):
-    """The final checks are the plan-level control: a pass narrowed to a moved stage
-    still raises a pair addressed to the plan, and only the unmoved stage element drops."""
-    plan_path = _first_pass(store, tmp_path)
-    _write_plan(plan_path, EDITED_RESULT, final_checks=["git status"])
-    d = _enumerate(store, _runner(
-        "plan.done_criterion\tdoes the final check bite?\nstage:1.means\tis the tool right?"))
-
-    assert "plan.done_criterion" in _candidate_targets(store)
-    assert [o["target"] for o in d.data["out_of_scope"]] == ["stage:1.means"]
-
-
-def test_final_check_only_edit_leaves_every_question_in_scope(store, tmp_path):
-    """No stage moved, so there is nothing to narrow against: a question addressed to a
-    stage element and one addressed to the plan are both raised. This is the deliberate
-    wider direction: a final_check-only move re-reads the whole plan instead of keeping
-    only the final_check control targets."""
-    plan_path = _first_pass(store, tmp_path)
-    _write_plan(plan_path, BASE, final_checks=["git status"])
-    d = _enumerate(store, _runner(
-        "plan.done_criterion\tdoes the final check bite?\nstage:1.means\tis the tool right?"))
-
-    assert d.data["out_of_scope"] == []
-    assert _candidate_targets(store) == {"plan.done_criterion", "stage:1.means"}
-
-
-def test_order_only_edit_reads_the_whole_plan(store, tmp_path):
-    """The order is part of the plan's meta, and a moved meta re-opens every stage's fit
-    to it: a question addressed to the plan and one addressed to an unmoved stage element
-    are both raised."""
-    plan_path = _first_pass(store, tmp_path, functional_place="one place")
-    _write_plan(plan_path, BASE, functional_place="another place")
-    d = _enumerate(store, _runner(
-        "plan.goal\tdoes the goal still serve the place?\nstage:1.means\tis the tool right?"))
-
-    assert d.data["whole_plan"] is True
-    assert d.data["out_of_scope"] == []
-    assert _candidate_targets(store) == {"plan.goal", "stage:1.means"}
 
 
 # --- the norm delta itself ---------------------------------------------------------

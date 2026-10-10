@@ -251,10 +251,6 @@ def _setup_session_with_disposed_question(store, sid, plan_path):
     cli.cmd_order_raise(ns(session=sid, id="O1", element="covers this task"), store=store)
     cli.cmd_order_dispose(ns(session=sid, id="O1", as_="covered", stage=1, reason=""),
                           store=store)
-    cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
-                               runner=lambda *a, **kw:
-                               __import__('types').SimpleNamespace(
-                                   returncode=0, stdout="", stderr=""))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
@@ -351,10 +347,6 @@ class TestDispositionInvalidationOnReplan:
         cli.cmd_critique(ns(session=sid, similarities="same approach",
                             differences="img reverted",
                             failure_address="not_applicable"), store=store)
-        cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
-                                   runner=lambda *a, **kw:
-                                   __import__('types').SimpleNamespace(
-                                       returncode=0, stdout="", stderr=""))
         cli.cmd_replan(ns(session=sid, plan=str(reverted),
                           normalization_waiver="one-off", coverage_waiver=None),
                        store=store)

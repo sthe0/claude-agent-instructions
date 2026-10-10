@@ -44,6 +44,7 @@ class ReviewBlock:
     entries: tuple[Classified, ...]
     verdict_at: int
     digest_at: int | None
+    questions_at: int | None = None
 
     @property
     def verdict(self) -> str:
@@ -55,9 +56,28 @@ class ReviewBlock:
 
     @property
     def region(self) -> list[Classified]:
-        """What follows both the verdict and the digest line: the concerns."""
+        """What follows both the verdict and the digest line, up to the
+        customer-questions field: the concerns."""
         start = max(self.verdict_at, -1 if self.digest_at is None else self.digest_at) + 1
-        return list(self.entries[start:])
+        end = len(self.entries) if self.questions_at is None else self.questions_at
+        return list(self.entries[start:end])
+
+    @property
+    def questions(self) -> list[str]:
+        """The customer questions after the field header, in order; a block without
+        the field, or with `Customer questions: none`, has none. A line that is not a
+        new `Q:` line continues the question before it, until the closing marker."""
+        if self.questions_at is None:
+            return []
+        found: list[str] = []
+        for (kind, value), raw in self.entries[self.questions_at:]:
+            if kind == "review":
+                break
+            if kind == "question":
+                found.append(value)
+            elif kind == "other" and found and raw.strip() and not raw.strip().startswith("```"):
+                found[-1] = f"{found[-1]} {clean_value(raw.strip())}"
+        return [q for q in (q.strip() for q in found) if q]
 
     @property
     def followed_by_other_marker(self) -> bool:
@@ -86,6 +106,8 @@ def classify_line(raw: str) -> tuple[str, str]:
         ("review", plan.REVIEW_MARKER),
         ("verdict", plan.VERDICT_MARKER),
         ("digest", plan.PLAN_DIGEST_MARKER),
+        ("questions", plan.CUSTOMER_QUESTIONS_MARKER),
+        ("question", plan.CUSTOMER_QUESTION_MARKER),
     ):
         if cleaned.startswith(marker):
             value = strip(cleaned[len(marker):])
@@ -128,4 +150,10 @@ def find_terminal_review_block(text: str) -> ReviewBlock | None:
     entries = tuple(classified[anchor + 1:])
     verdict_at = next(i for i, ((k, _), _) in enumerate(entries) if k == "verdict")
     digest_at = next((i for i, ((k, _), _) in enumerate(entries) if k == "digest"), None)
-    return ReviewBlock(entries, verdict_at, digest_at)
+    after = max(verdict_at, -1 if digest_at is None else digest_at) + 1
+    questions_at = next(
+        (i for kind in ("questions", "question")
+         for i, ((k, _), _) in enumerate(entries) if i >= after and k == kind),
+        None,
+    )
+    return ReviewBlock(entries, verdict_at, digest_at, questions_at)

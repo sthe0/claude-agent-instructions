@@ -1612,6 +1612,14 @@ VERDICT_MARKER = "Verdict:"
 PLAN_DIGEST_MARKER = "Plan digest:"
 CONDITION_MARKERS = ("C1:", "C2:", "C3:", "C4:")
 
+# The customer-questions field every review reply carries after its concerns: the
+# header line, then one `Q: <question>` line per question (or `none` on the header).
+# Questions are what only the customer can decide, kept apart from plan remarks the
+# coordinator fixes itself.
+CUSTOMER_QUESTIONS_MARKER = "Customer questions:"
+CUSTOMER_QUESTION_MARKER = "Q:"
+CUSTOMER_QUESTIONS_NONE = "none"
+
 # A reviewer's concern is `<severity>: [re:<concern-id>] <body>`; the engine stores the
 # body in `concerns` and the severity / restated id beside it, so the body keeps the
 # leading `cut:`/`add:` remedy tag, part token and `C1:`..`C4:` marker its readers key on.

@@ -1517,69 +1517,26 @@ def plan_review_round_release_active(state: SessionState | None, thr: Thresholds
     return _PLAN_REVIEW_ROUND_COUNTER.release_active(state, thr)
 
 
-#: Message substituted for the staleness blocker in `premise_blockers` once the
-#: enumerate round-release fires (see `plan_enumerate_round_release_active`). Names
-#: the one act that both records the decision and opens ONLY the staleness gate —
-#: the other premise blockers (undispositioned questions, order-coverage, runner
-#: failure) remain standing regardless, so `approve` is still structurally refused.
-#: Every act named here must be EXECUTABLE from this state: `question-enumerate-
-#: escape --reason enumerate_rounds_exhausted` is the only one, because `approve`
-#: never clears a non-empty blockers list by itself.
-PLAN_ENUMERATE_ROUND_RELEASE_MESSAGE = (
-    "enumeration round budget exhausted at pass {passes} (config.md's "
-    "effort-replan-absolute threshold, reused) — no further re-run is required, but the decision is "
-    "the coordinator's and must be recorded: to proceed with the plan as it stands, run "
-    "question-enumerate-escape --reason enumerate_rounds_exhausted --note <why the current "
-    "plan is acceptable>; to refine instead, edit the plan and re-run question-enumerate "
-    "— the budget does not refill on an edit, so a re-run does not by itself open this gate; "
-    "`approve` still answers to every other premise blocker as well"
-)
-
-
-def plan_enumerate_round_release_active(bag, thr: Thresholds | None = None) -> bool:
-    """True once the premise bag's `enumerate_pass` reaches the
-    threshold this function reuses — config.md's `effort-replan-absolute`. Past this point
-    `premise_blockers` stops demanding another re-run for a stale enumeration and routes
-    to the user instead (see `PLAN_ENUMERATE_ROUND_RELEASE_MESSAGE`).
-
-    Uses `enumerate_pass` (the monotonic count of applied enumeration results) rather
-    than a per-content-digest counter. `enumerate_pass` is never reset when the plan
-    content digest moves — it grows with every `_apply_enumeration_result` call across
-    ALL digest transitions in the session. That monotonicity is the right property
-    here: the treadmill being bounded is the full planning loop (enumerate → surface
-    questions → dispose → edit → stale → enumerate again), and each lap increments
-    `enumerate_pass` exactly once, so the total pass count directly measures how many
-    laps the user has paid for. A per-digest count would reset on every plan edit and
-    could never fire across the treadmill's own lap boundary.
-
-    Delegates to `_PLAN_ENUMERATE_ROUND_COUNTER` (see
-    `round_release.RoundReleaseCounter`); kept as a standalone function for the same
-    reason as `plan_review_round_release_active`."""
-    return _PLAN_ENUMERATE_ROUND_COUNTER.release_active(bag, thr)
-
-
 def cross_axis_friction_release_active(state: SessionState | None, thr: Thresholds | None = None) -> bool:
     """True once the SUM of plan-review + plan-enumerate + code-review round counts
     reaches the shared threshold (config.md's `effort-replan-absolute`)
     — even when no single axis has individually reached it.
 
-    Exists because the three per-axis valves (`plan_review_round_release_active`,
-    `plan_enumerate_round_release_active`, `code_review_round_release_active`) each
-    hold an independent budget against their own scale: a session can spend 2 rounds
-    on plan-review plus 2 on code-review — 4 total, past the threshold — with neither
-    individual valve firing. Real session baa1daea reached 5+ combined rounds with no
-    valve firing at all. This predicate closes that gap by reading all three counts
-    together, via `round_release.compute_cross_axis_ceiling`.
+    Exists because the per-axis valves (`plan_review_round_release_active`,
+    `code_review_round_release_active`) each hold an independent budget against their
+    own scale: a session can spend 2 rounds on plan-review plus 2 on code-review — 4
+    total, past the threshold — with neither individual valve firing. Real session
+    baa1daea reached 5+ combined rounds with no valve firing at all. This predicate
+    closes that gap by reading the counts together, via
+    `round_release.compute_cross_axis_ceiling`.
 
-    Reads the plan-enumerate count from `state.plugins.get("premise")` (a plugin-owned
-    bag `plugins_premise.py` mutates — see `plan_enumerate_round_release_active`)
+    The plan-enumerate count is the premise bag's `enumerate_pass`, which no engine
+    path advances for a new plan (the standalone enumerator is retired, so its own
+    per-axis valve and release message are gone too); a legacy bag that already holds
+    passes keeps contributing them. It is read from `state.plugins.get("premise")`
     rather than a duplicate SessionState field, so this module never writes to
     premise-owned state; `state.plugins` defaults to `{}`, so a missing "premise" key
-    degrades to 0 rather than an error.
-
-    Wiring this predicate into the plan-enumerate axis's OWN gate (`plugins_premise.py`)
-    is deliberately out of scope here — see that module's docstring for which stage
-    owns it; this function is usable from either side."""
+    degrades to 0 rather than an error."""
     if state is None:
         return False
     bag = state.plugins.get("premise")

@@ -39,7 +39,7 @@ import sys
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -77,6 +77,7 @@ class ParsedReview:
     verdict: str
     digest: str
     concerns: list[str]
+    questions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -151,13 +152,15 @@ def build_spawn_argv(args, pair: str, plan_path: str, *, dry_run: bool,
 
 
 def record_argv(sid: str, plan_path: str, pair: str, verdict: str, digest: str,
-                concerns: list[str]) -> list[str]:
+                concerns: list[str], questions: "list[str] | None" = None) -> list[str]:
     argv = [
         "plan-review", "--session", sid, "--target", plan_path, "--scope", f"topo:{pair}",
         "--reviewer", "thinker", "--verdict", verdict, "--plan-digest", digest,
     ]
     for concern in concerns:
         argv += ["--concern", concern]
+    for question in questions or []:
+        argv += ["--customer-question", question]
     return argv
 
 
@@ -195,7 +198,7 @@ def parse_review_output(stdout: str) -> ParsedReview:
         raise TopoRefused(f"{plan.PLAN_DIGEST_MARKER} is not 64 lowercase hex characters: {digest!r}")
     region = found.region
     concerns = _parse_concerns(region, verdict) if verdict == "revise" else _pass_notes(region)
-    return ParsedReview(verdict, digest, concerns)
+    return ParsedReview(verdict, digest, concerns, found.questions)
 
 
 def _pass_notes(region) -> list[str]:
@@ -483,7 +486,8 @@ class Driver:
             f"pulls={'NA' if pulls is None else pulls} transcript={transcript or 'NA'}"
         )
         recorded = run_agentctl(
-            record_argv(self.sid, self.plan_path, pair, parsed.verdict, parsed.digest, parsed.concerns),
+            record_argv(self.sid, self.plan_path, pair, parsed.verdict, parsed.digest,
+                        parsed.concerns, parsed.questions),
             self.env,
         )
         if not recorded.get("ok"):
