@@ -743,6 +743,7 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "supplies.delivery": frozenset({"carry_key", "apply_refined", "question_key"}),
     "output_artifacts": frozenset(),
     "ephemeral_artifacts_waiver": frozenset({"apply_refined", "diff_plans"}),
+    "renorms": frozenset(_CD),
     "outcome.status": frozenset(),
     "outcome.actual": frozenset(),
     "outcome.fail_digests": frozenset(),

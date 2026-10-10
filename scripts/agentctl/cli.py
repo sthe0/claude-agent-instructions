@@ -831,6 +831,24 @@ def _replan_kind(state: SessionState, old, new) -> str:
     return _kind_within_boundary(state, kind, new, ledgered=ledgered)
 
 
+def _replan_pending_indices(state: SessionState, new, kind: str) -> list[int]:
+    """Indices of `new`'s stages this replan leaves to run: every stage but one whose
+    PASSED verdict survives it. A refinement or no-op never re-arms a PASSED stage; a
+    substantive replan keeps a PASSED stage's verdict only when `stage_carried` says its
+    definition and its suppliers' interfaces are unchanged."""
+    from .stage_norm import stage_carried
+
+    live = {s.index: s for s in state.stages}
+    pending = []
+    for ns in new.stages:
+        prev = live.get(ns.index)
+        passed = prev is not None and prev.outcome.status == StageStatus.PASSED.value
+        if passed and (kind != "substantive" or stage_carried(state.stages, new.stages, ns.index)):
+            continue
+        pending.append(ns.index)
+    return pending
+
+
 def _autonomy_directive_data(state: SessionState, doc) -> dict:
     """The `data['autonomy']` block a plan-approval-bound Directive carries: the
     boundary verdict plus the action it routes to (self_approve inside, the user's
@@ -880,6 +898,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.conditions = refined.conditions
     cur.preconditions = refined.preconditions
     cur.ephemeral_artifacts_waiver = refined.ephemeral_artifacts_waiver
+    cur.renorms = list(refined.renorms)
     for field in fields(Criterion):
         if field.name not in _CRITERION_ENGINE_WRITTEN_FIELDS:
             setattr(cur.criterion, field.name, getattr(refined.criterion, field.name))
@@ -5769,6 +5788,10 @@ def _try_reattest(
         state.log("reattest_declined", stage=stage.index,
                    reason="no prior PASSED outcome recorded for this stage")
         return None
+    if gates.pending_renorm_stage_blockers(state, stage.index):
+        state.log("reattest_declined", stage=stage.index,
+                   reason="stage is bound to a norm-edit obligation whose file is unchanged")
+        return None
     if not stash.operative_surface_matched:
         state.log("reattest_declined", stage=stage.index,
                    reason="replan touched the stage's operative surface "
@@ -7321,6 +7344,16 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     stage = state.active_stage()
     if stage is None:
         return Directive(False, state.node, "next_stage", "no active stage to record")
+    # Before any mutation: a refused PASS leaves the state file exactly as it was, so
+    # the obligation is read from the files' bytes on the retry as on this call.
+    if args.status == "passed":
+        renorm_block = gates.pending_renorm_stage_blockers(state, stage.index)
+        if renorm_block:
+            return Directive(
+                False, state.node, "renorm",
+                f"stage {stage.index} cannot pass: it is the re-norming stage of a "
+                "нормативное difficulty and the norm file is unchanged",
+                data={"blockers": renorm_block})
     actual = args.actual or ""
     stage.outcome.actual = actual
     passed = args.status == "passed"
@@ -7686,6 +7719,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         if observation:
             stage.criterion.observation = observation
         state.current_stage = None
+        state.pending_renorms = gates.open_renorms(state)
         state.log("record_result", stage=stage.index, status="passed")
         if div is not None and gates.effort_active(state):
             now = _utcnow()
@@ -7773,6 +7807,12 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             False, state.node, "inspect",
             f"verify-final runs only from VERIFYING; node is {state.node}",
         )
+    renorm_block = gates.pending_renorm_final_blockers(state)
+    if renorm_block:
+        return Directive(False, state.node, "renorm",
+                         "not ready for resolution: a нормативное difficulty's norm edit is "
+                         "still owed", data={"blockers": renorm_block})
+    state.pending_renorms = []
     blockers = gates.blockers(state, "resolution")
     _log_gate(state, "resolution", blockers, passed=not blockers)
     if blockers:
@@ -8100,7 +8140,8 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # plugin gates fold into resolve (not verify_final) so a plugin can let the
     # session reach RESOLUTION — where its publish-directive fires — yet still
     # block the final resolve until its sub-condition is met.
-    blockers = gates.blockers(state, "resolution") + plugins.plugin_gate_blockers(state, "resolution")
+    blockers = (gates.blockers(state, "resolution") + plugins.plugin_gate_blockers(state, "resolution")
+                + gates.pending_renorm_final_blockers(state))
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty confirmer: --by must name who confirmed resolution"]
     quality = getattr(args, "quality", None)
@@ -8121,6 +8162,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if blockers:
         return Directive(False, state.node, "fix_stages", "cannot resolve", data={"blockers": blockers})
     state.resolution = GateRecord("resolution", armed=True, passed=True, by=args.by)
+    state.pending_renorms = []
     state.node = transition(state.node, "resolve")  # RESOLUTION -> RESOLVED
     cost_surface: dict = {}
     if state.cost is not None:
@@ -8364,6 +8406,131 @@ def cmd_investigate(args, *, store: StateStore, runner: Runner | None = None) ->
                      "investigation recorded; state the functional ground + replanning task (critique)")
 
 
+# Test seam for `--norm-target` classification, mirroring exempt_paths.SCRATCH_ROOTS_ENV:
+# os.pathsep-separated directories that, when set and non-empty, REPLACE the whole root
+# set (the scratch exclusion included).
+NORM_ROOTS_ENV = "AGENTCTL_NORM_ROOTS"
+
+
+def _under_root(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _checkout_of(path: str) -> tuple[str, str, str] | None:
+    """(top level, git dir, common dir), as realpaths, of the checkout holding `path`;
+    None outside one."""
+    start = path if os.path.isdir(path) else os.path.dirname(path)
+    try:
+        run = subprocess.run(
+            ["git", "-C", start, "rev-parse", "--show-toplevel", "--absolute-git-dir",
+             "--git-common-dir"],
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = run.stdout.splitlines()
+    if run.returncode != 0 or len(lines) != 3:
+        return None
+    top, git_dir, common = lines
+    if not os.path.isabs(common):
+        common = os.path.join(start, common)
+    return os.path.realpath(top), os.path.realpath(git_dir), os.path.realpath(common)
+
+
+def _is_memory_path(rp: str) -> bool:
+    if "/memory-global/" in rp or "/agent-memory/" in rp:
+        return True
+    roots = {os.path.realpath(str(r)) for r in config_root.projects_roots()}
+    roots.add(os.path.realpath(str(config_root.agent_home() / "projects")))
+    for root in roots:
+        if rp.startswith(root + os.sep):
+            parts = rp[len(root) + 1:].split(os.sep)
+            if len(parts) >= 3 and parts[0] and parts[1] == "memory":
+                return True
+    return False
+
+
+def _session_plan_paths(state: SessionState) -> set[str]:
+    paths = {state.plan_path, state.plan_snapshot_path,
+             *(f.plan_path for f in state.plan_stack)}
+    return {os.path.realpath(p) for p in paths if p}
+
+
+def _norm_file_refusal(state: SessionState, target: str) -> str | None:
+    """Why `target` cannot be a file norm target, or None when it can. Classified on the
+    realpath, by the norm-bearing roots: a linked worktree of the instructions repo, a
+    memory root, and the agent home's skills/ and plans/."""
+    rp = os.path.realpath(target)
+    if not os.path.isfile(rp):
+        return f"--norm-target {target!r} is not an existing file"
+    if rp in _session_plan_paths(state):
+        return (f"--norm-target {target!r} is this session's own plan; name the stage "
+                f"norm instead as stage:<n>")
+    override = os.environ.get(NORM_ROOTS_ENV)
+    if override:
+        roots = [os.path.realpath(r) for r in override.split(os.pathsep) if r]
+        if any(_under_root(rp, r) for r in roots):
+            return None
+        return f"--norm-target {target!r} is under none of the {NORM_ROOTS_ENV} roots"
+    if any(_under_root(rp, os.path.realpath(r)) for r in exempt_paths._gate_scratch_roots()):
+        return f"--norm-target {target!r} is scratch, not a norm-bearing file"
+    own_repo = _checkout_of(str(REPO_ROOT))
+    here = _checkout_of(rp)
+    if own_repo is not None and here is not None and here[2] == own_repo[2]:
+        if here[1] != here[2]:
+            return None  # a linked worktree of the instructions repo
+        if "/memory-global/" not in rp:
+            return (f"--norm-target {target!r} is in the canonical instructions checkout, "
+                    f"which is read-only to sessions; name the same file in a linked "
+                    f"worktree")
+    if _is_memory_path(rp):
+        return None
+    for root in (config_root.skills_dir(), config_root.plans_dir()):
+        if _under_root(rp, os.path.realpath(str(root))):
+            return None
+    return (f"--norm-target {target!r} is not under a norm-bearing root (a linked worktree "
+            f"of the instructions repo, a memory root, or the agent home's skills/ or "
+            f"plans/)")
+
+
+def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[list[dict], str | None]:
+    """The `norm_targets` entries for a нормативное critique's --norm-target values, or
+    the first refusal. A stage target is snapshotted from the current plan's stage."""
+    from .plan import PlanError, load_plan as _load
+
+    entries: list[dict] = []
+    for raw in targets:
+        raw = (raw or "").strip()
+        if raw.startswith("stage:"):
+            try:
+                index = int(raw[len("stage:"):])
+            except ValueError:
+                return [], f"--norm-target {raw!r}: stage:<n> needs an integer stage index"
+            stage = None
+            if state.plan_path:
+                try:
+                    stage = next((s for s in _load(state.plan_path, strict=False).stages
+                                  if s.index == index), None)
+                except (OSError, PlanError):
+                    stage = None
+            if stage is None:
+                try:
+                    stage = state.stage(index)
+                except KeyError:
+                    return [], f"--norm-target {raw!r}: the current plan has no stage {index}"
+            entries.append({"target": f"stage:{index}", "kind": "stage",
+                            "baseline": gates.stage_norm_digest(stage), "source": "critique"})
+            continue
+        if not raw:
+            return [], "--norm-target must not be empty"
+        path = raw if os.path.isabs(raw) else os.path.abspath(raw)
+        refusal = _norm_file_refusal(state, path)
+        if refusal:
+            return [], refusal
+        entries.append({"target": path, "kind": "file",
+                        "baseline": gates.file_norm_digest(path), "source": "critique"})
+    return entries, None
+
+
 def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     bad = _require_diagnosing(state)
@@ -8386,6 +8553,23 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
         return Directive(False, state.node, "critique",
                          f"--failure-address must be one of {list(FAILURE_ADDRESS_VALUES)} "
                          f"or omitted, got {failure_address!r}")
+    norm_targets = list(getattr(args, "norm_targets", None) or [])
+    if failure_address == "нормативное" and not norm_targets:
+        return Directive(False, state.node, "critique",
+                         "a нормативное critique must name the norm that failed: pass "
+                         "--norm-target stage:<n> or the path of the norm file "
+                         "(repeatable), the edit the closing replan has to make")
+    if norm_targets and failure_address != "нормативное":
+        return Directive(False, state.node, "critique",
+                         "--norm-target names the norm of a нормативное fault; it is "
+                         f"refused with --failure-address {failure_address!r}")
+    snapshots, refusal = _snapshot_norm_targets(state, norm_targets)
+    if refusal:
+        return Directive(False, state.node, "critique", refusal)
+    inherited = [t for t in state.difficulty.norm_targets if t.get("source", "critique") != "critique"]
+    held = {t.get("target") for t in inherited}
+    state.difficulty.norm_targets = (
+        [t for t in snapshots if t["target"] not in held] + inherited)
     state.difficulty.critique = Critique(
         functional_ground=args.functional_ground,
         replanning_task=args.replanning_task,
@@ -8594,6 +8778,18 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
                          "the sequence of operations — drop --renormalize and replan it "
                          "through the review and approval it is owed",
                          data={"blockers": refusals})
+    live_status = {s.index: s.outcome.status for s in state.stages}
+    rtblock = gates.renorm_retention_blockers(
+        state, new,
+        [ns.index for ns in new.stages
+         if live_status.get(ns.index) != StageStatus.PASSED.value])
+    _log_gate(state, "renorm_retention", rtblock, passed=not rtblock)
+    if rtblock:
+        return Directive(False, state.node, "replan",
+                         "renormalization blocked: an open norm-edit obligation is no "
+                         "longer carried by a stage that still runs",
+                         data={"blockers": rtblock})
+    state.pending_renorms = gates.open_renorms(state)
     changed: list[int] = []
     for ns in new.stages:
         try:
@@ -8888,6 +9084,16 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             marker=DIRECTIVE_ESCALATE_TO_USER,
             data={"blockers": ["normalization waiver on an agent-acknowledged fire"]},
         )
+    if (getattr(args, "normalization_waiver", None) is not None
+            and state.node == Node.DIAGNOSING.value
+            and state.difficulty is not None and state.difficulty.norm_targets):
+        _log_gate(state, "normalization_waiver", ["record carries norm targets"], passed=False)
+        return Directive(
+            False, state.node, "normalize",
+            "replan refused: the difficulty record names norm target(s) the closing plan "
+            "must change; a --normalization-waiver is not accepted for it",
+            data={"blockers": ["normalization waiver on a record carrying norm targets"]},
+        )
     nblock = gates.normalization_blockers(state, pending_factor=normalize_factor or None)
     if nblock:
         waiver = getattr(args, "normalization_waiver", None)
@@ -9006,6 +9212,22 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                          "the user",
                          data={"blockers": arblock})
 
+    # Norm-edit consequence: a replan closing a difficulty whose record names norm targets
+    # must be the re-norming it named, and an obligation an earlier replan admitted must
+    # survive this one. Before the plan_approval plugin block below, whose dispositions
+    # save can persist state, so a refusal here leaves the state file as it was.
+    renorm_pending = _replan_pending_indices(state, new, auth_kind)
+    neblock = gates.normative_edit_blockers(state, new, renorm_pending)
+    _log_gate(state, "normative_edit", neblock, passed=not neblock)
+    rtblock = gates.renorm_retention_blockers(state, new, renorm_pending)
+    _log_gate(state, "renorm_retention", rtblock, passed=not rtblock)
+    if neblock or rtblock:
+        return Directive(False, state.node, "replan",
+                         "replan blocked: the corrected plan does not carry out the norm "
+                         "edit the difficulty named (stage `renorms` must list each norm "
+                         "file, on a stage that still runs)",
+                         data={"blockers": neblock + rtblock})
+
     # plan_approval PLUGIN gate: mirror cmd_approve's plugins.plugin_gate_blockers
     # composition so a refinement/no_change replan cannot rotate the plan bytes back
     # to VERIFYING while a premise-plugin blocker (undispositioned question, stale
@@ -9123,6 +9345,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                              destination=None, in_diagnosis=(state.node == Node.DIAGNOSING.value))
 
     kind = _replan_kind(state, old, new)
+    state.pending_renorms = gates.bound_renorms(state, new, renorm_pending)
     # The replan-loop counterpart of cmd_approve's reset: a replan that gets this far has
     # applied a corrected plan, so the rounds spent arguing about the previous one are
     # settled and the next loop starts from zero. Placed here — past every refusal of this
@@ -10924,6 +11147,13 @@ def build_parser() -> argparse.ArgumentParser:
                          "(ресурсное обеспечение — материал/средство) | нормативное "
                          "(нормативное обеспечение — норма/способ) | not_applicable (routing "
                          "does not apply); the closure gate demands it on a difficulty-closing replan")
+    sp.add_argument("--norm-target", dest="norm_targets", action="append", default=None,
+                    help="the norm a нормативное fault names, repeatable and required with "
+                         "--failure-address нормативное: `stage:<n>` (a stage of the current "
+                         "plan) or the absolute path of an existing norm file (a linked "
+                         "worktree of the instructions repo, a memory leaf, or a file under "
+                         "the agent home's skills/ or plans/); the closing replan must "
+                         "change it")
     sp = add("normalize"); sp.add_argument("--session", required=True)
     sp.add_argument("--factor", required=True,
                     help="the reproducible cause the difficulty exposed, being re-normed "

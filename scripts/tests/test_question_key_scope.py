@@ -73,6 +73,10 @@ _UNCLAIMED_STAGE_LEAVES = {
                                 "a place an answer can rest on. Same footing as "
                                 "actor.cost_tier above — covered instead by "
                                 "gates._renorm_stage_residual and diff_plans' prose",
+    "renorms": "the norm files a re-norming stage edits: an obligation of the difficulty "
+               "stack, not a place an answer can rest on. Declared-only in the whole-stage "
+               "digest (`StageNorm._review_payload`), covered by "
+               "gates._renorm_stage_residual and diff_plans' prose",
     "criterion.observation": "written at record-result time, not authored in the plan — "
                              "the criterion's declaration is what a question is answered "
                              "against, not the observation that later satisfied it",

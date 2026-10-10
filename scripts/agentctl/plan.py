@@ -54,6 +54,11 @@ TOML shape (minimal):
                                               # reachability lint: a verify_command path
                                               # that neither exists yet nor is declared
                                               # here by some stage is unreachable-green.
+    renorms = ["/abs/path/to/norm-file"]  # optional; the norm files this stage edits as a
+                                          # re-norming act, written exactly as given to
+                                          # `critique --norm-target`. Absolute paths only;
+                                          # a `stage:<n>` target is carried by editing that
+                                          # stage, not listed here.
 
 For substantive plans (meta.weight_class = "substantive") the [meta] table must
 also carry a plan-level external-research decision:
@@ -533,6 +538,34 @@ def _validate_substantive_stage(s: dict, index: int) -> None:
             f"stage {index} [stage.principle] statement must differ from the stage's "
             f"method (a principle that only restates the method is not a principle)"
         )
+
+
+def _parse_renorms(raw: object, context: str) -> list[str]:
+    """The stage's `renorms`: absolute file paths exactly as given to
+    `critique --norm-target`. A `stage:<n>` target is carried by editing the stage
+    itself, so naming one here is refused; so is an empty, relative or non-string entry."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise PlanError(f"{context}: renorms must be a list of absolute file paths")
+    out: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str) or not entry.strip():
+            raise PlanError(
+                f"{context}: renorms entry {entry!r} must be a non-empty string"
+            )
+        if entry.startswith("stage:"):
+            raise PlanError(
+                f"{context}: renorms entry {entry!r} names a stage; a stage:<n> norm "
+                f"target is carried by editing that stage, only file targets are listed"
+            )
+        if not entry.startswith("/"):
+            raise PlanError(
+                f"{context}: renorms entry {entry!r} must be an absolute path, written "
+                f"exactly as given to `critique --norm-target`"
+            )
+        out.append(entry)
+    return out
 
 
 def _build_supplies(s: dict, index: int) -> list[Supply]:
@@ -1545,6 +1578,7 @@ def parse_plan(
                 supplies=_build_supplies(s, index),
                 output_artifacts=[str(p) for p in s.get("output_artifacts", [])],
                 ephemeral_artifacts_waiver=ephemeral_artifacts_waiver,
+                renorms=_parse_renorms(s.get("renorms"), stage_ctx),
                 outcome=Outcome(status=StageStatus.PENDING.value),
                 grants=_parse_stage_grants(s.get("grants"), stage_ctx, strict=strict),
                 effects=_parse_stage_effects(s.get("effects"), stage_ctx),
@@ -2684,6 +2718,7 @@ def _reviewed_stage_keys(stage: Stage) -> dict[str, str]:
         tuple(sorted(rules)),
         tuple(sorted(add_dirs)),
         tuple(sorted(effects[0])) if effects else (),
+        *((("renorms", tuple(stage.renorms)),) if stage.renorms else ()),
     )
     if not any(extras):
         return keys
@@ -3331,6 +3366,9 @@ def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fals
              # dropped rather than carried by `_apply_refined_stage_fields`.
              *((("ephemeral_artifacts_waiver", s.ephemeral_artifacts_waiver),)
                if s.ephemeral_artifacts_waiver else ()),
+             # Same footing again: a stage's `renorms` is the consequence a нормативное
+             # critique is bound to, so an edit of it must not diff as 'no_change'.
+             *((("renorms", tuple(s.renorms)),) if s.renorms else ()),
              # Without this a knowledge-only correction — the exact edit an
              # overcome-difficulty replan makes when the fault addressed знание —
              # diffs to 'no_change' and is silently dropped.

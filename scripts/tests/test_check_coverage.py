@@ -40,7 +40,8 @@ def _to_diagnosing_with_critique(store, sid, plan, *, invariants_to_preserve=Non
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
                         invariants_to_preserve=invariants_to_preserve or ["keep idempotency"],
-                        differences_to_remove=[], failure_address="нормативное"), store=store)
+                        differences_to_remove=[], failure_address="нормативное",
+                        norm_targets=["stage:1"]), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
 

@@ -306,6 +306,31 @@ Accepted, it copies **only** `means.procedure` onto the live stages — no `_app
 
 **Quality-row counts and the scorecard.** `resolve`'s quality row adds `n_normalizations` (every `normalize` event), `n_normalizations_outside_diagnosis` (the subset with `in_diagnosis is False`), and `n_renormalize_replans` (every `renormalize` event) — all derived from `state.history`, so an older row predating these fields simply lacks the keys rather than being wrong. `policy-scorecard.py`'s `## Re-norming` section reports coverage (share of the window's rated rows with `n_normalizations >= 1`) and the quality mean split with-vs-without a recorded normalization, treating a missing `n_normalizations` as `0` so an old row still loads and counts toward the denominator instead of raising or being silently dropped.
 
+### A `нормативное` critique carries a consequence (`--norm-target`, `renorms`)
+
+*Difficulty removed:* routing a fault to the norm (`--failure-address нормативное`) used to change nothing the engine could see — the replan that closed the difficulty could leave the failed norm exactly as it was, and the gap between "the norm failed" and "the norm was edited" surfaced only in a later session's review. The label was a claim with no consequence.
+
+**The critique names the norm.** `critique --failure-address нормативное` is refused without at least one `--norm-target` (repeatable), and `--norm-target` is refused with any other failure address; `ресурсное` and `not_applicable` critiques are unchanged. A target is either `stage:<n>` of the current plan, or a file under a norm-bearing root, classified in `cli._norm_file_refusal` on the file's realpath: (1) a **linked worktree** of the instructions repo; (2) a **memory root** (`/memory-global/`, `/agent-memory/`, or `<agent home>/projects/<one component>/memory/`); (3) `<agent home>/skills/` or `<agent home>/plans/`. Refused with a reason: a non-existent file, a scratch path, a file in the **canonical checkout** outside `memory-global/` (the refusal names the same file in the linked worktree — the checkout is mutated only by `pull`), the session's own plan file (use `stage:<n>`), and anything under no norm-bearing root. `AGENTCTL_NORM_ROOTS` (path-separator-joined), when non-empty, replaces the whole root set including the scratch exclusion — the test seam.
+
+The record keeps each target on `Difficulty.norm_targets` as `{target, kind, baseline, source}`. `baseline` is the sha256 of the file's bytes, or the **index-free norm digest** of the stage (`StageNorm.norm_digest`: the stage's own norm with its index and its suppliers' indices dropped, so a stage merely renumbered by an inserted neighbour keeps its digest and an edited one moves it; `review_digest` is untouched for a stage without `renorms`). `source` is `critique` for a target this critique passed and anything else for one inherited from a closed nested difficulty; a re-critique replaces only the `critique`-source entries.
+
+**The closing replan makes the edit a stage.** A stage may carry `renorms = ["/abs/path", ...]` — the absolute norm files it edits (a `stage:` entry is a parse error: a stage target is satisfied by editing the stage, not by naming it). `gates.normative_edit_blockers(state, new_plan, pending_indices)` is a closure precondition of a `DIAGNOSING` replan whose record carries targets, checked in `cmd_replan` beside the normalization and failure-address gates and logged through `_log_gate`:
+
+- a `stage:<n>` target blocks while **any** stage of the corrected plan still has the snapshotted norm digest — keyed on the norm, not the index;
+- a file target blocks when no stage lists it in `renorms`, and when it is still at its baseline bytes while every stage naming it is carried forward as `PASSED` (that stage never runs again, so the reference is no consequence).
+
+The gate keys on the **record carrying targets, not on the label** of its failure address, and `--normalization-waiver` is refused for such a record: a waiver says "no reproducible factor", which a named norm target contradicts. A refused replan persists nothing.
+
+**Why the edit lives in a stage.** In `DIAGNOSING` the production-edit gate is closed, so the norm file cannot be edited inside the difficulty; the corrected plan carries the edit as a re-norming stage. Authors should also list the file in that stage's `output_artifacts` (the engine does not require it).
+
+**The obligation outlives the replan.** An unedited file target whose `renorms` stage is pending becomes an entry of `SessionState.pending_renorms` (`{target, baseline, stage, depth}`, bound to the lowest-index pending stage naming it; `depth` is the sub-plan depth). The observable is the file's digest: a target already moved at replan time binds nothing, and one that moves later is discharged wherever it was edited.
+
+- `record-result --status passed` for a stage bound to an open obligation is refused, state unchanged, while the file is at its baseline; with the file moved it records and discharges.
+- Every later replan — refinement, substantive or `--renormalize` — must keep each open target named in `renorms` of a stage it leaves pending (`gates.renorm_retention_blockers`); moving the reference to another pending stage rebinds the obligation.
+- `verify-final` and `resolve` refuse while any obligation is open, naming the target and the stage it is bound to.
+
+`SCHEMA_VERSION` 47 adds the three fields; a v46 state, a plan without `renorms` and an in-flight record without targets load and behave exactly as before. Tests: `scripts/tests/test_failure_address_consequence.py`.
+
 ### Replan authorization
 
 *Difficulty removed:* an approved plan could be edited without the user any time up to the moment a genuine difficulty legitimately required it — not only executed silently after a byte edit (§ Check venue's whole charter), but *changed* silently, because `replan`'s two ordinary outcomes (refinement retries the re-armed stage; substantive re-arms `PLAN_READY`) both apply the corrected plan **before** any approval-shaped gate has seen it, and a refinement never re-arms one at all. `replan_authorization_blockers` (`gates.py`) is the write-side twin of `plan_presentation_blockers`: an approved plan must not change under the user's feet any more than it must not execute under a stale reading of itself.

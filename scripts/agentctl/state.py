@@ -25,7 +25,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 46  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 47  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -69,6 +69,10 @@ SCHEMA_VERSION = 46  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # service_iface_norm/edge_norm) and unit_norm for unit records
                      # (`unit:<node>` keys in plan_pair_reviews); PlanReview gains
                      # reviewed_unit_currency
+                     # 47: Difficulty gains norm_targets (the norms a нормативное critique
+                     # names for editing); Stage gains `renorms` (the files a re-norming
+                     # stage edits); SessionState gains pending_renorms (norm-edit
+                     # obligations that outlive the closing replan)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -478,6 +482,13 @@ class Difficulty:
     investigation: Investigation | None = None
     critique: Critique | None = None
     normalization: Normalization | None = None
+    # The norms a нормативное critique names for editing (schema 47). Kept on the record
+    # rather than inside `Critique`: `Critique(**crit)` raises on an unknown key, so a
+    # field there would make every state written after this one unloadable by an older
+    # engine, while this class reads only the keys it knows.
+    # Entry: {"target": as given, "kind": "file"|"stage", "baseline": digest,
+    #         "source": "critique" | uid of the nested record it was inherited from}.
+    norm_targets: list[dict] = field(default_factory=list)
 
     def complete(self) -> bool:
         return (
@@ -501,6 +512,7 @@ class Difficulty:
             investigation=Investigation(**inv) if inv else None,
             critique=Critique(**crit) if crit else None,
             normalization=Normalization(**norm) if norm else None,
+            norm_targets=[dict(t) for t in (d.get("norm_targets") or [])],
         )
 
 
@@ -1713,6 +1725,10 @@ class Stage:
     # non-empty). None on every plan authored before this field, which is byte-identical
     # to "no waiver declared".
     ephemeral_artifacts_waiver: str | None = None
+    # Norm files this stage edits as a re-norming act (schema 47): absolute paths exactly
+    # as given to `critique --norm-target`. Empty on every plan authored before this
+    # field. Part of the stage's norm (stage_norm.StageNorm.renorms).
+    renorms: list[str] = field(default_factory=list)
     outcome: Outcome = field(default_factory=Outcome)
     # General control-criterion attestation (element #3 of the plan activity ontology).
     # Optional on any stage; required non-empty for spawn:developer when recording passed,
@@ -1779,6 +1795,7 @@ class Stage:
                 supplies=[Supply(**s) for s in d.get("supplies", [])],
                 output_artifacts=list(d.get("output_artifacts", [])),
                 ephemeral_artifacts_waiver=d.get("ephemeral_artifacts_waiver"),
+                renorms=list(d.get("renorms") or []),
                 outcome=Outcome(**d["outcome"]) if d.get("outcome") else Outcome(),
                 control=d.get("control"),
                 grants=StageGrants.from_dict(d.get("grants")),
@@ -1815,6 +1832,7 @@ class Stage:
             supplies=[Supply(on=int(x)) for x in d.get("depends_on", [])],
             output_artifacts=list(d.get("output_artifacts", [])),
             ephemeral_artifacts_waiver=d.get("ephemeral_artifacts_waiver"),
+            renorms=list(d.get("renorms") or []),
             outcome=Outcome(
                 status=d.get("status", StageStatus.PENDING.value),
                 actual=d.get("actual"),
@@ -2177,6 +2195,13 @@ class SessionState:
     materialization_defects: list[dict] = field(default_factory=list)
     settings_drift: list[dict] = field(default_factory=list)
     cwd_drift: list[dict] = field(default_factory=list)
+    # Norm-edit obligations admitted by a closing replan and still open (schema 47).
+    # Entry: {"target": file path, "baseline": digest at critique time, "stage": index of
+    # the lowest-index pending stage whose `renorms` names it, "depth": len(plan_stack)
+    # when bound -- a sub-plan's stage indices restart, so index alone would collide}.
+    # Discharged when the file's digest moves; verify-final / resolve refuse while any
+    # remains (gates.pending_renorm_final_blockers).
+    pending_renorms: list[dict] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
     # Not a dataclass field (ClassVar): the number of history events that were already
     # present when this object was built — what store.stamp_new_history uses to tell a

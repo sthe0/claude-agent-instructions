@@ -78,6 +78,7 @@ from .plan import (
 )
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
+from .stage_norm import StageNorm
 from .state import CONCERN_OPEN, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
@@ -501,6 +502,170 @@ def failure_address_blockers(state: SessionState) -> list[str]:
                 "материал/средство | нормативное: inadequate нормативное обеспечение, "
                 "норма/способ | not_applicable: routing does not apply)"]
     return []
+
+
+def file_norm_digest(path: str) -> str | None:
+    """sha256 of a norm file's bytes; None when it is missing or unreadable (a deleted
+    norm file has moved, which is all `renorm` bookkeeping asks of it)."""
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def stage_norm_digest(stage) -> str:
+    """The index-free norm digest of one stage (`StageNorm.norm_digest`) -- what a
+    `stage:<n>` norm target is snapshotted and compared by."""
+    return StageNorm.from_stage(stage).norm_digest()
+
+
+def _renorm_depth(state: SessionState) -> int:
+    return len(state.plan_stack)
+
+
+def _record_file_targets(state: SessionState) -> list[dict]:
+    d = state.difficulty
+    if d is None:
+        return []
+    return [t for t in d.norm_targets if t.get("kind") == "file"]
+
+
+def _stages_naming(new_plan, target: str) -> list[int]:
+    return sorted(s.index for s in new_plan.stages if target in s.renorms)
+
+
+def normative_edit_blockers(state: SessionState, new_plan, pending_indices) -> list[str]:
+    """Closure precondition of a DIAGNOSING replan whose difficulty record carries norm
+    targets: the corrected plan must actually be the re-norming the critique named.
+    Keyed on the record carrying targets, not on its failure_address label -- a record
+    that inherited targets from a closed nested difficulty is bound the same way. [] when
+    the record has no targets and outside DIAGNOSING.
+
+    One blocker per `stage:<n>` target while ANY stage of `new_plan` still has the
+    snapshotted index-free norm digest (keyed on the norm, so a stage merely shifted by an
+    inserted neighbour still blocks); one per file target no stage names in `renorms`; one
+    per file target whose bytes are still the baseline and whose `renorms` references all
+    sit on stages the replan does not leave pending (a reference on a carried-forward
+    PASSED stage is no consequence, that stage never runs again).
+
+    `pending_indices` is the set of `new_plan` stage indices this replan does NOT carry
+    forward as PASSED -- supplied by the caller, which owns the carry decision."""
+    if state.node != Node.DIAGNOSING.value:
+        return []
+    d = state.difficulty
+    if d is None or not d.norm_targets:
+        return []
+    pending = set(pending_indices)
+    digests = {s.index: stage_norm_digest(s) for s in new_plan.stages}
+    out: list[str] = []
+    for t in d.norm_targets:
+        target, baseline = t.get("target", ""), t.get("baseline")
+        if t.get("kind") == "stage":
+            if any(dg == baseline for dg in digests.values()):
+                out.append(
+                    f"norm target {target}: no stage of the corrected plan has a norm "
+                    f"other than the one the critique named -- edit that stage's "
+                    f"norm (title, result image, criterion, method, means, ...), "
+                    f"not just its place in the plan"
+                )
+            continue
+        naming = _stages_naming(new_plan, target)
+        if not naming:
+            out.append(
+                f"norm target {target}: no stage of the corrected plan lists it in "
+                f"`renorms` -- add a re-norming stage that edits it and names it there "
+                f"(also list it in that stage's output_artifacts)"
+            )
+        elif file_norm_digest(target) == baseline and not any(i in pending for i in naming):
+            out.append(
+                f"norm target {target}: still unedited, and the only stage(s) naming it in "
+                f"`renorms` ({', '.join(str(i) for i in naming)}) are carried forward as "
+                f"PASSED and will not run again -- name it on a stage this replan leaves "
+                f"pending"
+            )
+    return out
+
+
+def open_renorms(state: SessionState) -> list[dict]:
+    """The obligations in `state.pending_renorms` whose file still has its baseline bytes.
+    A moved one is discharged: the observable is the file's digest, never the path's
+    class or who edited it."""
+    return [e for e in state.pending_renorms
+            if file_norm_digest(e.get("target", "")) == e.get("baseline")]
+
+
+def renorm_retention_blockers(state: SessionState, new_plan, pending_indices) -> list[str]:
+    """An obligation outlives the replan that admitted it: every later replan (of any
+    kind) must keep each still-open target of THIS plan frame named in `renorms` of a
+    stage it leaves pending. Obligations bound at another plan depth are not judged here
+    -- their stage indices belong to a different plan."""
+    pending = set(pending_indices)
+    depth = _renorm_depth(state)
+    out: list[str] = []
+    for e in open_renorms(state):
+        if e.get("depth", 0) != depth:
+            continue
+        naming = _stages_naming(new_plan, e["target"])
+        if not any(i in pending for i in naming):
+            out.append(
+                f"open norm-edit obligation {e['target']}: the plan must keep naming it in "
+                f"`renorms` of a stage that is still to run (it was bound to stage "
+                f"{e.get('stage')}); a reference on a carried-forward PASSED stage does "
+                f"not count"
+            )
+    return out
+
+
+def bound_renorms(state: SessionState, new_plan, pending_indices) -> list[dict]:
+    """`state.pending_renorms` as it stands after a replan that passed both gates:
+    moved obligations discharged, open ones rebound to the lowest-index pending stage
+    naming them, and the closing record's unedited file targets admitted. Pure."""
+    pending = set(pending_indices)
+    depth = _renorm_depth(state)
+    out: list[dict] = []
+    seen: set[str] = set()
+    for e in open_renorms(state):
+        entry = dict(e)
+        if entry.get("depth", 0) == depth:
+            naming = [i for i in _stages_naming(new_plan, e["target"]) if i in pending]
+            if naming:
+                entry["stage"] = naming[0]
+        out.append(entry)
+        seen.add(entry["target"])
+    if state.node == Node.DIAGNOSING.value:
+        for t in _record_file_targets(state):
+            target = t["target"]
+            if target in seen or file_norm_digest(target) != t.get("baseline"):
+                continue
+            naming = [i for i in _stages_naming(new_plan, target) if i in pending]
+            if not naming:
+                continue
+            out.append({"target": target, "baseline": t["baseline"],
+                        "stage": naming[0], "depth": depth})
+            seen.add(target)
+    return out
+
+
+def pending_renorm_stage_blockers(state: SessionState, stage_index: int) -> list[str]:
+    """record-result PASS gate: a stage bound to a still-open obligation does not pass
+    while the norm file it was to edit has its baseline bytes."""
+    depth = _renorm_depth(state)
+    return [
+        f"stage {stage_index} is bound to norm target {e['target']}, which still has its "
+        f"baseline bytes -- edit it (the re-norming act), then record the result"
+        for e in open_renorms(state)
+        if e.get("depth", 0) == depth and e.get("stage") == stage_index
+    ]
+
+
+def pending_renorm_final_blockers(state: SessionState) -> list[str]:
+    """verify-final / resolve gate: no open norm-edit obligation may remain."""
+    return [
+        f"norm target {e['target']} (bound to stage {e.get('stage')}) was named by a "
+        f"нормативное critique and its file still has its baseline bytes -- edit it, "
+        f"the re-norming act that closes the difficulty"
+        for e in open_renorms(state)
+    ]
 
 
 def plan_review_active(state: SessionState) -> bool:
@@ -2887,6 +3052,9 @@ def _renorm_stage_residual(stage) -> tuple:
       footing as `actor.cost_tier`: no Question.target names it, but re-declaring it
       under the light path would move which `output_artifacts` entries the ephemeral-
       artifacts check is trusted to skip.
+    * `renorms` — the norm files a re-norming stage edits. Same footing again: it binds a
+      нормативное critique to its consequence, and moving it under the light path would
+      re-route which stage owns an open norm-edit obligation.
 
     Deliberately outside, and the only things outside: `index` (the key both sides are
     matched ON, so a change there is an added/removed stage, refused above), and the
@@ -2905,6 +3073,7 @@ def _renorm_stage_residual(stage) -> tuple:
         *grants_place(stage),
         *effects_place(stage),
         stage.ephemeral_artifacts_waiver,
+        tuple(stage.renorms),
     )
 
 

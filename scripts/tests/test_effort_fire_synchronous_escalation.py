@@ -176,7 +176,7 @@ def test_fire_acknowledge_revise_leaves_diagnosing_for_the_ordinary_cycle(store,
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="нормативное"), store=store)
+                        failure_address="нормативное", norm_targets=["stage:1"]), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
     d_replan = cli.cmd_replan(
         ns(session=sid, plan=str(fixtures_dir / "plan_two_stage_refined.toml")), store=store,

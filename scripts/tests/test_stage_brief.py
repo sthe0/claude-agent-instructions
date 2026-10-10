@@ -304,6 +304,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (Stage, "actor"), (Stage, "criterion"), (Stage, "principle"),
         (Stage, "conditions"), (Stage, "supplies"), (Stage, "output_artifacts"),
         (Stage, "ephemeral_artifacts_waiver"),
+        (Stage, "renorms"),  # excluded: an engine obligation, stated by the stage's own method
         (Stage, "outcome"),  # excluded: engine execution history
         (Stage, "control"), (Stage, "knowledge"), (Stage, "preconditions"),
         (Stage, "grants"), (Stage, "effects"),

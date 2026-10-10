@@ -48,10 +48,18 @@ def _investigate(store, sid, hypotheses=("h1", "h2")):
                                   hypotheses=list(hypotheses)), store=store)
 
 
-def _critique(store, sid):
+def _critique(store, sid, *, norm_fault=True):
+    """A `нормативное` critique names stage 1 as the norm at fault, so the closing replan
+    must carry a different stage-1 norm; `norm_fault=False` is for a replan that only adds
+    stages."""
+    if not norm_fault:
+        return cli.cmd_critique(ns(session=sid, functional_ground="fg",
+                                   replanning_task="rt",
+                                   failure_address="ресурсное"), store=store)
     return cli.cmd_critique(ns(session=sid, functional_ground="fg",
                                replanning_task="rt",
-                               failure_address="нормативное"), store=store)
+                               failure_address="нормативное",
+                               norm_targets=["stage:1"]), store=store)
 
 
 def _normalize(store, sid, *, factor="reproducible cause", level="note"):
@@ -106,7 +114,7 @@ def test_substantive_replan_from_diagnosing_rearms_gate(store, fixtures_dir):
     _to_failed_stage1(store, "f4", plan)
     _declare(store, "f4")
     _investigate(store, "f4")
-    _critique(store, "f4")
+    _critique(store, "f4", norm_fault=False)
     _normalize(store, "f4")  # re-norm the reproducible factor before closure
     d = cli.cmd_replan(ns(session="f4", plan=bigger), store=store)
     assert d.marker == "PLAN-READY"

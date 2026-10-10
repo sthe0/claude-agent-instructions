@@ -160,7 +160,7 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="нормативное"), store=store)
+                        failure_address="нормативное", norm_targets=["stage:1"]), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
@@ -181,6 +181,9 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     # default in the suite), then stage 5 (item B)'s replan_authorization gate
     # (vacuous here: the session is DIAGNOSING with a complete difficulty
     # record, one of the gate's own unconditional exemptions), then the
+    # normative_edit and renorm_retention gates (norm-repair consequence of a
+    # нормативное critique — vacuous here, the critique names stage 1 and the
+    # refined plan changes it), then the
     # plan_approval PLUGIN gate (stage 3: cmd_replan now composes
     # plugins.plugin_gate_blockers(state, "plan_approval") just as cmd_approve does —
     # vacuous here, premise force-off in the suite), then the replan_coverage check.
@@ -191,6 +194,7 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
                            "normalization_blockers",
                            "failure_address_blockers", "plan_review",
                            "replan_authorization",
+                           "normative_edit", "renorm_retention",
                            "plan_approval_plugin", "replan_coverage"]
     assert rows[0]["passed"] is True   # effort_fire: no fire yet, submit_plan
     assert rows[1]["passed"] is True   # plan_approval

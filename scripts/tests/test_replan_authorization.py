@@ -343,7 +343,7 @@ def test_case1_diagnosing_complete_difficulty_replan_succeeds(store, fixtures_di
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="нормативное"), store=store)
+                        failure_address="нормативное", norm_targets=["stage:1"]), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
     state = store.load(sid)
     assert gates.replan_authorization_blockers(state, refined, diff_kind="refinement") == []

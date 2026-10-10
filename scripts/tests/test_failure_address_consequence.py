@@ -1,0 +1,623 @@
+"""A нормативное critique carries a consequence: it names the norm that failed
+(`--norm-target`), the closing replan must change it in a re-norming stage (`renorms`),
+and the edit stays owed -- across replans, through verify-final and resolve -- until the
+norm file's bytes have moved.
+
+Tests marked "negative control" are the ones the stage's negative control runs against
+the base tree: they drive entry points that exist there and read the new symbols only
+inside their bodies, so on base they fail on their `BEHAVIOUR:` assertion."""
+import hashlib
+import json
+import subprocess
+from argparse import Namespace
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from agentctl import cli, gates
+from agentctl.plan import PlanError, load_plan
+from agentctl.stage_norm import StageNorm
+from agentctl.state import SCHEMA_VERSION, Node, SessionState, StageStatus
+from conftest import STAGE_OBSERVATIONS
+
+
+def ns(**kw):
+    return Namespace(**kw)
+
+
+@pytest.fixture(autouse=True)
+def norms(tmp_path, monkeypatch):
+    """The norm-bearing root of every test that does not exercise the real classifier."""
+    root = tmp_path / "norms"
+    root.mkdir()
+    monkeypatch.setenv("AGENTCTL_NORM_ROOTS", str(root))
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+    return root
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+                    "-c", "commit.gpgsign=false", *args],
+                   cwd=cwd, check=True, capture_output=True)
+
+
+@pytest.fixture
+def real_roots(tmp_path, monkeypatch):
+    """The real classifier: no override roots, scratch narrowed to its own directory,
+    a canonical instructions checkout with a linked worktree, and an agent home."""
+    monkeypatch.delenv("AGENTCTL_NORM_ROOTS", raising=False)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(scratch))
+    home = tmp_path / "home"
+    (home / "skills").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(home))
+    canon = tmp_path / "canon"
+    (canon / "docs").mkdir(parents=True)
+    (canon / "memory-global" / "leaves").mkdir(parents=True)
+    (canon / "docs" / "rule.md").write_text("rule\n", encoding="utf-8")
+    (canon / "memory-global" / "leaves" / "leaf.md").write_text("leaf\n", encoding="utf-8")
+    _git(canon, "init", "-q")
+    _git(canon, "add", "-A")
+    _git(canon, "commit", "-q", "-m", "init")
+    wt = tmp_path / "wt"
+    _git(canon, "worktree", "add", "-q", "-b", "wt-branch", str(wt))
+    monkeypatch.setattr(cli, "REPO_ROOT", canon)
+    return SimpleNamespace(scratch=scratch, home=home, canon=canon, wt=wt)
+
+
+# --- plans -------------------------------------------------------------------
+
+def _stage(index, title, result, done, deps, outs, **extra):
+    return {"index": index, "title": title, "result": result, "done": done,
+            "deps": deps, "outs": outs, **extra}
+
+
+def _stages(*, s1=None, s2=None):
+    return [
+        _stage(1, "Scaffold module", "module file exists and imports cleanly",
+               "python -c 'import mod' exits 0", [], ["mod.py"], **(s1 or {})),
+        _stage(2, "Add tests", "pytest green for the new module",
+               "pytest tests/test_mod.py green", [1], ["tests/test_mod.py"], **(s2 or {})),
+    ]
+
+
+def _plan(path, stages):
+    lines = ["[meta]", 'weight_class = "small_change"', 'task_id = "demo-two-stage"',
+             'goal = "Demonstrate a norm-edit consequence"',
+             'done_criterion = "both stages PASSED and resolution confirmed"',
+             'criterion_type = "measurable"']
+    for s in stages:
+        lines += ["", "[[stage]]", f"index = {s['index']}", f"title = {json.dumps(s['title'])}",
+                  'executor = "spawn:developer"',
+                  f"expected_result_image = {json.dumps(s['result'])}",
+                  'criterion_type = "measurable"', f"done_criterion = {json.dumps(s['done'])}",
+                  f"depends_on = {json.dumps(s['deps'])}",
+                  f"output_artifacts = {json.dumps(s['outs'])}"]
+        if "method" in s:
+            lines.append(f"method = {json.dumps(s['method'])}")
+        if "renorms" in s:
+            lines.append(f"renorms = {json.dumps(s['renorms'])}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(path)
+
+
+@pytest.fixture
+def plans(tmp_path):
+    def make(name, stages=None):
+        return _plan(tmp_path / "work" / f"{name}.toml", stages or _stages())
+    return make
+
+
+# --- driving the spine -------------------------------------------------------
+
+def _start(store, sid, plan):
+    cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+
+
+def _pass(store, sid, index):
+    return cli.cmd_record_result(
+        ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
+           observation=STAGE_OBSERVATIONS[index - 1]), store=store)
+
+
+def _diagnosing(store, sid, plan, *, fail_stage=1):
+    _start(store, sid, plan)
+    if fail_stage == 2:
+        _pass(store, sid, 1)
+        cli.cmd_next_stage(ns(session=sid), store=store)
+    cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
+    cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
+    cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
+                           hypotheses=["h1", "h2"]), store=store)
+    assert store.load(sid).node == Node.DIAGNOSING.value
+
+
+def _critique(store, sid, address, targets=None):
+    return cli.cmd_critique(
+        ns(session=sid, functional_ground="fg", replanning_task="rt",
+           failure_address=address, norm_targets=targets), store=store)
+
+
+def _normalize(store, sid):
+    d = cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"),
+                          store=store)
+    assert d.ok is True
+
+
+def _replan(store, sid, plan, **kw):
+    return cli.cmd_replan(ns(session=sid, plan=plan, **kw), store=store)
+
+
+def _digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _norm_file(norms, name="leaf.md"):
+    p = norms / name
+    p.write_text("v1\n", encoding="utf-8")
+    return str(p)
+
+
+def _seed(store, sid, *, address=None, targets):
+    """Write `norm_targets` (and optionally the critique's address) into the state file:
+    the way a record that inherited targets from a closed nested difficulty looks."""
+    path = store.path(sid)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if address is not None:
+        data["difficulty"]["critique"]["failure_address"] = address
+    data["difficulty"]["norm_targets"] = targets
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def _file_target(path, *, source="critique"):
+    return {"target": path, "kind": "file", "baseline": _digest(path), "source": source}
+
+
+def _blockers(d):
+    return " | ".join(d.data.get("blockers", []))
+
+
+def _bound_session(store, sid, plans, norm):
+    """A VERIFYING session whose replan admitted a re-norming stage 1 for `norm`."""
+    _diagnosing(store, sid, plans("base"))
+    d = _critique(store, sid, "нормативное", [norm])
+    assert d.ok is True
+    _normalize(store, sid)
+    d = _replan(store, sid, plans("renorm", _stages(s1={"renorms": [norm]})))
+    assert d.ok is True
+    state = store.load(sid)
+    assert state.node == Node.VERIFYING.value
+    return state
+
+
+# --- the critique ------------------------------------------------------------
+
+def test_normative_requires_norm_target(store, plans):
+    """negative control: a нормативное critique with no norm target is refused."""
+    _diagnosing(store, "n1", plans("base"))
+    d = _critique(store, "n1", "нормативное")
+    assert d.ok is False, "BEHAVIOUR: a нормативное critique naming no norm target was accepted"
+    assert "--norm-target" in d.detail, "BEHAVIOUR: the refusal does not name the flag to pass"
+    assert store.load("n1").difficulty.critique is None, \
+        "BEHAVIOUR: a refused critique was persisted"
+
+
+def test_norm_target_refused_with_other_failure_address(store, plans, norms):
+    _diagnosing(store, "n2", plans("base"))
+    f = _norm_file(norms)
+    for address in ("ресурсное", "not_applicable", None):
+        d = _critique(store, "n2", address, [f])
+        assert d.ok is False, f"BEHAVIOUR: --norm-target accepted with failure_address {address!r}"
+        assert "--norm-target" in d.detail
+    assert store.load("n2").difficulty.norm_targets == []
+
+
+@pytest.mark.parametrize("address", ["ресурсное", "not_applicable"])
+def test_other_failure_addresses_critique_unchanged(store, plans, address):
+    _diagnosing(store, "n3", plans("base"))
+    d = _critique(store, "n3", address)
+    assert d.ok is True, "BEHAVIOUR: a critique without norm targets must behave as before"
+    state = store.load("n3")
+    assert state.difficulty.norm_targets == []
+    assert state.difficulty.critique.failure_address == address
+
+
+def test_scratch_file_refused(store, plans, real_roots):
+    _diagnosing(store, "c1", plans("base"))
+    f = real_roots.scratch / "note.md"
+    f.write_text("x\n", encoding="utf-8")
+    d = _critique(store, "c1", "нормативное", [str(f)])
+    assert d.ok is False, "BEHAVIOUR: a scratch file was accepted as a norm target"
+    assert "scratch" in d.detail
+
+
+def test_canonical_checkout_file_refused_naming_the_worktree(store, plans, real_roots):
+    _diagnosing(store, "c2", plans("base"))
+    d = _critique(store, "c2", "нормативное", [str(real_roots.canon / "docs" / "rule.md")])
+    assert d.ok is False, "BEHAVIOUR: a file in the canonical checkout was accepted"
+    assert "linked worktree" in d.detail
+
+
+def test_session_plan_file_refused_naming_stage_form(store, plans, real_roots):
+    _diagnosing(store, "c3", plans("base"))
+    plan_path = store.load("c3").plan_path
+    d = _critique(store, "c3", "нормативное", [plan_path])
+    assert d.ok is False, "BEHAVIOUR: the session's own plan file was accepted"
+    assert "stage:<n>" in d.detail
+
+
+def test_nonexistent_and_unrooted_paths_refused(store, plans, real_roots, tmp_path):
+    _diagnosing(store, "c4", plans("base"))
+    missing = _critique(store, "c4", "нормативное", [str(real_roots.wt / "docs" / "nope.md")])
+    assert missing.ok is False, "BEHAVIOUR: a nonexistent file was accepted"
+    assert "not an existing file" in missing.detail
+    stray = tmp_path / "elsewhere.md"
+    stray.write_text("x\n", encoding="utf-8")
+    unrooted = _critique(store, "c4", "нормативное", [str(stray)])
+    assert unrooted.ok is False, "BEHAVIOUR: a file under no norm-bearing root was accepted"
+    assert "norm-bearing root" in unrooted.detail
+
+
+def test_linked_worktree_file_accepted(store, plans, real_roots):
+    _diagnosing(store, "c5", plans("base"))
+    f = real_roots.wt / "docs" / "rule.md"
+    d = _critique(store, "c5", "нормативное", [str(f)])
+    assert d.ok is True, f"BEHAVIOUR: a linked-worktree file was refused: {d.detail}"
+    (entry,) = store.load("c5").difficulty.norm_targets
+    assert entry["target"] == str(f) and entry["kind"] == "file"
+
+
+def test_memory_leaf_and_skill_file_accepted(store, plans, real_roots):
+    _diagnosing(store, "c6", plans("base"))
+    leaf = real_roots.home / "projects" / "-some-project" / "memory" / "leaf.md"
+    leaf.parent.mkdir(parents=True)
+    leaf.write_text("leaf\n", encoding="utf-8")
+    skill = real_roots.home / "skills" / "x" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("skill\n", encoding="utf-8")
+    global_leaf = real_roots.canon / "memory-global" / "leaves" / "leaf.md"
+    d = _critique(store, "c6", "нормативное", [str(leaf), str(skill), str(global_leaf)])
+    assert d.ok is True, f"BEHAVIOUR: a norm-bearing file was refused: {d.detail}"
+    assert len(store.load("c6").difficulty.norm_targets) == 3
+
+
+def test_norm_roots_override_replaces_the_whole_root_set(store, plans, real_roots,
+                                                         monkeypatch):
+    _diagnosing(store, "c7", plans("base"))
+    inside = real_roots.scratch / "inside.md"
+    inside.write_text("x\n", encoding="utf-8")
+    outside = real_roots.wt / "docs" / "rule.md"
+    monkeypatch.setenv("AGENTCTL_NORM_ROOTS", str(real_roots.scratch))
+    ok = _critique(store, "c7", "нормативное", [str(inside)])
+    assert ok.ok is True, "BEHAVIOUR: the override did not replace the scratch exclusion"
+    refused = _critique(store, "c7", "нормативное", [str(outside)])
+    assert refused.ok is False, "BEHAVIOUR: a file outside the override roots was accepted"
+
+
+def test_snapshot_records_baseline_kind_and_source(store, plans, norms):
+    base = plans("base")
+    _diagnosing(store, "s1", base)
+    f = _norm_file(norms)
+    d = _critique(store, "s1", "нормативное", [f, "stage:2"])
+    assert d.ok is True
+    by_target = {t["target"]: t for t in store.load("s1").difficulty.norm_targets}
+    assert by_target[f]["kind"] == "file" and by_target[f]["source"] == "critique"
+    assert by_target[f]["baseline"] == _digest(f), \
+        "BEHAVIOUR: the file baseline is not the digest of its bytes at critique time"
+    stage_two = next(s for s in load_plan(base, strict=False).stages if s.index == 2)
+    assert by_target["stage:2"]["kind"] == "stage"
+    assert by_target["stage:2"]["baseline"] == gates.stage_norm_digest(stage_two)
+    assert _critique(store, "s1", "нормативное", ["stage:9"]).ok is False
+
+
+def test_recritique_replaces_own_targets_and_keeps_inherited(store, plans, norms):
+    _diagnosing(store, "s2", plans("base"))
+    own = _norm_file(norms, "own.md")
+    inherited = _norm_file(norms, "inherited.md")
+    assert _critique(store, "s2", "нормативное", [own]).ok is True
+    _seed(store, "s2", targets=[_file_target(own),
+                                _file_target(inherited, source="difficulty-close")])
+    d = _critique(store, "s2", "нормативное", ["stage:1", inherited])
+    assert d.ok is True
+    entries = {t["target"]: t for t in store.load("s2").difficulty.norm_targets}
+    assert set(entries) == {"stage:1", inherited}, \
+        "BEHAVIOUR: a re-critique kept its replaced target or dropped an inherited one"
+    assert entries[inherited]["source"] == "difficulty-close", \
+        "BEHAVIOUR: a re-critique re-sourced an inherited target as its own"
+
+
+# --- the norm digest and `renorms` -------------------------------------------
+
+def test_norm_digest_is_index_free_and_moves_on_edit(plans):
+    base = load_plan(plans("a"), strict=False)
+    shifted = load_plan(plans("b", [
+        _stage(1, "Prepare", "env ready", "make env exits 0", [], ["env.txt"]),
+        _stage(2, "Scaffold module", "module file exists and imports cleanly",
+               "python -c 'import mod' exits 0", [], ["mod.py"]),
+        _stage(3, "Add tests", "pytest green for the new module",
+               "pytest tests/test_mod.py green", [2], ["tests/test_mod.py"]),
+    ]), strict=False)
+    edited = load_plan(plans("c", _stages(s1={"method": "a different method"})), strict=False)
+
+    def norm(doc, index):
+        return next(s for s in doc.stages if s.index == index)
+
+    assert gates.stage_norm_digest(norm(base, 1)) == gates.stage_norm_digest(norm(shifted, 2)), \
+        "BEHAVIOUR: renumbering a stage moved its norm digest"
+    assert gates.stage_norm_digest(norm(base, 1)) != gates.stage_norm_digest(norm(edited, 1)), \
+        "BEHAVIOUR: a method edit left the norm digest unchanged"
+
+
+def test_review_digest_is_untouched_for_stages_without_renorms(plans, norms):
+    f = _norm_file(norms)
+    plain = load_plan(plans("a"), strict=False).stages[0]
+    named = load_plan(plans("b", _stages(s1={"renorms": [f]})), strict=False).stages[0]
+    assert plain.renorms == [] and named.renorms == [f]
+    assert "renorms" not in StageNorm.from_stage(plain)._review_payload(indexed=True), \
+        "BEHAVIOUR: a stage without renorms carries a renorms element in its review payload"
+    assert StageNorm.from_stage(named).review_digest() != \
+        StageNorm.from_stage(plain).review_digest()
+
+
+def test_renorms_validation(plans, tmp_path):
+    good = load_plan(plans("g", _stages(s1={"renorms": ["/abs/norm.md"]})), strict=False)
+    assert good.stages[0].renorms == ["/abs/norm.md"]
+    for i, bad in enumerate((["relative/norm.md"], [""], ["stage:1"])):
+        with pytest.raises(PlanError):
+            load_plan(plans(f"b{i}", _stages(s1={"renorms": bad})), strict=False)
+    not_a_list = tmp_path / "work" / "not-a-list.toml"
+    not_a_list.write_text(
+        Path(plans("t")).read_text(encoding="utf-8").replace(
+            'output_artifacts = ["mod.py"]', 'output_artifacts = ["mod.py"]\nrenorms = "x"'),
+        encoding="utf-8")
+    with pytest.raises(PlanError):
+        load_plan(str(not_a_list), strict=False)
+
+
+# --- the closing replan ------------------------------------------------------
+
+def test_closing_replan_refused_without_renorms_reference(store, fixtures_dir, norms):
+    """negative control: a closing replan whose record names a norm file must name it in a
+    stage's `renorms`; the refined plan below changes stage 1 but never mentions the file."""
+    f = _norm_file(norms)
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    _diagnosing(store, "r1", plan)
+    assert _critique(store, "r1", "ресурсное").ok is True
+    _seed(store, "r1", address="нормативное", targets=[_file_target(f)])
+    _normalize(store, "r1")
+    before = store.path("r1").read_bytes()
+    d = _replan(store, "r1", refined)
+    assert d.ok is False, "BEHAVIOUR: a closing replan with no renorms reference was applied"
+    assert store.load("r1").node == Node.DIAGNOSING.value
+    assert store.path("r1").read_bytes() == before, \
+        "BEHAVIOUR: a refused closing replan changed the state file"
+
+
+def test_closing_replan_names_renorms_and_binds_the_obligation(store, plans, norms):
+    f = _norm_file(norms)
+    state = _bound_session(store, "r2", plans, f)
+    assert [(e["target"], e["stage"], e["depth"]) for e in state.pending_renorms] == [(f, 1, 0)]
+    assert state.pending_renorms[0]["baseline"] == _digest(f)
+    assert state.difficulty is None
+
+
+def test_stage_target_refused_while_norm_unchanged_admitted_once_edited(store, plans):
+    _diagnosing(store, "r3", plans("base"))
+    assert _critique(store, "r3", "нормативное", ["stage:1"]).ok is True
+    _normalize(store, "r3")
+    other_stage_only = plans("other", _stages(s2={"method": "write a regression test"}))
+    d = _replan(store, "r3", other_stage_only)
+    assert d.ok is False, "BEHAVIOUR: editing a different stage satisfied a stage:1 target"
+    assert "stage:1" in _blockers(d)
+    edited = plans("edited", _stages(s1={"method": "mirror the working caller"}))
+    d = _replan(store, "r3", edited)
+    assert d.ok is True, f"BEHAVIOUR: an edit of the targeted stage was refused: {d.detail}"
+    assert store.load("r3").pending_renorms == []
+
+
+def test_stage_target_shifted_by_an_inserted_stage_is_still_refused(store, plans):
+    _diagnosing(store, "r4", plans("base"))
+    assert _critique(store, "r4", "нормативное", ["stage:2"]).ok is True
+    _normalize(store, "r4")
+    shifted = plans("shifted", [
+        _stage(1, "Scaffold module", "module file exists and imports cleanly",
+               "python -c 'import mod' exits 0", [], ["mod.py"]),
+        _stage(2, "Lint", "lint is clean", "ruff exits 0", [1], ["lint.txt"]),
+        _stage(3, "Add tests", "pytest green for the new module",
+               "pytest tests/test_mod.py green", [1], ["tests/test_mod.py"]),
+    ])
+    d = _replan(store, "r4", shifted)
+    assert d.ok is False, "BEHAVIOUR: shifting the targeted stage to a new index passed the gate"
+    assert "stage:2" in _blockers(d)
+
+
+def test_reference_only_on_a_carried_passed_stage_is_refused(store, plans, norms):
+    f = _norm_file(norms)
+    _diagnosing(store, "r5", plans("base"), fail_stage=2)
+    assert store.load("r5").stage(1).outcome.status == StageStatus.PASSED.value
+    assert _critique(store, "r5", "нормативное", [f]).ok is True
+    _normalize(store, "r5")
+    on_passed = plans("on-passed", _stages(s1={"renorms": [f]}))
+    d = _replan(store, "r5", on_passed)
+    assert d.ok is False, "BEHAVIOUR: a reference on a carried-forward PASSED stage was admitted"
+    assert "PASSED" in _blockers(d)
+    on_pending = plans("on-pending", _stages(s2={"renorms": [f]}))
+    d = _replan(store, "r5", on_pending)
+    assert d.ok is True, f"BEHAVIOUR: a reference on the stage that will run was refused: {d.detail}"
+    assert store.load("r5").pending_renorms[0]["stage"] == 2
+
+
+def test_waiver_refused_for_target_bearing_record(store, fixtures_dir, norms):
+    """negative control: --normalization-waiver is not an escape for a record that carries
+    norm targets, whatever its failure_address label says."""
+    f = _norm_file(norms)
+    _diagnosing(store, "w1", str(fixtures_dir / "plan_two_stage.toml"))
+    assert _critique(store, "w1", "ресурсное").ok is True
+    _seed(store, "w1", targets=[_file_target(f, source="difficulty-close")])
+    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    d = _replan(store, "w1", refined, normalization_waiver="genuinely one-off")
+    assert d.ok is False, "BEHAVIOUR: a normalization waiver closed a target-bearing record"
+    state = store.load("w1")
+    assert state.node == Node.DIAGNOSING.value
+    assert not any(h.get("event") == "normalization_waived" for h in state.history), \
+        "BEHAVIOUR: the refused waiver was recorded as taken"
+
+
+def test_waiver_still_admitted_for_a_record_without_targets(store, fixtures_dir):
+    _diagnosing(store, "w2", str(fixtures_dir / "plan_two_stage.toml"))
+    assert _critique(store, "w2", "ресурсное").ok is True
+    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    d = _replan(store, "w2", refined, normalization_waiver="genuinely one-off")
+    assert d.ok is True, "BEHAVIOUR: the waiver regressed for a record carrying no targets"
+    assert any(h.get("event") == "normalization_waived" for h in store.load("w2").history)
+
+
+def test_gate_keys_on_the_record_carrying_targets_not_its_label(store, plans, norms):
+    f = _norm_file(norms)
+    _diagnosing(store, "g1", plans("base"))
+    assert _critique(store, "g1", "ресурсное").ok is True
+    _seed(store, "g1", targets=[_file_target(f, source="difficulty-close")])
+    _normalize(store, "g1")
+    d = _replan(store, "g1", plans("without", _stages(s1={"method": "m2"})))
+    assert d.ok is False, "BEHAVIOUR: a ресурсное record with inherited targets skipped the gate"
+    d = _replan(store, "g1", plans("with", _stages(s1={"renorms": [f]})))
+    assert d.ok is True
+    assert store.load("g1").pending_renorms[0]["target"] == f
+
+
+# --- the obligation ----------------------------------------------------------
+
+def test_pass_refused_while_the_file_is_unedited_then_discharged(store, plans, norms):
+    f = _norm_file(norms)
+    state = _bound_session(store, "o1", plans, f)
+    cli.cmd_next_stage(ns(session="o1"), store=store)
+    before = store.path("o1").read_bytes()
+    d = _pass(store, "o1", 1)
+    assert d.ok is False, "BEHAVIOUR: the re-norming stage passed with its norm file unedited"
+    assert f in _blockers(d)
+    assert store.path("o1").read_bytes() == before, \
+        "BEHAVIOUR: a refused PASS changed the state file"
+    Path(f).write_text("v2\n", encoding="utf-8")
+    d = _pass(store, "o1", 1)
+    assert d.ok is True, f"BEHAVIOUR: the stage was refused after the file moved: {d.detail}"
+    state = store.load("o1")
+    assert state.stage(1).outcome.status == StageStatus.PASSED.value
+    assert gates.open_renorms(state) == []
+
+
+def test_file_edited_before_the_replan_leaves_no_obligation(store, plans, norms):
+    f = _norm_file(norms)
+    _diagnosing(store, "o2", plans("base"))
+    assert _critique(store, "o2", "нормативное", [f]).ok is True
+    _normalize(store, "o2")
+    Path(f).write_text("v2\n", encoding="utf-8")
+    d = _replan(store, "o2", plans("renorm", _stages(s1={"renorms": [f]})))
+    assert d.ok is True
+    assert store.load("o2").pending_renorms == [], \
+        "BEHAVIOUR: an already-moved file was bound as an owed edit"
+    cli.cmd_next_stage(ns(session="o2"), store=store)
+    assert _pass(store, "o2", 1).ok is True
+
+
+def test_refinement_dropping_the_pending_stage_is_refused(store, plans, norms):
+    f = _norm_file(norms)
+    _bound_session(store, "o3", plans, f)
+    before = store.path("o3").read_bytes()
+    for name, stage in (("dropped", {"method": "m2"}), ("emptied", {"renorms": []})):
+        d = _replan(store, "o3", plans(name, _stages(s1=stage)))
+        assert d.ok is False, f"BEHAVIOUR: a refinement that {name} the renorms reference applied"
+        assert f in _blockers(d)
+        assert store.path("o3").read_bytes() == before
+
+
+def test_refinement_moving_the_reference_rebinds_the_obligation(store, plans, norms):
+    f = _norm_file(norms)
+    _bound_session(store, "o4", plans, f)
+    d = _replan(store, "o4", plans("moved", _stages(s2={"renorms": [f]})))
+    assert d.ok is True, f"BEHAVIOUR: moving the reference to another pending stage failed: {d.detail}"
+    (entry,) = store.load("o4").pending_renorms
+    assert entry["target"] == f and entry["stage"] == 2, \
+        "BEHAVIOUR: the obligation stayed bound to the stage that no longer names it"
+
+
+def test_obligation_survives_a_substantive_replan(store, plans, norms):
+    f = _norm_file(norms)
+    _bound_session(store, "o5", plans, f)
+    bigger = plans("bigger", _stages(s1={"renorms": [f]}) + [
+        _stage(3, "Wire CI", "CI config references test_mod", "grep test_mod ci.yml",
+               [2], [".github/workflows/ci.yml"])])
+    d = _replan(store, "o5", bigger)
+    assert d.ok is True
+    state = store.load("o5")
+    assert state.node == Node.PLAN_READY.value
+    assert [e["target"] for e in state.pending_renorms] == [f], \
+        "BEHAVIOUR: a substantive replan discharged an obligation whose file is unedited"
+    without = plans("bigger-without", _stages() + [
+        _stage(3, "Wire CI", "CI config references test_mod", "grep test_mod ci.yml",
+               [2], [".github/workflows/ci.yml"])])
+    cli.cmd_approve(ns(session="o5", by="user"), store=store)
+    refused = _replan(store, "o5", without)
+    assert refused.ok is False, "BEHAVIOUR: a substantive replan dropped the open obligation"
+
+
+def test_verify_final_and_resolve_refused_while_an_edit_is_owed(store, plans, norms):
+    f = _norm_file(norms)
+    _start(store, "v1", plans("base"))
+    _pass(store, "v1", 1)
+    cli.cmd_next_stage(ns(session="v1"), store=store)
+    _pass(store, "v1", 2)
+    state = store.load("v1")
+    assert state.node == Node.VERIFYING.value
+    owed = {"target": f, "baseline": _digest(f), "stage": 2, "depth": 0}
+    state.pending_renorms = [owed]
+    store.save(state)
+
+    d = cli.cmd_verify_final(ns(session="v1"), store=store)
+    assert d.ok is False, "BEHAVIOUR: verify-final passed with a norm edit still owed"
+    assert f in _blockers(d) and "stage 2" in _blockers(d), \
+        "BEHAVIOUR: the refusal does not name the target and its bound stage"
+    assert store.load("v1").node == Node.VERIFYING.value
+
+    Path(f).write_text("v2\n", encoding="utf-8")
+    d = cli.cmd_verify_final(ns(session="v1"), store=store)
+    assert d.ok is True and store.load("v1").pending_renorms == []
+
+    state = store.load("v1")
+    state.pending_renorms = [{**owed, "baseline": _digest(f)}]
+    store.save(state)
+    d = cli.cmd_resolve(ns(session="v1", by="user", quality=5, quality_by="user-confirmed",
+                           quality_note=None), store=store)
+    assert d.ok is False and f in _blockers(d), \
+        "BEHAVIOUR: resolve closed the task with a norm edit still owed"
+
+
+def test_previous_schema_state_loads_without_targets_or_obligations(store, plans):
+    _diagnosing(store, "m1", plans("base"))
+    data = store.load("m1").to_dict()
+    data["schema_version"] = SCHEMA_VERSION - 1
+    data.pop("pending_renorms", None)
+    data["difficulty"].pop("norm_targets", None)
+    for stage in data.get("stages") or []:
+        stage.pop("renorms", None)
+    restored = SessionState.from_dict(data)
+    assert restored.schema_version == SCHEMA_VERSION - 1
+    assert restored.pending_renorms == []
+    assert restored.difficulty.norm_targets == []
+    assert all(s.renorms == [] for s in restored.stages)
+    assert restored.difficulty.complete() is False
