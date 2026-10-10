@@ -11,6 +11,7 @@ import ast
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -1432,12 +1433,44 @@ def test_the_installer_writes_a_oneshot_service_and_a_nightly_timer_and_enables_
     assert "Type=oneshot" in service
     assert "WorkingDirectory=%h/claude-agent-instructions" in service
     assert "EnvironmentFile=%h/.config/agent-debt-cycle/env" in service
-    assert "ExecStart=%h/claude-agent-instructions/scripts/mandate-cycle.py run" in service
+    exec_start = [ln for ln in service.splitlines() if ln.startswith("ExecStart=")]
+    interpreter, _, command = exec_start[0].removeprefix("ExecStart=").partition(" ")
+    assert interpreter.startswith("/") and interpreter.endswith("/python3"), exec_start
+    assert command == "%h/claude-agent-instructions/scripts/mandate-cycle.py run"
     assert "append:%h/.local/log/agent-debt-cycle.log" in service
     assert "OnCalendar=*-*-* 01:00:00" in timer and "Persistent=false" in timer
     assert systemctl_calls(box) == [
         "--user daemon-reload", "--user enable --now agent-debt-cycle.timer",
     ]
+
+
+def test_the_unit_path_leads_with_python3_and_execstart_names_it_even_when_gh_comes_first(box, tmp_path):
+    gh_dir, py_dir = tmp_path / "gh-first", tmp_path / "py-second"
+    for d, name in ((gh_dir, "gh"), (py_dir, "python3")):
+        d.mkdir()
+        (d / name).write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        (d / name).chmod(0o755)
+    result = install(box, extra_env={"PATH": f"{gh_dir}:{py_dir}:{box['fakes']}:/usr/bin:/bin"})
+    assert result.returncode == 0, result.stderr
+    env_text = (box["home"] / ".config" / "agent-debt-cycle" / "env").read_text(encoding="utf-8")
+    unit_path = env_text.splitlines()[0].removeprefix("PATH=").split(":")
+    assert unit_path[:2] == [str(py_dir), str(gh_dir)]
+    assert len(unit_path) == len(set(unit_path)), unit_path
+    service = (box["units"] / "agent-debt-cycle.service").read_text(encoding="utf-8")
+    assert f"ExecStart={py_dir}/python3 %h/claude-agent-instructions/scripts/mandate-cycle.py run\n" in service
+
+
+def test_the_installer_refuses_to_pin_execstart_without_a_python3(box, tmp_path):
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    for name in ("bash", "uname", "dirname", "mkdir", "chmod", "sed", "cat", "rm"):
+        found = shutil.which(name)
+        if found:
+            (bare / name).symlink_to(found)
+    result = install(box, "--write-env", extra_env={"PATH": f"{bare}:{box['fakes']}"})
+    assert result.returncode == 1
+    assert "python3 not found" in result.stderr
+    assert not (box["home"] / ".config" / "agent-debt-cycle" / "env").exists()
 
 
 def test_the_env_file_carries_path_and_config_roots_but_never_a_token(box):

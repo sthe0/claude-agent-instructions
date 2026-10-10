@@ -39,16 +39,29 @@ if (( UNINSTALL )); then
   exit 0
 fi
 
-path_dirs=""
-for bin in gh git python3 claude; do
+# The unit's PATH is ordered by priority: the interpreter's directory first, so the cycle runs
+# under the same python3 (and its site-packages) this shell resolves, then the other tools, then
+# the usual fallbacks -- each directory once. ExecStart names that interpreter outright, so the
+# one binary that matters never depends on PATH order.
+path_dirs=()
+add_dir() {
+  local d
+  for d in ${path_dirs[@]+"${path_dirs[@]}"}; do [[ "$d" == "$1" ]] && return 0; done
+  path_dirs+=("$1")
+}
+PYTHON3=""
+for bin in python3 gh git claude; do
   p="$(command -v "$bin" 2>/dev/null || true)"
   if [[ -n "$p" && "$p" == /* ]]; then
-    path_dirs+="$(dirname "$p"):"
+    [[ "$bin" == python3 ]] && PYTHON3="$p"
+    add_dir "$(dirname "$p")"
   else
     echo "warning: $bin not found on PATH; the cycle will not see it" >&2
   fi
 done
-UNIT_PATH="${path_dirs}$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+[[ -n "$PYTHON3" ]] || { echo 'agent-debt-cycle timer: python3 not found on PATH; cannot pin ExecStart' >&2; exit 1; }
+for d in "$HOME/.local/bin" /usr/local/bin /usr/bin /bin; do add_dir "$d"; done
+UNIT_PATH="$(IFS=:; printf '%s' "${path_dirs[*]}")"
 
 mkdir -p "$ENV_DIR"
 {
@@ -62,7 +75,7 @@ echo "Wrote $ENV_FILE"
 (( WRITE_ENV )) && exit 0
 
 mkdir -p "$UNIT_DIR" "$HOME/.local/log"
-cat >"$UNIT_DIR/agent-debt-cycle.service" <<'EOF'
+cat >"$UNIT_DIR/agent-debt-cycle.service" <<EOF
 [Unit]
 Description=Background debt cycle under the standing mandate
 
@@ -70,7 +83,7 @@ Description=Background debt cycle under the standing mandate
 Type=oneshot
 WorkingDirectory=%h/claude-agent-instructions
 EnvironmentFile=%h/.config/agent-debt-cycle/env
-ExecStart=%h/claude-agent-instructions/scripts/mandate-cycle.py run
+ExecStart=$PYTHON3 %h/claude-agent-instructions/scripts/mandate-cycle.py run
 StandardOutput=append:%h/.local/log/agent-debt-cycle.log
 StandardError=append:%h/.local/log/agent-debt-cycle.log
 EOF
