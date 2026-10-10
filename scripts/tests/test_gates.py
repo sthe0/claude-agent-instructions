@@ -89,6 +89,39 @@ def test_approve_nonempty_by_passes(store, fixtures_dir):
     assert store.load(sid).node == Node.APPROVED.value
 
 
+# --- approve at wrong node returns legible directive, not TransitionError (#339) ---
+
+def test_approve_at_executing_is_no_action(store, fixtures_dir):
+    """approve at EXECUTING should report 'already approved' (ok=True), not
+    raise an uncaught TransitionError — issue #339."""
+    sid = "gae"
+    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    assert store.load(sid).node == Node.EXECUTING.value
+
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.ok is True
+    assert "already approved" in d.detail
+    assert store.load(sid).node == Node.EXECUTING.value  # node unchanged
+
+
+def test_approve_before_plan_submitted_is_refused(store):
+    """approve at CLASSIFIED (no plan yet) should return ok=False with a
+    helpful message, not an uncaught TransitionError."""
+    sid = "gabc"
+    cli.cmd_start(ns(session=sid, task="demo", goal="", done_criterion="",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    assert store.load(sid).node == Node.CLASSIFIED.value
+
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.ok is False
+    assert "submit" in d.detail.lower()
+    assert store.load(sid).node == Node.CLASSIFIED.value  # node unchanged
+
+
 # --- empty --by refused at the resolution gate ---------------------------
 
 def test_resolve_empty_by_is_refused(store, fixtures_dir):
