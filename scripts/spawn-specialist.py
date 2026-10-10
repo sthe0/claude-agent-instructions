@@ -347,8 +347,10 @@ def assemble_prompt(
             "## Checkpoints",
             "",
             "Commit each checkpoint as soon as its own control goes green — don't "
-            "batch unrelated checkpoints into one commit. Push the personal/ticket "
-            "branch after each commit (pre-authorized; never a shared/trunk branch). "
+            "batch unrelated checkpoints into one commit. "
+            "In the Core repo the git-worktrees reaper backs up committed branches, so commit only. "
+            "Outside the Core repo, push the personal/ticket branch after each commit "
+            "where your grants allow it (never a shared/trunk branch); never land. "
             "Keep evidence (test output, command logs, intermediate artifacts) in the "
             "durable evidence directory below, not under `/tmp` or another OS-temp "
             "scratch root — a scratch root can be swept before anyone reviews it.",
