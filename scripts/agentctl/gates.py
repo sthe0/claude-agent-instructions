@@ -526,6 +526,18 @@ def difficulty_stack_blockers(state: SessionState) -> list[str]:
     ]
 
 
+def normalization_waiver_blockers(state: SessionState, waiver: str | None) -> list[str]:
+    """Refusal of a `replan --normalization-waiver` in the DIAGNOSING cycle while the open
+    record names norm target(s) the closing plan must change: such a record closes on its
+    real normalization, never on a waiver. [] == the waiver may be considered."""
+    if waiver is None or state.node != Node.DIAGNOSING.value:
+        return []
+    d = state.difficulty
+    if d is not None and d.norm_targets:
+        return ["normalization waiver on a record carrying norm targets"]
+    return []
+
+
 def difficulty_close_blockers(state: SessionState) -> list[str]:
     """Precondition guardian for `difficulty-close`: the top (nested) record must be as
     complete as a record closing through `replan` has to be -- difficulty_blockers (the

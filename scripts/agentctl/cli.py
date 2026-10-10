@@ -9378,15 +9378,14 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             marker=DIRECTIVE_ESCALATE_TO_USER,
             data={"blockers": ["normalization waiver on an agent-acknowledged fire"]},
         )
-    if (getattr(args, "normalization_waiver", None) is not None
-            and state.node == Node.DIAGNOSING.value
-            and state.difficulty is not None and state.difficulty.norm_targets):
+    wtblock = gates.normalization_waiver_blockers(state, getattr(args, "normalization_waiver", None))
+    if wtblock:
         _log_gate(state, "normalization_waiver", ["record carries norm targets"], passed=False)
         return Directive(
             False, state.node, "normalize",
             "replan refused: the difficulty record names norm target(s) the closing plan "
             "must change; a --normalization-waiver is not accepted for it",
-            data={"blockers": ["normalization waiver on a record carrying norm targets"]},
+            data={"blockers": wtblock},
         )
     nblock = gates.normalization_blockers(state, pending_factor=normalize_factor or None)
     if nblock:

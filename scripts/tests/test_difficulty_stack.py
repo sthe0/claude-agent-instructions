@@ -506,6 +506,28 @@ def test_child_file_target_binds_a_parent_that_was_not_critiqued_normative(
         "BEHAVIOUR: the inherited file target was not bound as an owed edit"
 
 
+def test_replan_waiver_cannot_stand_in_for_the_renorm_of_a_target_bearing_record(
+        store, fixtures_dir, tmp_path):
+    """negative control: with the renorms reference already satisfied, the
+    --normalization-waiver is the only thing that could let the closing replan past the
+    missing normalization -- and a record carrying an inherited norm target refuses it."""
+    sid = "f1-waiver-only"
+    path, _ = _with_child_target(store, tmp_path, fixtures_dir, sid, parent_address="ресурсное")
+    assert _critique(store, sid, "ресурсное").ok is True
+    plan = _renorms_plan(tmp_path, fixtures_dir, path)
+
+    plain = _replan(store, sid, plan)
+    assert plain.ok is False and plain.action == "normalize", \
+        "BEHAVIOUR: the closing replan needs a recorded normalization before the waiver is in play"
+
+    waived = _replan(store, sid, plan, normalization_waiver="genuinely one-off")
+    assert waived.ok is False, \
+        "BEHAVIOUR: a normalization waiver let a target-bearing record close without its normalization"
+    assert "norm targets" in " ".join(waived.data.get("blockers", [])), \
+        "BEHAVIOUR: the waiver refusal does not name the norm targets as its ground"
+    assert store.load(sid).node == Node.DIAGNOSING.value
+
+
 # --- target collision ---------------------------------------------------------
 
 def test_collision_takes_the_childs_baseline(store, fixtures_dir, tmp_path):
