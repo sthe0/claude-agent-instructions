@@ -28,6 +28,9 @@ from . import grants as _grants
 from .directive import Directive
 from .plan import (
     CONDITION_MARKERS,
+    CUSTOMER_QUESTION_MARKER,
+    CUSTOMER_QUESTIONS_MARKER,
+    CUSTOMER_QUESTIONS_NONE,
     PLAN_DIGEST_MARKER,
     RESTATES_PREFIX,
     REVIEW_MARKER,
@@ -35,7 +38,6 @@ from .plan import (
     SEVERITY_NOTE,
     VERDICT_MARKER,
     PAIR_BASE_NODE,
-    PAIR_PLAN_NODE,
     PlanDoc,
     PlanError,
     _sha256_hex,
@@ -45,7 +47,8 @@ from .plan import (
     interface_empty,
     load_plan,
     parse_pair,
-    plan_coverage_refs,
+    parse_unit,
+    plan_coverage_entries,
     reliance_set,
     review_pairs,
 )
@@ -330,7 +333,44 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
     )
     lines.append("")
 
-    s = stage
+    lines.extend(_stage_field_lines(doc, stage, dependency_blocks=True))
+
+    if m.final_check:
+        lines.append(
+            "## Final verification (labels only — this stage does not need the "
+            "commands; see the full plan file for those)"
+        )
+        lines.append("")
+        for i, fc in enumerate(m.final_check, start=1):
+            if fc.label:
+                lines.append(f"- {fc.label}")
+            else:
+                lines.append(f"- check {i} ({fc.kind})")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_stage_fields(doc: PlanDoc, stage_index: int) -> str:
+    """Pure: every field of ONE stage and nothing else — the stage's own heading
+    and declared fields as `render_stage_brief` shows them, without the plan header
+    (goal, done criterion, repo root, research), the final-check labels and the
+    supplier blocks under `Depends on` (a supplier's title, result image and output
+    artifacts, which belong to the supplier). A review of the stage alone is shown
+    exactly the content its currency keys on; the direct dependencies appear as
+    stage indices.
+
+    Raises ValueError if no stage in `doc` carries `stage_index`."""
+    stage = next((s for s in doc.stages if s.index == stage_index), None)
+    if stage is None:
+        raise ValueError(f"no stage with index {stage_index} in plan {doc.meta.task_id!r}")
+    return "\n".join(_stage_field_lines(doc, stage, dependency_blocks=False)).rstrip() + "\n"
+
+
+def _stage_field_lines(doc: PlanDoc, s, *, dependency_blocks: bool) -> list[str]:
+    """The stage section of `render_stage_brief`: heading and every non-empty field.
+    `dependency_blocks=False` lists the direct dependencies by index only."""
+    lines: list[str] = []
     lines.append(f"## Stage {s.index}: {s.title}")
     lines.append("")
     lines.append(f"- **Executor:** {s.actor.executor}")
@@ -385,7 +425,9 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
         lines.append(f"- **Output artifacts:** {', '.join(s.output_artifacts)}")
     if s.ephemeral_artifacts_waiver:
         lines.append(f"- **Ephemeral artifacts waived:** {s.ephemeral_artifacts_waiver}")
-    if s.depends_on:
+    if s.depends_on and not dependency_blocks:
+        lines.append(f"- **Depends on:** {', '.join(f'stage {d}' for d in sorted(s.depends_on))}")
+    elif s.depends_on:
         lines.append("- **Depends on** (direct dependencies only; see their own stage for detail):")
         for dep_index in sorted(s.depends_on):
             dep = next((d for d in doc.stages if d.index == dep_index), None)
@@ -418,28 +460,16 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
             f"confidence: {p.confidence}; refutation: {p.refutation})"
         )
     lines.append("")
-
-    if m.final_check:
-        lines.append(
-            "## Final verification (labels only — this stage does not need the "
-            "commands; see the full plan file for those)"
-        )
-        lines.append("")
-        for i, fc in enumerate(m.final_check, start=1):
-            if fc.label:
-                lines.append(f"- {fc.label}")
-            else:
-                lines.append(f"- check {i} ({fc.kind})")
-        lines.append("")
-
-    return "\n".join(lines).rstrip() + "\n"
+    return lines
 
 
 # --- Topological review: one reliance edge ("pair") reviewed per spawn,
 # from a small starting prompt whose single service file is reachable by
 # exactly one `Read` in a per-pair view directory. A pair id is `<b>-<s>`
-# (`b` relies on `s`); nodes are stage indices plus the synthetic `plan`
-# and `base` nodes. See `render_pair_review_bundle`. ----------------------
+# (`b` relies on `s`); nodes are stage indices plus the synthetic `base`
+# node (the reconstructed activity: order, goal, done criterion, final
+# checks). See `render_pair_review_bundle`; each node is also reviewed alone
+# as a unit (`render_unit_review_bundle`). ---------------------------------
 
 class TopoUnitsCorrupt(Exception):
     """A materialized `<root>/<plan_sha256>/` topo tree's on-disk content
@@ -457,35 +487,36 @@ def _lines_text(lines: list[str]) -> str:
 
 
 def node_file_name(node: "int | str") -> str:
-    """The view file name for one pair node: `base.md`, `plan.md`, or
-    `stage-<n>.md`."""
+    """The view file name for one pair node: `base.md` or `stage-<n>.md`."""
     if node == PAIR_BASE_NODE:
         return "base.md"
-    if node == PAIR_PLAN_NODE:
-        return "plan.md"
     return f"stage-{int(node)}.md"
 
 
 def node_file_text(doc: PlanDoc, node: "int | str") -> str:
     """One node's own FULL file: the order block for `base` (empty when the
-    plan declares no order), meta + order coverage + final checks for
-    `plan`, `render_stage_brief` for a stage. The bundle's inlined text and
-    the materialized file are both this one function's output."""
+    plan declares no order), `render_stage_brief` for a stage. The bundle's
+    inlined text and the materialized file are both this one function's
+    output. The `base` unit's own fields (`unit_base_text`) add the meta."""
     if node == PAIR_BASE_NODE:
         lines = render_order_md(doc)
         return _lines_text(lines) if lines else ""
-    if node == PAIR_PLAN_NODE:
-        return _lines_text(
-            render_meta_md(doc) + render_order_coverage_md(doc) + render_final_checks_md(doc)
-        )
     return render_stage_brief(doc, int(node))
+
+
+def unit_base_text(doc: PlanDoc) -> str:
+    """Every field of the `base` unit: the meta (goal, done criterion), the order
+    (customer, functional place, requirements with derivations), its coverage map
+    and the final checks."""
+    return _lines_text(
+        render_meta_md(doc) + render_order_md(doc) + render_order_coverage_md(doc)
+        + render_final_checks_md(doc)
+    )
 
 
 def _node_label(doc: PlanDoc, node: "int | str") -> str:
     if node == PAIR_BASE_NODE:
         return "the base activity (the order)"
-    if node == PAIR_PLAN_NODE:
-        return "the plan as a whole"
     stage = next(s for s in doc.stages if s.index == node)
     return f"stage {node} ({stage.title})"
 
@@ -526,30 +557,9 @@ def render_stage_interface(doc: PlanDoc, stage_index: int, *, contract: bool = F
     return "\n".join(lines).rstrip() + "\n"
 
 
-def render_plan_interface(doc: PlanDoc) -> str:
-    """The interface-only projection of the plan as a whole, shaped like
-    `render_stage_interface`: the goal as the result image, the plan's
-    criterion type and done criterion, and the de-duplicated union of every
-    stage's output_artifacts."""
-    meta = doc.meta
-    lines = ["## The plan as a whole", ""]
-    lines.append(f"- **Expected result image:** {meta.goal}")
-    lines.append(f"- **Criterion type:** {meta.criterion_type}")
-    lines.append(f"- **Done criterion:** {meta.done_criterion}")
-    artifacts = list(dict.fromkeys(a for s in doc.stages for a in s.output_artifacts))
-    if artifacts:
-        lines.append("- **Output artifacts:**")
-        for a in artifacts:
-            lines.append(f"  - `{a}`")
-    else:
-        lines.append("- **Output artifacts:** *(none declared)*")
-    lines.append("")
-    return _lines_text(lines)
-
-
 def topo_pair_view_dirname(pair_id: str) -> str:
     """The view directory's bare name for `pair_id` — e.g. `view-3-1` or
-    `view-plan-7`. Matches the exact `view-<pair>` shape
+    `view-base-7`. Matches the exact `view-<pair>` shape
     `spawn-specialist.py --review-topo` grants `Read(//.../view-<pair>/**)`
     against."""
     return f"view-{pair_id}"
@@ -565,12 +575,11 @@ def topo_pair_view(doc: PlanDoc, pair_id: str) -> list[str]:
 
 def topo_node_files(doc: PlanDoc) -> dict[str, str]:
     """Every node file for the WHOLE plan, keyed by filename: `stage-<n>.md`
-    for every stage, `plan.md`, and `base.md` when the plan declares an
-    order. A pure function of the plan bytes — `materialize_topo_units`
-    writes these verbatim once per plan sha256, and every pair's view
-    directory is a copy of one of them."""
+    for every stage and `base.md` when the plan declares an order. A pure
+    function of the plan bytes — `materialize_topo_units` writes these
+    verbatim once per plan sha256, and every pair's view directory is a
+    copy of one of them."""
     files = {node_file_name(s.index): node_file_text(doc, s.index) for s in doc.stages}
-    files[node_file_name(PAIR_PLAN_NODE)] = node_file_text(doc, PAIR_PLAN_NODE)
     if doc.meta.order is not None:
         files[node_file_name(PAIR_BASE_NODE)] = node_file_text(doc, PAIR_BASE_NODE)
     return files
@@ -780,16 +789,59 @@ def _supply_edge_label(doc: PlanDoc, consumer: int, supplier: int) -> str:
 
 
 def _is_source_stage(doc: PlanDoc, node: "int | str") -> bool:
-    return node not in (PAIR_PLAN_NODE, PAIR_BASE_NODE) and not reliance_set(doc, int(node))
+    return node != PAIR_BASE_NODE and not reliance_set(doc, int(node))
 
 
-def pair_service_text(doc: PlanDoc, service: "int | str") -> str:
-    """Section 3 of a pair bundle: the service's declared product. The plan
-    service shows `render_plan_interface`; a stage service shows its
-    contract interface — or, when it relies on nothing (a source stage), its
-    full brief, so its own construction can be judged in this pair."""
-    if service == PAIR_PLAN_NODE:
-        return render_plan_interface(doc)
+def _control_text(doc: PlanDoc, control: str) -> str:
+    """What the stage-addressed coverage control `control` names, in the
+    plan's own words (`controls` grammars: a stage's verify_command or landed
+    assertion); the control's own spelling when no grammar describes it."""
+    from .controls import STAGE_LANDED_ASSERTION, STAGE_VERIFY_COMMAND
+    for grammar in (STAGE_VERIFY_COMMAND, STAGE_LANDED_ASSERTION):
+        match = grammar.pattern.match(control)
+        if match is not None:
+            return grammar.describe(match, doc) or control
+    return control
+
+
+def _base_edge_requirements(doc: PlanDoc, service: int) -> list:
+    """The order's requirements the coverage entries on stage `service` name,
+    in the order's own sequence."""
+    order = doc.meta.order
+    wanted = {req_id for req_id, _ in plan_coverage_entries(doc).get(service, ())}
+    return [r for r in (order.requirements if order is not None else ()) if r.id in wanted]
+
+
+def _base_edge_section(doc: PlanDoc, service: int) -> str:
+    """The base side of a `base-<s>` pair: only the requirements the edge
+    supplies — id, text, derivation — and never the goal, done criterion, final
+    checks, other requirements or the rest of the order."""
+    lines = ["- **Requirements named by this edge:**"]
+    for r in _base_edge_requirements(doc, service):
+        label = f"**{r.id}**" if r.id else "*(no id)*"
+        lines.append(f"  - {label}: {r.text}")
+        lines.append(f"    - **Derivation:** {r.derivation or '*(none)*'}")
+    return "\n".join(lines) + "\n"
+
+
+def pair_service_text(doc: PlanDoc, service: "int | str", base: "int | str | None" = None) -> str:
+    """Section 3 of a pair bundle: the service's declared product. A stage
+    service shows its contract interface — or, when it relies on nothing (a
+    source stage), its full brief, so its own construction can be judged in
+    this pair. For a `base-<s>` pair (`base` is `PAIR_BASE_NODE`) it is the
+    stage's declared product — for a blank-interface stage its own fields
+    (`render_stage_fields`), never the plan header or a supplier's block — and,
+    under it, the control each coverage entry names, in the plan's own words."""
+    if base == PAIR_BASE_NODE:
+        if interface_empty(next(s for s in doc.stages if s.index == int(service))):
+            product = render_stage_fields(doc, int(service))
+        else:
+            product = render_stage_interface(doc, int(service))
+        lines = [product.rstrip("\n"), ""]
+        lines.append("**Controls named by the coverage entries:**")
+        for req_id, control in plan_coverage_entries(doc).get(int(service), ()):
+            lines.append(f"- {req_id} → `{control}`: {_control_text(doc, control)}")
+        return "\n".join(lines) + "\n"
     if _is_source_stage(doc, service):
         return render_stage_brief(doc, int(service))
     return render_stage_interface(doc, int(service), contract=True)
@@ -797,23 +849,18 @@ def pair_service_text(doc: PlanDoc, service: "int | str") -> str:
 
 def pair_edge_text(doc: PlanDoc, base: "int | str", service: "int | str") -> str:
     """Section 4 of a pair bundle: the edge's label, (for a stage base) the
-    base's full reliance set with each edge's kind, and the ORDERING tag."""
+    base's full reliance set with each edge's kind, and the ORDERING tag. For a
+    `base-<s>` pair the edge is the set of coverage entries on stage `s`, each
+    requirement with the control it names."""
     if base == PAIR_BASE_NODE:
         lines = [
-            f"- Edge: the base activity relies on the plan as a whole — {_ORDER_EDGE}",
-            f"- Ordering: {_NO_ORDERING}",
+            f"- Edge: the base activity relies on stage {service} — {_ORDER_EDGE} coverage",
         ]
-    elif base == PAIR_PLAN_NODE:
-        parts = []
-        refs = plan_coverage_refs(doc).get(int(service), ())
-        if refs:
-            parts.append("covers " + ", ".join(refs))
-        if not consumers(doc, int(service)):
-            parts.append("sink")
-        lines = [
-            f"- Edge: the plan as a whole relies on stage {service} — {'; '.join(parts)}",
-            f"- Ordering: {_NO_ORDERING}",
-        ]
+        lines.extend(
+            f"  - {req_id} → {control}"
+            for req_id, control in plan_coverage_entries(doc).get(int(service), ())
+        )
+        lines.append(f"- Ordering: {_NO_ORDERING}")
     else:
         stage = next(s for s in doc.stages if s.index == base)
         supplied = {sup.on for sup in stage.supplies}
@@ -838,22 +885,14 @@ def _pair_conditions(doc: PlanDoc, base: "int | str", service: "int | str") -> l
     service_label = _node_label(doc, service)
     if base == PAIR_BASE_NODE:
         return [
-            "the base is organized in a non-arbitrary way",
-            "the requirements are genuinely derived from the functional place",
-            "not applicable — the base activity delivers no product of its own for a "
-            "consumer to rely on",
-            "the goal and done criterion answer every requirement",
-        ]
-    if base == PAIR_PLAN_NODE:
-        return [
-            "the coverage map is total and non-arbitrary",
-            "the plan as a whole is a genuine derivation from the order through this edge",
-            f"the plan as a whole delivers its goal and done criterion — the part "
-            f"attributed to {service_label} measured against that stage's declared "
-            f"product, the rest (coverage map, final checks) standing on its own from "
-            f"the plan file",
-            f"{service_label}'s declared product decides the requirements the coverage "
-            f"map attributes to it",
+            "each requirement this edge names is stated unambiguously and attributed to "
+            f"{service_label} in a non-arbitrary way",
+            "each named requirement is genuinely derived from the difficulty and the "
+            "functional place",
+            f"every named requirement is discharged through this edge — {service_label}'s "
+            f"declared product delivers what the requirement asks",
+            f"the control each coverage entry names, in {service_label}, genuinely decides "
+            f"its requirement and is checkable from that stage's declared product",
         ]
     return [
         f"every need of {base_label} is attributed to a declared edge — it is organized "
@@ -866,10 +905,10 @@ def _pair_conditions(doc: PlanDoc, base: "int | str", service: "int | str") -> l
     ]
 
 
-def _prior_review_section(history: dict) -> list[str]:
-    """The `## Prior review of this pair` and `## Changed since the prior verdict`
+def _prior_review_section(history: dict, noun: str = "pair") -> list[str]:
+    """The `## Prior review of this <noun>` and `## Changed since the prior verdict`
     sections of a re-review bundle, from the `plan-review-pair-history` payload."""
-    lines = ["## Prior review of this pair", ""]
+    lines = [f"## Prior review of this {noun}", ""]
     for position, record in enumerate(history["records"], start=1):
         reviewer, recorded = record["reviewer_verdict"], record["effective_verdict"]
         verdicts = f"`{reviewer}`" if reviewer == recorded else f"`{reviewer}` (recorded as `{recorded}`)"
@@ -890,8 +929,62 @@ def _prior_review_section(history: dict) -> list[str]:
     lines.append("")
     changed = history["changed_parts_since_last"]
     lines.append(
-        "Parts of this pair changed since the last review: " + ", ".join(f"`{p}`" for p in changed)
+        f"Parts of this {noun} changed since the last review: " + ", ".join(f"`{p}`" for p in changed)
         if changed else "Nothing changed since the prior verdict."
+    )
+    lines.append("")
+    return lines
+
+
+def _protocol_lines(history: "dict | None", noun: str) -> list[str]:
+    """The `## Review protocol` section and the closing marker line shared by
+    the pair and the unit bundle; `noun` is `pair` or `unit`. Every marker is
+    sourced from `plan` (`REVIEW_MARKER`, `VERDICT_MARKER`, `PLAN_DIGEST_MARKER`,
+    `CONDITION_MARKERS`) — never a string literal here."""
+    concern_markers = ", ".join(f"`{marker}`" for marker in CONDITION_MARKERS)
+    gap_marker = CONDITION_MARKERS[3]
+    lines = ["## Review protocol", ""]
+    lines.append("Reply with these lines, in this order:")
+    lines.append(f"- `{REVIEW_MARKER}` on a line of its own;")
+    lines.append(f"- `{VERDICT_MARKER} <pass|revise>`;")
+    lines.append(
+        f"- `{PLAN_DIGEST_MARKER} <sha256>` — echo the `{PLAN_DIGEST_MARKER}` line above "
+        f"verbatim; do not compute it;"
+    )
+    lines.append(
+        f"- one concern per line, written `{SEVERITY_BLOCKING}: [{RESTATES_PREFIX}<concern-id>] "
+        f"<marker> <concern>` or `{SEVERITY_NOTE}: ...`, where <marker> is the condition the "
+        f"concern concerns ({concern_markers}); a condition-4 gap is a `{gap_marker}` line. "
+        f"An untagged concern line is refused."
+    )
+    lines.append(
+        f"  - `{SEVERITY_BLOCKING}:` keeps the plan from passing; `{SEVERITY_NOTE}:` is "
+        f"recorded and does not. A `{VERDICT_MARKER} pass` carries `{SEVERITY_NOTE}:` lines only."
+    )
+    lines.append(
+        f"  - Block only on a part that changed since the last review of this {noun}, or on a "
+        f"part that still carries an unresolved blocker, re-raised as "
+        f"`{RESTATES_PREFIX}<concern-id>` (the stable id of the earlier concern). A blocking "
+        f"concern on an unchanged part is recorded as advisory."
+    )
+    if history is not None:
+        lines.append(
+            f"  - This is a re-review. Block only on a part listed under `## Changed since the "
+            f"prior verdict`, or on a part that still carries an unresolved blocker listed "
+            f"under `## Prior review of this {noun}` — raise such a blocker again, if it is still "
+            f"unfixed, as `{RESTATES_PREFIX}<concern-id>`. Raise any other prior concern again "
+            f"only as `{RESTATES_PREFIX}<concern-id>`; do not restate a settled concern as new."
+        )
+    lines.append(
+        f"- after the concerns, a line `{CUSTOMER_QUESTIONS_MARKER}` followed by one "
+        f"`{CUSTOMER_QUESTION_MARKER} <question>` line per question only the customer can "
+        f"decide (a choice or a fact this {noun} depends on and the plan does not settle), or "
+        f"`{CUSTOMER_QUESTIONS_MARKER} {CUSTOMER_QUESTIONS_NONE}`. A question is not a plan "
+        f"remark: a flaw the coordinator can fix is a concern, not a question."
+    )
+    lines.append(
+        f"The {REVIEW_MARKER} block is the last thing in your reply, with no other "
+        f"marker (COMPLETED:, REPLAN:, etc.) after it."
     )
     lines.append("")
     return lines
@@ -918,37 +1011,37 @@ def render_pair_review_bundle(
     Raises ValueError for a pair the plan does not have, and PlanError for
     a dangling or cyclic raw reliance graph."""
     base, service = parse_pair(doc, pair_id)
-    base_text = node_file_text(doc, PAIR_BASE_NODE)
 
     lines: list[str] = [f"# Topological review pair: {pair_id}", ""]
     lines.append(f"Base: {_node_label(doc, base)}. Service: {_node_label(doc, service)}.")
     lines.append("")
 
-    lines.append("## Order context")
-    lines.append("")
-    if base_text:
-        lines.append(base_text.rstrip("\n"))
-    else:
-        lines.append("*(the plan declares no order)*")
     if base == PAIR_BASE_NODE:
+        lines.append(f"## Base: {_node_label(doc, base)} — the part this edge supplies")
         lines.append("")
-        lines.append("The base brief in the next section is this same text.")
-    lines.append("")
+        lines.append(_base_edge_section(doc, int(service)).rstrip("\n"))
+        lines.append("")
+    else:
+        base_text = node_file_text(doc, PAIR_BASE_NODE)
+        lines.append("## Order context")
+        lines.append("")
+        lines.append(base_text.rstrip("\n") if base_text else "*(the plan declares no order)*")
+        lines.append("")
 
-    lines.append(f"## Base: {_node_label(doc, base)}")
-    lines.append("")
-    lines.append(node_file_text(doc, base).rstrip("\n"))
-    lines.append("")
+        lines.append(f"## Base: {_node_label(doc, base)}")
+        lines.append("")
+        lines.append(node_file_text(doc, base).rstrip("\n"))
+        lines.append("")
 
     lines.append(f"## Service declared product: {_node_label(doc, service)}")
     lines.append("")
-    if _is_source_stage(doc, service):
+    if base != PAIR_BASE_NODE and _is_source_stage(doc, service):
         lines.append(
             "*(this stage relies on nothing, so its full brief is shown and its own "
             "construction is judged in this pair)*"
         )
         lines.append("")
-    lines.append(pair_service_text(doc, service).rstrip("\n"))
+    lines.append(pair_service_text(doc, service, base).rstrip("\n"))
     lines.append("")
 
     lines.append("## Edge")
@@ -964,7 +1057,6 @@ def render_pair_review_bundle(
     lines.append(f"- `{Path(view_dir) / node_file_name(service)}`")
     lines.append("")
 
-    concern_markers = ", ".join(f"`{marker}`" for marker in CONDITION_MARKERS)
     gap_marker = CONDITION_MARKERS[3]
     lines.append("## Per-pair procedure")
     lines.append("")
@@ -972,9 +1064,13 @@ def render_pair_review_bundle(
         f"1. Decide `{gap_marker}` (the service's declared product covers the part of the "
         f"base attributed to this edge) from the service's declared product above first."
     )
+    base_inlined = (
+        "The base part this edge supplies is inlined above in full."
+        if base == PAIR_BASE_NODE else "The base is inlined above in full."
+    )
     lines.append(
         "2. Only when that section cannot decide it, `Read` the one file listed in the "
-        "service file section. The base is inlined above in full."
+        f"service file section. {base_inlined}"
     )
     lines.append(f"3. Report any gap as one `{gap_marker}` line.")
     lines.append(
@@ -989,46 +1085,120 @@ def render_pair_review_bundle(
     lines.append(f"{PLAN_DIGEST_MARKER} {plan_sha256}")
     lines.append("")
 
-    lines.append("## Review protocol")
-    lines.append("")
-    lines.append("Reply with these lines, in this order:")
-    lines.append(f"- `{REVIEW_MARKER}` on a line of its own;")
-    lines.append(f"- `{VERDICT_MARKER} <pass|revise>`;")
-    lines.append(
-        f"- `{PLAN_DIGEST_MARKER} <sha256>` — echo the `{PLAN_DIGEST_MARKER}` line above "
-        f"verbatim; do not compute it;"
-    )
-    lines.append(
-        f"- one concern per line, written `{SEVERITY_BLOCKING}: [{RESTATES_PREFIX}<concern-id>] "
-        f"<marker> <concern>` or `{SEVERITY_NOTE}: ...`, where <marker> is the condition the "
-        f"concern concerns ({concern_markers}); a condition-4 gap is a `{gap_marker}` line. "
-        f"An untagged concern line is refused."
-    )
-    lines.append(
-        f"  - `{SEVERITY_BLOCKING}:` keeps the plan from passing; `{SEVERITY_NOTE}:` is "
-        f"recorded and does not. A `{VERDICT_MARKER} pass` carries `{SEVERITY_NOTE}:` lines only."
-    )
-    lines.append(
-        f"  - Block only on a part that changed since the last review of this pair, or on a "
-        f"part that still carries an unresolved blocker, re-raised as "
-        f"`{RESTATES_PREFIX}<concern-id>` (the stable id of the earlier concern). A blocking "
-        f"concern on an unchanged part is recorded as advisory."
-    )
-    if history is not None:
-        lines.append(
-            f"  - This is a re-review. Block only on a part listed under `## Changed since the "
-            f"prior verdict`, or on a part that still carries an unresolved blocker listed "
-            f"under `## Prior review of this pair` — raise such a blocker again, if it is still "
-            f"unfixed, as `{RESTATES_PREFIX}<concern-id>`. Raise any other prior concern again "
-            f"only as `{RESTATES_PREFIX}<concern-id>`; do not restate a settled concern as new."
-        )
-    lines.append(
-        f"The {REVIEW_MARKER} block is the last thing in your reply, with no other "
-        f"marker (COMPLETED:, REPLAN:, etc.) after it."
-    )
-    lines.append("")
+    lines.extend(_protocol_lines(history, "pair"))
     lines.append("Conditions:")
     for marker, text in zip(CONDITION_MARKERS, _pair_conditions(doc, base, service)):
+        lines.append(f"- `{marker}` {text}")
+    lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _unit_conditions(doc: PlanDoc, node: "int | str") -> list[str]:
+    """The four condition texts of a unit review, read for its kind. A unit is
+    judged alone, from its own fields and its declared edges."""
+    if node == PAIR_BASE_NODE:
+        return [
+            "the order and the meta are internally consistent — customer, functional "
+            "place, requirements and the coverage map do not contradict each other",
+            "every requirement follows from the difficulty and the functional place — "
+            "none is arbitrary, none is missing a derivation",
+            "every requirement has a coverage entry or a final check that decides it — "
+            "none is left uncovered",
+            "the goal, the done criterion and the final checks match the requirements "
+            "and are checkable",
+        ]
+    return [
+        "the stage's own fields are internally consistent — result image, done "
+        "criterion, criterion, means and method do not contradict each other",
+        "the stage relies only on its own fields and the edges declared below — it "
+        "assumes nothing a declared edge does not supply",
+        "the stage is consumed — the inbound edge set is not empty (an empty inbound "
+        "set is an orphan: no stage relies on it and no requirement names it)",
+        "the done criterion is checkable from the stage's own controls",
+    ]
+
+
+def _unit_edge_lines(doc: PlanDoc, node: "int | str") -> list[str]:
+    """The `## Edges` body of a unit bundle: the unit's full edge set, an empty
+    set stated explicitly (an empty inbound set is the orphan signal)."""
+    lines: list[str] = []
+    if node == PAIR_BASE_NODE:
+        entries = plan_coverage_entries(doc)
+        known = {s.index for s in doc.stages}
+        lines.append("Outbound — the coverage entries, each a typed edge of the base on a stage:")
+        rows = [
+            f"- {req_id} → stage {s}: `{control}`"
+            for s in sorted(entries) if s in known for req_id, control in entries[s]
+        ]
+        lines.extend(rows or ["- none"])
+        lines.append("")
+        lines.append("Inbound — what relies on the base: nothing (the base is the root).")
+        return lines
+    n = int(node)
+    lines.append("Outbound — what this stage relies on:")
+    outbound = sorted(reliance_set(doc, n))
+    lines.extend(
+        [f"- stage {m} — {_supply_edge_label(doc, n, m)}" for m in outbound] or ["- none"]
+    )
+    lines.append("")
+    lines.append("Inbound — what relies on this stage:")
+    inbound = [f"- stage {c} — {_supply_edge_label(doc, c, n)}" for c in sorted(consumers(doc, n))]
+    for req_id, control in plan_coverage_entries(doc).get(n, ()):
+        inbound.append(f"- the base: requirement {req_id} → `{control}`")
+    lines.extend(inbound or [
+        "- none — ORPHAN: no stage relies on this stage and no requirement names it"
+    ])
+    return lines
+
+
+def render_unit_review_bundle(
+    doc: PlanDoc, unit: str, *, plan_sha256: str, history: "dict | None" = None,
+) -> str:
+    """The `--review-topo` starting prompt for one UNIT: every field of the
+    node, inlined, and its full edge set; nothing else is read. `unit:base`
+    holds the order and the meta's goal, done criterion and final checks;
+    `unit:<n>` the whole of stage `n`. The same marker protocol as a pair
+    bundle (`_protocol_lines`), with unit-specific conditions
+    (`_unit_conditions`). Dispatchers key on the `Topological review unit:`
+    heading, never the pair heading.
+
+    Raises ValueError for a unit the plan does not have."""
+    node = parse_unit(doc, unit)
+    lines: list[str] = [f"# Topological review unit: {unit}", ""]
+    lines.append(f"Unit: {_node_label(doc, node)}.")
+    lines.append("")
+
+    lines.append("## Fields")
+    lines.append("")
+    fields = unit_base_text(doc) if node == PAIR_BASE_NODE else render_stage_fields(doc, int(node))
+    lines.append(fields.rstrip("\n"))
+    lines.append("")
+
+    lines.append("## Edges")
+    lines.append("")
+    lines.extend(_unit_edge_lines(doc, node))
+    lines.append("")
+
+    lines.append("## Per-unit procedure")
+    lines.append("")
+    lines.append(
+        "1. Judge this unit alone, from the fields and the edges above; there is no "
+        "other file to read and no other node to judge."
+    )
+    lines.append(f"2. Report any gap as one `{CONDITION_MARKERS[3]}` line.")
+    lines.append("3. Check the other conditions below, then reply per the protocol.")
+    lines.append("")
+
+    if history is not None:
+        lines.extend(_prior_review_section(history, "unit"))
+
+    lines.append(f"{PLAN_DIGEST_MARKER} {plan_sha256}")
+    lines.append("")
+
+    lines.extend(_protocol_lines(history, "unit"))
+    lines.append("Conditions:")
+    for marker, text in zip(CONDITION_MARKERS, _unit_conditions(doc, node)):
         lines.append(f"- `{marker}` {text}")
     lines.append("")
 

@@ -153,6 +153,7 @@ from .state import (
     Order,
     Outcome,
     PAIR_BINDING_KEYS,
+    PAIR_CONTENT_KEYS,
     Principle,
     Stage,
     StageStatus,
@@ -163,7 +164,7 @@ from .state import (
 )
 from .text_shape import ELEMENT_NAMES as _ELEMENT_NAMES
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
-from .text_shape import WHOLE_STAGE_ELEMENT
+from .text_shape import CARRY_ELEMENT, INTERFACE_ELEMENT, WHOLE_STAGE_ELEMENT
 from .text_shape import normalize_string as _normalize_string
 
 
@@ -1611,6 +1612,51 @@ VERDICT_MARKER = "Verdict:"
 PLAN_DIGEST_MARKER = "Plan digest:"
 CONDITION_MARKERS = ("C1:", "C2:", "C3:", "C4:")
 
+# The customer-questions field every review reply carries after its concerns: the
+# header line, then one `Q: <question>` line per question (or `none` on the header).
+# Questions are what only the customer can decide, kept apart from plan remarks the
+# coordinator fixes itself.
+CUSTOMER_QUESTIONS_MARKER = "Customer questions:"
+CUSTOMER_QUESTION_MARKER = "Q:"
+CUSTOMER_QUESTIONS_NONE = "none"
+# The header as a reviewer may decorate it: any case, singular, emphasis around the
+# colon (`**Customer questions**: ...`); group `rest` is what follows the colon.
+CUSTOMER_QUESTIONS_HEADER_RE = re.compile(
+    r"customer\s+questions?[\s*`_]*:[\s*`_]*(?P<rest>.*)", re.IGNORECASE | re.DOTALL)
+_NONE_DECORATION = "().,;:!*`_- "
+
+
+def declares_no_questions(text: str) -> bool:
+    """`none`, in any case, with the punctuation, parentheses or emphasis a reviewer
+    puts around it (`None.`, `(none)`, `**none**`)."""
+    return (text or "").strip(_NONE_DECORATION).lower() == CUSTOMER_QUESTIONS_NONE
+
+
+def customer_question_defect(text: str) -> str:
+    """Why `text` cannot be recorded as ONE customer question, or '' when it can.
+
+    The field's own syntax (the `Q:` prefix, the `Customer questions:` header, the
+    `none` value) belongs to the reply, not to a question: a caller that passes a raw
+    field line, a blank string or several lines would otherwise record a candidate the
+    customer cannot read, or none at all."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return "a customer question is blank"
+    if "\n" in stripped:
+        return "a customer question is one line; pass one --customer-question per question"
+    lowered = stripped.lower()
+    field_line = (
+        CUSTOMER_QUESTIONS_MARKER if CUSTOMER_QUESTIONS_HEADER_RE.match(stripped)
+        else CUSTOMER_QUESTION_MARKER if lowered.startswith(CUSTOMER_QUESTION_MARKER.lower())
+        else None)
+    if field_line is not None:
+        return (f"a customer question is the text after `{CUSTOMER_QUESTION_MARKER}`, "
+                f"not the reply's own field line (starts with {field_line!r})")
+    if declares_no_questions(stripped):
+        return (f"`{CUSTOMER_QUESTIONS_NONE}` states there are no customer questions: "
+                "pass no --customer-question instead")
+    return ""
+
 # A reviewer's concern is `<severity>: [re:<concern-id>] <body>`; the engine stores the
 # body in `concerns` and the severity / restated id beside it, so the body keeps the
 # leading `cut:`/`add:` remedy tag, part token and `C1:`..`C4:` marker its readers key on.
@@ -2390,39 +2436,60 @@ def part_digest_map(doc: PlanDoc) -> dict[str, str]:
     return digests
 
 
+UNIT_ID_PREFIX = "unit:"
+
+
+def unit_id(node: "int | str") -> str:
+    """The review id of `node`'s unit: `unit:base` or `unit:<n>`."""
+    return f"{UNIT_ID_PREFIX}{node}"
+
+
+def is_unit_id(review_id: str) -> bool:
+    return review_id.startswith(UNIT_ID_PREFIX)
+
+
 def pair_part_tokens(pair_id: str) -> tuple[str, ...]:
-    """The parts a pair review judges: both nodes' parts, the `plan` and `base` nodes
-    standing for the meta and the order."""
+    """The parts a pair or unit review judges: its nodes' parts, the `base` node
+    standing for the meta and the order (the legacy `plan` node likewise)."""
+    nodes = (unit_node(pair_id),) if is_unit_id(pair_id) else split_pair_id(pair_id)
     tokens: list[str] = []
-    for node in split_pair_id(pair_id):
+    for node in nodes:
         own = (META_TOKEN, ORDER_TOKEN) if node in (PAIR_PLAN_NODE, PAIR_BASE_NODE) else (
             stage_token(node),)
         tokens.extend(t for t in own if t not in tokens)
     return tuple(tokens)
 
-def plan_coverage_refs(doc: PlanDoc) -> dict[int, tuple[str, ...]]:
-    """`{stage index: requirement ids}` for every stage a `[meta.order.coverage]`
-    control names through one of the stage-addressed coverage grammars
-    (`controls.COVERAGE_GRAMMARS`), requirement ids in coverage order. Empty
-    when the plan declares no order. Imports `controls` locally: it imports
-    this module."""
+
+def plan_coverage_entries(doc: PlanDoc) -> dict[int, tuple[tuple[str, str], ...]]:
+    """`{stage index: ((requirement id, control text), ...)}` for every stage a
+    `[meta.order.coverage]` control names through one of the stage-addressed
+    coverage grammars (`controls.COVERAGE_GRAMMARS`), entries in coverage order.
+    Each entry is an ordinary typed edge of `unit:base` on that stage: the
+    requirement is the element of base it supplies, the control the part of the
+    stage the entry names. Empty when the plan declares no order. Imports
+    `controls` locally: it imports this module."""
     from .controls import STAGE_LANDED_ASSERTION, STAGE_VERIFY_COMMAND
     order = doc.meta.order
     if order is None:
         return {}
     grammars = (STAGE_VERIFY_COMMAND, STAGE_LANDED_ASSERTION)
-    refs: dict[int, list[str]] = {}
+    entries: dict[int, list[tuple[str, str]]] = {}
     for req_id, controls in order.coverage.items():
         for control in controls:
             for grammar in grammars:
                 match = grammar.pattern.match(control)
                 if match is None:
                     continue
-                n = int(match.group(1))
-                if req_id not in refs.setdefault(n, []):
-                    refs[n].append(req_id)
+                entries.setdefault(int(match.group(1)), []).append((req_id, control))
                 break
-    return {n: tuple(ids) for n, ids in refs.items()}
+    return {n: tuple(rows) for n, rows in entries.items()}
+
+
+def plan_coverage_refs(doc: PlanDoc) -> dict[int, tuple[str, ...]]:
+    """`{stage index: requirement ids}` for every stage a coverage control names
+    (`plan_coverage_entries`), requirement ids in coverage order, each once."""
+    return {n: tuple(dict.fromkeys(req for req, _ in rows))
+            for n, rows in plan_coverage_entries(doc).items()}
 
 
 def plan_reliance_set(doc: PlanDoc) -> frozenset[int]:
@@ -2435,9 +2502,13 @@ def plan_reliance_set(doc: PlanDoc) -> frozenset[int]:
 
 
 def review_pairs(doc: PlanDoc) -> tuple[str, ...]:
-    """Every reliance edge of `doc` as a pair id `<b>-<s>` — `b` relies on
-    `s` — in review order: `base-plan` (only when an order is declared),
-    then `plan-<s>` by `s`, then `<n>-<s>` by `n` and then `s`.
+    """Every review pair of `doc` as an id `<b>-<s>` — `b` relies on `s` — in
+    review order: `base-<s>` by `s` for each stage a `[meta.order.coverage]`
+    entry names (`plan_coverage_refs`; the coverage entry is an ordinary edge of
+    `unit:base`), then `<n>-<s>` by `n` and then `s` for every reliance edge
+    between stages. There is no `plan-<s>` pair and no `base-plan`: a stage
+    nothing relies on and no requirement names is caught by its own unit review
+    (`review_units`).
 
     Raises PlanError for a dangling or cyclic raw reliance graph: the raw
     union `reliance_set` reads can cycle while the supplies-derived graph
@@ -2446,26 +2517,68 @@ def review_pairs(doc: PlanDoc) -> tuple[str, ...]:
     inherits the check."""
     for stage in doc.stages:
         reliance_closure(doc, stage.index)
-    pairs: list[str] = []
-    if doc.meta.order is not None:
-        pairs.append(f"{PAIR_BASE_NODE}-{PAIR_PLAN_NODE}")
-    pairs.extend(f"{PAIR_PLAN_NODE}-{s}" for s in sorted(plan_reliance_set(doc)))
+    valid = {s.index for s in doc.stages}
+    pairs = [f"{PAIR_BASE_NODE}-{s}" for s in sorted(set(plan_coverage_refs(doc)) & valid)]
     for stage in sorted(doc.stages, key=lambda st: st.index):
         pairs.extend(f"{stage.index}-{s}" for s in sorted(reliance_set(doc, stage.index)))
     return tuple(pairs)
 
 
+def review_units(doc: PlanDoc) -> tuple[str, ...]:
+    """Every unit of `doc` in review order: `unit:base` — always, an order-less
+    plan included — then `unit:<n>` by stage index. A unit is reviewed alone
+    (`render.render_unit_review_bundle`): `unit:base` holds the order (customer,
+    functional place, requirements, coverage) and the meta's goal, done criterion
+    and final checks; `unit:<n>` every field of stage `n` and its full edge set."""
+    return (unit_id(PAIR_BASE_NODE),) + tuple(
+        unit_id(s.index) for s in sorted(doc.stages, key=lambda st: st.index)
+    )
+
+
+def review_ids(doc: PlanDoc) -> tuple[str, ...]:
+    """Every id the walk demands: the units, then the pairs."""
+    return review_units(doc) + review_pairs(doc)
+
+
+def is_legacy_review_id(review_id: str) -> bool:
+    """A review id a stored record may still carry but no plan has any more:
+    `base-plan`, `plan-<n>` and `unit:plan`. Such a record loads and validates and
+    is stale, never current; nothing demands it."""
+    if review_id in (f"{PAIR_BASE_NODE}-{PAIR_PLAN_NODE}", unit_id(PAIR_PLAN_NODE)):
+        return True
+    head, _, tail = review_id.partition("-")
+    return head == PAIR_PLAN_NODE and tail.isdigit()
+
+
 def parse_pair(doc: PlanDoc, pair_id: str) -> tuple["int | str", "int | str"]:
-    """`(b, s)` for a pair id `doc` has — stage nodes as ints, the synthetic
-    nodes as `PAIR_PLAN_NODE` / `PAIR_BASE_NODE`. Splits on the first `-`.
-    Raises ValueError for any id outside `review_pairs(doc)`, including the
-    unit-shaped ids (`3`, `order`)."""
+    """`(b, s)` for a pair id `doc` has — stage nodes as ints, the order node as
+    `PAIR_BASE_NODE`. Splits on the first `-`. Raises ValueError for any id
+    outside `review_pairs(doc)`, including unit ids and legacy `plan-<s>` /
+    `base-plan`."""
     if pair_id not in review_pairs(doc):
         raise ValueError(
             f"no review pair {pair_id!r} in plan {doc.meta.task_id!r} "
             f"(valid pairs: {', '.join(review_pairs(doc)) or 'none'})"
         )
     return split_pair_id(pair_id)
+
+
+def parse_unit(doc: PlanDoc, review_id: str) -> "int | str":
+    """The node (`PAIR_BASE_NODE` or a stage index) of a unit id `doc` has.
+    Raises ValueError for any other id."""
+    if review_id not in review_units(doc):
+        raise ValueError(
+            f"no review unit {review_id!r} in plan {doc.meta.task_id!r} "
+            f"(valid units: {', '.join(review_units(doc))})"
+        )
+    return unit_node(review_id)
+
+
+def unit_node(review_id: str) -> "int | str":
+    """The node of a unit id already known to be in `review_units`, with no
+    membership check (`parse_unit` re-enumerates every unit per call)."""
+    node = review_id[len(UNIT_ID_PREFIX):]
+    return int(node) if node.isdigit() else node
 
 
 def split_pair_id(pair_id: str) -> tuple["int | str", "int | str"]:
@@ -2483,8 +2596,6 @@ def _pair_node_key(doc: PlanDoc, node: "int | str") -> str:
     from .render import node_file_text
     if node == PAIR_BASE_NODE:
         return _sha256_hex(node_file_text(doc, node))
-    if node == PAIR_PLAN_NODE:
-        return _sha256_hex(repr((plan_meta_digest(doc), order_extra_digest(doc.meta))))
     stage = _stage_by_index(doc, node)
     return _sha256_hex(repr((
         stage_element_keys(stage)[WHOLE_STAGE_ELEMENT],
@@ -2497,8 +2608,8 @@ def pair_binding(doc: PlanDoc, pair_id: str) -> dict:
     `doc`, recomputed fresh on every call. Together they cover what the
     reviewer was shown: the order context (`context_digest`, the base file's
     sha256), both nodes' identity keys, both nodes' file bytes, the exact
-    service-interface and edge sections of the bundle. For `base-plan` the
-    context, base key and base file digests are the same value by
+    service-interface and edge sections of the bundle. For a `base-<s>` pair
+    the context, base key and base file digests are the same value by
     construction. Raises ValueError for an unknown pair, PlanError for a
     dangling or cyclic reliance graph."""
     from .render import node_file_text, pair_edge_text, pair_service_text
@@ -2510,7 +2621,7 @@ def pair_binding(doc: PlanDoc, pair_id: str) -> dict:
         "service_key": _pair_node_key(doc, s),
         "base_file_digest": _sha256_hex(node_file_text(doc, b)),
         "service_file_digest": _sha256_hex(node_file_text(doc, s)),
-        "service_interface_digest": _sha256_hex(pair_service_text(doc, s)),
+        "service_interface_digest": _sha256_hex(pair_service_text(doc, s, b)),
         "edge_digest": _sha256_hex(pair_edge_text(doc, b, s)),
     }
 
@@ -2522,29 +2633,194 @@ def pair_shows_declared_product_only(doc: PlanDoc, pair_id: str) -> bool:
     """Whether the bundle of `pair_id` shows its service only as the declared product
     (`render.pair_service_text`): a stage service that relies on something and has a
     concrete interface. A source stage and an `interface_empty` stage are shown in
-    full, and the synthetic `plan` service has no separate construction."""
+    full."""
     _, s = parse_pair(doc, pair_id)
-    if s in (PAIR_PLAN_NODE, PAIR_BASE_NODE):
-        return False
+    return _service_shown_as_declared_product(doc, s)
+
+
+def _service_shown_as_declared_product(doc: PlanDoc, s: "int | str") -> bool:
     return bool(reliance_set(doc, int(s))) and not interface_empty(_stage_by_index(doc, int(s)))
 
 
 def pair_currency_keys(doc: PlanDoc, pair_id: str) -> tuple[str, ...]:
-    """The `PAIR_BINDING_KEYS` a record of `pair_id` is judged current by: all seven,
-    less the service's construction (`service_key`, `service_file_digest`) when the
-    reviewer was shown only its declared product -- that evidence is
-    `service_interface_digest` alone. The order is `PAIR_BINDING_KEYS`'."""
-    if not pair_shows_declared_product_only(doc, pair_id):
-        return PAIR_BINDING_KEYS
-    return tuple(k for k in PAIR_BINDING_KEYS if k not in PAIR_SERVICE_CONSTRUCTION_KEYS)
+    """The `PAIR_BINDING_KEYS` a LEGACY record of `pair_id` (one written before the
+    content digests, `PlanPairReview.is_content_keyed`) is judged current by -- the
+    content-derived pair of its seven digests, so an upgrade does not stale a record
+    whose plan content is unchanged: the base's `base_key` and the service's
+    `service_key`, or its `service_interface_digest` when the reviewer was shown
+    only its declared product (the construction digests are then not evidence).
+    The rendered-text digests (`context_digest`, `edge_digest`, the file digests)
+    are not consulted: a render-code change must not stale a record."""
+    if pair_shows_declared_product_only(doc, pair_id):
+        return ("base_key", "service_interface_digest")
+    return ("base_key", "service_key")
+
+
+def _element_digest(stage: Stage, keys: dict[str, str], element: "str | None") -> str:
+    """The digest of one element of `stage`: the element's own key, or the
+    whole-stage key for an element-less edge (the whole stage is supplied) and for a
+    name the key family does not know (the wider answer)."""
+    if element is None or element not in keys:
+        return keys[WHOLE_STAGE_ELEMENT]
+    return keys[element]
+
+
+def _reviewed_stage_keys(stage: Stage) -> dict[str, str]:
+    """`stage_element_keys` with every whole-stage entry widened to what a
+    reviewer is shown of `stage`: the declared fields its file renders that no
+    question-target name covers (output artifacts, cost tier, ephemeral-artifacts
+    waiver, grants, script effects) join the whole-stage digest. Unchanged for a
+    stage declaring none of them. `stage_question_key` is left alone: a premise
+    stamp binds to the question vocabulary, which names none of these."""
+    keys = stage_element_keys(stage)
+    whole = keys[WHOLE_STAGE_ELEMENT]
+    grants = grants_place(stage)
+    rules, add_dirs = grants[0] if grants else ((), ())
+    effects = effects_place(stage)
+    extras = (
+        tuple(stage.output_artifacts),
+        stage.actor.cost_tier,
+        stage.ephemeral_artifacts_waiver,
+        tuple(sorted(rules)),
+        tuple(sorted(add_dirs)),
+        tuple(sorted(effects[0])) if effects else (),
+    )
+    if not any(extras):
+        return keys
+    reviewed = _sha256_hex(repr((whole, extras)))
+    return {name: reviewed if key == whole else key for name, key in keys.items()}
+
+
+def _supplied_by(doc: PlanDoc, b: int, s: int) -> tuple[Supply, ...]:
+    """The typed edges of stage `b` on stage `s`."""
+    return tuple(sup for sup in _stage_by_index(doc, b).supplies if sup.on == s)
+
+
+def _edge_rows(doc: PlanDoc, b: int, s: int) -> tuple:
+    """The pair's edge set as a comparable value: the (element, artifact, delivery)
+    of every typed edge of `b` on `s`, and whether the reliance is also a raw
+    `depends_on` that no typed edge restates."""
+    rows = tuple(sorted(
+        (sup.element or "", sup.artifact or "", sup.delivery or "")
+        for sup in _supplied_by(doc, b, s)
+    ))
+    return rows, s in doc.raw_depends_on.get(b, ())
+
+
+def pair_content(doc: PlanDoc, pair_id: str) -> dict[str, str]:
+    """The four content digests a CURRENT review of `pair_id` must match, from plan
+    content alone (StageNorm / meta / order digests, never rendered text, so a
+    render-code change with unchanged plan content moves none of them):
+
+    - `base_norm`: the elements of the base node the edges supply -- for a stage
+      base, the element keys the typed edges name (the whole-stage key when an edge
+      is element-less); for `base-<s>`, the (id, text, derivation) of the
+      requirements the coverage entries on `s` name.
+    - `service_iface_norm`: the service's `interface_token` (full carry digest for a
+      source or blank-interface stage).
+    - `service_norm`: the service's construction -- the whole-stage key when the
+      bundle shows it in full (a source or blank-interface stage); for `base-<s>`
+      the whole reviewed stage key when `s` is blank-interface (its bundle shows
+      the full brief), else the `criterion` key of `s`, the part the coverage
+      entries name; empty when a stage-stage reviewer was shown only the declared
+      product.
+    - `edge_norm`: the pair's edge set -- (element, artifact, delivery) per typed
+      edge, or (requirement id, control) per coverage entry.
+
+    Raises ValueError for an unknown pair, PlanError for a cyclic reliance graph."""
+    from .stage_norm import interface_token
+    b, s = parse_pair(doc, pair_id)
+    service = _stage_by_index(doc, int(s))
+    service_keys = _reviewed_stage_keys(service)
+    iface = interface_token(service)
+    if b == PAIR_BASE_NODE:
+        entries = plan_coverage_entries(doc).get(int(s), ())
+        wanted = {req_id for req_id, _ in entries}
+        order = doc.meta.order
+        requirements = tuple(
+            (r.id, r.text, r.derivation)
+            for r in (order.requirements if order is not None else ())
+            if r.id in wanted
+        )
+        return {
+            "base_norm": _sha256_hex(repr(("requirements", requirements))),
+            "service_iface_norm": iface,
+            "service_norm": (
+                service_keys[WHOLE_STAGE_ELEMENT] if interface_empty(service)
+                else service_keys["criterion"]
+            ),
+            "edge_norm": _sha256_hex(repr(("coverage", entries))),
+        }
+    base = _stage_by_index(doc, int(b))
+    base_keys = _reviewed_stage_keys(base)
+    supplied = _supplied_by(doc, int(b), int(s))
+    elements = sorted({_element_digest(base, base_keys, sup.element) for sup in supplied})
+    if not supplied or any(sup.element is None for sup in supplied):
+        elements = sorted(set(elements) | {base_keys[WHOLE_STAGE_ELEMENT]})
+    return {
+        "base_norm": _sha256_hex(repr(("elements", tuple(elements)))),
+        "service_iface_norm": iface,
+        "service_norm": (
+            "" if _service_shown_as_declared_product(doc, s)
+            else service_keys[WHOLE_STAGE_ELEMENT]
+        ),
+        "edge_norm": _sha256_hex(repr(("edges", _edge_rows(doc, int(b), int(s))))),
+    }
 
 
 def pair_currency_hash(doc: PlanDoc, pair_id: str) -> str:
-    """sha256 of the `pair_currency_keys` digests of `pair_id` -- what a whole-plan
-    record keeps per pair in `reviewed_pair_currency`."""
-    binding = pair_binding(doc, pair_id)
-    text = "\n".join(f"{key}={binding[key]}" for key in pair_currency_keys(doc, pair_id))
-    return _sha256_hex(text)
+    """sha256 of the `pair_content` digests of `pair_id` -- what a whole-plan record
+    keeps per pair in `reviewed_pair_currency`."""
+    content = pair_content(doc, pair_id)
+    return _sha256_hex("\n".join(f"{k}={content[k]}" for k in PAIR_CONTENT_KEYS))
+
+
+def unit_content(doc: PlanDoc, node: "int | str") -> dict:
+    """What a CURRENT review of the unit of `node` was shown, from plan content
+    alone: `unit:base` -- the meta's goal, done criterion, final checks and the
+    order; `unit:<n>` -- every field of stage `n` (its whole-stage key) and its full
+    edge set, outbound (what it supplies from, its raw `depends_on`) and inbound
+    (what other stages' typed edges and the coverage entries take from it)."""
+    if node == PAIR_BASE_NODE:
+        return {"meta": plan_meta_digest(doc), "extra": order_extra_digest(doc.meta)}
+    n = int(node)
+    stage = _stage_by_index(doc, n)
+    outbound = tuple(sorted(
+        (sup.on, sup.element or "", sup.artifact or "", sup.delivery or "")
+        for sup in stage.supplies
+    ))
+    inbound = tuple(sorted(
+        (s.index, sup.element or "", sup.artifact or "", sup.delivery or "")
+        for s in doc.stages for sup in s.supplies if sup.on == n
+    ))
+    reliance = tuple(sorted(doc.raw_depends_on.get(n, ())))
+    consumed = tuple(sorted(
+        s.index for s in doc.stages if n in doc.raw_depends_on.get(s.index, ())
+    ))
+    return {
+        "stage": _reviewed_stage_keys(stage)[WHOLE_STAGE_ELEMENT],
+        "outbound": outbound,
+        "depends_on": reliance,
+        "inbound": inbound,
+        "depended_on_by": consumed,
+        "coverage": plan_coverage_entries(doc).get(n, ()),
+    }
+
+
+def unit_currency_hash(doc: PlanDoc, unit: str) -> str:
+    """sha256 of `unit_content` for the unit id `unit` -- the currency value a unit
+    record and a whole-plan baseline keep. Raises ValueError for an unknown unit."""
+    node = parse_unit(doc, unit)
+    return _sha256_hex(repr((unit, sorted(unit_content(doc, node).items()))))
+
+
+def review_currency_hash(doc: PlanDoc, review_id: str) -> str:
+    """The currency hash of a unit or pair id, recomputed from `doc` alone (no
+    record). For a pair shown only as its declared product it ignores the
+    service's construction by construction (`pair_content`)."""
+    if is_unit_id(review_id):
+        return unit_currency_hash(doc, review_id)
+    return pair_currency_hash(doc, review_id)
 
 
 def plan_interface_digests(doc: PlanDoc, indices=None) -> dict[int, str]:
@@ -2603,6 +2879,177 @@ def changed_parts(doc: PlanDoc, baseline_digests: dict) -> tuple[bool, set[int]]
     return (baseline_digests.get("meta") or "") != plan_meta_digest(doc), moved
 
 
+# Moves of these two are not question targets (no `stage:<n>.<name>` names them): they are the
+# consumer-facing identities of a stage, tracked beside the question vocabulary.
+PSEUDO_ELEMENTS = frozenset({INTERFACE_ELEMENT, CARRY_ELEMENT})
+
+# The names that move when only a stage's `criterion` fields do: the element itself, the
+# whole-stage keys (the reserved entry and the names sharing it) and the carry digest.
+# Any other name moving -- `interface` (title, result image, criterion type, done criterion,
+# output artifacts), `executor`, `material` (the edges) -- means the edit left the control.
+CRITERION_CONFINED_ELEMENTS = frozenset(
+    {"criterion", CARRY_ELEMENT, WHOLE_STAGE_ELEMENT}
+    | {name for name, fields in _ELEMENT_FIELDS.items() if fields is _WHOLE_STAGE_DEFINITION}
+)
+
+
+def stage_norm_keys(stage) -> dict[str, str]:
+    """`stage_element_keys` plus the two identities a consumer of the stage relies on:
+    its interface token and its carry digest (`stage_norm`)."""
+    from .stage_norm import StageNorm, interface_token
+    keys = stage_element_keys(stage)
+    keys[INTERFACE_ELEMENT] = interface_token(stage)
+    keys[CARRY_ELEMENT] = StageNorm.from_stage(stage).carry_digest()
+    return keys
+
+
+def _final_check_place(doc: PlanDoc) -> list:
+    return [
+        (fc.command, fc.expected_exit, fc.label,
+         _normalize_string(fc.venue), _normalize_string(fc.kind), fc.landed)
+        for fc in doc.meta.final_check
+    ]
+
+
+def final_check_digest(doc: PlanDoc) -> str:
+    """Digest of the plan's final checks, which sit outside `plan_meta_digest`."""
+    return hashlib.sha256(repr(_final_check_place(doc)).encode("utf-8")).hexdigest()
+
+
+def _final_check_identity(check) -> tuple:
+    """A final check's identity: what it verifies and where, not the command that does."""
+    return (check.label, _normalize_string(check.kind), _normalize_string(check.venue),
+            check.expected_exit, check.landed)
+
+
+def acceptance_requirement_bindings(doc: PlanDoc) -> dict[str, str]:
+    """`{requirement id: digest}` of what each order requirement is accepted against: its
+    text and, per coverage entry (order-insensitive), the deliverable the entry names -- the
+    interface token of a named stage, the identity of a named final check, the entry's own
+    text for any other control. A control-only edit (a verify command, a method) moves no
+    binding; a moved deliverable, requirement text or coverage entry moves exactly the
+    requirements it concerns. Empty when the plan declares no order."""
+    from .controls import COVERAGE_GRAMMARS, FINAL_CHECK
+    from .stage_norm import interface_token
+    order = doc.meta.order
+    if order is None:
+        return {}
+    stages = {s.index: s for s in doc.stages}
+    checks = doc.meta.final_check
+
+    def token(entry: str) -> tuple:
+        for grammar in COVERAGE_GRAMMARS:
+            match = grammar.pattern.match(entry)
+            if match is None:
+                continue
+            n = int(match.group(1))
+            if grammar is FINAL_CHECK:
+                if 1 <= n <= len(checks):
+                    return ("final_check", _final_check_identity(checks[n - 1]))
+                return ("final_check", n, "missing")
+            stage = stages.get(n)
+            if stage is None:
+                return ("stage", n, "missing")
+            return ("stage", n, interface_token(stage))
+        return ("entry", entry)
+
+    bindings: dict[str, str] = {}
+    for req in order.requirements:
+        tokens = sorted(repr(token(e)) for e in order.coverage.get(req.id, ()))
+        payload = repr((req.text, tuple(tokens)))
+        bindings[req.id] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return bindings
+
+
+def stage_element_baseline(doc: PlanDoc) -> dict[str, dict[str, str]]:
+    """`{str(stage index): {element: key}}` -- what a record keeps so a later `norm_delta_from`
+    can name the elements that moved, not just the stages."""
+    return {str(s.index): stage_norm_keys(s) for s in doc.stages}
+
+
+def _order_place_digest(doc: PlanDoc) -> str:
+    return hashlib.sha256(repr(order_place(doc.meta)).encode("utf-8")).hexdigest()
+
+
+def norm_baseline(doc: PlanDoc) -> dict:
+    """Everything `norm_delta_from` compares a document against."""
+    return {
+        "meta": plan_meta_digest(doc),
+        "order": _order_place_digest(doc),
+        "final_check": final_check_digest(doc),
+        "stages": stage_element_baseline(doc),
+    }
+
+
+@dataclass(frozen=True)
+class NormDelta:
+    """How a plan's norm moved against a baseline. Its one caller today is `_grants_grew`;
+    the other consumers key on content digests built from the same per-element keys.
+
+    `elements` holds, per stage present in the document, the names whose key moved (the
+    question vocabulary, the reserved whole-stage entry, and `interface` / `carry`); a stage
+    absent from the baseline is in `added` with every element moved. `order_moved` is a
+    sub-case of `meta_moved` (the order rides in the meta digest)."""
+    meta_moved: bool
+    order_moved: bool
+    final_check_moved: bool
+    added: frozenset
+    removed: frozenset
+    elements: dict
+
+    @property
+    def moved_stages(self) -> frozenset:
+        return frozenset(self.elements)
+
+    @property
+    def interface_moved(self) -> frozenset:
+        return frozenset(i for i, names in self.elements.items() if INTERFACE_ELEMENT in names)
+
+    def question_elements(self, index: int) -> frozenset:
+        """The moved elements of stage `index` a question can be bound to."""
+        return self.elements.get(index, frozenset()) - PSEUDO_ELEMENTS
+
+    @property
+    def any_moved(self) -> bool:
+        return bool(self.meta_moved or self.order_moved or self.final_check_moved
+                    or self.added or self.removed or self.elements)
+
+
+def norm_delta_from(baseline: dict, doc: PlanDoc) -> NormDelta:
+    """The `NormDelta` of `doc` against `baseline` (a `norm_baseline` value, typically
+    round-tripped through JSON, so stage indices are compared as strings). A missing entry
+    compares as moved: the wider answer."""
+    recorded = {str(k): v for k, v in (baseline.get("stages") or {}).items()}
+    elements: dict[int, frozenset] = {}
+    added = set()
+    present = set()
+    for s in doc.stages:
+        present.add(str(s.index))
+        keys = stage_norm_keys(s)
+        old = recorded.get(str(s.index))
+        if old is None:
+            added.add(s.index)
+            elements[s.index] = frozenset(keys)
+            continue
+        moved = frozenset(name for name, key in keys.items() if old.get(name) != key)
+        if moved:
+            elements[s.index] = moved
+    removed = frozenset(int(k) for k in recorded if k not in present)
+    return NormDelta(
+        meta_moved=(baseline.get("meta") or "") != plan_meta_digest(doc),
+        order_moved=(baseline.get("order") or "") != _order_place_digest(doc),
+        final_check_moved=(baseline.get("final_check") or "") != final_check_digest(doc),
+        added=frozenset(added),
+        removed=removed,
+        elements=elements,
+    )
+
+
+def norm_delta(old: PlanDoc, new: PlanDoc) -> NormDelta:
+    """Pure document-vs-document form of `norm_delta_from`."""
+    return norm_delta_from(norm_baseline(old), new)
+
+
 def _venue_for(doc: PlanDoc) -> str:
     """The venue `derive_stage_grants` resolves DR-E/in-venue paths against —
     `delivery_worktree` when declared else `repo_root`, mirroring
@@ -2633,7 +3080,7 @@ def _grants_effective_map(doc: PlanDoc, *, venue: str | None = None) -> dict[int
     return {s.index: _effective_grants_for_stage(s, v).effective_tuple() for s in doc.stages}
 
 
-def _grants_grew(old: PlanDoc, new: PlanDoc) -> bool:
+def _grants_grew(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = False) -> bool:
     """Whether any stage's EFFECTIVE (declared+derived) grant set grew from `old` to
     `new` — a strictly wider Bash/Edit rule set, or a strictly wider set of add_dirs.
     A stage present only in `new` (an added stage) is compared against the empty
@@ -2650,15 +3097,47 @@ def _grants_grew(old: PlanDoc, new: PlanDoc) -> bool:
     `repo_root`/`delivery_worktree` relocation — already excluded from
     `_structural_signature` and (for `delivery_worktree`) from `diff_plans`' prose
     keys — as a rule that "grew" purely because the two literals differ textually,
-    not because anything the stage may touch actually widened."""
+    not because anything the stage may touch actually widened.
+
+    `relax_verify_identity` admits a rewritten verify_command that keeps its
+    `grants.bash_rule_identity`; the caller sets it only when the autonomy boundary
+    (`cli._kind_within_boundary`) will also judge the refinement."""
     shared_venue = _venue_for(new)
     old_map = _grants_effective_map(old, venue=shared_venue)
     new_map = _grants_effective_map(new, venue=shared_venue)
-    for idx, (new_rules, new_dirs) in new_map.items():
-        old_rules, old_dirs = old_map.get(idx, (frozenset(), frozenset()))
-        if (new_rules - old_rules) or (new_dirs - old_dirs):
+    old_stages = {s.index: s for s in old.stages}
+    delta = norm_delta(old, new)
+    for stage in new.stages:
+        new_rules, new_dirs = new_map[stage.index]
+        old_rules, old_dirs = old_map.get(stage.index, (frozenset(), frozenset()))
+        grown_rules = new_rules - old_rules
+        criterion_only = (not delta.order_moved
+                          and delta.elements.get(stage.index, frozenset())
+                          <= CRITERION_CONFINED_ELEMENTS)
+        if relax_verify_identity and grown_rules and stage.index in old_stages and criterion_only:
+            # DR-V derives one literal per verify_command segment, so rewriting a command
+            # always adds literals; only a segment running a program/script the stage did
+            # not already run is wider. See `grants.bash_rule_identity`. Applies only to a
+            # stage whose delta is confined to its criterion (and an unmoved order): any
+            # other move keeps the plain set difference.
+            known = {
+                _grants.bash_rule_identity(r.rule, shared_venue)
+                for r in _derived_verify_rules(old_stages[stage.index], shared_venue)
+            }
+            verify_rules = {r.rule for r in _derived_verify_rules(stage, shared_venue)}
+            identities = {r: _grants.bash_rule_identity(r, shared_venue) for r in grown_rules if r in verify_rules}
+            grown_rules = {
+                r for r in grown_rules
+                if r not in verify_rules or identities[r] is None or identities[r] not in known
+            }
+        if grown_rules or (new_dirs - old_dirs):
             return True
     return False
+
+
+def _derived_verify_rules(stage, venue: str) -> list:
+    derived, _dropped = _grants.derive_stage_grants(stage, venue=venue)
+    return [r for r in derived.allow if r.provenance == "derived:DR-V"]
 
 
 def plan_has_any_grants(doc: PlanDoc) -> bool:
@@ -2686,8 +3165,119 @@ def grants_sha256(doc: PlanDoc) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
-    """Return 'no_change' | 'refinement' | 'substantive'."""
+def materialized_grant_entries(doc: PlanDoc, *, venue: str | None = None) -> dict[str, dict]:
+    """`{str(stage index): {"declared", "derived", "dropped"}}` -- the entry dicts a
+    dispatch hands a child, derived once against `doc`'s venue. Bound next to
+    `grants_sha256` so the set the hash covers is the set dispatch reads, instead of a
+    re-derivation that depends on the engine code and venue filesystem of the moment."""
+    venue = venue if venue is not None else _venue_for(doc)
+    entries: dict[str, dict] = {}
+    for stage in doc.stages:
+        declared = stage.grants if getattr(stage, "grants", None) else StageGrants()
+        derived, dropped = _grants.derive_stage_grants(stage, venue=venue)
+        entries[str(stage.index)] = {
+            "declared": [r.to_dict() for r in declared.allow]
+            + [a.to_dict() for a in declared.add_dirs],
+            "derived": [r.to_dict() for r in derived.allow]
+            + [a.to_dict() for a in derived.add_dirs],
+            "dropped": list(dropped),
+        }
+    return entries
+
+
+def _entry_key(entry: dict) -> tuple:
+    """Identity of one stored grant entry, provenance label ignored (as
+    `StageGrants.effective_tuple` ignores it)."""
+    if "rule" in entry:
+        return ("rule", entry["rule"])
+    return ("dir", entry["path"], entry["mode"])
+
+
+def _effective_entry_keys(stage_entries: dict) -> frozenset:
+    return frozenset(
+        _entry_key(e) for e in list(stage_entries.get("declared") or [])
+        + list(stage_entries.get("derived") or [])
+    )
+
+
+def entries_grants_sha256(entries: dict[str, dict]) -> str:
+    """`grants_sha256` computed from stored entries instead of a plan: the digest of
+    their declared+derived rules and add_dirs. `materialized_grant_entries(doc)` yields
+    the same digest as `grants_sha256(doc)` (pinned by a test), so a stored set and the
+    hash bound next to it can be re-checked against each other at dispatch without
+    touching the venue filesystem. `declared` is read here -- the hash covers it -- while
+    dispatch itself takes the declared half from the hash-verified plan snapshot."""
+    def projection(stage_entries: dict) -> tuple:
+        every = list(stage_entries.get("declared") or []) + list(stage_entries.get("derived") or [])
+        return (tuple(sorted({e["rule"] for e in every if "rule" in e})),
+                tuple(sorted({(e["path"], e["mode"]) for e in every if "rule" not in e})))
+
+    payload = repr(tuple(
+        (int(idx), *projection(s))
+        for idx, s in sorted(entries.items(), key=lambda kv: int(kv[0]))
+    ))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def refined_grant_entries(
+    stored: dict[str, dict], old: PlanDoc | None, new: PlanDoc,
+) -> tuple[dict[str, dict], dict[str, list[str]]]:
+    """The entries to bind after a refinement replan applies `new` over `old` (the
+    snapshot it replaces) to a session whose approved entries are `stored`, plus
+    `{stage index: [rule/path withheld]}`.
+
+    Entries are re-derived against today's venue filesystem, which may have moved since
+    approval (#338). Both `old` and `new` are derived against `new`'s venue -- the
+    `_grants_grew` / `diff_plans` convention -- so the comparison isolates what the plan
+    changed from what the filesystem did, and a relocation of `repo_root` /
+    `delivery_worktree` on its own moves no stage's inputs: it never admits a rule only
+    the new venue's filesystem proposes. A stage's re-derived set is split by cause:
+
+      * the stage's grant inputs did not move (`old` derives the same set as `new` for
+        it, both read now): the stored entries stay exactly as approved;
+      * they moved: what `new` derives and `old` did not is the plan's own change -- the
+        diff layer already classified it (growth is substantive, a relaxed verify
+        identity is admitted) -- and what `new` derives that `old` also derives but the
+        approval never stored is venue drift. The result keeps the stored entries `new`
+        still derives plus the plan's own additions; drift is withheld and reported.
+        A stored entry `new` no longer derives is dropped: a stage that moved AND whose
+        venue relocated loses its venue-path entries until it is re-approved (under-,
+        never over-granting).
+
+    `old` unreadable: nothing separates the plan's change from drift, so nothing new is
+    admitted -- stored entries `new` still derives, and declared grants from `new`."""
+    new_venue = _venue_for(new)
+    now = materialized_grant_entries(new, venue=new_venue)
+    before = materialized_grant_entries(old, venue=new_venue) if old is not None else {}
+    out: dict[str, dict] = {}
+    withheld: dict[str, list[str]] = {}
+    for idx, n in now.items():
+        s = stored.get(idx)
+        o = before.get(idx)
+        if s is None:
+            out[idx] = n
+            continue
+        if o is not None and _effective_entry_keys(o) == _effective_entry_keys(n):
+            out[idx] = s
+            continue
+        admitted = {_entry_key(e) for e in s.get("derived") or []}
+        if o is not None:
+            admitted |= {_entry_key(e) for e in n["derived"]} - {_entry_key(e) for e in o["derived"]}
+        out[idx] = {
+            "declared": n["declared"],
+            "derived": [e for e in n["derived"] if _entry_key(e) in admitted],
+            "dropped": n["dropped"],
+        }
+        held = [e.get("rule") or f"{e['path']} ({e['mode']})" for e in n["derived"]
+                if _entry_key(e) not in admitted]
+        if held:
+            withheld[idx] = held
+    return out, withheld
+
+
+def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = False) -> str:
+    """Return 'no_change' | 'refinement' | 'substantive'. `relax_verify_identity`: see
+    `_grants_grew`."""
     if _structural_signature(old) != _structural_signature(new):
         return "substantive"
     # Structurally identical — any other change is a refinement. The means/method/
@@ -2761,12 +3351,7 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
              *negative_control_place(s))
             for s in doc.stages
         ]
-    def _fc(doc: PlanDoc):
-        return [
-            (fc.command, fc.expected_exit, fc.label,
-             _normalize_string(fc.venue), _normalize_string(fc.kind), fc.landed)
-            for fc in doc.meta.final_check
-        ]
+    _fc = _final_check_place
     # `order_place` is the meta-level sibling of the `knowledge_place`/`preconditions_place`
     # splices above, and it is here for the identical reason: without it a re-worded
     # requirement, a corrected functional place or a coverage entry pointed at a different
@@ -2779,18 +3364,19 @@ def diff_plans(old: PlanDoc, new: PlanDoc) -> str:
     # wider DR-V, say — without moving a single field `_structural_signature`
     # OR the prose/`_fc`/`order_place` keys below compare, or while only moving
     # a field the prose keys below DO compare. Checked HERE, before the prose
-    # comparison, and unconditionally: the approved done criterion is "grant
-    # edits and effective-set growth are substantive", full stop — a
-    # `verify_command` edit that also derives a wider DR-V rule (or any other
-    # field whose edit both registers in `_prose` and widens the derived set)
-    # is substantive precisely BECAUSE it widens the derived set, not merely
-    # 'refinement with a grant on the side'. A `verify_command` edit that does
-    # NOT grow the effective set is untouched by this check and falls through
-    # to the ordinary `_prose` comparison, so it still classifies only as
-    # 'refinement'. "Did the EFFECTIVE grant set grow" is not folded into
-    # `_structural_signature` itself because it is not a pure function of the
-    # two docs' own bytes alone (it also calls the same deriver dispatch will).
-    if _grants_grew(old, new):
+    # comparison, and unconditionally: grant edits and effective-set growth are
+    # substantive. A `verify_command` edit is judged by what it lets the stage RUN,
+    # not by its text: DR-V derives one literal per segment, so a rewritten command
+    # always adds literals, and with `relax_verify_identity` `_grants_grew` counts one as
+    # growth only when its program (for an interpreter: its script) is new to the stage --
+    # and only when the stage's norm delta is confined to its criterion. Arguments to an
+    # already-granted program are then a refinement; the boundary check
+    # (`_kind_within_boundary`), which runs exactly when the caller sets the flag, still
+    # re-approves an unresolved or out-of-set command. "Did the EFFECTIVE grant
+    # set grow" is not folded into `_structural_signature` itself because it is not a
+    # pure function of the two docs' own bytes alone (it also calls the same deriver
+    # dispatch will).
+    if _grants_grew(old, new, relax_verify_identity=relax_verify_identity):
         return "substantive"
     if (_prose(old) != _prose(new) or old.meta.goal != new.meta.goal
             or old.meta.repo_root != new.meta.repo_root

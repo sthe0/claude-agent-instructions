@@ -1,11 +1,19 @@
 ---
 name: question-provenance-gate
-description: The premise plugin gates plan_approval on question provenance — every planning question dispositioned, an enumeration cross-check run, and every element of the ORDER either covered by a stage or cut with a reason and visible in the approved essence — the plan-time twin of the ledger's resolution-time claim gate; a question binds to the ELEMENT it targets, must name the control its answer could flip, and the pre-approval review rounds carry a budget; carries the honest ceiling INCLUDING the silent-advisor fail-open hole, the designed-in incentive gradient, and the unenumerated order.
+description: The premise plugin gates plan_approval on question provenance — every planning question dispositioned (the enumeration cross-check is retired; customer questions come from review acts), and every element of the ORDER either covered by a stage or cut with a reason and visible in the approved essence — the plan-time twin of the ledger's resolution-time claim gate; a question binds to the ELEMENT it targets, must name the control its answer could flip, and the pre-approval review rounds carry a budget; carries the honest ceiling (the silent-advisor fail-open hole is retired with the enumerator), the designed-in incentive gradient, and the unenumerated order.
 schema: leaf/v1
 type: reference
 created: 2026-07-20
 last_verified: 2026-08-26
 ---
+
+> **Retired route (task `norm-staleness`).** The standalone enumeration cross-check — `question-enumerate`,
+> the `enumerated` flag, the runner-health gate and its escape, edit-scoped narrowing and carried
+> dismissals — is retired. Customer questions now come from the review acts (`plan-review
+> --customer-question` → `qrev-` candidates, blocking approve until dispositioned). Sections below that
+> describe the enumeration cross-check (the `enumerated` row, F3b, "THE ORDER IS UNENUMERATED",
+> "Edit-scoped enumeration…", the enumeration escape budget) are kept as the history of the retired route;
+> the disposition, order-coverage and materiality rules stand.
 
 ## Difficulty
 

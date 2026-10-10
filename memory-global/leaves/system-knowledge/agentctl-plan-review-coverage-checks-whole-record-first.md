@@ -64,12 +64,12 @@ review, not another stage-scoped one.
 **After clearing `plan_review_blockers`, `replan` can still hit a second, separate gate** —
 `plan_approval` premises: a stale per-stage `order-list` coverage disposition (content
 digest changed under an order element mapped to that stage — re-confirm via `agentctl
-order-dispose --id <R-id> --as covered --stage <n> --plan <corrected-plan>`), and an
-unresolved `question-enumerate` cross-check (run it against the corrected plan; every
-raised `qenum-*` candidate then needs `question-candidate-dispose --as recorded|dismissed`
-before `replan` proceeds — no bulk-dismiss escape exists when the enumeration run itself
-succeeded; `question-enumerate-escape` is only for discharging an *unhealthy* enumeration
-run, not for skipping disposition of a healthy run's candidates).
+order-dispose --id <R-id> --as covered --stage <n> --plan <corrected-plan>`), and a
+raised customer-question candidate. *Historical note:* the standalone `question-enumerate`
+cross-check and `question-enumerate-escape` this paragraph used to describe are retired
+(both exit 2); customer questions now arrive with each review act as `qrev-` candidates,
+and a legacy `qenum-*` candidate still needs `question-candidate-dispose
+--as recorded|dismissed` before `replan` proceeds.
 
 ## See also
 

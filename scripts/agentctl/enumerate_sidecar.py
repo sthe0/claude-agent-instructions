@@ -1,5 +1,8 @@
 """Atomic sidecar files for the detached enumeration worker's result payload.
 
+Retired route: the enumerator no longer launches for new plans; the only remaining
+caller is discard_all_for_session. The text below describes the route as it ran.
+
 The detached enumeration child (cmd_question_enumerate_worker) must NEVER call
 store.save() -- FileStateStore.save() is an unlocked, whole-state truncating
 write (store.py:49-52), and the child's write racing against whatever
@@ -66,7 +69,7 @@ def read_discarding_superseded(
     the fold just raised persists nothing, so the next `approve` must be able to
     read the same payload again. An unlink-on-read here instead left the session
     with candidates that existed nowhere on disk and no sidecar to re-fold, and
-    `_ENUMERATE_NOT_RUN` forever after (there is no launch site on the approve
+    the (since retired) `_ENUMERATE_NOT_RUN` forever after (there is no launch site on the approve
     path) -- the whole point of detaching, undone.
 
     Sidecars for OTHER digests ARE removed: a result computed against an abandoned

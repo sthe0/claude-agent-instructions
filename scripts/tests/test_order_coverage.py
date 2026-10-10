@@ -19,11 +19,10 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from agentctl import advisor, cli, plugins, plugins_premise, premise
+from agentctl import cli, plugins, plugins_premise, premise
 from agentctl.state import SessionState
 from agentctl.store import FileStateStore
 
@@ -314,16 +313,6 @@ def _premise_armed(monkeypatch):
     monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
 
 
-@pytest.fixture
-def _stub_advisor_runner(monkeypatch):
-    """`question-enumerate` through cli.main has no runner= seam; stub the
-    module-level fallback to a healthy, question-less pass so the mandatory
-    cross-check discharges without a live subprocess."""
-    monkeypatch.setattr(
-        advisor, "subprocess_runner",
-        lambda argv, **kw: SimpleNamespace(returncode=0, stdout="", stderr=""))
-
-
 _PLAN = str(Path(__file__).resolve().parent / "fixtures" / "plan_two_stage.toml")
 
 
@@ -339,7 +328,6 @@ def _build_substantive(capsys, root, sid="e2e"):
     _run(capsys, root, "classify", "--session", sid, "--architectural")
     _run(capsys, root, "plan", "--session", sid)
     _run(capsys, root, "submit-plan", "--session", sid, "--plan", _PLAN)
-    _run(capsys, root, "question-enumerate", "--session", sid)
     return sid
 
 
@@ -347,7 +335,7 @@ def _blockers(directive):
     return (directive.get("data") or {}).get("blockers") or []
 
 
-@pytest.mark.usefixtures("_premise_armed", "_stub_advisor_runner")
+@pytest.mark.usefixtures("_premise_armed")
 def test_approve_refused_with_an_empty_order_bag(capsys, tmp_path):
     root = str(tmp_path / "state")
     sid = _build_substantive(capsys, root)
@@ -357,7 +345,7 @@ def test_approve_refused_with_an_empty_order_bag(capsys, tmp_path):
                for b in _blockers(d))
 
 
-@pytest.mark.usefixtures("_premise_armed", "_stub_advisor_runner")
+@pytest.mark.usefixtures("_premise_armed")
 def test_approve_refused_with_an_undispositioned_order_element(capsys, tmp_path):
     root = str(tmp_path / "state")
     sid = _build_substantive(capsys, root)
@@ -370,7 +358,7 @@ def test_approve_refused_with_an_undispositioned_order_element(capsys, tmp_path)
                for b in _blockers(d))
 
 
-@pytest.mark.usefixtures("_premise_armed", "_stub_advisor_runner")
+@pytest.mark.usefixtures("_premise_armed")
 def test_approve_allowed_once_every_order_element_is_covered_or_cut(capsys, tmp_path):
     root = str(tmp_path / "state")
     sid = _build_substantive(capsys, root)

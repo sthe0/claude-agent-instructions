@@ -1,43 +1,23 @@
-"""Per-part keying of the enumeration cross-check.
+"""Per-part keying of the plan digest, and what survives of it after the enumerator's
+retirement.
 
-The cross-check used to be recorded against ONE whole-plan digest, so any edit
-anywhere marked the whole record stale: the re-run re-read every stage, and every
-candidate it raised came back `raised`, discarding the dispositions the coordinator
-had already recorded against parts nobody touched. The record is now keyed per part —
-the plan's meta/order and one entry per stage — so a plan edit marks stale only the
-parts whose digest moved, the re-run covers only those parts, and a candidate
-dispositioned against an unchanged part keeps its disposition.
-
-What must NOT move with it: the composite digest of an unchanged plan, which escapes,
-launch windows and every persisted `enumerated_at` bind to; the closed escape-reason
-set; and the stale branch's deliberate lack of an escape.
+The plan's content digest is keyed per part -- the meta/order and one entry per stage --
+so `plan.changed_parts` can say which parts moved. The standalone enumeration that used
+to consume that is retired (amendments-2.md E3); what remains pinned here is the
+composite digest every persisted `enumerated_at` binds to, `changed_parts` against a
+supplied baseline, and the `qenum-` upsert that keeps a disposition on an untouched stage.
 """
 from __future__ import annotations
 
 import hashlib
 from argparse import Namespace
 from pathlib import Path
-from types import SimpleNamespace
 
-from agentctl import cli, plan, plugins, plugins_premise, premise
+from agentctl import cli, plan, plugins, plugins_premise
 from agentctl.plan import load_plan
 from agentctl.state import SessionState
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-
-
-def _runner(stdout, *, returncode=0):
-    calls: list[list[str]] = []
-    prompts: list[str] = []
-
-    def run(argv, **kw):
-        calls.append(argv)
-        prompts.append(kw.get("stdin", ""))
-        return SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
-
-    run.calls = calls
-    run.prompts = prompts
-    return run
 
 
 _STAGE_TMPL = """\
@@ -79,10 +59,6 @@ def _state(store, sid="s", *, plan_path):
     return state
 
 
-def _enumerate(store, sid, run):
-    return cli.cmd_question_enumerate(Namespace(session=sid), store=store, runner=run)
-
-
 def _bag(store, sid="s"):
     return store.load(sid).plugins["premise"]
 
@@ -113,34 +89,6 @@ def test_the_composite_digest_reproduces_the_pre_split_value():
         pre_split_payload.encode("utf-8")).hexdigest()
 
 
-def test_an_escape_recorded_before_the_split_still_discharges():
-    """A bag minted before per-part keying carries an escape bound to the composite and
-    no part digests at all. It must keep discharging: the alternative is a fleet-wide
-    re-arming of the very blocker the escape was recorded to clear."""
-    doc = load_plan(FIXTURES / "plan_two_stage.toml")
-    digest = plugins_premise._plan_content_digest(doc)
-    bag = {
-        "enumerated": True,
-        "enumerated_at": digest,
-        "enumerated_runner_ok": False,
-        "enumerate_launch": 2,
-        "enumerate_pass": 1,
-        "escapes": [{"reason": premise.ESCAPE_ADVISOR_TIMEOUT, "content_digest": digest,
-                     "enumerate_launch": 2, "enumerate_pass": 1}],
-    }
-    assert plugins_premise.escape_recorded(
-        bag, digest, premise.ENUMERATION_RUNNER_FAILURE_REASONS) is True
-    assert plugins_premise.stale_enumeration_parts(bag, doc) == (False, set())
-
-
-def test_a_bag_minted_before_the_split_is_judged_whole():
-    """The same legacy bag against CHANGED bytes: with no part digests to compare, the
-    only honest answer is that no part is covered — never 'nothing moved'."""
-    doc = load_plan(FIXTURES / "plan_two_stage.toml")
-    bag = {"enumerated": True, "enumerated_at": "a-digest-of-other-bytes"}
-    assert plugins_premise.stale_enumeration_parts(bag, doc) == (True, {1, 2})
-
-
 # --- changed_parts takes its baseline as a parameter ----------------------------
 
 def test_changed_parts_compares_against_a_supplied_baseline(tmp_path):
@@ -159,65 +107,23 @@ def test_changed_parts_compares_against_a_supplied_baseline(tmp_path):
     assert plan.changed_parts(doc, baseline) == (True, {2})
 
 
-# --- a stage edit marks only that stage ----------------------------------------
+# --- a disposition on an untouched stage survives a narrowed upsert ---------------
 
-def test_editing_one_stage_marks_only_that_stage_stale(store, tmp_path):
-    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
-    _state(store, plan_path=plan_path)
-    _enumerate(store, "s", _runner(""))
+def _apply(store, sid, plan_path, pairs, *, parts=None):
+    """The `qenum-` upsert the standalone enumeration used to drive -- called directly,
+    since no engine path runs it for a new plan any more."""
+    state = store.load(sid)
+    cli._apply_enumeration_result(
+        state.plugins["premise"], load_plan(plan_path), plan_path, pairs, True,
+        parts=parts, preserve_disposition=True)
+    store.save(state)
 
-    live = store.load("s")
-    assert plugins_premise.stale_enumeration_parts(
-        live.plugins["premise"], load_plan(plan_path)) == (False, set())
-
-    _write_plan(plan_path, [(1, "img-one"), (2, "img-two-EDITED")])
-    live = store.load("s")
-    doc = load_plan(plan_path)
-    assert plugins_premise.stale_enumeration_parts(live.plugins["premise"], doc) == (
-        False, {2})
-    assert plugins_premise.enumeration_run_scope(live.plugins["premise"], doc) == (
-        False, {2})
-    assert any("different plan content" in b
-               for b in plugins_premise.premise_blockers(live, live.plugins["premise"]))
-
-
-def test_a_meta_edit_scopes_the_re_run_to_the_whole_plan(store, tmp_path):
-    """A moved goal re-opens every stage's fit to it, so the narrowing widens back to
-    the whole plan rather than raising a `meta` part the stages are read apart from."""
-    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
-    _state(store, plan_path=plan_path)
-    _enumerate(store, "s", _runner(""))
-
-    _write_plan(plan_path, [(1, "img-one"), (2, "img-two")], goal="a different goal")
-    bag = _bag(store)
-    doc = load_plan(plan_path)
-    assert plugins_premise.stale_enumeration_parts(bag, doc) == (True, set())
-    assert plugins_premise.enumeration_run_scope(bag, doc) == (True, {1, 2})
-
-
-def test_a_narrowed_pass_reads_only_the_changed_stages(store, tmp_path):
-    plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
-    _state(store, plan_path=plan_path)
-    _enumerate(store, "s", _runner(""))
-    _write_plan(plan_path, [(1, "img-one"), (2, "img-two-EDITED")])
-
-    run = _runner("stage:2.result\tis the edited image still checkable?")
-    d = _enumerate(store, "s", run)
-    prompt = run.prompts[0]
-    assert "stage 2 done" in prompt
-    assert "stage 1 done" not in prompt
-    assert d.data["whole_plan"] is False and d.data["stages"] == [2]
-    assert plugins_premise.stale_enumeration_parts(_bag(store), load_plan(plan_path)) == (
-        False, set())
-
-
-# --- a disposition on an untouched stage survives the re-run --------------------
 
 def test_a_disposed_candidate_on_an_untouched_stage_survives_the_re_run(store, tmp_path):
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
     _state(store, plan_path=plan_path)
-    _enumerate(store, "s", _runner(
-        "stage:1.means\twhy this tool?\nstage:2.result\twhat does done look like?"))
+    _apply(store, "s", plan_path, [("stage:1.means", "why this tool?"),
+                                   ("stage:2.result", "what does done look like?")])
     assert [c["id"] for c in _bag(store)["candidates"]] == ["qenum-s1-1", "qenum-s2-1"]
 
     cli.cmd_question_candidate_dispose(
@@ -226,7 +132,7 @@ def test_a_disposed_candidate_on_an_untouched_stage_survives_the_re_run(store, t
         store=store)
 
     _write_plan(plan_path, [(1, "img-one"), (2, "img-two-EDITED")])
-    _enumerate(store, "s", _runner("stage:2.result\tand now?"))
+    _apply(store, "s", plan_path, [("stage:2.result", "and now?")], parts=(False, {2}))
 
     candidates = {c["id"]: c for c in _bag(store)["candidates"]}
     assert candidates["qenum-s1-1"]["disposition"] == "dismissed"
@@ -256,21 +162,20 @@ def test_a_candidate_raised_under_the_old_id_scheme_keeps_its_disposition(store,
     assert bag["candidates"][0]["disposition"] == "dismissed"
 
 
-# --- the stale branch still has no escape ---------------------------------------
+# --- a plan edit under a discharged legacy record blocks nothing -------------------
 
-def test_the_stale_branch_still_admits_no_escape(store, tmp_path):
+def test_a_plan_edit_under_a_legacy_enumeration_record_raises_no_staleness_blocker(
+        store, tmp_path):
+    """The staleness blocker (an enumeration recorded against other plan bytes) is
+    retired with the enumerator: nothing re-runs, so nothing is left to be stale."""
     plan_path = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
     _state(store, plan_path=plan_path)
-    _enumerate(store, "s", _runner(""))
+    _apply(store, "s", plan_path, [])
     _write_plan(plan_path, [(1, "img-one"), (2, "img-two-EDITED")])
 
     live = store.load("s")
     bag = live.plugins["premise"]
-    digest = plugins_premise._plan_content_digest(load_plan(plan_path))
-    bag["escapes"] = [
-        {"reason": reason, "content_digest": digest,
-         "enumerate_launch": int(bag.get("enumerate_launch") or 0),
-         "enumerate_pass": int(bag.get("enumerate_pass") or 0)}
-        for reason in premise.ENUMERATION_ESCAPE_REASONS
-    ]
-    assert plugins_premise._ENUMERATE_STALE in plugins_premise.premise_blockers(live, bag)
+    assert bag["enumerated_at"] != plugins_premise._plan_content_digest(load_plan(plan_path))
+    blockers = plugins_premise.premise_blockers(live, bag)
+    assert not any("different plan content" in b or "cross-check" in b
+                   for b in blockers), blockers

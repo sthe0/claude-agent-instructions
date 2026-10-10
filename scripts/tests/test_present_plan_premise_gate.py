@@ -12,9 +12,9 @@ is circular before the receipt exists. `approve`'s own gating is unfiltered and
 therefore unchanged — proven by leaving test_plugins_premise.py and
 test_premise_gate_e2e.py untouched.
 
-Covers: refusal on a raised enumeration candidate; refusal when the enumeration
-cross-check has not run; a stamp when every check is clear; `full` staying
-ungated (it never was); silence with no premise bag at all; and the exclusion
+Covers: refusal on a raised candidate;
+no refusal when the retired enumeration cross-check has not run (amendments-2.md E3);
+a stamp when every check is clear; `full` staying ungated (it never was); silence with no premise bag at all; and the exclusion
 of the essence-coverage half not being merely permissive but load-bearing —
 re-presenting after the order bag moved past an EARLIER receipt is not blocked
 by that stale receipt.
@@ -70,16 +70,6 @@ def _order(store, sid, *, id, element, as_=None, stage=None, reason=""):
             ns(session=sid, id=id, as_=as_, stage=stage, reason=reason), store=store)
 
 
-def _mark_enumerated(store, sid) -> None:
-    """Lands the enumeration half at the CURRENT plan digest — not stale, no
-    escape needed — so a test can isolate the ONE blocker it means to exercise."""
-    state = store.load(sid)
-    state.plugins["premise"]["enumerated"] = True
-    state.plugins["premise"]["enumerated_at"] = plugins_premise._plan_content_digest(
-        load_plan(_PLAN))
-    store.save(state)
-
-
 def _raise_candidate(store, sid, *, id="qenum-1", statement="which mode is out of scope?") -> None:
     state = store.load(sid)
     state.plugins["premise"]["candidates"].append({
@@ -119,10 +109,9 @@ def _block(store, sid) -> str:
 
 
 def _premise_clear(store, sid) -> None:
-    """Covers the order, lands the enumeration, leaves no open question/candidate —
-    every named blocker below is exercised by moving state AWAY from this baseline."""
+    """Covers the order, leaves no open question/candidate — every named blocker
+    below is exercised by moving state AWAY from this baseline."""
     _order(store, sid, id="O1", element="the gate", as_="covered", stage=1)
-    _mark_enumerated(store, sid)
 
 
 # --- refusal cases ---------------------------------------------------------------
@@ -138,15 +127,15 @@ def test_essence_refused_while_candidate_raised(store, tmp_path, armed):
     assert any("qenum-1" in b for b in d.data["blockers"])
 
 
-def test_essence_refused_when_enumeration_not_run(store, tmp_path, armed):
+def test_essence_not_refused_when_the_retired_enumeration_has_not_run(store, tmp_path, armed):
     sid = _plan_ready(store)
     _order(store, sid, id="O1", element="the gate", as_="covered", stage=1)
-    # enumeration deliberately left un-landed
+    assert store.load(sid).plugins["premise"]["enumerated"] is False
 
     d = _present_essence(store, sid, tmp_path)
-    assert d.ok is False and d.action == "noop"
-    assert store.load(sid).plan_presentations == []
-    assert any("enumeration" in b for b in d.data["blockers"])
+    assert d.ok is True, d.detail
+    assert len(store.load(sid).plan_presentations) == 1
+    assert not any("enumeration" in b for b in d.data.get("blockers", []))
 
 
 # --- the clean pass ----------------------------------------------------------------

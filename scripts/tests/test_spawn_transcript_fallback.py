@@ -151,7 +151,7 @@ def test_recovered_transcript_resolves_through_select_cost_row_window_match_and_
         "--complexity", "medium",
         "--effort", "medium",
         "--workdir", str(workdir),
-        "--review-topo", "plan-2",
+        "--review-topo", "2-1",
     ]
     rc = SPAWN_MOD.main(argv)
     assert rc == 0
@@ -159,12 +159,12 @@ def test_recovered_transcript_resolves_through_select_cost_row_window_match_and_
     rows = [json.loads(line) for line in cost_log.read_text().splitlines() if line.strip()]
     assert len(rows) == 1
     row = rows[0]
-    assert row["review_pair"] == "plan-2"
+    assert row["review_pair"] == "2-1"
     assert row["plan_sha256"] == sha
     assert row["transcript_path"] == str(transcript_file)
 
     monkeypatch.setattr(REVIEW_MOD, "COST_LOG", cost_log)
-    resolved = REVIEW_MOD.select_cost_row("plan-2", sha, SENTINEL, 0)
+    resolved = REVIEW_MOD.select_cost_row("2-1", sha, SENTINEL, 0)
     assert resolved is not None
     assert resolved["transcript_path"] == str(transcript_file)
 
@@ -177,5 +177,5 @@ def test_recovered_transcript_resolves_through_select_cost_row_window_match_and_
         log_offset=0,
         plan_sha=sha,
     )
-    cost, duration, pulls, transcript = REVIEW_MOD.pair_telemetry(launched, "plan-2")
+    cost, duration, pulls, transcript = REVIEW_MOD.pair_telemetry(launched, "2-1")
     assert transcript == str(transcript_file)

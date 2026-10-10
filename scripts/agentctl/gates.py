@@ -50,27 +50,35 @@ from .config import Thresholds
 from .plan import (
     PlanError,
     SEVERITY_BLOCKING,
+    acceptance_requirement_bindings,
     changed_parts,
     consumers,
     effects_place,
     grants_place,
     grants_sha256,
     load_plan,
+    load_plan_with_digest,
     moved_interfaces,
     order_place,
+    is_legacy_review_id,
+    is_unit_id,
     pair_binding,
+    pair_content,
     pair_currency_hash,
     pair_currency_keys,
-    pair_shows_declared_product_only,
     plan_has_any_grants,
     plan_interface_digests,
     review_pairs,
+    review_units,
     split_pair_id,
     stage_question_key,
+    unit_currency_hash,
+    unit_id,
+    unit_node,
 )
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
-from .state import CONCERN_OPEN, Node, PAIR_BINDING_KEYS, Route, SessionState, StageStatus, WeightClass
+from .state import CONCERN_OPEN, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
@@ -182,33 +190,97 @@ def plan_asserts_landing(state: SessionState) -> bool:
     return asserts_landing(state.stages, state.final_check)
 
 
-def _acceptance_review_check(state: SessionState) -> tuple[str, list[str], dict[str, str]]:
+def acceptance_staleness(review, doc, plan_digest: str) -> list[str] | None:
+    """Whether `review` no longer describes the product `doc` (accepted at `plan_digest`)
+    declares: `None` when it still does, else the requirement ids that went stale.
+
+    A review that carries per-requirement bindings is stale only where a binding moved --
+    an accepted requirement whose text, coverage entries or named deliverables changed --
+    or where the plan declares a requirement the review never saw; a requirement the plan
+    no longer declares stales nothing. A review without bindings (written before they
+    existed) keeps the raw plan-digest comparison, and then every declared requirement is
+    named. One function, read by the resolution gate and by `replan`, so the two cannot
+    disagree about which acceptance a plan edit invalidated."""
+    order = doc.meta.order
+    declared = [r.id for r in order.requirements] if order is not None else []
+    if review.requirement_bindings is None:
+        if (review.plan_sha256 or "") == (plan_digest or ""):
+            return None
+        return declared
+    current = acceptance_requirement_bindings(doc)
+    stale = [rid for rid in declared
+             if review.requirement_bindings.get(rid) != current.get(rid)]
+    return stale or None
+
+
+def acceptance_stale_requirements(state: SessionState) -> list[str] | None:
+    """The requirement ids the session's recorded acceptance has gone stale for, by the
+    resolution gate's own check (`_acceptance_review_check`) -- `None` when acceptance is
+    inactive, absent, unreadable or current. A review without bindings that is stale names
+    every requirement the plan declares; a stale review whose plan file is not the
+    accepted version names none (the file's requirement ids cannot be trusted)."""
+    status, _ids, _verdicted, stale_ids = _acceptance_review_check(state)
+    if status != "stale":
+        return None
+    review = state.acceptance_review
+    if (stale_ids or review is None or review.requirement_bindings is not None
+            or not state.plan_path):
+        return list(stale_ids)
+    try:
+        doc, _data, _digest = load_plan_with_digest(state.plan_path, strict=False)
+    except (OSError, PlanError):
+        return []
+    order = doc.meta.order
+    return [r.id for r in order.requirements] if order is not None else []
+
+
+class _AcceptanceCheck(NamedTuple):
+    status: str
+    requirement_ids: list[str]
+    verdicted: dict[str, str]
+    stale_ids: list[str]
+
+
+def _acceptance_review_check(state: SessionState) -> _AcceptanceCheck:
     """Shared guard chain behind both acceptance-review checks
     (_acceptance_review_resolution_blockers and failing_acceptance_requirements):
     resolves a status in {"inactive", "no_review", "stale", "unreadable", "ok"} plus,
     only when "ok", the current plan's declared requirement ids and the review's
-    recorded verdicts. Each early-out mirrors a distinct guard
-    _acceptance_review_resolution_blockers already documents in full; this helper
-    exists so the two callers never drift on WHICH guard fired."""
+    recorded verdicts, and, only when "stale", the requirement ids that went stale
+    (empty for a stale review of a plan that declares none, or of a plan file that is
+    not the accepted version). Each early-out mirrors a distinct guard
+    _acceptance_review_resolution_blockers already documents in full; this helper exists
+    so the two callers never drift on WHICH guard fired."""
     if not acceptance_active(state):
-        return "inactive", [], {}
+        return _AcceptanceCheck("inactive", [], {}, [])
     review = state.acceptance_review
     if review is None:
-        return "no_review", [], {}
-    if (review.plan_sha256 or "") != (state.accepted_plan_digest or ""):
-        return "stale", [], {}
+        return _AcceptanceCheck("no_review", [], {}, [])
+    digest_moved = (review.plan_sha256 or "") != (state.accepted_plan_digest or "")
+    if digest_moved and review.requirement_bindings is None:
+        return _AcceptanceCheck("stale", [], {}, [])
     doc = None
+    file_digest = ""
     if state.plan_path:
         try:
-            doc = load_plan(state.plan_path, strict=False)
+            doc, _data, file_digest = load_plan_with_digest(state.plan_path, strict=False)
         except (OSError, PlanError):
             doc = None
     if doc is None:
-        return "unreadable", [], {}
+        return _AcceptanceCheck("unreadable", [], {}, [])
+    if file_digest != (state.accepted_plan_digest or ""):
+        # Bindings and requirement ids are read from this file: bytes the engine never
+        # accepted cannot stand in for the version the review was recorded against. A
+        # session with NO accepted digest has accepted none, so it fails closed here too.
+        return _AcceptanceCheck("stale", [], {}, [])
+    if digest_moved:
+        stale = acceptance_staleness(review, doc, state.accepted_plan_digest or "")
+        if stale is not None:
+            return _AcceptanceCheck("stale", [], {}, stale)
     order = doc.meta.order
     requirement_ids = [r.id for r in order.requirements] if order is not None else []
     verdicted = {v.requirement_id: v.verdict for v in review.verdicts}
-    return "ok", requirement_ids, verdicted
+    return _AcceptanceCheck("ok", requirement_ids, verdicted, [])
 
 
 def failing_acceptance_requirements(state: SessionState) -> list[str]:
@@ -219,7 +291,7 @@ def failing_acceptance_requirements(state: SessionState) -> list[str]:
     that is a genuine difficulty (a customer rejection) from the other three,
     which are ordinary in-progress states that must keep their existing passive
     'not ready yet' refusal — see cmd_verify_final's early-blockers branch."""
-    status, requirement_ids, verdicted = _acceptance_review_check(state)
+    status, requirement_ids, verdicted, _ = _acceptance_review_check(state)
     if status != "ok":
         return []
     missing = [rid for rid in requirement_ids if rid not in verdicted]
@@ -241,11 +313,13 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
     checks, in order:
       - a review must exist — else blocked (fail-CLOSED: an all-PASSED session with
         no acceptance is not resolved, only controlled);
-      - review.plan_sha256 must equal state.accepted_plan_digest — a mismatch means
-        the plan was replaced (accept, then approve/replan on a new plan) since the
-        review was written, so the review is STALE and is treated as though absent
-        (same blocker as the missing-review case, not a distinct message — the
-        session's observable state is "no current acceptance" either way);
+      - review.plan_sha256 must equal state.accepted_plan_digest, or — for a review
+        carrying per-requirement bindings — no accepted requirement's binding may
+        have moved and the plan may declare no requirement the review lacks
+        (`acceptance_staleness`): a control-only replan moves the digest and no
+        binding. A stale review is treated as though absent (same blocker as the
+        missing-review case, naming the stale requirement ids — the session's
+        observable state is "no current acceptance" either way);
       - the CURRENT plan must be READABLE — an absent plan_path, or bytes that no
         longer load, means the order this review claims to have satisfied cannot be
         re-read, and the two checks below would then run against an empty requirement
@@ -267,7 +341,7 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
     Deliberately never reads state.acceptance_bypass: a bypass is a resolution
     OUTCOME the engine surfaces (verify-final), never a resolution PRECONDITION the
     engine evaluates — see AcceptanceBypass's docstring for why."""
-    status, requirement_ids, verdicted = _acceptance_review_check(state)
+    status, requirement_ids, verdicted, stale_ids = _acceptance_review_check(state)
     if status == "inactive":
         return []
     if status == "no_review":
@@ -276,10 +350,13 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
             "acceptance (agentctl accept) before resolution"
         ]
     if status == "stale":
+        which = (f"requirement id(s) {stale_ids} were accepted against deliverables "
+                 "the currently accepted plan has since moved" if stale_ids else
+                 "it was written against a different plan version than the one "
+                 "currently accepted")
         return [
-            "no AcceptanceReview recorded — the recorded review is stale (it was "
-            "written against a different plan version than the one currently "
-            "accepted) and is treated as absent; re-run accept on the current plan"
+            f"no AcceptanceReview recorded — the recorded review is stale ({which}) "
+            "and is treated as absent; re-run accept on the current plan"
         ]
     if status == "unreadable":
         return [
@@ -823,26 +900,40 @@ def plan_review_prior_pass(state: SessionState, scope: str, target_plan: str | N
 
 
 def pair_status(state: SessionState, doc, plan_path: str, pair: str) -> str:
-    """Whether review pair `pair` has been reviewed, and with what verdict — the one
-    currency rule every consumer of a `PlanPairReview` calls, so what makes a record
-    count cannot drift between them.
+    """Whether review id `pair` — a pair `<b>-<s>` or a unit `unit:<node>` — has been
+    reviewed, and with what verdict: the one currency rule every consumer of a
+    `PlanPairReview` calls, so what makes a record count cannot drift between them.
 
-    `missing` — no record, or one computed against a different plan path. Otherwise
-    the stored digests of `plan.pair_currency_keys` (the seven of `PAIR_BINDING_KEYS`,
-    less the service's construction when the reviewer saw only its declared product)
-    are compared, in `PAIR_BINDING_KEYS` order, with a fresh `plan.pair_binding(doc,
-    pair)`: the first that moved gives `stale:<key>` (the digest name without its
-    `_digest`/`_key` suffix, e.g. `stale:service_file`); with all current the verdict
-    is reported — `current` for a pass, `override`, or `revise`. Raises ValueError
-    for a pair `doc` does not have."""
+    `missing` — no record, or one computed against a different plan path. A legacy
+    id (`plan-<s>`, `base-plan`, `unit:plan`) with a record is `stale:legacy`, never
+    current. A unit is `stale:unit` when its stored `unit_norm` differs from
+    `plan.unit_currency_hash`. A content-keyed pair compares its stored
+    `PAIR_CONTENT_KEYS` with a fresh `plan.pair_content`, the first that moved giving
+    `stale:<key without _norm>` (`edge`, `base`, `service_iface`, `service`); a
+    pair record written before the content digests is judged by `plan.pair_currency_keys`
+    against `plan.pair_binding` (`stale:<key sans _digest/_key>`). With all current the
+    verdict is reported — `current` for a pass, `override`, or `revise`. Raises
+    ValueError for an id `doc` does not have."""
     record = state.plan_pair_reviews.get(pair)
     if record is None or record.plan_path != plan_path:
         return "missing"
-    fresh = pair_binding(doc, pair)
-    stored = record.binding()
-    for key in pair_currency_keys(doc, pair):
-        if stored[key] != fresh[key]:
-            return "stale:" + key.removesuffix("_digest").removesuffix("_key")
+    if is_legacy_review_id(pair):
+        return "stale:legacy"
+    if is_unit_id(pair):
+        if record.unit_norm != unit_currency_hash(doc, pair):
+            return "stale:unit"
+    elif record.is_content_keyed:
+        fresh_content = pair_content(doc, pair)
+        stored_content = record.content()
+        for key in PAIR_CONTENT_KEYS:
+            if stored_content[key] != fresh_content[key]:
+                return "stale:" + key.removesuffix("_norm")
+    else:
+        fresh = pair_binding(doc, pair)
+        stored = record.binding()
+        for key in pair_currency_keys(doc, pair):
+            if stored[key] != fresh[key]:
+                return "stale:" + key.removesuffix("_digest").removesuffix("_key")
     return "current" if record.verdict == _PLAN_REVIEW_PASS else record.verdict
 
 
@@ -865,16 +956,22 @@ def pair_baseline_currency(doc) -> "dict[str, str]":
     return {pid: pair_currency_hash(doc, pid) for pid in review_pairs(doc)}
 
 
+def unit_baseline_currency(doc) -> "dict[str, str]":
+    return {uid: unit_currency_hash(doc, uid) for uid in review_units(doc)}
+
+
 def pair_depths(doc) -> "dict[int | str, int]":
-    """Depth of every node in the graph whose edges are the review pairs (b -> s):
-    a node no pair serves is a root at 0, any other is 1 + the depth of the
-    deepest base that relies on it. Raises PlanError naming the cycle when the
-    graph has one."""
+    """Depth of every unit node (`base` and each stage) in the graph whose edges are
+    the review pairs (b -> s): a node no pair serves is a root at 0, any other is 1 +
+    the depth of the deepest base that relies on it. Raises PlanError naming the
+    cycle when the graph has one."""
     edges = [split_pair_id(pid) for pid in review_pairs(doc)]
     bases_of: "dict[int | str, list[int | str]]" = {}
     for b, s in edges:
         bases_of.setdefault(s, []).append(b)
         bases_of.setdefault(b, [])
+    for uid in review_units(doc):
+        bases_of.setdefault(unit_node(uid), [])
     depths: "dict[int | str, int]" = {}
     visiting: list = []
 
@@ -915,63 +1012,107 @@ def pair_prereqs(
 
 
 def pair_walk(state: SessionState, doc, plan_path: str) -> "list[dict]":
-    """One row per review pair — `pair`, `base`, `service`, `level`, `status`,
-    `ready`, `waiting` — in `review_pairs` order. Readiness is advisory: a pair is
-    ready once every prerequisite is current or override."""
+    """One row per review unit and pair — `pair` (the id), `kind` (`unit`/`pair`),
+    `base`, `service`, `level`, `status`, `ready`, `waiting` — units first (in
+    `review_units` order), then pairs (in `review_pairs` order). A unit's level is
+    its depth; a pair's level is its SERVICE's depth (so the service's unit is
+    reviewed before the pair and the base's unit at an earlier level), pushed one
+    past its deepest prerequisite pair when that shares the depth (two bases of
+    one service) — a level's rows share no input and may run in one batch.
+    Readiness is advisory: a row is ready once every prerequisite — the units of a
+    unit's bases, the units of both a pair's ends, and the shallower pairs
+    `pair_prereqs` names — is current or override."""
     depths = pair_depths(doc)
+    units = review_units(doc)
     pairs = review_pairs(doc)
-    status = {pid: pair_status(state, doc, plan_path, pid) for pid in pairs}
+    status = {rid: pair_status(state, doc, plan_path, rid) for rid in units + pairs}
+    edges = [split_pair_id(pid) for pid in pairs]
+    pair_levels: "dict[str, int]" = {}
+
+    def pair_level(pid: str) -> int:
+        # Prerequisites have a strictly shallower base, so the recursion is well-founded.
+        if pid not in pair_levels:
+            service = split_pair_id(pid)[1]
+            pair_levels[pid] = max(
+                [depths[service]]
+                + [pair_level(q) + 1 for q in pair_prereqs(doc, pid, depths, pairs)]
+            )
+        return pair_levels[pid]
+
     rows = []
+    for uid in units:
+        node = unit_node(uid)
+        bases = {unit_id(b) for b, s in edges if s == node}
+        waiting = [u for u in units if u in bases and status[u] not in PAIR_SATISFIED]
+        rows.append({
+            "pair": uid, "kind": "unit", "base": str(node), "service": "",
+            "level": depths[node], "status": status[uid], "ready": not waiting,
+            "waiting": waiting,
+        })
     for pid in pairs:
         b, s = split_pair_id(pid)
-        waiting = [p for p in pair_prereqs(doc, pid, depths, pairs) if status[p] not in PAIR_SATISFIED]
+        waiting = [u for u in (unit_id(b), unit_id(s)) if status[u] not in PAIR_SATISFIED]
+        waiting += [p for p in pair_prereqs(doc, pid, depths, pairs) if status[p] not in PAIR_SATISFIED]
         rows.append({
-            "pair": pid, "base": str(b), "service": str(s), "level": depths[b],
-            "status": status[pid], "ready": not waiting, "waiting": waiting,
+            "pair": pid, "kind": "pair", "base": str(b), "service": str(s),
+            "level": pair_level(pid), "status": status[pid], "ready": not waiting,
+            "waiting": waiting,
         })
     return rows
 
 
 def has_pair_records_for(state: SessionState, target_plan: "str | None") -> bool:
+    """Whether a PAIR record (legacy ids included) exists for `target_plan`. A unit
+    record alone never counts: it must not switch a plan onto the coverage route."""
     return bool(target_plan) and any(
-        record.plan_path == target_plan for record in state.plan_pair_reviews.values()
+        record.plan_path == target_plan
+        for pid, record in state.plan_pair_reviews.items() if not is_unit_id(pid)
     )
 
 
+def _revised_since(state: SessionState, plan_path: str, rid: str, baseline) -> bool:
+    record = state.plan_pair_reviews.get(rid)
+    return (
+        record is not None and record.plan_path == plan_path
+        and record.verdict == _PLAN_REVIEW_REVISE and record.record_seq > baseline.record_seq
+    )
+
+
+def walk_stale_units(state: SessionState, doc, plan_path: str, baseline) -> "list[str]":
+    """The walk-stale units in `review_units` order: a unit whose currency hash
+    differs from `baseline`'s recorded one or that the baseline never recorded (every
+    unit when it recorded none: a baseline written before units existed), and a unit
+    not current/override whose own latest record is a revise written after the
+    baseline."""
+    units = review_units(doc)
+    currency = baseline.reviewed_unit_currency if baseline is not None else None
+    if not currency:
+        return list(units)
+    stale = []
+    for uid in units:
+        if currency.get(uid) != unit_currency_hash(doc, uid):
+            stale.append(uid)
+        elif (pair_status(state, doc, plan_path, uid) not in PAIR_SATISFIED
+              and _revised_since(state, plan_path, uid, baseline)):
+            stale.append(uid)
+    return stale
+
+
 def walk_stale_pairs(state: SessionState, doc, plan_path: str, baseline) -> "list[str]":
-    """The walk-stale set W in `review_pairs` order: pairs incident to a stage that
-    moved since `baseline` (a whole-plan record), pairs not current/override whose
-    live binding differs from the baseline's recorded one or whose own latest record
-    is a revise written after the baseline, and pairs the baseline never knew of.
-    A baseline with no recorded bindings makes W every pair."""
+    """The walk-stale set of pairs in `review_pairs` order: a pair whose content
+    currency hash (`plan.pair_currency_hash` — only the evidence the reviewer was
+    shown) differs from the one `baseline` (a whole-plan record) recorded, a pair the
+    baseline never recorded (every pair when it recorded no content-keyed currency),
+    and a pair not current/override whose own latest record is a revise written
+    after the baseline."""
     pairs = review_pairs(doc)
-    if baseline is None or not baseline.reviewed_pair_bindings:
-        return list(pairs)
-    recorded = baseline.reviewed_pair_bindings
-    _, moved = changed_parts(doc, _plan_review_baseline(baseline))
-    interface_moved = moved_interfaces(doc, baseline.reviewed_interface_keys, moved)
-    currency = baseline.reviewed_pair_currency or {}
+    currency = (baseline.reviewed_pair_currency if baseline is not None else None) or {}
     stale = []
     for pid in pairs:
-        b, s = split_pair_id(pid)
-        service_moved = (
-            s in interface_moved if pair_shows_declared_product_only(doc, pid) else s in moved
-        )
-        if b in moved or service_moved or pid not in recorded:
+        if currency.get(pid) != pair_currency_hash(doc, pid):
             stale.append(pid)
-            continue
-        if pair_status(state, doc, plan_path, pid) in PAIR_SATISFIED:
-            continue
-        record = state.plan_pair_reviews.get(pid)
-        revised_since = (
-            record is not None and record.plan_path == plan_path
-            and record.verdict == _PLAN_REVIEW_REVISE and record.record_seq > baseline.record_seq
-        )
-        binding_moved = (
-            pair_currency_hash(doc, pid) != currency[pid] if pid in currency
-            else pair_binding_hash(doc, pid) != recorded[pid]
-        )
-        if revised_since or binding_moved:
+        elif (pair_status(state, doc, plan_path, pid) not in PAIR_SATISFIED
+              and _revised_since(state, plan_path, pid, baseline)):
             stale.append(pid)
     return stale
 
@@ -1134,7 +1275,10 @@ def _pair_route(state: SessionState, doc, plan_path: "str | None") -> "_PairRout
     if scope.meta_moved or _plan_review_verdict_blockers(whole, state=state, doc=doc):
         return None
     try:
-        walk_stale = walk_stale_pairs(state, doc, plan_path, whole)
+        walk_stale = (
+            walk_stale_units(state, doc, plan_path, whole)
+            + walk_stale_pairs(state, doc, plan_path, whole)
+        )
     except PlanError as exc:
         return _PairRoute([], {}, False, scope, str(exc))
     status = {pid: pair_status(state, doc, plan_path, pid) for pid in walk_stale}
@@ -1153,7 +1297,10 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     When a pair record exists for `target_plan`, the walk-stale set W
     (`walk_stale_pairs`) is computed whatever `changed_parts` reports: every moved
     stage's obligation discharges via pairs only if EVERY pair of W is current or
-    override, and each uncovered member of W adds a blocker naming its pair.
+    override, and each uncovered member of W adds a blocker naming its pair. W holds
+    unit records (`unit:base`, `unit:<n>`) beside the pairs, and an uncovered unit
+    adds a blocker naming it exactly as an uncovered pair does, so a stage no pair
+    names is still held to a review.
 
     A path that differs is excused by byte identity and by nothing weaker: the
     recorded meta/stage keys this function decides staleness by cover only what
@@ -1195,11 +1342,13 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     for pid in route.walk_stale:
         if route.status[pid] in PAIR_SATISFIED:
             continue
-        scoped_ends = [x for x in split_pair_id(pid) if x in scope.stages]
+        ends = (unit_node(pid),) if is_unit_id(pid) else split_pair_id(pid)
+        scoped_ends = [x for x in ends if x in scope.stages]
         if scoped_ends and all(not stage_gaps[x] for x in scoped_ends):
             continue
+        kind = "unit" if is_unit_id(pid) else "pair"
         blockers.append(
-            f"review pair {pid} is {route.status[pid]} and is not covered by a stage-scoped "
+            f"review {kind} {pid} is {route.status[pid]} and is not covered by a stage-scoped "
             f"pass — run: plan-review-topological.py --pairs {pid}"
         )
     return blockers
@@ -1368,69 +1517,26 @@ def plan_review_round_release_active(state: SessionState | None, thr: Thresholds
     return _PLAN_REVIEW_ROUND_COUNTER.release_active(state, thr)
 
 
-#: Message substituted for the staleness blocker in `premise_blockers` once the
-#: enumerate round-release fires (see `plan_enumerate_round_release_active`). Names
-#: the one act that both records the decision and opens ONLY the staleness gate —
-#: the other premise blockers (undispositioned questions, order-coverage, runner
-#: failure) remain standing regardless, so `approve` is still structurally refused.
-#: Every act named here must be EXECUTABLE from this state: `question-enumerate-
-#: escape --reason enumerate_rounds_exhausted` is the only one, because `approve`
-#: never clears a non-empty blockers list by itself.
-PLAN_ENUMERATE_ROUND_RELEASE_MESSAGE = (
-    "enumeration round budget exhausted at pass {passes} (config.md's "
-    "effort-replan-absolute threshold, reused) — no further re-run is required, but the decision is "
-    "the coordinator's and must be recorded: to proceed with the plan as it stands, run "
-    "question-enumerate-escape --reason enumerate_rounds_exhausted --note <why the current "
-    "plan is acceptable>; to refine instead, edit the plan and re-run question-enumerate "
-    "— the budget does not refill on an edit, so a re-run does not by itself open this gate; "
-    "`approve` still answers to every other premise blocker as well"
-)
-
-
-def plan_enumerate_round_release_active(bag, thr: Thresholds | None = None) -> bool:
-    """True once the premise bag's `enumerate_pass` reaches the
-    threshold this function reuses — config.md's `effort-replan-absolute`. Past this point
-    `premise_blockers` stops demanding another re-run for a stale enumeration and routes
-    to the user instead (see `PLAN_ENUMERATE_ROUND_RELEASE_MESSAGE`).
-
-    Uses `enumerate_pass` (the monotonic count of applied enumeration results) rather
-    than a per-content-digest counter. `enumerate_pass` is never reset when the plan
-    content digest moves — it grows with every `_apply_enumeration_result` call across
-    ALL digest transitions in the session. That monotonicity is the right property
-    here: the treadmill being bounded is the full planning loop (enumerate → surface
-    questions → dispose → edit → stale → enumerate again), and each lap increments
-    `enumerate_pass` exactly once, so the total pass count directly measures how many
-    laps the user has paid for. A per-digest count would reset on every plan edit and
-    could never fire across the treadmill's own lap boundary.
-
-    Delegates to `_PLAN_ENUMERATE_ROUND_COUNTER` (see
-    `round_release.RoundReleaseCounter`); kept as a standalone function for the same
-    reason as `plan_review_round_release_active`."""
-    return _PLAN_ENUMERATE_ROUND_COUNTER.release_active(bag, thr)
-
-
 def cross_axis_friction_release_active(state: SessionState | None, thr: Thresholds | None = None) -> bool:
     """True once the SUM of plan-review + plan-enumerate + code-review round counts
     reaches the shared threshold (config.md's `effort-replan-absolute`)
     — even when no single axis has individually reached it.
 
-    Exists because the three per-axis valves (`plan_review_round_release_active`,
-    `plan_enumerate_round_release_active`, `code_review_round_release_active`) each
-    hold an independent budget against their own scale: a session can spend 2 rounds
-    on plan-review plus 2 on code-review — 4 total, past the threshold — with neither
-    individual valve firing. Real session baa1daea reached 5+ combined rounds with no
-    valve firing at all. This predicate closes that gap by reading all three counts
-    together, via `round_release.compute_cross_axis_ceiling`.
+    Exists because the per-axis valves (`plan_review_round_release_active`,
+    `code_review_round_release_active`) each hold an independent budget against their
+    own scale: a session can spend 2 rounds on plan-review plus 2 on code-review — 4
+    total, past the threshold — with neither individual valve firing. Real session
+    baa1daea reached 5+ combined rounds with no valve firing at all. This predicate
+    closes that gap by reading the counts together, via
+    `round_release.compute_cross_axis_ceiling`.
 
-    Reads the plan-enumerate count from `state.plugins.get("premise")` (a plugin-owned
-    bag `plugins_premise.py` mutates — see `plan_enumerate_round_release_active`)
+    The plan-enumerate count is the premise bag's `enumerate_pass`, which no engine
+    path advances for a new plan (the standalone enumerator is retired, so its own
+    per-axis valve and release message are gone too); a legacy bag that already holds
+    passes keeps contributing them. It is read from `state.plugins.get("premise")`
     rather than a duplicate SessionState field, so this module never writes to
     premise-owned state; `state.plugins` defaults to `{}`, so a missing "premise" key
-    degrades to 0 rather than an error.
-
-    Wiring this predicate into the plan-enumerate axis's OWN gate (`plugins_premise.py`)
-    is deliberately out of scope here — see that module's docstring for which stage
-    owns it; this function is usable from either side."""
+    degrades to 0 rather than an error."""
     if state is None:
         return False
     bag = state.plugins.get("premise")

@@ -139,6 +139,31 @@ def _git_common_dir(venue_real: str) -> str | None:
     return os.path.realpath(resolved)
 
 
+def _script_real(script_path_arg: str, venue_real: str) -> str:
+    expanded = os.path.expanduser(script_path_arg)
+    abs_script = expanded if os.path.isabs(expanded) else os.path.join(venue_real, expanded)
+    return os.path.realpath(abs_script)
+
+
+def registered_entry(
+    script_path_arg: str,
+    venue_real: str,
+    *,
+    table: dict[str, ScriptEntry] | None = None,
+) -> ScriptEntry | None:
+    """The registry entry whose script `script_path_arg` names, matched by realpath
+    against `venue_real` (so a symlink alias or `./x/../` spelling matches too), or
+    `None`. The one matcher behind both `resolve_script` and `grants.bash_rule_identity`,
+    so the resolver and the identity check cannot disagree on which scripts are
+    registered."""
+    table = table if table is not None else load_script_effects_table()
+    script_real = _script_real(script_path_arg, venue_real)
+    for entry in table.values():
+        if os.path.realpath(str(Path(venue_real) / entry.path)) == script_real:
+            return entry
+    return None
+
+
 def resolve_script(
     script_path_arg: str,
     argv: list[str],
@@ -157,18 +182,10 @@ def resolve_script(
     from .tool_contracts import Resolution  # deferred: see module docstring
 
     table = table if table is not None else load_script_effects_table()
-    expanded = os.path.expanduser(script_path_arg)
-    abs_script = expanded if os.path.isabs(expanded) else os.path.join(venue_real, expanded)
-    script_real = os.path.realpath(abs_script)
-
-    matched: ScriptEntry | None = None
-    for entry in table.values():
-        candidate_real = os.path.realpath(str(Path(venue_real) / entry.path))
-        if candidate_real == script_real:
-            matched = entry
-            break
+    matched = registered_entry(script_path_arg, venue_real, table=table)
     if matched is None:
         return None
+    script_real = _script_real(script_path_arg, venue_real)
 
     script_file = Path(script_real)
     if not script_file.is_file():

@@ -289,6 +289,7 @@ def test_stage_grant_entries_legacy_session_reports_advisory_note_not_error(
     assert note_hashed is None
 
     state.approved_grants_sha256 = None
+    state.approved_grant_entries = None  # approved before hashing: nothing stored either
     store.save(state)
     state = store.load(sid)
 

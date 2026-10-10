@@ -32,28 +32,35 @@ from agentctl.plan import (
     consumers,
     first_hop,
     interface_empty,
+    is_unit_id,
     load_plan_with_digest,
     pair_binding,
     parse_pair,
     parse_plan,
+    parse_unit,
     plan_reliance_set,
     reliance_closure,
     reliance_set,
+    review_ids,
     review_pairs,
+    review_units,
 )
 from agentctl.render import (
     TopoUnitsCorrupt,
     materialize_topo_units,
     node_file_text,
+    pair_service_text,
     render_order_md,
     render_pair_review_bundle,
-    render_plan_interface,
     render_plan_md,
     render_stage_brief,
+    render_stage_fields,
     render_stage_interface,
+    render_unit_review_bundle,
     topo_node_files,
     topo_pair_view,
     topo_pair_view_dirname,
+    unit_base_text,
     verify_topo_units,
 )
 
@@ -65,6 +72,12 @@ _SECTION_HEADINGS = (
     "## Edge",
     "## Service file",
     "## Per-pair procedure",
+    "## Review protocol",
+)
+_UNIT_SECTION_HEADINGS = (
+    "## Fields",
+    "## Edges",
+    "## Per-unit procedure",
     "## Review protocol",
 )
 
@@ -79,11 +92,14 @@ def _stage(index=1, **overrides):
     return base
 
 
-def _doc(stages, order=None, **meta_overrides):
+def _doc(stages, order=None, final_check=None, **meta_overrides):
     meta = {"task_id": "t", **meta_overrides}
     if order is not None:
         meta["order"] = order
-    return parse_plan({"meta": meta, "stage": stages})
+    data = {"meta": meta, "stage": stages}
+    if final_check is not None:
+        data["final_check"] = final_check
+    return parse_plan(data)
 
 
 def _doc_with_raw(stages, raw_depends_on):
@@ -120,6 +136,24 @@ def _sections(bundle: str) -> dict[str, str]:
         elif current is not None:
             sections[current].append(line)
     return {name: "\n".join(body).strip("\n") for name, body in sections.items()}
+
+
+def _unit_sections(bundle: str) -> dict[str, str]:
+    """A unit bundle split at its own section headings (`_UNIT_SECTION_HEADINGS`)."""
+    sections: dict[str, list[str]] = {}
+    current = None
+    for line in bundle.splitlines():
+        matched = next((h for h in _UNIT_SECTION_HEADINGS if line.startswith(h)), None)
+        if matched is not None:
+            current = matched
+            sections[current] = []
+        elif current is not None:
+            sections[current].append(line)
+    return {name: "\n".join(body).strip("\n") for name, body in sections.items()}
+
+
+def _unit_bundle(doc, unit, sha="d"):
+    return render_unit_review_bundle(doc, unit, plan_sha256=sha)
 
 
 def _edge_lines(bundle: str) -> list[str]:
@@ -238,10 +272,12 @@ def test_tb1_checklist_states_c3_as_the_bases_full_delivery():
     assert "the part that depends on stage 1 (Stage 1)'s product measured against it" in stage_c3
     assert "the rest standing on its own" in stage_c3
 
-    plan_c3 = _conditions(_bundle(doc, "plan-2"))[2]
-    assert "delivers its goal and done criterion" in plan_c3
-    assert "the rest (coverage map, final checks) standing on its own from the plan file" in plan_c3
-    assert "as far as that rests on this edge" not in plan_c3
+    # A `base-<s>` pair has no `plan-<s>` form: C3 reads the stage's declared product
+    # against the requirements the edge names, never as the base's own FULL product.
+    base_c3 = _conditions(_bundle(doc, "base-2"))[2]
+    assert "every named requirement is discharged through this edge" in base_c3
+    assert "declared product delivers what the requirement asks" in base_c3
+    assert "delivers its FULL declared product" not in base_c3
 
 
 def test_tb2_edge_section_names_the_edge_the_reliance_set_and_the_ordering():
@@ -295,8 +331,9 @@ def test_tb3_pair_binding_digests_are_the_sha256_of_the_bytes_the_reviewer_sees(
         ("3-2", "stage-3.md", "stage-2.md", render_stage_interface(doc, 2, contract=True)),
         # Stage 1 relies on nothing, so it is shown by its full brief.
         ("2-1", "stage-2.md", "stage-1.md", render_stage_brief(doc, 1)),
-        ("plan-3", "plan.md", "stage-3.md", render_stage_interface(doc, 3, contract=True)),
-        ("base-plan", "base.md", "plan.md", render_plan_interface(doc)),
+        # The coverage edge of stage 3: base side is the order file, the service text is
+        # the stage's contract interface plus the control the entry names.
+        ("base-3", "base.md", "stage-3.md", pair_service_text(doc, 3, "base")),
     ):
         sections = _sections(_bundle(doc, pair))
         binding = pair_binding(doc, pair)
@@ -345,69 +382,92 @@ def test_tb5_interface_empty_service_falls_back_others_stay_interface_only():
     assert _method_sentinel(3) not in interface_only
 
 
-def test_tb6_plan_base_pair_carries_meta_coverage_and_final_check():
+def test_tb6_unit_base_bundle_carries_meta_order_coverage_and_final_check():
+    # E5: the reconstructed activity is an ordinary unit (`unit:base`) holding the order
+    # AND the meta's goal, done criterion and final checks; there is no `plan-<s>` pair.
     doc = _order_doc()
-    bundle = _bundle(doc, "plan-2")
-    lines = bundle.splitlines()
-    base = _sections(bundle)["## Base: "]
-    assert base.rstrip("\n") == node_file_text(doc, "plan").rstrip("\n")
+    bundle = _unit_bundle(doc, "unit:base")
+    sections = _unit_sections(bundle)
+    assert bundle.startswith("# Topological review unit: unit:base\n")
+    fields = sections["## Fields"]
+    assert fields.rstrip("\n") == unit_base_text(doc).rstrip("\n")
     for sentinel in (
         "- **Done criterion:** DC-SENTINEL",
         "- **External research:** ER-SENTINEL",
         "- fc1: `true` (expected exit 0)",
         "  - R1: stage 1 verify_command, stage 2 verify_command",
         "- **Requires traceability:** True",
+        "  - **R1**: R1",
     ):
-        assert sentinel in base.splitlines()
-    assert "\n".join(render_order_md(doc)).rstrip("\n") in _sections(bundle)["## Order context"]
-    assert _edge_lines(bundle) == [
-        "- Edge: the plan as a whole relies on stage 2 — covers R1; sink",
-        "- Ordering: none",
+        assert sentinel in fields.splitlines()
+    assert sections["## Edges"].splitlines() == [
+        "Outbound — the coverage entries, each a typed edge of the base on a stage:",
+        "- R1 → stage 1: `stage 1 verify_command`",
+        "- R1 → stage 2: `stage 2 verify_command`",
+        "",
+        "Inbound — what relies on the base: nothing (the base is the root).",
     ]
-    assert _edge_lines(_bundle(doc, "plan-1")) == [
-        "- Edge: the plan as a whole relies on stage 1 — covers R1",
-        "- Ordering: none",
-    ]
-    assert lines.count(f"{PLAN_DIGEST_MARKER} d") == 1
+    assert bundle.splitlines().count(f"{PLAN_DIGEST_MARKER} d") == 1
+    # Self-contained: no view directory, no service file, no order-context section.
+    for absent in ("## Service file", "## Order context", "## Base: ", "view-"):
+        assert absent not in bundle
 
 
-def test_tb6_base_plan_pair_inlines_the_base_twice_and_marks_c3_not_applicable():
-    doc = _order_doc()
-    bundle = _bundle(doc, "base-plan")
+def test_tb6_base_stage_pair_shows_only_what_the_coverage_edge_names():
+    # E5: `base-<s>` is an ordinary `<b>-<s>` pair. The base side is only the requirements
+    # the coverage entries on stage s name -- never the goal, done criterion, final checks,
+    # the customer / functional place, or another requirement.
+    doc = _doc(
+        [_stage(1), _stage(2, depends_on=[1])],
+        order=_order(
+            ["R1", "R2"],
+            {"R1": ["stage 1 verify_command"], "R2": ["stage 2 verify_command"]},
+            customer="CUSTOMER-SENTINEL",
+            customer_id="cust-id",
+            functional_place="PLACE-SENTINEL",
+        ),
+        done_criterion="DC-SENTINEL",
+    )
+    assert review_pairs(doc) == ("base-1", "base-2", "2-1")
+    bundle = _bundle(doc, "base-2")
     sections = _sections(bundle)
-    order_text = node_file_text(doc, "base").rstrip("\n")
-    assert order_text in sections["## Order context"]
-    assert sections["## Base: "].rstrip("\n") == order_text
-    assert "same text" in sections["## Order context"]
-    assert render_plan_interface(doc).rstrip("\n") in sections["## Service declared product: "]
-    assert "- `/tmp/v/plan.md`" in sections["## Service file"].splitlines()
+    assert bundle.startswith("# Topological review pair: base-2\n")
+    assert "## Order context" not in sections
+    base = sections["## Base: "]
+    assert "  - **R2**: R2" in base.splitlines()
+    assert "R1" not in base
+    for withheld in ("CUSTOMER-SENTINEL", "PLACE-SENTINEL", "DC-SENTINEL", "stage 1 verify_command"):
+        assert withheld not in bundle
+    service = sections["## Service declared product: "]
+    assert pair_service_text(doc, 2, "base").rstrip("\n") in service
+    assert render_stage_interface(doc, 2, contract=True).rstrip("\n") in service
+    assert "Controls named by the coverage entries" in service
+    assert "- R2 → `stage 2 verify_command`: " in service
+    assert _method_sentinel(2) not in bundle
+    assert "- `/tmp/v/stage-2.md`" in sections["## Service file"].splitlines()
     assert _edge_lines(bundle) == [
-        "- Edge: the base activity relies on the plan as a whole — order",
+        "- Edge: the base activity relies on stage 2 — order coverage",
+        "  - R2 → stage 2 verify_command",
         "- Ordering: none",
     ]
-    assert _conditions(bundle) == [
-        "- `C1:` the base is organized in a non-arbitrary way",
-        "- `C2:` the requirements are genuinely derived from the functional place",
-        "- `C3:` not applicable — the base activity delivers no product of its own for a "
-        "consumer to rely on",
-        "- `C4:` the goal and done criterion answer every requirement",
-    ]
+    assert bundle.splitlines().count(f"{PLAN_DIGEST_MARKER} d") == 1
 
 
-def test_tb6_plan_stage_pair_conditions_read_the_coverage_map_and_the_plan_delivery():
+def test_tb6_base_stage_pair_conditions_read_the_named_requirements_through_the_edge():
     doc = _order_doc()
-    assert _conditions(_bundle(doc, "plan-2")) == [
-        "- `C1:` the coverage map is total and non-arbitrary",
-        "- `C2:` the plan as a whole is a genuine derivation from the order through this edge",
-        "- `C3:` the plan as a whole delivers its goal and done criterion — the part "
-        "attributed to stage 2 (Stage 2) measured against that stage's declared product, "
-        "the rest (coverage map, final checks) standing on its own from the plan file",
-        "- `C4:` stage 2 (Stage 2)'s declared product decides the requirements the "
-        "coverage map attributes to it",
+    assert _conditions(_bundle(doc, "base-2")) == [
+        "- `C1:` each requirement this edge names is stated unambiguously and attributed "
+        "to stage 2 (Stage 2) in a non-arbitrary way",
+        "- `C2:` each named requirement is genuinely derived from the difficulty and the "
+        "functional place",
+        "- `C3:` every named requirement is discharged through this edge — stage 2 "
+        "(Stage 2)'s declared product delivers what the requirement asks",
+        "- `C4:` the control each coverage entry names, in stage 2 (Stage 2), genuinely "
+        "decides its requirement and is checkable from that stage's declared product",
     ]
 
 
-def test_tb6_synthetic_node_files_hold_no_stage_content_and_coverage_is_new_to_plan_md():
+def test_tb6_node_files_hold_no_stage_content_and_the_unit_adds_meta_coverage_and_checks():
     doc = _doc(
         [_stage(1), _stage(2, depends_on=[1])],
         order=_order(
@@ -420,16 +480,21 @@ def test_tb6_synthetic_node_files_hold_no_stage_content_and_coverage_is_new_to_p
         ),
     )
     base_md = node_file_text(doc, "base")
-    plan_md = node_file_text(doc, "plan")
+    unit_md = unit_base_text(doc)
+    assert base_md == "\n".join(render_order_md(doc)).rstrip() + "\n"
     assert "CUSTOMER-SENTINEL" in base_md
     assert "PLACE-SENTINEL" in base_md
     assert "**R1**" in base_md
+    # The node file is the order only; coverage and traceability are fields of the unit.
+    assert "R1: stage 1 verify_command, stage 2 verify_command" not in base_md
+    assert "Requires traceability" not in base_md
     for stage_content in (_method_sentinel(1), _method_sentinel(2), "Stage 1", "Stage 2", "Expected result image"):
         assert stage_content not in base_md
-        assert stage_content not in plan_md
-    assert "## Stage" not in plan_md
-    assert "R1: stage 1 verify_command, stage 2 verify_command" in plan_md
-    assert "- **Requires traceability:** True" in plan_md
+        assert stage_content not in unit_md
+    assert "## Stage" not in unit_md
+    assert base_md.rstrip("\n") in unit_md
+    assert "R1: stage 1 verify_command, stage 2 verify_command" in unit_md
+    assert "- **Requires traceability:** True" in unit_md
     whole_plan = render_plan_md(doc)
     assert "R1: stage 1 verify_command, stage 2 verify_command" not in whole_plan
     assert "Requires traceability" not in whole_plan
@@ -452,13 +517,24 @@ def test_tb6_stage_pair_conditions_name_both_nodes_and_never_mark_c3_not_applica
 
 def test_tb7_unknown_pair_and_unit_form_ids_raise_value_error():
     doc = _doc([_stage(1), _stage(2, depends_on=[1])])
-    for pair in ("2-1", "plan-2"):
-        _bundle(doc, pair)
-    for refused in ("1-2", "plan-1", "99-1", "base-plan", "2", "order", "1", "", "2-"):
+    _bundle(doc, "2-1")
+    # `plan-<s>` and `base-plan` are retired ids; a unit id is not a pair id; an order-less
+    # plan has no `base-<s>` pair (no coverage entry names a stage).
+    for refused in (
+        "1-2", "plan-1", "plan-2", "99-1", "base-plan", "base-2", "2", "order", "1", "", "2-",
+        "unit:base", "unit:1",
+    ):
         with pytest.raises(ValueError):
             _bundle(doc, refused)
         with pytest.raises(ValueError):
             parse_pair(doc, refused)
+    for unit in ("unit:base", "unit:1", "unit:2"):
+        _unit_bundle(doc, unit)
+    for refused in ("unit:plan", "unit:99", "unit:", "2-1", "base", "1", "plan-1", ""):
+        with pytest.raises(ValueError):
+            _unit_bundle(doc, refused)
+        with pytest.raises(ValueError):
+            parse_unit(doc, refused)
 
 
 def test_tb8_non_direct_edges_reliance_set_raw_depends_on_and_closure():
@@ -489,23 +565,39 @@ def test_tb8_review_pairs_order_and_plan_reliance_set():
         "stage": [_stage(1), _stage(2, depends_on=[1]), _stage(3, depends_on=[1, 2])],
     })
     assert plan_reliance_set(doc) == {1, 3}
-    assert review_pairs(doc) == ("base-plan", "plan-1", "plan-3", "2-1", "3-1", "3-2")
+    # `base-<s>` only for a stage a coverage entry names (stage 1; `final_check 1` is not
+    # stage-addressed), then the stage reliance edges; no `plan-<s>`, no `base-plan`.
+    assert review_pairs(doc) == ("base-1", "2-1", "3-1", "3-2")
     assert parse_pair(doc, "3-2") == (3, 2)
-    assert parse_pair(doc, "plan-3") == ("plan", 3)
-    assert parse_pair(doc, "base-plan") == ("base", "plan")
+    assert parse_pair(doc, "base-1") == ("base", 1)
+    for retired in ("plan-1", "plan-3", "base-plan", "base-2", "base-3"):
+        with pytest.raises(ValueError):
+            parse_pair(doc, retired)
+    assert review_units(doc) == ("unit:base", "unit:1", "unit:2", "unit:3")
+    assert review_ids(doc) == review_units(doc) + review_pairs(doc)
+    assert parse_unit(doc, "unit:base") == "base"
+    assert parse_unit(doc, "unit:3") == 3
+    assert all(is_unit_id(u) for u in review_units(doc))
+    assert not any(is_unit_id(p) for p in review_pairs(doc))
 
 
-def test_tb8_plan_without_an_order_has_no_base_plan_pair_and_no_base_file():
+def test_tb8_plan_without_an_order_has_no_base_pair_and_no_base_file_but_still_a_base_unit():
     doc = _doc([_stage(1), _stage(2, depends_on=[1])])
-    assert review_pairs(doc) == ("plan-2", "2-1")
+    assert review_pairs(doc) == ("2-1",)
+    assert review_units(doc) == ("unit:base", "unit:1", "unit:2")
     assert "base.md" not in topo_node_files(doc)
-    with pytest.raises(ValueError):
-        parse_pair(doc, "base-plan")
+    assert node_file_text(doc, "base") == ""
+    for retired in ("base-plan", "plan-2", "base-2"):
+        with pytest.raises(ValueError):
+            parse_pair(doc, retired)
+    bundle = _unit_bundle(doc, "unit:base")
+    assert bundle.startswith("# Topological review unit: unit:base\n")
+    assert "- none" in _unit_sections(bundle)["## Edges"].splitlines()
 
 
-def test_tb8_pair_binding_has_seven_digests_and_base_plan_context_identity():
+def test_tb8_pair_binding_has_seven_digests_and_base_pair_context_identity():
     doc = _order_doc()
-    binding = pair_binding(doc, "base-plan")
+    binding = pair_binding(doc, "base-2")
     assert sorted(binding) == [
         "base_file_digest", "base_key", "context_digest", "edge_digest",
         "service_file_digest", "service_interface_digest", "service_key",
@@ -677,13 +769,16 @@ def test_tb13_one_pair_view_holds_only_the_service_file_copy(tmp_path):
     assert _method_sentinel(1) not in (view_dir / "stage-2.md").read_text(encoding="utf-8")
 
 
-def test_tb13_node_files_are_stage_plan_and_base_when_an_order_is_declared():
+def test_tb13_node_files_are_stage_and_base_when_an_order_is_declared():
     doc = _order_doc()
-    assert sorted(topo_node_files(doc)) == ["base.md", "plan.md", "stage-1.md", "stage-2.md"]
-    assert topo_node_files(doc)["plan.md"] == node_file_text(doc, "plan")
+    assert sorted(topo_node_files(doc)) == ["base.md", "stage-1.md", "stage-2.md"]
     assert topo_node_files(doc)["base.md"] == node_file_text(doc, "base")
-    assert topo_pair_view(doc, "base-plan") == ["plan.md"]
-    assert topo_pair_view(doc, "plan-1") == ["stage-1.md"]
+    assert topo_node_files(doc)["stage-1.md"] == node_file_text(doc, 1)
+    assert topo_pair_view(doc, "base-1") == ["stage-1.md"]
+    assert topo_pair_view(doc, "base-2") == ["stage-2.md"]
+    for retired in ("plan-1", "base-plan", "unit:base", "unit:1"):
+        with pytest.raises(ValueError):
+            topo_pair_view(doc, retired)
 
 
 def test_tb14_materialize_manifest_sha256s_match_the_files(tmp_path):
@@ -694,9 +789,15 @@ def test_tb14_materialize_manifest_sha256s_match_the_files(tmp_path):
     version_root = materialize_topo_units(doc, "shaA", tmp_path)
     assert version_root == tmp_path / "shaA"
     _assert_manifest_matches_files(version_root)
+    # One view directory per PAIR (the coverage edge `base-3` included); a unit is
+    # self-contained and has no view directory.
     assert sorted(p.name for p in version_root.iterdir() if p.is_dir()) == [
-        "view-2-1", "view-3-2", "view-base-plan", "view-plan-3",
+        "view-2-1", "view-3-2", "view-base-3",
     ]
+    assert sorted(p.name for p in version_root.iterdir() if p.is_file()) == [
+        "MANIFEST.json", "base.md", "stage-1.md", "stage-2.md", "stage-3.md",
+    ]
+    assert [p.name for p in (version_root / "view-base-3").iterdir()] == ["stage-3.md"]
     verify_topo_units(version_root, doc)
 
 
@@ -935,13 +1036,14 @@ def test_tb21_ordering_tag_flips_when_transitively_engine_ordered():
 
 
 def test_tb22_protocol_constants_present_and_not_duplicated_in_render_module():
-    doc = _doc([_stage(1)])
-    bundle = _bundle(doc, "plan-1")
-    assert REVIEW_MARKER in bundle
-    assert VERDICT_MARKER in bundle
-    assert PLAN_DIGEST_MARKER in bundle
-    for marker in CONDITION_MARKERS:
-        assert marker in bundle
+    doc = _doc([_stage(1), _stage(2, depends_on=[1])])
+    # The pair bundle and the unit bundle share one protocol.
+    for bundle in (_bundle(doc, "2-1"), _unit_bundle(doc, "unit:1")):
+        assert REVIEW_MARKER in bundle
+        assert VERDICT_MARKER in bundle
+        assert PLAN_DIGEST_MARKER in bundle
+        for marker in CONDITION_MARKERS:
+            assert marker in bundle
 
     source = inspect.getsource(render)
     for literal in (REVIEW_MARKER, VERDICT_MARKER, PLAN_DIGEST_MARKER, *CONDITION_MARKERS):
@@ -963,6 +1065,11 @@ def test_tb22_protocol_text_pins_markers_echo_concerns_and_per_pair_steps():
         "or `note: ...`, where <marker> is the condition the concern concerns "
         "(`C1:`, `C2:`, `C3:`, `C4:`); a condition-4 gap is a `C4:` line. "
         "An untagged concern line is refused.",
+        "- after the concerns, a line `Customer questions:` followed by one "
+        "`Q: <question>` line per question only the customer can decide (a choice or a "
+        "fact this pair depends on and the plan does not settle), or "
+        "`Customer questions: none`. A question is not a plan remark: a flaw the "
+        "coordinator can fix is a concern, not a question.",
     ]
     assert "  - Block only on a part that changed since the last review of this pair, or on " \
         "a part that still carries an unresolved blocker, re-raised as `re:<concern-id>` " \
@@ -974,3 +1081,104 @@ def test_tb22_protocol_text_pins_markers_echo_concerns_and_per_pair_steps():
     assert any(line.startswith("1. Decide `C4:`") for line in procedure)
     assert "3. Report any gap as one `C4:` line." in procedure
     assert f"{PLAN_DIGEST_MARKER} abc123" in procedure
+
+
+def test_tb23_stage_unit_bundle_is_self_contained_fields_and_full_edge_set():
+    doc = _doc(
+        [
+            _stage(
+                1, title="SUPPLIER-TITLE", expected_result_image="SUPPLIER-RESULT",
+                output_artifacts=["supplier/OUT-SENTINEL.py"],
+            ),
+            _stage(2, depends_on=[1], supplies=[{"on": 1, "element": "e1"}]),
+            _stage(3, depends_on=[2], supplies=[{"on": 2}]),
+        ],
+        order=_order(["R1"], {"R1": ["stage 3 verify_command"]}),
+        goal="GOAL-SENTINEL",
+        final_check=[{"command": "true", "expected_exit": 0, "label": "FINAL-CHECK-SENTINEL"}],
+    )
+    bundle = _unit_bundle(doc, "unit:2", sha="abc123")
+    sections = _unit_sections(bundle)
+    assert bundle.startswith("# Topological review unit: unit:2\n")
+    assert sections["## Fields"].rstrip("\n") == render_stage_fields(doc, 2).rstrip("\n")
+    assert "- **Depends on:** stage 1" in sections["## Fields"].splitlines()
+    # The unit shows its own fields only: no plan header, no final checks, no supplier block.
+    for outside in (
+        "GOAL-SENTINEL", "FINAL-CHECK-SENTINEL", "SUPPLIER-TITLE", "SUPPLIER-RESULT",
+        "OUT-SENTINEL", "# Plan:", "PROJECTED BRIEF", "Final verification",
+    ):
+        assert outside not in bundle
+    assert sections["## Edges"].splitlines() == [
+        "Outbound — what this stage relies on:",
+        "- stage 1 — supplies `e1`",
+        "",
+        "Inbound — what relies on this stage:",
+        "- stage 3 — supplies whole product",
+    ]
+    # Another stage's fields are not part of this unit.
+    assert _method_sentinel(1) not in bundle
+    assert _method_sentinel(3) not in bundle
+    # No service file, no view directory: the bundle is the whole review input.
+    for absent in ("## Service file", "## Order context", "## Base: ", "view-"):
+        assert absent not in bundle
+    assert f"{PLAN_DIGEST_MARKER} abc123" in bundle.splitlines()
+    procedure = sections["## Per-unit procedure"].splitlines()
+    assert "2. Report any gap as one `C4:` line." in procedure
+    protocol = sections["## Review protocol"]
+    assert f"`{REVIEW_MARKER}` on a line of its own;" in protocol
+    assert "since the last review of this unit" in protocol
+    conditions = _conditions(bundle)
+    assert [line.split(" ")[1] for line in conditions] == ["`C1:`", "`C2:`", "`C3:`", "`C4:`"]
+
+
+def test_tb23_unit_edges_name_coverage_inbound_and_state_an_orphan_explicitly():
+    doc = _doc(
+        [_stage(1), _stage(2, depends_on=[1]), _stage(3, depends_on=[1])],
+        order=_order(["R1"], {"R1": ["stage 3 verify_command"]}),
+    )
+    # Stage 3 is a sink but a requirement names it: inbound is the base's coverage edge.
+    assert _unit_sections(_unit_bundle(doc, "unit:3"))["## Edges"].splitlines() == [
+        "Outbound — what this stage relies on:",
+        "- stage 1 — supplies whole product",
+        "",
+        "Inbound — what relies on this stage:",
+        "- the base: requirement R1 → `stage 3 verify_command`",
+    ]
+    # Stage 2: nothing relies on it and no requirement names it -- an orphan, said outright.
+    orphan_edges = _unit_sections(_unit_bundle(doc, "unit:2"))["## Edges"]
+    assert "- none — ORPHAN: no stage relies on this stage and no requirement names it" in orphan_edges
+    assert "ORPHAN" not in _unit_sections(_unit_bundle(doc, "unit:1"))["## Edges"]
+    assert "ORPHAN" not in _unit_sections(_unit_bundle(doc, "unit:3"))["## Edges"]
+
+
+def test_tb23_base_unit_conditions_judge_the_requirements_and_the_goal_against_each_other():
+    doc = _order_doc()
+    conditions = _conditions(_unit_bundle(doc, "unit:base"))
+    assert len(conditions) == 4
+    assert "follows from the difficulty and the functional place" in conditions[1]
+    assert "coverage entry or a final check" in conditions[2]
+    assert "the goal, the done criterion and the final checks match the requirements" in conditions[3]
+    stage_conditions = _conditions(_unit_bundle(doc, "unit:2"))
+    assert len(stage_conditions) == 4
+    assert "the inbound edge set is not empty" in stage_conditions[2]
+
+
+def test_tb23_unit_bundle_re_review_carries_prior_review_and_changed_parts():
+    doc = _doc([_stage(1), _stage(2, depends_on=[1])])
+    history = {
+        "records": [{
+            "record_seq": 3, "reviewer_verdict": "revise", "effective_verdict": "revise",
+            "concerns": [{
+                "id": "c-1", "severity": "blocking", "effective_severity": "blocking",
+                "unresolved": True, "parts": ["stage:2"], "text": "result image is vague",
+            }],
+        }],
+        "changed_parts_since_last": ["stage:2"],
+    }
+    first = _unit_bundle(doc, "unit:2")
+    again = render_unit_review_bundle(doc, "unit:2", plan_sha256="d", history=history)
+    assert "## Prior review of this unit" not in first
+    assert "## Prior review of this unit" in again
+    assert "- `c-1` — blocking (effective: blocking) — UNRESOLVED BLOCKER — parts: stage:2" in again
+    assert "Parts of this unit changed since the last review: `stage:2`" in again
+    assert "This is a re-review." in again

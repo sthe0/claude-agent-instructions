@@ -274,6 +274,21 @@ def test_td2_levels_run_in_walk_order_and_the_walk_is_reread_per_level(real):
         assert any(e == ("walk",) for e in rig.events[last_record:first_spawn]), depth
 
 
+def test_td2_units_are_spawned_first_each_before_the_pairs_it_serves(real):
+    env, rig = real
+    rc, out = rig.run("--parallel", "1")
+    assert rc == 0 and "COMPOSE: pass" in out
+    spawned = rig.spawned()
+    units = [p for p in spawned if p.startswith("unit:")]
+    assert units and units[0] == "unit:base"
+    assert set(units) == {f"unit:{n}" for n in ["base", *(s.index for s in env.doc().stages)]}
+    assert not [p for p in spawned if p.startswith(("plan-", "base-plan"))]
+    for pair in (p for p in spawned if not p.startswith("unit:")):
+        base, service = pair.split("-", 1)
+        for end in (base, service):
+            assert spawned.index(f"unit:{end}") < spawned.index(pair), (pair, end)
+
+
 def test_td2_parallel_one_keeps_exact_walk_order(real):
     env, rig = real
     first = rig.engine.run(["plan-review-walk", "--session", SID, "--target", str(env.plan),

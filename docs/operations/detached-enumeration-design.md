@@ -1,5 +1,11 @@
 # Detached question-enumeration — design settled against the code
 
+> **Historical — retired.** The standalone enumeration run this note designs (`question-enumerate`, its
+> detached producer, the `enumerated` flag, `_ENUMERATE_NOT_RUN` / `_ENUMERATE_STALE`) was retired by task
+> `norm-staleness`: customer questions now come from the review acts (`plan-review --customer-question`),
+> and no engine path launches an enumerator. Read it as the record of why the detach was built, not as a
+> description of the live route; the live behaviour is in `scripts/agentctl/README.md` § StageNorm.
+
 Stage 3 of the `advisor-timeout-f3b` plan. The order was "the enumeration must leave the
 blocking path"; that names a direction, not a design. This note settles the three questions
 whose answers change what stage 4 builds, each against the code rather than against
