@@ -1,0 +1,152 @@
+# Registry of scripts that can write files: where each one's writes land when
+# it runs from the canonical checkout. Checked by verify-canon-writers.py
+# (a candidate without an entry, a dangling entry, a bad disposition or empty
+# reason, or a `routed` entry that does not import lib.worktree_route fails).
+#
+# disposition / category:
+#   routed     / routed              writes tracked files; goes through lib/worktree_route.py
+#   exempt     / exempt-maintenance  edits tracked files; run by a maintainer inside a worktree
+#   exempt     / exempt-landing      is itself the landing / sync path
+#   exempt     / exempt-config-root  installs into the config root or machine, not into tracked files
+#   not-canon  / not-canon           writes only outside the repo (state, logs, /tmp, linked worktrees)
+#   deferred   / deferred            writes tracked files and is not routed yet (issue #353 scope)
+#
+# Classify a new writer: `python3 scripts/verify-canon-writers.py --list-candidates`
+# shows what the picker matched; read the file, then add one line here.
+
+[writers]
+
+# --- routed: write tracked files, reach the repo through worktree_route ---
+"scripts/record-experience.py" = { disposition = "routed", category = "routed", reason = "creates and extends experience leaves and MEMORY.md indexes under memory-global/" }
+"scripts/stamp-memory-dates.py" = { disposition = "routed", category = "routed", reason = "rewrites created/last_verified frontmatter of memory leaves" }
+"scripts/gen_crutch_registry.py" = { disposition = "routed", category = "routed", reason = "regenerates scripts/crutch_registry.toml and the crutch docs" }
+"scripts/permissions-cli.py" = { disposition = "routed", category = "routed", reason = "edits permissions/*.json grant files" }
+"scripts/verify-readme.py" = { disposition = "routed", category = "routed", reason = "--fix rewrites the README inventory tables" }
+
+# --- exempt-maintenance: edit tracked files, run by a maintainer in a worktree ---
+"scripts/verify-judge-prose-numbers.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "--repin rewrites its own allowlist file; a deliberate maintainer action, reviewed in the diff" }
+"scripts/verify-config-root-refs.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "--repin rewrites its own allowlist file; a deliberate maintainer action, reviewed in the diff" }
+
+# --- exempt-landing: the sync / landing path itself ---
+"scripts/land-branch.py" = { disposition = "exempt", category = "exempt-landing", reason = "advances main from a branch; the route calls it, so it cannot be routed through itself" }
+"scripts/land-on-main.sh" = { disposition = "exempt", category = "exempt-landing", reason = "applies and commits a change onto main; the landing primitive" }
+"scripts/sync-instructions-repo.sh" = { disposition = "exempt", category = "exempt-landing", reason = "pull/push sync of the canonical checkout; ff-merges origin/main by design" }
+"scripts/lib/worktree_route.py" = { disposition = "exempt", category = "exempt-landing", reason = "the route itself: creates and removes its own worktrees and ff-pulls the canonical checkout" }
+
+# --- exempt-config-root: install into the config root / machine ---
+"scripts/apply-mcp-local.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "applies local MCP registration into the config root" }
+"scripts/apply-settings.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "merges settings/base.json into the live settings file in the config root" }
+"scripts/configure-identity.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "writes agent-identity.local in the config root, an untracked per-machine file" }
+"scripts/install-claude-recover-systemd.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "installs a user systemd unit on this machine" }
+"scripts/install-git-hooks.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "points core.hooksPath at githooks/ in git config; no tracked file changes" }
+"scripts/install-reminder-hooks.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "wires reminder hooks into the live settings file in the config root" }
+"scripts/install-sync-cron.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "installs a crontab entry on this machine" }
+"scripts/install-sync-systemd-timer.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "installs a user systemd timer on this machine" }
+"scripts/migrate-to-isolated.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "one-off migration of config-root layout into an isolated root" }
+"scripts/session-isolate.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "creates a per-session isolated config root outside the repo" }
+"scripts/setup-org.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "installs the org layer into the config root" }
+"scripts/setup-project-memory.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "symlinks the project memory dir into the config root" }
+"scripts/setup-symlinks.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "creates the config-root symlinks into the repo; changes no tracked file" }
+
+# --- deferred: write tracked files, not routed yet ---
+"scripts/set-context-cap.sh" = { disposition = "deferred", category = "deferred", reason = "rewrites settings/base.json in place; routing it is outside #353 and needs its own plan" }
+"scripts/measure-advisor-latency.py" = { disposition = "deferred", category = "deferred", reason = "appends docs/operations/advisor-calibration.jsonl; a calibration run, outside #353" }
+"scripts/measure-marker-extractor-latency.py" = { disposition = "deferred", category = "deferred", reason = "appends docs/operations/marker-extractor-calibration.jsonl; a calibration run, outside #353" }
+
+# --- not-canon: writes only outside the repo, or names a write primitive without using it ---
+"scripts/agent_commit_trailer.py" = { disposition = "not-canon", category = "not-canon", reason = "prints a commit trailer; `git commit` appears in prose only" }
+"scripts/agentctl/cli.py" = { disposition = "not-canon", category = "not-canon", reason = "engine state, evidence, gate and quality logs under ~/.local and the agentctl state dir; plan snapshots under the session dir" }
+"scripts/agentctl/delivery.py" = { disposition = "not-canon", category = "not-canon", reason = "delivery receipts in the agentctl state dir" }
+"scripts/agentctl/dispatch.py" = { disposition = "not-canon", category = "not-canon", reason = "removes its own dispatch markers in the agentctl state dir" }
+"scripts/agentctl/edit_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only ledger under ~/.local/log" }
+"scripts/agentctl/enumerate_sidecar.py" = { disposition = "not-canon", category = "not-canon", reason = "sidecar result files in the agentctl state dir" }
+"scripts/agentctl/order_approvals.py" = { disposition = "not-canon", category = "not-canon", reason = "approval records in the agentctl state dir" }
+"scripts/agentctl/plan_resources.py" = { disposition = "not-canon", category = "not-canon", reason = "writes only the caller-supplied --dump-commands / --report-json paths" }
+"scripts/agentctl/render.py" = { disposition = "not-canon", category = "not-canon", reason = "plan render directory in the agentctl state dir, built in a temp dir then swapped" }
+"scripts/agentctl/store.py" = { disposition = "not-canon", category = "not-canon", reason = "session state JSON in the agentctl state dir" }
+"scripts/agentctl/task_accumulator.py" = { disposition = "not-canon", category = "not-canon", reason = "per-task accumulator files in the agentctl state dir" }
+"scripts/cap-run.sh" = { disposition = "not-canon", category = "not-canon", reason = "runs a command under ulimit/timeout; its only `>` is a usage message to stderr" }
+"scripts/check-in-harness-observation.py" = { disposition = "not-canon", category = "not-canon", reason = "writes stub files inside a TemporaryDirectory" }
+"scripts/check-org-neutral.py" = { disposition = "not-canon", category = "not-canon", reason = "reads text; `git commit` appears in comments about the scissors marker" }
+"scripts/claude-recover.py" = { disposition = "not-canon", category = "not-canon", reason = "recovery state and logs under ~/.local" }
+"scripts/doctor.sh" = { disposition = "not-canon", category = "not-canon", reason = "read-only diagnostic report to stdout; `>` matches are inside messages and comparisons" }
+"scripts/enter-task.sh" = { disposition = "not-canon", category = "not-canon", reason = "adds a linked task worktree and branch; the canonical working tree is untouched, the same operation the route performs" }
+"scripts/file-difficulty.py" = { disposition = "not-canon", category = "not-canon", reason = "writes only the caller-supplied --filing-preview path" }
+"scripts/hook-budget-calibration-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
+"scripts/hook-engine-start.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session marker under the hook state dir" }
+"scripts/hook-guard-bash-source-edit.py" = { disposition = "not-canon", category = "not-canon", reason = "detects `sed -i`; appends to its guard log under ~/.local/log, edits no file itself" }
+"scripts/hook-guard-canon-readonly.py" = { disposition = "not-canon", category = "not-canon", reason = "the read-only guard: names `git commit`/`sed -i` as patterns to deny, writes no file" }
+"scripts/hook-guard-permission-surface.py" = { disposition = "not-canon", category = "not-canon", reason = "fire log under ~/.local/log/claude-permission-guard.jsonl" }
+"scripts/hook-improvement-scan-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
+"scripts/hook-instruction-grooming-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
+"scripts/hook-instructions-refresh-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
+"scripts/hook-judge-ceiling-drift-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
+"scripts/hook-long-job-arm.py" = { disposition = "not-canon", category = "not-canon", reason = "arm marker under the hook state dir" }
+"scripts/hook-phase3-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
+"scripts/hook-policy-scorecard-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
+"scripts/hook-prewrite-plan-check.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session check markers and logs under the hook state dir" }
+"scripts/hook-promote-scan-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
+"scripts/hook-retry-detector.py" = { disposition = "not-canon", category = "not-canon", reason = "retry counter state under the hook state dir" }
+"scripts/hook-review-mergeable-guardian.py" = { disposition = "not-canon", category = "not-canon", reason = "guardian state under the hook state dir" }
+"scripts/hook-review-monitor-arm.py" = { disposition = "not-canon", category = "not-canon", reason = "monitor arm files under the hook state dir" }
+"scripts/hook-self-diagnose-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
+"scripts/hook-sigma-sentinel-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
+"scripts/hook-skill-first.py" = { disposition = "not-canon", category = "not-canon", reason = "fired-skills marker under the hook state dir" }
+"scripts/hook-turn-end-gate.py" = { disposition = "not-canon", category = "not-canon", reason = "turn-gate markers under the hook state dir" }
+"scripts/improvement-scan.py" = { disposition = "not-canon", category = "not-canon", reason = "scan ledger and report under ~/.local/state" }
+"scripts/improvement_scan_loss.py" = { disposition = "not-canon", category = "not-canon", reason = "loss ledger under ~/.local/state" }
+"scripts/instruction-sandbox-verify.sh" = { disposition = "not-canon", category = "not-canon", reason = "writes marker lines into files of the throwaway sandbox copy ($root/core), never the source checkout" }
+"scripts/instruction-sandbox.sh" = { disposition = "not-canon", category = "not-canon", reason = "builds a throwaway sandbox copy and its logs and env file under the sandbox root" }
+"scripts/lexical-meaning-inventory.py" = { disposition = "not-canon", category = "not-canon", reason = "emits its JSON report to stdout" }
+"scripts/lib/band_throttle.py" = { disposition = "not-canon", category = "not-canon", reason = "throttle band files under the hook state dir" }
+"scripts/lib/bash_write_targets.py" = { disposition = "not-canon", category = "not-canon", reason = "parser that recognises `sed -i`/`git apply` in a command string; writes no file" }
+"scripts/lib/config-root.sh" = { disposition = "not-canon", category = "not-canon", reason = "resolves the config root; writes no file" }
+"scripts/lib/dispatch_witness_snapshot.py" = { disposition = "not-canon", category = "not-canon", reason = "witness snapshot in the agentctl state dir" }
+"scripts/lib/git_cwd.py" = { disposition = "not-canon", category = "not-canon", reason = "parses the directory a `git commit` targets; writes no file" }
+"scripts/lib/hook_wiring.py" = { disposition = "not-canon", category = "not-canon", reason = "hook wiring table; names `git commit`/`sed -i` as deny patterns in text" }
+"scripts/lib/host_llm.py" = { disposition = "not-canon", category = "not-canon", reason = "per-call sandbox home under the fleet temp root, pruned by itself" }
+"scripts/lib/judge_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "judge ledger under ~/.local/log" }
+"scripts/lib/kind_baselines.py" = { disposition = "not-canon", category = "not-canon", reason = "table of permission rules such as Bash(git commit:*); writes no file" }
+"scripts/lib/mcp_registration.py" = { disposition = "not-canon", category = "not-canon", reason = "atomic rewrite of the user's MCP registration file outside the repo" }
+"scripts/lib/published_body.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only sink under ~/.local; `git commit` appears in a docstring" }
+"scripts/lib/semantic_join.py" = { disposition = "not-canon", category = "not-canon", reason = "join cache under ~/.local, written atomically" }
+"scripts/lib/shell_tokens.py" = { disposition = "not-canon", category = "not-canon", reason = "tokenizer that recognises `git apply`/`git commit` in command strings; writes no file" }
+"scripts/lint-settings-base.py" = { disposition = "not-canon", category = "not-canon", reason = "reads settings/base.json; `git pull` appears in a docstring" }
+"scripts/offload-large.sh" = { disposition = "not-canon", category = "not-canon", reason = "tees a command's output into /tmp/cc-scratch" }
+"scripts/plan-review-topological.py" = { disposition = "not-canon", category = "not-canon", reason = "per-run review files in a scratch dir" }
+"scripts/policy-scorecard.py" = { disposition = "not-canon", category = "not-canon", reason = "scorecard output and ledger copies under ~/.local" }
+"scripts/probe-hook-decision-semantics.py" = { disposition = "not-canon", category = "not-canon", reason = "probes in a temp dir and removes it" }
+"scripts/project_entry/agent-dispatch.sh" = { disposition = "not-canon", category = "not-canon", reason = "launcher; `>` matches are inside usage text, it writes no file" }
+"scripts/project_entry/projects.py" = { disposition = "not-canon", category = "not-canon", reason = "project registry under the config root" }
+"scripts/project_entry/task_mount_registry.py" = { disposition = "not-canon", category = "not-canon", reason = "task mount registry under the config root" }
+"scripts/project_entry/tests/test-enter-task.sh" = { disposition = "not-canon", category = "not-canon", reason = "test fixture repo built under mktemp" }
+"scripts/project_entry/tests/test-launchers.sh" = { disposition = "not-canon", category = "not-canon", reason = "test fixtures under mktemp" }
+"scripts/project_entry/tests/test-projects.sh" = { disposition = "not-canon", category = "not-canon", reason = "test fixtures under mktemp" }
+"scripts/project_entry/tests/test-tracker-plan-marker.sh" = { disposition = "not-canon", category = "not-canon", reason = "test fixtures under mktemp" }
+"scripts/project_entry/tests/test-tracker-publish.sh" = { disposition = "not-canon", category = "not-canon", reason = "test fixtures under mktemp" }
+"scripts/project_entry/tests/test-tracker-read.sh" = { disposition = "not-canon", category = "not-canon", reason = "test fixtures under mktemp" }
+"scripts/project_entry/tests/verify-cursor-personal-live.sh" = { disposition = "not-canon", category = "not-canon", reason = "adds and removes a linked worktree only; canonical working tree untouched" }
+"scripts/project_entry/trackers/github.sh" = { disposition = "not-canon", category = "not-canon", reason = "tracker adapter; writes temp payload files, publishes through the tracker API" }
+"scripts/reaper/builtin/agentctl_state.py" = { disposition = "not-canon", category = "not-canon", reason = "removes stale agentctl state files" }
+"scripts/reaper/builtin/git_worktrees.py" = { disposition = "not-canon", category = "not-canon", reason = "removes stale linked worktrees and branches; canonical working tree untouched" }
+"scripts/reaper/runner.py" = { disposition = "not-canon", category = "not-canon", reason = "reaper reports and state under ~/.local/state" }
+"scripts/replay-permission-guard.py" = { disposition = "not-canon", category = "not-canon", reason = "replay output and temp files under /tmp" }
+"scripts/review-monitor.sh" = { disposition = "not-canon", category = "not-canon", reason = "appends markers to the caller-supplied --out log (a scratch path)" }
+"scripts/review_open_detect.py" = { disposition = "not-canon", category = "not-canon", reason = "detection cache under ~/.local/state" }
+"scripts/self-diagnose.py" = { disposition = "not-canon", category = "not-canon", reason = "diagnosis store under ~/.local/state" }
+"scripts/self_diagnose_store.py" = { disposition = "not-canon", category = "not-canon", reason = "diagnosis store files under ~/.local/state" }
+"scripts/session-start-digest.sh" = { disposition = "not-canon", category = "not-canon", reason = "prints a digest to stdout; redirects only to /dev/null or stderr" }
+"scripts/session_scope/registry.py" = { disposition = "not-canon", category = "not-canon", reason = "scope registry files under the config-root state dir" }
+"scripts/spawn-cursor-escape.py" = { disposition = "not-canon", category = "not-canon", reason = "spawn logs and task files under ~/.local and /tmp" }
+"scripts/spawn-cursor-specialist.py" = { disposition = "not-canon", category = "not-canon", reason = "spawn logs and task files under ~/.local and /tmp" }
+"scripts/spawn-outcome-report.py" = { disposition = "not-canon", category = "not-canon", reason = "spawn outcome report under ~/.local/log" }
+"scripts/spawn-specialist.py" = { disposition = "not-canon", category = "not-canon", reason = "spawn logs, costs ledger and task files under ~/.local and /tmp" }
+"scripts/usage-digest.py" = { disposition = "not-canon", category = "not-canon", reason = "writes agent-identity.local and its ledger in the config root, untracked" }
+"scripts/verify-agentctl.py" = { disposition = "not-canon", category = "not-canon", reason = "fixtures in temp dirs" }
+"scripts/verify-canon-writers.py" = { disposition = "not-canon", category = "not-canon", reason = "this verifier: its pattern table spells write primitives as regex text; it only reads" }
+"scripts/verify-difficulty-channel-resolves.sh" = { disposition = "not-canon", category = "not-canon", reason = "read-only resolver check; `>` matches are inside messages" }
+"scripts/verify-judge-isolation.py" = { disposition = "not-canon", category = "not-canon", reason = "isolation probes in temp dirs" }
+"scripts/verify-layout-contract.sh" = { disposition = "not-canon", category = "not-canon", reason = "read-only layout check; `>` matches are inside messages" }
+"scripts/verify-no-conflict-markers.py" = { disposition = "not-canon", category = "not-canon", reason = "reads tracked text; `git stash`/`git commit` appear in docstrings" }
+"scripts/verify-self-improvement-edit.py" = { disposition = "not-canon", category = "not-canon", reason = "pre-commit check; `git commit --no-verify` appears in a message" }
+"scripts/verify-ticket-plan-sync.py" = { disposition = "not-canon", category = "not-canon", reason = "fixture plan in a TemporaryDirectory" }
