@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import worktree_route
 
-REGIONS =("scripts", "skills", "specializations")
+REGIONS = ("scripts", "skills", "specializations")
 
 # Source file (repo-relative) each sentinel region lives in. The scripts inventory
 # is heavy and operational, so it lives in scripts/README.md, not the conceptual root README.
