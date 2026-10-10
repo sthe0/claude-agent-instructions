@@ -177,6 +177,11 @@ def _sandbox_script_in(repo: str | Path, sha: str) -> bool:
     return bool(_git_ok(repo, "ls-tree", "--name-only", sha, "--", SANDBOX_SCRIPT).strip())
 
 
+def gate_applies(repo: str | Path, remote_sha: str, candidate_sha: str) -> bool:
+    """The gate binds a repository that carries the instruction sandbox in the base or the candidate."""
+    return _sandbox_script_in(repo, remote_sha) or _sandbox_script_in(repo, candidate_sha)
+
+
 def fetch_remote_tip(repo: str | Path, remote: str, trunk: str) -> str:
     tracking = f"refs/remotes/{remote}/{trunk}"
     _git_ok(repo, "fetch", "--quiet", remote, f"+refs/heads/{trunk}:{tracking}")
@@ -420,7 +425,7 @@ def evaluate_landing(repo: str | Path, candidate_sha: str, remote_sha: str,
     The record comes from ``record_file`` when given, else from the store under the common dir.
     """
     try:
-        applies = _sandbox_script_in(repo, remote_sha) or _sandbox_script_in(repo, candidate_sha)
+        applies = gate_applies(repo, remote_sha, candidate_sha)
         paths = changed_paths(repo, remote_sha, candidate_sha) if applies else []
         record = None
         if applies and touches_surface(paths):

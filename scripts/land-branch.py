@@ -16,11 +16,16 @@ to opt out (e.g. a release branch cut from the landed tip must outlive it).
       Report landability only. Zero side effects. Prints "LANDABLE: ..."
       followed by the exact commands that would run (exit 0), or
       "NOT-LANDABLE: <reason>" (exit 2). The command list reflects the chosen
-      mode (--remote-only, --keep-branch).
+      mode (--remote-only, --keep-branch). A final "SMOKE-STATUS: ..." line
+      reports the instruction smoke record (not required / admitted / pending)
+      from local state only — no fetch, no smoke run; a pending record does not
+      change the exit code.
 
   land-branch.py [--branch B] [--trunk main] [--remote origin] [-C DIR]
                  [--remote-only] [--keep-branch]
-      Re-checks landability, then runs, in order:
+                 [--smoke-waiver REASON] [--smoke-timeout SECONDS]
+      Re-checks landability, then applies the instruction smoke gate (below),
+      then runs, in order:
         git push <remote> <branch>:<trunk>
         git push <remote> --delete <branch>          (unless --keep-branch)
         git branch -f <trunk> <branch-tip-sha>       (unless --remote-only)
@@ -37,6 +42,20 @@ to opt out (e.g. a release branch cut from the landed tip must outlive it).
       landing-critical git command failed partway (state is reported so it can
       be finished manually).
 
+      Instruction smoke gate (scripts/instruction-smoke-gate.py, library
+      scripts/lib/instruction_smoke_gate.py): before any push it fetches
+      <remote> <trunk>, refuses (NOT-LANDABLE, exit 2, nothing pushed) unless
+      that tip is an ancestor of the branch tip, and decides whether the gate
+      applies — scripts/instruction-sandbox.sh in the base or the candidate
+      tree — and whether the diff touches the instruction surface. A diff that
+      does is landed only on an admitted smoke record bound to the candidate
+      and that remote tip: a stored record is reused, otherwise the smoke runs
+      here (one live `claude -p` launch, minutes). Exactly one "SMOKE: ..."
+      line is printed before the push. --smoke-waiver REASON admits an
+      UNAVAILABLE live launch with the reason recorded; --smoke-timeout bounds
+      that launch. The pre-push hook (githooks/pre-push) re-checks the same
+      record at push time; its "pre-push:" lines are relayed on success.
+
       Exit-code asymmetry (deliberate, not an accident): a remote-branch delete
       failure keeps the established exit 3 (backward-compat). Worktree / local-
       branch cleanup refusals stay exit 0 with a WARNING — the LANDING itself
@@ -51,6 +70,11 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from lib import instruction_smoke_gate as gate  # noqa: E402
 
 
 def _git(args, cwd):
@@ -142,7 +166,38 @@ def assess(repo_root, branch_arg, trunk, remote, remote_only=False, keep_branch=
     return _mk(True, "clean fast-forward", branch, branch_sha)
 
 
-def _report_check(assessment: Assessment) -> int:
+def _stored_record(repo_root, sha):
+    try:
+        return gate.load_record(gate.git_common_dir(repo_root), sha)
+    except gate.RecordError:
+        return None
+
+
+def _smoke_status(repo_root, assessment: Assessment) -> str:
+    """One line on the stored smoke record against the LOCAL remote-tracking ref.
+
+    Reads local state only (no fetch, no sandbox, no write), so `--check` stays the cheap,
+    side-effect-free probe hook-resolution-reminder.py relies on."""
+    try:
+        tip = gate.resolve_commit(repo_root, f"refs/remotes/{assessment.remote}/{assessment.trunk}")
+        sha = assessment.branch_sha
+        if not gate.gate_applies(repo_root, tip, sha):
+            return "SMOKE-STATUS: not required (repository has no instruction sandbox)"
+        paths = gate.changed_paths(repo_root, tip, sha)
+        decision = gate.decide(paths, True, _stored_record(repo_root, sha), sha, tip)
+    except gate.GateError as exc:
+        return gate.defuse(f"SMOKE-STATUS: unknown ({gate.one_line(exc, 200)})")
+    if decision.kind == gate.NOT_REQUIRED:
+        return f"SMOKE-STATUS: not required ({decision.reason})"
+    if decision.allowed:
+        return f"SMOKE-STATUS: admitted ({gate.short(sha)}: {decision.reason})"
+    return gate.defuse(
+        f"SMOKE-STATUS: pending ({decision.reason}); landing runs the smoke, "
+        f"or run: {gate.RUN_COMMAND} --ref {assessment.branch}"
+    )
+
+
+def _report_check(repo_root, assessment: Assessment) -> int:
     if not assessment.ok:
         print(f"NOT-LANDABLE: {assessment.reason}")
         return 2
@@ -152,7 +207,55 @@ def _report_check(assessment: Assessment) -> int:
     )
     for cmd in assessment.commands():
         print(f"  {cmd}")
+    print(_smoke_status(repo_root, assessment))
     return 0
+
+
+def _smoke_gate(repo_root, assessment: Assessment, timeout_s, waiver, runner):
+    """The pre-push smoke gate. Returns (None, line) when landing may proceed, else (reason, None).
+
+    Fetches the remote tip, requires it to be an ancestor of the candidate, then decides through
+    the library: not required, a stored admitted record, or a fresh smoke run."""
+    remote, branch, trunk, sha = (
+        assessment.remote, assessment.branch, assessment.trunk, assessment.branch_sha
+    )
+    try:
+        tip = gate.fetch_remote_tip(repo_root, remote, trunk)
+        if not gate.is_ancestor(repo_root, tip, sha):
+            return (
+                f"{remote}/{trunk} {gate.short(tip)} is not an ancestor of {branch!r}; "
+                f"merge {remote}/{trunk} into {branch!r} and rerun",
+                None,
+            )
+        if not gate.gate_applies(repo_root, tip, sha):
+            return None, "SMOKE: not required (repository has no instruction sandbox)"
+        paths = gate.changed_paths(repo_root, tip, sha)
+        if not gate.touches_surface(paths):
+            return None, "SMOKE: not required (diff touches only exempt paths)"
+        stored = _stored_record(repo_root, sha)
+        decision = gate.decide(paths, True, stored, sha, tip)
+        if decision.allowed:
+            return None, (
+                f"SMOKE: admitted {gate.short(sha)} by stored record "
+                f"({gate.admission_summary(stored)})"
+            )
+        outcome = gate.run_smoke(
+            repo_root, ref=sha, remote=remote, trunk=trunk,
+            timeout_s=timeout_s, waiver=waiver, runner=runner,
+        )
+    except gate.GateError as exc:
+        return f"instruction smoke gate: {gate.one_line(exc, 400)}", None
+    if not outcome.admitted:
+        kept = f"; sandbox kept at {outcome.sandbox_root}" if outcome.sandbox_root else ""
+        return (
+            f"instruction smoke gate: {outcome.record['result']} for {gate.short(sha)}: "
+            f"{outcome.reason} (record {outcome.record_path}{kept})",
+            None,
+        )
+    return None, (
+        f"SMOKE: ran and admitted {gate.short(sha)} "
+        f"({gate.admission_summary(outcome.record)}; record {outcome.record_path})"
+    )
 
 
 def _worktree_for_branch(repo_root, branch):
@@ -213,7 +316,8 @@ def _cleanup_local_branch(repo_root, branch):
         )
 
 
-def _do_land(repo_root, assessment: Assessment) -> int:
+def _do_land(repo_root, assessment: Assessment, smoke_timeout=gate.DEFAULT_TIMEOUT_S,
+             smoke_waiver=None, runner=None) -> int:
     if not assessment.ok:
         print(f"NOT-LANDABLE: {assessment.reason}", file=sys.stderr)
         return 2
@@ -221,6 +325,12 @@ def _do_land(repo_root, assessment: Assessment) -> int:
     remote, branch, trunk, sha = (
         assessment.remote, assessment.branch, assessment.trunk, assessment.branch_sha
     )
+
+    refusal, smoke_line = _smoke_gate(repo_root, assessment, smoke_timeout, smoke_waiver, runner)
+    if refusal is not None:
+        print(gate.defuse(f"NOT-LANDABLE: {refusal}"), file=sys.stderr)
+        return 2
+    print(smoke_line)
 
     push_landing = _git(["push", remote, f"{branch}:{trunk}"], repo_root)
     if push_landing.returncode != 0:
@@ -230,6 +340,9 @@ def _do_land(repo_root, assessment: Assessment) -> int:
             file=sys.stderr,
         )
         return 3
+    for line in push_landing.stderr.splitlines():
+        if line.startswith("pre-push:"):
+            print(line)
     print(f"[land-branch] pushed {branch} -> {remote}/{trunk} ({sha})")
 
     # delete_ok / branch_f_ok are the two landing-critical steps that gate the
@@ -271,7 +384,7 @@ def _do_land(repo_root, assessment: Assessment) -> int:
     return 3
 
 
-def main(argv=None) -> int:
+def main(argv=None, *, runner=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     parser.add_argument("-C", dest="repo_dir", default=".", help="run as if started in DIR")
     parser.add_argument("--branch", default=None, help="branch to land (default: current branch)")
@@ -290,6 +403,15 @@ def main(argv=None) -> int:
         "--keep-branch", action="store_true",
         help="skip all branch deletion (remote branch, worktree, local branch)",
     )
+    parser.add_argument(
+        "--smoke-waiver", metavar="REASON", default=None,
+        help="admit an UNAVAILABLE live launch of the instruction smoke, recording REASON",
+    )
+    parser.add_argument(
+        "--smoke-timeout", type=int, default=gate.DEFAULT_TIMEOUT_S, metavar="SECONDS",
+        help="seconds allowed for the live launch of the instruction smoke "
+             f"(default: {gate.DEFAULT_TIMEOUT_S})",
+    )
     args = parser.parse_args(argv)
 
     root_proc = _git(["rev-parse", "--show-toplevel"], args.repo_dir)
@@ -304,8 +426,11 @@ def main(argv=None) -> int:
     )
 
     if args.check:
-        return _report_check(assessment)
-    return _do_land(repo_root, assessment)
+        return _report_check(repo_root, assessment)
+    return _do_land(
+        repo_root, assessment,
+        smoke_timeout=args.smoke_timeout, smoke_waiver=args.smoke_waiver, runner=runner,
+    )
 
 
 if __name__ == "__main__":

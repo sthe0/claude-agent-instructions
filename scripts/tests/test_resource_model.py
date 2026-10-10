@@ -483,18 +483,25 @@ def test_sibling_helper_edit_changes_unresolved_identity(tmp_path):
 
 
 def test_land_branch_registry_entry_lists_every_effect(tmp_path):
-    """A `--branch`+`--keep-branch` (no --remote-only) invocation resolves to
-    BOTH the push ref and the git-common-dir write — the two effects
-    land-branch.py's own module docstring documents for that argv shape."""
+    """A non-`--check` invocation resolves to the push ref, the git-common-dir
+    write (tracking-ref fetch + smoke record, so also under `--remote-only`)
+    and the live-launch service — the effects land-branch.py's own module
+    docstring documents for its instruction smoke gate."""
     tc = _tool_contracts_module()
     venue, _digest = _land_branch_registry_venue(tmp_path)
 
-    r = tc.resolve_command(
-        "python3 scripts/land-branch.py --branch feature --keep-branch", str(venue)
-    )
-    assert r.status == "resolved"
-    kinds = sorted(res.kind for res in r.resources)
-    assert kinds == ["file", "vcs_ref"]
+    for flags in ("", " --remote-only"):
+        r = tc.resolve_command(
+            f"python3 scripts/land-branch.py --branch feature --keep-branch{flags}", str(venue)
+        )
+        assert r.status == "resolved"
+        kinds = sorted(res.kind for res in r.resources)
+        assert kinds == ["file", "service", "vcs_ref"]
+        service = next(res for res in r.resources if res.kind == "service")
+        assert (service.name, service.op_class) == ("claude-cli", "spend")
+
+    check = tc.resolve_command("python3 scripts/land-branch.py --check", str(venue))
+    assert check.status == "resolved" and list(check.resources) == []
 
 
 def test_no_command_or_registry_entry_resolves_to_land(tmp_path):

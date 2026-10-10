@@ -41,7 +41,9 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 GITHOOKS_DIR = SCRIPTS_DIR.parent / "githooks"
 LIB = "scripts/lib/instruction_smoke_gate.py"
 HOOK = "githooks/pre-push"
+LAND = "scripts/land-branch.py"
 TESTS = "tests/test_instruction_smoke_gate.py"
+LAND_TESTS = "tests/test_land_branch_smoke_gate.py"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
 CONTROL_RED = 7
@@ -55,8 +57,8 @@ class Mutant:
     ids: "tuple[str, ...]"
 
 
-def _ids(*names: str) -> "tuple[str, ...]":
-    return tuple(f"{TESTS}::{name}" for name in names)
+def _ids(*names: str, module: str = TESTS) -> "tuple[str, ...]":
+    return tuple(f"{module}::{name}" for name in names)
 
 
 CATALOGUE: "dict[str, Mutant]" = {
@@ -141,6 +143,29 @@ CATALOGUE: "dict[str, Mutant]" = {
         'exec python3 "$HERE/../scripts/instruction-smoke-gate.py" pre-push "$@"',
         "exit 0",
         _ids("test_git_push_runs_the_hook_and_a_recorded_candidate_lands"),
+    ),
+    "land-gate-wired": Mutant(
+        LAND,
+        "    refusal, smoke_line = _smoke_gate(repo_root, assessment, smoke_timeout, smoke_waiver, runner)",
+        '    refusal, smoke_line = None, "SMOKE: not required (diff touches only exempt paths)"',
+        _ids(
+            "test_a_surface_diff_runs_the_smoke_and_lands_on_pass",
+            "test_a_failing_smoke_refuses_and_pushes_nothing",
+            "test_an_unavailable_live_launch_needs_a_waiver_to_land",
+            "test_a_remote_tip_the_branch_lacks_is_refused_before_any_launch",
+            module=LAND_TESTS,
+        ),
+    ),
+    "land-fabricates-literal": Mutant(
+        LAND,
+        '    print(f"[land-branch] pushed {branch} -> {remote}/{trunk} ({sha})")',
+        '    print(gate.admission_line(sha))\n'
+        '    print(f"[land-branch] pushed {branch} -> {remote}/{trunk} ({sha})")',
+        _ids(
+            "test_without_the_hook_land_branch_never_claims_a_hook_admission",
+            "test_pre_push_lines_are_relayed_when_the_hook_is_enabled",
+            module=LAND_TESTS,
+        ),
     ),
 }
 

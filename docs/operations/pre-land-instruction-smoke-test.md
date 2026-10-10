@@ -74,9 +74,23 @@ UNAVAILABLE is not FAIL, because a check that could not run says nothing about t
 - **Semantic correctness of rule content.** The recipe shows the rules load, not that they are right.
 - **Data- or timing-dependent behaviour.**
 
+## Landing gate
+
+The recipe above is wired into landing so that an instruction change cannot reach `main` unsmoked. The gate has three parts: a library, a CLI and a `githooks/pre-push` hook (`scripts/lib/instruction_smoke_gate.py`, `scripts/instruction-smoke-gate.py`), plus the integration in `scripts/land-branch.py`.
+
+**What needs a smoke.** A diff against the live `origin/main` tip that touches any path outside `docs/`, `memory-global/`, `scripts/tests/` and the top-level `README.md` is instruction surface. A diff of exempt paths only lands with the line `SMOKE: not required (diff touches only exempt paths)`; a repository that has no `scripts/instruction-sandbox.sh` (neither at the remote tip nor in the candidate) is not gated at all.
+
+**The record.** `instruction-smoke-gate.py run` builds the sandbox of the candidate on top of the freshly fetched remote tip, runs the verify recipe and writes `<git common dir>/instruction-smoke/<candidate sha>.json` (`instruction-smoke/v1`). A record admits a landing only when it names that candidate, was built from that candidate, was built on the *current* remote tip, carries every required check and has a derived result of PASS. FAIL is never admitted. UNAVAILABLE is admitted only with a waiver (`run --waiver "<reason>"`, or `waive --sha … --reason …` afterwards) and only when every non-PASS check is a live launch; an unavailable static or canon check cannot be waived. A remote that moved on makes the record stale and the smoke runs again.
+
+**Landing.** `land-branch.py` first requires the branch to contain the remote tip (otherwise: merge or rebase, then land again), then reuses an admitted stored record or runs the smoke itself, and pushes only on admission. The outcome is one line before the push report: `SMOKE: ran and admitted …`, `SMOKE: admitted … by stored record …`, `SMOKE: waived …` or `SMOKE: not required …`; with `githooks/pre-push` enabled the hook's `pre-push: instruction smoke record admitted <sha>` line is relayed too. A refusal exits 2 with `NOT-LANDABLE: instruction smoke gate: …` and pushes nothing. `--smoke-waiver "<reason>"` and `--smoke-timeout <seconds>` pass through to the run; `--check` stays side-effect free and only reports `SMOKE-STATUS: not required|admitted|pending|unknown` from the stored record and the local tracking ref.
+
+**The hook.** `githooks/pre-push` refuses any push that moves `main` to a commit without an admitted record, so a raw `git push` cannot bypass the gate. Its output is defused so that `sync-instructions-repo.sh` does not read a refusal as "no push rights".
+
+**Cost.** A landing that needs a smoke spends the minutes of one live launch (the default bound is 480 s per launch) inside the `land-branch.py` call. Callers that wrap it with a short timeout — notably `lib/worktree_route.py`, which lands a routed write with no timeout of its own, and `land-on-main.sh`, which builds a new commit per attempt and so can never present a stored record — must expect that, or run the gate first and land the recorded commit.
+
 ## Cost
 
-A run makes one live `claude -p` call, or two with a project, on a small model. It is meant for manual use before landing an instruction change, not for CI.
+A run makes one live `claude -p` call, or two with a project, on a small model. A landing of an instruction-surface change pays this once (see Landing gate); the standalone recipe stays a manual check and is not meant for CI.
 
 ## Relation to the other gates
 

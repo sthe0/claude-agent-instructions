@@ -62,7 +62,7 @@ Setup and distribution, the git workflow, the verification-guard suite, and laye
 - [Cross-session filesystem-scope isolation](operations/cross-session-scope-isolation.md) — the deterministic session-scope registry + conflict detector + PreToolUse hook that denies/warns when two live sessions overlap the same working tree/mount; isolate, not serialize.
 - [Plan review: routes, severity, round budget](../scripts/agentctl/README.md#topological-review--the-review-route-of-a-spawn-route-plan) — how a plan is reviewed (pairwise on a SPAWN route, whole-plan otherwise), the `blocking:`/`note:` concern severity, the reviewer memory, and the task-level `review_rounds` counter that fires the round release.
 - [Planning-convergence contradictions ledger](operations/planning-convergence-contradictions.toml) — the eight doc-versus-mechanism contradictions found in the plan-review engine, each closed by a literal in a repo file or tracked by an issue.
-- [Pre-land instruction smoke test](operations/pre-land-instruction-smoke-test.md) — loading a committed candidate revision into a throw-away sandbox, running its own static checks plus a tool-less live session, and what that does and does not catch.
+- [Pre-land instruction smoke test](operations/pre-land-instruction-smoke-test.md) — loading a committed candidate revision into a throw-away sandbox, running its own static checks plus a tool-less live session, and what that does and does not catch; plus the landing gate that makes `land-branch.py` and the pre-push hook require an admitted smoke record before an instruction-surface change reaches `main`.
 
 ## Decisions — architecture decision records
 
