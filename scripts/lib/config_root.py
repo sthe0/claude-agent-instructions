@@ -310,6 +310,17 @@ def agentctl_enumerate_sidecar_dir() -> Path:
     return agentctl_dir() / "enumerate-sidecars"
 
 
+def agentctl_workspace_registry_dir() -> Path:
+    """Task-workspace registry directory (``<root>/agentctl/workspace-registry`` — see
+    agentctl/workspace_cleanup.py). One subdirectory per session holding one record
+    per registered workspace, plus ``pending/`` for workspaces created before any
+    engine session existed (``enter-task.sh``). Honors an
+    ``$AGENTCTL_WORKSPACE_REGISTRY_DIR`` override at the call site
+    (workspace_cleanup.py's ``registry_root()``), mirroring
+    ``agentctl_task_accumulator_dir()``'s role for task-accumulators."""
+    return agentctl_dir() / "workspace-registry"
+
+
 def agentctl_task_accumulator_dir() -> Path:
     """Cross-session per-task effort accumulator directory (``<root>/agentctl/
     task-accumulators`` — see agentctl/task_accumulator.py). One file per

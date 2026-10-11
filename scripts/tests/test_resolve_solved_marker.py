@@ -152,3 +152,40 @@ def test_resolve_without_tracker_key_writes_null_and_stamps_nothing(store, monke
     assert d.data["quality"]["tracker_key"] is None
     rows = _read_quality_rows(cli.TASK_QUALITY_LOG)
     assert rows[-1]["tracker_key"] is None
+
+
+# --- resolve: workspace cleanup runs after the stamp and never blocks ---------
+
+def test_resolve_workspace_cleanup_runs_after_solved_marker_and_reports(store, monkeypatch, fixtures_dir):
+    from agentctl import workspace_cleanup
+    order = []
+    report = {"enabled": True, "dry_run": False,
+              "removed": [{"path": "/w", "kind": "git-worktree", "reason": "clean and landed"}],
+              "would_remove": [], "kept": []}
+    monkeypatch.setattr(solved_marker, "stamp", lambda key, **kw: order.append("stamp") or
+                         {"channel": None, "key": key, "stamped": False})
+    monkeypatch.setattr(workspace_cleanup, "run", lambda *a, **kw: order.append("cleanup") or report)
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+
+    d = _drive_to_resolved(store, "res-ws-cleanup", plan)
+
+    assert d.ok is True
+    assert order == ["stamp", "cleanup"]
+    assert d.data["workspace_cleanup"] == report
+
+
+def test_resolve_workspace_cleanup_raising_still_completes(store, monkeypatch, fixtures_dir):
+    from agentctl import workspace_cleanup
+
+    def _raise(*a, **kw):
+        raise RuntimeError("cleanup exploded")
+    monkeypatch.setattr(workspace_cleanup, "run", _raise)
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+
+    d = _drive_to_resolved(store, "res-ws-cleanup-raise", plan)
+
+    assert d.ok is True
+    assert d.node == Node.RESOLVED.value
+    assert d.marker == "COMPLETED"
+    assert d.data["workspace_cleanup"]["error"] == "cleanup exploded"
+    assert d.data["workspace_cleanup"]["removed"] == []

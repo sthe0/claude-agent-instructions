@@ -236,6 +236,19 @@ def _landing_gate_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _workspace_cleanup_off_by_default(tmp_path, monkeypatch):
+    """Default the resolve-time workspace cleanup OFF and route the registry into tmp,
+    the same accommodation as `_landing_gate_off_by_default` above: `cmd_resolve` runs
+    `workspace_cleanup.run` after every successful resolve, which would otherwise
+    read (and, for a registered path, remove) real workspaces under the developer's
+    HOME. AGENTCTL_WORKSPACE_CLEANUP=0 is the documented force-off knob; its real
+    behaviour is proven by test_workspace_cleanup.py, which re-enables it against
+    temp git repos."""
+    monkeypatch.setenv("AGENTCTL_WORKSPACE_CLEANUP", "0")
+    monkeypatch.setenv("AGENTCTL_WORKSPACE_REGISTRY_DIR", str(tmp_path / "workspace-registry"))
+
+
+@pytest.fixture(autouse=True)
 def _resolution_ask_gate_off_by_default(monkeypatch):
     """Default the resolve-time resolution-ask gate OFF for the suite at large, the same
     accommodation as `_landing_gate_off_by_default` above and for the same reason:

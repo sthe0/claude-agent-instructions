@@ -27,7 +27,7 @@ from pathlib import Path
 
 from lib import argv_text, config_root, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -7937,6 +7937,32 @@ def cmd_evidence_dir(args, *, store: StateStore, runner: Runner | None = None) -
     return Directive(True, "n/a", "evidence_dir", str(path) + "\n", data={"evidence_dir": str(path)})
 
 
+def cmd_workspace_register(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record a workspace this task created so `resolve` may clean it up (see
+    workspace_cleanup.py). Session-keyed, or --pending for a workspace made before any
+    engine session exists (enter-task.sh): the engine binds a pending record at resolve
+    time by the resolve cwd / the plan's delivery_worktree. Needs no session state, so it
+    works before `classify`."""
+    kind = getattr(args, "kind", None)
+    try:
+        if getattr(args, "pending", False):
+            record = workspace_cleanup.register_pending(
+                args.path, kind=kind, backend=args.ws_backend, name=args.ws_name)
+            scope = "pending"
+        elif args.session:
+            record = workspace_cleanup.register(
+                args.session, args.path, kind=kind, backend=args.ws_backend, name=args.ws_name)
+            scope = "session"
+        else:
+            return Directive(False, "n/a", "noop",
+                             "workspace-register needs --session (or CLAUDE_CODE_SESSION_ID) "
+                             "or --pending")
+    except (OSError, ValueError) as exc:
+        return Directive(False, "n/a", "noop", str(exc))
+    return Directive(True, "n/a", "workspace_registered", f"{record}\n",
+                     data={"record": str(record), "scope": scope, "path": args.path})
+
+
 def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Report the EFFECTIVE grant set for one stage — declared + derived (only when
     the live re-derivation still re-hashes to `approved_grants_sha256`, per
@@ -8989,8 +9015,19 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     except Exception as exc:  # noqa: BLE001 - fail-open by design
         marker_status = {"channel": None, "key": tracker_key, "stamped": False,
                           "skipped_reason": str(exc)}
+    # Same shape as the marker stamp: resolution is already saved, so a cleanup fault
+    # is reported, never allowed to undo it. Runs last of the post-resolve effects
+    # because it may remove the very directory the engine was invoked from.
+    try:
+        cleanup_report = workspace_cleanup.run(
+            state.session_id, cwd=workspace_cleanup.current_dir(),
+            delivery_worktree=state.delivery_worktree)
+    except Exception as exc:  # noqa: BLE001 - fail-open by design
+        cleanup_report = {"enabled": True, "dry_run": False, "removed": [],
+                          "would_remove": [], "kept": [], "error": str(exc)}
     detail = "task resolved"
-    data = {"cost": cost_surface, "quality": quality_row, "solved_marker": marker_status}
+    data = {"cost": cost_surface, "quality": quality_row, "solved_marker": marker_status,
+            "workspace_cleanup": cleanup_report}
     # Bypass visibility: the resolution summary surfaces every acceptance judge bypass
     # verbatim, so a resolved task's record shows which acceptance passes were unjudged
     # (kill switch) or overridden — never hidden behind a clean COMPLETED.
@@ -11379,6 +11416,7 @@ COMMANDS = {
     "resolve-permission": cmd_resolve_permission,
     "stage-grants": cmd_stage_grants,
     "evidence-dir": cmd_evidence_dir,
+    "workspace-register": cmd_workspace_register,
     "grant-stats": cmd_grant_stats,
     "record-result": cmd_record_result,
     "declare": cmd_declare,
@@ -11456,6 +11494,7 @@ _SESSION_COMMANDS = (
     "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status", "children",
     "drive", "close", "push-subplan", "pop-subplan", "task-reset",
     "mandate-grant", "mandate-extend", "mandate-resume", "mandate-stop", "mandate-status",
+    "workspace-register",
 )
 
 # (dest, subcommands that declare it)
@@ -11585,6 +11624,9 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("regression_command", ("plan-review",),
      "shell command run verbatim via the runner (terminal-pass evidence) — an "
      "invocation string, not narrative prose for the @<path> convention"),
+    ("path", ("workspace-register",), "filesystem path of the workspace — a path, not narrative"),
+    ("ws_backend", ("workspace-register",), "workspace backend name from the registry — an identifier"),
+    ("ws_name", ("workspace-register",), "workspace/mount name the backend teardown is keyed by — an identifier"),
 )
 
 _ARG_RESOLVE: frozenset[tuple[str, str]] = frozenset(
@@ -12124,6 +12166,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("evidence-dir"); sp.add_argument("--session", required=True)
     sp.add_argument("--stage", type=int, required=True,
                     help="stage index the evidence directory is scoped to")
+    sp = add("workspace-register"); sp.add_argument("path")
+    sp.add_argument("--kind", choices=workspace_cleanup.KINDS, default=None,
+                    help="workspace kind; inferred from --backend when omitted "
+                         "(git or none -> git-worktree, any other backend -> mount)")
+    sp.add_argument("--backend", dest="ws_backend", default=None,
+                    help="workspace backend name (registry.sh), used for mount teardown")
+    sp.add_argument("--name", dest="ws_name", default=None,
+                    help="mount name the backend teardown is keyed by")
+    sp.add_argument("--pending", action="store_true",
+                    help="no engine session exists yet (enter-task.sh): record a pending "
+                         "binding the engine resolves at `resolve` time by the resolve cwd")
+    # Optional: the harness-session auto-injection appends it; --pending ignores it.
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
     sp = add("grant-stats"); sp.add_argument("--session", required=True)
     sp.add_argument("--json", action="store_true")
     sp = add("record-result"); sp.add_argument("--session", required=True)
