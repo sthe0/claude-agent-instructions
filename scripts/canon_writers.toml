@@ -38,6 +38,7 @@
 "scripts/apply-settings.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "merges settings/base.json into the live settings file in the config root" }
 "scripts/configure-identity.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "writes agent-identity.local in the config root, an untracked per-machine file" }
 "scripts/install-claude-recover-systemd.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "installs a user systemd unit on this machine" }
+"scripts/install-mandate-timer.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "installs the agent-debt-cycle user systemd service and timer and writes their env file under ~/.config" }
 "scripts/install-git-hooks.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "points core.hooksPath at githooks/ in git config; no tracked file changes" }
 "scripts/install-reminder-hooks.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "wires reminder hooks into the live settings file in the config root" }
 "scripts/install-sync-cron.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "installs a crontab entry on this machine" }
@@ -54,12 +55,14 @@
 "scripts/measure-marker-extractor-latency.py" = { disposition = "deferred", category = "deferred", reason = "appends docs/operations/marker-extractor-calibration.jsonl; a calibration run, outside #353" }
 
 # --- not-canon: writes only outside the repo, or names a write primitive without using it ---
+"scripts/lib/instruction_smoke_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes smoke records under the git common dir and a throwaway sandbox under the temp dir; no tracked file" }
 "scripts/agent_commit_trailer.py" = { disposition = "not-canon", category = "not-canon", reason = "prints a commit trailer; `git commit` appears in prose only" }
 "scripts/agentctl/cli.py" = { disposition = "not-canon", category = "not-canon", reason = "engine state, evidence, gate and quality logs under ~/.local and the agentctl state dir; plan snapshots under the session dir" }
 "scripts/agentctl/delivery.py" = { disposition = "not-canon", category = "not-canon", reason = "delivery receipts in the agentctl state dir" }
 "scripts/agentctl/dispatch.py" = { disposition = "not-canon", category = "not-canon", reason = "removes its own dispatch markers in the agentctl state dir" }
 "scripts/agentctl/edit_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only ledger under ~/.local/log" }
 "scripts/agentctl/enumerate_sidecar.py" = { disposition = "not-canon", category = "not-canon", reason = "sidecar result files in the agentctl state dir" }
+"scripts/agentctl/mandate_store.py" = { disposition = "not-canon", category = "not-canon", reason = "mandate records, cycle ledgers and locks in the mandate dir under the config root" }
 "scripts/agentctl/order_approvals.py" = { disposition = "not-canon", category = "not-canon", reason = "approval records in the agentctl state dir" }
 "scripts/agentctl/plan_resources.py" = { disposition = "not-canon", category = "not-canon", reason = "writes only the caller-supplied --dump-commands / --report-json paths; callers pass scratch paths, and no caller points them into the repo" }
 "scripts/agentctl/render.py" = { disposition = "not-canon", category = "not-canon", reason = "plan render directory in the agentctl state dir, built in a temp dir then swapped" }
@@ -112,6 +115,8 @@
 "scripts/lib/semantic_join.py" = { disposition = "not-canon", category = "not-canon", reason = "join cache under ~/.local, written atomically" }
 "scripts/lib/shell_tokens.py" = { disposition = "not-canon", category = "not-canon", reason = "tokenizer that recognises `git apply`/`git commit` in command strings; writes no file" }
 "scripts/lint-settings-base.py" = { disposition = "not-canon", category = "not-canon", reason = "reads settings/base.json; `git pull` appears in a docstring" }
+"scripts/mandate_cycle/driver.py" = { disposition = "not-canon", category = "not-canon", reason = "adds linked worktrees under the temp root and commits there, writes briefs into the mandate dir; canonical working tree untouched" }
+"scripts/mandate_cycle/notifiers.py" = { disposition = "not-canon", category = "not-canon", reason = "cycle digest files in the mandate dir under the config root" }
 "scripts/offload-large.sh" = { disposition = "not-canon", category = "not-canon", reason = "tees a command's output into /tmp/cc-scratch" }
 "scripts/plan-review-topological.py" = { disposition = "not-canon", category = "not-canon", reason = "per-run review files in a scratch dir" }
 "scripts/policy-scorecard.py" = { disposition = "not-canon", category = "not-canon", reason = "scorecard output and ledger copies under ~/.local" }

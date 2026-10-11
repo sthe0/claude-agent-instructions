@@ -209,6 +209,17 @@ def render_final_checks_md(doc: PlanDoc) -> list[str]:
     return lines
 
 
+def _optional_lines(s) -> list[str]:
+    """The optional-stage marker, empty for every stage that is not optional so a plan
+    without optional stages renders byte-identical to before the field existed."""
+    if not s.optional:
+        return []
+    return [
+        f"- **Optional:** yes — traces to backlog item {s.backlog_issue}; the customer may "
+        f"decline it at approval (`approve --skip-optional {s.index}`)"
+    ]
+
+
 def render_plan_md(doc: PlanDoc) -> str:
     """Pure: a PlanDoc -> a markdown prose view. Renders every stage in order."""
     lines: list[str] = []
@@ -219,6 +230,7 @@ def render_plan_md(doc: PlanDoc) -> str:
         lines.append(f"## Stage {s.index}: {s.title}")
         lines.append("")
         lines.append(f"- **Executor:** {s.actor.executor}")
+        lines.extend(_optional_lines(s))
         if s.actor.capability_required:
             lines.append(f"- **Capability required:** {s.actor.capability_required}")
         if s.subject.material:
@@ -374,6 +386,7 @@ def _stage_field_lines(doc: PlanDoc, s, *, dependency_blocks: bool) -> list[str]
     lines.append(f"## Stage {s.index}: {s.title}")
     lines.append("")
     lines.append(f"- **Executor:** {s.actor.executor}")
+    lines.extend(_optional_lines(s))
     if s.actor.capability_required:
         lines.append(f"- **Capability required:** {s.actor.capability_required}")
     if s.actor.cost_tier:

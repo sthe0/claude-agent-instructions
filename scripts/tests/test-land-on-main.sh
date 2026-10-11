@@ -224,6 +224,58 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Test 5 — a pre-push gate refusal stops the retry loop at the first rejection
+# ═══════════════════════════════════════════════════════════════════════════
+printf '\n--- pre-push refusal ---\n'
+read -r ORIGIN LOCAL <<<"$(make_fixture t5)"
+ORIGIN_BEFORE="$(git -C "$ORIGIN" rev-parse main)"
+HOOK_LOG="$TMP/t5-hook-calls"
+mkdir -p "$LOCAL/.git/hooks"
+cat >"$LOCAL/.git/hooks/pre-push" <<HOOK
+#!/usr/bin/env bash
+echo call >>"$HOOK_LOG"
+echo "pre-push: refused: no smoke record for the commit" >&2
+exit 1
+HOOK
+chmod +x "$LOCAL/.git/hooks/pre-push"
+
+out="$(cd "$LOCAL" && LAND_ON_MAIN_REMOTE=origin LAND_ON_MAIN_BRANCH=main "$LAND_BIN" -m "gated change" 2>&1)"
+rc=$?
+
+if [[ "$rc" -eq 1 ]]; then
+  ok "refusal: exits 1"
+else
+  fail "refusal: expected exit 1, got $rc (output: $out)"
+fi
+if [[ "$(wc -l <"$HOOK_LOG" 2>/dev/null || echo 0)" -eq 1 ]]; then
+  ok "refusal: the push was attempted exactly once (no rebase-retry loop)"
+else
+  fail "refusal: expected one push attempt, hook log: $(cat "$HOOK_LOG" 2>/dev/null)"
+fi
+if [[ "$(printf '%s\n' "$out" | grep -c 'pre-push: refused')" -eq 1 ]]; then
+  ok "refusal: the hook's refusal is printed once"
+else
+  fail "refusal: refusal text not printed exactly once (got: $out)"
+fi
+if printf '%s' "$out" | grep -qF 'land-branch.py'; then
+  ok "refusal: points at land-branch.py"
+else
+  fail "refusal: no pointer to land-branch.py (got: $out)"
+fi
+if printf '%s' "$out" | grep -q 'retrying'; then
+  fail "refusal: output still announces a retry (got: $out)"
+else
+  ok "refusal: no retry announced"
+fi
+
+ORIGIN_AFTER="$(git -C "$ORIGIN" rev-parse main)"
+if [[ "$ORIGIN_AFTER" == "$ORIGIN_BEFORE" ]]; then
+  ok "refusal: origin/main unchanged"
+else
+  fail "refusal: origin/main advanced unexpectedly"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

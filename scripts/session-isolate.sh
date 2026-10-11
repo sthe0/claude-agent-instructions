@@ -115,5 +115,7 @@ log "session-isolate: isolated workspace ready at $project_dir"
 log "session-isolate: continue the task there, e.g.:  cd \"$project_dir\""
 log "session-isolate: when done, stage your change there and land it back:"
 log "  $_SCRIPT_DIR/land-on-main.sh -C \"$project_dir\" -m \"<message>\""
+log "session-isolate: a change to the instruction surface needs the pre-land smoke record, which"
+log "  land-on-main.sh cannot present; commit it on a branch and land that with scripts/land-branch.py"
 
 printf '%s\n' "$project_dir"

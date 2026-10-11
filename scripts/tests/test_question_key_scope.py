@@ -123,6 +123,12 @@ _UNCLAIMED_STAGE_LEAVES = {
     "outcome.checked_tree_identity": "the mutable execution record, not the declaration",
     "outcome.checked_tree_ok": "the mutable execution record, not the declaration",
     "outcome.record_attempts": "the mutable execution record, not the declaration",
+    "outcome.declined": "the mutable execution record, not the declaration",
+    "optional": "whether the customer may decline the stage at approval: an approval "
+                "surface, not a place an answer can rest on — no target names it; "
+                "covered instead by gates._renorm_stage_residual",
+    "backlog_issue": "the backlog issue an optional stage traces to in place of an "
+                     "order requirement, same exclusion as its sibling `optional`",
 }
 
 _BARE_STAGE = {

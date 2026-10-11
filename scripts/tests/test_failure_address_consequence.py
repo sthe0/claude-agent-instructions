@@ -741,6 +741,8 @@ def _populated_stage():
         ephemeral_artifacts_waiver="ephemeral",
         renorms=["/norm/file"],
         control="control",
+        optional=True,
+        backlog_issue="backlog-issue",
     )
 
 

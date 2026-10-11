@@ -214,48 +214,111 @@ def resolve_script(
     return resolver_fn(argv, venue_real)
 
 
+LIVE_LAUNCH_SERVICE = ("claude-cli", "spend")
+"""The instruction smoke's one live `claude -p` launch: a model-quota-consuming
+call, typed as a service at `spend` exactly like any other paid external call
+(resources.py: money/quota amounts are never their own resource kind)."""
+
+
+def _parse_flags(argv, bool_flags, value_flags, who, *, max_positionals=0):
+    """Split `argv` into (values, bools, positionals), or return a `Resolution`
+    that is `unresolved` on the first token outside the reviewed grammar."""
+    from .tool_contracts import Resolution  # deferred: see module docstring
+
+    values: dict[str, str] = {}
+    bools: dict[str, bool] = {f: False for f in bool_flags}
+    positionals: list[str] = []
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in bool_flags:
+            bools[tok] = True
+            i += 1
+            continue
+        if tok in value_flags:
+            if i + 1 >= len(argv):
+                return Resolution(
+                    "unresolved", reason_class="contract-unresolved",
+                    reason=f"{who}: {tok!r} missing its value",
+                )
+            values[tok] = argv[i + 1]
+            i += 2
+            continue
+        if "=" in tok and tok.split("=", 1)[0] in value_flags:
+            key, val = tok.split("=", 1)
+            values[key] = val
+            i += 1
+            continue
+        if not tok.startswith("-") and len(positionals) < max_positionals:
+            positionals.append(tok)
+            i += 1
+            continue
+        return Resolution(
+            "unresolved", reason_class="contract-unresolved",
+            reason=f"{who}: unrecognized argument {tok!r}",
+        )
+    return values, bools, positionals
+
+
+def _venue_mismatch(dash_c, venue_real, who):
+    """`Resolution` (unresolved) when `-C` names a checkout other than the venue, else `None`.
+
+    A relative `-C` value is joined against the VENUE -- the resource a resolution
+    decides whether to self-grant for -- never against the analyzing process's own cwd.
+    Mirrors git's own `-C` handling in `tool_contracts._resolve_git`."""
+    from .tool_contracts import Resolution, _abs_join, _realpath  # deferred: see module docstring
+
+    if dash_c is None:
+        return None
+    if _realpath(_abs_join(dash_c, venue_real)) != venue_real:
+        return Resolution(
+            "unresolved", reason_class="contract-unresolved",
+            reason=f"{who}: -C {dash_c!r} targets a different checkout than the venue",
+        )
+    return None
+
+
+def _common_dir_write(venue_real, who):
+    """(FileResource write on the venue's git common dir, None), or (None, unresolved `Resolution`)."""
+    from .tool_contracts import Resolution  # deferred: see module docstring
+
+    common_dir = _git_common_dir(venue_real)
+    if common_dir is None:
+        return None, Resolution(
+            "unresolved", reason_class="contract-unresolved",
+            reason=f"{who}: could not resolve the git common dir for the venue",
+        )
+    return _resources.FileResource(common_dir, "write"), None
+
+
 def _resolve_land_branch(argv: list[str], venue_real: str):
     """The full, reviewed argument grammar of `land-branch.py` (its own
     module docstring / argparse block is the source of truth this mirrors).
     Any flag OUTSIDE this set, or a recognized value-flag missing its value,
     makes the whole command unresolved — an unrecognized flag might change
     the script's effects in a way this resolver has no story for (fail-closed,
-    same bias as every other resolver in this codebase)."""
-    from .tool_contracts import Resolution, _abs_join, _realpath  # deferred: see module docstring
+    same bias as every other resolver in this codebase).
 
-    known_bool_flags = {"--check", "--remote-only", "--keep-branch"}
-    known_value_flags = {"-C", "--branch", "--trunk", "--remote"}
+    A non-`--check` run is not push-only: its instruction smoke gate fetches
+    `<remote> <trunk>` (a tracking-ref write), writes the smoke record under
+    the git common dir (so the common-dir write holds even with
+    `--remote-only`), and may run one live `claude -p` launch (a `spend`
+    service). All three are named below."""
+    from .tool_contracts import Resolution  # deferred: see module docstring
 
-    values: dict[str, str] = {}
-    bools: dict[str, bool] = {f: False for f in known_bool_flags}
-    i = 0
-    while i < len(argv):
-        tok = argv[i]
-        if tok in known_bool_flags:
-            bools[tok] = True
-            i += 1
-            continue
-        if tok in known_value_flags:
-            if i + 1 >= len(argv):
-                return Resolution(
-                    "unresolved", reason_class="contract-unresolved",
-                    reason=f"land-branch.py: {tok!r} missing its value",
-                )
-            values[tok] = argv[i + 1]
-            i += 2
-            continue
-        if "=" in tok and tok.split("=", 1)[0] in known_value_flags:
-            key, val = tok.split("=", 1)
-            values[key] = val
-            i += 1
-            continue
-        return Resolution(
-            "unresolved", reason_class="contract-unresolved",
-            reason=f"land-branch.py: unrecognized argument {tok!r}",
-        )
+    parsed = _parse_flags(
+        argv,
+        {"--check", "--remote-only", "--keep-branch"},
+        {"-C", "--branch", "--trunk", "--remote", "--smoke-waiver", "--smoke-timeout"},
+        "land-branch.py",
+    )
+    if isinstance(parsed, Resolution):
+        return parsed
+    values, bools, _ = parsed
 
     if bools["--check"]:
-        # Zero side effects by the script's own module docstring guarantee.
+        # Reads local refs, trees and the stored record only: no fetch, no smoke run,
+        # no write (the script's own `--check` contract).
         return Resolution("resolved", resources=[])
 
     if not bools["--keep-branch"]:
@@ -284,37 +347,70 @@ def _resolve_land_branch(argv: list[str], venue_real: str):
             ),
         )
 
-    dash_c = values.get("-C")
-    if dash_c is not None:
-        # A relative `-C` value must be joined against the VENUE -- the
-        # resource this resolution decides whether to self-grant a
-        # push for -- never against the analyzing process's own cwd (which
-        # need not have any relation to the venue at all). Mirrors git's
-        # own `-C`/`--git-dir`/`--work-tree` handling in
-        # `tool_contracts._resolve_git`.
-        dash_c_real = _realpath(_abs_join(dash_c, venue_real))
-        if dash_c_real != venue_real:
-            return Resolution(
-                "unresolved", reason_class="contract-unresolved",
-                reason=f"land-branch.py: -C {dash_c!r} targets a different checkout than the venue",
-            )
+    mismatch = _venue_mismatch(values.get("-C"), venue_real, "land-branch.py")
+    if mismatch is not None:
+        return mismatch
 
     remote = values.get("--remote", "origin")
     trunk = values.get("--trunk", "main")
 
-    out: list = [_resources.VcsRefResource(remote, trunk, "push")]
-    if not bools["--remote-only"]:
-        common_dir = _git_common_dir(venue_real)
-        if common_dir is None:
-            return Resolution(
-                "unresolved", reason_class="contract-unresolved",
-                reason="land-branch.py: could not resolve the git common dir for the venue",
-            )
-        out.append(_resources.FileResource(common_dir, "write"))
+    common_write, problem = _common_dir_write(venue_real, "land-branch.py")
+    if problem is not None:
+        return problem
+    out: list = [
+        _resources.VcsRefResource(remote, trunk, "push"),
+        common_write,
+        _resources.ServiceResource(*LIVE_LAUNCH_SERVICE),
+    ]
+    return Resolution("resolved", resources=out)
 
+
+def _resolve_instruction_smoke_gate(argv: list[str], venue_real: str):
+    """The reviewed grammar of `instruction-smoke-gate.py`: one subcommand, then its flags.
+
+    `run` fetches the remote tip, writes the record under the git common dir and makes
+    one live `claude -p` launch; `waive` rewrites a record there; `check` with an explicit
+    `--remote-sha` and `pre-push` read local state only, while `check` without it fetches
+    (a tracking-ref write in the common dir). A subcommand or flag outside this grammar
+    leaves the command unresolved."""
+    from .tool_contracts import Resolution  # deferred: see module docstring
+
+    who = "instruction-smoke-gate.py"
+    if not argv or argv[0] not in {"run", "check", "waive", "pre-push"}:
+        return Resolution(
+            "unresolved", reason_class="contract-unresolved",
+            reason=f"{who}: first argument is not a reviewed subcommand",
+        )
+    command, rest = argv[0], argv[1:]
+    value_flags, max_positionals = {
+        "run": ({"-C", "--remote", "--trunk", "--ref", "--timeout", "--waiver"}, 0),
+        "check": ({"-C", "--remote", "--trunk", "--sha", "--remote-sha", "--record"}, 0),
+        "waive": ({"-C", "--remote", "--trunk", "--sha", "--reason"}, 0),
+        "pre-push": ({"--trunk"}, 2),
+    }[command]
+    parsed = _parse_flags(rest, set(), value_flags, f"{who} {command}", max_positionals=max_positionals)
+    if isinstance(parsed, Resolution):
+        return parsed
+    values, _, _ = parsed
+
+    if command == "pre-push":
+        return Resolution("resolved", resources=[])
+    mismatch = _venue_mismatch(values.get("-C"), venue_real, who)
+    if mismatch is not None:
+        return mismatch
+    if command == "check" and "--remote-sha" in values:
+        return Resolution("resolved", resources=[])
+
+    common_write, problem = _common_dir_write(venue_real, who)
+    if problem is not None:
+        return problem
+    out: list = [common_write]
+    if command == "run":
+        out.append(_resources.ServiceResource(*LIVE_LAUNCH_SERVICE))
     return Resolution("resolved", resources=out)
 
 
 _RESOLVERS = {
     "land_branch": _resolve_land_branch,
+    "instruction_smoke_gate": _resolve_instruction_smoke_gate,
 }

@@ -269,6 +269,29 @@ class StageStatus(str, Enum):
     ACTIVE = "ACTIVE"
     PASSED = "PASSED"
     FAILED = "FAILED"
+    # An optional stage the user declined at approval (`approve --skip-optional`). It is
+    # never dispatched and never verified; for "are all stages done?" it counts as
+    # settled — ask that through `is_settled`, never by testing for PASSED.
+    SKIPPED = "SKIPPED"
+
+
+# The statuses that mean a stage needs no further work for the plan to resolve.
+_SETTLED_STATUSES = frozenset({StageStatus.PASSED.value, StageStatus.SKIPPED.value})
+
+
+def is_settled(stage) -> bool:
+    """True iff the stage needs no further work: PASSED, or an optional stage SKIPPED.
+
+    The ONE predicate behind every "have all stages passed?" decision (resolution gate,
+    RESOLVED invariant, next-stage, verify-final, tracker summary): a site that tests
+    `status == PASSED` for that question treats a declined optional stage as unfinished and
+    strands the plan. `test_optional_stages.py` enumerates the sites mechanically."""
+    return stage.outcome.status in _SETTLED_STATUSES
+
+
+def is_skipped(stage) -> bool:
+    """True iff the stage is an optional stage the customer declined (status SKIPPED)."""
+    return stage.outcome.status == StageStatus.SKIPPED.value
 
 
 class Confidence(str, Enum):
@@ -1732,6 +1755,11 @@ class Outcome:
     # attempt made against this stage, including ones a gate blocked before any
     # verification ran.
     record_attempts: int = 0
+    # The customer declined this stage at an approval (`approve --skip-optional`). Stays
+    # True when a changed definition sends the stage back to PENDING for a fresh choice, so
+    # `approve --by agent` can tell "never offered" from "offered, declined, since changed"
+    # and leaves the second to the customer; cleared by the next customer approval.
+    declined: bool = False
 
 
 @dataclass
@@ -1809,6 +1837,13 @@ class Stage:
     # resolve time; this field only carries the declaration). Empty on every plan
     # authored before this field, byte-identical to "no declared effects".
     effects: list[StageEffectDeclaration] = field(default_factory=list)
+    # `optional = true` in the plan: the user may decline the stage at approval
+    # (`approve --skip-optional`) without failing the plan. An optional stage traces to
+    # `backlog_issue` ("<repo>#<n>") instead of an order requirement; plan.py's loader owns
+    # the rules. False/None on every plan authored before the field, byte-identical to
+    # "not optional".
+    optional: bool = False
+    backlog_issue: str | None = None
 
     @property
     def depends_on(self) -> list[int]:
@@ -1861,6 +1896,8 @@ class Stage:
                 control=d.get("control"),
                 grants=StageGrants.from_dict(d.get("grants")),
                 effects=[StageEffectDeclaration.from_dict(e) for e in d.get("effects", [])],
+                optional=bool(d.get("optional", False)),
+                backlog_issue=d.get("backlog_issue"),
             )
         # legacy FLAT shape -> nested groups (migration shim)
         return cls(
@@ -1902,6 +1939,8 @@ class Stage:
             control=d.get("control"),
             grants=StageGrants.from_dict(d.get("grants")),
             effects=[StageEffectDeclaration.from_dict(e) for e in d.get("effects", [])],
+            optional=bool(d.get("optional", False)),
+            backlog_issue=d.get("backlog_issue"),
         )
 
 
@@ -2199,6 +2238,12 @@ class SessionState:
     # so `dispatch --re-attest` has no observable and falls back to a normal
     # dispatch (fail-closed toward the more expensive, never the cheaper, path).
     reattest_stash: list[ReattestStash] = field(default_factory=list)
+    # The `backlog_issue` of every optional stage the customer declined, keyed by the stage's
+    # identity rather than its index (a replan renumbers; the issue does not). Written ONLY
+    # by a customer `approve` (`--skip-optional` adds, a customer approve that leaves the
+    # stage live removes), never by a replan, reject or agent approve. Absent on older
+    # states -> empty (dataclass default).
+    declined_issues: list[str] = field(default_factory=list)
     # Permission-grant model custody (schema 36) — grants.py is the sole validation/
     # coverage authority; these fields are the durable record of what it decided.
     # Plain dict-of-list-of-dict, same shape discipline as effort_fires/renegotiations
@@ -2301,8 +2346,8 @@ class SessionState:
         if self.node == Node.RESOLVED.value:
             if not self.resolution.passed:
                 raise InvariantError("node=RESOLVED requires resolution.passed")
-            if any(s.outcome.status != StageStatus.PASSED.value for s in self.stages):
-                raise InvariantError("node=RESOLVED requires every stage PASSED")
+            if any(not is_settled(s) for s in self.stages):
+                raise InvariantError("node=RESOLVED requires every stage PASSED or SKIPPED")
         if self.route == Route.SPAWN.value and self.weight_class != WeightClass.SUBSTANTIVE.value:
             raise InvariantError("route=SPAWN requires weight_class=SUBSTANTIVE")
         if (
@@ -2509,7 +2554,8 @@ class SessionState:
         return self.stage(self.current_stage)
 
     def ready_stages(self) -> list[Stage]:
-        """PENDING stages whose dependencies are all PASSED."""
+        """PENDING stages whose dependencies are all PASSED (a SKIPPED stage never satisfies
+        a dependency: the loader forbids a non-optional stage depending on an optional one)."""
         passed = {s.index for s in self.stages if s.outcome.status == StageStatus.PASSED.value}
         out = []
         for s in self.stages:
@@ -2517,10 +2563,10 @@ class SessionState:
                 out.append(s)
         return out
 
-    def all_stages_passed(self) -> bool:
-        return bool(self.stages) and all(
-            s.outcome.status == StageStatus.PASSED.value for s in self.stages
-        )
+    def all_stages_settled(self) -> bool:
+        return bool(self.stages) and all(is_settled(s) for s in self.stages)
+
+    all_stages_passed = all_stages_settled  # legacy name; means "settled" (PASSED or SKIPPED)
 
     def log(self, event: str, **fields) -> None:
         self.history.append({"event": event, **fields})

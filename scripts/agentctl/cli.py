@@ -27,7 +27,7 @@ from pathlib import Path
 
 from lib import argv_text, config_root, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -118,6 +118,8 @@ from .state import (
     FAILURE_ADDRESS_VALUES,
     FinalCheck,
     Investigation,
+    is_settled,
+    is_skipped,
     JudgeBypass,
     LANDED_GIT_ERROR_EXIT,
     Partition,
@@ -887,8 +889,17 @@ def _autonomy_for(state: SessionState, doc) -> dict:
         ledger_dir=str(order_approvals._root(None)),
     )
     view = plan_resources.compute_boundary_view(doc, order_digest(doc), venue=_venue_for(doc))
+    # A decline this session holds is enforced where the stage is carried and at the agent's
+    # approval; the ledger's copy is what a session that never saw the decline (a new session,
+    # a reset) is held to, so only the stages the session does not already know are offered.
+    known_issues = gates.declined_issue_set(state)
+    known_titles = gates.declined_title_set(state)
     return gates.autonomy_boundary(
         ledger, view, ledger.get("first_thinker_verdicts"), protected=protected,
+        live_optional=[
+            s for s in doc.stages
+            if not gates.is_declined_stage(s, known_issues, known_titles)
+        ],
     )
 
 
@@ -1135,6 +1146,10 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.actor.cost_tier = refined.actor.cost_tier
     cur.actor.guard_exempt_paths = list(refined.actor.guard_exempt_paths)
     cur.supplies = list(refined.supplies)
+    cur.optional = refined.optional
+    cur.backlog_issue = refined.backlog_issue
+    if is_skipped(cur) and not cur.optional:
+        cur.outcome.status = StageStatus.PENDING.value
 
 
 def _sync_venue_from_plan(state: SessionState, doc: "PlanDoc | None" = None) -> None:
@@ -1285,15 +1300,32 @@ def _refresh_caches_from_plan_path(
     # suppliers' pre-edit interfaces.
     carried = {rs.index: stage_carried(state.stages, refreshed.stages, rs.index)
                for rs in refreshed.stages}
+    declined_issues = gates.declined_issue_set(state)
+    declined_titles = gates.declined_title_set(state)
+    rebuilt: list[Stage] = []
     for rs in refreshed.stages:
         try:
             cur = state.stage(rs.index)
         except KeyError:
+            # An in-place edit may renumber or add a stage; the file is the plan, so the
+            # session's stage list is rebuilt from it and a stage the file no longer has
+            # leaves with it (an orphan SKIPPED stage would carry a decline for work that
+            # is no longer there).
+            rebuilt.append(rs)
             continue
         unchanged = carried[rs.index]
         _apply_refined_stage_fields(cur, rs)
-        if not unchanged and cur.outcome.status == StageStatus.PASSED.value:
+        # One rule shared with the substantive-replan carry: a changed stage loses its
+        # settled status, a declined one included, and is offered again for a fresh choice.
+        if not unchanged and cur.outcome.status in (
+            StageStatus.PASSED.value, StageStatus.SKIPPED.value,
+        ):
             cur.outcome.status = StageStatus.PENDING.value
+        rebuilt.append(cur)
+    for s in rebuilt:
+        s.outcome.declined = is_skipped(s) or (
+            not is_settled(s) and gates.is_declined_stage(s, declined_issues, declined_titles))
+    state.stages = rebuilt
     state.final_check = refreshed.meta.final_check
     _sync_venue_from_plan(state, refreshed)
     # The digest is NOT stamped here. A clean submission is not yet an accepted plan at this
@@ -2139,6 +2171,142 @@ def cmd_task_reset(args, *, store: StateStore, runner: Runner | None = None) -> 
         True, "(task-scoped)", "noop",
         f"cross-session task accumulator reset for task {args.task!r} by {by}: {args.reason}",
         data={"task": args.task, "reason": args.reason, "by": by},
+    )
+
+
+_MANDATE_NODE = "(mandate-scoped)"
+
+
+def _mandate_by_refusal(args) -> Directive | None:
+    by = (args.by or "").strip()
+    if by and by.casefold() != AGENT_ACTOR:
+        return None
+    return Directive(
+        False, _MANDATE_NODE, "noop",
+        f"{args.command} is a user decision: --by must name the customer, not {AGENT_ACTOR!r}",
+        marker=DIRECTIVE_ESCALATE_TO_USER,
+        data={"mandate": args.mandate_id, "by": by},
+    )
+
+
+def _mandate_view(mandate: mandate_rules.Mandate, now: dt.datetime) -> dict:
+    spend = mandate_store.spend_now(mandate.id, now)
+    verdict_ = mandate_rules.gate(mandate, now, spend)
+    held, pid = mandate_store.probe_cycle(mandate.id)
+    return {
+        "mandate": mandate.to_dict(),
+        "spend": {"day_usd": spend.day_usd, "week_usd": spend.week_usd},
+        "may_start": verdict_.may_start,
+        "refusals": list(verdict_.reasons),
+        "cycle_running": held,
+        "cycle_pid": pid,
+    }
+
+
+def cmd_mandate_grant(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Create a standing mandate: the user's one-time grant of bounded authority to the
+    background debt cycle. Refused for `--by agent`, and for an id that already has a
+    record (extend or resume that one instead)."""
+    refusal = _mandate_by_refusal(args)
+    if refusal:
+        return refusal
+    if mandate_store.load_mandate(args.mandate_id) is not None:
+        return Directive(
+            False, _MANDATE_NODE, "noop",
+            f"mandate {args.mandate_id!r} already exists; use mandate-extend or mandate-resume",
+            data={"mandate": args.mandate_id},
+        )
+    defaults = mandate_rules.MandateLimits()
+    limits = mandate_rules.MandateLimits(**{
+        name: (getattr(args, name) if getattr(args, name) is not None else getattr(defaults, name))
+        for name in mandate_rules.LIMIT_FIELDS
+    })
+    now = mandate_store.utcnow()
+    mandate = mandate_rules.new_mandate(
+        args.mandate_id, args.by.strip(), now, limits,
+        term_days=args.days if args.days is not None else mandate_rules.DEFAULT_TERM_DAYS,
+    )
+    mandate_store.save_mandate(mandate)
+    mandate_store.append_event(
+        mandate.id, "granted", {"expires_at": mandate.expires_at}, by=mandate.granted_by, now=now,
+    )
+    return Directive(
+        True, _MANDATE_NODE, "noop",
+        f"mandate {mandate.id!r} granted by {mandate.granted_by} until {mandate.expires_at}",
+        data=_mandate_view(mandate, now),
+    )
+
+
+def cmd_mandate_extend(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    refusal = _mandate_by_refusal(args)
+    if refusal:
+        return refusal
+    mandate = mandate_store.load_mandate(args.mandate_id)
+    if mandate is None:
+        return Directive(False, _MANDATE_NODE, "noop", f"no mandate {args.mandate_id!r}")
+    now = mandate_store.utcnow()
+    mandate = mandate_rules.extended(mandate, now, args.days)
+    mandate_store.save_mandate(mandate)
+    mandate_store.append_event(
+        mandate.id, "extended", {"expires_at": mandate.expires_at}, by=args.by.strip(), now=now,
+    )
+    return Directive(
+        True, _MANDATE_NODE, "noop",
+        f"mandate {mandate.id!r} extended to {mandate.expires_at}",
+        data=_mandate_view(mandate, now),
+    )
+
+
+def cmd_mandate_resume(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Unpause a stopped mandate and close an open breaker -- a user decision, since the
+    breaker opens exactly when the cycle's own judgement failed."""
+    refusal = _mandate_by_refusal(args)
+    if refusal:
+        return refusal
+    if mandate_store.load_mandate(args.mandate_id) is None:
+        return Directive(False, _MANDATE_NODE, "noop", f"no mandate {args.mandate_id!r}")
+    detail = mandate_store.resume_cycle(args.mandate_id, by=args.by.strip(), runner=runner)
+    now = mandate_store.utcnow()
+    return Directive(
+        True, _MANDATE_NODE, "noop",
+        f"mandate {args.mandate_id!r} resumed by {args.by.strip()}",
+        data={**_mandate_view(mandate_store.load_mandate(args.mandate_id), now), "resume": detail},
+    )
+
+
+def cmd_mandate_stop(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Pause the mandate, disable its timer and kill a running cycle. Open to the agent:
+    stopping only ever narrows authority."""
+    if not mandate_store.mandate_exists(args.mandate_id):
+        return Directive(False, _MANDATE_NODE, "noop", f"no mandate {args.mandate_id!r}")
+    detail = mandate_store.stop_cycle(args.mandate_id, runner=runner)
+    if detail["killed"]:
+        outcome = f"killed cycle pid {detail['killed']['pid']}"
+    elif detail["cycle_running"]:
+        outcome = "a cycle holds the lock but its pid is unknown, nothing killed"
+    else:
+        outcome = "no running cycle"
+    try:
+        view = _mandate_view(mandate_store.load_mandate(args.mandate_id), mandate_store.utcnow())
+    except (mandate_rules.MandateError, AttributeError):
+        view = {"mandate": None, "record_unreadable": True}
+    return Directive(
+        True, _MANDATE_NODE, "noop",
+        f"mandate {args.mandate_id!r} stopped; {outcome}",
+        data={**view, "stop": detail},
+    )
+
+
+def cmd_mandate_status(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    mandate = mandate_store.load_mandate(args.mandate_id)
+    if mandate is None:
+        return Directive(False, _MANDATE_NODE, "noop", f"no mandate {args.mandate_id!r}")
+    now = mandate_store.utcnow()
+    view = _mandate_view(mandate, now)
+    return Directive(
+        True, _MANDATE_NODE, "noop",
+        f"mandate {mandate.id!r}: " + ("may start a cycle" if view["may_start"] else "refused: " + ", ".join(view["refusals"])),
+        data=view,
     )
 
 
@@ -5564,6 +5732,47 @@ def cmd_accept(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     )
 
 
+def _skip_optional_problems(
+    indices: list[int], doc: "PlanDoc | None", state: SessionState, *, by_agent: bool,
+) -> list[str]:
+    """Why `approve --skip-optional <indices>` cannot be honoured; [] when it can."""
+    if by_agent:
+        return ["--skip-optional is the customer's decision and cannot be made with --by agent"]
+    if doc is None:
+        return ["--skip-optional needs a loadable plan at plan_path"]
+    by_index = {s.index: s for s in doc.stages}
+    problems: list[str] = []
+    for index in indices:
+        stage = by_index.get(index)
+        if stage is None:
+            problems.append(f"stage {index} does not exist")
+        elif not stage.optional:
+            problems.append(f"stage {index} is not optional (only `optional = true` stages can be declined)")
+    if problems:
+        return problems
+    return _stranded_dependency_problems(doc, state, set(indices))
+
+
+def _stranded_dependency_problems(
+    doc: "PlanDoc", state: SessionState, newly_declined: set[int],
+) -> list[str]:
+    """Stages that stay live but depend on a declined stage and so could never become ready.
+
+    Declined = `newly_declined` plus every stage the session already holds SKIPPED. Run on
+    every approve that has any declined stage, not only on `--skip-optional`: a replan can
+    carry a SKIPPED stage forward and add a live optional stage that depends on it."""
+    declined = newly_declined | {s.index for s in state.stages if is_skipped(s)}
+    problems: list[str] = []
+    for stage in doc.stages:
+        stranded = sorted(d for d in stage.depends_on if d in declined)
+        if stage.index not in declined and stranded:
+            problems.append(
+                f"stage {stage.index} depends on declined stage(s) {stranded} — decline it too "
+                f"or keep them"
+            )
+    return problems
+
+
 def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     # plan_presentation_blockers is fail-open on the RECEIPT side (mirrors
     # plan_review_blockers) but fail-CLOSED on the DELIVERY side: approval — the
@@ -5611,8 +5820,25 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             _approved_doc, _approved_data, _approved_digest = load_plan_with_digest(state.plan_path)
         except (OSError, PlanError):
             _approved_doc = None
-    review_blockers = gates.plan_review_blockers(state, state.plan_path)
+    skip_optional = sorted(set(getattr(args, "skip_optional", None) or []))
     by_agent = bool(args.by and args.by.strip().casefold() == AGENT_ACTOR)
+    if skip_optional:
+        skip_problems = _skip_optional_problems(
+            skip_optional, _approved_doc, state, by_agent=by_agent)
+        if skip_problems:
+            return Directive(False, state.node, "fix_plan",
+                             "cannot approve: --skip-optional names stages that cannot be "
+                             "declined (fix the indices and re-run approve)",
+                             data={"problems": skip_problems})
+    elif _approved_doc is not None and any(is_skipped(s) for s in state.stages):
+        stranded_problems = _stranded_dependency_problems(_approved_doc, state, set())
+        if stranded_problems:
+            return Directive(False, state.node, "fix_plan",
+                             "cannot approve: a live stage depends on a declined (SKIPPED) "
+                             "stage and would never become ready (edit the plan and re-run "
+                             "approve)",
+                             data={"problems": stranded_problems})
+    review_blockers = gates.plan_review_blockers(state, state.plan_path)
     blockers = (
         gates.blockers(state, "plan_approval")
         + plugins.plugin_gate_blockers(state, "plan_approval")
@@ -5628,6 +5854,23 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty approver: --by must name who approved"]
     elif by_agent:
+        # A stage the customer declined and that has since changed, been renumbered or
+        # re-added (or stopped being optional) is live again; the resource boundary below
+        # cannot see that, and `--skip-optional` is refused for the agent, so its approval
+        # would dispatch work the customer turned down. Two lines of defence: the decline
+        # keyed by the stage's issue, and the marker the stage itself carries. Only a
+        # customer approval re-offers the choice.
+        revived = sorted(
+            {s.index for s in state.stages if s.outcome.declined and not is_skipped(s)}
+            | set(gates.declined_live_optional(
+                state.stages, gates.declined_issue_set(state), gates.declined_title_set(state)))
+        )
+        if revived:
+            blockers = blockers + [
+                f"--by {args.by!r} refused: stage(s) {revived} were declined by the customer "
+                "and have changed since -- the customer must choose again (approve by the "
+                "customer, with --skip-optional to keep them declined)"
+            ]
         # The coordinator approves only inside the boundary the user approved for this
         # order (a ledger entry and an eligible verdict on the CURRENT bytes); it never
         # stamps the ledger, so its approval is never a later boundary.
@@ -5668,6 +5911,36 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # The single-buffer read above failed (OSError/PlanError) -- fall back to
         # the legacy best-effort re-read rather than leaving the digest stale.
         _stamp_accepted_plan_digest(state, state.plan_path)
+    # Before arm: the effort estimate the window is armed against must not price work the
+    # user just declined.
+    for skipped_index in skip_optional:
+        skipped = state.stage(skipped_index)
+        skipped.outcome.status = StageStatus.SKIPPED.value
+        skipped.outcome.declined = True
+        skipped.outcome.actual = "declined at approval (optional stage)"
+    for s in state.stages:
+        if not is_skipped(s):
+            s.outcome.declined = False
+    previous = (
+        order_approvals.latest_user_approved_record(order_digest(_approved_doc))
+        if _approved_doc is not None and _approved_doc.meta.order is not None else None
+    )
+    if not by_agent:
+        # The customer's own choice, made again: a stage left live is no longer declined; the
+        # issues of stages no longer in the plan stay, so re-adding one is still the
+        # customer's call. "Stay" includes the declines this session never saw: they are
+        # read from the order's last approval record, or the same act would keep a decline
+        # in the session that made it and erase it in any other.
+        kept = {s.backlog_issue for s in state.stages if is_skipped(s) and s.backlog_issue}
+        offered = {
+            s.backlog_issue for s in state.stages
+            if s.optional and s.backlog_issue and not is_skipped(s)
+        }
+        state.declined_issues = sorted(
+            (set(state.declined_issues) | set(order_approvals.declined_issues_of(previous)) | kept)
+            - offered)
+    if skip_optional:
+        state.log("skip_optional", by=args.by, stages=skip_optional)
     effort.arm(state)  # opens the effort-divergence window — see effort.py's ARMED-ONLY
     # Fold this session's review-round counts into the cross-session task accumulator
     # (item B) BEFORE the reset-to-0 below — approval is the reset point, so this is
@@ -5760,7 +6033,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                 for scale in effort.RATIO_SCALES
             }
             order_approvals.record_approval(
-                order_digest(_approved_doc),
+                order_key,
                 plan_sha256=_approved_digest or "",
                 resources=all_resources,
                 unresolved_identities=all_unresolved,
@@ -5768,6 +6041,9 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                 by=args.by,
                 at=dt.datetime.now(dt.timezone.utc).isoformat(),
                 effort_estimate=armed_estimate,
+                declined_issues=sorted(state.declined_issues),
+                declined_stages=gates.declined_stage_entries(
+                    state, order_approvals.declined_stages_of(previous)),
             )
             state.order_effort_frozen = armed_estimate
             actual_now = effort.actual(state)
@@ -5937,7 +6213,7 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
         # (every stage already PASSED); a genuine dependency problem (a non-ready,
         # non-PASSED stage) must NOT be silently finalized, so it keeps the prior
         # non-ok directive below.
-        if state.node == Node.PARTITIONED.value and state.all_stages_passed():
+        if state.node == Node.PARTITIONED.value and state.all_stages_settled():
             state.node = transition(state.node, "finalize_partitioned")
             state.log("finalize_partitioned")
             store.save(state)
@@ -6132,7 +6408,7 @@ def _try_reattest(
     state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
     state.log("reattest", stage=stage.index)
     store.save(state)
-    if state.all_stages_passed():
+    if state.all_stages_settled():
         return Directive(True, state.node, "verify_final",
                           f"stage {stage.index} re-attested; all stages passed")
     return Directive(True, state.node, "next_stage",
@@ -8007,7 +8283,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
             fire = _record_effort_fire(state, div, now=now)
             return _diagnose_effort_divergence(state, store, div, fire)
         store.save(state)
-        if state.all_stages_passed():
+        if state.all_stages_settled():
             d = Directive(True, state.node, "verify_final", f"stage {stage.index} passed; all stages passed")
         else:
             d = Directive(True, state.node, "next_stage", f"stage {stage.index} passed; more stages ready")
@@ -8131,6 +8407,8 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
     failures: list[str] = []
     for stage in state.stages:
+        if is_skipped(stage):
+            continue
         crit = stage.criterion
         if crit.criterion_type == CriterionType.MEASURABLE.value and crit.verify_kind == CheckKind.LANDED.value:
             # No re-freeze here: verify-final re-checks the delivered_head each
@@ -8609,16 +8887,24 @@ def cmd_reject(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         targets: list[Stage] = []
         for idx in raw:
             try:
-                targets.append(state.stage(int(idx)))
+                target = state.stage(int(idx))
             except KeyError:
                 return Directive(
                     False, state.node, "noop",
                     f"reject --stage {idx} does not exist in the plan",
                 )
-    elif state.stages:
-        targets = [max(state.stages, key=lambda s: s.index)]  # default: the final stage
+            if is_skipped(target):
+                return Directive(
+                    False, state.node, "noop",
+                    f"reject --stage {idx} names a SKIPPED stage; a declined optional stage "
+                    "is never re-opened (R8: SKIPPED is settled and is never dispatched)",
+                )
+            targets.append(target)
     else:
-        return Directive(False, state.node, "noop", "reject has no stages to re-open")
+        live = [s for s in state.stages if not is_skipped(s)]
+        if not live:
+            return Directive(False, state.node, "noop", "reject has no stages to re-open")
+        targets = [max(live, key=lambda s: s.index)]  # default: the final non-declined stage
     state.node = transition(state.node, "reject")  # RESOLUTION -> DIAGNOSING
     for s in targets:
         s.outcome.status = StageStatus.FAILED.value
@@ -10075,12 +10361,25 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             reattest_digest=stage_reattest_digest(ns),
         ))
     state.reattest_stash = reattest_stash
+    declined_issues = gates.declined_issue_set(state)
+    declined_titles = gates.declined_title_set(state)
     for ns in new.stages:
         prev = live_by_index.get(ns.index)
-        if (prev is not None
-                and prev.outcome.status == StageStatus.PASSED.value
-                and stage_carried(state.stages, new.stages, ns.index)):
-            ns.outcome = prev.outcome
+        if prev is not None and stage_carried(state.stages, new.stages, ns.index):
+            # A declined optional stage whose definition did not move stays declined; a
+            # changed one goes back to PENDING for a fresh choice at the customer's
+            # re-approval.
+            if prev.outcome.status == StageStatus.PASSED.value or (
+                is_skipped(prev) and ns.optional
+            ):
+                ns.outcome = prev.outcome
+        # The customer's decline follows the stage's identity (its issue), not its index,
+        # and outlives a reset to PENDING: `approve --by agent` refuses while a declined
+        # stage is live, so only a customer approval can bring it back.
+        if is_skipped(ns) or (
+            not is_settled(ns) and gates.is_declined_stage(ns, declined_issues, declined_titles)
+        ):
+            ns.outcome.declined = True
     state.stages = new.stages
     _sync_venue_from_plan(state, new)
     state.final_check = new.meta.final_check
@@ -10382,6 +10681,16 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     originating = int(getattr(args, "originating_stage", None) or state.current_stage or 0)
     if not originating:
         return Directive(False, state.node, "noop", "cannot determine originating stage; pass --originating-stage")
+    try:
+        declined_origin = is_skipped(state.stage(originating))
+    except KeyError:
+        declined_origin = False
+    if declined_origin:
+        return Directive(
+            False, state.node, "noop",
+            f"push-subplan: originating stage {originating} is SKIPPED; a declined optional "
+            "stage is never run, so it cannot spawn a sub-plan",
+        )
     child_plan = args.plan
     child_task = getattr(args, "task", None) or f"sub:{Path(child_plan).stem}"
 
@@ -10570,8 +10879,9 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     # re-point at a stage this same call is about to mark PASSED.
     try:
         orig = state.stage(frame.originating_stage)
-        orig.outcome.status = StageStatus.PASSED.value
-        orig.control = f"satisfied by sub-plan {child_task_id}"
+        if not is_skipped(orig):
+            orig.outcome.status = StageStatus.PASSED.value
+            orig.control = f"satisfied by sub-plan {child_task_id}"
     except KeyError:
         pass
     _restore_current_stage(state)
@@ -10892,6 +11202,11 @@ COMMANDS = {
     "push-subplan": cmd_push_subplan,
     "pop-subplan": cmd_pop_subplan,
     "task-reset": cmd_task_reset,
+    "mandate-grant": cmd_mandate_grant,
+    "mandate-extend": cmd_mandate_extend,
+    "mandate-resume": cmd_mandate_resume,
+    "mandate-stop": cmd_mandate_stop,
+    "mandate-status": cmd_mandate_status,
 }
 
 
@@ -10939,6 +11254,7 @@ _SESSION_COMMANDS = (
     "verify-final", "resolve", "reject",
     "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status",
     "drive", "close", "push-subplan", "pop-subplan", "task-reset",
+    "mandate-grant", "mandate-extend", "mandate-resume", "mandate-stop", "mandate-status",
 )
 
 # (dest, subcommands that declare it)
@@ -11026,8 +11342,11 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "comma-separated stage indices the launcher narrowed the pass to"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
+    ("mandate_id", ("mandate-grant", "mandate-extend", "mandate-resume", "mandate-stop",
+                    "mandate-status"),
+     "mandate slug the state directory is keyed by"),
     ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge", "resolve-permission",
-            "task-reset"),
+            "task-reset", "mandate-grant", "mandate-extend", "mandate-resume"),
      "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
      "identity token like any other --by, not free text)"),
     # --decision is NOT listed here: argparse `choices=` already makes it a non-candidate
@@ -11537,6 +11856,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="why this acceptance stands without judge corroboration "
                          "(required with --bypass)")
     sp = add("approve"); sp.add_argument("--session", required=True); sp.add_argument("--by", required=True)
+    sp.add_argument("--skip-optional", dest="skip_optional", type=int, action="append",
+                    default=[], metavar="INDEX",
+                    help="decline an `optional = true` stage at approval (repeatable); the "
+                         "stage is marked SKIPPED, never dispatched, and counts as settled")
     _UNIT_HELP = ("delivery unit as '<mode>|<stages csv>|<title>[|<ref>]' "
                   "(mode: inline|spawn|subtask); repeatable")
     sp = add("partition"); sp.add_argument("--session", required=True)
@@ -11833,6 +12156,33 @@ def build_parser() -> argparse.ArgumentParser:
                     help="why this task's accumulated cross-session friction is being forgiven")
     sp.add_argument("--by", required=True,
                     help="the customer authorizing the reset; the coordinator is refused")
+
+    def add_mandate(name: str, help_: str, *, by: bool = False) -> argparse.ArgumentParser:
+        sub = add(name, help=help_)
+        sub.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+        sub.add_argument("--id", dest="mandate_id", default=mandate_rules.DEFAULT_MANDATE_ID,
+                         help="mandate slug (default: %(default)s)")
+        if by:
+            sub.add_argument("--by", required=True,
+                             help="the customer authorizing this; the coordinator is refused")
+        return sub
+
+    sp = add_mandate("mandate-grant", "create the standing mandate for the background debt cycle", by=True)
+    sp.add_argument("--days", type=float, default=None, help="term length in days")
+    for limit, unit in (
+        ("daily_usd", "USD"), ("weekly_usd", "USD"), ("item_usd_cap", "USD"),
+        ("item_minutes_cap", "minutes"), ("cycle_minutes_cap", "minutes"),
+        ("veto_window_hours", "hours"),
+    ):
+        sp.add_argument(f"--{limit.replace('_', '-')}", dest=limit, type=float, default=None,
+                        help=f"override the default ({unit})")
+    sp.add_argument("--max-items", dest="max_items", type=int, default=None,
+                    help="items taken per cycle")
+    sp = add_mandate("mandate-extend", "push the mandate's expiry out", by=True)
+    sp.add_argument("--days", type=float, required=True, help="days to add past the later of now and expiry")
+    add_mandate("mandate-resume", "unpause the mandate and close its breaker", by=True)
+    add_mandate("mandate-stop", "pause the mandate, disable its timer, kill a running cycle")
+    add_mandate("mandate-status", "show the mandate, its spend windows and whether a cycle may start")
     return p
 
 

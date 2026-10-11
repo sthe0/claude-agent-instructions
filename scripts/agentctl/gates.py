@@ -87,6 +87,7 @@ from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESS
 from .state import PLAN_PRESENTATION_KIND_REPLAN_DIFF as _PLAN_PRESENTATION_KIND_REPLAN_DIFF
 from .state import Stage as _Stage
 from .state import asserts_landing
+from .state import is_settled, is_skipped
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
 from .text_shape import normalize_string as _normalize_string
 
@@ -124,11 +125,87 @@ def plan_approval_blockers(state: SessionState) -> list[str]:
     return out
 
 
+def declined_issue_set(state: SessionState) -> set[str]:
+    """The backlog issues the customer has declined in this session.
+
+    The recorded `declined_issues`, plus the issue of every stage that is SKIPPED or still
+    marked declined right now (a state written before the list existed holds the decline
+    only on the stage)."""
+    out = set(state.declined_issues)
+    out.update(
+        s.backlog_issue for s in state.stages
+        if (is_skipped(s) or s.outcome.declined) and s.backlog_issue
+    )
+    return out
+
+
+def declined_title_set(state: SessionState) -> set[str]:
+    """Titles of the stages this session holds as declined (SKIPPED, or offered again and
+    still marked) -- the identity of a declined stage that is no longer optional."""
+    return {s.title for s in state.stages if s.outcome.declined or is_skipped(s)}
+
+
+def is_declined_stage(
+    stage: _Stage,
+    declined_issues: "set[str] | frozenset[str]",
+    declined_titles: "set[str] | frozenset[str]" = frozenset(),
+) -> bool:
+    """Whether `stage` is work the customer declined: the ONE identity rule.
+
+    An optional stage is identified by its `backlog_issue`, never by its index (a replan
+    renumbers). A stage that stopped being optional has no issue left to name -- the loader
+    forbids one on a required stage -- so it is matched by title. A re-keyed issue or a
+    renamed required stage is a different stage: the accepted limit of both halves.
+
+    Every carry site, the agent-approval blocker and the autonomy boundary read the decline
+    through this function, whether the session or the approval record holds it, so they
+    cannot disagree about what a declined stage is."""
+    if stage.optional:
+        return stage.backlog_issue in declined_issues
+    return stage.title in declined_titles
+
+
+def declined_live_optional(doc_or_stages, declined_issues, declined_titles=()) -> list[int]:
+    """Indices of the stages that are still live although the customer declined them.
+
+    `doc_or_stages` is a plan document or a list of stages; a stage that is SKIPPED is not
+    live. The issues and titles are plain collections, so a carrier other than the session
+    (an order-level record) can be passed in without touching this rule; the identity
+    itself is `is_declined_stage`'s."""
+    stages = getattr(doc_or_stages, "stages", doc_or_stages)
+    issues, titles = set(declined_issues), set(declined_titles)
+    return sorted(
+        s.index for s in stages if is_declined_stage(s, issues, titles) and not is_skipped(s)
+    )
+
+
+def declined_stage_entries(
+    state: SessionState, prior_entries: "list[dict] | None" = None,
+) -> list[dict]:
+    """The `{"issue", "title"}` pairs a customer approval stamps on the order's record.
+
+    One per issue in `state.declined_issues` whose stage title is known: from a SKIPPED
+    stage of this session, else from `prior_entries` (the previous approval record), so an
+    issue whose stage the plan no longer holds keeps its title. A title the approved plan
+    holds as a live stage is dropped -- the customer just approved that stage, so the
+    decline of it lapses with that choice."""
+    titles = {e["issue"]: e["title"] for e in (prior_entries or [])}
+    titles.update({
+        s.backlog_issue: s.title for s in state.stages if is_skipped(s) and s.backlog_issue
+    })
+    live = {s.title for s in state.stages if not is_skipped(s)}
+    return [
+        {"issue": issue, "title": titles[issue]}
+        for issue in sorted(set(state.declined_issues))
+        if titles.get(issue) and titles[issue] not in live
+    ]
+
+
 def resolution_blockers(state: SessionState) -> list[str]:
     out: list[str] = []
     if not state.stages:
         out.append("no stages defined")
-    unpassed = [s.index for s in state.stages if s.outcome.status != StageStatus.PASSED.value]
+    unpassed = [s.index for s in state.stages if not is_settled(s)]
     if unpassed:
         out.append(f"stages not PASSED: {unpassed}")
     out.extend(_acceptance_review_resolution_blockers(state))
@@ -3140,7 +3217,7 @@ def _renorm_stage_residual(stage) -> tuple:
     `plan.stage_question_key` is most of it, and would have been all of it but for its
     own scope: that key answers whether a disposed Question still targets the same
     bytes, and a Question.target may only name a stage field the plan's author writes
-    as an activity element. Five engine-consumed fields fall outside that and are
+    as an activity element. The engine-consumed fields below fall outside that and are
     spliced on here, because a renormalization is defined by what it does NOT touch:
 
     * `actor.cost_tier` — the dispatch budget label and the effort-divergence estimate's
@@ -3165,19 +3242,25 @@ def _renorm_stage_residual(stage) -> tuple:
       footing as `actor.cost_tier`: no Question.target names it, but re-declaring it
       under the light path would move which `output_artifacts` entries the ephemeral-
       artifacts check is trusted to skip.
+    * `optional` / `backlog_issue` — whether the customer may decline the stage at
+      approval, and the backlog issue it traces to in place of an order requirement.
+      Either one changes what the stage IS to the customer; flipping a required stage
+      to optional under the light path would let it be declined without an approval
+      that saw it offered as declinable.
     * `renorms` — the norm files a re-norming stage edits. Same footing again: it binds a
       нормативное critique to its consequence, and moving it under the light path would
       re-route which stage owns an open norm-edit obligation.
 
     Deliberately outside, and the only things outside: `index` (the key both sides are
     matched ON, so a change there is an added/removed stage, refused above), and the
-    mutable execution RECORD `outcome` / `criterion.observation` / `control` — a plan doc
-    loaded from TOML carries the defaults for those, and the live state's copies are what
-    this path exists to leave alone.
+    mutable execution RECORD `outcome` (including `outcome.declined`, the customer's
+    decline already recorded against the stage) / `criterion.observation` / `control` —
+    a plan doc loaded from TOML carries the defaults for those, and the live state's
+    copies are what this path exists to leave alone.
 
     Hand-written, like every membership list of this family, and pinned the same way:
     `test_the_stage_residual_exhausts_the_stage_s_field_set` goes red when a field is
-    added to `Stage` and to neither the key nor the five splices above."""
+    added to `Stage` and to neither the key nor the splices above."""
     return (
         stage_question_key(stage),
         stage.actor.cost_tier,
@@ -3186,6 +3269,8 @@ def _renorm_stage_residual(stage) -> tuple:
         *grants_place(stage),
         *effects_place(stage),
         stage.ephemeral_artifacts_waiver,
+        stage.optional,
+        stage.backlog_issue,
         tuple(stage.renorms),
     )
 
@@ -3260,6 +3345,9 @@ def blockers(state: SessionState, gate_name: str) -> list[str]:
 AUTONOMY_REASON_NO_VERSION = "no user-approved version for this order"
 AUTONOMY_REASON_ORDER_CHANGED = "the order itself changed since the user's approval"
 AUTONOMY_REASON_OPEN_FIRE = "open spend/wall-clock fire owed to the user"
+AUTONOMY_REASON_DECLINED_STAGE = (
+    "a stage the customer declined at their approval is live in this plan"
+)
 
 
 def _identity_key(identity) -> str:
@@ -3274,13 +3362,20 @@ def _resource_name(data: dict) -> str:
 
 
 def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict | None = None,
-                      *, protected: list[str] | None = None) -> dict:
+                      *, protected: list[str] | None = None,
+                      live_optional=None) -> dict:
     """Whether the coordinator may approve `resolved_plan` (a `plan_resources.
     BoundaryView`) on the user's behalf, given the order's ledger snapshot: the same
     order, no resource outside what the user approved for it, no changed command of
     unknown effect without a first passing thinker review, no open fire owed to the
-    user. Pure: every input is a stored value; the reference is the last USER-approved
-    version, never the previous plan."""
+    user, and no stage live that the user declined at that approval.
+    Pure: every input is a stored value; the reference is the last USER-approved
+    version, never the previous plan.
+
+    `live_optional` is the plan's stages the caller holds as still on offer (a
+    `BoundaryView` carries no stages); the decline is read from the approval record, by
+    `is_declined_stage`'s identity (issue while optional, title once required), so a
+    session that never saw the decline cannot lose it."""
     from . import order_approvals as _oa
 
     last = _oa.latest_user_approved_of(ledger_snapshot)
@@ -3289,7 +3384,7 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
         "reasons": [AUTONOMY_REASON_NO_VERSION],
         "order_changed": False, "extra_resources": [], "unresolved_changed_commands": [],
         "thinker_pass": None, "open_effort_fire": bool(ledger_snapshot.get("open_effort_fires")),
-        "first_verdict_key": None,
+        "first_verdict_key": None, "declined_live_optional": [],
     }
     if last is None:
         return out
@@ -3299,6 +3394,17 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
         reasons.append(AUTONOMY_REASON_ORDER_CHANGED)
     if out["open_effort_fire"]:
         reasons.append(AUTONOMY_REASON_OPEN_FIRE)
+
+    stages = list(live_optional or [])
+    out["declined_live_optional"] = declined_live_optional(
+        stages, _oa.declined_issues_of(last), _oa.declined_titles_of(last))
+    if out["declined_live_optional"]:
+        names = {s.index: s.backlog_issue or s.title for s in stages}
+        reasons.append(
+            AUTONOMY_REASON_DECLINED_STAGE + ": " + ", ".join(
+                f"stage {i} ({names[i]})" for i in out["declined_live_optional"]
+            )
+        )
 
     approved = _oa.boundary_resources_of(ledger_snapshot)
     seen: set[str] = set()
