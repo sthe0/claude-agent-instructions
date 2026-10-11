@@ -353,7 +353,7 @@ The gate keys on the **record carrying targets, not on the label** of its failur
 
 ### Norm handoff (`AGENTCTL_NORM_HANDOFF`, `parent_link`, `children`)
 
-*Difficulty removed:* a spawned specialist's engine session knew nothing of the stage that caused its spawn — its depth came from a bare `AGENT_RECURSION_DEPTH` and its parent's norm only from prose in the prompt. A spawn is a depth n+1 manager whose brief is its parent stage's norm; the engine now carries that norm to it as one verifiable record.
+*Difficulty removed:* a spawned specialist's engine session knew nothing of the stage that caused its spawn — its depth came from a bare `AGENT_RECURSION_DEPTH` and its parent's norm only from prose in the prompt. A spawn is a depth n+1 manager whose brief is its parent stage's norm; the engine now carries that norm to it as one verifiable record. The decision and its premises are recorded in [ADR-0009](../../docs/adr/0009-specialist-as-manager.md).
 
 **The record.** When `spawn-specialist.py` is given `--session S` and `--stage-index n` and stage `n` resolves in S's plan (`state.plan_path`, else the approved snapshot), it writes one JSON file atomically under `<state root>/handoffs/` — `schema: "norm-handoff/v1"`, `parent_session`, `stage_index`, `kind`, `norm` (the stage's `StageNorm.to_dict()`), `norm_digest`, `grants` (the stage's effective engine grants, `[]` when none), `depth` (the child's depth), `norm_lineage` and `created_at` — and exports `AGENTCTL_NORM_HANDOFF=<absolute path>:<sha256 of the file's bytes>` to the child. The writer and the reader both go through `agentctl/norm_handoff.py`, which is the one place that knows the shape. Any other spawn (no session or stage, unknown session, unreadable plan, stage absent from it, a failed write) exports nothing and **removes** an inherited value: an ancestor's variable names the ancestor's stage, never this spawn's. The wrapper never writes the parent session's state file, and a write failure is a stderr warning, never a failed spawn.
 
@@ -369,7 +369,7 @@ The gate keys on the **record carrying targets, not on the label** of its failur
 
 ### Delegation rules: norm-loop, grant-widening, `LOOP_DETECTED`
 
-*Difficulty removed:* a child could be handed the very task it was spawned for (a re-delegation loop that only the depth cap stops), and a delegated stage could hold more authority than the stage that spawned its session. Both are decidable from the handoff the child already carries, so the wrapper refuses them before any process launches; what is **not** decidable — whether a task *re-frames* an ancestor's — stays with the model.
+*Difficulty removed:* a child could be handed the very task it was spawned for (a re-delegation loop that only the depth cap stops), and a delegated stage could hold more authority than the stage that spawned its session. Both are decidable from the handoff the child already carries, so the wrapper refuses them before any process launches; what is **not** decidable — whether a task *re-frames* an ancestor's — stays with the model. Decision record: [ADR-0009](../../docs/adr/0009-specialist-as-manager.md).
 
 **Rule, not perception.** The engine compares exactly: `norm_digest` equality against `parent_link.norm_lineage`, and resource coverage of a grant. It never compares wording. "This task re-frames the ancestor's" is the model's judgement, asked for through `loop_self_check` below and answered with the `LOOP_DETECTED` marker.
 

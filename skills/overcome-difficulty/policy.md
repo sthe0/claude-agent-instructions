@@ -63,7 +63,7 @@ If the child hits its budget cap (`--max-budget-usd`) without emitting a marker,
 
 - **Per-level budget** — `--budget` is the tier label recorded for the spawn (default `medium` = `budget-medium-usd` for overcome-difficulty spawns); the wrapper passes the global `spawn-runaway-ceiling-usd` as the actual `--max-budget-usd` kill. Hitting the cap returns control to the caller.
 - **Visible depth** — `AGENT_RECURSION_DEPTH` is in env and in the prompt; each level knows where it is in the stack.
-- **Loop sensitivity at depth ≥ `loop-sensitivity-depth`** (see `~/.claude-agent/config.md`) — the spawned level must self-check whether its task is a re-framing of an ancestor's task. If yes, return `LOOP_DETECTED:` early rather than recursing further.
+- **Loop sensitivity at depth ≥ `loop-sensitivity-depth`** (see `~/.claude-agent/config.md`) — the engine already refuses an unchanged re-delegation of an ancestor's norm (norm-loop) and, at this depth, hands the child the ancestors' titles and done criteria as `loop_self_check`. What stays judgment is whether the task is a re-framing of an ancestor's task; if yes, return `LOOP_DETECTED:` early rather than recursing further.
 - **Transcripts persist** — each spawned level leaves a session transcript at `~/.claude/projects/<cwd-hash>/<sid>.jsonl`. Useful for post-mortem if recursion was long.
 
 ## Cursor (use spawn-cursor-escape.py)
