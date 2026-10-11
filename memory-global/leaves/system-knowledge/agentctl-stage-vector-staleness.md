@@ -43,8 +43,8 @@ common case — a review round adds a phase), re-run
 this takes the supported `revise_plan` edge, which does `state.stages = doc.stages` — a full
 rebuild — and preserves `plan_review`, `plan_presentations` and the digest, because
 `_still_covers` compares via `changed_parts` and unchanged bytes move nothing. It costs one
-increment of `plan_review_rounds` (reset on approve) and re-launches the question
-enumeration.
+increment of `plan_review_rounds` (reset on approve). (Historically it also re-launched
+the question enumeration; that standalone enumerator is retired.)
 
 **Repair after the fact.** From APPROVED there is **no legal edge** that rebuilds the
 vector: `submit_plan` requires `node=PLANNING`, `revise_plan` requires `node=PLAN_READY`,
@@ -61,9 +61,7 @@ is the visible symptom.
 
 ## See also
 
-- [[question-provenance-gate]] — the `premise` gate that guards plan approval; its
-  enumeration cross-check re-runs on every `submit-plan`, and on large plans it fails on
-  an OS argv limit (Core backlog
-  [#127](https://github.com/sthe0/claude-agent-instructions/issues/127)), so a repair
-  re-submit usually needs a fresh `question-enumerate-escape`.
+- [[question-provenance-gate]] — the `premise` gate that guards plan approval. Its
+  standalone enumeration cross-check (and `question-enumerate-escape`) is retired;
+  customer questions now come from the review acts.
 - `scripts/agentctl/README.md` — state machine and plan-freeze rules.

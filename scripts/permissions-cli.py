@@ -16,6 +16,9 @@ import json
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import worktree_route
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_FILE = REPO_ROOT / "permissions" / "global.json"
 
@@ -156,6 +159,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if (args.cmd in ("grant", "revoke") and args.file.resolve().is_relative_to(REPO_ROOT)
+            and worktree_route.should_route(REPO_ROOT)):
+        return worktree_route.route_script(
+            REPO_ROOT, "scripts/permissions-cli.py",
+            sys.argv[1:] if argv is None else list(argv),
+            f"permissions: {args.cmd} {args.pattern}",
+            path_options=("--file",),
+        )
     return args.func(args)
 
 

@@ -36,6 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import edit_ledger
+from lib import worktree_route
 from lib.config_root import project_memory_dirs
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -170,6 +171,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true",
                         help="write changes (default: dry-run)")
     args = parser.parse_args(argv)
+
+    if (args.apply and args.scope in ("global", "all")
+            and worktree_route.should_route(REPO_ROOT)):
+        return worktree_route.route_script(
+            REPO_ROOT, "scripts/stamp-memory-dates.py",
+            sys.argv[1:] if argv is None else list(argv),
+            "memory: stamp-memory-dates --apply",
+            path_options=("--project-dir",),
+        )
 
     leaves = list(iter_leaves(args.scope, args.project_dir))
     changed: list[str] = []

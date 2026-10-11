@@ -1,6 +1,6 @@
 ---
 name: developer
-description: Specialization. TRIGGER for writing, refactoring, debugging, or reviewing production code; implementing per an approved plan; fixing bugs; modifying tests/build/config. Invoke **inline** via `Skill` when the manager already has the target files loaded and the plan's steps fit the *small change* carve-out (CLAUDE.md § Classify task weight); otherwise **spawn** as a separate `claude -p` process (CLAUDE.md § Spawning specialists). SKIP for trivial read-only questions (manager handles directly) and non-code work; for planning use `planner` — though `developer` MAY be spawned **read-only advisory** to validate technical feasibility/architecture during planning (no code changes).
+description: Specialization. TRIGGER for writing, refactoring, debugging, or reviewing production code; implementing per an approved plan; fixing bugs; modifying tests/build/config. Invoke **inline** via `Skill` when the manager already has the target files loaded and the plan's steps fit the *small change* carve-out (CLAUDE.md § Classify task weight); otherwise **spawn** as a separate `claude -p` process (CLAUDE.md § Delegating to specialists & skills). SKIP for trivial read-only questions (manager handles directly) and non-code work; for planning use `planner` — though `developer` MAY be spawned **read-only advisory** to validate technical feasibility/architecture during planning (no code changes).
 ---
 
 # Developer specialization
@@ -78,6 +78,8 @@ These almost always need `PERMISSION-REQUEST:` before execution unless the grant
 ## Commit & push cadence
 
 On a **personal ticket / working branch** (anything not main / master / release-*), commit in small increments and **push after each commit**. Frequent pushed commits make rollback cheap and keep the manager's PR current — never withhold ticket-branch pushes waiting for the coordinator to "handle the PR". Pushing to an **open PR's branch is safe**: on VCSs with draft PRs the pushed commits land as a **draft** update and are not shown to reviewers until an explicit publish. Only **shared-branch** pushes (§ When the plan step involves external / irreversible actions) need `PERMISSION-REQUEST:`.
+
+In Core worktrees the git-worktrees reaper pushes committed non-trunk branches at turn end, so there commit and never land; the push-after-commit rule above applies to other repos.
 
 **Address the worktree in the commit itself:** `git -C <worktree> commit …`, never a bare `git commit`. A `cd` does not persist between tool calls, so a bare commit runs in the *session's* directory — if that is the canonical checkout, it commits canon's index (a linked worktree keeps its own), which the canon guard correctly denies. Background: `docs/decisions/canon-guard-bare-commit-verdict.md`.
 

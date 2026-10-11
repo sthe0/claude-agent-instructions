@@ -1,5 +1,11 @@
 # Advisor enumeration latency — calibration note
 
+> **Historical for the question cross-check.** `advisor.enumerate_questions_health`, the call this dataset
+> was measured through, is retired together with the standalone `question-enumerate` run (task
+> `norm-staleness`). The measured latency and the 480 s scalar still bind `advisor.enumerate_claims`
+> (`ledger-enumerate`), which keeps `advisor.ENUMERATE_TIMEOUT_S`; the sections below that speak of the
+> question enumeration describe the retired route.
+
 Dataset: `docs/operations/advisor-calibration.jsonl`, 15 rows, 5 distinct plan sizes, 3 repeats each.
 Measured by driving the real `advisor.enumerate_questions_health` through `functools.partial(advisor.subprocess_runner, timeout=600)`, so no datapoint is truncated by the 20 s cap under repair.
 

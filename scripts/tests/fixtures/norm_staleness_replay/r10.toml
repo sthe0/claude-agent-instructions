@@ -1,0 +1,516 @@
+# Replay fixture for stage 6 of norm-staleness: the real rating-after-landing plan, revision 10
+# (the plan whose edit 10 -> 11 re-ran the whole review walk). Cut from the real TOML:
+# the structure the engine keys on is kept verbatim -- stage indices, depends_on, supplies,
+# output_artifacts, coverage, the [[final_check]] list and all of stage 6 -- and the prose
+# of every other stage is shortened. r11.toml moves exactly two fields from this file:
+# the third final_check command and stage 6's verify_command.
+
+[meta]
+task_id = "rating-after-landing"
+goal = "The 1-5 quality rating is asked only after the task's work has landed on trunk and final verification has passed, and the engine decides every link of that order mechanically."
+done_criterion = "After landing, in the canonical checkout: the new engine tests, the hook and prose tests pass, CLAUDE.md is at most 39451 chars and lint-prose-length exits 0, the landed check for stage 7 is green, and the external provider reports PR 16287880 as landed."
+criterion_type = "measurable"
+weight_class = "substantive"
+repo_root = "/home/the0/claude-agent-instructions"
+delivery_worktree = "/home/the0/cai-wt-rating-after-landing"
+external_research = "In-repo only; git patch-id semantics and the existing plugin seams were read."
+context = '''Difficulty removed. The coordinator asked for the 1-5 rating together with the land/push option, so the user rated a task before knowing whether its work landed. A rating is a verdict on an outcome; it must come after the outcome exists. Each link of that order is closed mechanically: M1, M2, A-G.'''
+
+[meta.order]
+customer_id = "user"
+customer = "the user, who objected to being asked for the quality rating before the task's push"
+functional_place = "The resolution gate's rating: the place where the user's verdict on a finished task is recorded into the quality ledger."
+requires_traceability = true
+
+[[meta.order.requirements]]
+id = "R1"
+text = "Prose order: every surface that describes the resolution step says land, then verify-final, then the marked resolution ask with rating."
+derivation = "A repo-wide grep showed the norm repeated on eight surfaces."
+
+[[meta.order.requirements]]
+id = "R2"
+text = "Hook text: the resolution reminder hook tells the coordinator to land before the resolution AskUserQuestion; assertions run on joined constant strings."
+derivation = "The previous negative grep was vacuous because the phrase spans two source lines."
+
+[[meta.order.requirements]]
+id = "R3"
+text = "Plan-time landing waiver: a substantive plan with a delivery worktree declares a landed check or a landing_waiver; resolve refuses otherwise."
+derivation = "A waiver chosen at resolve time is chosen by the actor the gate constrains."
+
+[[meta.order.requirements]]
+id = "R4"
+text = "Tests accompany every engine, hook, prose and instruction change, each new test file failing on the base tree."
+derivation = "memory-global/leaves/tests-accompany-code.md."
+
+[[meta.order.requirements]]
+id = "R5"
+text = "CLAUDE.md does not grow and lint-prose-length.py stays green."
+derivation = "config.md claude-md-max-chars."
+
+[[meta.order.requirements]]
+id = "R6"
+text = "The Core change is landed on origin/main before verify-final, and this task follows the new order itself."
+derivation = "landing-discipline.md."
+
+[[meta.order.requirements]]
+id = "R7"
+text = "M1 resolution-ask ordering: resolve --quality needs an answered AskUserQuestion carrying the marker after the verify-final stamp."
+derivation = "Both ends of the order are already machine records."
+
+[[meta.order.requirements]]
+id = "R8"
+text = "M2 squash landing: the landed check recognizes a squash of 2+ commits by combined patch-id."
+derivation = "A squash commit's diff equals the branch's combined diff against the merge-base."
+
+[[meta.order.requirements]]
+id = "R9"
+text = "A: the landed check proves THIS task's work: a delivery venue and a Task trailer in a frozen range."
+derivation = "A repo_root-venue stage freezes a commit already on trunk."
+
+[[meta.order.requirements]]
+id = "R10"
+text = "C: the hook fires at the landing moment and resolve refuses while the delivery branch holds unlanded commits."
+derivation = "The hook probed only at RESOLUTION, after the moment landing is due."
+
+[[meta.order.requirements]]
+id = "R11"
+text = "E: gate overrides are logged; the model judge is not widened; stale descriptions are corrected."
+derivation = "An unlogged override silently converts a gate into advisory text."
+
+[[meta.order.requirements]]
+id = "R12"
+text = "F (Core): an org-neutral landed-check provider seam with a plugin directory and a contract."
+derivation = "The git landed check cannot see a non-git VCS."
+
+[[meta.order.requirements]]
+id = "R13"
+text = "F (external VCS): a landed-check provider and landing-moment hook, landed into trunk by the owner self-ship path."
+derivation = "The org-specific plugin lives in the org tree behind the neutral seam."
+
+[[meta.order.requirements]]
+id = "R14"
+text = "G: the planner's and the plan-reviewer's rules require a decidability argument for every unmechanized claim, waiver, warning and judge."
+derivation = "Neither role's rules asked which mechanical source decides the omission."
+
+[meta.order.coverage]
+R1 = ["stage 6 verify_command", "final_check 2"]
+R2 = ["stage 5 verify_command", "final_check 2"]
+R3 = ["stage 3 verify_command", "final_check 1"]
+R4 = ["stage 1 verify_command", "stage 2 verify_command", "stage 3 verify_command", "stage 4 verify_command", "stage 5 verify_command", "stage 6 verify_command", "stage 7 verify_command", "stage 9 verify_command"]
+R5 = ["stage 6 verify_command", "final_check 3"]
+R6 = ["stage 8 landed assertion", "final_check 4"]
+R7 = ["stage 4 verify_command", "final_check 1"]
+R8 = ["stage 1 verify_command", "final_check 1"]
+R9 = ["stage 1 verify_command", "final_check 1"]
+R10 = ["stage 3 verify_command", "stage 5 verify_command", "final_check 1", "final_check 2"]
+R11 = ["stage 3 verify_command", "stage 4 verify_command", "stage 5 verify_command", "final_check 1"]
+R12 = ["stage 2 verify_command", "final_check 1"]
+R13 = ["stage 9 verify_command", "final_check 5"]
+R14 = ["stage 7 verify_command", "final_check 2"]
+
+[[final_check]]
+label = "engine tests (landed proof, squash, provider seam, landing gate, resolution-ask marker) and the existing resolve/gates/close/landed/submission tests pass in the canonical checkout"
+venue = "repo_root"
+command = '''python3 -m pytest -q -n 0 -p no:cacheprovider scripts/tests/test_landed_check_task_proof.py scripts/tests/test_landed_provider_seam.py scripts/tests/test_resolve_landing_gate.py scripts/tests/test_resolution_ask_marker_gate.py scripts/tests/test_gates.py scripts/tests/test_drive_close.py scripts/tests/test_resolve_solved_marker.py scripts/tests/test_landed_check_verify.py scripts/tests/test_landed_check_schema.py scripts/tests/test_landed_check_keys.py scripts/tests/test_landed_check_migration.py scripts/tests/test_check_venue.py scripts/tests/test_check_venue_lint.py scripts/tests/test_convergence_r2_negative_control.py scripts/tests/test_plan_delivery_gate_hook.py scripts/tests/test_transcript_turns.py scripts/tests/test_difficulty_channel.py'''
+expected_exit = 0
+
+[[final_check]]
+label = "hook, prose-order, salience and decidability-rule tests pass in the canonical checkout"
+venue = "repo_root"
+command = '''python3 -m pytest -q -n 0 -p no:cacheprovider scripts/tests/test_resolution_reminder_hook.py scripts/tests/test_resolution_landing_order.py scripts/tests/test_quality_salience.py scripts/tests/test_decidability_rule_anchor.py'''
+expected_exit = 0
+
+[[final_check]]
+label = "CLAUDE.md did not grow and prose-length lint is green"
+venue = "repo_root"
+command = '''test $(python3 -c "print(len(open('CLAUDE.md', encoding='utf-8').read()))") -le 39451 && python3 scripts/lint-prose-length.py'''
+expected_exit = 0
+
+[[final_check]]
+label = "the Core delivery (through stage 7) is landed on origin/main"
+kind = "landed"
+
+[final_check.landed]
+target = "main"
+remote = "origin"
+delivered_stage = 7
+
+[[final_check]]
+label = "External provider, loaded through Core's provider seam from the ticket mount, reports the already-merged PR 16287880 as landed in trunk"
+venue = "repo_root"
+command = '''T=$(mktemp -d) && test -n "$T" && trap 'rm -rf -- "$T"' EXIT && mkdir -p "$T/providers" && ln -s /home/the0/task-mounts/rating-after-landing-ext/landed-check/providers/ext.py "$T/providers/ext.py" && CLAUDE_LANDED_CHECK_PLUGIN_DIR="$T" python3 scripts/landed-provider-check.py --provider ext --token 16287880 --target trunk'''
+expected_exit = 0
+
+[[stage]]
+index = 1
+knowledge_refs = ["/home/the0/claude-agent-instructions/scripts/agentctl/README.md"]
+title = "R8+R9: the git landed check proves THIS task's commits and recognizes a squash landing"
+executor = "spawn:developer"
+material = "scripts/agentctl/state.py, cli.py, submission.py, plan.py. Traces R8, R9, R4."
+material_refs = ["scripts/agentctl/state.py", "scripts/agentctl/cli.py", "scripts/agentctl/submission.py", "scripts/agentctl/plan.py", "scripts/agentctl/README.md"]
+output_artifacts = ["scripts/tests/test_landed_check_task_proof.py"]
+means = "Edit tool on the engine files; pytest with real temp git repos."
+method = "Traces R8, R9, R4. The landed command requires a delivery venue and a Task trailer in the frozen range, and tests squash by combined patch-id."
+procedure = "1. Edit the engine. 2. Write the test file. 3. Run the verify_command. 4. One commit with trailers."
+conditions = "Work only in the delivery worktree; never edit the canonical checkout; no push."
+preconditions = "Worktree exists at the base commit."
+invariants = "The landed command stays one network-free bash -c string with exit codes 0/1/97."
+knowledge = "git patch-id --stable ignores whitespace and line numbers."
+capability_required = "Developer fluent in git plumbing and the agentctl landed-check machinery."
+criterion_type = "measurable"
+expected_result_image = "A commit with trailers Task and Stage: 1; the new landed-check test file passes and fails on the base tree."
+done_criterion = "verify_command exits 0 on the committed tree and negative_control exits 1."
+verify_venue = "delivery"
+verify_venue_at_final = "repo_root"
+verify_command = "python3 -m pytest -q -n 0 -p no:cacheprovider scripts/tests/test_landed_check_task_proof.py"
+expected_exit = 0
+negative_control = "false"
+expected_negative_exit = 1
+depends_on = []
+cost_tier = "large"
+grants = { allow = ["Bash(python3 -m pytest:*)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git log:*)", "Bash(git status:*)"] }
+
+[stage.principle]
+statement = "A verdict must cover the evidence domain it claims."
+source = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
+derivation = "A landed check that freezes HEAD of whatever tree the stage ran in claims more than its evidence."
+confidence = "high"
+refutation = "Refuted if a landed check goes green for a range with no Task trailer."
+
+[[stage]]
+index = 2
+knowledge_refs = ["/home/the0/claude-agent-instructions/scripts/agentctl/README.md"]
+title = "R12: org-neutral landed-check provider seam in Core"
+executor = "spawn:developer"
+material = "scripts/lib/plugin_dir.py, scripts/agentctl/plan.py, state.py, cli.py. Traces R12, R4."
+material_refs = ["scripts/agentctl/plan.py", "scripts/agentctl/state.py", "scripts/agentctl/cli.py", "scripts/setup-symlinks.sh", "docs/operations/org-portability.md"]
+output_artifacts = ["scripts/agentctl/landed_providers.py", "scripts/landed-provider-check.py", "scripts/tests/test_landed_provider_seam.py"]
+means = "Edit tool; plugin_dir helpers; pytest with a fake provider."
+method = "Traces R12, R4. A provider module loaded from the plugin dir with freeze and is_landed, a CLI that maps the verdict to an exit code."
+procedure = "1. Write the seam. 2. Wire the engine. 3. Write the CLI and tests. 4. One commit with trailers."
+conditions = "Same worktree; no org-specific identifiers anywhere in Core."
+preconditions = "Stage 1 passed."
+invariants = "The git provider path is unchanged from stage 1."
+knowledge = "Existing seams: difficulty-channel adapters, task-entry backends, sandbox composers."
+capability_required = "Developer fluent in this repo's plugin seams."
+criterion_type = "measurable"
+expected_result_image = "A commit with trailers Task and Stage: 2; the provider seam tests pass and fail on the base tree."
+done_criterion = "verify_command exits 0 on the committed tree and negative_control exits 1."
+verify_venue = "delivery"
+verify_venue_at_final = "repo_root"
+verify_command = "python3 -m pytest -q -n 0 -p no:cacheprovider scripts/tests/test_landed_provider_seam.py"
+expected_exit = 0
+negative_control = "false"
+expected_negative_exit = 1
+depends_on = [1]
+cost_tier = "medium"
+grants = { allow = ["Bash(python3 -m pytest:*)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git log:*)", "Bash(git status:*)"] }
+
+[[stage.supplies]]
+on = 1
+element = "material"
+
+[stage.principle]
+statement = "Org-specific mechanics attach to Core through a typed plugin seam."
+source = "docs/operations/org-portability.md"
+derivation = "The decision is mechanical for the org's VCS but Core may not name the org."
+confidence = "high"
+refutation = "Refuted if Core gains an org-specific identifier."
+
+[[stage]]
+index = 3
+knowledge_refs = ["/home/the0/claude-agent-instructions/scripts/agentctl/README.md"]
+title = "R3+R10+R11: plan-time landing_waiver, resolve landing gate, unlanded-branch blocker, logged overrides"
+executor = "spawn:developer"
+material = "scripts/agentctl/plan.py, submission.py, gates.py, cli.py. Traces R3, R10, R11, R4."
+material_refs = ["scripts/agentctl/plan.py", "scripts/agentctl/submission.py", "scripts/agentctl/gates.py", "scripts/agentctl/cli.py", "scripts/agentctl/README.md"]
+output_artifacts = ["scripts/tests/test_resolve_landing_gate.py"]
+means = "Edit tool; git through the injected Runner; pytest."
+method = "Traces R3, R10, R11, R4. A typed plan field, a submission rule, a resolve gate and an unlanded-branch blocker."
+procedure = "1. Plan field. 2. Submission rule. 3. Gate and blockers. 4. Tests. 5. One commit with trailers."
+conditions = "Same worktree; do not touch prose surfaces or the hook."
+preconditions = "Stage 2 passed."
+invariants = "gates.resolution_blockers is unchanged."
+knowledge = "Node RESOLUTION is reachable only through a passing verify-final."
+capability_required = "Developer fluent in the agentctl engine."
+criterion_type = "measurable"
+expected_result_image = "A commit with trailers Task and Stage: 3; the landing gate tests pass and fail on the base tree."
+done_criterion = "verify_command exits 0 on the committed tree and negative_control exits 1."
+verify_venue = "delivery"
+verify_venue_at_final = "repo_root"
+verify_command = "python3 -m pytest -q -n 0 -p no:cacheprovider scripts/tests/test_resolve_landing_gate.py"
+expected_exit = 0
+negative_control = "false"
+expected_negative_exit = 1
+depends_on = [2]
+cost_tier = "large"
+grants = { allow = ["Bash(python3 -m pytest:*)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git log:*)", "Bash(git status:*)"] }
+
+[[stage.supplies]]
+on = 2
+element = "material"
+
+[stage.principle]
+statement = "An escape hatch from a gate must be declared before the work it excuses and every use counted."
+source = "scripts/agentctl/submission.py negative_control_waiver"
+derivation = "A resolve-time waiver is written by the actor the gate constrains after the outcome is known."
+confidence = "high"
+refutation = "Refuted if a substantive session resolves with neither a landed check nor a landing_waiver."
+
+[[stage]]
+index = 4
+knowledge_refs = ["/home/the0/claude-agent-instructions/scripts/agentctl/README.md"]
+title = "R7+R11: resolve --quality requires an answered resolution-ask marker after the verify-final stamp"
+executor = "spawn:developer"
+material = "scripts/agentctl/state.py, cli.py, scripts/lib/transcript_turns.py. Traces R7, R11, R4."
+material_refs = ["scripts/agentctl/state.py", "scripts/agentctl/cli.py", "scripts/lib/transcript_turns.py", "scripts/hook-plan-delivery-gate.py", "scripts/agentctl/gates.py"]
+output_artifacts = ["scripts/tests/test_resolution_ask_marker_gate.py"]
+means = "Edit tool; harness transcript JSONL; pytest with synthetic transcripts."
+method = "Traces R7, R11, R4. A literal marker single-sourced in state.py, a transcript scanner and a resolve blocker."
+procedure = "1. Marker and stamp. 2. Scanner. 3. Gate. 4. Tests. 5. One commit with trailers."
+conditions = "Same worktree; the plan-delivery gate's observable behaviour must not change."
+preconditions = "Stage 3 passed."
+invariants = "The transcript path is always derived from the session id."
+knowledge = "The plan-approval gate already binds a literal marker in an AskUserQuestion option."
+capability_required = "Developer fluent in the engine and the harness transcript format."
+criterion_type = "measurable"
+expected_result_image = "A commit with trailers Task and Stage: 4; the marker gate tests pass and fail on the base tree."
+done_criterion = "verify_command exits 0 on the committed tree and negative_control exits 1."
+verify_venue = "delivery"
+verify_venue_at_final = "repo_root"
+verify_command = "python3 -m pytest -q -n 0 -p no:cacheprovider scripts/tests/test_resolution_ask_marker_gate.py"
+expected_exit = 0
+negative_control = "false"
+expected_negative_exit = 1
+depends_on = [3]
+cost_tier = "large"
+grants = { allow = ["Bash(python3 -m pytest:*)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git log:*)", "Bash(git status:*)"] }
+
+[[stage.supplies]]
+on = 3
+element = "material"
+
+[stage.principle]
+statement = "An ordering of two recorded events is a rule, decided by the records, not by prose discipline."
+source = "CLAUDE.md preamble"
+derivation = "Both ends of the order are already machine records."
+confidence = "high"
+refutation = "Refuted if a substantive resolve --quality succeeds with no marked ask after verify-final."
+
+[[stage]]
+index = 5
+knowledge_refs = ["/home/the0/claude-agent-instructions/scripts/agentctl/README.md"]
+title = "R2+R10+R11: hook fires at the landing moment and says land before the resolution ask"
+executor = "spawn:developer"
+material = "scripts/hook-resolution-reminder.py, scripts/lib/hook_wiring.py. Traces R2, R10, R11, R4."
+material_refs = ["scripts/hook-resolution-reminder.py", "scripts/lib/hook_wiring.py", "scripts/tests/test_resolution_reminder_hook.py"]
+output_artifacts = []
+means = "Edit tool; importlib loading of the hook module; pytest."
+method = "Traces R2, R10, R11, R4. A landing_pending predicate and joined-constant assertions."
+procedure = "1. Predicate. 2. Messages. 3. Tests. 4. One commit with trailers."
+conditions = "Same worktree; hook exit codes and fail-open behaviour unchanged."
+preconditions = "Stage 4 passed."
+invariants = "The hook always exits 0."
+knowledge = "The hook currently fires its probes only when node is RESOLUTION."
+capability_required = "Developer fluent in this repo's hook conventions."
+criterion_type = "measurable"
+expected_result_image = "A commit with trailers Task and Stage: 5; the hook tests pass and fail on the base tree."
+done_criterion = "verify_command exits 0 on the committed tree and negative_control exits 1."
+verify_venue = "delivery"
+verify_venue_at_final = "repo_root"
+verify_command = "python3 -m pytest -q -n 0 -p no:cacheprovider scripts/tests/test_resolution_reminder_hook.py"
+expected_exit = 0
+negative_control = "false"
+expected_negative_exit = 1
+depends_on = [4]
+cost_tier = "medium"
+grants = { allow = ["Bash(python3 -m pytest:*)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git log:*)", "Bash(git status:*)"] }
+
+[[stage.supplies]]
+on = 4
+element = "material"
+
+[stage.principle]
+statement = "A nudge must fire at the moment its action is due."
+source = "scripts/hook-resolution-reminder.py"
+derivation = "A nudge gated on RESOLUTION arrives after landing is due."
+confidence = "high"
+refutation = "Refuted if a session at VERIFYING with an unlanded branch gets no landing nudge."
+
+[[stage]]
+index = 6
+title = "R1+R5: prose surfaces say land, verify-final, then the marked resolution ask with rating; CLAUDE.md does not grow; prose-order tests"
+executor = "spawn:developer"
+material = "CLAUDE.md § On task resolution (intro naming the closing sequence; 'Recap one line … Bundle … (push, scope) … 1-5 quality rating as the first resolution option'; 'Push, then land into trunk/main — proactively, at the resolution gate … landing is first and (Recommended) in the resolution AskUserQuestion'); memory-global/leaves/landing-discipline.md (frontmatter description, title, :22 'Bundle the delivering step into the resolution AskUserQuestion…', the 'rides that same click-gate' paragraph); memory-global/leaves/quality-regression-investigation.md § 1 (:28-40); cursor/rules/claude-code-sync.mdc (:134 'bundle the delivering option into that same ask'); memory-global/leaves/coordinator-pitfalls.md (:63 row); memory-global/leaves/systemic-pattern-scan.md (:61); memory-global/leaves/coordination/MEMORY.md (:21 'the AskUserQuestion bundling rule'); memory-global/leaves/review-accompanies-code.md (:37 'trunk/main at the resolution gate'); scripts/tests/test_quality_salience.py. Traces R1, R5, R4."
+material_refs = ["CLAUDE.md", "memory-global/leaves/landing-discipline.md", "memory-global/leaves/quality-regression-investigation.md", "cursor/rules/claude-code-sync.mdc", "memory-global/leaves/coordinator-pitfalls.md", "memory-global/leaves/systemic-pattern-scan.md", "memory-global/leaves/coordination/MEMORY.md", "memory-global/leaves/review-accompanies-code.md", "scripts/tests/test_quality_salience.py"]
+knowledge_refs = ["/home/the0/claude-agent-instructions/scripts/agentctl/README.md", "/home/the0/claude-agent-instructions/memory-global/leaves/tests-accompany-code.md"]
+output_artifacts = ["scripts/tests/test_resolution_landing_order.py"]
+means = "Edit tool on the listed files; pytest; scripts/lint-prose-length.py; scripts/verify-all.py."
+method = '''Traces R1, R5 and R4. Requirements:
+(a) Order on every listed surface: push and land into trunk/main is its own step BEFORE verify-final — a separate AskUserQuestion only where a trunk push needs confirmation (pre-authorized pushes and a landing stage approved with the plan just run); then verify-final; then the resolution AskUserQuestion carrying the `[resolution-ask]` marker and the agent-proposed 1-5 rating as its first option. Where a surface already discusses resolve, name the engine backstops in one clause: landed check proves this task's commits; a git-delivery plan declares a landed check or `landing_waiver`; resolve refuses an unlanded delivery branch and a rating without a marked ask after verify-final.
+(b) Anchor phrases present (one test case per surface, verbatim): CLAUDE.md, landing-discipline.md, quality-regression-investigation.md and the cursor mirror each contain 'before `verify-final`'; CLAUDE.md's resolution region still contains '1-5 quality rating'; CLAUDE.md, landing-discipline.md, quality-regression-investigation.md and the cursor mirror each contain '[resolution-ask]' (CLAUDE.md within the 39451-char budget the removed bundling clauses free); landing-discipline.md contains 'landing_waiver'; coordinator-pitfalls.md, review-accompanies-code.md and coordination/MEMORY.md each contain 'before the resolution AskUserQuestion'.
+(c) Forbidden phrases absent (tests assert absence on the whole decoded file text, so a phrase split across a line break is still caught by also checking the whitespace-normalized text): 'landing is **first and `(Recommended)`**' and '(push, scope)' in CLAUDE.md; 'Bundle the delivering step into the resolution' in landing-discipline.md; 'bundle the delivering option into that same ask' in the cursor mirror; 'and "push?"' in systemic-pattern-scan.md; 'the AskUserQuestion bundling rule' in coordination/MEMORY.md; 'trunk/main at the resolution gate' in review-accompanies-code.md; coordinator-pitfalls.md's corrective action reads 'land before the resolution ask' (it may keep its historical incident text).
+(d) landing-discipline.md keeps all other content (mechanisms, review-gated definition, branch deletion, gh pr merge --merge rule, scratch teardown); only the bundling contract becomes an ordering contract; frontmatter description and last_verified updated.
+(e) CLAUDE.md: reword, never add — final char count (python len of the decoded text) at most 39451; the cursor mirror stays within cursor-mirror-max-lines (220); lint-prose-length.py exits 0.
+(f) Tests: new scripts/tests/test_resolution_landing_order.py, parametrized over the eight surfaces (b)+(c), at least 12 cases; test_quality_salience.py keeps its two tests (update only if an anchor moved), no assertion weakened.
+(g) Meaning: the tests decide presence/absence of phrases only; whether each surface MEANS the order is the user's acceptance review at stage 8 (no engine state, transcript marker, VCS fact or plan field encodes English semantics).'''
+procedure = '''1. Edit CLAUDE.md § On task resolution: merge the 'Push, then land' bullet into the ordering statement (land -> verify-final -> marked rating ask), drop 'push' from the Recap bullet's bundling list, keep the landing-discipline.md link; measure chars.
+2. Edit the seven other surfaces per (a)-(d).
+3. Write scripts/tests/test_resolution_landing_order.py; adjust test_quality_salience.py only if needed.
+4. Run the verify_command, scripts/lint-prose-length.py, then python3 scripts/verify-all.py.
+5. One commit with trailers `Task: rating-after-landing` and `Stage: 6`.'''
+conditions = "Same worktree and branch, continuing from stage 5's commit; never edit the canonical checkout; no push; English; Edit tools only; do not touch engine or hook files. Code review via the engine gate as in stage 1. Traces R1, R5."
+preconditions = "Stage 5 passed and its commit is HEAD of the branch."
+invariants = "CLAUDE.md char count does not exceed 39451; no rule other than the landing/rating order changes meaning. Traces R1, R5."
+knowledge = "CLAUDE.md was 39451 chars on 2026-10-08 against claude-md-max-chars 39500 (lint WARN at 99%), so the edit must be net-zero-or-shorter; the cursor mirror was 203 of 220 lines. The engine names (`[resolution-ask]`, `landing_waiver`, `--landing-waiver`) come from stages 3-4. Traces R1, R5."
+capability_required = "Developer comfortable with concise English instruction prose and pytest (traces R1)."
+criterion_type = "measurable"
+expected_result_image = "A commit with trailers `Task: rating-after-landing` and `Stage: 6`; anchor phrases present and forbidden phrases absent on all eight surfaces; test_resolution_landing_order.py (12+ cases) and test_quality_salience.py pass; CLAUDE.md <= 39451 chars; lint-prose-length.py exits 0; the new test file fails against 4b298b94."
+done_criterion = "verify_command exits 0 on the committed tree and negative_control exits 1."
+verify_venue = "delivery"
+verify_venue_at_final = "repo_root"
+verify_command = '''git log --format=%B 4b298b94..HEAD | grep -qx 'Stage: 6' && python3 -m pytest -q -n 0 -p no:cacheprovider scripts/tests/test_resolution_landing_order.py scripts/tests/test_quality_salience.py && test $(python3 -m pytest -q --collect-only -p no:cacheprovider scripts/tests/test_resolution_landing_order.py | grep -c '::') -ge 12 && test $(python3 -c "print(len(open('CLAUDE.md', encoding='utf-8').read()))") -le 39451 && python3 scripts/lint-prose-length.py && grep -qF '[resolution-ask]' CLAUDE.md && grep -qF '[resolution-ask]' memory-global/leaves/quality-regression-investigation.md && grep -qF '[resolution-ask]' cursor/rules/claude-code-sync.mdc && grep -qF '[resolution-ask]' memory-global/leaves/landing-discipline.md'''
+expected_exit = 0
+negative_control = '''T=$(mktemp -d) || exit 0; test -n "$T" || exit 0; trap 'rm -rf -- "$T"' EXIT; git archive 4b298b94 | tar -x -C "$T" || exit 0; cp scripts/tests/test_resolution_landing_order.py "$T/scripts/tests/" || exit 0; cd "$T" || exit 0; python3 -m pytest -q -n 0 -p no:cacheprovider scripts/tests/test_resolution_landing_order.py >/dev/null 2>&1; rc=$?; test $rc -eq 1 && exit 1; exit 0'''
+expected_negative_exit = 1
+depends_on = [5]
+cost_tier = "medium"
+grants = { allow = ["Bash(python3 -m pytest:*)", "Bash(python3 scripts/verify-all.py:*)", "Bash(python3 scripts/lint-prose-length.py:*)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git show:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git archive:*)", "Bash(git status:*)"] }
+
+[[stage.supplies]]
+on = 5
+element = "material"
+
+[[stage.supplies]]
+on = 3
+element = "knowledge"
+
+[[stage.supplies]]
+on = 4
+element = "knowledge"
+
+[stage.principle]
+statement = "A norm stated on several surfaces must be changed on all of them or it re-emerges from the unchanged one; a test of prose decides presence, not meaning."
+source = "User correction 2026-10-08; memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md; the surface list from a repo-wide grep of the bundling phrases (2026-10-08)."
+derivation = "The coordinator reads CLAUDE.md, the landing leaf, the quality leaf and the cursor mirror at the resolution moment; each currently prescribes the bundled ask, so leaving any one unchanged keeps producing it. Pinning anchors and forbidden phrases per surface makes a silent regression visible, while the claim stays honest about deciding only presence."
+confidence = "high"
+refutation = "Refuted if, after landing, a resolution turn following these surfaces still offers land/push and the rating in one AskUserQuestion."
+
+[[stage]]
+index = 7
+knowledge_refs = ["/home/the0/claude-agent-instructions/scripts/agentctl/README.md"]
+title = "R14: planner and plan-reviewer rules require a decidability argument for every unmechanized claim, waiver, warning and judge"
+executor = "spawn:developer"
+material = "skills/specializations/planner/policy.md, planner/SKILL.md, thinker/SKILL.md. Traces R14, R5, R4."
+material_refs = ["skills/specializations/planner/policy.md", "skills/specializations/planner/SKILL.md", "skills/specializations/thinker/SKILL.md"]
+output_artifacts = ["scripts/tests/test_decidability_rule_anchor.py"]
+means = "Edit tool; pytest; scripts/lint-prose-length.py."
+method = "Traces R14, R5, R4. A policy section, a pointer in the planner skill and a numbered item in the thinker skill."
+procedure = "1. Policy section. 2. Pointer and thinker item. 3. Anchor test. 4. One commit with trailers."
+conditions = "Same worktree; skills/self-improvement untouched."
+preconditions = "Stage 6 passed."
+invariants = "No other planner or thinker rule changes meaning."
+knowledge = "CLAUDE.md's preamble already states the rule/perception separation."
+capability_required = "Developer comfortable with concise instruction prose."
+criterion_type = "measurable"
+expected_result_image = "A commit with trailers Task and Stage: 7; the anchor phrase is present in the policy and the thinker skill."
+done_criterion = "verify_command exits 0 on the committed tree and negative_control exits 1."
+verify_venue = "delivery"
+verify_venue_at_final = "repo_root"
+verify_command = "python3 -m pytest -q -n 0 -p no:cacheprovider scripts/tests/test_decidability_rule_anchor.py"
+expected_exit = 0
+negative_control = "false"
+expected_negative_exit = 1
+depends_on = [6]
+cost_tier = "small"
+grants = { allow = ["Bash(python3 -m pytest:*)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git log:*)", "Bash(git status:*)"] }
+
+[[stage.supplies]]
+on = 6
+element = "material"
+
+[stage.principle]
+statement = "A rule that neither the author nor the reviewer is asked to apply is applied by neither."
+source = "This task's own history; CLAUDE.md preamble."
+derivation = "Adding the question to both roles makes its absence a reviewable concern."
+confidence = "medium"
+refutation = "Refuted if a later plan still carries an unargued waiver the reviewer does not raise."
+
+[[stage]]
+index = 8
+knowledge_refs = ["/home/the0/claude-agent-instructions/scripts/agentctl/README.md"]
+title = "R6: land the Core branch on origin/main, pull the canonical checkout, remove worktree and branch before verify-final"
+executor = "in_thread"
+material = "Branch rating-after-landing after stages 1-7. Traces R6."
+material_refs = ["scripts/land-branch.py"]
+output_artifacts = []
+means = "git fetch and merge; land-branch.py; git pull --ff-only in the canonical checkout."
+method = "Delivers R1-R5 and R7-R12, R14 to trunk (R6). Fetch, check the frozen commit's trailer, land fast-forward, pull canon."
+procedure = "As method, in order; stop and report on any red check."
+conditions = "Landing to main is approved by the user as part of this plan's approval; fast-forward only."
+preconditions = "Stages 1-7 passed."
+invariants = "No force-push; trunk only fast-forwards."
+knowledge = "land-branch.py warns harmlessly when the remote branch never existed."
+capability_required = "Root coordinator."
+criterion_type = "measurable"
+expected_result_image = "origin/main and the canonical checkout's main contain all seven Stage commits of the task."
+done_criterion = "The engine's landed check for delivered_stage 7 against origin/main exits 0."
+verify_kind = "landed"
+depends_on = [7]
+cost_tier = "small"
+grants = { allow = ["Bash(git fetch origin:*)", "Bash(python3 scripts/land-branch.py:*)", "Bash(git pull --ff-only:*)"] }
+
+[[stage.supplies]]
+on = 7
+element = "material"
+
+[stage.principle]
+statement = "A change is delivered when it is on trunk and in the checkout every session reads."
+source = "memory-global/leaves/landing-discipline.md"
+derivation = "Sessions load the engine from the canonical checkout, so a change only on a branch alters no future resolution."
+confidence = "high"
+refutation = "Refuted if the next substantive resolve accepts --quality without a marked ask."
+
+[stage.landed]
+target = "main"
+remote = "origin"
+delivered_stage = 7
+
+[[stage]]
+index = 9
+knowledge_refs = ["/home/the0/claude-agent-instructions/scripts/agentctl/README.md"]
+title = "R13: external landed-check provider and hook at the landing moment, landed into trunk by the owner self-ship path"
+executor = "spawn:developer"
+material = "The agents tree, edited in a ticket mount: setup-local.sh, hook-resolution-land-ext.py. Traces R13, R4."
+material_refs = ["/home/the0/task-mounts/rating-after-landing-ext/agents/common/scripts/setup-local.sh", "/home/the0/task-mounts/rating-after-landing-ext/agents/common/scripts/hook-resolution-land-ext.py"]
+output_artifacts = ["/home/the0/task-mounts/rating-after-landing-ext/agents/common/landed-check/providers/ext.py", "/home/the0/task-mounts/rating-after-landing-ext/agents/common/landed-check/tests/test-landed-check-ext.sh", "/home/the0/task-mounts/rating-after-landing-ext/agents/common/scripts/tests/test-resolution-land-ext.sh", "/home/the0/task-mounts/rating-after-landing-ext/agents/common/scripts/setup-local.sh"]
+means = "the VCS CLI; land and self-merge scripts; Core's landed_providers seam."
+method = "Traces R13, R4. The provider reports merged-into-target from the PR status; setup-local.sh registers it; the hook fires at the landing moment."
+procedure = "1. Mount. 2. Write provider, test, registration. 3. Land by the owner self-ship path."
+conditions = "Edits only in the ticket mount; only paths under agents/."
+preconditions = "Stage 8 passed."
+invariants = "No org-specific identifier enters Core; the provider never mutates a PR."
+knowledge = "the PR status query is read-only and needs a mounted working copy."
+capability_required = "Developer fluent in the VCS CLI and the agents tree."
+criterion_type = "measurable"
+expected_result_image = "The provider and its tests exist and pass; the PR is merged into trunk."
+done_criterion = "verify_command exits 0 and negative_control exits 1."
+verify_venue = "repo_root"
+verify_command = "true"
+expected_exit = 0
+negative_control = "false"
+expected_negative_exit = 1
+depends_on = [8]
+cost_tier = "large"
+grants = { allow = ["Bash(vcs mount:*)", "Bash(vcs pr status:*)"] }
+
+[[stage.supplies]]
+on = 8
+element = "material"
+
+[stage.principle]
+statement = "An org's VCS facts are decided by an org-side plugin behind a neutral seam."
+source = "org/vcs/storage-changes-land-on-trunk.md"
+derivation = "the PR status query already exposes the merged fact the seam needs."
+confidence = "medium"
+refutation = "Refuted if the provider reports a merged trunk PR as not landed."

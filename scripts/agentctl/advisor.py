@@ -276,29 +276,20 @@ def enumerate_questions_health(
     done-criterion an invariant can't hold) and per-element calls would both miss those
     and multiply the cost/latency by the element count for no recall gain.
 
-    Fail-open, exactly like enumerate_claims. The returned flag reports whether the
-    runner produced a usable answer, so the caller can record runner health and attach a
-    non-blocking advisory when the pass was vacuous — WITHOUT ever re-gating on it:
+    RETIRED for new plans (amendments-2.md E3): no engine path calls this any more —
+    a review act (unit, pair, stage, whole-plan) returns the customer questions this
+    cross-check used to produce, and the engine records them as `qrev-` candidates.
+    The function stays, with `ENUMERATE_TIMEOUT_S` and `enumerate_claims`, because the
+    advisor-latency measurement script and the advisor suites still exercise it.
+
+    Fail-open, exactly like enumerate_claims: the returned flag reports whether the
+    runner produced a usable answer, and the function RETURNS on a failed run instead
+    of raising.
 
       * runner is None        -> (None, [], "")        advisor absent (disabled/stubbed)
       * non-zero exit          -> (False, [], stderr)   runner reachable but failed
       * exception              -> (False, [], "")       timeout/crash swallowed
-      * success (0 exit)       -> (True, pairs, stderr) pairs may still be empty
-
-    Fail-open here means this function RETURNS on a failed run instead of raising — it
-    does not mean the failure is forgiven. Those are two different layers and they are
-    deliberately split: the mandatory obligation lives in the GATE, so that is where
-    refusing belongs. plugins_premise.premise_blockers now blocks approve whenever the
-    recorded `enumerated_runner_ok` is False, discharged only by a typed escape
-    (`agentctl question-enumerate-escape`) counted against the plan's content digest.
-    Two things survive that change unaltered. The pair COUNT still never gates
-    discharge: a genuinely question-free plan is a healthy run, and gating on the count
-    would wedge approve on a pass that worked. And `None` — the advisor absent — still
-    discharges on the flag alone with a non-blocking advisory, since blocking a fleet
-    that never had an advisor would refuse approve for a check it cannot run. `stderr`
-    is carried so a background caller (the detached enumeration worker) can surface WHY
-    a run failed without the caller needing its own capture path — and so the blocker
-    can pre-select the escape reason from it."""
+      * success (0 exit)       -> (True, pairs, stderr) pairs may still be empty"""
     if runner is None:
         return None, [], ""
     judge_ledger.begin_attributed_call("enumerate_questions_health")

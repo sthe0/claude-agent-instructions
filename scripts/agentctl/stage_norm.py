@@ -238,10 +238,11 @@ class StageNorm:
         return hashlib.sha256(repr(self.carry_key()).encode("utf-8")).hexdigest()
 
 
-def _interface_token(stage) -> str:
-    """A supplier's interface for the carry decision. Live stages have no PlanDoc, so a
-    blank-interface stage (whose digest would hash its rendered brief) is identified by
-    its whole carry key instead: wider than the interface, never narrower."""
+def interface_token(stage) -> str:
+    """A stage's interface as one comparable token, for a caller with no PlanDoc to render
+    a brief from (the carry decision, the order-item binding). A blank-interface stage
+    (whose digest would hash its rendered brief) is identified by its whole carry key
+    instead: wider than the interface, never narrower."""
     norm = StageNorm.from_stage(stage)
     if interface_empty(stage):
         return "full:" + norm.carry_digest()
@@ -268,6 +269,6 @@ def stage_carried(prev_stages, new_stages, index: int) -> bool:
     for sup in {e.on for e in new[index].supplies}:
         if sup not in prev or sup not in new:
             return False
-        if _interface_token(prev[sup]) != _interface_token(new[sup]):
+        if interface_token(prev[sup]) != interface_token(new[sup]):
             return False
     return True

@@ -14,7 +14,8 @@ A reaper is a Python module in one of the three layers below, defining:
 | `THROTTLE_HOURS` | minimum hours between real passes of this reaper; a finite number above 0 (default 24) |
 | `scan(ctx) -> list[Verdict]` | one `Verdict(path, action, reason, report=False)` per item it has an opinion on; `action` is `remove` or `keep`. No side effect beyond best-effort bookkeeping that checks `ctx.dry_run` and `ctx.due` |
 | `remove(path, ctx)` | delete one item the runner approved. Raise, or return `False`, when it did not happen |
-| `summary(verdicts) -> str \| None` | optional; one line for the SessionStart notice (the `git-worktrees` reaper uses it for worktrees kept for over a week) |
+| `summary(verdicts) -> str \| None` | optional; one line for the SessionStart notice (the `git-worktrees` reaper uses it for worktrees kept for over a week, and for branches origin lacks) |
+| `upkeep(ctx) -> list[str]` | optional; work that is not a removal and must run on every trigger rather than on the throttle (the `git-worktrees` reaper backs up unpushed branches). Returns report lines; honours `ctx.dry_run`. Called **only** by `--upkeep-only`, never by a plain pass |
 
 `ctx` (`scripts/reaper/contract.py: ReapContext`) carries `now`, `dry_run`, `due`, `project_dir`, `deadletter_dir` and two ownership queries over the session-scope registry: `ctx.owned_path(path)` compares real paths against each record's working directory and repo root, `ctx.owned_session(session_id)` compares session ids (in the sanitized form both stores use as file names). Both count a session as live when its pid is alive or its heartbeat is under 24 hours old.
 
@@ -52,8 +53,12 @@ Files starting with `_` are not reapers. A module that fails to import, calls `s
 | `--force-run` | A real run that ignores stamps, and writes none. No effect with `--dry-run` |
 | `--only NAME` | Restricts the run to one reaper: only it is due and can remove, the others still scan and veto, and only its lines print in a dry run. An unknown name exits 2 |
 | `--list` | Lists the discovered reapers and exits |
+| `--upkeep-only` | Runs only each reaper's `upkeep`: no scan, no removal, no stamp. Holds an exclusive lock on `~/.local/state/claude-reaper/upkeep.lock` and waits for it up to 120 s, then gives up. Prints each reaper's report lines; one `reaper <NAME>: upkeep failed: <why>` stderr line per raising `upkeep`, the others still run. Exits 0 on every path except invalid argv (exit 2). Honours `--dry-run` and `--only`. If the lock file cannot be created the run goes ahead unlocked |
+| `--no-wait` | Only with `--upkeep-only` (alone it is invalid argv): exit 0 at once when another upkeep run holds the lock |
 
 Use `--dry-run` before anything else on a new machine or after writing a reaper.
+
+`scripts/hook-branch-backup.py` is the Stop and SessionStart trigger of the upkeep. It spawns `hook-reaper.py --upkeep-only --no-wait` in its own session, appends that run's output to `~/.local/state/claude-reaper/upkeep.log`, and returns without waiting, printing nothing and exiting 0 whatever happens (a push can wedge on the network, and a Stop hook must not). It names its own repository, so the session's working directory is irrelevant. The pass that runs on SessionStart through `hook-reaper.py` never calls `upkeep`.
 
 ## The `git-worktrees` reaper
 
@@ -64,6 +69,22 @@ Source: `scripts/reaper/builtin/git_worktrees.py`. It looks at the repository th
 - **Branch worktree** (anywhere, except the main checkout and a worktree on `main`): removed when it is older than 24 hours, unowned, clean (`git status --porcelain` empty, untracked files count) and landed (`git cherry origin/main <branch>` prints no `+` line, so a fast-forward, a merge and a rebase all count). First `<iso-time> <branch> <sha> <path>` is appended to `reaped-branches.log` in the dead-letter directory; then the worktree is removed with plain `git worktree remove` (no `--force`, so git itself refuses one that turned dirty since the scan, and the runner keeps it); only then `git branch -D` runs, so a deleted branch can always be restored from the log line.
 - A stale unowned branch worktree with unlanded commits or local changes is **kept** (`unlanded <N>` / `dirty`). Once it is older than 7 days, `summary()` adds one SessionStart line naming how many there are and the command that lists them.
 - Any git failure for an entry is a keep for that entry. The main checkout, `refs/heads/main`, the working directory of the running process and the checkout holding the reaper code are never touched.
+
+### Backup duty (`upkeep`)
+
+Difficulty removed: a worktree branch holds the only copy of its commits until someone pushes it, and the reaper above is the one place that already knows which branches those are.
+
+Every `--upkeep-only` run pushes each worktree branch of this repository (the main checkout's branch included; detached, bare and branchless entries skipped) that is **not trunk** (`main`, `master`, `release-*`, `release/*`), has commits `git cherry origin/main <branch>` marks `+` (a branch landed by rebase is not resurrected), and whose tip origin does not already have: `refs/remotes/origin/<branch>` is missing or the tip is not its ancestor. It runs only local ref queries before the push; it never fetches.
+
+- **Plain push only.** `git push origin refs/heads/<b>:refs/heads/<b>`: no force flag, no leading `+`, no lease, no hook bypass, no working-tree command, so uncommitted and untracked files never leave the machine. A remote that moved on is a `rejected` outcome, not an overwrite. A branch whose origin tip is neither an ancestor nor a descendant of the local tip is **diverged**: reported, never pushed.
+- **Org-neutral check first.** The outgoing patch (`git log -p` of the commits origin lacks) is piped to `scripts/check-org-neutral.py -`; exit 1 skips the push as `blocked` / `org-neutral`, any other failure of the checker (missing, crash, timeout of 30 s) as `blocked` / `checker error`. The repository is public, so an unchecked push is not an option.
+- **Bounded and non-interactive.** `GIT_TERMINAL_PROMPT=0`, `LC_ALL=C`, ssh `BatchMode=yes` and `ConnectTimeout=10` (appended to any existing `GIT_SSH_COMMAND`, else `core.sshCommand`, else `ssh`), and a 60 s kill of the whole push process group (`timeout` outcome; the 60 s is an assumption, not a measured figure).
+- **Idempotent.** A successful push updates `refs/remotes/origin/<b>`, so the next run sees the branch as backed up and does nothing.
+- **Fail-open.** One branch failing (no push rights, rejection, timeout, exception) is logged and the loop goes on; nothing raises out of `upkeep`.
+- **Report and log.** One line per branch, `git-worktrees <WORD> <branch> <sha> [detail]` with `WORD` one of `PUSHED`, `REJECTED`, `BLOCKED`, `TIMEOUT`, `ERROR`, and `git-worktrees DIVERGED <branch>`. A dry run prints `WOULD-PUSH`, `BLOCKED` or `DIVERGED` and writes nothing. A live run appends one JSON line `{ts, branch, sha, outcome, detail}` per branch to `<config root>/reaper/branch-backup.jsonl`.
+- **Visible at session start.** `summary()` adds a line naming how many linked worktree branches hold commits origin lacks.
+
+Residuals, named rather than hidden: the checker runs before the push, so a branch that moves in between is pushed unchecked for its newest commits; `branch-backup.jsonl` and `upkeep.log` gain one line per unresolved `blocked` or `diverged` branch per run, with no deduplication or rotation; only this repository is covered; a machine without push rights logs an `error` per branch per run; the session-start count covers linked worktrees while the backup also covers the main checkout's branch.
 
 ## The `agentctl-state` reaper
 
@@ -87,7 +108,7 @@ What it deliberately keeps, and why:
 
 `scripts/tests/test_reaper_runner.py`, `scripts/tests/test_reaper_git_worktrees.py` and `scripts/tests/test_reaper_agentctl_state.py` are hermetic: throw-away git repositories, and `HOME`, the config root, the plugin dir, the project dir and `TMPDIR` redirected under `tmp_path`. A test never runs the real runner against a real checkout.
 
-`scripts/tests/reaper_mutation_control.py` holds a catalogue of named wrong versions of production lines (`keep-wins`, `error-isolation`, `removal-log-before-remove`, `realpath`, `landed-check`, `state-node-filter`, `state-age-floor`, `state-suffix-filter`, ...). `--mutant NAME` applies one to a scratch copy of `scripts/` and runs only its listed tests; exit **1** means killed (the anchor matched once and every listed test failed in its call phase), **0** survived, **3** anchor miss, **4** collection error, **5** a listed test was missing, errored or skipped, **6** unhandled exception. `--control` runs the same tests on the unmutated copy. The in-suite test runs the whole catalogue (about half a minute); the child runs set `REAPER_MUTATION_CHILD=1` so it skips itself. Run the first trial of the catalogue through `scripts/cap-run.sh`: it spawns a pytest per mutant.
+`scripts/tests/reaper_mutation_control.py` holds a catalogue of named wrong versions of production lines (`keep-wins`, `error-isolation`, `removal-log-before-remove`, `realpath`, `landed-check`, `state-node-filter`, `state-age-floor`, `state-suffix-filter`, `backup-push-duty`, `backup-never-force`, `backup-trunk-excluded`, `backup-skip-backed-up`, `backup-dry-run`, `backup-fail-open`, ...). `--mutant NAME` applies one to a scratch copy of `scripts/` and runs only its listed tests; exit **1** means killed (the anchor matched once and every listed test failed in its call phase), **0** survived, **3** anchor miss, **4** collection error, **5** a listed test was missing, errored or skipped, **6** unhandled exception. `--control` runs the same tests on the unmutated copy. The in-suite test runs the whole catalogue (about half a minute); the child runs set `REAPER_MUTATION_CHILD=1` so it skips itself. Run the first trial of the catalogue through `scripts/cap-run.sh`: it spawns a pytest per mutant.
 
 ## Adding a reaper
 

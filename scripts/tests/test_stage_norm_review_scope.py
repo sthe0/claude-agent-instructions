@@ -8,8 +8,8 @@ predates the interface digests cannot show an interface unchanged, so it widens 
 consumers and never narrows.
 
 Fixture: `_bounded_data` -- stage 2 relies on 1, stage 3 relies on 2, stage 4 is alone.
-Pairs: base-plan, plan-3, plan-4, 2-1, 3-2 (pair `b-s`: base b is the consumer, service
-s its supplier)."""
+Units: unit:base, unit:1..unit:4. Pairs: base-3 (the coverage-named stage), 2-1, 3-2 (pair
+`b-s`: base b is the consumer, service s its supplier); stage 4 has no pair."""
 from __future__ import annotations
 
 import dataclasses
@@ -17,6 +17,7 @@ import dataclasses
 import pytest
 
 from agentctl import gates
+from agentctl.plan import review_ids, review_units
 from agentctl.state import PlanReview
 
 from test_plan_review_topo import (  # noqa: F401  (fixtures + helpers)
@@ -131,25 +132,67 @@ def test_walk_stales_a_pair_for_its_service_end_only_when_the_interface_moved(ma
     assert "3-2" in _w(env)
 
 
+def _legacy_baseline(env):
+    """A whole-plan pass written before content-keyed currency existed: the shared
+    `_hand_baseline` (bindings + content currency), with the two currency maps removed,
+    on both the live record and the pass it is filed under."""
+    _hand_baseline(env)
+
+    def strip(state):
+        for review in (state.plan_review, state.plan_review_passes[""]):
+            review.reviewed_pair_currency = None
+            review.reviewed_unit_currency = None
+
+    env.mutate_state(strip)
+
+
+def _walk_stale_units(env):
+    state = env.state()
+    return gates.walk_stale_units(state, env.doc(), str(env.plan), state.plan_review)
+
+
 def test_walk_under_a_legacy_baseline_stales_the_service_end_of_a_moved_stage(make_env):
     env = make_env(_bounded_data())
     env.record_all()
-    _hand_baseline(env)
+    _legacy_baseline(env)
     env.edit(_construction(2))
-    assert "3-2" in _w(env)
+    walked = _w(env)
+    assert "3-2" in walked
+    # a baseline that recorded no content currency can show no pair unchanged: never narrows
+    assert walked == list(review_ids(env.doc()))
 
 
 def test_a_pair_record_current_before_stays_current_under_a_legacy_baseline(make_env):
     env = make_env(_bounded_data())
     env.record_all()
-    _hand_baseline(env)
+    _legacy_baseline(env)
     before = env.statuses()
     assert set(before.values()) == {"current"}
-    assert _w(env) == []
+    # no baseline currency: every pair and unit is walk-stale ...
+    assert _w(env) == list(review_ids(env.doc()))
+    assert _walk_stale_units(env) == list(review_units(env.doc()))
     env.edit(_construction(4))
     after = env.statuses()
-    assert {p for p, s in after.items() if s != "current"} <= {"plan-4"}
-    assert _w(env) == ["plan-4"]
+    # ... yet every record the edit does not touch is still current, so none is owed a
+    # review: stage 4 is alone (no pair), only its own unit moved.
+    assert {p for p, s in after.items() if s != "current"} == {"unit:4"}
+
+
+def test_a_pair_record_current_before_stays_current_under_a_content_keyed_baseline(make_env):
+    env = make_env(_bounded_data())
+    env.record_all()
+    _hand_baseline(env)
+    assert set(env.statuses().values()) == {"current"}
+    assert _w(env) == []
+    assert _walk_stale_units(env) == []
+    env.edit(_construction(4))
+    after = env.statuses()
+    assert {p for p, s in after.items() if s != "current"} == {"unit:4"}
+    # stage 4 is alone (no pair): the walk-stale set is its unit and no pair
+    assert _w(env) == ["unit:4"]
+    assert _walk_stale_units(env) == ["unit:4"]
+    state = env.state()
+    assert gates.walk_stale_pairs(state, env.doc(), str(env.plan), state.plan_review) == []
 
 
 def test_a_source_service_is_still_stale_by_its_construction(make_env):
@@ -170,7 +213,11 @@ def test_effects_only_edit_of_a_relying_service_keeps_its_consumer_pair_current(
     env.record_all()
     env.edit(_effects_on_stage2("r2"))
     assert env.status("3-2") == "current"
-    assert env.status("2-1").startswith("stale:")
+    # stage 2 is the base of `2-1` and its reviewer is shown its effects: the pair and the
+    # stage's own unit move, though no whole-plan review key does (next test)
+    assert env.status("2-1") == "stale:base"
+    assert env.status("unit:2") == "stale:unit"
+    assert {p for p, s in env.statuses().items() if s != "current"} == {"2-1", "unit:2"}
 
 
 def test_effects_only_edit_moves_no_review_key_so_nothing_is_in_scope(whole_pass):

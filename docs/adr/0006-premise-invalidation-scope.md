@@ -2,6 +2,11 @@
 
 - Status: Accepted 2026-08-18
 - Plan: `premise-loop-determinize-r2.toml` (stages 2–9)
+- Amended 2026-10-10 (task `norm-staleness`): the standalone enumeration route — per-part digests,
+  `stale_enumeration_parts`, edit-scoped narrowing and carried dismissals — is retired. The invariants on
+  stamped (non-candidate) question keys and the absent-field digest identity still hold; the passages
+  below about per-part enumeration describe the retired route and are kept as the record of why the keys
+  are shaped as they are (live behaviour: `scripts/agentctl/README.md` § StageNorm).
 
 ## Context
 

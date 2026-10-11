@@ -208,6 +208,36 @@ def test_guardian_blocks_open_plan_review_until_passing_review_bound(tmp_path):
     assert ob._resolution_guardian(state, bag) == []
 
 
+def test_guardian_discharges_plan_review_once_the_approved_plan_has_started(tmp_path):
+    """The review is a precondition of `approve`/`replan`, not of resolution: an
+    approved plan with a stage past PENDING owes nothing however the plan moved since;
+    a replan that resets the approval sends the obligation back to the live check."""
+    plan = tmp_path / "plan.toml"
+    plan.write_text("index = 1\n")
+    started = _dev_stage(index=1, status=StageStatus.PASSED.value)
+    state = _active_state(plan_path=str(plan), stages=[started], current_stage=1)
+    ob.mint(state, [_thinker_pd()])
+    bag = state.plugins["obligations"]
+    assert len(ob._resolution_guardian(state, bag)) == 1
+
+    state.approval = GateRecord("plan_approval", armed=True, passed=True)
+    assert ob._resolution_guardian(state, bag) == []
+
+    state.approval = GateRecord("plan_approval", armed=True, passed=False)
+    assert len(ob._resolution_guardian(state, bag)) == 1
+
+
+def test_guardian_keeps_plan_review_open_while_every_stage_is_pending(tmp_path):
+    plan = tmp_path / "plan.toml"
+    plan.write_text("index = 1\n")
+    pending = _dev_stage(index=1, status=StageStatus.PENDING.value)
+    state = _active_state(plan_path=str(plan), stages=[pending], current_stage=1)
+    state.approval = GateRecord("plan_approval", armed=True, passed=True)
+    ob.mint(state, [_thinker_pd()])
+    bag = state.plugins["obligations"]
+    assert len(ob._resolution_guardian(state, bag)) == 1
+
+
 def test_guardian_blocks_open_code_review_until_passing_review_bound():
     stage = _dev_stage(index=1)
     state = _active_state(stages=[stage], current_stage=1)
@@ -262,6 +292,10 @@ def test_premise_and_experience_obligations_never_populate_ledger():
     plugins.activate(state, "premise")
     plugins.activate(state, "experience")
     plugins.activate(state, "obligations")
+    # An un-dispositioned review question is what makes the premise gate block.
+    state.plugins["premise"]["candidates"].append(
+        {"id": "qrev-whole-1", "statement": "who owns the rollout?", "disposition": "raised"}
+    )
 
     fired_approve = _fire(state, "approve")
     assert any(p["plugin"] == "premise" and p["action"] == "close_questions" for p in fired_approve)

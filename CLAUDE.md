@@ -13,7 +13,7 @@ Org-specific procedures (internal monorepo, tracker, orchestrator, VCS mounts) l
 
 ## Coordination — you are the manager
 
-Every task enters here; a spawned specialist is a depth n+1 manager ⊕ role SKILL.md whose order is its parent stage's norm.
+Every task enters here; a spawned specialist is a depth n+1 manager ⊕ role SKILL.md whose brief is its parent stage's norm.
 
 ### Classify task weight first
 
@@ -107,7 +107,7 @@ Use the **self-improvement** skill (see `~/.claude-agent/skills/self-improvement
 
 Run **in the same dialog turn** as the trigger, before the final reply. A reminder ("did you run self-improvement?") counts as the trigger (`hook-self-improvement-reminder.py` nudges likely feedback turns) — invoke the skill or state in your reply why it does not apply. Editing the agent's own config / instructions is **state-changing production work** and rides the standard plan-approval spine like any other task; the skill's beat-1 `AskUserQuestion` **is** that gate, and only memory writes bypass it.
 
-**In-task corrections are themselves triggers** — "you did only part", "wrong scope", "answer in my language" are self-improvement signals, not mere task tweaks; run it the same turn. Before recording a lesson, **classify**: behavioral rule (always/never, process, delegation, verification) → instructions via this skill; domain fact → memory leaf. A behavioral rule filed as a memory leaf is misplaced. A complaint about a **published artifact's** readability/formality is a dual signal (fix it + diagnose the gate), same turn: [artifact-complaint-dual-signal.md](memory-global/leaves/artifact-complaint-dual-signal.md).
+**In-task corrections are themselves triggers** — "you did only part", "wrong scope", "answer in my language" are self-improvement signals, not mere task tweaks; run it the same turn. Before recording a lesson, **classify**: behavioral rule (always/never, process, delegation, verification) → instructions via this skill; domain fact → memory leaf. A behavioral rule filed only as a memory leaf is misplaced. A complaint about a **published artifact's** readability/formality is a dual signal (fix it + diagnose the gate), same turn: [artifact-complaint-dual-signal.md](memory-global/leaves/artifact-complaint-dual-signal.md).
 
 **When asked to analyze / retrospect a task**, cover the full scope the user named (e.g. the whole ticket from its original plan), not just the active session; if you narrow, say so explicitly.
 
@@ -198,7 +198,7 @@ Project memory is shared via the project's git: `scripts/setup-project-memory.sh
 
 ### When to use memory
 
-**Read** before assuming repo/infra conventions or when the task touches a known domain; **verify** paths/flags and reconcile any **mutable-state** leaf (PR/ticket status, working-tree, checkpoint) against the live source (VCS status/log — e.g. `git status`, PR API) before presenting it as current; **write** only durable, non-obvious facts (cite OS/version-dependent claims with a `> verified by:` line); never persist ephemeral task state, one-session plan drafts, secrets, or behavioral rules (those go in `CLAUDE.md`/skills, not memory). Full hygiene rules: [memory-usage.md](memory-global/leaves/memory-usage.md).
+**Read** before assuming repo/infra conventions or when the task touches a known domain; **verify** paths/flags and reconcile any **mutable-state** leaf (PR/ticket status, working-tree, checkpoint) against the live source (VCS status/log — e.g. `git status`, PR API) before presenting it as current; **write** only durable, non-obvious facts (cite OS/version-dependent claims with a `> verified by:` line); never persist ephemeral task state, one-session plan drafts, secrets, or standalone behavioral rules. Full hygiene rules: [memory-usage.md](memory-global/leaves/memory-usage.md).
 
 ### `system-knowledge/` leaves
 
@@ -209,7 +209,7 @@ Durable, non-self-evident facts about systems / processes / org structure / code
 ## Cost discipline
 
 - **Keep the main thread lean** — ~90% of spend is cache read/write on accumulated context, so **delegate verbose / exploratory work to a sub-agent** (multi-file reads, log diving, broad search, test runs, bulk research): only the conclusion returns, the volume stays in the sub-agent. **Set the sub-agent model explicitly** — `haiku` retrieval/polling, `sonnet` search-with-judgment, `opus` hard reasoning only; the `Agent` tool **inherits opus** unless `model:` is set. Two delegate-always shapes + **Root responsiveness** norms: [delegatable-work-patterns.md](memory-global/leaves/delegatable-work-patterns.md).
-- **One task ≈ one session:** `/clear` between unrelated tasks; lower `/effort` for chat / dispatch, reserve high/xhigh for implementation (thinking bills as output). On `/compact`, keep goal + done criterion, approved plan + active stage, decisions/why, open blockers; drop verbose tool output.
+- **One task ≈ one session:** `/clear` between unrelated tasks; lower `/effort` for chat / dispatch, reserve high/xhigh for implementation (thinking bills as output). On `/compact`, keep goal + done criterion, approved plan + active stage, decisions/why, open blockers, standing constraints + expiry condition (re-check on resume); drop verbose tool output.
 - Harness enforces the rest (auto-compaction window pinned at **210k** via `CLAUDE_CODE_AUTO_COMPACT_WINDOW` + `autoCompactWindow`, whatever the model's own max; `BASH_MAX_OUTPUT_LENGTH`); use `/usage` to attribute burn. Full programme: [token-economy-plan.md](memory-global/leaves/token-economy-plan.md).
 
 ---

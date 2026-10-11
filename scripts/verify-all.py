@@ -37,6 +37,7 @@ CHECKS: list[str] = [
     "rule-salience-report",
     "verify-terms",
     "verify-semantic-gates",
+    "verify-canon-writers",
     "check-live-run-evidence",
     "check-in-harness-observation",
 ]

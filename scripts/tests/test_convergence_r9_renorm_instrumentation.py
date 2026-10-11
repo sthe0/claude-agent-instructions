@@ -216,12 +216,11 @@ def test_replan_normalize_factor_and_renormalize_refused_together(store, fixture
 
 def test_replan_normalize_factor_not_double_logged_on_refused_retry(store, fixtures_dir, monkeypatch):
     """Required change B (round-2 review, defect A): drive a DIAGNOSING
-    --normalize-factor replan against a plan the premise plugin has never
-    enumerated. It reaches the enumeration-bag save inside cmd_replan's
-    plan_approval-plugin block (`store.save(state)` guarded by
-    enumeration_bag_dirty) -- the exact save defect A rode an orphaned
+    --normalize-factor replan against a plan whose retitled stage moves the
+    order bag's covering-stage key. It reaches the bag save inside cmd_replan's
+    plan_approval-plugin block -- the exact save defect A rode an orphaned
     normalization onto disk across -- and is THEN refused by the plan_approval
-    plugin gate itself (_ENUMERATE_NOT_RUN), strictly past that save and strictly
+    plugin gate itself, strictly past that save and strictly
     before the single logging point at the end of cmd_replan. Pre-fix,
     state.difficulty.normalization was set (and gates.normalization_blockers
     satisfied) before this save ran, so the refusal left a persisted record with
@@ -230,14 +229,10 @@ def test_replan_normalize_factor_not_double_logged_on_refused_retry(store, fixtu
     pending --normalize-factor ARGUMENT instead, so nothing is written to
     state.difficulty until past every refusal -- the save that does happen here
     must carry no orphaned normalization and no normalize event."""
-    from agentctl import cli, plugins_premise
+    from agentctl import cli
     from agentctl.state import Node
 
     monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
-
-    def _silent_advisor(argv, **kw):
-        from types import SimpleNamespace
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     plan = str(fixtures_dir / "plan_two_stage.toml")
     refined = str(fixtures_dir / "plan_two_stage_refined.toml")
@@ -253,8 +248,6 @@ def test_replan_normalize_factor_not_double_logged_on_refused_retry(store, fixtu
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
     assert "premise" in store.load(sid).plugins  # gate really is live
 
-    cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
-                               runner=_silent_advisor)
     cli.cmd_order_raise(ns(session=sid, id="O1", element="the order this plan answers"),
                         store=store)
     cli.cmd_order_dispose(ns(session=sid, id="O1", as_="covered", stage=1, reason=""),
@@ -263,7 +256,6 @@ def test_replan_normalize_factor_not_double_logged_on_refused_retry(store, fixtu
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)
-    assert store.load(sid).plugins["premise"]["enumerated"] is True
 
     cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
     cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
@@ -272,28 +264,22 @@ def test_replan_normalize_factor_not_double_logged_on_refused_retry(store, fixtu
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
                         failure_address="нормативное"), store=store)
 
-    # `refined` has never been enumerated: this reaches the enumeration-bag save
-    # and is refused by the plan_approval plugin gate on _ENUMERATE_NOT_RUN --
-    # the save-then-refuse-after ordering defect A persisted an orphan across.
+    # `refined` retitles stage 1, moving O1's covering-stage key (#123), so the
+    # plan_approval plugin gate refuses it on the order bag -- strictly past
+    # the save in cmd_replan and strictly before the single logging point at its
+    # end, the save-then-refuse-after ordering defect A persisted an orphan across.
     d1 = cli.cmd_replan(ns(session=sid, plan=refined, normalize_factor="dup check",
                            normalize_level=None), store=store)
     assert d1.ok is False
     assert d1.action == "close_questions"
-    assert any(plugins_premise._ENUMERATE_NOT_RUN in b for b in d1.data.get("blockers", []))
+    assert any("[premise]" in b for b in d1.data.get("blockers", []))
 
     state = store.load(sid)
     assert state.node == Node.DIAGNOSING.value
     assert not [h for h in state.history if h.get("event") == "normalize"]
     assert state.difficulty.normalization is None
-    # the save DID happen (this is the point defect A rode an orphan across):
-    # _launch_enumeration cleared the bag back to not-run and that was persisted.
-    assert state.plugins["premise"]["enumerated"] is False
 
-    d2 = cli.cmd_question_enumerate(ns(session=sid, plan=refined), store=store,
-                                   runner=_silent_advisor)
-    assert d2.ok is True
-    # `refined` retitles stage 1, moving O1's covering-stage key (#123) --
-    # re-cover against the refined plan by name, same as the enumeration above.
+    # re-cover against the refined plan by name
     d2b = cli.cmd_order_dispose(ns(session=sid, id="O1", as_="covered", stage=1,
                                    reason="", plan=refined), store=store)
     assert d2b.ok is True

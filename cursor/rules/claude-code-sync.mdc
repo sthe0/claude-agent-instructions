@@ -151,7 +151,7 @@ If a fact qualifies for two scopes, write to the **most specific**. Duplicate co
 
 **Read** the relevant scope index when the task touches a domain it knows, or before making assumptions about repo/infra conventions. **Verify** specific file paths / function names / flags from memory before recommending — code may have moved.
 
-**Behavioral rules** ("always X", "never Y") belong in `CLAUDE.md` or skill / agent prompts — not in memory.
+**Behavioral rules** ("always X", "never Y") belong in `CLAUDE.md` or skill / agent prompts; a rule filed only as a memory leaf is misplaced.
 
 Each scope also carries two sub-folders: `experience/` (per-task post-resolution leaves, § On task resolution above) and `system-knowledge/` (durable non-self-evident system/process/architecture facts; recording criteria in `~/.claude-agent/CLAUDE.md` § Memory). Cursor has no auto-memory write mechanism — write memory files directly when triggered.
 

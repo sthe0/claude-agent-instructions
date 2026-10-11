@@ -21,11 +21,20 @@ One pass:
      is logged to ``<config root>/reaper/removed.jsonl`` BEFORE it is attempted; a
      remove() exception keeps the path and leaves that reaper's stamp where it was.
   5. SessionStart mode (no flag) always exits 0.
+
+``--upkeep-only`` is a different mode: it skips scan/remove and the throttle stamps and
+calls only each reaper's optional ``upkeep(ctx)``, one reaper at a time with its errors
+isolated, under an exclusive flock on ``<stamp dir>/upkeep.lock``. It waits up to
+``UPKEEP_LOCK_WAIT_S`` for the lock (``--no-wait``: not at all) and exits 0 without
+running when another run still holds it. It exits 0 on every path except invalid argv.
+``--dry-run`` is passed through to ``upkeep``; ``--only NAME`` restricts it to one reaper.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
+import fcntl
 import json
 import os
 import re
@@ -33,7 +42,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Sequence, TextIO
+from typing import Callable, Iterator, Sequence, TextIO
 
 from lib import config_root
 from reaper import registry
@@ -41,10 +50,16 @@ from reaper.contract import KEEP, REMOVE, ReapContext, Verdict
 from session_scope import registry as scope_registry
 
 THROTTLED_SENTINEL = "throttled: within window"
+UPKEEP_LOCK_WAIT_S = 120.0
+UPKEEP_LOCK_POLL_S = 0.25
 
 
 def stamp_dir() -> Path:
     return Path.home() / ".local" / "state" / "claude-reaper"
+
+
+def upkeep_lock_path() -> Path:
+    return stamp_dir() / "upkeep.lock"
 
 
 def removal_log_path() -> Path:
@@ -84,7 +99,8 @@ def _normalize(raw: object) -> "list[Verdict]":
         action = item.action
         if action not in (REMOVE, KEEP):
             raise ValueError(f"verdict action {action!r} is neither remove nor keep")
-        verdicts.append(Verdict(str(item.path), action, str(item.reason), bool(getattr(item, "report", False))))
+        tags = tuple(str(tag) for tag in getattr(item, "tags", ()))
+        verdicts.append(Verdict(str(item.path), action, str(item.reason), bool(getattr(item, "report", False)), tags))
     return verdicts
 
 
@@ -211,6 +227,53 @@ def execute_pass(
             _write_stamp(stamps, name, now)
 
 
+@contextlib.contextmanager
+def _upkeep_lock(path: Path, wait_s: float, err: TextIO) -> "Iterator[bool]":
+    """Yield True under the exclusive lock, False when another run holds it past ``wait_s``.
+
+    A lock file that cannot be created yields True unlocked: upkeep is idempotent, so a
+    second concurrent run is wasteful, not wrong.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("a")
+    except OSError as exc:
+        print(f"reaper: upkeep lock unavailable ({type(exc).__name__}: {exc}); running unlocked", file=err)
+        yield True
+        return
+    try:
+        deadline = time.monotonic() + wait_s
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    yield False
+                    return
+                time.sleep(UPKEEP_LOCK_POLL_S)
+        yield True
+    finally:
+        handle.close()
+
+
+def execute_upkeep(
+    reapers: "list[registry.Reaper]", ctx: ReapContext, *, only: "str | None", out: TextIO, err: TextIO,
+) -> None:
+    """Call each selected reaper's ``upkeep``; one failing reaper never stops the others."""
+    for reaper in reapers:
+        step = getattr(reaper.module, "upkeep", None)
+        if only not in (None, reaper.name) or not callable(step):
+            continue
+        try:
+            lines = [str(line) for line in step(ctx) or ()]
+        except Exception as exc:
+            print(f"reaper {reaper.name}: upkeep failed: {type(exc).__name__}: {exc}", file=err)
+            continue
+        for line in lines:
+            print(line, file=out)
+
+
 def build_context(*, now: float, dry_run: bool) -> ReapContext:
     project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     records: "list[scope_registry.ScopeRecord]" = []
@@ -248,8 +311,12 @@ def main(
     parser.add_argument("--force-run", action="store_true", help="run now regardless of throttle stamps, without writing them")
     parser.add_argument("--only", metavar="NAME", help="restrict the run to one reaper (others still veto)")
     parser.add_argument("--list", action="store_true", help="list discovered reapers and exit")
+    parser.add_argument("--upkeep-only", action="store_true", help="run only each reaper's upkeep (e.g. the branch backup push), under a lock")
+    parser.add_argument("--no-wait", action="store_true", help="with --upkeep-only: exit 0 at once if another upkeep run holds the lock")
     args = parser.parse_args(argv)
-    session_start = not (args.dry_run or args.force_run or args.only or args.list)
+    if args.no_wait and not args.upkeep_only:
+        parser.error("--no-wait needs --upkeep-only")
+    fail_open = not (args.dry_run or args.force_run or args.only or args.list) or args.upkeep_only
 
     try:
         now = time.time()
@@ -267,6 +334,12 @@ def main(
         if args.only and args.only not in {r.name for r in reapers}:
             print(f"reaper: no reaper named {args.only!r} (have: {', '.join(r.name for r in reapers) or 'none'})", file=sys.stderr)
             return 2
+        if args.upkeep_only:
+            wait_s = 0.0 if args.no_wait else UPKEEP_LOCK_WAIT_S
+            with _upkeep_lock(upkeep_lock_path(), wait_s, sys.stderr) as acquired:
+                if acquired:
+                    execute_upkeep(reapers, ctx, only=args.only, out=sys.stdout, err=sys.stderr)
+            return 0
         execute_pass(
             reapers, ctx,
             dry_run=args.dry_run, force_run=args.force_run, only=args.only,
@@ -275,5 +348,5 @@ def main(
         )
     except Exception as exc:
         print(f"reaper: runner error: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 0 if session_start else 1
+        return 0 if fail_open else 1
     return 0

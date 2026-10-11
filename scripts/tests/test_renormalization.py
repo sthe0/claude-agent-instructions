@@ -667,6 +667,12 @@ _STAGE_RESIDUAL_COVERAGE = {
     "outcome.checked_tree_identity": "outside: the mutable execution RECORD, same reason",
     "outcome.checked_tree_ok": "outside: the mutable execution RECORD, same reason",
     "outcome.record_attempts": "outside: the mutable execution RECORD, same reason",
+    "outcome.declined": "outside: the mutable execution RECORD, same reason — the "
+                        "customer's decline already recorded, not the stage's definition",
+    "optional": "the residual's own splice — outside stage_question_key because no "
+                "Question.target names it, inside here because flipping a required stage "
+                "to declinable changes what the stage IS to the customer",
+    "backlog_issue": "the residual's own splice, same reason as its sibling `optional`",
     "control": "outside: the control attestation record-result stamps, same reason",
     "subject.material": "stage_question_key",
     "subject.result": "stage_question_key",

@@ -5,7 +5,6 @@ Also covers the loop guard on repeated identical stage failures, the
 import json
 from argparse import Namespace
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -145,25 +144,33 @@ def test_refinement_applies_changed_means_to_state(store, fixtures_dir):
     assert state.stage(1).means.method == "establish the import context the working caller uses"
 
 
-def test_verify_command_change_classifies_as_substantive(fixtures_dir):
-    """diff_plans returns 'substantive' (not 'refinement') when verify_command changes
-    to a textually different command: DR-V derives a Bash(<verify_command>:*) rule
-    straight from the literal text, so the two plans' effective grant sets differ and
-    `_grants_grew` intercepts this before the prose comparison is ever reached — a
-    verify_command edit that does not change the derived rule (e.g. a pure
-    non-semantic edit outside the derivable segment) still falls through to
-    'refinement', but this fixture pair's two commands ARE textually different.
+def test_verify_command_change_is_judged_by_what_it_runs(fixtures_dir):
+    """A verify_command edit is a refinement while the stage keeps running the same
+    program/script (new arguments), and substantive once it runs another script or a
+    new interpreter-less program: DR-V derives one `Bash(<segment>:*)` literal per
+    segment, so the rewritten text always adds a literal, and `_grants_grew` counts it
+    as growth only when its (program, script) identity is new to the stage. That relaxation
+    is admitted only for a ledgered order (`relax_verify_identity`); without it the plain
+    set difference makes any rewrite substantive.
 
-    Uses a dedicated `_grantgrowth` fixture pair rather than the widely-shared
-    `plan_two_stage_verifyfix[.toml/_changed.toml]` pair: both of THOSE plans'
-    verify_commands are `python -c '...'` (inline code, no positional script-file
-    operand), which the interpreter/launcher allowlist now refuses outright for
-    BOTH plans equally, collapsing `_grants_grew`'s difference to nothing and
-    falling through to 'refinement' -- this pair uses a real script-file operand
-    (`python3 mod.py` / `python3 mod.py --strict`) so DR-V actually derives a rule."""
-    base = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml"))
+    Uses the `_grantgrowth` fixture (a real script-file operand, `python3 mod.py`) rather
+    than the shared `plan_two_stage_verifyfix` pair, whose commands are inline
+    `python -c` code that derives no rule at all. The `_changed` variant of the fixture
+    also rewrites the stage's done criterion, which is authority-bearing on its own."""
+    def with_command(command):
+        doc = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml"))
+        doc.stages[0].criterion.verify_command = command
+        return doc
+
+    base = with_command("python3 mod.py")
+    assert diff_plans(base, with_command("python3 mod.py --strict"),
+                      relax_verify_identity=True) == "refinement"
+    assert diff_plans(base, with_command("python3 mod.py --strict")) == "substantive"
+    assert diff_plans(base, with_command("python3 other.py"),
+                      relax_verify_identity=True) == "substantive"
     changed = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml"))
-    assert diff_plans(base, changed) == "substantive"
+    assert diff_plans(load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml")),
+                      changed, relax_verify_identity=True) == "substantive"
 
 
 def test_substantive_verify_command_change_carries_into_state(store, fixtures_dir):
@@ -789,30 +796,23 @@ def test_substantive_replan_rearms_stage_whose_done_criterion_changed(
     assert store.load(sid).stage(1).outcome.status == StageStatus.PENDING.value
 
 
-def test_corrected_plan_is_enumerable_so_the_premise_gate_stops_deadlocking_replan(
+def test_replan_to_a_corrected_plan_needs_no_enumeration_under_a_live_premise_gate(
         store, fixtures_dir, monkeypatch):
-    """#48(b) end to end, with the premise gate LIVE (the suite force-off deleted).
+    """#48(b) after the enumerator's retirement, with the premise gate LIVE (the suite
+    force-off deleted).
 
-    `cmd_replan` evaluates the plan_approval plugin gate against the CORRECTED plan,
-    and premise_blockers rejects an `enumerated_at` that does not match that plan's
-    content digest. The corrected plan is not `state.plan_path` yet and only becomes
-    so once the replan succeeds — so before `--plan`, the enumeration could only ever
-    re-stamp the OLD plan's digest and the gate blocked the very replan that would
-    clear it, with no route out that did not edit session state by hand.
+    `cmd_replan` evaluates the plan_approval plugin gate against the CORRECTED plan.
+    The enumeration that used to be bound to the plan's content digest -- and so
+    blocked the very replan that would clear it until the corrected plan was
+    enumerated by name -- is retired (amendments-2.md E3): nothing is enumerated and no
+    enumeration blocker stands, so a replan on a covered order goes straight through.
 
-    Every step here is an ordinary CLI call; the point of the test is that the bag is
-    never touched directly."""
+    Every step here is an ordinary CLI call; the bag is never touched directly."""
     monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
-    from agentctl import plugins_premise
 
     sid = "deadlock"
     base = str(fixtures_dir / "plan_two_stage.toml")
     corrected = str(fixtures_dir / "plan_two_stage_substantive.toml")
-
-    def _silent_advisor(argv, **kw):
-        # healthy runner, no questions raised: the flag flips, and the gate is then
-        # carried purely by the enumerated_at binding this test is about.
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)
@@ -824,30 +824,12 @@ def test_corrected_plan_is_enumerable_so_the_premise_gate_stops_deadlocking_repl
     cli.cmd_submit_plan(ns(session=sid, plan=base), store=store)
     assert "premise" in store.load(sid).plugins  # gate really is live
 
-    cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
-                               runner=_silent_advisor)
     _cover_the_order(store, sid)
     assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
+    assert store.load(sid).plugins["premise"]["enumerated"] is False
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)
-
-    # the deadlock itself: the enumeration on record is bound to the OLD plan.
-    # Stage 4's detached-enumeration relaunch fires here too (the corrected
-    # plan's digest differs from the bag's enumerated_at), and it clears
-    # enumerated back to not-run rather than leaving it pinned stale — see
-    # _launch_enumeration's docstring — so the blocker below is the escapable
-    # _ENUMERATE_NOT_RUN, not _ENUMERATE_STALE.
-    blocked = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
-    assert blocked.ok is False
-    assert any(plugins_premise._ENUMERATE_NOT_RUN in b      # plugin gate prefixes "[premise] "
-               for b in blocked.data.get("blockers", []))
-    assert store.load(sid).node == Node.EXECUTING.value  # nothing moved
-
-    # the route out: enumerate the corrected plan by name, then replan
-    d = cli.cmd_question_enumerate(ns(session=sid, plan=corrected), store=store,
-                                   runner=_silent_advisor)
-    assert d.ok is True
 
     d = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
     assert d.ok is True, d.detail
@@ -871,14 +853,10 @@ def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_repl
 
     Every step here is an ordinary CLI call; the bag is never touched directly."""
     monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
-    from agentctl import plugins_premise
 
     sid = "deadlock-rebind"
     base = str(fixtures_dir / "plan_two_stage.toml")
     corrected = str(fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
-
-    def _silent_advisor(argv, **kw):
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)
@@ -903,8 +881,6 @@ def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_repl
                                 source="fixture", derivation="single-module package",
                                 basis="", risk="", plan=None), store=store)
 
-    cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
-                               runner=_silent_advisor)
     _cover_the_order(store, sid)
     assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
@@ -918,16 +894,11 @@ def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_repl
                for b in blocked.data.get("blockers", []))
     assert store.load(sid).node == Node.EXECUTING.value  # nothing moved
 
-    # the route out: rebind Q1 against the corrected plan by name, and enumerate
-    # it too (the retitle also moves the content digest — the enumeration
-    # channel's own #48(b) fix, already landed, clears that half)
+    # the route out: rebind Q1 against the corrected plan by name
     d = cli.cmd_question_rebind(ns(session=sid, id="Q1", plan=corrected,
                                    confirm_still_valid="re-read against the "
                                    "retitled stage 1; the answer still holds"),
                                store=store)
-    assert d.ok is True
-    d = cli.cmd_question_enumerate(ns(session=sid, plan=corrected), store=store,
-                                   runner=_silent_advisor)
     assert d.ok is True
 
     # the retitle also moves O1's covering-stage key (order coverage tracks the
@@ -959,9 +930,6 @@ def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_re
     base = str(fixtures_dir / "plan_two_stage.toml")
     corrected = str(fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
 
-    def _silent_advisor(argv, **kw):
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
     cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -982,8 +950,6 @@ def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_re
                                 source="fixture", derivation="single-module package",
                                 basis="", risk="", plan=None), store=store)
 
-    cli.cmd_question_enumerate(ns(session=sid, plan=None), store=store,
-                               runner=_silent_advisor)
     _cover_the_order(store, sid)
     assert cli.cmd_approve(ns(session=sid, by="user"), store=store).ok is True
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
@@ -1004,9 +970,6 @@ def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_re
                                     "wiring stage now depends on", source="fixture",
                                     derivation="the added CI stage reaches back to it",
                                     basis="", risk="", plan=corrected), store=store)
-    assert d.ok is True
-    d = cli.cmd_question_enumerate(ns(session=sid, plan=corrected), store=store,
-                                   runner=_silent_advisor)
     assert d.ok is True
 
     # the retitle also moves O1's covering-stage key (order coverage tracks the

@@ -228,6 +228,40 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_STATE, "test_session_owned_by_live_pid_or_fresh_heartbeat_and_by_sanitized_id",
              "test_session_ownership_ends_when_the_heartbeat_passes_the_ttl"),
     ),
+    "backup-push-duty": Mutant(
+        GIT_WORKTREES, "return backup_push(worktrees[0].path, ctx)", "return []",
+        _ids(T_GIT, "test_unpushed_branch_is_pushed", "test_new_branch_gets_a_remote_ref"),
+    ),
+    "backup-never-force": Mutant(
+        GIT_WORKTREES,
+        'refspec = f"refs/heads/{branch}:refs/heads/{branch}"',
+        'refspec = f"+refs/heads/{branch}:refs/heads/{branch}"',
+        _ids(
+            T_GIT,
+            "test_remote_that_moved_on_is_rejected_not_overwritten",
+            "test_push_argv_is_the_plain_refspec_form",
+        ),
+    ),
+    "backup-trunk-excluded": Mutant(
+        GIT_WORKTREES,
+        'return name in ("main", "master") or name.startswith(("release-", "release/"))',
+        "return False",
+        _ids(T_GIT, "test_trunk_named_branches_are_never_pushed"),
+    ),
+    "backup-skip-backed-up": Mutant(
+        GIT_WORKTREES, "if _is_ancestor(repo, sha, remote):\n        return None", "if False:\n        return None",
+        _ids(T_GIT, "test_backed_up_branch_is_not_pushed_again"),
+    ),
+    "backup-dry-run": Mutant(
+        GIT_WORKTREES, 'if ctx.dry_run:\n        return "would-push", ""', 'if False:\n        return "would-push", ""',
+        _ids(T_GIT, "test_dry_run_pushes_nothing_logs_nothing_and_reports_the_partition"),
+    ),
+    "backup-fail-open": Mutant(
+        GIT_WORKTREES,
+        'except Exception as exc:\n            outcome, detail = "error", f"{type(exc).__name__}: {exc}"',
+        'except KeyboardInterrupt as exc:\n            outcome, detail = "error", f"{type(exc).__name__}: {exc}"',
+        _ids(T_GIT, "test_one_branch_failing_does_not_stop_the_others"),
+    ),
 }
 
 

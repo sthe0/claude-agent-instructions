@@ -7,7 +7,8 @@ Pure-`PlanDoc`-level coverage of the underlying reliance/rendering helpers
 lives in `test_topo_review_bundle.py`; this file drives `spawn-specialist.py`
 end to end (module-loading/argv/DryRun pattern mirrors
 `test_spawn_stage2_image.py`). The two-stage fixture's stage 2 relies on
-stage 1, so its pairs are `plan-2` and `2-1`.
+stage 1, so its only pair is `2-1` (its units are `unit:base`, `unit:1`,
+`unit:2`); a plan whose order coverage names a stage adds `base-<s>` pairs.
 """
 from __future__ import annotations
 
@@ -20,12 +21,12 @@ from pathlib import Path
 import pytest
 
 from agentctl.plan import load_plan_with_digest
-from agentctl.render import render_pair_review_bundle
+from agentctl.render import render_pair_review_bundle, render_unit_review_bundle
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 SCRIPT = SCRIPTS_DIR / "spawn-specialist.py"
 TOPO_PLAN_LABEL = (
-    "## Working plan — topological review pair "
+    "## Working plan — topological review unit or pair "
     "(projected; the full plan is never inlined for --review-topo — "
     "see § File-access scope for the per-pair view directory)"
 )
@@ -223,7 +224,11 @@ def test_ts5_refused_on_a_unit_form_id(capsys, topo_units_dir, two_stage_plan, u
     assert not topo_units_dir.exists()
 
 
-def test_ts6_dry_run_base_plan_pair_materializes_from_a_plan_with_an_order_block(capsys, topo_units_dir, tmp_path):
+@pytest.fixture
+def order_plan(tmp_path) -> Path:
+    """A plan whose order's coverage names stage 1 and stage 2 through the
+    stage-addressed `verify_command` control -- each an ordinary edge of
+    `unit:base`, so the plan's pairs are `base-1`, `base-2` and `2-1`."""
     plan_path = tmp_path / "order_plan.toml"
     plan_path.write_text(
         '[meta]\n'
@@ -231,7 +236,7 @@ def test_ts6_dry_run_base_plan_pair_materializes_from_a_plan_with_an_order_block
         '[meta.order]\n'
         'requirements = [{id = "R1", text = "r1"}]\n'
         '[meta.order.coverage]\n'
-        'R1 = ["1", "2"]\n'
+        'R1 = ["stage 1 verify_command", "stage 2 verify_command"]\n'
         '[[stage]]\n'
         'index = 1\ntitle = "s1"\nexecutor = "in_thread"\n'
         'expected_result_image = "img"\ndone_criterion = "dc"\n'
@@ -243,13 +248,76 @@ def test_ts6_dry_run_base_plan_pair_materializes_from_a_plan_with_an_order_block
         'means = "Edit"\nmethod = "do"\nverify_command = "true"\n',
         encoding="utf-8",
     )
-    argv = _base_argv("thinker", plan_path) + ["--review-topo", "base-plan"]
+    return plan_path
+
+
+def test_ts6_dry_run_base_stage_pair_materializes_from_a_plan_with_an_order_block(capsys, topo_units_dir, order_plan):
+    # E5: a coverage entry is an ordinary typed edge of `unit:base`, reviewed as the
+    # `base-<s>` pair; `base-plan` / `plan-<s>` no longer exist.
+    argv = _base_argv("thinker", order_plan) + ["--review-topo", "base-1"]
     result = _dry_run(capsys, argv)
     assert result.rc == 0
-    view_dir = topo_units_dir / _plan_sha(plan_path) / "view-base-plan"
-    assert f"TOPO-VIEW: {view_dir} files=plan.md" in result.out.splitlines()
-    assert "# Topological review pair: base-plan" in result.prompt
+    view_dir = topo_units_dir / _plan_sha(order_plan) / "view-base-1"
+    assert f"TOPO-VIEW: {view_dir} files=stage-1.md" in result.out.splitlines()
+    assert "# Topological review pair: base-1" in result.prompt
     assert [d for d in result.add_dirs if d.startswith(str(topo_units_dir))] == [str(view_dir)]
+
+
+@pytest.mark.parametrize("retired", ["base-plan", "plan-1", "plan-2"])
+def test_ts6_retired_pair_ids_are_refused_even_with_an_order_block(capsys, topo_units_dir, order_plan, retired):
+    result = _dry_run(capsys, _base_argv("thinker", order_plan) + ["--review-topo", retired])
+    assert result.rc == 2
+    assert retired in result.err
+    assert not topo_units_dir.exists()
+
+
+@pytest.mark.parametrize("unit", ["unit:base", "unit:1", "unit:2"])
+def test_ts6_dry_run_unit_bundle_is_self_contained_with_no_view_directory(capsys, topo_units_dir, order_plan, plans_dir_patch, unit):
+    argv = _base_argv("thinker", order_plan) + ["--review-topo", unit]
+    result = _dry_run(capsys, argv)
+    assert result.rc == 0
+    # No view directory is named, granted or written for a unit.
+    assert [line for line in result.out.splitlines() if line.startswith("TOPO-VIEW:")] == [
+        "TOPO-VIEW: none files=",
+    ]
+    assert f"# Topological review unit: {unit}" in result.prompt
+    assert "# Topological review pair:" not in result.prompt
+    assert [d for d in result.add_dirs if d.startswith(str(topo_units_dir))] == []
+    assert str(plans_dir_patch) not in result.add_dirs
+    assert not any(topo_units_dir.name in rule for rule in result.allow)
+    assert not any(str(plans_dir_patch) in rule for rule in result.allow)
+    assert not topo_units_dir.exists()
+
+
+def test_ts6_unit_bundle_body_is_exactly_the_unit_bundle(capsys, topo_units_dir, order_plan):
+    argv = _base_argv("thinker", order_plan) + ["--review-topo", "unit:1"]
+    result = _dry_run(capsys, argv)
+    assert result.rc == 0
+    doc, _, sha = load_plan_with_digest(order_plan)
+    body = result.prompt.split(f"\n{TOPO_PLAN_LABEL}\n\n", 1)[1]
+    body = body.split(f"\n\n{DONE_HEADING}\n", 1)[0]
+    assert body == render_unit_review_bundle(doc, "unit:1", plan_sha256=sha)
+
+
+@pytest.mark.parametrize("unit", ["unit:plan", "unit:9", "unit:"])
+def test_ts6_refused_on_a_unit_the_plan_does_not_have(capsys, topo_units_dir, order_plan, unit):
+    result = _dry_run(capsys, _base_argv("thinker", order_plan) + ["--review-topo", unit])
+    assert result.rc == 2
+    assert unit in result.err
+    assert not topo_units_dir.exists()
+
+
+def test_ts6_unit_real_spawn_grants_no_view_directory_and_writes_no_tree(capsys, topo_units_dir, order_plan, monkeypatch, tmp_path):
+    seen: list[list[str]] = []
+    _stub_child_launch(monkeypatch, tmp_path, on_launch=seen.append)
+    argv = [a for a in _base_argv("thinker", order_plan) if a != "--dry-run"]
+    argv += ["--review-topo", "unit:base"]
+    assert MOD.main(argv) == 0
+    assert len(seen) == 1
+    cmd = seen[0]
+    add_dirs = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "--add-dir"]
+    assert [d for d in add_dirs if d.startswith(str(topo_units_dir))] == []
+    assert not topo_units_dir.exists()
 
 
 def test_ts1_dry_run_plan_body_is_exactly_the_topo_bundle(capsys, topo_units_dir, two_stage_plan, tmp_path):

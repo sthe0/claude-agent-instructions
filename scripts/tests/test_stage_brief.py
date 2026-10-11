@@ -256,6 +256,8 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         effects=[StageEffectDeclaration(
             path="EFFECTS_PATH_V", sha256="EFFECTS_SHA256_V", resolver="EFFECTS_RESOLVER_V",
         )],
+        optional=True,
+        backlog_issue="BACKLOG_ISSUE_V",
     )
     meta = PlanMeta(
         task_id="TASK_ID_V",
@@ -281,6 +283,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         "OUTPUT_ARTIFACT_V", "EPHEMERAL_ARTIFACTS_WAIVER_V", "CONTROL_V", "on stage 7", "ELEMENT_V", "ARTIFACT_V", "delivery: report",
         "GRANTS_RULE_V", "GRANTS_ADDDIR_V",
         "EFFECTS_PATH_V", "EFFECTS_SHA256_V", "EFFECTS_RESOLVER_V",
+        "**Optional:** yes", "BACKLOG_ISSUE_V",
         "TASK_ID_V", "GOAL_V", "OVERALL_DONE_CRITERION_V", "OVERALL_CRITERION_TYPE_V",
         "WEIGHT_CLASS_V", "EXTERNAL_RESEARCH_V", "REPO_ROOT_V", "DELIVERY_WORKTREE_V",
         "FC_LABEL_V",
@@ -306,7 +309,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (Stage, "ephemeral_artifacts_waiver"),
         (Stage, "outcome"),  # excluded: engine execution history
         (Stage, "control"), (Stage, "knowledge"), (Stage, "preconditions"),
-        (Stage, "grants"), (Stage, "effects"),
+        (Stage, "grants"), (Stage, "effects"), (Stage, "optional"), (Stage, "backlog_issue"),
         (Subject, "material"), (Subject, "result"), (Subject, "invariants"),
         (Subject, "material_refs"), (Subject, "knowledge_refs"),
         (Means, "means"), (Means, "method"), (Means, "procedure"),

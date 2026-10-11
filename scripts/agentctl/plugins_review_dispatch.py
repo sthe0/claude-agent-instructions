@@ -124,17 +124,19 @@ def _obs_submit_plan(state, bag) -> list[PluginDirective]:
         record_instruction = (
             f"The ROOT then records the verdict: `agentctl plan-review --session "
             f"{state.session_id} --verdict pass|revise|override --reviewer {specialist} "
-            f"--plan-digest <sha256-hex>{scope_suffix}` (a pass does NOT bind without a "
-            f"matching --plan-digest)"
+            f"--plan-digest <sha256-hex>{scope_suffix} [--customer-question <Q>]...` (a "
+            f"pass does NOT bind without a matching --plan-digest; pass each `Q:` line of "
+            f"the reply's `Customer questions:` field as one --customer-question)"
         )
     else:
         record_instruction = (
             "The ROOT then records each stage's verdict separately: " + "; ".join(
                 f"`agentctl plan-review --session {state.session_id} --verdict "
                 f"pass|revise|override --reviewer {specialist} --plan-digest "
-                f"<sha256-hex> {scope_arg}`"
+                f"<sha256-hex> {scope_arg} [--customer-question <Q>]...`"
                 for scope_arg in scopes
-            ) + " (a pass does NOT bind without a matching --plan-digest)"
+            ) + (" (a pass does NOT bind without a matching --plan-digest; pass each `Q:` "
+                 "line of the reply's `Customer questions:` field as one --customer-question)")
         )
     if gates.pairwise_review_route(state):
         return [PluginDirective(

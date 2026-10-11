@@ -18,7 +18,7 @@ import pytest
 
 from agentctl import gates, plugins
 from agentctl.directive import Directive
-from agentctl.plan import load_plan, review_pairs
+from agentctl.plan import load_plan, review_ids, review_pairs, review_units
 from agentctl.state import Node, Route, SessionState, WeightClass
 from test_replan_autonomy_boundary import (  # noqa: F401  (fixtures + helpers)
     Eng, _no_ambient_harness_session, action, approved_order, autonomy, cmd_plan, eng, venue,
@@ -81,19 +81,23 @@ def test_blocker_message_follows_the_same_route_predicate(tmp_path, review_armed
 
 
 def _record_pairs(eng: Eng, sid: str, plan: str, *, override: tuple[str, ...] = ()) -> list[str]:
+    """Record a review for EVERY unit and EVERY pair of the plan (`review_ids`: the
+    compose demands both), `override` ids as revise + user override, the rest as pass.
+    Returns the pair ids."""
     digest = hashlib.sha256(Path(plan).read_bytes()).hexdigest()
-    pairs = list(review_pairs(load_plan(plan)))
+    doc = load_plan(plan)
+    pairs = list(review_pairs(doc))
     assert pairs
-    for pair in pairs:
-        if pair in override:
+    for review_id in review_ids(doc):
+        if review_id in override:
             assert eng.run("plan_review", session=sid, verdict="revise", reviewer="thinker",
-                           target=plan, scope=f"topo:{pair}", plan_digest=digest,
-                           concern=["blocking: open"])["ok"], pair
+                           target=plan, scope=f"topo:{review_id}", plan_digest=digest,
+                           concern=["blocking: open"])["ok"], review_id
             assert eng.run("plan_review", session=sid, verdict="override", reviewer="user",
-                           target=plan, scope=f"topo:{pair}", note="accepted")["ok"], pair
+                           target=plan, scope=f"topo:{review_id}", note="accepted")["ok"], review_id
         else:
             assert eng.run("plan_review", session=sid, verdict="pass", reviewer="thinker",
-                           target=plan, scope=f"topo:{pair}", plan_digest=digest)["ok"], pair
+                           target=plan, scope=f"topo:{review_id}", plan_digest=digest)["ok"], review_id
     return pairs
 
 
@@ -113,12 +117,30 @@ def test_compose_over_all_pass_pairs_is_a_first_thinker_verdict(eng, venue):
     assert action(later) == "self_approve"
 
 
-def test_compose_with_an_override_pair_is_not_a_first_thinker_verdict(eng, venue):
+def test_compose_demands_every_unit_not_only_the_pairs(eng, venue):
     approved_order(eng, cmd_plan(venue))
     slow = eng.write(cmd_plan(venue, "frobnicate --slow"))
     eng.open("t1", slow)
-    pairs = review_pairs(load_plan(slow))
-    _record_pairs(eng, "t1", slow, override=(pairs[0],))
+    digest = hashlib.sha256(Path(slow).read_bytes()).hexdigest()
+    doc = load_plan(slow)
+    for pair in review_pairs(doc):
+        assert eng.run("plan_review", session="t1", verdict="pass", reviewer="thinker",
+                       target=slow, scope=f"topo:{pair}", plan_digest=digest)["ok"], pair
+    refused = eng.run("plan_review_compose", session="t1", target=slow)
+    assert not refused["ok"], refused
+    assert set(refused["data"]["failing"]) == set(review_units(doc))
+    assert set(refused["data"]["failing"].values()) == {"missing"}
+    assert autonomy(eng.open("t2", slow))["thinker_pass"] is False
+
+
+@pytest.mark.parametrize("kind", ["pair", "unit"])
+def test_compose_with_an_override_pair_is_not_a_first_thinker_verdict(eng, venue, kind):
+    approved_order(eng, cmd_plan(venue))
+    slow = eng.write(cmd_plan(venue, "frobnicate --slow"))
+    eng.open("t1", slow)
+    doc = load_plan(slow)
+    overridden = review_pairs(doc)[0] if kind == "pair" else review_units(doc)[0]
+    _record_pairs(eng, "t1", slow, override=(overridden,))
     composed = eng.run("plan_review_compose", session="t1", target=slow)
     assert composed["ok"], composed
     later = eng.open("t2", slow)

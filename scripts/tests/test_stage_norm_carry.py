@@ -60,7 +60,7 @@ def _statuses_at_refresh(tmp_path, old_text, new_text):
         s.outcome.status = PASSED
     path.write_text(new_text)
     assert cli._refresh_caches_from_plan_path(state) == []
-    return {s.index: s.outcome.status for s in state.stages}
+    return {s.index: s.outcome.status for s in state.stages if s.index in (1, 2)}
 
 
 def _statuses_at_replan(store, tmp_path, old_text, new_text):
@@ -90,7 +90,8 @@ def _no_replan_authorization_gate(monkeypatch):
 @pytest.fixture(params=["approve-refresh", "substantive-replan"])
 def statuses(request, store, tmp_path):
     """Run the plan pair through one carry site; a third stage keeps the replan
-    substantive (a structural change) and is inert at the refresh."""
+    substantive (a structural change). Both sites materialize it from the new plan,
+    so both report only the two stages the carry decision is about."""
     def run(old_kwargs, new_kwargs):
         old, new = _plan(**old_kwargs), _plan(extra_stage=True, **new_kwargs)
         if request.param == "approve-refresh":

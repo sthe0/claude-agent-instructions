@@ -7,25 +7,21 @@ NOBODY hand-armed: `premise` is armed only because `classify` routed the session
 SUBSTANTIVE, exactly as a production session arms it. It proves the two directions
 the gate must satisfy at the plan_approval boundary:
 
-  * approve is REFUSED while a question is open, while a question is escalated with
-    no own_research, and while the enumeration cross-check has not run — three
-    distinct blocker origins, each surfaced through the real `approve` verb's
-    `data["blockers"]` (prefixed `[premise] ...` by plugins.plugin_gate_blockers);
-  * approve is ALLOWED once every question is dispositioned AND the enumeration
-    cross-check has run against the current plan content.
-
-`question-enumerate` has no `runner=` seam through `cli.main` (the COMMANDS table
-calls each verb with only `store=`), so the advisor runner is stubbed at its
-module-level fallback — `advisor.subprocess_runner` — never a live `claude -p`.
+  * approve is REFUSED while a question is open and while a question is escalated
+    with no own_research — two distinct blocker origins, each surfaced through the
+    real `approve` verb's `data["blockers"]` (prefixed `[premise] ...` by
+    plugins.plugin_gate_blockers);
+  * approve is ALLOWED once every question is dispositioned and the order is
+    covered, with no enumeration cross-check anywhere on the path: the standalone
+    enumeration is retired (amendments-2.md E3), so its absence is not a blocker.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from agentctl import advisor, cli, plan, plugins_premise
+from agentctl import cli
 from agentctl.store import FileStateStore
 
 
@@ -36,18 +32,6 @@ def _premise_armed(monkeypatch):
     after conftest's, so this delenv wins). conftest's AGENTCTL_PLAN_REVIEW=0 stays,
     keeping the unrelated thinker-review gate out of this test's approve path."""
     monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
-
-
-@pytest.fixture(autouse=True)
-def _stub_advisor_runner(monkeypatch):
-    """`question-enumerate` driven through cli.main() falls back to
-    advisor.subprocess_runner (no runner= kwarg on the dispatch path). Stub it to a
-    healthy, question-less pass: enumerated flips True, zero candidates — enough to
-    discharge the mandatory cross-check without a live subprocess. Individual tests
-    that never call question-enumerate are unaffected."""
-    def run(argv, **kw):
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-    monkeypatch.setattr(advisor, "subprocess_runner", run)
 
 
 @pytest.fixture
@@ -82,6 +66,16 @@ def _build_substantive(capsys, root, sid="e2e"):
     return sid
 
 
+def _cover_the_order(capsys, root, sid):
+    """The gate's order-coverage half fail-closes on an EMPTY order bag once a plan is
+    submitted, so approve is only reachable with the order covered too (that half's own
+    two-directional proof lives in test_order_coverage.py)."""
+    _run(capsys, root, "order-raise", "--session", sid, "--id", "O1",
+         "--element", "the order this plan answers")
+    _run(capsys, root, "order-dispose", "--session", sid, "--id", "O1",
+         "--as", "covered", "--stage", "1")
+
+
 def _blockers(directive):
     return (directive.get("data") or {}).get("blockers") or []
 
@@ -98,17 +92,16 @@ def test_fresh_substantive_session_arms_premise_without_deliverable_kind(capsys,
     assert state.weight_class == "SUBSTANTIVE"
     assert state.deliverable_kind == ""          # never named on the CLI
     assert "premise" in state.plugins            # armed anyway
-    assert state.plugins["premise"]["enumerated"] is False
 
 
 # --- approve REFUSED: an open question ------------------------------------------
 
 def test_approve_refused_with_open_question(capsys, root):
     sid = _build_substantive(capsys, root)
+    _cover_the_order(capsys, root, sid)
     _run(capsys, root, "question-raise", "--session", sid, "--id", "Q1",
          "--target", "plan.goal", "--question", "is the goal even agreed?",
          "--control", "stage 1 done_criterion")
-    _run(capsys, root, "question-enumerate", "--session", sid)  # discharge the cross-check
 
     rc, d = _run(capsys, root, "approve", "--session", sid, "--by", "user")
     assert rc == 1
@@ -121,22 +114,19 @@ def test_approve_refused_with_open_question(capsys, root):
 
 def test_approve_refused_with_escalated_and_empty_own_research(capsys, root):
     sid = _build_substantive(capsys, root)
+    _cover_the_order(capsys, root, sid)
 
     # The CLI's question-dispose fast-fail refuses `--to escalated` with empty
     # own_research, so the ONLY way this state reaches approve is a bag that
     # bypassed the CLI (a hand-edited state, a future bug). The gate — not the CLI
     # fast-fail — is the real authority, so inject the state directly and prove the
-    # real approve verb still refuses it. Stamp the enumeration against current
-    # content so the escalation blocker is the one isolated blocker.
+    # real approve verb still refuses it.
     store = FileStateStore(root)
     state = store.load(sid)
     state.plugins["premise"]["questions"] = [{
         "id": "Q9", "target": "plan.goal", "question": "reachable?",
         "disposition": "escalated", "answer": "ask the user", "own_research": "",
     }]
-    state.plugins["premise"]["enumerated"] = True
-    state.plugins["premise"]["enumerated_at"] = plugins_premise._plan_content_digest(
-        plan.load_plan(state.plan_path))
     store.save(state)
 
     rc, d = _run(capsys, root, "approve", "--session", sid, "--by", "user")
@@ -145,21 +135,22 @@ def test_approve_refused_with_escalated_and_empty_own_research(capsys, root):
     assert any("[premise]" in b and "own_research" in b for b in _blockers(d))
 
 
-# --- approve REFUSED: the enumeration cross-check has not run -------------------
+# --- approve ALLOWED: nothing is waiting on an enumeration ----------------------
 
-def test_approve_refused_when_not_enumerated(capsys, root):
+def test_approve_not_blocked_by_an_enumeration_that_never_ran(capsys, root):
     sid = _build_substantive(capsys, root)
-    # no open questions, but enumeration never ran — the mandatory cross-check blocks
+    _cover_the_order(capsys, root, sid)
+    assert FileStateStore(root).load(sid).plugins["premise"]["enumerated"] is False
+
     rc, d = _run(capsys, root, "approve", "--session", sid, "--by", "user")
-    assert rc == 1
-    assert d["ok"] is False
-    assert any("[premise]" in b and "enumeration cross-check not run" in b
-               for b in _blockers(d))
+    assert rc == 0
+    assert d["ok"] is True
+    assert not any("enumeration" in b for b in _blockers(d))
 
 
-# --- approve ALLOWED: every question dispositioned AND enumeration run ----------
+# --- approve ALLOWED: every question dispositioned ------------------------------
 
-def test_approve_allowed_when_dispositioned_and_enumerated(capsys, root):
+def test_approve_allowed_when_every_question_is_dispositioned(capsys, root):
     sid = _build_substantive(capsys, root)
     _run(capsys, root, "question-raise", "--session", sid, "--id", "Q1",
          "--target", "plan.goal", "--question", "is the goal even agreed?",
@@ -169,14 +160,7 @@ def test_approve_allowed_when_dispositioned_and_enumerated(capsys, root):
     _run(capsys, root, "question-dispose", "--session", sid, "--id", "Q1",
          "--to", "assumed", "--basis", "confirmed reachable by the reporter",
          "--risk", "the reporter may be wrong")
-    _run(capsys, root, "question-enumerate", "--session", sid)
-    # the gate's order-coverage half fail-closes on an EMPTY order bag once a plan is
-    # submitted, so approve is only reachable with the order covered too (that half's
-    # own two-directional proof lives in test_order_coverage.py).
-    _run(capsys, root, "order-raise", "--session", sid, "--id", "O1",
-         "--element", "the order this plan answers")
-    _run(capsys, root, "order-dispose", "--session", sid, "--id", "O1",
-         "--as", "covered", "--stage", "1")
+    _cover_the_order(capsys, root, sid)
 
     rc, d = _run(capsys, root, "approve", "--session", sid, "--by", "user")
     assert rc == 0

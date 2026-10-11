@@ -104,7 +104,7 @@ Classify before placing:
 
 | Type | Signs | Where |
 |---|---|---|
-| **Behavioral rule** | "always/never", delegation, tool choice, cross-repo pattern with no single product tie | `CLAUDE.md` or skill prompt |
+| **Behavioral rule** | "always/never", delegation, tool choice | `CLAUDE.md` or skill prompt |
 | **Domain fact / runbook** | Relaunch procedures, API/CLI contracts, data paths, ticket-specific detail, prod naming | Memory leaf (global or project) |
 
 Do not push domain runbooks into generic agent prompts or CLAUDE.md. If the user says "remember" or "too specific for an agent" — memory only; revert agent edit.

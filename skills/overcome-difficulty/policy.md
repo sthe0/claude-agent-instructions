@@ -6,7 +6,7 @@ Elaboration moved out of `SKILL.md` to keep that trigger surface lean. The skill
 
 Before spawning, verify the would-be `AGENT_RECURSION_DEPTH` does not exceed `max-recursion-depth` (see `~/.claude-agent/config.md`). If it would, follow § Safeguards § Hard depth cap and do not spawn.
 
-Choose the budget tier per `CLAUDE.md` § Budget tier — `budget-medium-usd` is the default for overcome-difficulty escapes; use `budget-large-usd` only when the difficulty likely needs deep exploration.
+Choose the budget tier per `~/.claude-agent/config.md` — `budget-medium-usd` is the default for overcome-difficulty escapes; use `budget-large-usd` only when the difficulty likely needs deep exploration.
 
 The escape is the **`manager` kind** of `scripts/spawn-specialist.py`: the empty specialization — a depth n+1 manager with no role `SKILL.md` and no appended marker protocol, so it is a vanilla Claude Code root with your `CLAUDE.md`, memory and skills. Write the brief below to a file (any readable file; `--plan` inlines its text into the child's prompt), then:
 

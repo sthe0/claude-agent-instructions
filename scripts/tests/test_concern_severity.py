@@ -24,7 +24,7 @@ import pytest
 
 from agentctl import cli, gates
 from agentctl.dispatch import RunResult
-from agentctl.plan import load_plan, review_pairs
+from agentctl.plan import load_plan, review_ids
 from agentctl.state import Node, PlanPairReview, PlanReview, SessionState
 from lib import marker_extract
 
@@ -100,7 +100,8 @@ def _override(store, sid, plan, pair=PAIR):
 
 
 def _pass_every_pair(store, sid, plan):
-    for pair in review_pairs(load_plan(str(plan))):
+    """Pass every review id the compose demands: the units, then the pairs."""
+    for pair in review_ids(load_plan(str(plan))):
         assert _pair(store, sid, plan, "pass", pair=pair).ok, pair
 
 
@@ -303,7 +304,7 @@ def test_passed_review_supersedes_the_open_blockers(store, fixtures_dir, tmp_pat
 
 def test_revise_of_only_note_concerns_composes_as_pass(store, fixtures_dir, tmp_path):
     plan = _session(store, fixtures_dir, tmp_path, "c1")
-    for pair in review_pairs(load_plan(str(plan))):
+    for pair in review_ids(load_plan(str(plan))):
         if pair == PAIR:
             assert _pair(store, "c1", plan, "revise", ["note: C4: worth a look", "note: C1: minor"]).ok
         else:
@@ -332,7 +333,7 @@ def test_revise_of_only_downgraded_concerns_composes_as_pass_and_stays_current(
         _override(store, sid, plan)
         _retitle(plan, "Scaffold module")
         concern = f"blocking: re:{first_id} C1: raised again"
-    for pair in review_pairs(load_plan(str(plan))):
+    for pair in review_ids(load_plan(str(plan))):
         if pair != PAIR:
             assert _pair(store, sid, plan, "pass", pair=pair).ok
     assert _pair(store, sid, plan, "revise", [concern]).ok

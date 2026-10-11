@@ -22,7 +22,7 @@ import pytest
 
 from agentctl import cli, gates, task_accumulator
 from agentctl.config import Thresholds
-from agentctl.plan import load_plan, review_pairs
+from agentctl.plan import load_plan, review_ids, review_pairs
 from agentctl.state import Node, SessionState
 from conftest import STAGE_OBSERVATIONS
 
@@ -74,6 +74,13 @@ def _pairs(plan):
     return review_pairs(load_plan(plan))
 
 
+def _review_ids(plan):
+    """Every record the walk demands of one plan version: the units, then the pairs.
+    The two-stage fixture has one pair (`2-1`), so a version carries several records
+    only once the units are counted."""
+    return review_ids(load_plan(plan))
+
+
 def _pair_record(store, sid, plan, pair, verdict="revise", reviewer="thinker", note=""):
     d = cli.cmd_plan_review(
         ns(session=sid, target=plan, scope=f"topo:{pair}", verdict=verdict,
@@ -116,7 +123,7 @@ def test_replay_c5ceb718_shape(store, fixtures_dir, tmp_path, gate_on):
     sid = "rv-replay"
     plan = _plan(fixtures_dir, tmp_path)
     _to_plan_ready(store, sid, plan)
-    pairs = _pairs(plan)
+    pairs = _review_ids(plan)
     assert len(pairs) >= 2
     thr = _threshold()
     for version in range(thr):
@@ -137,12 +144,12 @@ def test_replay_same_version_counts_one_round(store, fixtures_dir, tmp_path, gat
     sid = "rv-one"
     plan = _plan(fixtures_dir, tmp_path)
     _to_plan_ready(store, sid, plan)
-    for pair in _pairs(plan):
+    for pair in _review_ids(plan):
         _pair_record(store, sid, plan, pair)
     assert _rounds(sid, store) == 1
     assert store.load(sid).review_rounds == 1
     _new_version(plan, 1)
-    for pair in _pairs(plan):
+    for pair in _review_ids(plan):
         _pair_record(store, sid, plan, pair)
     assert _rounds(sid, store) == 2
 

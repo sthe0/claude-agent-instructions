@@ -46,6 +46,10 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPTS_DIR.parent
 REGISTRY_PATH = SCRIPTS_DIR / "crutch_registry.toml"
 
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+from lib import worktree_route
+
 
 def _load_inventory_module():
     path = SCRIPTS_DIR / "crutch-inventory.py"
@@ -246,6 +250,7 @@ CODE_PARTITIONS = [
         "keep",
         "Parses the closed REVIEW reply contract the thinker's SKILL.md fixes — the "
         "`REVIEW:` / `Verdict:` / `Plan digest:` / condition-prefix tokens, the "
+        "`Customer questions:` header and `Q:` line prefix, the "
         "`blocking:` / `note:` severity tag and `re:<id>` restatement token, and "
         "list-numbering/emphasis decoration — never the meaning of a concern's text: "
         "the verdict is read from its token, and a message without that token is "
@@ -793,6 +798,11 @@ def render_registry(entries: list[dict]) -> str:
 
 
 def main() -> int:
+    if worktree_route.should_route(REPO_ROOT):
+        return worktree_route.route_script(
+            REPO_ROOT, "scripts/gen_crutch_registry.py", sys.argv[1:],
+            "crutch-registry: regenerate",
+        )
     entries = build_entries()
     text = render_registry(entries)
     REGISTRY_PATH.write_text(text, encoding="utf-8")
