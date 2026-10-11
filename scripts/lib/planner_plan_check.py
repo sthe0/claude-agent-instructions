@@ -35,14 +35,16 @@ RETURN_MARKERS = (
     "PERMISSION-REQUEST",
     "ESCALATE",
     "REVIEW",
+    "LOOP_DETECTED",
 )
 MARKER_RE = re.compile(rf"^({'|'.join(RETURN_MARKERS)}):")
 
 # The escape child spawned as kind ``manager`` is a vanilla manager, not a
-# specialist: it answers in overcome-difficulty's own vocabulary. Kept OUT of
-# RETURN_MARKERS so every other kind validates against the specialist set
-# unchanged; PERMISSION-REQUEST is shared because a child outside its grants
-# must be able to ask.
+# specialist: it answers in overcome-difficulty's own vocabulary. RESOLVED and
+# INVESTIGATION stay OUT of RETURN_MARKERS so every other kind validates against
+# the specialist set unchanged; PERMISSION-REQUEST is shared because a child
+# outside its grants must be able to ask, and LOOP_DETECTED because any depth n+1
+# manager may find its task re-frames an ancestor's.
 MANAGER_RETURN_MARKERS = ("RESOLVED", "INVESTIGATION", "LOOP_DETECTED", "PERMISSION-REQUEST")
 _MARKERS_BY_KIND = {"manager": MANAGER_RETURN_MARKERS}
 

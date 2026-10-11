@@ -434,6 +434,12 @@ def log_cost_entry(entry: dict) -> None:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+EXIT_NORM_LOOP = 3
+# 4 is also "claude not on PATH"; the engine tells the two apart by the
+# `Refusal: grant-widening` line on stdout.
+EXIT_GRANT_WIDENING = 4
+
+
 def log_refused(reason: str, extra: dict) -> None:
     """Log a spawn that was refused before reaching `claude -p` (recursion cap, unknown kind, etc.).
     Visible in cost-report.py as a separate category."""
@@ -1637,6 +1643,140 @@ def session_recursion_depth(
     return state.recursion_depth if state is not None else 0
 
 
+def _session_plan(state):
+    """The session's plan document -- the live plan path first, the approved snapshot as
+    the fallback -- or `None` when neither loads."""
+    for plan_file in (state.plan_path, state.plan_snapshot_path):
+        if not plan_file:
+            continue
+        try:
+            return load_plan(plan_file)
+        except (OSError, PlanError):
+            continue
+    return None
+
+
+def _stage_norm(doc, stage_index: int) -> "StageNorm | None":
+    stages = {s.index: s for s in doc.stages}
+    stage = stages.get(stage_index)
+    if stage is None:
+        return None
+    suppliers = {e.on: stages[e.on] for e in stage.supplies if e.on in stages}
+    return StageNorm.from_stage(stage, suppliers, doc=doc)
+
+
+def _linked_session(session_id: "str | None", state_root: "Path | None"):
+    """`(state, plan document)` of a session that carries a `parent_link` and whose
+    plan loads, else `None`. A session nobody linked is never subject to the delegation
+    checks below, and neither is one whose state or plan cannot be read -- the checks
+    refuse on evidence, not on missing evidence."""
+    if not session_id:
+        return None
+    from agentctl.store import FileStateStore
+
+    store = FileStateStore(state_root) if state_root is not None else FileStateStore()
+    try:
+        state = store.load(session_id)
+    except Exception:
+        return None
+    if state is None or not state.parent_link:
+        return None
+    doc = _session_plan(state)
+    return (state, doc) if doc is not None else None
+
+
+def norm_loop_ancestor(linked, stage_index: int) -> "dict | None":
+    """The lineage entry whose `norm_digest` equals the digest of the stage this spawn
+    would delegate, or `None`. Exact digest equality is the whole rule: a re-framed task
+    (different norm, same intent) is the child's own `loop_self_check` perception."""
+    state, doc = linked
+    norm = _stage_norm(doc, stage_index)
+    if norm is None:
+        return None
+    digest = norm.norm_digest()
+    for entry in state.parent_link.get("norm_lineage") or []:
+        if entry.get("norm_digest") == digest:
+            return entry
+    return None
+
+
+def _grant_key(entry: dict) -> tuple:
+    return ("rule", entry["rule"]) if entry.get("rule") else ("add-dir", entry.get("path"), entry.get("mode"))
+
+
+def _grant_text(entry: dict) -> str:
+    return entry["rule"] if entry.get("rule") else f"--add-dir {entry.get('path')}:{entry.get('mode')}"
+
+
+def uncovered_grants(linked, stage_index: int, engine_grants: "list[dict]") -> "list[dict]":
+    """The entries of `engine_grants` that exceed the authority `linked`'s session holds:
+    its adopted handoff grants plus the unconsumed runtime grants a user resolved on
+    this stage. An entry is covered when it is identical to a covering entry, or when it
+    resolves to resources every one of which a resource of some covering entry covers
+    (an unresolved entry -- a wildcard-tail Bash rule -- only by identity). The
+    protected permission surfaces bound `covers` exactly as the autonomy boundary does."""
+    from agentctl import cli as agentctl_cli
+    from agentctl import order_approvals
+    from agentctl import plan_resources
+    from agentctl import resources as agentctl_resources
+    from agentctl.plan import _venue_for
+
+    state, doc = linked
+    covering = list(state.parent_link.get("grants") or [])
+    covering += [e for e in state.runtime_grants.get(str(stage_index), []) if not e.get("consumed")]
+    covering_keys = {_grant_key(e) for e in covering}
+    venue = _venue_for(doc)
+    protected = agentctl_resources.protected_permission_surfaces(
+        repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
+        ledger_dir=str(order_approvals._root(None)),
+    )
+
+    def resolved(entry: dict):
+        if entry.get("rule"):
+            res = plan_resources.resolve_rule_grant(entry["rule"], venue)
+        else:
+            res = plan_resources.resolve_add_dir_grant(entry["path"], entry["mode"])
+        return res.resources if res.status == "resolved" else None
+
+    covering_resources: list = []
+    for entry in covering:
+        covering_resources.extend(resolved(entry) or [])
+
+    out = []
+    for entry in engine_grants:
+        if _grant_key(entry) in covering_keys:
+            continue
+        needed = resolved(entry)
+        if needed is not None and all(
+            any(agentctl_cli._covers_resource(held, want, protected) for held in covering_resources)
+            for want in needed
+        ):
+            continue
+        out.append(entry)
+    return out
+
+
+def grant_widening_refusal(linked, stage_index: int, kind: str, uncovered: "list[dict]") -> str:
+    """The `PERMISSION-REQUEST:` block a refused delegation prints on stdout. The
+    `Refusal: grant-widening` line is what the engine's dispatch route keys on; the
+    `Rule:` lines name each uncovered entry so a user decision can grant exactly them."""
+    state, _ = linked
+    lines = [
+        "PERMISSION-REQUEST:",
+        f"Action: delegate stage {stage_index} to a {kind} child with {len(uncovered)} grant(s) "
+        f"beyond the authority session {state.session_id} was handed",
+        "Why: a delegated stage may not hold more authority than the stage that spawned this "
+        "session was granted; the entries below are not covered by that handoff or by a "
+        "user-resolved runtime grant",
+        "Fallback if denied: stop the step",
+        "Refusal: grant-widening",
+        f"Session: {state.session_id}",
+        f"Handoff-sha256: {state.parent_link.get('sha256')}",
+    ]
+    lines += [f"Rule: {_grant_text(e)}" for e in uncovered]
+    return "\n".join(lines) + "\n"
+
+
 def norm_handoff_env_value(
     session_id: "str | None",
     stage_index: "int | None",
@@ -1660,27 +1800,15 @@ def norm_handoff_env_value(
         state = store.load(session_id)
         if state is None:
             return None
-        doc = None
-        for plan_file in (state.plan_path, state.plan_snapshot_path):
-            if not plan_file:
-                continue
-            try:
-                doc = load_plan(plan_file)
-            except (OSError, PlanError):
-                continue
-            break
-        if doc is None:
+        doc = _session_plan(state)
+        norm = _stage_norm(doc, stage_index) if doc is not None else None
+        if norm is None:
             return None
-        stages = {s.index: s for s in doc.stages}
-        stage = stages.get(stage_index)
-        if stage is None:
-            return None
-        suppliers = {e.on: stages[e.on] for e in stage.supplies if e.on in stages}
         record = norm_handoff.build_record(
             parent_session=session_id,
             stage_index=stage_index,
             kind=kind,
-            norm=StageNorm.from_stage(stage, suppliers, doc=doc),
+            norm=norm,
             grants=engine_grants,
             depth=depth,
             parent_lineage=(state.parent_link or {}).get("norm_lineage"),
@@ -2088,6 +2216,26 @@ def main(argv: list[str] | None = None) -> int:
         log_refused("recursion-cap", {"kind": args.kind, "depth_attempted": depth_next, "cap": cap})
         return 3
 
+    linked = (
+        _linked_session(args.session, args.state_root)
+        if args.session is not None and args.stage_index is not None
+        else None
+    )
+    if linked is not None:
+        ancestor = norm_loop_ancestor(linked, args.stage_index)
+        if ancestor is not None:
+            print(
+                f"LOOP_DETECTED: stage {args.stage_index} of session {args.session} carries the "
+                f"norm already delegated at stage {ancestor.get('stage_index')} of session "
+                f"{ancestor.get('session')} (norm_digest {ancestor.get('norm_digest')}); "
+                "re-delegating it would loop. Edit the norm or escalate."
+            )
+            log_refused(
+                "norm-loop",
+                {"kind": args.kind, "stage_index": args.stage_index, "matching": ancestor, "depth": depth_next},
+            )
+            return EXIT_NORM_LOOP
+
     # A developer spawn's static prefix (skill body + context dossier) alone burns
     # ~$1 in cache reads before the first edit, so budget-small ($1) is exhausted
     # mid-flight (error_max_budget_usd) even on a trivial fix. Floor developer at
@@ -2226,6 +2374,19 @@ def main(argv: list[str] | None = None) -> int:
         engine_grants = load_engine_stage_grants(
             args.session, args.stage_index, args.kind, state_root=args.state_root
         )
+        if linked is not None and engine_grants:
+            uncovered = uncovered_grants(linked, args.stage_index, engine_grants)
+            if uncovered:
+                print(grant_widening_refusal(linked, args.stage_index, args.kind, uncovered), end="")
+                log_refused(
+                    "grant-widening",
+                    {
+                        "kind": args.kind,
+                        "stage_index": args.stage_index,
+                        "uncovered": [_grant_text(e) for e in uncovered],
+                    },
+                )
+                return EXIT_GRANT_WIDENING
         from agentctl import cli as agentctl_cli
 
         try:

@@ -137,7 +137,8 @@ def test_kind_extractor_keeps_extract_marker_contract(mod, text, expected):
 def test_global_marker_set_is_unchanged():
     from lib.planner_plan_check import RETURN_MARKERS
 
-    assert not {"RESOLVED", "INVESTIGATION", "LOOP_DETECTED"} & set(RETURN_MARKERS)
+    assert not {"RESOLVED", "INVESTIGATION"} & set(RETURN_MARKERS)
+    assert "LOOP_DETECTED" in RETURN_MARKERS
 
 
 def test_extraction_hint_for_manager_is_its_own_marker_set():

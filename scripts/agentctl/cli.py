@@ -776,6 +776,24 @@ def _adopt_norm_handoff(state: SessionState) -> None:
               norm_digest=adopted["norm_digest"])
 
 
+def _loop_self_check(state: SessionState, thresholds: Thresholds) -> dict | None:
+    """The ancestor-norm digest a deep child compares its own task against, or None.
+    The comparison is perception (is my task a re-framing of an ancestor's?) and stays
+    with the agent; the engine only decides *when* to ask and *what* to show."""
+    link = state.parent_link
+    threshold = thresholds.loop_sensitivity_depth
+    if link is None or state.recursion_depth < threshold:
+        return None
+    return {
+        "depth": state.recursion_depth,
+        "threshold": threshold,
+        "ancestors": [
+            {k: entry.get(k) for k in ("session", "stage_index", "title", "done_criterion")}
+            for entry in link.get("norm_lineage") or []
+        ],
+    }
+
+
 def _agent_replans_fire_route(state: SessionState) -> dict | None:
     """The agent's own route for an unacknowledged `replans`-scale fire of a ledgered
     order: a planning-difficulty cycle, not a question to the user. None for every other
@@ -1874,6 +1892,45 @@ def _is_recursion_refusal(result) -> bool:
     return getattr(result, "returncode", None) == 3 or (
         "max-recursion-depth" in (getattr(result, "stderr", "") or "")
     )
+
+
+_GRANT_WIDENING_EXIT = 4
+_REFUSAL_LINE_RE = re.compile(r"^[-*]?\s*\*{0,2}Refusal:\*{0,2}\s*grant-widening\s*$", re.MULTILINE)
+_HANDOFF_SHA_LINE_RE = re.compile(r"^[-*]?\s*\*{0,2}Handoff-sha256:\*{0,2}\s*(\S+)\s*$", re.MULTILINE)
+
+
+def _loop_detected_line(result) -> str | None:
+    """The `LOOP_DETECTED: ...` first stdout line of a norm-loop refusal
+    (spawn-specialist exit 3 before any child launched), else None."""
+    stdout = (getattr(result, "stdout", "") or "").lstrip()
+    if stdout.startswith("LOOP_DETECTED:"):
+        return stdout.splitlines()[0].strip()
+    return None
+
+
+def _is_grant_widening_refusal(result) -> bool:
+    """spawn-specialist refuses a delegation that would hold more authority than the
+    session was handed with exit 4 and a `Refusal: grant-widening` stdout line (exit 4
+    is also "claude not on PATH", so the line is the discriminator). A relaying
+    manager may hand the same block back inside its own `PERMISSION-REQUEST:` return
+    under any exit code, so the line alone decides in that form."""
+    stdout = getattr(result, "stdout", "") or ""
+    if not _REFUSAL_LINE_RE.search(stdout):
+        return False
+    if getattr(result, "returncode", None) == _GRANT_WIDENING_EXIT:
+        return True
+    return parse_marker(stdout)[0] == "PERMISSION-REQUEST"
+
+
+def _parse_rule_lines(body: str) -> list[str]:
+    """Every `Rule:` line of a PERMISSION-REQUEST block, in order; `_parse_rule_line`
+    returns only the last."""
+    rules = []
+    for line in body.splitlines():
+        m = _RULE_LINE_RE.match(line.strip())
+        if m and m.group(1).strip():
+            rules.append(m.group(1).strip().strip("`").strip())
+    return rules
 
 
 def _require(store: StateStore, session_id: str) -> SessionState:
@@ -3456,6 +3513,15 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
 
     store.save(state)
     d = Directive(True, state.node, action, detail, data={"reasons": result.reasons})
+    loop_self_check = _loop_self_check(state, thr)
+    if loop_self_check is not None:
+        d.data["loop_self_check"] = loop_self_check
+        d.detail += (
+            f" | loop self-check (depth {loop_self_check['depth']} >= "
+            f"{loop_self_check['threshold']}): if your task re-frames any ancestor task in "
+            "data.loop_self_check.ancestors, end with `LOOP_DETECTED:` naming it instead "
+            "of recursing further"
+        )
     _attach_advisories(d, "weight_classification",
                        {"goal": state.goal, "weight_class": state.weight_class, "route": state.route},
                        runner, weight_class=state.weight_class,
@@ -6463,19 +6529,29 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         )
     state.log("dispatch", stage=stage.index, kind=stage.spawn_kind(), returncode=result.returncode)
     if result.returncode != 0 and _is_recursion_refusal(result):
-        # spawn-specialist refused at the recursion cap — a structural blocker, not
-        # a stage result. Park at BLOCKED and escalate; never report success. This
-        # must win before marker routing (a refusal carries no valid marker).
+        # spawn-specialist refused at the recursion cap or on the norm-loop rule
+        # (both exit 3, told apart by the LOOP_DETECTED stdout line) — a structural
+        # blocker, not a stage result. Park at BLOCKED and escalate; never report
+        # success. This must win before marker routing (a refusal carries no valid
+        # marker).
+        loop_line = _loop_detected_line(result)
         state.blocked_from = state.node
         state.node = Node.BLOCKED.value
-        state.log("dispatch_refused", stage=stage.index, reason="recursion-cap")
-        store.save(state)
-        return Directive(
-            False, state.node, "escalate",
-            f"stage {stage.index} spawn refused: recursion cap reached — escalate to the user",
-            marker="ESCALATE",
-            data={"returncode": result.returncode, "stderr": result.stderr},
+        state.log(
+            "dispatch_refused", stage=stage.index,
+            reason="norm-loop" if loop_line else "recursion-cap",
         )
+        store.save(state)
+        data = {"returncode": result.returncode, "stderr": result.stderr}
+        if loop_line:
+            data["loop_detected"] = loop_line
+            message = (
+                f"stage {stage.index} spawn refused: its norm is already on the delegation "
+                f"lineage (norm-loop) — escalate to the user: {loop_line}"
+            )
+        else:
+            message = f"stage {stage.index} spawn refused: recursion cap reached — escalate to the user"
+        return Directive(False, state.node, "escalate", message, marker="ESCALATE", data=data)
 
     # The marker wins over the returncode: a specialist may exit 0 with CLARIFY, or
     # non-zero with a valid escalation marker. spawn-specialist.py has already parsed
@@ -6485,6 +6561,37 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         "returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr,
         "evidence_dir": evidence_dir,
     }
+
+    if _is_grant_widening_refusal(result):
+        # A delegation that would widen authority beyond what the session was
+        # handed is a request for authority, not a defect of the materialized
+        # grants: park it for the user's decision. No materialization_defects row,
+        # no self_grant (the engine never widens on its own say-so), no DIAGNOSING.
+        rules = _parse_rule_lines(result.stdout)
+        sha_match = _HANDOFF_SHA_LINE_RE.search(result.stdout)
+        action = (
+            f"grant-widening refusal on stage {stage.index}: delegation holds "
+            f"{len(rules)} grant(s) beyond the session's handoff: {', '.join(rules)}"
+        )
+        state.permission_request = PermissionRequest(
+            action=action, stage_index=stage.index, raw=result.stdout
+        )
+        state.log("dispatch_refused", stage=stage.index, reason="grant-widening", rules=rules)
+        store.save(state)
+        return Directive(
+            True, state.node, "ask_user_permission",
+            f"stage {stage.index} delegation refused: it would widen grants beyond the "
+            "authority this session was handed — the user decides",
+            marker="PERMISSION-REQUEST",
+            data={
+                **base, "action": action,
+                "options": ["once", "stage", "project", "global", "deny"],
+                "grant_widening": {
+                    "rules": rules,
+                    "handoff_sha256": sha_match.group(1) if sha_match else None,
+                },
+            },
+        )
 
     # Post-launch half of the settings_drift check: re-hash the SAME paths
     # enumerated before dispatch_stage ran. A spawned child is never granted
@@ -6761,6 +6868,12 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             f"stage {stage.index} spawn was refused for size before it could "
             "answer — recommend a reduced brief or the re-attest path",
             marker="CHILD_EXHAUSTED", data={**base, "reason": body},
+        )
+    if marker == "LOOP_DETECTED":
+        # The child reports its task re-frames an ancestor's: routed like ESCALATE
+        # (park BLOCKED, the user decides), with the report carried on the directive.
+        return _park_blocked(
+            state, store, stage, marker, {**base, "loop_detected": f"LOOP_DETECTED: {body}".strip()},
         )
     if marker is None and result.returncode != 0:
         store.save(state)
