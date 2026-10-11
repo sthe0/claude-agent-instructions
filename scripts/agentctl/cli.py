@@ -83,6 +83,7 @@ from .plan import (
     unit_currency_hash,
     verify_command_reachability_blockers,
     verify_command_scope_warnings,
+    _derive_stage_grants,
     _venue_for,
 )
 from .render import (
@@ -3721,9 +3722,15 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         # control from being false-RED; this BLOCKS a control that can never
         # go honestly GREEN because it names a path no stage produces and
         # that does not exist. No legitimate instance -> a blocker, not a warn.
+        # The base a path's existence is judged against is the plan's declared absolute
+        # venue — repo_root first, as before, delivery_worktree when that is the only
+        # one declared. A plan declaring neither is refused above for it
+        # (`plan.venue_declaration_blockers`); the process cwd is never the base.
         problems.extend(
             verify_command_reachability_blockers(
-                doc.stages, doc.meta.final_check, doc.meta.repo_root
+                doc.stages, doc.meta.final_check,
+                next((v for v in (doc.meta.repo_root, doc.meta.delivery_worktree)
+                      if v and os.path.isabs(v)), None),
             )
         )
     if problems:
@@ -7293,7 +7300,7 @@ def _stage_grant_entries(
             "since this plan was approved) -- derived grants withheld"
         ), None
     venue = _venue_for(snap_doc)
-    derived, dropped = _grants.derive_stage_grants(snap_stage, venue=venue)
+    derived, dropped = _derive_stage_grants(snap_stage, venue)
     derived_entries = [r.to_dict() for r in derived.allow] + \
         [a.to_dict() for a in derived.add_dirs]
     return declared_entries, derived_entries, dropped, None, None
@@ -7321,7 +7328,7 @@ def _stage_would_derive_grants(state: SessionState, stage_index: int) -> bool:
     if snap_stage is None:
         return False
     venue = _venue_for(snap_doc)
-    derived, _dropped = _grants.derive_stage_grants(snap_stage, venue=venue)
+    derived, _dropped = _derive_stage_grants(snap_stage, venue)
     return not derived.is_empty()
 
 
