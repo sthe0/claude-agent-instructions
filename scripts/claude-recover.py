@@ -30,7 +30,9 @@ disk level, through five phases in order: disk-pre, mounts, compose, disk-post, 
 first four call the machine-local hooks ~/.config/claude/recover.d/<NN>-*.sh; the last opens one
 tmux window per session with `claude --resume`. A dry run prints the plan and calls the hooks
 with RECOVER_DRY_RUN=1; nothing of Core's own is executed. Restore never starts a tmux server
-and never touches the unit that owns it; it only adds windows to an existing tmux session.
+and never touches the unit that owns it. That is a property of the plan builder, which emits
+only `new-window -d` commands for the sessions phase (see session_command()); tmux_run itself
+runs whatever argv it is given.
 
 Hook contract: env RECOVER_PHASE (disk-pre|mounts|compose|disk-post), RECOVER_DRY_RUN (0|1),
 RECOVER_PLAN (JSON of the plan; the mounts hook mounts exactly the entries with
