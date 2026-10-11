@@ -371,6 +371,14 @@ def _no_ambient_recursion_depth(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_norm_handoff(monkeypatch):
+    """Drop the ambient AGENTCTL_NORM_HANDOFF: a suite run from inside a spawned
+    specialist would otherwise link every session an engine test starts to that
+    specialist's parent stage. Tests that own the link set the variable themselves."""
+    monkeypatch.delenv("AGENTCTL_NORM_HANDOFF", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_project_dir(monkeypatch):
     """Drop the ambient CLAUDE_PROJECT_DIR for the suite at large.
 

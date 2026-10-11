@@ -38,6 +38,7 @@ from typing import NamedTuple, Sequence
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from agentctl import grants  # the sole validator every materialized rule/add_dir passes through
+from agentctl import norm_handoff  # the one definition of the handoff record the child engine adopts
 from agentctl.plan import (  # parse the TOML plan for a single-stage brief projection
     PlanError,
     is_unit_id,
@@ -46,6 +47,7 @@ from agentctl.plan import (  # parse the TOML plan for a single-stage brief proj
     parse_pair,
     parse_unit,
 )
+from agentctl.stage_norm import StageNorm
 from agentctl.state import PARENT_DIFFICULTY_ENV, format_parent_difficulty
 from agentctl.render import (  # pure PlanDoc(+index) -> markdown; TopoUnitsCorrupt/materialize_topo_units do the one bit of I/O
     TopoUnitsCorrupt,
@@ -1615,6 +1617,81 @@ def parent_difficulty_env_value(
     return format_parent_difficulty(session_id, state.difficulty.uid, state.difficulty.level)
 
 
+def session_recursion_depth(
+    session_id: "str | None",
+    state_root: "Path | None" = None,
+) -> int:
+    """The `recursion_depth` the engine recorded for `session_id`, 0 when the session is
+    absent or unreadable. A child's `AGENT_RECURSION_DEPTH` is set only by this wrapper,
+    so a session whose spawn did not pass through it (the autostart hook) has the depth
+    only in its engine state; the cap reads both."""
+    if not session_id:
+        return 0
+    from agentctl.store import FileStateStore
+
+    store = FileStateStore(state_root) if state_root is not None else FileStateStore()
+    try:
+        state = store.load(session_id)
+    except Exception:
+        return 0
+    return state.recursion_depth if state is not None else 0
+
+
+def norm_handoff_env_value(
+    session_id: "str | None",
+    stage_index: "int | None",
+    kind: str,
+    depth: int,
+    engine_grants: "list[dict] | None",
+    state_root: "Path | None" = None,
+) -> "str | None":
+    """Write the norm-handoff record for the stage this spawn works for and return the
+    `AGENTCTL_NORM_HANDOFF` value (`<path>:<sha256>`), or `None` when the spawn is not
+    linkable: no session or stage given, the session or its plan unreadable, or the stage
+    absent from the plan. A write failure is reported on stderr and leaves the spawn
+    unlinked -- it never fails the spawn. Same in-process engine seam as
+    `load_engine_stage_grants`; never writes the parent session's state file."""
+    if not session_id or stage_index is None:
+        return None
+    from agentctl.store import FileStateStore
+
+    store = FileStateStore(state_root) if state_root is not None else FileStateStore()
+    try:
+        state = store.load(session_id)
+        if state is None:
+            return None
+        doc = None
+        for plan_file in (state.plan_path, state.plan_snapshot_path):
+            if not plan_file:
+                continue
+            try:
+                doc = load_plan(plan_file)
+            except (OSError, PlanError):
+                continue
+            break
+        if doc is None:
+            return None
+        stages = {s.index: s for s in doc.stages}
+        stage = stages.get(stage_index)
+        if stage is None:
+            return None
+        suppliers = {e.on: stages[e.on] for e in stage.supplies if e.on in stages}
+        record = norm_handoff.build_record(
+            parent_session=session_id,
+            stage_index=stage_index,
+            kind=kind,
+            norm=StageNorm.from_stage(stage, suppliers, doc=doc),
+            grants=engine_grants,
+            depth=depth,
+            parent_lineage=(state.parent_link or {}).get("norm_lineage"),
+        )
+        path, sha = norm_handoff.write_record(store.root, record)
+    except Exception as exc:
+        print(f"warning: norm handoff not written, spawning unlinked: {exc}", file=sys.stderr)
+        return None
+    return norm_handoff.format_env_value(path, sha)
+
+
 def load_or_create_evidence_dir(
     session_id: str,
     stage_index: int,
@@ -1995,7 +2072,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     constants = parse_config_md()
-    depth_now = int(os.environ.get("AGENT_RECURSION_DEPTH", "0"))
+    depth_now = max(
+        int(os.environ.get("AGENT_RECURSION_DEPTH", "0")),
+        session_recursion_depth(args.session, args.state_root),
+    )
     depth_next = depth_now + 1
     cap = recursion_max(constants)
     if depth_next > cap:
@@ -2329,6 +2409,14 @@ def main(argv: list[str] | None = None) -> int:
     parent_difficulty = parent_difficulty_env_value(args.session, args.state_root)
     if parent_difficulty is not None:
         env[PARENT_DIFFICULTY_ENV] = parent_difficulty
+    # Same rule: an inherited handoff names an ancestor's stage, never this spawn's own.
+    env.pop(norm_handoff.NORM_HANDOFF_ENV, None)
+    handoff = norm_handoff_env_value(
+        args.session, args.stage_index, args.kind, depth_next, engine_grants,
+        state_root=args.state_root,
+    )
+    if handoff is not None:
+        env[norm_handoff.NORM_HANDOFF_ENV] = handoff
 
     # Snapshot existing transcripts BEFORE spawning so we can identify the
     # child's new jsonl (the parent manager's own live transcript would

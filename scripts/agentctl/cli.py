@@ -27,7 +27,7 @@ from pathlib import Path
 
 from lib import argv_text, config_root, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -747,6 +747,33 @@ def _adopt_parent_difficulty(state: SessionState) -> None:
         return
     state.parent_difficulty = parsed
     state.log("parent_difficulty", **parsed)
+
+
+def _adopt_norm_handoff(state: SessionState) -> None:
+    """Adopt the spawning stage's norm handoff from `AGENTCTL_NORM_HANDOFF`
+    (`<path>:<sha256>`) as `state.parent_link`, and with it the child's depth.
+    Idempotent: a session that is already linked keeps its link, and a different value
+    arriving later is logged, not adopted. A handoff that fails verification is logged and
+    ignored with one stderr line, never a crash -- the child's work does not depend on a
+    parent's env hygiene; the session simply stays unlinked."""
+    raw = os.environ.get(norm_handoff.NORM_HANDOFF_ENV, "").strip()
+    link = state.parent_link
+    if link is not None:
+        if raw and raw != norm_handoff.format_env_value(link["handoff"], link["sha256"]):
+            state.log("norm_handoff_ignored", reason="session already linked", value=raw[:200])
+        return
+    if not raw:
+        return
+    adopted, reason = norm_handoff.verify_env_value(raw)
+    if adopted is None:
+        state.log("norm_handoff_ignored", reason=reason, value=raw[:200])
+        print(f"agentctl: ignoring {norm_handoff.NORM_HANDOFF_ENV}: {reason}", file=sys.stderr)
+        return
+    state.parent_link = adopted
+    state.recursion_depth = adopted["depth"]
+    state.log("norm_handoff", parent_session=adopted["parent_session"],
+              stage_index=adopted["stage_index"], depth=adopted["depth"],
+              norm_digest=adopted["norm_digest"])
 
 
 def _agent_replans_fire_route(state: SessionState) -> dict | None:
@@ -1911,6 +1938,7 @@ def cmd_start(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     )
     runtime_host.bind_runtime_host(state, getattr(args, "host", None), require=False)
     _adopt_parent_difficulty(state)
+    _adopt_norm_handoff(state)
     state.log("start", task=state.task_id)
     store.save(state)
     return Directive(True, state.node, "classify", "session registered; run classify next")
@@ -1983,6 +2011,12 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         # root. A reset to a different task starts unrelated work, which must not stay
         # nested under a parent record that may long since have closed.
         new.parent_difficulty = dict(prior.parent_difficulty)
+    if prior is not None and prior.parent_link is not None:
+        # Spawn lineage belongs to the session, not to one task: a reset inside the same
+        # child process stays linked to the stage that spawned it.
+        new.parent_link = dict(prior.parent_link)
+        new.recursion_depth = new.parent_link["depth"]
+    _adopt_norm_handoff(new)
     new.log("reset", task=new.task_id, prior_task=(prior.task_id if prior else None))
     if reopening:
         # Counted in the accumulator, which survives this command; logged on the new
@@ -3366,6 +3400,7 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     except (runtime_host.HostAmbiguousError, runtime_host.HostConflictError) as exc:
         return Directive(False, state.node, "noop", str(exc))
     _adopt_parent_difficulty(state)
+    _adopt_norm_handoff(state)
     thr = Thresholds()
     sig = Signals(
         is_chat=bool(getattr(args, "chat", False)),
@@ -10484,8 +10519,52 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             # submitted — see _enumeration_escape_counts on why neither is reported
             # as a zero.
             "enumeration_escapes": _enumeration_escape_counts(state),
+            "parent_link": _parent_link_summary(state.parent_link),
         },
     )
+
+
+def _parent_link_summary(link: dict | None) -> dict | None:
+    if link is None:
+        return None
+    return {key: link.get(key) for key in ("parent_session", "stage_index", "depth", "norm_digest")}
+
+
+def cmd_children(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """The sessions the engine linked as children of `--session`: every stored session
+    whose `parent_link.parent_session` names it. Read-only -- a state file that cannot be
+    loaded is skipped, never repaired or rewritten."""
+    parent = args.session
+    list_ids = getattr(store, "session_ids", None)
+    children: list[dict] = []
+    for session_id in (list_ids() if list_ids is not None else []):
+        try:
+            child = store.load(session_id)
+        except Exception:
+            continue
+        link = child.parent_link if child is not None else None
+        if link is None or link.get("parent_session") != parent:
+            continue
+        children.append({
+            "session": child.session_id,
+            "stage_index": link.get("stage_index"),
+            "node": child.node,
+            "recursion_depth": child.recursion_depth,
+            "difficulty_level": child.difficulty.level if child.difficulty is not None else None,
+            "resolved": child.node == Node.RESOLVED.value,
+        })
+    data = {"parent_session": parent, "children": children}
+    if getattr(args, "json", False):
+        text = json.dumps(data, indent=2, sort_keys=True)
+    else:
+        lines = [
+            f"{c['session']} stage={c['stage_index']} node={c['node']} depth={c['recursion_depth']} "
+            f"difficulty={c['difficulty_level'] if c['difficulty_level'] is not None else 'none'}"
+            f"{' resolved' if c['resolved'] else ''}"
+            for c in children
+        ]
+        text = "\n".join(lines) if lines else f"no children linked to {parent}"
+    return Directive(True, "(none)", "inspect", text, data=data)
 
 
 # --- sub-plan stack: push_subplan / pop_subplan --------------------------------
@@ -11019,6 +11098,7 @@ COMMANDS = {
     "block": cmd_block,
     "unblock": cmd_unblock,
     "status": cmd_status,
+    "children": cmd_children,
     "drive": cmd_drive,
     "close": cmd_close,
     "push-subplan": cmd_push_subplan,
@@ -11074,7 +11154,7 @@ _SESSION_COMMANDS = (
     "record-result", "declare",
     "investigate", "critique", "normalize", "difficulty-open", "difficulty-close",
     "verify-final", "resolve", "reject",
-    "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status",
+    "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status", "children",
     "drive", "close", "push-subplan", "pop-subplan", "task-reset",
     "mandate-grant", "mandate-extend", "mandate-resume", "mandate-stop", "mandate-status",
 )
@@ -11907,6 +11987,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="cost log file path (test override)")
     sp = add("block"); sp.add_argument("--session", required=True); sp.add_argument("--reason", default="")
     sp = add("unblock"); sp.add_argument("--session", required=True)
+    sp = add("children"); sp.add_argument("--session", required=True)
+    sp.add_argument("--json", action="store_true")
     sp = add("status"); sp.add_argument("--session", required=False)
 
     # drive: opening-spine orchestrator — union of classify signals + --plan +

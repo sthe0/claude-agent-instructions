@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 48  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 49  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -80,6 +80,9 @@ SCHEMA_VERSION = 48  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # ancestors), parent_difficulty (the spawning session's open record,
                      # read from AGENTCTL_PARENT_DIFFICULTY) and closed_difficulties
                      # (roots a closing replan archives, children included)
+                     # 49: SessionState gains parent_link (the spawning stage's norm
+                     # handoff, read from AGENTCTL_NORM_HANDOFF); recursion_depth is
+                     # taken from it when present
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -2317,6 +2320,11 @@ class SessionState:
     # Root records a closing replan archived, each with its `children` — the one place a
     # later reader finds a closed difficulty's nested history.
     closed_difficulties: list[dict] = field(default_factory=list)
+    # The spawning stage's norm handoff (schema 49), verified and adopted once from
+    # AGENTCTL_NORM_HANDOFF at session creation: {handoff, sha256, parent_session,
+    # stage_index, kind, norm_digest, norm, grants, depth, norm_lineage}. None for a
+    # session no engine-linked parent spawned.
+    parent_link: dict | None = None
     schema_version: int = SCHEMA_VERSION
     # Not a dataclass field (ClassVar): the number of history events that were already
     # present when this object was built — what store.stamp_new_history uses to tell a

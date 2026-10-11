@@ -60,6 +60,12 @@ class FileStateStore:
     def exists(self, session_id: str) -> bool:
         return self.path(session_id).exists()
 
+    def session_ids(self) -> list[str]:
+        """Every session id with a state file, sorted; read-only."""
+        if not self.root.is_dir():
+            return []
+        return sorted(p.stem for p in self.root.glob("*.json"))
+
     def load(self, session_id: str) -> SessionState | None:
         p = self.path(session_id)
         if not p.exists():
