@@ -3,7 +3,7 @@ name: verify-command-scope-and-frozen-revision
 description: a plan stage's verify_command must scope tolerance/strictness to ids/fields it itself changed, and read historical claims from a frozen revision, not the live tree
 type: feedback
 created: 2026-09-30
-last_verified: 2026-09-30
+last_verified: 2026-10-11
 ---
 
 ## Difficulty
@@ -15,12 +15,17 @@ A stage's `verify_command`, once written, keeps running against a working tree t
 
 Concrete instance (a substantive multi-stage plan doing a production config edit): an additive stage added new entries to a shared broker/routing config and pushed a pinned revision `h`. A later, customer-authorized commit on the same branch added an override field to four pre-existing entries — none of which the additive stage had itself added. That stage's own verify_command wrongly (a) tolerance-listed one of those pre-existing entries as if the stage owned it, and (b) read a historical claim about its own change from a live `open()` instead of a frozen-revision helper already defined in the same script. The mirror-image bug existed in the stage that verifies the **final landed state**: it applied strict byte-equality to those same four entries with no exception for the now-authorized override, guaranteeing a red result once the extension became part of what actually ships.
 
+Second instance (2026-10-11, the background-debt-mandate delivery, stage "land and verify"): the stage's verify_command ran the full suite on the canonical checkout's **tip** after `git fetch`/`HEAD == FETCH_HEAD`, so the proof about our landed merge commit was bound to whatever main was at run time — a foreign landing nine commits later turned the check red for failures in files the delivery never touched. The fix pinned the suite to the landed merge commit (`merged.sha`) in a throwaway detached worktree and replaced the tip-equality check with "HEAD contains merged.sha". That fix then failed on its own **location** axis: the worktree sat under the session scratchpad, whose realpath (`/place/vartmp`) is the realpath of `$TMPDIR`, and the engine's ephemeral-artifact rule (`exempt_paths.under_scratch_root`, which resolves RELATIVE `output_artifacts` against cwd) flagged every tmp_path-built test plan — 15 deterministic failures that vanished from a worktree under the plan's own checks directory at the same sha.
+
+3. **Location scope.** A throwaway checkout created to run a verification at a frozen revision is itself an input to the code under test: anything that resolves relative paths against cwd (scratch-root containment, hook path guards, repo-root detection) sees the checkout's path. Put it under a durable, non-scratch path (the plan's checks directory, a sibling of the canonical checkout) — never under the session scratchpad, `/tmp`, `$TMPDIR` or their realpaths.
+
 ## Guidance
 
 - Define, per additive-edit stage, the exact set of ids/fields it itself introduces (a `NEW` set) and scope every tolerance/strictness assertion in that stage's `verify_command` to that set only. State explicitly in the stage's `done_criterion`/`invariants` that it makes **no claim, tolerant or strict**, about any id it did not add — that is the job of whichever later stage verifies the fully-landed state.
 - The stage that verifies the **final landed state** (post-merge/post-deploy) is the correct place to carry a tolerance exception for a later, separately-authorized extension to a shared artifact — not the stage that only verifies its own narrow addition.
 - Any assertion inside a `verify_command` that states a historical fact about what an earlier pinned revision contained must read that content via a frozen-revision helper (a VCS show-content-at-revision call), never a plain filesystem `open()` against the current working tree. Watch for `subprocess.run` without `text=True` — such a helper returns `bytes` and callers must `.decode('utf-8')` before using string methods.
 - When narrowing a scope inside a shared multi-occurrence code block (e.g. two near-identical lines differing only by a variable-name prefix), do not blindly `replace_all` — check whether the near-duplicate occurrence checks a *different* field that was never touched by the same later change; if so it does not need the same fix, and forcing symmetry would be a needless additional edit.
+- A throwaway worktree for a frozen-revision suite run goes under a durable path the plan already owns (e.g. its checks directory), outside `/tmp`, `$TMPDIR` and their realpaths; `scratch_roots()` in `scripts/agentctl/exempt_paths.py` lists what counts as scratch on the machine. A moving-tip check (`HEAD == FETCH_HEAD`, the suite on the canonical tip) binds the stage's proof to strangers' landings — pin the suite to the landed revision and check containment (`git merge-base --is-ancestor <merged> HEAD`) instead.
 
 ## See also
 
