@@ -1762,16 +1762,29 @@ def pair_discharged_stages(state: SessionState, doc, plan_path: str) -> "list[st
 #: forward, which made an honest passing review look, once recorded, like it had been
 #: an override — this message now says so explicitly rather than leaving that exit
 #: for the reader to infer from the code.
+#:
+#: The exits are listed in the order to try them — the reflection exit (an
+#: overcome-difficulty cycle on why the loop did not converge) first, the fresh pass
+#: second, the override last — because the override is the one that ends the loop
+#: without addressing it; an agent-authored override is admitted only with the
+#: reflection exit's record (`cli._plan_review_override_refusal`).
 _PLAN_REVIEW_ROUND_RELEASE_MESSAGE = (
     "review round budget exhausted at round {rounds} (the task's review_rounds count "
     "against config.md's effort-replan-absolute threshold, reused) — no further thinker review is required, but the "
-    "decision is the coordinator's and must be recorded. Two exits, both executable from this "
-    "state: (1) run a fresh whole-plan thinker review and record plan-review --verdict "
+    "decision is the coordinator's and must be recorded. Three exits, all executable from this "
+    "state, in the order to try them: (1) the reflection exit — run the overcome-difficulty "
+    "cycle on why the review loop did not converge (declare, investigate, critique naming "
+    "differences_to_remove, then normalize with a real factor, not a waiver), then act on "
+    "that critique: revise the plan, or split or cut its scope; (2) run a fresh whole-plan "
+    "thinker review and record plan-review --verdict "
     "pass — this clears the gate exactly as an on-budget pass always does, because it "
     "is an honest pass, not an override — on a plan too large for one reviewer, run "
-    "plan-review-topological.py over its pairs and then plan-review-compose; or (2) go ahead with the plan as it stands, "
-    "without a further review, by running plan-review --verdict override --reviewer "
-    "<you> --note <why it is acceptable>. To cut scope instead, edit the plan and "
+    "plan-review-topological.py over its pairs and then plan-review-compose; or (3) last, "
+    "go ahead with the plan as it stands, without a further review, by running "
+    "plan-review --verdict override --reviewer <you> --note <why it is acceptable> — an "
+    "agent-authored override is admitted only with the reflection exit's record: a "
+    "complete difficulty record declared after this release, with differences_to_remove "
+    "and a real normalization, which the override then consumes. To cut scope instead, edit the plan and "
     "re-apply it by the route your state allows — `submit-plan` before approval, "
     "`replan --plan <edited>` after it — but the budget does not refill, so cutting "
     "scope does not by itself open this gate; `approve` still answers to every other "
@@ -1795,13 +1808,20 @@ _PLAN_REVIEW_ROUND_RELEASE_MESSAGE_POST_PASS = (
     "recorded this approval cycle, and a recorded pass is terminal: 'run a fresh "
     "whole-plan thinker review' is no longer an exit, because an on-budget pass would have "
     "cleared the gate directly rather than reaching this message at all. The decision "
-    "is the coordinator's and must be recorded. Two exits, both executable from this state: (1) go "
-    "ahead with the plan as it stands, without a further review, by running "
-    "plan-review --verdict override --reviewer <you> --note <why it is acceptable>; or "
-    "(2) edit the plan as the concern proposes (cut or add) and re-apply it by the "
-    "route your state allows — `submit-plan` before approval, `replan --plan <edited>` "
-    "after it — but the budget does not refill, so editing the plan does not by itself "
-    "open this gate; `approve` still answers to every other gate as well"
+    "is the coordinator's and must be recorded. Two exits, both executable from this state, "
+    "in the order to try them: (1) the reflection exit — run the overcome-difficulty cycle "
+    "on why the review loop did not converge (declare, investigate, critique naming "
+    "differences_to_remove, then normalize with a real factor, not a waiver), then act on "
+    "that critique by editing the plan as the concern proposes (cut or add) and "
+    "re-applying it by the route your state allows; or (2) last, go ahead with the plan as "
+    "it stands, without a further review, by running plan-review --verdict override "
+    "--reviewer <you> --note <why it is acceptable> — an agent-authored override is "
+    "admitted only with the reflection exit's record: a complete difficulty record "
+    "declared after this release, with differences_to_remove and a real normalization, "
+    "which the override then consumes. Re-apply an edited plan by the route your state "
+    "allows — `submit-plan` before approval, `replan --plan <edited>` after it — but the "
+    "budget does not refill, so editing the plan does not by itself open this gate; "
+    "`approve` still answers to every other gate as well"
 )
 
 

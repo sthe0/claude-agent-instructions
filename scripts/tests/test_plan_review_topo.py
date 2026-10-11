@@ -608,7 +608,7 @@ def test_tr21_pair_override_checks_and_storage(make_env):
     state.plan_pair_reviews["3-1"].reviewer = "agent"
     assert cli._agent_review_override(state) == {
         "reviewer": "agent", "scope": "topo:3-1", "note": state.plan_pair_reviews["3-1"].note,
-        "plan_path": str(env.plan)}
+        "plan_path": str(env.plan), "difficulty_id": None}
 
     # Flags a pair record has no field for are refused, never silently dropped.
     for flag, dest, value in (("--concern-id", "concern_ids", ["k1"]),

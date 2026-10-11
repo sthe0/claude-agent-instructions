@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 49  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 50  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -80,7 +80,9 @@ SCHEMA_VERSION = 49  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # ancestors), parent_difficulty (the spawning session's open record,
                      # read from AGENTCTL_PARENT_DIFFICULTY) and closed_difficulties
                      # (roots a closing replan archives, children included)
-                     # 49: SessionState gains parent_link (the spawning stage's norm
+                     # 49: SessionState gains review_release_difficulty_id (the plan-review
+                     # round release's event anchor for the agent override's reflection exit)
+                     # 50: SessionState gains parent_link (the spawning stage's norm
                      # handoff, read from AGENTCTL_NORM_HANDOFF); recursion_depth is
                      # taken from it when present
 
@@ -2217,6 +2219,12 @@ class SessionState:
     #                         diagnosing-replan ceiling last refused a replan; an agent
     #                         `continue` needs a record declared after it.
     renegotiation_ceiling_difficulty_id: str | None = None
+    #   review_release_difficulty_id  event anchor of the plan-review round release:
+    #                         the id of the difficulty record open (or a sentinel when
+    #                         none was) at the release's first active observation. An
+    #                         agent review override needs a complete record whose id
+    #                         differs from it; None while no release is active.
+    review_release_difficulty_id: str | None = None
     # DIAGNOSING-renegotiation audit trail (GitHub #177) — one record per customer
     # decision at the diagnosing_replan round-release gate, keyed by string (decision,
     # note, by, ts, task_replan_count_at_decision). Same plain list[dict] shape as
@@ -2320,7 +2328,7 @@ class SessionState:
     # Root records a closing replan archived, each with its `children` — the one place a
     # later reader finds a closed difficulty's nested history.
     closed_difficulties: list[dict] = field(default_factory=list)
-    # The spawning stage's norm handoff (schema 49), verified and adopted once from
+    # The spawning stage's norm handoff (schema 50), verified and adopted once from
     # AGENTCTL_NORM_HANDOFF at session creation: {handoff, sha256, parent_session,
     # stage_index, kind, norm_digest, norm, grants, depth, norm_lineage}. None for a
     # session no engine-linked parent spawned.

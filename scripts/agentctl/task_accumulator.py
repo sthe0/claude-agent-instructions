@@ -35,7 +35,9 @@ real cross-machine accumulator directory::
         "plan_enumerate_rounds": 0,
         "code_review_rounds": 0,
         "resolved_reentry": 0,
-        "review_rounds": 0
+        "review_rounds": 0,
+        "replans_since_user_decision": 0,
+        "review_rounds_since_user_decision": 0
       },
       "review_rounds_last_sha256": "<plan digest the last review round was counted for>",
       "session_ids_contributing": ["18fb6860", "2442a5ac"],
@@ -77,10 +79,20 @@ from lib import config_root
 #: / `add(force_digest=)` below. Unlike `plan_review_rounds` (folded in only at
 #: approve/replan, from a session counter those commands zero) it is incremented at
 #: record time, so the review loop cannot reset the budget that is meant to end it.
+#:
+#: `replans_since_user_decision` / `review_rounds_since_user_decision` are the two
+#: backstop axes of the agent self-decision rule (`cli._agent_self_decision_refusal`):
+#: they advance by exactly what `replan_count` / `review_rounds` advance by, but
+#: `reset()` leaves them alone -- an agent's own `--renegotiation-decision continue`
+#: zeroes the ceiling counters, so only a decision the USER took
+#: (`clear_since_user_decision`) may zero these, which is what lets them stop an
+#: agent that keeps re-deciding for itself.
+SINCE_USER_AXES = ("replans_since_user_decision", "review_rounds_since_user_decision")
+
 AXES = (
     "replan_count", "plan_review_rounds", "plan_enumerate_rounds", "code_review_rounds",
     "resolved_reentry", "review_rounds",
-)
+) + SINCE_USER_AXES
 
 SCHEMA_VERSION = 1
 
@@ -238,6 +250,7 @@ def add(
     root: Path | None = None,
     count_if_digest_differs: str | None = None,
     force_digest: str | None = None,
+    mirror_axis: str | None = None,
 ) -> dict:
     """Add `count` to `axis`'s running total for `task_id` and persist it,
     returning the updated totals. Guarded by an exclusive lock spanning the
@@ -258,9 +271,15 @@ def add(
     digest differs from `<sha>` (a pair record on an already counted version adds
     nothing); `force_digest=<sha>` always adds `count` (a thinker spawn is a round
     in itself) and records `<sha>` so a pairwise run right after it on the same
-    version does not count again."""
+    version does not count again.
+
+    `mirror_axis` adds, in the same critical section, exactly what `axis` received --
+    after a digest-suppressed count is already 0 -- to a second axis, so a since-user
+    twin of a total can never drift from it under concurrent sessions."""
     if axis not in AXES:
         raise ValueError(f"unknown accumulator axis: {axis!r} (expected one of {AXES})")
+    if mirror_axis is not None and mirror_axis not in AXES:
+        raise ValueError(f"unknown accumulator axis: {mirror_axis!r} (expected one of {AXES})")
     if count < 0:
         raise ValueError(f"accumulator counts never decrease: got {count} for axis {axis!r}")
     if count_if_digest_differs is not None and force_digest is not None:
@@ -274,6 +293,8 @@ def add(
         if count_if_digest_differs is not None and data["review_rounds_last_sha256"] == digest:
             count = 0
         data["per_axis_totals"][axis] += count
+        if mirror_axis is not None:
+            data["per_axis_totals"][mirror_axis] += count
         if digest is not None:
             data["review_rounds_last_sha256"] = digest
         if session_id and session_id not in data["session_ids_contributing"]:
@@ -295,9 +316,37 @@ def reset(task_id: str, *, root: Path | None = None) -> dict:
     ceiling, GitHub #177) -- the latter also being the fix for GitHub #201's
     unbounded REPLANS-scale re-fire, since effort.py's effective_deltas()
     reads this same accumulator field against a static ceiling and never
-    resets it itself."""
+    resets it itself.
+
+    The `SINCE_USER_AXES` survive: an agent's own continue decision is one of the
+    callers, and zeroing the since-user counters there would let that decision
+    reset the very backstop that bounds it."""
     path = _path(task_id, root)
-    data = _empty(task_id)
     with _FileLock(path):
+        previous = _coerce(path.read_text(encoding="utf-8"), task_id) if path.exists() else _empty(task_id)
+        data = _empty(task_id)
+        for axis in SINCE_USER_AXES:
+            data["per_axis_totals"][axis] = previous["per_axis_totals"][axis]
         _write_atomic(path, data)
     return data
+
+
+def clear_since_user_decision(
+    task_id: str, *, session_id: str | None = None, now: float | str | None = None,
+    root: Path | None = None,
+) -> dict:
+    """Zero only the `SINCE_USER_AXES`: the user took a decision (approval,
+    fire-acknowledgement, renegotiation, review override, task-reset), so the
+    agent's autonomous-decision backstops start counting again from here. Leaves
+    every other axis and the review digest as they are."""
+    path = _path(task_id, root)
+    with _FileLock(path):
+        data = _coerce(path.read_text(encoding="utf-8"), task_id) if path.exists() else _empty(task_id)
+        for axis in SINCE_USER_AXES:
+            data["per_axis_totals"][axis] = 0
+        if session_id and session_id not in data["session_ids_contributing"]:
+            data["session_ids_contributing"].append(session_id)
+        if now is not None:
+            data["last_updated"] = now
+        _write_atomic(path, data)
+        return data

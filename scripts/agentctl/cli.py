@@ -810,6 +810,74 @@ def _agent_replans_fire_route(state: SessionState) -> dict | None:
     }
 
 
+def _agent_self_decision_refusal(
+    state: SessionState, anchor_id: str | None, *, event: str = "the event",
+    consumed: str = "an earlier decision", decision: str = "decision",
+) -> str | None:
+    """The one rule an agent-authored decision that would end a friction loop must meet:
+    the open difficulty record is complete (declared, investigated, critiqued), is not the
+    record that stood at the anchoring event, was not already spent on an earlier
+    decision, names `differences_to_remove`, and carries a real normalization (a waiver
+    does not discharge it). The fire-acknowledge, the renegotiation `continue` and the
+    plan-review override all reach it, so the three cannot drift apart. Returns why the
+    decision is refused, or None when the record qualifies.
+
+    `anchor_id` is the id of the record that stood at the event (None when the event
+    recorded none, which no record can equal); `event`/`consumed`/`decision` only word
+    the refusal for the caller."""
+    diff = state.difficulty
+    did = _difficulty_id(diff)
+    if did is None or not diff.complete():
+        return "no complete planning-difficulty record (declare, investigate, critique) is open"
+    if did == anchor_id:
+        return f"the difficulty record predates {event}; declare one after it"
+    if did in state.agent_ack_difficulty_ids:
+        return f"this difficulty record already discharged {consumed}"
+    if not diff.critique.differences_to_remove:
+        return "the critique names no differences_to_remove"
+    if diff.normalization is None or not diff.normalization.factor.strip():
+        return f"no real normalization record (a waiver does not discharge an agent {decision})"
+    return None
+
+
+def _since_user_backstop_refusal(state: SessionState, axis: str, backstop: int,
+                                 what: str, cleared_by: str) -> str | None:
+    """Why the since-user backstop stops an agent decision, or None below it. The counter
+    is the task's cross-session `axis` total since the last decision the user took."""
+    spent = task_accumulator.get(state.task_id)["per_axis_totals"].get(axis, 0)
+    if spent < backstop:
+        return None
+    return (f"{axis} is {spent}, at or past its backstop of {backstop}: {what} is no longer "
+            f"the agent's to take; {cleared_by} zeroes it")
+
+
+# Stands for "no difficulty record was open" at the release event: no real record id can
+# equal it, so any record declared afterwards is a fresh one.
+_NO_RECORD_ANCHOR = "no-record"
+
+
+def _plan_review_release_active(state: SessionState) -> bool:
+    """True while the plan-review round budget or the combined cross-axis ceiling is
+    spent -- the two releases whose messages name the reflection exit."""
+    return (gates.plan_review_round_release_active(state)
+            or gates.cross_axis_friction_release_active(state))
+
+
+def _sync_release_anchor(state: SessionState) -> bool:
+    """Keep `review_release_difficulty_id` in step with the release: set once, at the
+    first moment the release is observed active, to the id of the record then open
+    (never moved forward by a later observation), and cleared once it is no longer
+    active. Returns True when it changed `state`, for callers that must save."""
+    anchor = state.review_release_difficulty_id
+    if not _plan_review_release_active(state):
+        state.review_release_difficulty_id = None
+        return anchor is not None
+    if anchor is None:
+        state.review_release_difficulty_id = _difficulty_id(state.difficulty) or _NO_RECORD_ANCHOR
+        return True
+    return False
+
+
 def _agent_fire_ack_refusal(state: SessionState, last: dict, decision: str) -> str | None:
     """Why an agent-authored fire-acknowledge is refused, or None when it may proceed."""
     if _ledgered_order_key(state) is None:
@@ -818,19 +886,14 @@ def _agent_fire_ack_refusal(state: SessionState, last: dict, decision: str) -> s
         return "an open spend/wall-clock fire is owed to the user, not the agent"
     if decision != "revise":
         return f"decision {decision!r} on a fire is the user's; the agent may only revise"
-    diff = state.difficulty
-    did = _difficulty_id(diff)
-    if did is None or not diff.complete():
-        return "no complete planning-difficulty record (declare, investigate, critique) is open"
-    if did == last.get("difficulty_id_at_fire"):
-        return "the difficulty record predates the fire; declare one after it"
-    if did in state.agent_ack_difficulty_ids:
-        return "this difficulty record already discharged an earlier fire"
-    if not diff.critique.differences_to_remove:
-        return "the critique names no differences_to_remove"
-    if diff.normalization is None or not diff.normalization.factor.strip():
-        return "no real normalization record (a waiver does not discharge an agent fire)"
-    return None
+    backstopped = _since_user_backstop_refusal(
+        state, "replans_since_user_decision", Thresholds().effort_replan_backstop(),
+        "acknowledging an effort fire", "a user approval, fire-acknowledgement or renegotiation")
+    if backstopped is not None:
+        return backstopped
+    return _agent_self_decision_refusal(
+        state, last.get("difficulty_id_at_fire"),
+        event="the fire", consumed="an earlier fire", decision="fire")
 
 
 def _agent_renegotiation_refusal(state: SessionState, decision: str, doc) -> str | None:
@@ -840,20 +903,20 @@ def _agent_renegotiation_refusal(state: SessionState, decision: str, doc) -> str
         return f"{decision!r} changes the order's scope or ends it; that is the user's decision"
     if doc is None or _ledgered_order_key(state) is None:
         return "the order has no user-approved version to continue within"
-    diff = state.difficulty
-    did = _difficulty_id(diff)
-    if did is None or not diff.complete():
-        return "no complete planning-difficulty record (declare, investigate, critique) is open"
     if state.renegotiation_ceiling_difficulty_id is None:
+        diff = state.difficulty
+        if _difficulty_id(diff) is None or not diff.complete():
+            return "no complete planning-difficulty record (declare, investigate, critique) is open"
         return "no ceiling refusal is recorded; run the replan without a decision first"
-    if did == state.renegotiation_ceiling_difficulty_id:
-        return "the difficulty record predates the ceiling event; declare one after it"
-    if did in state.agent_ack_difficulty_ids:
-        return "this difficulty record already discharged an earlier decision"
-    if not diff.critique.differences_to_remove:
-        return "the critique names no differences_to_remove"
-    if diff.normalization is None or not diff.normalization.factor.strip():
-        return "no real normalization record (a waiver does not discharge an agent decision)"
+    backstopped = _since_user_backstop_refusal(
+        state, "replans_since_user_decision", Thresholds().effort_replan_backstop(),
+        "continuing a renegotiation", "a user approval, fire-acknowledgement or renegotiation")
+    if backstopped is not None:
+        return backstopped
+    refused = _agent_self_decision_refusal(
+        state, state.renegotiation_ceiling_difficulty_id, event="the ceiling event")
+    if refused is not None:
+        return refused
     boundary = _autonomy_for(state, doc)
     if not boundary["eligible"]:
         return f"the plan is outside the approved boundary: {boundary['reason']}"
@@ -921,9 +984,39 @@ def _agent_review_override(state: SessionState) -> dict | None:
     for review, scope in reviews:
         if (review.verdict == gates._PLAN_REVIEW_OVERRIDE
                 and (review.reviewer or "").strip().casefold() == AGENT_ACTOR):
+            spent = [e.get("difficulty_id") for e in state.history
+                     if e.get("event") == "agent_review_override_record" and e.get("scope") == scope]
             return {"reviewer": review.reviewer, "scope": scope, "note": review.note,
-                    "plan_path": review.plan_path}
+                    "plan_path": review.plan_path,
+                    "difficulty_id": spent[-1] if spent else None}
     return None
+
+
+def _consume_override_record(state: SessionState, scope: str) -> None:
+    """Spend the open difficulty record on the agent-authored override just recorded,
+    so it cannot discharge a second decision, and log which record it was for the
+    disclosure the user sees."""
+    did = _difficulty_id(state.difficulty)
+    if did is not None and did not in state.agent_ack_difficulty_ids:
+        state.agent_ack_difficulty_ids.append(did)
+    state.log("agent_review_override_record", scope=scope, difficulty_id=did)
+
+
+def _settle_override_decision(state: SessionState, review, scope: str) -> None:
+    """What a recorded review does to the self-decision machinery. An agent-authored
+    override spends the record that earned it. A user's override restarts the
+    since-user backstops, and so does the release it ends: a non-agent override or an
+    attested whole-plan pass leaves no release event for a later record to be
+    measured against."""
+    reviewer = (review.reviewer or "").strip()
+    if review.verdict == gates._PLAN_REVIEW_OVERRIDE:
+        if reviewer.casefold() == AGENT_ACTOR:
+            _consume_override_record(state, scope)
+            return
+        _clear_since_user_decision(state, reviewer)
+        state.review_release_difficulty_id = None
+    elif review.verdict == gates._PLAN_REVIEW_PASS and review.plan_sha256 and not scope:
+        state.review_release_difficulty_id = None
 
 
 def _plan_review_override_refusal(state: SessionState, prev, reviewer: str, order) -> str | None:
@@ -942,11 +1035,26 @@ def _plan_review_override_refusal(state: SessionState, prev, reviewer: str, orde
     if reviewer.casefold() == AGENT_ACTOR:
         # The override never counts as a passing first verdict for the autonomy
         # boundary (it is not written to the ledger).
-        if not (gates.plan_review_round_release_active(state)
-                or gates.cross_axis_friction_release_active(state)):
+        if not _plan_review_release_active(state):
             return (
                 "an agent-authored override is refused: it is available only once the "
                 "review-round or cross-axis friction release is active"
+            )
+        _sync_release_anchor(state)
+        backstopped = _since_user_backstop_refusal(
+            state, "review_rounds_since_user_decision", Thresholds().review_round_backstop(),
+            "recording a plan-review override",
+            "a user approval, fire-acknowledgement, renegotiation or plan-review override")
+        if backstopped is not None:
+            return f"an agent-authored override is refused: {backstopped}"
+        refused = _agent_self_decision_refusal(
+            state, state.review_release_difficulty_id,
+            event="the release", decision="override")
+        if refused is not None:
+            return (
+                f"an agent-authored override is refused: {refused}. Run the reflection exit "
+                "first (declare, investigate, critique with differences_to_remove, normalize "
+                "with a real factor) after the release, then override"
             )
     elif order is not None and order.customer_id and reviewer != order.customer_id:
         return (
@@ -1955,9 +2063,29 @@ def _count_review_round(state: SessionState, plan_sha256: str, *, thinker_record
         return
     digest = {"force_digest" if thinker_record else "count_if_digest_differs": plan_sha256}
     totals = task_accumulator.add(
-        state.task_id, "review_rounds", 1, session_id=state.session_id, now=_utcnow(), **digest,
+        state.task_id, "review_rounds", 1, session_id=state.session_id, now=_utcnow(),
+        mirror_axis="review_rounds_since_user_decision", **digest,
     )
     state.review_rounds = totals["per_axis_totals"]["review_rounds"]
+    _sync_release_anchor(state)
+
+
+def _clear_since_user_decision(state: SessionState, by: str) -> None:
+    """A decision the user (not the agent) took restarts the agent self-decision
+    backstops: the counters they read are 'since the last user decision'."""
+    if (by or "").strip().casefold() == AGENT_ACTOR:
+        return
+    task_accumulator.clear_since_user_decision(
+        state.task_id, session_id=state.session_id, now=_utcnow())
+
+
+def _count_replan(state: SessionState) -> None:
+    """Count one replan of the task, on the cross-session total and on the since-user
+    total the agent self-decision backstop reads."""
+    task_accumulator.add(
+        state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
+        mirror_axis="replans_since_user_decision",
+    )
 
 
 def _park_blocked(state: SessionState, store: StateStore, stage, marker, base: dict) -> Directive:
@@ -2129,6 +2257,7 @@ def cmd_task_reset(args, *, store: StateStore, runner: Runner | None = None) -> 
             data={"task": args.task, "by": by},
         )
     task_accumulator.reset(args.task)
+    task_accumulator.clear_since_user_decision(args.task, now=_utcnow())
     return Directive(
         True, "(task-scoped)", "noop",
         f"cross-session task accumulator reset for task {args.task!r} by {by}: {args.reason}",
@@ -4249,6 +4378,7 @@ def _note_round_release(state, review_blockers, store: StateStore) -> dict | Non
     ):
         return None
     rounds = gates._PLAN_REVIEW_ROUND_COUNTER.value(state)
+    anchored = _sync_release_anchor(state)
     already_logged = any(
         e.get("event") == "plan_review_round_release" and e.get("rounds") == rounds
         for e in state.history
@@ -4256,6 +4386,8 @@ def _note_round_release(state, review_blockers, store: StateStore) -> dict | Non
     if not already_logged:
         state.log("plan_review_round_release", rounds=rounds, review_rounds=state.review_rounds,
                   threshold=Thresholds().effort_replan_absolute())
+        store.save(state)
+    elif anchored:
         store.save(state)
     return {"rounds": rounds, "review_rounds": state.review_rounds,
             "threshold": Thresholds().effort_replan_absolute()}
@@ -4626,6 +4758,7 @@ def _cmd_plan_review_pair(
     elif verdict == gates._PLAN_REVIEW_OVERRIDE and prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE:
         ledger = _condition4_ledger_rows(state, doc, target, prev, prev.concerns, "false-alarm")
     state.plan_pair_reviews[pair] = review
+    _settle_override_decision(state, review, plan_review_scope_for_pair(pair))
     question_ids = _record_review_questions(state, pair, question_texts)
     if _is_counted_review(review.verdict, reviewer):
         _count_review_round(state, live)
@@ -4692,6 +4825,7 @@ def _count_plan_review_round(state: SessionState, target: str) -> None:
         if counted and counted != state.plan_review_counted_digest:
             state.plan_review_rounds += 1
             state.plan_review_counted_digest = counted
+            _sync_release_anchor(state)
 
 
 def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -4961,6 +5095,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         # CONTRACT INVERSION note on the pass path of _plan_review_verdict_blockers),
         # so it must not become a terminal pass either.
         state.plan_review_passes[scope] = review
+    _settle_override_decision(state, review, scope)
     _record_first_thinker_verdict(state, doc, review, scope)
     # POST-APPROVAL round counting. cmd_submit_plan's increment covers only the
     # pre-approval resubmission loop; review cycles overwhelmingly recur AFTER
@@ -5921,6 +6056,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     )
     state.approval = GateRecord("plan_approval", armed=True, passed=True, by=args.by)
     state.plan_review_rounds = 0
+    state.review_release_difficulty_id = None
     # Cleared with the counter, not merely alongside it: the marker is what makes the
     # NEXT post-approval review count as round 1. Left carrying the approved plan's
     # digest, a first replan-time review of that same unedited plan would be read as
@@ -5974,6 +6110,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         )
     else:
         state.log("approve", by=args.by)
+    _clear_since_user_decision(state, args.by)
     # REQ4: stamp the order-approvals ledger for the CUSTOMER only -- never
     # AGENT_ACTOR (refused above, before this point is ever reached) and
     # never a non-customer --by (a reviewer, a delegate) whose approval does
@@ -8958,8 +9095,18 @@ def cmd_reject(args, *, store: StateStore, runner: Runner | None = None) -> Dire
 # CONTENT (what the divergence is, the >=2 hypotheses, the functional ground) is
 # the cognition the overcome-difficulty skill supplies.
 
-def _require_diagnosing(state: SessionState) -> Directive | None:
-    if state.node != Node.DIAGNOSING.value:
+def _release_reflection_open(state: SessionState) -> bool:
+    """True while a plan-review or cross-axis release is active at a node other than
+    DIAGNOSING and RESOLVED: the reflection exit's difficulty commands run there, without
+    the node moving, because the release is where the budget runs out -- not a failure."""
+    return (state.node not in (Node.DIAGNOSING.value, Node.RESOLVED.value)
+            and _plan_review_release_active(state))
+
+
+def _require_diagnosing(state: SessionState, *, admit_release: bool = False) -> Directive | None:
+    """`admit_release` lets the reflection exit's commands (declare, investigate,
+    critique, normalize) run outside DIAGNOSING while a plan-review release is active."""
+    if state.node != Node.DIAGNOSING.value and not (admit_release and _release_reflection_open(state)):
         return Directive(
             False, state.node, "noop",
             f"difficulty commands run only in the DIAGNOSING cycle; node={state.node}",
@@ -8969,11 +9116,26 @@ def _require_diagnosing(state: SessionState) -> Directive | None:
     return None
 
 
+def _supersede_for_release(state: SessionState) -> None:
+    """Under a plan-review release a re-declared difficulty is a fresh record, never the
+    earlier one's investigation, critique and normalization under a new declaration (its
+    id would change while its content did not). The replaced record is logged whole."""
+    old = state.difficulty
+    if old is None or (old.declaration is None and old.investigation is None
+                       and old.critique is None and old.normalization is None):
+        return
+    state.log("difficulty_superseded", uid=old.uid, record=asdict(old))
+    state.difficulty = Difficulty(level=old.level, parent_uid=old.parent_uid, origin=old.origin)
+
+
 def cmd_declare(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
-    bad = _require_diagnosing(state)
+    bad = _require_diagnosing(state, admit_release=True)
     if bad:
         return bad
+    if _plan_review_release_active(state):
+        _sync_release_anchor(state)
+        _supersede_for_release(state)
     state.difficulty.declaration = Declaration(
         expected=args.expected, actual=args.actual, mismatch=args.mismatch
     )
@@ -8985,7 +9147,7 @@ def cmd_declare(args, *, store: StateStore, runner: Runner | None = None) -> Dir
 
 def cmd_investigate(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
-    bad = _require_diagnosing(state)
+    bad = _require_diagnosing(state, admit_release=True)
     if bad:
         return bad
     if state.difficulty.declaration is None:
@@ -9126,7 +9288,7 @@ def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[lis
 
 def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
-    bad = _require_diagnosing(state)
+    bad = _require_diagnosing(state, admit_release=True)
     if bad:
         return bad
     if state.difficulty.declaration is None or state.difficulty.investigation is None:
@@ -9195,8 +9357,14 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
     if blockers:
         action = "investigate" if any("investigation" in b for b in blockers) else "declare"
         return Directive(False, state.node, action, "; ".join(blockers), data={"blockers": blockers})
-    d = Directive(True, state.node, "replan",
-                  "difficulty cycle complete; replan is now unblocked")
+    if state.node != Node.DIAGNOSING.value:
+        d = Directive(True, state.node, "normalize",
+                      "reflection record complete; record the re-norming (normalize --factor) "
+                      "-- an agent-authored review override is then admitted once, with "
+                      "this record")
+    else:
+        d = Directive(True, state.node, "replan",
+                      "difficulty cycle complete; replan is now unblocked")
     inv = state.difficulty.investigation
     decl = state.difficulty.declaration
     _attach_advisories(d, "hypothesis_distinctness", {
@@ -9250,8 +9418,9 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
 
     Also callable OUTSIDE DIAGNOSING (any node from CLASSIFIED up to, but not
     including, RESOLVED) as a plain record-only act -- a normalization worth writing
-    down does not always arrive framed as a difficulty closure. That branch never
-    touches `state.difficulty` or any gate, and logs the SAME `normalize` event shape
+    down does not always arrive framed as a difficulty closure. That branch touches no
+    gate and `state.difficulty` only under a plan-review release (the reflection exit's
+    record takes the re-norming), and logs the SAME `normalize` event shape
     with `in_diagnosis=False` so every reader of the DIAGNOSING event still recognizes
     it. Dispatch happens FIRST, before any of this function's own validation, so a
     DIAGNOSING call reaches byte-identical code below."""
@@ -9320,9 +9489,11 @@ def _record_normalization_waiver(args, state: SessionState, store: StateStore,
 def _cmd_normalize_outside_diagnosing(args, state: SessionState, store: StateStore) -> Directive:
     """The record-only sibling of cmd_normalize's DIAGNOSING branch -- runs at any
     node from CLASSIFIED up to, but not including, RESOLVED (a RESOLVED session has
-    no further quality row or scorecard pass for the record to land on), touches no
-    difficulty state and no gate, and logs the same `normalize` event shape with
-    `in_diagnosis=False` so a reader scanning history for the event still finds it."""
+    no further quality row or scorecard pass for the record to land on), touches no gate,
+    and logs the same `normalize` event shape with `in_diagnosis=False` so a reader
+    scanning history for the event still finds it. The one difficulty state it touches:
+    while a plan-review release is active and the open record is declared, investigated
+    and critiqued, the re-norming lands on that record (the reflection exit's record)."""
     if state.node == Node.RESOLVED.value:
         return Directive(False, state.node, "continue",
                          "normalize outside a difficulty cannot record against a "
@@ -9337,6 +9508,16 @@ def _cmd_normalize_outside_diagnosing(args, state: SessionState, store: StateSto
         return Directive(False, state.node, "normalize", error)
     level = getattr(args, "level", None)
     destination = getattr(args, "destination", None)
+    record = state.difficulty
+    if (_release_reflection_open(state) and record is not None and record.declaration is not None
+            and record.investigation is not None and record.critique is not None):
+        record.normalization = Normalization(factor=factor, level=level, destination=destination)
+        _log_normalize_event(state, factor=factor, level=level, destination=destination,
+                             in_diagnosis=False)
+        store.save(state)
+        return Directive(True, state.node, "continue",
+                         "renorming recorded on the reflection record; an agent-authored "
+                         "plan-review override is now admitted with it")
     _log_normalize_event(state, factor=factor, level=level, destination=destination, in_diagnosis=False)
     store.save(state)
     return Directive(True, state.node, "continue",
@@ -9773,6 +9954,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             "task_replan_count_at_decision": cross_replan_count,
         })
         state.log("renegotiation", decision=decision, by=renegotiated_by)
+        _clear_since_user_decision(state, renegotiated_by)
         if decision == "abandon":
             # mirrors cmd_block's own bypass-transition idiom (and fire-acknowledge's
             # "abandon" decision) — parks reversibly via unblock, never RESOLVED, and
@@ -9798,6 +9980,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # budget from zero instead.
         task_accumulator.reset(state.task_id)
         state.review_rounds = 0
+        state.review_release_difficulty_id = None
 
     # The renormalization branch sits HERE deliberately: after difficulty_blockers (a
     # renormalization offers a whole plan, and offering one while the difficulty record
@@ -10242,9 +10425,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             state.log("replan", kind="no_change", exited_diagnosing=True, plan=args.plan,
                       prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
                       **replan_cause)
-            task_accumulator.add(
-                state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
-            )
+            _count_replan(state)
             effort.rederive(state)  # re-derive AFTER logging so this in-flight replan is counted
             store.save(state)
             if state.ready_stages():
@@ -10288,9 +10469,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         state.log("replan", kind="refinement", exited_diagnosing=diagnosing, plan=args.plan,
                   prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
                   **replan_cause)
-        task_accumulator.add(
-            state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
-        )
+        _count_replan(state)
         effort.rederive(state)  # re-derive AFTER logging so this replan is counted
         store.save(state)
         if state.node == Node.VERIFYING.value and state.ready_stages():
@@ -10370,9 +10549,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     state.log("replan", kind="substantive", plan=args.plan,
               prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
               **replan_cause)
-    task_accumulator.add(
-        state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
-    )
+    _count_replan(state)
     effort.rederive(state)  # re-derive AFTER logging so this replan is counted
     store.save(state)
     autonomy = _autonomy_directive_data(state, new)
@@ -10451,6 +10628,7 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
         "note": getattr(args, "note", None),
     }
     state.log("fire_acknowledge", by=args.by, decision=decision)
+    _clear_since_user_decision(state, args.by)
     _clear_open_fires_if_customer(state, args.by)
     if decision == "abandon":
         state.blocked_from = state.node

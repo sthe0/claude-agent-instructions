@@ -90,6 +90,26 @@ class Thresholds:
         trigger fires regardless of the multiple."""
         return self._int("effort-replan-absolute")
 
+    def _backstop(self, key: str) -> int:
+        """A missing or unparsable backstop row falls back to
+        `effort-replan-absolute + 1` -- the smallest value that still lets the
+        absolute threshold fire before the backstop does -- so a damaged
+        config.md can never make the agent self-decision rule unbounded."""
+        try:
+            return self._int(key)
+        except (KeyError, ValueError):
+            return self.effort_replan_absolute() + 1
+
+    def effort_replan_backstop(self) -> int:
+        """Replans since the last USER decision at/above which an agent may no
+        longer acknowledge an effort fire or continue a renegotiation itself."""
+        return self._backstop("effort-replan-backstop")
+
+    def review_round_backstop(self) -> int:
+        """Review rounds since the last USER decision at/above which an agent may
+        no longer record a plan-review override itself."""
+        return self._backstop("review-round-backstop")
+
     def review_parallel_max(self) -> int:
         """Cap on concurrent pair-reviewer spawns within one topological level."""
         return self._int("review-parallel-max")
