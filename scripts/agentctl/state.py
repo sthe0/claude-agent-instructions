@@ -15,8 +15,10 @@ dataclass — the seam store.py persists.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
+import uuid
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from pathlib import Path
@@ -25,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 46  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 48  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -69,6 +71,15 @@ SCHEMA_VERSION = 46  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # service_iface_norm/edge_norm) and unit_norm for unit records
                      # (`unit:<node>` keys in plan_pair_reviews); PlanReview gains
                      # reviewed_unit_currency
+                     # 47: Difficulty gains norm_targets (the norms a нормативное critique
+                     # names for editing); Stage gains `renorms` (the files a re-norming
+                     # stage edits); SessionState gains pending_renorms (norm-edit
+                     # obligations that outlive the closing replan)
+                     # 48: Difficulty gains uid/parent_uid/level/origin/children (the
+                     # difficulty stack); SessionState gains difficulty_stack (suspended
+                     # ancestors), parent_difficulty (the spawning session's open record,
+                     # read from AGENTCTL_PARENT_DIFFICULTY) and closed_difficulties
+                     # (roots a closing replan archives, children included)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -493,6 +504,31 @@ class Normalization:
     destination: str | None = None
 
 
+PARENT_DIFFICULTY_ENV = "AGENTCTL_PARENT_DIFFICULTY"
+
+
+def format_parent_difficulty(session: str, uid: str, level: int) -> str:
+    """The `AGENTCTL_PARENT_DIFFICULTY` value a spawn hands its child: `<session>:<uid>:<level>`."""
+    return f"{session}:{uid}:{level}"
+
+
+def parse_parent_difficulty(raw: str) -> dict | None:
+    """Inverse of `format_parent_difficulty`: `{"session", "uid", "level"}`, or None when
+    `raw` is not of that shape. The session id may itself contain `:`, hence the right split."""
+    parts = (raw or "").strip().rsplit(":", 2)
+    if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2].isdigit():
+        return None
+    return {"session": parts[0], "uid": parts[1], "level": int(parts[2])}
+
+
+def _legacy_difficulty_uid(d: dict) -> str:
+    """A stable uid for a pre-schema-48 record, derived from the sections it already holds."""
+    payload = {k: d.get(k) for k in
+               ("declaration", "investigation", "critique", "normalization", "norm_targets")}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+
+
 @dataclass
 class Difficulty:
     """One active difficulty: a plan-vs-reality divergence being worked through.
@@ -501,6 +537,28 @@ class Difficulty:
     investigation: Investigation | None = None
     critique: Critique | None = None
     normalization: Normalization | None = None
+    # The norms a нормативное critique names for editing (schema 47). Kept on the record
+    # rather than inside `Critique`: `Critique(**crit)` raises on an unknown key, so a
+    # field there would make every state written after this one unloadable by an older
+    # engine, while this class reads only the keys it knows.
+    # Entry: {"target": as given, "kind": "file"|"stage", "baseline": digest,
+    #         "source": "critique" | uid of the nested record it was inherited from}.
+    norm_targets: list[dict] = field(default_factory=list)
+    # Stack identity (schema 48). `uid` is assigned once at creation and survives every
+    # re-declare / re-critique of the record, so a child's `parent_uid` and a norm target's
+    # `source` keep naming the same difficulty. `level` is the record's depth: 0 for a
+    # session's first difficulty, parent + 1 for a nested one, inherited parent session
+    # level + 1 for a root opened in a spawned child session. `origin` is why it exists.
+    # `children` holds the nested records closed under this one.
+    uid: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    parent_uid: str | None = None
+    level: int = 0
+    origin: str = "stage"
+    children: list["Difficulty"] = field(default_factory=list)
+    # The reason `normalize --normalization-waiver` recorded for a one-off factor, kept on
+    # the record (not inside `Normalization`, which an older engine builds with `**`) so an
+    # archived nested record shows how it was closed without a normalization.
+    normalization_waiver: str | None = None
 
     def complete(self) -> bool:
         return (
@@ -524,6 +582,19 @@ class Difficulty:
             investigation=Investigation(**inv) if inv else None,
             critique=Critique(**crit) if crit else None,
             normalization=Normalization(**norm) if norm else None,
+            norm_targets=[dict(t) for t in (d.get("norm_targets") or [])],
+            normalization_waiver=d.get("normalization_waiver"),
+            # A record written before schema 48 carries no identity: it becomes a level-0
+            # stage-origin root. Its uid is derived from its content, not drawn at random,
+            # so every load of the same unsaved legacy file names the record the same way
+            # (a spawn exports it before any command has had a chance to save it).
+            uid=d.get("uid") or _legacy_difficulty_uid(d),
+            parent_uid=d.get("parent_uid"),
+            level=int(d.get("level") or 0),
+            origin=d.get("origin") or "stage",
+            children=[
+                c for c in (cls.from_dict(x) for x in (d.get("children") or [])) if c is not None
+            ],
         )
 
 
@@ -1741,6 +1812,10 @@ class Stage:
     # non-empty). None on every plan authored before this field, which is byte-identical
     # to "no waiver declared".
     ephemeral_artifacts_waiver: str | None = None
+    # Norm files this stage edits as a re-norming act (schema 47): absolute paths exactly
+    # as given to `critique --norm-target`. Empty on every plan authored before this
+    # field. Part of the stage's norm (stage_norm.StageNorm.renorms).
+    renorms: list[str] = field(default_factory=list)
     outcome: Outcome = field(default_factory=Outcome)
     # General control-criterion attestation (element #3 of the plan activity ontology).
     # Optional on any stage; required non-empty for spawn:developer when recording passed,
@@ -1814,6 +1889,7 @@ class Stage:
                 supplies=[Supply(**s) for s in d.get("supplies", [])],
                 output_artifacts=list(d.get("output_artifacts", [])),
                 ephemeral_artifacts_waiver=d.get("ephemeral_artifacts_waiver"),
+                renorms=list(d.get("renorms") or []),
                 outcome=Outcome(**d["outcome"]) if d.get("outcome") else Outcome(),
                 control=d.get("control"),
                 grants=StageGrants.from_dict(d.get("grants")),
@@ -1852,6 +1928,7 @@ class Stage:
             supplies=[Supply(on=int(x)) for x in d.get("depends_on", [])],
             output_artifacts=list(d.get("output_artifacts", [])),
             ephemeral_artifacts_waiver=d.get("ephemeral_artifacts_waiver"),
+            renorms=list(d.get("renorms") or []),
             outcome=Outcome(
                 status=d.get("status", StageStatus.PENDING.value),
                 actual=d.get("actual"),
@@ -2222,6 +2299,24 @@ class SessionState:
     materialization_defects: list[dict] = field(default_factory=list)
     settings_drift: list[dict] = field(default_factory=list)
     cwd_drift: list[dict] = field(default_factory=list)
+    # Norm-edit obligations admitted by a closing replan and still open (schema 47).
+    # Entry: {"target": file path, "baseline": digest at critique time, "stage": index of
+    # the lowest-index pending stage whose `renorms` names it, "depth": len(plan_stack)
+    # when bound -- a sub-plan's stage indices restart, so index alone would collide}.
+    # Discharged when the file's digest moves; verify-final / resolve refuse while any
+    # remains (gates.pending_renorm_final_blockers).
+    pending_renorms: list[dict] = field(default_factory=list)
+    # The difficulty stack (schema 48). `difficulty` stays the TOP (open) record; this holds
+    # its suspended ancestors, outermost first. Non-empty only between `difficulty-open` and
+    # the matching `difficulty-close`; a replan is refused while it is.
+    difficulty_stack: list["Difficulty"] = field(default_factory=list)
+    # The spawning session's open difficulty, {"session", "uid", "level"}, read once from
+    # AGENTCTL_PARENT_DIFFICULTY at session creation. None for a session nobody spawned
+    # from inside a difficulty. A root record here is numbered from level + 1.
+    parent_difficulty: dict | None = None
+    # Root records a closing replan archived, each with its `children` — the one place a
+    # later reader finds a closed difficulty's nested history.
+    closed_difficulties: list[dict] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
     # Not a dataclass field (ClassVar): the number of history events that were already
     # present when this object was built — what store.stamp_new_history uses to tell a
@@ -2505,6 +2600,10 @@ class SessionState:
         pr = data.get("permission_request")
         data["permission_request"] = PermissionRequest(**pr) if pr else None
         data["difficulty"] = Difficulty.from_dict(data.get("difficulty"))
+        data["difficulty_stack"] = [
+            r for r in (Difficulty.from_dict(x) for x in (data.get("difficulty_stack") or []))
+            if r is not None
+        ]
         data["plan_review"] = PlanReview.from_dict(data.get("plan_review"))
         data["plan_stage_reviews"] = {
             scope: r for scope, v in (data.get("plan_stage_reviews") or {}).items()

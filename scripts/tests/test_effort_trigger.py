@@ -376,7 +376,7 @@ def test_repeat_digest_escalate_does_not_spend_the_fire(store, fixtures_dir, tmp
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="нормативное"), store=store)
+                        failure_address="ресурсное"), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
     cli.cmd_replan(ns(session=sid, plan=plan), store=store)  # no_change; re-arms the stage
     cli.cmd_next_stage(ns(session=sid), store=store)
@@ -575,7 +575,7 @@ def test_fire_diagnose_replan_cycle_then_refires_on_renewed_overrun(store, fixtu
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="нормативное"), store=store)
+                        failure_address="нормативное", norm_targets=["stage:1"]), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
     # Stage 7: replan is blocked until the fire itself is explicitly decided —

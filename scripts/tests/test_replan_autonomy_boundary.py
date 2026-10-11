@@ -46,8 +46,11 @@ def _with_order(text: str, order: str = SUBSTANTIVE_ORDER) -> str:
 
 def plan_text(*, goal=None, req=None, place=None, customer=None, traceability=False,
               extra_outputs=(), executor2=None, stage2_extra="", stage3=False,
-              verify1=None, repo_root=None, negative1=None) -> str:
-    """The two-stage fixture with a `[meta.order]`, varied on exactly one axis per test."""
+              verify1=None, repo_root=None, negative1=None, revised=False) -> str:
+    """The two-stage fixture with a `[meta.order]`, varied on exactly one axis per test.
+
+    `revised` rewrites stage 1's result image: the diagnosing helper names stage 1 as the
+    norm at fault, so a replan plan must carry a different stage-1 norm to be admitted."""
     order = SUBSTANTIVE_ORDER
     if req:
         order = order.replace("the fixture plan meets the substantive grade", req)
@@ -58,6 +61,8 @@ def plan_text(*, goal=None, req=None, place=None, customer=None, traceability=Fa
     if traceability:
         order = order.replace('functional_place =', 'requires_traceability = true\nfunctional_place =')
     text = _with_order((FIXTURES / "plan_two_stage.toml").read_text(encoding="utf-8"), order)
+    if revised:
+        text = text.replace('expected_result_image = "', 'expected_result_image = "Revised: ', 1)
     if goal:
         text = text.replace(BASE_GOAL, f'goal = "{goal}"')
     if extra_outputs:
@@ -158,7 +163,7 @@ class Eng:
         self.run("investigate", session=sid, localized_expectation=f"le-{tag}",
                  localized_actual=f"la-{tag}", hypothesis=[f"h1-{tag}", f"h2-{tag}"])
         self.run("critique", session=sid, functional_ground=f"fg-{tag}", replanning_task=f"rt-{tag}",
-                 failure_address="нормативное",
+                 failure_address="нормативное", norm_target="stage:1",
                  difference_to_remove=[f"d-{tag}"] if difference else None)
         if normalize:
             self.run("normalize", session=sid, factor=f"factor-{tag}", level="note")
@@ -277,7 +282,7 @@ def test_substantive_replan_within_boundary_self_approved(eng):
     eng.run("approve", session="r1", by="agent")
     eng.fail_stage("r1")
     eng.diagnose("r1")
-    d = eng.run("replan", session="r1", plan=eng.write(plan_text(stage3=True)))
+    d = eng.run("replan", session="r1", plan=eng.write(plan_text(stage3=True, revised=True)))
     assert action(d) == "self_approve", d
     assert eng.run("approve", session="r1", by="agent")["ok"] is True
 
@@ -383,7 +388,8 @@ def test_refinement_moving_order_digest_goes_to_user(eng):
     eng.run("approve", session="m1", by="agent")
     eng.fail_stage("m1")
     eng.diagnose("m1", difference=False)
-    moved = eng.write(plan_text(goal="Demonstrate the cycle, re-scoped by the coordinator"))
+    moved = eng.write(plan_text(goal="Demonstrate the cycle, re-scoped by the coordinator",
+                                revised=True))
     d = eng.run("replan", session="m1", plan=moved)
     assert action(d) == "await_user_approval", d
     assert d["marker"] == "PLAN-READY"
@@ -669,7 +675,7 @@ def test_effort_flushed_at_approve_replan_submit(eng):
     eng.run("record_result", session="a1", status="failed", actual="boom",
             cost_log=eng.cost_log(plan, 2.0))
     eng.diagnose("a1")
-    replanned = eng.write(plan_text(stage3=True))
+    replanned = eng.write(plan_text(stage3=True, revised=True))
     eng.run("replan", session="a1", plan=replanned, cost_log=eng.cost_log(plan, 4.0))
     assert window(eng, plan)["spend"] == pytest.approx(4.0)
     resubmitted = eng.write(plan_text(stage3=True), "resubmitted.toml")
@@ -824,7 +830,7 @@ def test_replans_fire_with_complete_planning_record_proceeds_without_user(eng):
     eng.diagnose("a1")
     assert ack(eng)["ok"] is True
     assert eng.state("a1").effort_fires[-1]["ack"]["by"] == "agent"
-    d = eng.run("replan", session="a1", plan=eng.write(plan_text(stage3=True)))
+    d = eng.run("replan", session="a1", plan=eng.write(plan_text(stage3=True, revised=True)))
     assert action(d) == "self_approve", d
     assert eng.run("approve", session="a1", by="agent")["ok"] is True
     approvers = [e.get("by") for e in eng.state("a1").history if e.get("event") == "approve"]
@@ -835,7 +841,7 @@ def test_agent_replan_after_agent_ack_refuses_normalization_waiver(eng):
     replans_fire(eng)
     eng.diagnose("a1")
     assert ack(eng)["ok"] is True
-    refused = eng.run("replan", session="a1", plan=eng.write(plan_text(stage3=True)),
+    refused = eng.run("replan", session="a1", plan=eng.write(plan_text(stage3=True, revised=True)),
                       normalization_waiver="one-off")
     assert refused["ok"] is False
     assert "normalization-waiver is not accepted" in refused["detail"]
@@ -879,7 +885,7 @@ def ceiling_refusal(eng: Eng, sid: str, replanned: str):
 
 def test_agent_renegotiation_continue_after_planning_cycle_within_boundary_accepted(eng):
     at_ceiling(eng)
-    replanned = eng.write(plan_text(stage3=True))
+    replanned = eng.write(plan_text(stage3=True, revised=True))
     ceiling_refusal(eng, "a1", replanned)
     eng.diagnose("a1", "b")
     d = renegotiate(eng, "a1", replanned)
@@ -894,7 +900,7 @@ def test_agent_renegotiation_continue_after_planning_cycle_within_boundary_accep
 ])
 def test_agent_renegotiation_continue_requires_planning_difficulty_record(eng, gap, needle):
     at_ceiling(eng, **gap)
-    replanned = eng.write(plan_text(stage3=True))
+    replanned = eng.write(plan_text(stage3=True, revised=True))
     ceiling_refusal(eng, "a1", replanned)
     eng.diagnose("a1", "b", **gap)
     refused = renegotiate(eng, "a1", replanned)
@@ -905,7 +911,7 @@ def test_agent_renegotiation_continue_requires_planning_difficulty_record(eng, g
 
 def test_agent_renegotiation_continue_refuses_record_declared_before_ceiling(eng):
     at_ceiling(eng)
-    replanned = eng.write(plan_text(stage3=True))
+    replanned = eng.write(plan_text(stage3=True, revised=True))
     ceiling_refusal(eng, "a1", replanned)
     refused = renegotiate(eng, "a1", replanned)
     assert refused["ok"] is False
@@ -914,7 +920,8 @@ def test_agent_renegotiation_continue_refuses_record_declared_before_ceiling(eng
 
 def test_agent_renegotiation_refused_when_resources_widen(eng):
     at_ceiling(eng)
-    widened = eng.write(plan_text(stage3=True, extra_outputs=("brand_new_module.py",)))
+    widened = eng.write(plan_text(stage3=True, revised=True,
+                                  extra_outputs=("brand_new_module.py",)))
     ceiling_refusal(eng, "a1", widened)
     eng.diagnose("a1", "b")
     refused = renegotiate(eng, "a1", widened)
@@ -924,7 +931,7 @@ def test_agent_renegotiation_refused_when_resources_widen(eng):
 
 def test_agent_renegotiation_refused_when_order_changes(eng):
     at_ceiling(eng)
-    moved = eng.write(plan_text(goal="Demonstrate a different goal entirely"))
+    moved = eng.write(plan_text(goal="Demonstrate a different goal entirely", revised=True))
     ceiling_refusal(eng, "a1", moved)
     eng.diagnose("a1", "b")
     refused = renegotiate(eng, "a1", moved)
@@ -934,7 +941,7 @@ def test_agent_renegotiation_refused_when_order_changes(eng):
 
 def test_agent_cannot_rescope_or_abandon(eng):
     at_ceiling(eng)
-    replanned = eng.write(plan_text(stage3=True))
+    replanned = eng.write(plan_text(stage3=True, revised=True))
     ceiling_refusal(eng, "a1", replanned)
     eng.diagnose("a1", "b")
     for decision in ("rescope", "abandon"):
@@ -952,7 +959,8 @@ def test_trunk_push_self_grant_goes_to_user(eng):
     agent_session(eng, "a1", plan, execute=False)
     eng.fail_stage("a1")
     eng.diagnose("a1")
-    pushing = eng.write(plan_text(stage2_extra=LAND_MAIN + grant_block(PUSH_MAIN), stage3=True))
+    pushing = eng.write(plan_text(stage2_extra=LAND_MAIN + grant_block(PUSH_MAIN), stage3=True,
+                                  revised=True))
     d = eng.run("replan", session="a1", plan=pushing)
     assert d["marker"] == "PLAN-READY", d
     assert action(d) == "await_user_approval"
@@ -1009,12 +1017,13 @@ def test_e2e_agent_replan_cycle_without_user(eng):
         ("investigate", dict(localized_expectation="le", localized_actual="la",
                              hypothesis=["h1", "h2"])),
         ("critique", dict(functional_ground="fg", replanning_task="rt",
-                          failure_address="нормативное", difference_to_remove="d")),
+                          failure_address="нормативное", norm_target="stage:1",
+                          difference_to_remove="d")),
         ("normalize", dict(factor="f", level="note")),
     ):
         sub(eng, step, session="e1", **flags)
     assert sub(eng, "fire_acknowledge", session="e1", decision="revise", by="agent")["ok"] is True
-    replanned = eng.write(plan_text(stage3=True))
+    replanned = eng.write(plan_text(stage3=True, revised=True))
     d = sub(eng, "replan", session="e1", plan=replanned)
     assert action(d) == "self_approve", d
     assert sub(eng, "approve", session="e1", by="agent")["ok"] is True

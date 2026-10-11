@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
 from lib import argv_text, config_root, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
@@ -132,6 +132,8 @@ from .state import (
     NORMALIZATION_DESTINATIONS,
     NORMALIZATION_LEVELS,
     Outcome,
+    PARENT_DIFFICULTY_ENV,
+    parse_parent_difficulty,
     PermissionRequest,
     PLAN_PRESENTATION_KIND_ESSENCE,
     PLAN_PRESENTATION_KIND_FULL,
@@ -638,6 +640,115 @@ def _difficulty_id(difficulty) -> str | None:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
+# --- the difficulty stack ---------------------------------------------------
+# `state.difficulty` is the open (top) record; `state.difficulty_stack` holds its
+# suspended ancestors. EVERY record is created by `_open_difficulty` -- the automatic
+# sites (a failed result, a failed final check, a rejection, an effort divergence, a venue
+# or materialization diagnosis), the lazy creation behind `declare`, and the explicit
+# `difficulty-open` -- so the depth cap and the "never silently discard a declared record"
+# rule have exactly one place to live.
+
+NESTED_DIFFICULTY_ORIGINS = ("replan", "normalize", "stage")
+
+
+def _difficulty_level_cap() -> int:
+    """A difficulty at this level or deeper is never recorded (`max-recursion-depth`)."""
+    return Thresholds().max_recursion_depth
+
+
+def _root_difficulty_slot(state: SessionState) -> tuple[int, str | None, str]:
+    """(level, parent_uid, origin) of a session's own outermost record: level 0 and no
+    parent, or one level below the spawning session's open difficulty."""
+    parent = state.parent_difficulty
+    if parent:
+        return int(parent["level"]) + 1, parent["uid"], "child"
+    return 0, None, "stage"
+
+
+def _open_difficulty(state: SessionState, origin: str | None = None, *,
+                     declaration: Declaration | None = None,
+                     nested: bool = False) -> Difficulty | None:
+    """The one factory of difficulty records. Installs a fresh record as the open one and
+    returns it, or returns None -- with `state` untouched -- when its level would reach
+    the depth cap.
+
+    A declared record already open is never replaced: it is pushed onto the stack and the
+    new one nests under it (`nested=True` does that for an undeclared one too). An
+    undeclared record is the placeholder the new one takes the slot of, and an absent one
+    leaves the session's root slot. `origin` is None for a root record and then follows
+    the slot (`child` inside a spawned session, else `stage`)."""
+    cur = state.difficulty
+    root_level, root_parent_uid, root_origin = _root_difficulty_slot(state)
+    push = cur is not None and (nested or cur.declaration is not None)
+    if push:
+        level, parent_uid = cur.level + 1, cur.uid
+    elif cur is not None:
+        level, parent_uid = cur.level, cur.parent_uid
+    elif state.difficulty_stack:
+        top = state.difficulty_stack[-1]
+        level, parent_uid = top.level + 1, top.uid
+    else:
+        level, parent_uid = root_level, root_parent_uid
+    if level >= _difficulty_level_cap():
+        return None
+    if origin is None:
+        origin = root_origin if level == root_level else "stage"
+    if push:
+        state.difficulty_stack.append(cur)
+    state.difficulty = Difficulty(
+        declaration=declaration, level=level, parent_uid=parent_uid, origin=origin)
+    return state.difficulty
+
+
+def _difficulty_cap_directive(state: SessionState, cause: str, data: dict | None = None) -> Directive:
+    """What every refusal at the depth cap returns: the record is withheld and the user
+    decides, since a further nested record would be the loop the cap exists to stop."""
+    cap = _difficulty_level_cap()
+    detail = (f"{cause}; the difficulty stack is at its depth cap (max-recursion-depth "
+              f"{cap}), so no further difficulty record is opened -- the user decides how "
+              f"to proceed")
+    return Directive(
+        False, state.node, "escalate", detail,
+        marker=DIRECTIVE_ESCALATE_TO_USER,
+        data={**(data or {}), "difficulty_level_cap": cap, "blockers": [detail]},
+    )
+
+
+def _archive_difficulty(state: SessionState, waiver: str | None = None) -> None:
+    """Leave the difficulty cycle: file the open record -- its closed children inside it,
+    and any ancestor the stack still holds -- in `closed_difficulties`, where a later
+    reader finds it. An undeclared placeholder is not a difficulty and is dropped.
+    `waiver` is the `--normalization-waiver` reason the closing replan itself took; the
+    root record has no other way to carry it, and the filed record must show how it
+    closed the same way a nested one does."""
+    if waiver and state.difficulty is not None and not state.difficulty.normalization_waiver:
+        state.difficulty.normalization_waiver = waiver.strip()
+    for rec in (*state.difficulty_stack, state.difficulty):
+        if rec is not None and rec.declaration is not None:
+            state.closed_difficulties.append(asdict(rec))
+    state.difficulty_stack = []
+    state.difficulty = None
+
+
+def _adopt_parent_difficulty(state: SessionState) -> None:
+    """Record the spawning session's open difficulty from `AGENTCTL_PARENT_DIFFICULTY`
+    (`<session>:<uid>:<level>`). Idempotent; a malformed value is logged and ignored,
+    never a crash -- the child's own work must not depend on a parent's env hygiene."""
+    if state.parent_difficulty is not None:
+        return
+    raw = os.environ.get(PARENT_DIFFICULTY_ENV, "").strip()
+    if not raw:
+        return
+    parsed = parse_parent_difficulty(raw)
+    if parsed is None:
+        state.log("parent_difficulty_ignored", value=raw[:200])
+        print(f"agentctl: ignoring malformed {PARENT_DIFFICULTY_ENV}={raw[:200]!r} "
+              "(expected <session>:<uid>:<level>)", file=sys.stderr)
+        return
+    state.parent_difficulty = parsed
+    state.log("parent_difficulty", **parsed)
+
+
 def _agent_replans_fire_route(state: SessionState) -> dict | None:
     """The agent's own route for an unacknowledged `replans`-scale fire of a ledgered
     order: a planning-difficulty cycle, not a question to the user. None for every other
@@ -842,6 +953,24 @@ def _replan_kind(state: SessionState, old, new) -> str:
     return _kind_within_boundary(state, kind, new, ledgered=ledgered)
 
 
+def _replan_pending_indices(state: SessionState, new, kind: str) -> list[int]:
+    """Indices of `new`'s stages this replan leaves to run: every stage but one whose
+    PASSED verdict survives it. A refinement or no-op never re-arms a PASSED stage; a
+    substantive replan keeps a PASSED stage's verdict only when `stage_carried` says its
+    definition and its suppliers' interfaces are unchanged."""
+    from .stage_norm import stage_carried
+
+    live = {s.index: s for s in state.stages}
+    pending = []
+    for ns in new.stages:
+        prev = live.get(ns.index)
+        passed = prev is not None and prev.outcome.status == StageStatus.PASSED.value
+        if passed and (kind != "substantive" or stage_carried(state.stages, new.stages, ns.index)):
+            continue
+        pending.append(ns.index)
+    return pending
+
+
 def _autonomy_directive_data(state: SessionState, doc) -> dict:
     """The `data['autonomy']` block a plan-approval-bound Directive carries: the
     boundary verdict plus the action it routes to (self_approve inside, the user's
@@ -872,6 +1001,13 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     pre-edit bytes while its siblings track the file is a discrepancy with no
     reason behind it.
 
+    The set must cover every field `StageNorm.from_stage` reads as well: a
+    `stage:<n>` norm target is snapshotted from the LIVE stage and compared against
+    stages loaded from plan files, so a norm field left stale here makes an unedited
+    stage read as moved, or an edited one as unchanged.
+    `test_apply_refined_stage_fields_covers_every_norm_field` derives that field set
+    from `StageNorm` itself.
+
     Some of the copied fields (executor, supplies, done_criterion, criterion_type)
     are `_structural_signature`'s per-stage tuple, so a change to one classifies the
     replan substantive: copying them is a no-op for the two replan callers and
@@ -891,10 +1027,14 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.conditions = refined.conditions
     cur.preconditions = refined.preconditions
     cur.ephemeral_artifacts_waiver = refined.ephemeral_artifacts_waiver
+    cur.renorms = list(refined.renorms)
     for field in fields(Criterion):
         if field.name not in _CRITERION_ENGINE_WRITTEN_FIELDS:
             setattr(cur.criterion, field.name, getattr(refined.criterion, field.name))
+    cur.principle = replace(refined.principle) if refined.principle is not None else None
+    cur.output_artifacts = list(refined.output_artifacts)
     cur.actor.executor = refined.actor.executor
+    cur.actor.capability_required = refined.actor.capability_required
     cur.actor.cost_tier = refined.actor.cost_tier
     cur.actor.guard_exempt_paths = list(refined.actor.guard_exempt_paths)
     cur.supplies = list(refined.supplies)
@@ -1467,12 +1607,14 @@ def _diagnose_venue_refusal(
     doesn't silently drop a live effort divergence just because it returns before
     the plan's own end-of-function fire check."""
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
-    state.difficulty = Difficulty()
+    opened = _open_difficulty(state)
     data = {}
     if div is not None and gates.effort_active(state):
         now = _utcnow()
         data["effort_divergence"] = _record_effort_fire(state, div, now=now)
     store.save(state)
+    if opened is None:
+        return _difficulty_cap_directive(state, message, data)
     return Directive(
         False, state.node, "declare", message,
         marker="OVERCOME-DIFFICULTY",
@@ -1498,13 +1640,16 @@ def _diagnose_acceptance_rejection(
     so would require hoisting refresh_spend/divergence earlier in cmd_verify_final
     for a defense-in-depth nicety, not the core fix)."""
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
-    state.difficulty = Difficulty(declaration=Declaration(
+    opened = _open_difficulty(state, declaration=Declaration(
         expected="every [meta.order] requirement accepted (verdict pass)",
         actual=f"requirement id(s) {failing_ids} recorded as fail",
         mismatch="the order's customer rejected part of the delivery after every "
                   "stage already PASSED",
     ))
     store.save(state)
+    if opened is None:
+        return _difficulty_cap_directive(
+            state, f"AcceptanceReview carries a non-pass verdict on requirement id(s) {failing_ids}")
     return Directive(
         False, state.node, "declare",
         f"AcceptanceReview carries a non-pass verdict on requirement id(s) "
@@ -1528,12 +1673,14 @@ def _diagnose_effort_divergence(
     OBLIGATION — and passes its return value through as `fire` so the pre-framed
     declaration carries the numbers that triggered it, not just the scale name."""
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
-    state.difficulty = Difficulty()
+    opened = _open_difficulty(state)
     store.save(state)
     data = {"effort_divergence": fire}
     route = _agent_replans_fire_route(state)
     if route is not None:
         data["agent_route"] = route
+    if opened is None:
+        return _difficulty_cap_directive(state, div.framing, data)
     return Directive(
         False, state.node, "declare", div.framing,
         marker="OVERCOME-DIFFICULTY",
@@ -1763,6 +1910,7 @@ def cmd_start(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         recursion_depth=int(getattr(args, "recursion_depth", 0) or 0),
     )
     runtime_host.bind_runtime_host(state, getattr(args, "host", None), require=False)
+    _adopt_parent_difficulty(state)
     state.log("start", task=state.task_id)
     store.save(state)
     return Directive(True, state.node, "classify", "session registered; run classify next")
@@ -1825,6 +1973,16 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         recursion_depth=int(getattr(args, "recursion_depth", 0) or 0),
     )
     runtime_host.bind_runtime_host(new, getattr(args, "host", None), require=False)
+    _adopt_parent_difficulty(new)
+    if (
+        new.parent_difficulty is None and prior is not None and prior.parent_difficulty
+        and prior.task_id == new.task_id
+    ):
+        # The session was spawned under that parent difficulty; a later `reset` of the
+        # same task runs without the spawn's env and must not turn it into a parentless
+        # root. A reset to a different task starts unrelated work, which must not stay
+        # nested under a parent record that may long since have closed.
+        new.parent_difficulty = dict(prior.parent_difficulty)
     new.log("reset", task=new.task_id, prior_task=(prior.task_id if prior else None))
     if reopening:
         # Counted in the accumulator, which survives this command; logged on the new
@@ -3207,6 +3365,7 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
         runtime_host.bind_runtime_host(state, getattr(args, "host", None), require=True)
     except (runtime_host.HostAmbiguousError, runtime_host.HostConflictError) as exc:
         return Directive(False, state.node, "noop", str(exc))
+    _adopt_parent_difficulty(state)
     thr = Thresholds()
     sig = Signals(
         is_chat=bool(getattr(args, "chat", False)),
@@ -6045,6 +6204,10 @@ def _try_reattest(
         state.log("reattest_declined", stage=stage.index,
                    reason="no prior PASSED outcome recorded for this stage")
         return None
+    if gates.pending_renorm_stage_blockers(state, stage.index):
+        state.log("reattest_declined", stage=stage.index,
+                   reason="stage is bound to a norm-edit obligation whose file is unchanged")
+        return None
     if not stash.operative_surface_matched:
         state.log("reattest_declined", stage=stage.index,
                    reason="replan touched the stage's operative surface "
@@ -7201,7 +7364,7 @@ def _diagnose_materialization_defect(
     state.log("materialization_defect", stage=stage.index, action=action, evidence=evidence)
     state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
-    state.difficulty = Difficulty(declaration=Declaration(
+    opened = _open_difficulty(state, declaration=Declaration(
         expected=f"stage {stage.index}'s materialized grants should have covered: {action}",
         actual=f"the child was denied and asked permission for: {action}",
         mismatch="the effective grant set declares/derives coverage for this call, but "
@@ -7209,6 +7372,10 @@ def _diagnose_materialization_defect(
                  "it through -- a materialization defect, not a planning miss.",
     ))
     store.save(state)
+    if opened is None:
+        return _difficulty_cap_directive(
+            state, f"stage {stage.index} permission request was already covered by its "
+                   f"materialized grants ({evidence})")
     return Directive(
         False, state.node, "declare",
         f"stage {stage.index} permission request was already covered by its "
@@ -7597,6 +7764,16 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     stage = state.active_stage()
     if stage is None:
         return Directive(False, state.node, "next_stage", "no active stage to record")
+    # Before any mutation: a refused PASS leaves the state file exactly as it was, so
+    # the obligation is read from the files' bytes on the retry as on this call.
+    if args.status == "passed":
+        renorm_block = gates.pending_renorm_stage_blockers(state, stage.index)
+        if renorm_block:
+            return Directive(
+                False, state.node, "renorm",
+                f"stage {stage.index} cannot pass: it is the re-norming stage of a "
+                "нормативное difficulty and the norm file is unchanged",
+                data={"blockers": renorm_block})
     actual = args.actual or ""
     stage.outcome.actual = actual
     passed = args.status == "passed"
@@ -7962,6 +8139,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         if observation:
             stage.criterion.observation = observation
         state.current_stage = None
+        state.pending_renorms = gates.open_renorms(state)
         state.log("record_result", stage=stage.index, status="passed")
         if div is not None and gates.effort_active(state):
             now = _utcnow()
@@ -8001,7 +8179,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     # enter the overcome-difficulty sub-spine: a fresh Difficulty record must be
     # worked through (declare -> investigate -> critique) before replan is allowed.
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
-    state.difficulty = Difficulty()
+    opened = _open_difficulty(state)
     data = {"failure_kind": failure_kind} if failure_kind else {}
     if div is not None and gates.effort_active(state):
         # Already entering DIAGNOSING for the stage failure — attach the divergence
@@ -8010,6 +8188,8 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         now = _utcnow()
         data["effort_divergence"] = _record_effort_fire(state, div, now=now)
     store.save(state)
+    if opened is None:
+        return _difficulty_cap_directive(state, f"stage {stage.index} failed", data)
     return Directive(
         False, state.node, "declare",
         f"stage {stage.index} failed; run overcome-difficulty — declare the divergence, "
@@ -8049,6 +8229,13 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             False, state.node, "inspect",
             f"verify-final runs only from VERIFYING; node is {state.node}",
         )
+    renorm_block = gates.pending_renorm_final_blockers(state)
+    if renorm_block:
+        _log_gate(state, "renorm_final", renorm_block, passed=False)
+        return Directive(False, state.node, "renorm",
+                         "not ready for resolution: a нормативное difficulty's norm edit is "
+                         "still owed", data={"blockers": renorm_block})
+    state.pending_renorms = gates.open_renorms(state)
     blockers = gates.blockers(state, "resolution")
     _log_gate(state, "resolution", blockers, passed=not blockers)
     if blockers:
@@ -8148,7 +8335,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
         # VERIFYING, declare/investigate/critique all refuse ("difficulty commands
         # run only in the DIAGNOSING cycle"), and only `reset --force` escaped.
         state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
-        state.difficulty = Difficulty()
+        opened = _open_difficulty(state)
         data = {"failures": failures}
         if div is not None and gates.effort_active(state):
             # Already entering DIAGNOSING for the failure — attach the divergence
@@ -8158,6 +8345,9 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             now = _utcnow()
             data["effort_divergence"] = _record_effort_fire(state, div, now=now)
         store.save(state)
+        if opened is None:
+            return _difficulty_cap_directive(
+                state, "final verification command(s) failed", data)
         return Directive(
             False, state.node, "declare",
             "final verification command(s) failed; run overcome-difficulty — declare "
@@ -8378,7 +8568,8 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # plugin gates fold into resolve (not verify_final) so a plugin can let the
     # session reach RESOLUTION — where its publish-directive fires — yet still
     # block the final resolve until its sub-condition is met.
-    blockers = gates.blockers(state, "resolution") + plugins.plugin_gate_blockers(state, "resolution")
+    blockers = (gates.blockers(state, "resolution") + plugins.plugin_gate_blockers(state, "resolution")
+                + gates.pending_renorm_final_blockers(state))
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty confirmer: --by must name who confirmed resolution"]
     quality = getattr(args, "quality", None)
@@ -8399,6 +8590,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if blockers:
         return Directive(False, state.node, "fix_stages", "cannot resolve", data={"blockers": blockers})
     state.resolution = GateRecord("resolution", armed=True, passed=True, by=args.by)
+    state.pending_renorms = gates.open_renorms(state)
     state.node = transition(state.node, "resolve")  # RESOLUTION -> RESOLVED
     cost_surface: dict = {}
     if state.cost is not None:
@@ -8583,7 +8775,7 @@ def cmd_reject(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # Seed the difficulty record with the rejection so the reason is durably
     # captured; the coordinator refines it through declare -> investigate -> critique
     # (which the difficulty_blockers gate still requires complete before replan).
-    state.difficulty = Difficulty(declaration=Declaration(
+    opened = _open_difficulty(state, declaration=Declaration(
         expected=state.overall_done_criterion or "delivery matches the user's approved intent",
         actual=reason,
         mismatch="user rejected the delivery at the resolution gate (delivered != approved intent)",
@@ -8591,6 +8783,10 @@ def cmd_reject(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     idxs = [s.index for s in targets]
     state.log("reject", reason=reason, stages=idxs)
     store.save(state)
+    if opened is None:
+        return _difficulty_cap_directive(
+            state, f"delivery rejected: {reason}; stage(s) {idxs} re-opened as FAILED",
+            {"rejected_stages": idxs, "reason": reason})
     return Directive(
         False, state.node, "declare",
         f"delivery rejected: {reason}; stage(s) {idxs} re-opened as FAILED. Work the "
@@ -8612,8 +8808,8 @@ def _require_diagnosing(state: SessionState) -> Directive | None:
             False, state.node, "noop",
             f"difficulty commands run only in the DIAGNOSING cycle; node={state.node}",
         )
-    if state.difficulty is None:
-        state.difficulty = Difficulty()
+    if state.difficulty is None and _open_difficulty(state) is None:
+        return _difficulty_cap_directive(state, "a difficulty record cannot be opened")
     return None
 
 
@@ -8650,6 +8846,128 @@ def cmd_investigate(args, *, store: StateStore, runner: Runner | None = None) ->
                      "investigation recorded; state the functional ground + replanning task (critique)")
 
 
+# Test seam for `--norm-target` classification, mirroring exempt_paths.SCRATCH_ROOTS_ENV:
+# os.pathsep-separated directories that, when set and non-empty, REPLACE the whole root
+# set (the scratch exclusion included).
+NORM_ROOTS_ENV = "AGENTCTL_NORM_ROOTS"
+
+
+def _under_root(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _checkout_of(path: str) -> tuple[str, str, str] | None:
+    """(top level, git dir, common dir), as realpaths, of the checkout holding `path`;
+    None outside one."""
+    start = path if os.path.isdir(path) else os.path.dirname(path)
+    try:
+        run = subprocess.run(
+            ["git", "-C", start, "rev-parse", "--show-toplevel", "--absolute-git-dir",
+             "--git-common-dir"],
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = run.stdout.splitlines()
+    if run.returncode != 0 or len(lines) != 3:
+        return None
+    top, git_dir, common = lines
+    if not os.path.isabs(common):
+        common = os.path.join(start, common)
+    return os.path.realpath(top), os.path.realpath(git_dir), os.path.realpath(common)
+
+
+def _is_memory_path(rp: str) -> bool:
+    if "/memory-global/" in rp or "/agent-memory/" in rp:
+        return True
+    roots = {os.path.realpath(str(r)) for r in config_root.projects_roots()}
+    roots.add(os.path.realpath(str(config_root.agent_home() / "projects")))
+    for root in roots:
+        if rp.startswith(root + os.sep):
+            parts = rp[len(root) + 1:].split(os.sep)
+            if len(parts) >= 3 and parts[0] and parts[1] == "memory":
+                return True
+    return False
+
+
+def _session_plan_paths(state: SessionState) -> set[str]:
+    """Every plan file this session has installed or submitted: a norm target must not be
+    one, since its bytes move with the plan rather than with a norm edit."""
+    paths = {state.plan_path, state.plan_snapshot_path,
+             *(f.plan_path for f in state.plan_stack),
+             *(e.get("plan") for e in state.history if isinstance(e, dict))}
+    return {os.path.realpath(p) for p in paths if p and isinstance(p, str)}
+
+
+def _norm_file_refusal(state: SessionState, target: str) -> str | None:
+    """Why `target` cannot be a file norm target, or None when it can. Classified on the
+    realpath, by the norm-bearing roots: a linked worktree of the instructions repo, a
+    memory root, and the agent home's skills/ and plans/."""
+    rp = os.path.realpath(target)
+    if not os.path.isfile(rp):
+        return f"--norm-target {target!r} is not an existing file"
+    if rp in _session_plan_paths(state):
+        return (f"--norm-target {target!r} is this session's own plan; name the stage "
+                f"norm instead as stage:<n>")
+    override = os.environ.get(NORM_ROOTS_ENV)
+    if override:
+        roots = [os.path.realpath(r) for r in override.split(os.pathsep) if r]
+        if any(_under_root(rp, r) for r in roots):
+            return None
+        return f"--norm-target {target!r} is under none of the {NORM_ROOTS_ENV} roots"
+    if any(_under_root(rp, os.path.realpath(r)) for r in exempt_paths._gate_scratch_roots()):
+        return f"--norm-target {target!r} is scratch, not a norm-bearing file"
+    own_repo = _checkout_of(str(REPO_ROOT))
+    here = _checkout_of(rp)
+    if own_repo is not None and here is not None and here[2] == own_repo[2]:
+        if here[1] != here[2]:
+            return None  # a linked worktree of the instructions repo
+        if "/memory-global/" not in rp:
+            return (f"--norm-target {target!r} is in the canonical instructions checkout, "
+                    f"which is read-only to sessions; name the same file in a linked "
+                    f"worktree")
+    if _is_memory_path(rp):
+        return None
+    for root in (config_root.skills_dir(), config_root.plans_dir()):
+        if _under_root(rp, os.path.realpath(str(root))):
+            return None
+    return (f"--norm-target {target!r} is not under a norm-bearing root (a linked worktree "
+            f"of the instructions repo, a memory root, or the agent home's skills/ or "
+            f"plans/)")
+
+
+def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[list[dict], str | None]:
+    """The `norm_targets` entries for a нормативное critique's --norm-target values, or
+    the first refusal. A stage target is snapshotted from the live state's stage -- the
+    stage that actually ran, which refinement replans rebuild and `--renormalize` patches
+    -- never from a plan file, which is editable while DIAGNOSING. A stage the state does
+    not hold is refused, not read from the approved snapshot, which `--renormalize`
+    leaves on the approved bytes."""
+    entries: list[dict] = []
+    for raw in targets:
+        raw = (raw or "").strip()
+        if raw.startswith("stage:"):
+            try:
+                index = int(raw[len("stage:"):])
+            except ValueError:
+                return [], f"--norm-target {raw!r}: stage:<n> needs an integer stage index"
+            try:
+                stage = state.stage(index)
+            except KeyError:
+                return [], f"--norm-target {raw!r}: the current plan has no stage {index}"
+            entries.append({"target": f"stage:{index}", "kind": "stage",
+                            "baseline": gates.stage_norm_digest(stage), "source": "critique"})
+            continue
+        if not raw:
+            return [], "--norm-target must not be empty"
+        path = os.path.normpath(raw if os.path.isabs(raw) else os.path.abspath(raw))
+        refusal = _norm_file_refusal(state, path)
+        if refusal:
+            return [], refusal
+        entries.append({"target": path, "kind": "file",
+                        "baseline": gates.file_norm_digest(path), "source": "critique"})
+    return entries, None
+
+
 def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     bad = _require_diagnosing(state)
@@ -8672,6 +8990,31 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
         return Directive(False, state.node, "critique",
                          f"--failure-address must be one of {list(FAILURE_ADDRESS_VALUES)} "
                          f"or omitted, got {failure_address!r}")
+    norm_targets = list(getattr(args, "norm_targets", None) or [])
+    if failure_address == "нормативное" and not norm_targets:
+        return Directive(False, state.node, "critique",
+                         "a нормативное critique must name the norm that failed: pass "
+                         "--norm-target stage:<n> or the path of the norm file "
+                         "(repeatable), the edit the closing replan has to make")
+    if norm_targets and failure_address != "нормативное":
+        return Directive(False, state.node, "critique",
+                         "--norm-target names the norm of a нормативное fault; it is "
+                         f"refused with --failure-address {failure_address!r}")
+    snapshots, refusal = _snapshot_norm_targets(state, norm_targets)
+    if refusal:
+        return Directive(False, state.node, "critique", refusal)
+    inherited = [t for t in state.difficulty.norm_targets if t.get("source", "critique") != "critique"]
+    held = {t.get("target") for t in inherited}
+    # A re-critique naming a stage again keeps the baseline of the first snapshot: the
+    # bar is the norm as it stood when the fault was first routed to it.
+    first_baselines = {t.get("target"): t.get("baseline")
+                       for t in state.difficulty.norm_targets
+                       if t.get("kind") == "stage" and t.get("source", "critique") == "critique"}
+    for t in snapshots:
+        if t["kind"] == "stage" and t["target"] in first_baselines:
+            t["baseline"] = first_baselines[t["target"]]
+    state.difficulty.norm_targets = (
+        [t for t in snapshots if t["target"] not in held] + inherited)
     state.difficulty.critique = Critique(
         functional_ground=args.functional_ground,
         replanning_task=args.replanning_task,
@@ -8767,6 +9110,9 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
         return Directive(False, state.node, "declare",
                          "normalize is out of order: declaration, investigation, and "
                          "critique must come first")
+    waiver = getattr(args, "normalization_waiver", None)
+    if waiver is not None:
+        return _record_normalization_waiver(args, state, store, waiver)
     error, factor = _normalize_record_fields(
         getattr(args, "factor", None), getattr(args, "level", None), getattr(args, "destination", None))
     if error:
@@ -8780,6 +9126,41 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
                      "renorming recorded; replan is now unblocked")
 
 
+def _record_normalization_waiver(args, state: SessionState, store: StateStore,
+                                 waiver: str) -> Directive:
+    """`normalize --normalization-waiver <reason>` at DIAGNOSING: the open record is
+    declared to expose a genuinely one-off factor, so it carries the reason instead of a
+    Normalization. It is the only way a NESTED record closes (`difficulty-close`) without
+    a factor; the root record closes through `replan`'s own waiver, which `replan` itself
+    files on the record. Refused for the root record (the stored field would be inert
+    there: `replan` never reads it), for an empty reason, alongside a `--factor`, and for
+    a record that names norm targets -- those must be delivered by the closing plan, not
+    waived."""
+    d = state.difficulty
+    refusal = None
+    if not state.difficulty_stack:
+        refusal = ("the open record is the root difficulty, which closes through replan: "
+                   "pass --normalization-waiver to `replan`, not to normalize")
+    elif not waiver.strip():
+        refusal = "normalization waiver reason must not be empty"
+    elif (getattr(args, "factor", None) or "").strip():
+        refusal = ("normalize takes either --factor (the re-norming record) or "
+                   "--normalization-waiver (a one-off factor), not both")
+    elif d.norm_targets:
+        refusal = ("the difficulty record names norm target(s) the closing plan must "
+                   "change; a --normalization-waiver is not accepted for it")
+    if refusal:
+        _log_gate(state, "normalization_waiver", [refusal], passed=False)
+        return Directive(False, state.node, "normalize", refusal, data={"blockers": [refusal]})
+    d.normalization_waiver = waiver.strip()
+    state.log("normalization_waived", reason=d.normalization_waiver, uid=d.uid)
+    _log_gate(state, "normalization_waiver", [], passed=True)
+    store.save(state)
+    return Directive(True, state.node, "replan",
+                     "one-off factor recorded on the nested record as a normalization "
+                     "waiver; it may now difficulty-close")
+
+
 def _cmd_normalize_outside_diagnosing(args, state: SessionState, store: StateStore) -> Directive:
     """The record-only sibling of cmd_normalize's DIAGNOSING branch -- runs at any
     node from CLASSIFIED up to, but not including, RESOLVED (a RESOLVED session has
@@ -8790,6 +9171,10 @@ def _cmd_normalize_outside_diagnosing(args, state: SessionState, store: StateSto
         return Directive(False, state.node, "continue",
                          "normalize outside a difficulty cannot record against a "
                          "RESOLVED session")
+    if getattr(args, "normalization_waiver", None) is not None:
+        return Directive(False, state.node, "normalize",
+                         "--normalization-waiver applies to a difficulty being closed; "
+                         "outside a difficulty cycle there is nothing to waive")
     error, factor = _normalize_record_fields(
         getattr(args, "factor", None), getattr(args, "level", None), getattr(args, "destination", None))
     if error:
@@ -8800,6 +9185,103 @@ def _cmd_normalize_outside_diagnosing(args, state: SessionState, store: StateSto
     store.save(state)
     return Directive(True, state.node, "continue",
                      "renorming recorded outside a difficulty cycle")
+
+
+def cmd_difficulty_open(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Open a NESTED difficulty under the one being worked: the current record is
+    suspended on `state.difficulty_stack` (never overwritten, never discarded) and a fresh
+    one, one level deeper, becomes the open record the declare/investigate/critique/
+    normalize commands act on. At the depth cap (`max-recursion-depth`) nothing is
+    recorded and the user decides -- the state is left exactly as it was."""
+    state = _require(store, args.session)
+    origin = getattr(args, "origin", None) or "stage"
+    if origin not in NESTED_DIFFICULTY_ORIGINS:
+        return Directive(False, state.node, "noop",
+                         f"difficulty-open --origin must be one of "
+                         f"{list(NESTED_DIFFICULTY_ORIGINS)}, got {origin!r}")
+    bad = _require_diagnosing(state)
+    if bad:
+        return bad
+    parent = state.difficulty
+    opened = _open_difficulty(state, origin, nested=True)
+    if opened is None:
+        return _difficulty_cap_directive(state, "a nested difficulty cannot be opened")
+    state.log("difficulty_open", uid=opened.uid, parent_uid=opened.parent_uid,
+              level=opened.level, origin=origin, suspended=parent.uid)
+    store.save(state)
+    return Directive(
+        True, state.node, "declare",
+        f"nested difficulty {opened.uid} opened at level {opened.level} under "
+        f"{parent.uid}; work it through declare -> investigate -> critique -> normalize, "
+        f"then difficulty-close",
+        data={"uid": opened.uid, "parent_uid": opened.parent_uid, "level": opened.level,
+              "origin": origin},
+    )
+
+
+def _resume_action(d: Difficulty) -> str:
+    if d.declaration is None:
+        return "declare"
+    if d.investigation is None:
+        return "investigate"
+    if d.critique is None:
+        return "critique"
+    return "replan"
+
+
+def cmd_difficulty_close(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Close the open NESTED difficulty and resume its parent. The record must be as
+    complete as one closing through `replan` (`gates.difficulty_close_blockers`). The
+    norm targets it named -- including ones whose file or stage was already edited -- move
+    to the parent, tagged with the closed record's uid, so the parent's closing replan
+    still has to deliver every norm edit; the closed record joins the parent's `children`.
+    The root difficulty has no parent to resume and closes with `replan`."""
+    state = _require(store, args.session)
+    blockers = gates.difficulty_close_blockers(state)
+    _log_gate(state, "difficulty_close", blockers, passed=not blockers)
+    if blockers:
+        d = state.difficulty
+        if state.node != Node.DIAGNOSING.value:
+            action = "noop"
+        elif not state.difficulty_stack:
+            action = "replan"
+        elif d is None or not d.complete():
+            action = _resume_action(d) if d else "declare"
+        elif d.critique.failure_address is None:
+            action = "critique"
+        else:
+            action = "normalize"
+        return Directive(False, state.node, action,
+                         "difficulty-close refused: " + "; ".join(blockers),
+                         data={"blockers": blockers})
+    closed = state.difficulty
+    parent = state.difficulty_stack.pop()
+    held = {t.get("target"): t for t in parent.norm_targets}
+    moved: list[str] = []
+    for t in closed.norm_targets:
+        entry = dict(t)
+        entry["source"] = closed.uid
+        if entry.get("target") in held:
+            # Both records named the target: the closing child's entry (baseline
+            # included) replaces the parent's -- the child's is the later snapshot, and
+            # keeping the parent's stale digest would hold the file to an edit the
+            # child's own cycle has already accounted for.
+            held[entry["target"]].update(entry)
+        else:
+            parent.norm_targets.append(entry)
+        moved.append(entry.get("target", ""))
+    parent.children.append(closed)
+    state.difficulty = parent
+    state.log("difficulty_close", uid=closed.uid, parent_uid=parent.uid, level=closed.level,
+              moved_norm_targets=moved)
+    store.save(state)
+    return Directive(
+        True, state.node, _resume_action(parent),
+        f"nested difficulty {closed.uid} closed; {parent.uid} (level {parent.level}) is the "
+        f"open difficulty again" + (f"; norm targets moved to it: {moved}" if moved else ""),
+        data={"closed_uid": closed.uid, "parent_uid": parent.uid, "level": parent.level,
+              "moved_norm_targets": moved},
+    )
 
 
 def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -> Directive:
@@ -8880,6 +9362,19 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
                          "the sequence of operations — drop --renormalize and replan it "
                          "through the review and approval it is owed",
                          data={"blockers": refusals})
+    live_status = {s.index: s.outcome.status for s in state.stages}
+    rtblock = gates.renorm_retention_blockers(
+        state, new,
+        [ns.index for ns in new.stages
+         if live_status.get(ns.index) != StageStatus.PASSED.value],
+        installing_plan_path=args.plan)
+    _log_gate(state, "renorm_retention", rtblock, passed=not rtblock)
+    if rtblock:
+        return Directive(False, state.node, "replan",
+                         "renormalization blocked: an open norm-edit obligation is no "
+                         "longer carried by a stage that still runs",
+                         data={"blockers": rtblock})
+    state.pending_renorms = gates.open_renorms(state)
     changed: list[int] = []
     for ns in new.stages:
         try:
@@ -9029,6 +9524,15 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if efblock:
         return _effort_fire_refusal(state, "replan", efblock)
 
+    # precondition: a nested difficulty (difficulty-open) is a sub-cycle of the enclosing
+    # one -- closed with difficulty-close, never swept away by the replan of its parent.
+    sblock = gates.difficulty_stack_blockers(state)
+    _log_gate(state, "difficulty_stack", sblock, passed=not sblock)
+    if sblock:
+        return Directive(False, state.node, "difficulty_close",
+                         "replan blocked by an open nested difficulty",
+                         data={"blockers": sblock})
+
     # precondition: inside the DIAGNOSING cycle, the difficulty record must be
     # complete before a plan may be re-normed (variant (b) — internal command
     # precondition, not a tool-hook gate). [] outside DIAGNOSING.
@@ -9174,7 +9678,17 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             marker=DIRECTIVE_ESCALATE_TO_USER,
             data={"blockers": ["normalization waiver on an agent-acknowledged fire"]},
         )
+    wtblock = gates.normalization_waiver_blockers(state, getattr(args, "normalization_waiver", None))
+    if wtblock:
+        _log_gate(state, "normalization_waiver", wtblock, passed=False)
+        return Directive(
+            False, state.node, "normalize",
+            "replan refused: the difficulty record names norm target(s) the closing plan "
+            "must change; a --normalization-waiver is not accepted for it",
+            data={"blockers": wtblock},
+        )
     nblock = gates.normalization_blockers(state, pending_factor=normalize_factor or None)
+    closing_waiver: str | None = None
     if nblock:
         waiver = getattr(args, "normalization_waiver", None)
         if waiver is None:
@@ -9191,6 +9705,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # of the difficulty-record completeness precondition checked above.
         state.log("normalization_waived", reason=waiver, blockers=list(nblock))
         _log_gate(state, "normalization_waiver", nblock, passed=True)
+        closing_waiver = waiver
     else:
         _log_gate(state, "normalization_blockers", nblock, passed=True)
 
@@ -9291,6 +9806,24 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                          "replan blocked: this plan edit has not been authorized by "
                          "the user",
                          data={"blockers": arblock})
+
+    # Norm-edit consequence: a replan closing a difficulty whose record names norm targets
+    # must be the re-norming it named, and an obligation an earlier replan admitted must
+    # survive this one. Before the plan_approval plugin block below, whose dispositions
+    # save can persist state, so a refusal here leaves the state file as it was.
+    renorm_pending = _replan_pending_indices(state, new, auth_kind)
+    neblock = gates.normative_edit_blockers(state, new, renorm_pending,
+                                            installing_plan_path=args.plan)
+    _log_gate(state, "normative_edit", neblock, passed=not neblock)
+    rtblock = gates.renorm_retention_blockers(state, new, renorm_pending,
+                                              installing_plan_path=args.plan)
+    _log_gate(state, "renorm_retention", rtblock, passed=not rtblock)
+    if neblock or rtblock:
+        return Directive(False, state.node, "replan",
+                         "replan blocked: the corrected plan does not carry out the norm "
+                         "edit the difficulty named (stage `renorms` must list each norm "
+                         "file, on a stage that still runs)",
+                         data={"blockers": neblock + rtblock})
 
     # plan_approval PLUGIN gate: mirror cmd_approve's plugins.plugin_gate_blockers
     # composition so a refinement/no_change replan cannot rotate the plan bytes back
@@ -9408,7 +9941,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         _log_normalize_event(state, factor=normalize_factor, level=normalize_level,
                              destination=None, in_diagnosis=(state.node == Node.DIAGNOSING.value))
 
-    kind = _replan_kind(state, old, new)
+    kind = auth_kind
+    state.pending_renorms = gates.bound_renorms(state, new, renorm_pending)
     # The replan-loop counterpart of cmd_approve's reset: a replan that gets this far has
     # applied a corrected plan, so the rounds spent arguing about the previous one are
     # settled and the next loop starts from zero. Placed here — past every refusal of this
@@ -9547,9 +10081,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             for s in state.stages:
                 if s.outcome.status == StageStatus.FAILED.value:
                     s.outcome.status = StageStatus.PENDING.value
-            state.difficulty = None
+            _archive_difficulty(state, closing_waiver)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
-            state.log("replan", kind="no_change", exited_diagnosing=True,
+            state.log("replan", kind="no_change", exited_diagnosing=True, plan=args.plan,
                       prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
                       **replan_cause)
             task_accumulator.add(
@@ -9593,9 +10127,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         _sync_venue_from_plan(state, new)
         state.final_check = new.meta.final_check
         if diagnosing:
-            state.difficulty = None
+            _archive_difficulty(state, closing_waiver)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
-        state.log("replan", kind="refinement", exited_diagnosing=diagnosing,
+        state.log("replan", kind="refinement", exited_diagnosing=diagnosing, plan=args.plan,
                   prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
                   **replan_cause)
         task_accumulator.add(
@@ -9674,10 +10208,10 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     state.plan_verified = True
     state.overall_done_criterion = new.meta.done_criterion or state.overall_done_criterion
     state.current_stage = None
-    state.difficulty = None
+    _archive_difficulty(state, closing_waiver)
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
-    state.log("replan", kind="substantive",
+    state.log("replan", kind="substantive", plan=args.plan,
               prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
               **replan_cause)
     task_accumulator.add(
@@ -10048,7 +10582,7 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     state.resolution = GateRecord("resolution")
     state.stages = []
     state.current_stage = None
-    state.difficulty = None
+    _archive_difficulty(state)
     state.permission_request = None
     state.blocked_from = None
     # Effort-divergence custody (schema 25, effort.py's SUB-PLAN CUSTODY): the frame above
@@ -10473,6 +11007,8 @@ COMMANDS = {
     "investigate": cmd_investigate,
     "critique": cmd_critique,
     "normalize": cmd_normalize,
+    "difficulty-open": cmd_difficulty_open,
+    "difficulty-close": cmd_difficulty_close,
     "verify-final": cmd_verify_final,
     "resolve": cmd_resolve,
     "reject": cmd_reject,
@@ -10536,7 +11072,8 @@ _SESSION_COMMANDS = (
     "risk-accept", "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
     "record-result", "declare",
-    "investigate", "critique", "normalize", "verify-final", "resolve", "reject",
+    "investigate", "critique", "normalize", "difficulty-open", "difficulty-close",
+    "verify-final", "resolve", "reject",
     "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status",
     "drive", "close", "push-subplan", "pop-subplan", "task-reset",
     "mandate-grant", "mandate-extend", "mandate-resume", "mandate-stop", "mandate-status",
@@ -10581,7 +11118,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("landing_waiver", ("resolve", "close")),
     ("resolution_ask_unverifiable", ("resolve", "close")),
     ("coverage_waiver", ("replan",)),
-    ("normalization_waiver", ("replan",)),
+    ("normalization_waiver", ("replan", "normalize")),
     ("renegotiation_note", ("replan",)),
     ("bypass_reason", ("accept",)),
     ("reopen_reason", ("reset",)),
@@ -10646,6 +11183,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("concern_ids", ("plan-review",),
      "explicit stable ids for --concern, positionally paired — ids, not narrative"),
     ("concern_id", ("risk-accept",), "the concern id this acceptance answers — an id, not narrative"),
+    ("norm_targets", ("critique",),
+     "norm-target address (`stage:<n>` or a repo path) the critique must edit — an address, not narrative"),
     ("code_ref", ("code-review", "record-result"), "commit / PR reference the verdict binds to"),
     ("unit", ("partition", "partition-units"), "'|'-delimited partition-unit record"),
     ("author", ("accept", "risk-accept"), "acceptance author id — an identity token, not narrative"),
@@ -11247,10 +11786,23 @@ def build_parser() -> argparse.ArgumentParser:
                          "(ресурсное обеспечение — материал/средство) | нормативное "
                          "(нормативное обеспечение — норма/способ) | not_applicable (routing "
                          "does not apply); the closure gate demands it on a difficulty-closing replan")
+    sp.add_argument("--norm-target", dest="norm_targets", action="append", default=None,
+                    help="the norm a нормативное fault names, repeatable and required with "
+                         "--failure-address нормативное: `stage:<n>` (a stage of the current "
+                         "plan) or the absolute path of an existing norm file (a linked "
+                         "worktree of the instructions repo, a memory leaf, or a file under "
+                         "the agent home's skills/ or plans/); the closing replan must "
+                         "change it")
     sp = add("normalize"); sp.add_argument("--session", required=True)
-    sp.add_argument("--factor", required=True,
+    sp.add_argument("--factor", default=None,
                     help="the reproducible cause the difficulty exposed, being re-normed "
-                         "(the ACT is mandatory at closure)")
+                         "(the ACT is mandatory at closure); required unless "
+                         "--normalization-waiver is given")
+    sp.add_argument("--normalization-waiver", dest="normalization_waiver", default=None,
+                    help="record the open difficulty as exposing a genuinely one-off factor "
+                         "instead of a re-norming; a reason, stored on the record and what "
+                         "lets a nested difficulty close without a factor (refused if empty, "
+                         "alongside --factor, and for a record that names norm targets)")
     sp.add_argument("--level", dest="level", default=None, choices=list(NORMALIZATION_LEVELS),
                     help="recording level (payoff-gated by rediscovery-threshold-min); omit "
                          "for an in-head note below the leaf threshold")
@@ -11259,6 +11811,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the functional place the renorming lands on — материал | средство "
                          "| норма | способ | знание; ORTHOGONAL to --level (any destination "
                          "at any level), omit when the place is not being recorded")
+    sp = add("difficulty-open"); sp.add_argument("--session", required=True)
+    sp.add_argument("--origin", dest="origin", default="stage",
+                    choices=list(NESTED_DIFFICULTY_ORIGINS),
+                    help="why the nested difficulty exists: it arose while replanning "
+                         "(replan), while re-norming (normalize), or from the stage's "
+                         "own work (stage)")
+    sp = add("difficulty-close"); sp.add_argument("--session", required=True)
     sp = add("verify-final"); sp.add_argument("--session", required=True)
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG)")
