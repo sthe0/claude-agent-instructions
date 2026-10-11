@@ -554,11 +554,27 @@ def release_review_rounds(eng: Eng, sid: str) -> None:
     eng.store.save(state)
 
 
+def reflect_after_release(eng: Eng, sid: str, tag: str = "r") -> None:
+    """The reflection exit an agent-authored override requires: a complete difficulty record
+    declared after the release, with a real normalization."""
+    for cmd, flags in (
+        ("declare", dict(expected=f"e-{tag}", actual=f"a-{tag}", mismatch=f"m-{tag}")),
+        ("investigate", dict(localized_expectation=f"le-{tag}", localized_actual=f"la-{tag}",
+                             hypothesis=[f"h1-{tag}", f"h2-{tag}"])),
+        ("critique", dict(functional_ground=f"fg-{tag}", replanning_task=f"rt-{tag}",
+                          failure_address="not_applicable", difference_to_remove=[f"d-{tag}"])),
+        ("normalize", dict(factor=f"factor-{tag}", level="note")),
+    ):
+        d = eng.run(cmd, session=sid, **flags)
+        assert d["ok"] is True, (cmd, d)
+
+
 def test_agent_override_does_not_satisfy_unresolved_command_condition(eng, venue):
     approved_order(eng, cmd_plan(venue))
     slow = eng.write(cmd_plan(venue, "frobnicate --slow"))
     eng.open("t1", slow)
     release_review_rounds(eng, "t1")
+    reflect_after_release(eng, "t1")
     assert thinker_review(eng, "t1", slow, "override", "agent")["ok"] is True
     assert eng.state("t1").plan_review.verdict == "override"
     assert not (eng.ledger(slow).get("first_thinker_verdicts") or {})
@@ -599,6 +615,7 @@ def test_agent_plan_review_override_after_round_release(eng):
     plan = approved_order(eng)
     eng.open("o1", plan)
     release_review_rounds(eng, "o1")
+    reflect_after_release(eng, "o1")
     d = thinker_review(eng, "o1", plan, "override", "agent")
     assert d["ok"] is True, d
     review = eng.state("o1").plan_review
@@ -625,6 +642,7 @@ def test_present_directive_discloses_agent_review_override(eng, tmp_path):
     assert before["ok"] is True, before
     assert "agent_review_override" not in before["data"]
     release_review_rounds(eng, "o1")
+    reflect_after_release(eng, "o1")
     thinker_review(eng, "o1", plan, "override", "agent")
     after = eng.run("present_plan", session="o1", kind="essence", rendering_file=str(rendering))
     assert (after["data"].get("agent_review_override") or {}).get("reviewer") == "agent"
