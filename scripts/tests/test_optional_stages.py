@@ -24,6 +24,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import re
+import sys
 from argparse import Namespace
 from pathlib import Path
 
@@ -45,6 +46,22 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SUBSTANTIVE_FIXTURE = FIXTURES / "plan_two_stage_substantive.toml"
 ISSUE = "owner/repo#12"
+
+# The engine no longer falls back to the process cwd: a plan must declare an absolute venue
+# in `[meta]`. Every plan this file writes declares the test's own tmp dir as `repo_root`.
+_VENUE = None
+
+
+def _declare_venue(text):
+    """Insert `repo_root = <this test's tmp dir>` under `[meta]` (idempotent)."""
+    if _VENUE is None or "\nrepo_root" in text:
+        return text
+    return text.replace("[meta]\n", f'[meta]\nrepo_root = "{_VENUE}"\n', 1)
+
+
+@pytest.fixture(autouse=True)
+def _venue(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "_VENUE", str(tmp_path))
 
 
 def ns(**kw):
@@ -83,7 +100,7 @@ def _stage(index, *, depends=(), optional=None, issue=None, extra=""):
 
 
 def _plan_text(*stages, prelude="", tail=""):
-    return _META + prelude + "\n" + "\n".join(stages) + tail
+    return _declare_venue(_META + prelude + "\n" + "\n".join(stages) + tail)
 
 
 def _opt(index, depends=(), issue=ISSUE):
@@ -216,7 +233,7 @@ def test_the_backlog_issue_moves_the_plan_digest(tmp_path):
 @pytest.fixture
 def optional_plan(tmp_path):
     """The three-stage substantive fixture with its last stage optional."""
-    text = SUBSTANTIVE_FIXTURE.read_text(encoding="utf-8")
+    text = _declare_venue(SUBSTANTIVE_FIXTURE.read_text(encoding="utf-8"))
     text += f'optional = true\nbacklog_issue = "{ISSUE}"\n'
     path = tmp_path / "plan_optional.toml"
     path.write_text(text, encoding="utf-8")
@@ -533,10 +550,15 @@ def test_the_settled_helper_is_exactly_passed_or_skipped():
                     "SKIPPED": True}
 
 
-def test_the_effort_estimate_does_not_price_a_declined_stage(store, optional_plan, fixtures_dir):
+def test_the_effort_estimate_does_not_price_a_declined_stage(
+        store, optional_plan, fixtures_dir, tmp_path):
     kept = _executing(store, "eff-kept", optional_plan)
     declined = _executing(store, "eff-declined", optional_plan, skip=[3])
-    two_stage = _executing(store, "eff-two", fixtures_dir / "plan_two_stage.toml")
+    two_stage_plan = tmp_path / "plan_two_stage.toml"
+    two_stage_plan.write_text(
+        _declare_venue((fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")),
+        encoding="utf-8")
+    two_stage = _executing(store, "eff-two", two_stage_plan)
 
     assert effort.estimate(declined) == effort.estimate(two_stage)
     assert effort.estimate(declined)[effort.SCALE_SPEND] < effort.estimate(kept)[effort.SCALE_SPEND]
@@ -558,7 +580,10 @@ def test_the_plan_render_marks_the_optional_stage(tmp_path, optional_plan):
     assert "Optional" in full and ISSUE in full and "--skip-optional 3" in full
     assert "Optional" not in render_stage_brief(doc, 1)
     assert ISSUE in render_stage_brief(doc, 3)
-    plain = render_plan_md(load_plan(str(SUBSTANTIVE_FIXTURE)))
+    plain_path = tmp_path / "plain.toml"
+    plain_path.write_text(
+        _declare_venue(SUBSTANTIVE_FIXTURE.read_text(encoding="utf-8")), encoding="utf-8")
+    plain = render_plan_md(load_plan(str(plain_path)))
     assert "Optional" not in plain
 
 
@@ -1061,7 +1086,7 @@ def _optional_third_stage_plan(
     """The autonomy-boundary harness's three-stage plan with stage 3 optional, one axis varied."""
     from test_replan_autonomy_boundary import plan_text
 
-    text = plan_text(stage3=True)
+    text = plan_text(stage3=True, repo_root=_VENUE)
     if changed:
         text = text.replace("the CI config names test_mod", "the CI config names test_mod and lint")
     if retitled:
@@ -1184,7 +1209,7 @@ def _document(index, depends):
 def _plan_of(*blocks):
     from test_replan_autonomy_boundary import plan_text
 
-    return plan_text().partition("\n[[stage]]")[0] + "".join(blocks)
+    return plan_text(repo_root=_VENUE).partition("\n[[stage]]")[0] + "".join(blocks)
 
 
 def _declined_then_diagnosing(eng, sid, *, difference=True):
@@ -1530,7 +1555,7 @@ def test_a_customer_approval_of_a_plan_without_the_stage_keeps_its_decline_acros
 
     plan = _declined_order(eng)
     title = _stage_3_title(eng, plan)
-    dropped = eng.write(plan_text(), "dropped.toml")
+    dropped = eng.write(plan_text(repo_root=_VENUE), "dropped.toml")
     readded = _required_variant(eng) if readded_required else plan
 
     first = _submit_in_fresh_session(eng, "a2", dropped, reset=reset, tag="drop")

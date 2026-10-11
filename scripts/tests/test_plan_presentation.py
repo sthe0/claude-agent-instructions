@@ -80,12 +80,25 @@ def _to_plan_ready(store, sid, plan) -> None:
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
 
 
-def _grants_blocks() -> str:
+def _declared_venue_plan(fixtures_dir, tmp_path) -> str:
+    """A copy of `plan_two_stage.toml` declaring `repo_root = tmp_path`: the
+    bare fixture declares no venue, so its relative `output_artifacts` derive
+    no grant, and a substantive session refuses it at submit."""
+    out = tmp_path / "plan_two_stage_declared_venue.toml"
+    out.write_text(
+        (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+        .replace("[meta]\n", f'[meta]\nrepo_root = "{tmp_path}"\n', 1),
+        encoding="utf-8",
+    )
+    return str(out)
+
+
+def _grants_blocks(plan_path=None) -> str:
     """Both the compact (essence-kind) and full (full-kind) grants renderings
-    of plan_two_stage.toml, so appending this once satisfies
-    cmd_present_plan's completeness check regardless of which `kind` the
-    caller presents."""
-    doc = load_plan(str(Path(__file__).resolve().parent / "fixtures" / "plan_two_stage.toml"))
+    of plan_two_stage.toml (or of `plan_path`), so appending this once
+    satisfies cmd_present_plan's completeness check regardless of which
+    `kind` the caller presents."""
+    doc = load_plan(plan_path or str(Path(__file__).resolve().parent / "fixtures" / "plan_two_stage.toml"))
     return (
         render_plan_grants(doc, fmt="compact").strip()
         + "\n\n"
@@ -93,9 +106,9 @@ def _grants_blocks() -> str:
     )
 
 
-def _write_rendering(tmp_path, text, name="rendering.txt") -> str:
+def _write_rendering(tmp_path, text, name="rendering.txt", plan_path=None) -> str:
     p = tmp_path / name
-    p.write_text(text + "\n\n" + _grants_blocks(), encoding="utf-8")
+    p.write_text(text + "\n\n" + _grants_blocks(plan_path), encoding="utf-8")
     return str(p)
 
 
@@ -409,7 +422,7 @@ def test_present_plan_essence_missing_grants_block_rejected_nothing_stamped(
     which goes through `_write_rendering`/`_grants_blocks`) is refused and
     stamps nothing."""
     sid = "pp5"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = _declared_venue_plan(fixtures_dir, tmp_path)
     _to_plan_ready(store, sid, plan)
     rendering = tmp_path / "rendering.txt"
     rendering.write_text("Summary of the plan.\n", encoding="utf-8")
@@ -509,13 +522,13 @@ def test_content_hash_empty_stored_hash_is_path_only(gate_on, tmp_path):
 
 # --- grants_approval_blockers (S3: approve refusing a stale grants_sha256) ----
 
-def test_grants_approval_blockers_stale_digest_blocks(fixtures_dir, gate_on):
+def test_grants_approval_blockers_stale_digest_blocks(fixtures_dir, tmp_path, gate_on):
     """`plan_two_stage.toml` derives a grant on both stages (DR-O), so a
     receipt whose bound `grants_sha256` no longer matches the plan's current
     effective grant set must refuse `approve` — the materialization-layer
     (or out-of-band plan edit) drift `grants_approval_blockers` exists to
     catch, distinct from `plan_presentation_blockers`' own staleness check."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = _declared_venue_plan(fixtures_dir, tmp_path)
     doc = load_plan(plan)
     assert plan_has_any_grants(doc)
     pp = PlanPresentation(
@@ -527,11 +540,11 @@ def test_grants_approval_blockers_stale_digest_blocks(fixtures_dir, gate_on):
     assert blockers and "grant set changed" in blockers[0]
 
 
-def test_grants_approval_blockers_missing_digest_blocks_fail_closed(fixtures_dir, gate_on):
+def test_grants_approval_blockers_missing_digest_blocks_fail_closed(fixtures_dir, tmp_path, gate_on):
     """A pre-schema-36 receipt has no `grants_sha256` at all (`None`) --
     treated as "never bound", not "matches", per the field's fail-closed
     docstring."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = _declared_venue_plan(fixtures_dir, tmp_path)
     pp = PlanPresentation(
         plan_path=plan, kind="essence", plan_sha256=_sha256_file(plan),
         rendering_sha256="r", rendering_text="t", presented_ts=1.0,
@@ -913,9 +926,9 @@ def test_confirm_delivery_missing_note_refuses(home_store, fixtures_dir, tmp_pat
 
 # --- cmd_approve integration: the ask-less-bypass fence ------------------------
 
-def test_approve_blocked_without_essence_presentation(home_store, fixtures_dir, gate_on):
+def test_approve_blocked_without_essence_presentation(home_store, fixtures_dir, tmp_path, gate_on):
     sid = "apr1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = _declared_venue_plan(fixtures_dir, tmp_path)
     _to_plan_ready(home_store, sid, plan)
     cli.cmd_plan_review(
         ns(session=sid, verdict="pass", reviewer="thinker", concerns=None, note="",
@@ -932,14 +945,14 @@ def test_approve_proceeds_with_receipt_and_matching_delivery_stamp(
     home_store, fixtures_dir, tmp_path, gate_on
 ):
     sid = "apr2"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = _declared_venue_plan(fixtures_dir, tmp_path)
     _to_plan_ready(home_store, sid, plan)
     cli.cmd_plan_review(
         ns(session=sid, verdict="pass", reviewer="thinker", concerns=None, note="",
            target=None, plan_digest=_sha256_file(plan)),
         store=home_store,
     )
-    rendering = _write_rendering(tmp_path, "essence text")
+    rendering = _write_rendering(tmp_path, "essence text", plan_path=plan)
     cli.cmd_present_plan(
         ns(session=sid, kind="essence", rendering_file=rendering, emit_skeleton=False),
         store=home_store,
@@ -961,14 +974,14 @@ def test_essence_receipt_without_delivery_stamp_still_blocks_approve(
     RECEIPT, never delivery). If this test ever passes approve, the ask-less
     bypass is re-opened."""
     sid = "apr3"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = _declared_venue_plan(fixtures_dir, tmp_path)
     _to_plan_ready(home_store, sid, plan)
     cli.cmd_plan_review(
         ns(session=sid, verdict="pass", reviewer="thinker", concerns=None, note="",
            target=None, plan_digest=_sha256_file(plan)),
         store=home_store,
     )
-    rendering = _write_rendering(tmp_path, "essence text")
+    rendering = _write_rendering(tmp_path, "essence text", plan_path=plan)
     d_present = cli.cmd_present_plan(
         ns(session=sid, kind="essence", rendering_file=rendering, emit_skeleton=False),
         store=home_store,

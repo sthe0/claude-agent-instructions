@@ -36,7 +36,7 @@ from agentctl.dispatch import RunResult
 
 import test_renormalization as rn
 from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
-from test_stage_grants import _to_executing, ns
+from test_stage_grants import _to_executing as _to_executing_shared, ns
 
 
 _ORDER = """
@@ -88,8 +88,31 @@ def _render(path: Path, *, order: str = _ORDER, final_check: str = _FINAL_CHECK,
                         'material = "m2',
                         f'verify_command = {json.dumps(stage2_verify)}\n'
                         'negative_control = "false"\nmaterial = "m2')
-    path.write_text(text.format(**fields), encoding="utf-8")
+    path.write_text(_with_venue(text.format(**fields), path.parent), encoding="utf-8")
     return str(path)
+
+
+def _with_venue(text: str, venue) -> str:
+    """Declare `venue` as the plan's absolute `repo_root`: the engine no longer falls back
+    to the process cwd, so a plan that stays silent about its venue is refused."""
+    return text.replace("[meta]\n", f'[meta]\nrepo_root = {json.dumps(str(venue))}\n', 1)
+
+
+def _venue_copy(src: Path, tmp_path: Path, name: str) -> str:
+    """A copy of a shared fixture plan with the test's tmp dir declared as its venue
+    (the fixture itself stays untouched)."""
+    out = tmp_path / name
+    out.write_text(_with_venue(src.read_text(encoding="utf-8"), tmp_path), encoding="utf-8")
+    return str(out)
+
+
+def _to_executing(store, sid, fixtures_dir, tmp_path, plan_path=None):
+    """`test_stage_grants._to_executing` over a venue-declaring copy of the default
+    two-stage fixture; an explicit `plan_path` is passed through (it declares its own)."""
+    if plan_path is None:
+        plan_path = _venue_copy(fixtures_dir / "plan_two_stage.toml", tmp_path,
+                                f"{sid}-approved.toml")
+    return _to_executing_shared(store, sid, fixtures_dir, plan_path=plan_path)
 
 
 def _judge_yes(argv, *, timeout=None, stdin=""):
@@ -368,7 +391,7 @@ def test_dispatch_reads_the_approved_derived_grants_not_the_venue_as_it_is_now(
     bound the grant; a package marker appearing afterwards must not withdraw it."""
     monkeypatch.chdir(tmp_path)
     sid = "grants-venue-drift"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, fixtures_dir, tmp_path)
     approved, error = _derived(store.load(sid))
     assert error is None
     assert any("mod.py" in e["rule"] for e in approved), approved
@@ -388,13 +411,14 @@ def test_a_refinement_replan_that_moves_no_grant_keeps_the_approved_set(
     approval. A replan whose old and new grant hashes are equal keeps what was approved."""
     monkeypatch.chdir(tmp_path)
     sid = "grants-refine-drift"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, fixtures_dir, tmp_path)
     approved, _ = _derived(store.load(sid))
     assert approved
 
     (tmp_path / "__init__.py").write_text("")
-    d = cli.cmd_replan(ns(session=sid, plan=str(fixtures_dir / "plan_two_stage_refined.toml")),
-                       store=store)
+    refined = _venue_copy(fixtures_dir / "plan_two_stage_refined.toml", tmp_path,
+                          "refined-venue.toml")
+    d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
     assert d.action == "continue", d.detail
 
     after, error = _derived(store.load(sid))
@@ -416,7 +440,8 @@ def _two_stage_verifying(fixtures_dir, path: Path, stage: int, command: str) -> 
     """`plan_two_stage.toml` with a verify_command on one stage. Rewriting only a
     verify_command to a subset of the segments it ran is the refinement that moves a
     stage's derived grants (a declared `[stage.grants]` edit is substantive)."""
-    text = (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+    text = _with_venue((fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8"),
+                       path.parent)
     text = text.replace(_ARTIFACT_LINE[stage],
                         f'verify_command = {json.dumps(command)}\nexpected_exit = 0\n'
                         + _ARTIFACT_LINE[stage], 1)
@@ -433,7 +458,7 @@ def _marker_then_drift(store, fixtures_dir, tmp_path, monkeypatch, *, narrowed_s
     marker.write_text("")
     sid = f"grants-drift-{narrowed_stage}"
     v1 = _two_stage_verifying(fixtures_dir, tmp_path / "v1.toml", narrowed_stage, _WIDE_VERIFY)
-    _to_executing(store, sid, fixtures_dir, plan_path=v1)
+    _to_executing(store, sid, fixtures_dir, tmp_path, plan_path=v1)
     before = store.load(sid)
     approved, error = _derived(before, narrowed_stage)
     assert error is None, error
@@ -500,7 +525,7 @@ def test_a_refinement_relocating_the_venue_alone_admits_no_rule_the_new_venue_pr
     (marked / "__init__.py").write_text("")
     v1 = _repo_root_plan(fixtures_dir, tmp_path, str(marked), "v1.toml")
     sid = "grants-relocated"
-    _to_executing(store, sid, fixtures_dir, plan_path=v1)
+    _to_executing(store, sid, fixtures_dir, tmp_path, plan_path=v1)
     approved, error = _derived(store.load(sid))
     assert error is None, error
     assert _RUN_MOD not in {e["rule"] for e in approved}, approved
@@ -547,12 +572,12 @@ def test_the_stored_entries_reproduce_the_hash_the_plan_derives(fixtures_dir, tm
 
 
 def test_stored_entries_that_no_longer_reproduce_the_approved_hash_withhold_the_derived(
-    store, fixtures_dir,
+    store, fixtures_dir, tmp_path,
 ):
     """The hash stays the guard once entries are stored: a stored set that does not hash
     to what was approved is reported, not trusted."""
     sid = "grants-stored-mismatch"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, fixtures_dir, tmp_path)
     state = store.load(sid)
     assert state.approved_grant_entries
     state.approved_grants_sha256 = "0" * 64
@@ -565,13 +590,13 @@ def test_stored_entries_that_no_longer_reproduce_the_approved_hash_withhold_the_
 
 
 def test_a_session_bound_before_entries_were_stored_still_refuses_on_a_hash_mismatch(
-    store, fixtures_dir,
+    store, fixtures_dir, tmp_path,
 ):
     """The legacy path is kept, not loosened: no stored entries means the approved set
     can only be re-derived, and a re-derivation that no longer reproduces the hash is
     reported rather than trusted."""
     sid = "grants-legacy"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, fixtures_dir, tmp_path)
     state = store.load(sid)
     state.approved_grant_entries = None
     state.approved_grants_sha256 = "0" * 64
@@ -591,10 +616,11 @@ def test_a_refinement_materializes_a_legacy_sessions_entries_only_when_its_hash_
     re-derivation that reproduces the approved hash is that set; one that does not is
     today's venue and engine, and writing it down as the approval would launder drift."""
     monkeypatch.chdir(tmp_path)
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    refined = _venue_copy(fixtures_dir / "plan_two_stage_refined.toml", tmp_path,
+                          "refined-venue.toml")
 
     holds = "legacy-hash-holds"
-    _to_executing(store, holds, fixtures_dir)
+    _to_executing(store, holds, fixtures_dir, tmp_path)
     state = store.load(holds)
     state.approved_grant_entries = None
     store.save(state)
@@ -604,7 +630,7 @@ def test_a_refinement_materializes_a_legacy_sessions_entries_only_when_its_hash_
     assert held_error is None and held_derived
 
     drifted = "legacy-hash-drifted"
-    _to_executing(store, drifted, fixtures_dir)
+    _to_executing(store, drifted, fixtures_dir, tmp_path)
     state = store.load(drifted)
     state.approved_grant_entries = None
     state.approved_grants_sha256 = "0" * 64
@@ -618,14 +644,17 @@ def test_a_refinement_materializes_a_legacy_sessions_entries_only_when_its_hash_
     assert error and "derived-grants hash mismatch" in error
 
 
-def test_a_grant_growing_replan_still_goes_back_for_approval(store, fixtures_dir):
+def test_a_grant_growing_replan_still_goes_back_for_approval(store, fixtures_dir, tmp_path):
     sid = "grants-grow"
-    _to_executing(store, sid, fixtures_dir,
-                  plan_path=str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml"))
+    _to_executing(store, sid, fixtures_dir, tmp_path,
+                  plan_path=_venue_copy(
+                      fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml",
+                      tmp_path, "grow-v1.toml"))
 
     d = cli.cmd_replan(
         ns(session=sid,
-           plan=str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml")),
+           plan=_venue_copy(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml",
+                            tmp_path, "grow-v2.toml")),
         store=store)
 
     assert d.marker == "PLAN-READY"
@@ -703,10 +732,10 @@ def test_a_renormalize_never_rebinds_a_legacy_hash_the_new_plan_does_not_reprodu
 
 
 def test_a_state_file_written_before_the_new_fields_loads_with_them_unset(
-    store, fixtures_dir,
+    store, fixtures_dir, tmp_path,
 ):
     sid = "old-state"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, fixtures_dir, tmp_path)
     path = store.path(sid)
     raw = json.loads(path.read_text(encoding="utf-8"))
     raw.pop("approved_grant_entries", None)

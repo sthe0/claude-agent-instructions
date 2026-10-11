@@ -30,8 +30,16 @@ def ns(**kw):
     return Namespace(**kw)
 
 
-def _to_executing(store, sid, fixtures_dir, plan_path=None):
-    plan = plan_path or str(fixtures_dir / "plan_two_stage.toml")
+def _to_executing(store, sid, fixtures_dir, venue, plan_path=None):
+    """Drive `sid` to EXECUTING over a private copy of the plan that declares `venue`
+    as its absolute `repo_root`: the engine no longer falls back to the process cwd,
+    so a venue-less plan from a substantive session is refused at submission."""
+    src = Path(plan_path or fixtures_dir / "plan_two_stage.toml")
+    private = venue.parent / f"venue-declared-{sid}.toml"
+    private.write_text(
+        src.read_text().replace("[meta]\n", f'[meta]\nrepo_root = {json.dumps(str(venue))}\n', 1),
+    )
+    plan = str(private)
     cli.cmd_start(ns(session=sid, task="t", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -68,9 +76,9 @@ def _venue_session(store, fixtures_dir, tmp_path, sid, grants_toml=None):
         plan_path = _write_plan_with_grants_block(
             fixtures_dir, tmp_path, grants_toml, f"plan-{sid}.toml",
         )
-    _to_executing(store, sid, fixtures_dir, plan_path=plan_path)
     venue = tmp_path / f"venue-{sid}"
     venue.mkdir()
+    _to_executing(store, sid, fixtures_dir, venue, plan_path=plan_path)
     state = store.load(sid)
     state.repo_root = str(venue)
     store.save(state)

@@ -544,9 +544,12 @@ def test_submit_plan_refuses_unreachable_final_check(tmp_path):
     assert any("scripts/ghost.py" in p and "final_check" in p for p in problems)
 
 
-def test_submit_plan_passes_when_final_check_path_declared(tmp_path):
+def test_submit_plan_passes_when_final_check_path_declared(tmp_path, monkeypatch):
     # Declare the path in a stage's output_artifacts and the same plan passes —
     # the GREEN direction of the same control (two-directional discipline on the lint).
+    # The artifact is anchored to the declared repo_root (tmp_path), so the scratch
+    # roots must not cover it or the ephemeral-artifact check refuses the plan.
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path.parent / "scratch-elsewhere"))
     store = FileStateStore(tmp_path / "state")
     sid = "reach-fc-pass"
     _session(store, sid, tmp_path, architectural=True)

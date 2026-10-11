@@ -2,7 +2,9 @@
 ok/node/action set, and the gate commands carry their return markers (submit-plan ->
 PLAN-READY hard gate; resolve -> COMPLETED; loop guard -> ESCALATE)."""
 import json as _json
+import sys
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
@@ -26,6 +28,28 @@ def _no_replan_authorization_gate(monkeypatch):
     behavior are covered directly in test_replan_authorization.py; here it is
     switched off so this module keeps testing what it was written to test."""
     monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+
+
+def _declare_venue(text, root):
+    """Insert `repo_root = <root>` under `[meta]` (idempotent).
+
+    The engine no longer falls back to the process cwd: a plan must declare an absolute
+    venue in `[meta]`, so every plan this module submits carries the test's tmp dir."""
+    if "\nrepo_root" in text:
+        return text
+    return text.replace("[meta]\n", f'[meta]\nrepo_root = "{root}"\n', 1)
+
+
+@pytest.fixture
+def fixtures_dir(tmp_path):
+    """The shared plan fixtures, copied into tmp with an absolute venue declared."""
+    src = Path(__file__).resolve().parent / "fixtures"
+    dst = tmp_path / "plan-fixtures"
+    dst.mkdir()
+    for path in src.glob("*.toml"):
+        (dst / path.name).write_text(
+            _declare_venue(path.read_text(encoding="utf-8"), tmp_path), encoding="utf-8")
+    return dst
 
 
 def _start(store, sid):
@@ -422,11 +446,13 @@ def test_final_check_carried_to_state_at_submit(store, tmp_path):
     """[[final_check]] tables in a TOML plan are parsed and carried to session state."""
     plan = tmp_path / "plan_with_fc.toml"
     plan.write_text(
-        '[meta]\ntask_id = "fc-test"\ngoal = "g"\ndone_criterion = "dc"\n'
-        'criterion_type = "measurable"\nweight_class = "small_change"\n\n'
-        '[[stage]]\nindex = 1\ntitle = "s"\nexecutor = "in_thread"\n'
-        'expected_result_image = "img"\ndone_criterion = "dc"\n\n'
-        '[[final_check]]\ncommand = "pytest -q"\nexpected_exit = 0\nlabel = "suite"\n',
+        _declare_venue(
+            '[meta]\ntask_id = "fc-test"\ngoal = "g"\ndone_criterion = "dc"\n'
+            'criterion_type = "measurable"\nweight_class = "small_change"\n\n'
+            '[[stage]]\nindex = 1\ntitle = "s"\nexecutor = "in_thread"\n'
+            'expected_result_image = "img"\ndone_criterion = "dc"\n\n'
+            '[[final_check]]\ncommand = "pytest -q"\nexpected_exit = 0\nlabel = "suite"\n',
+            tmp_path),
         encoding="utf-8",
     )
     sid = "fc-carry"
@@ -681,6 +707,7 @@ def _to_verifying_all_passed_failing_finalcheck(store, sid, tmp_path):
     final_check itself."""
     plan = tmp_path / "plan_failing_finalcheck.toml"
     plan.write_text(
+        _declare_venue(
         '[meta]\n'
         'task_id = "demo-failing-finalcheck"\n'
         'goal = "Pin verify-final routing a failing final_check into DIAGNOSING"\n'
@@ -712,6 +739,7 @@ def _to_verifying_all_passed_failing_finalcheck(store, sid, tmp_path):
         'done_criterion = "tests/test_mod.py exists"\n'
         'depends_on = [1]\n'
         'output_artifacts = ["tests/test_mod.py"]\n',
+            tmp_path),
         encoding="utf-8",
     )
 
@@ -777,8 +805,17 @@ def test_verify_final_pending_stage_stays_fix_stages(store, fixtures_dir):
 
 # --- approve/replan refresh caches from the plan file, not the submit-time copy ----
 
+_VENUE = None
+
+
+@pytest.fixture(autouse=True)
+def _venue(tmp_path, monkeypatch):
+    """The tmp dir `_two_stage_plan_text` declares as its absolute venue."""
+    monkeypatch.setattr(sys.modules[__name__], "_VENUE", str(tmp_path))
+
+
 def _two_stage_plan_text(final_check_cmd="true", stage2_verify_cmd="true"):
-    return (
+    return _declare_venue(
         '[meta]\n'
         'task_id = "demo-refresh"\n'
         'goal = "Pin approve/no_change refreshing final_check/stage caches"\n'
@@ -813,7 +850,8 @@ def _two_stage_plan_text(final_check_cmd="true", stage2_verify_cmd="true"):
         f'verify_command = "{stage2_verify_cmd}"\n'
         'expected_exit = 0\n'
         'depends_on = [1]\n'
-        'output_artifacts = ["tests/test_mod.py"]\n'
+        'output_artifacts = ["tests/test_mod.py"]\n',
+        _VENUE,
     )
 
 

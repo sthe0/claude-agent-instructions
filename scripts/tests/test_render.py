@@ -116,6 +116,7 @@ def _grants_doc():
     data = {
         "meta": {
             "task_id": "render-grants-test",
+            "repo_root": "/render-venue",
             "goal": "g",
             "done_criterion": "d",
             "criterion_type": "measurable",
