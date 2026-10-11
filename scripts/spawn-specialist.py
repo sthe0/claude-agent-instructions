@@ -1665,11 +1665,16 @@ def _stage_norm(doc, stage_index: int) -> "StageNorm | None":
     return StageNorm.from_stage(stage, suppliers, doc=doc)
 
 
-def _linked_session(session_id: "str | None", state_root: "Path | None"):
+def _linked_session(session_id: "str | None", state_root: "Path | None", depth: int = 0):
     """`(state, plan document)` of a session that carries a `parent_link` and whose
-    plan loads, else `None`. A session nobody linked is never subject to the delegation
-    checks below, and neither is one whose state or plan cannot be read -- the checks
-    refuse on evidence, not on missing evidence."""
+    plan loads, else `None`. A session nobody linked (no state, or a state without a
+    `parent_link`) is silently never subject to the delegation checks below. A session
+    whose state fails to load while the spawn is at `depth >= 1`, or a linked one whose
+    plan will not load, cannot be checked either -- the checks refuse on evidence, not
+    on missing evidence -- but that is a skipped safety check, so it is reported on
+    stderr rather than passing as an unlinked spawn. It is not refused: a spawn that
+    cannot read its own state is no proof of a loop or a widening, and refusing would
+    park every linked stage behind a transient read error."""
     if not session_id:
         return None
     from agentctl.store import FileStateStore
@@ -1677,12 +1682,25 @@ def _linked_session(session_id: "str | None", state_root: "Path | None"):
     store = FileStateStore(state_root) if state_root is not None else FileStateStore()
     try:
         state = store.load(session_id)
-    except Exception:
+    except Exception as exc:
+        if depth >= 1:
+            print(
+                f"warning: delegation checks (norm-loop, grant-widening) skipped: state of "
+                f"session {session_id} unreadable at depth {depth}: {exc}",
+                file=sys.stderr,
+            )
         return None
     if state is None or not state.parent_link:
         return None
     doc = _session_plan(state)
-    return (state, doc) if doc is not None else None
+    if doc is None:
+        print(
+            f"warning: delegation checks (norm-loop, grant-widening) skipped: the plan of "
+            f"linked session {session_id} does not load",
+            file=sys.stderr,
+        )
+        return None
+    return state, doc
 
 
 def norm_loop_ancestor(linked, stage_index: int) -> "dict | None":
@@ -1712,18 +1730,31 @@ def uncovered_grants(linked, stage_index: int, engine_grants: "list[dict]") -> "
     """The entries of `engine_grants` that exceed the authority `linked`'s session holds:
     its adopted handoff grants plus the unconsumed runtime grants a user resolved on
     this stage. An entry is covered when it is identical to a covering entry, or when it
-    resolves to resources every one of which a resource of some covering entry covers
-    (an unresolved entry -- a wildcard-tail Bash rule -- only by identity). The
-    protected permission surfaces bound `covers` exactly as the autonomy boundary does."""
+    resolves to a non-empty set of resources every one of which a resource of some
+    covering entry covers (an unresolved entry -- a wildcard-tail Bash rule -- only by
+    identity, and an entry resolving to no resource at all is never vacuously covered).
+    The protected permission surfaces bound `covers` exactly as the autonomy boundary
+    does.
+
+    Runtime grants the agent itself materialized (`granted_by == "agent"`) never count,
+    as in `cli._effective_stage_grants_for_self_grant`: otherwise an agent self-grant
+    would widen what it may delegate with no user decision in the chain. A `scope:
+    "once"` entry does count while unconsumed, unlike that function: this set exists to
+    honour the user's decision on exactly this refusal, whose offered options include
+    `once`, and `cmd_dispatch` consumes a once grant after the dispatch that used it."""
     from agentctl import cli as agentctl_cli
     from agentctl import order_approvals
     from agentctl import plan_resources
     from agentctl import resources as agentctl_resources
     from agentctl.plan import _venue_for
+    from agentctl.state import AGENT_ACTOR
 
     state, doc = linked
     covering = list(state.parent_link.get("grants") or [])
-    covering += [e for e in state.runtime_grants.get(str(stage_index), []) if not e.get("consumed")]
+    covering += [
+        e for e in state.runtime_grants.get(str(stage_index), [])
+        if not e.get("consumed") and (e.get("granted_by") or "").strip().casefold() != AGENT_ACTOR
+    ]
     covering_keys = {_grant_key(e) for e in covering}
     venue = _venue_for(doc)
     protected = agentctl_resources.protected_permission_surfaces(
@@ -1747,7 +1778,7 @@ def uncovered_grants(linked, stage_index: int, engine_grants: "list[dict]") -> "
         if _grant_key(entry) in covering_keys:
             continue
         needed = resolved(entry)
-        if needed is not None and all(
+        if needed and all(
             any(agentctl_cli._covers_resource(held, want, protected) for held in covering_resources)
             for want in needed
         ):
@@ -2217,7 +2248,7 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     linked = (
-        _linked_session(args.session, args.state_root)
+        _linked_session(args.session, args.state_root, depth_now)
         if args.session is not None and args.stage_index is not None
         else None
     )

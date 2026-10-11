@@ -22,6 +22,7 @@ import importlib.util
 import json
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -450,14 +451,19 @@ def test_spawn_refuses_grant_widening(store, fixtures_dir, tmp_path, monkeypatch
     assert not (tmp_path / "state" / "handoffs").exists(), "a refused spawn wrote a handoff"
 
 
-def test_wildcard_tail_bash_rule_is_covered_only_by_an_identical_entry(
+def test_wildcard_tail_bash_rule_does_not_cover_a_narrower_one_conservatively(
         store, fixtures_dir, tmp_path, monkeypatch, capsys, refusals):
+    """Deliberately conservative: a wildcard-tail Bash rule resolves to no bounded
+    resource set, so it covers only an identical entry -- `Bash(git:*)` does not cover
+    `Bash(git status:*)`, though it would in the harness's own matching. Erring toward a
+    user-decided refusal, never toward a silent widening."""
     held = ("Bash(git:*)", "Bash(git diff:*)", "Bash(python3 mod.py:*)", "Edit(//.)")
     plan = _grant_session(store, "g4", fixtures_dir, tmp_path, monkeypatch, held)
 
     rc, env = _spawn(monkeypatch, tmp_path, plan, "g4", stage_index=1)
 
-    assert env is None and rc == 4, "BEHAVIOUR: a broader wildcard Bash rule was taken to cover a narrower one"
+    assert env is None and rc == 4, \
+        "BEHAVIOUR: a wildcard-tail Bash rule was taken to cover a different Bash rule"
     rules = [ln.removeprefix("Rule: ") for ln in capsys.readouterr().out.splitlines()
              if ln.startswith("Rule: ")]
     assert rules == ["Bash(git status:*)"]
@@ -479,6 +485,101 @@ def test_a_user_resolved_runtime_grant_widens_the_covering_set(store, fixtures_d
 
     assert env is not None, f"BEHAVIOUR: a user-resolved runtime grant was counted as widening (rc={rc})"
     assert refusals == []
+
+
+def _add_runtime_grant(store, sid, rule, **kw):
+    state = store.load(sid)
+    state.runtime_grants.setdefault("1", []).append({
+        "rule": rule, "provenance": "runtime", "consumed": False, "scope": "stage",
+        "granted_by": "user", "stage_title": "Scaffold module", **kw,
+    })
+    store.save(state)
+
+
+def test_an_agent_granted_runtime_grant_does_not_cover(store, fixtures_dir, tmp_path, monkeypatch,
+                                                       capsys, refusals):
+    """An agent self-grant is no user decision: it is in the stage's engine grants, but
+    it is not authority the session was handed, so delegating it is still a widening."""
+    plan = _grant_session(store, "g7", fixtures_dir, tmp_path, monkeypatch, ENGINE)
+    _add_runtime_grant(store, "g7", "Bash(git log:*)", granted_by="agent")
+
+    rc, env = _spawn(monkeypatch, tmp_path, plan, "g7", stage_index=1)
+
+    assert env is None and rc == 4, \
+        f"BEHAVIOUR: an agent-granted runtime grant widened the covering set (rc={rc})"
+    rules = [ln.removeprefix("Rule: ") for ln in capsys.readouterr().out.splitlines()
+             if ln.startswith("Rule: ")]
+    assert rules == ["Bash(git log:*)"]
+    assert [r for r, _ in refusals] == ["grant-widening"]
+
+
+def test_an_unconsumed_once_grant_the_user_resolved_covers(store, fixtures_dir, tmp_path,
+                                                          monkeypatch, refusals):
+    """The ask offers `once`; counting it is what keeps that option from being a dead end."""
+    plan = _grant_session(store, "g8", fixtures_dir, tmp_path, monkeypatch, ENGINE)
+    _add_runtime_grant(store, "g8", "Bash(git log:*)", scope="once")
+
+    rc, env = _spawn(monkeypatch, tmp_path, plan, "g8", stage_index=1)
+
+    assert env is not None, f"BEHAVIOUR: the user's once grant was not honoured (rc={rc})"
+    assert refusals == []
+
+
+def test_an_entry_resolving_to_no_resource_is_not_vacuously_covered(store, fixtures_dir, tmp_path,
+                                                                   monkeypatch):
+    """`all(...)` over an empty resource set is True; a grant that resolves to nothing
+    bounded must not ride that into "covered"."""
+    from agentctl import plan_resources
+
+    plan = _grant_session(store, "g10", fixtures_dir, tmp_path, monkeypatch, ("Bash(git status:*)",))
+    real = plan_resources.resolve_rule_grant
+
+    def resolve(rule, venue):
+        if rule == "Bash(python3 mod.py:*)":
+            return SimpleNamespace(status="resolved", resources=[])
+        return real(rule, venue)
+
+    monkeypatch.setattr(plan_resources, "resolve_rule_grant", resolve)
+    linked = SPAWN._linked_session("g10", tmp_path / "state", 1)
+    engine = [{"rule": "Bash(python3 mod.py:*)"}]
+
+    assert SPAWN.uncovered_grants(linked, 1, engine) == engine, \
+        "BEHAVIOUR: an entry resolving to an empty resource set was taken as covered"
+
+
+def test_unreadable_state_at_depth_warns_instead_of_passing_as_unlinked(tmp_path, capsys):
+    root = tmp_path / "state"
+    root.mkdir()
+    (root / "bad.json").write_text("{not json", encoding="utf-8")
+
+    assert SPAWN._linked_session("bad", root, 1) is None
+    err = capsys.readouterr().err
+    assert "delegation checks" in err and "skipped" in err and "bad" in err, \
+        f"BEHAVIOUR: an unreadable state at depth >= 1 was skipped silently: {err!r}"
+
+    assert SPAWN._linked_session("bad", root, 0) is None
+    assert capsys.readouterr().err == "", "an unreadable state at depth 0 warned"
+
+
+def test_an_absent_or_unlinked_session_is_skipped_silently(store, fixtures_dir, tmp_path, capsys):
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _executing(store, "quiet", plan)
+
+    assert SPAWN._linked_session("quiet", tmp_path / "state", 3) is None
+    assert SPAWN._linked_session("nobody", tmp_path / "state", 3) is None
+    assert SPAWN._linked_session(None, tmp_path / "state", 3) is None
+    assert capsys.readouterr().err == ""
+
+
+def test_a_linked_session_whose_plan_does_not_load_warns(store, fixtures_dir, tmp_path,
+                                                         monkeypatch, capsys):
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _executing(store, "np", plan, record=_record(plan), tmp_path=tmp_path, monkeypatch=monkeypatch)
+    monkeypatch.setattr(SPAWN, "_session_plan", lambda state: None)
+
+    assert SPAWN._linked_session("np", tmp_path / "state", 1) is None
+    assert "does not load" in capsys.readouterr().err, \
+        "BEHAVIOUR: a linked session with an unloadable plan skipped its checks silently"
 
 
 def test_spawn_never_grant_checks_an_unlinked_session(store, fixtures_dir, tmp_path, monkeypatch, refusals):
@@ -536,6 +637,8 @@ def _assert_parked_for_the_user(store, sid, d):
     gw = (d.data or {}).get("grant_widening")
     assert gw is not None and gw["rules"] == ["Bash(git diff:*)", "Edit(//./mod.py)"]
     assert gw["handoff_sha256"] == "a1" * 32
+    assert d.data["options"] == ["once", "stage", "deny"], \
+        "BEHAVIOUR: a grant-widening ask offered a scope that cannot materialize its --rule"
     state = store.load(sid)
     assert state.permission_request is not None and "Refusal: grant-widening" in state.permission_request.raw
     assert state.materialization_defects == [], "a grant-widening refusal was booked as a materialization defect"
@@ -569,3 +672,67 @@ def test_dispatch_exit_4_without_the_refusal_line_is_not_a_grant_widening(store,
     d = _dispatch(store, "gn", _child_directive_runner(4, stderr="claude not on PATH\n"))
 
     assert "grant_widening" not in (d.data or {})
+
+
+def _with_settings_file(store, sid, tmp_path):
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    settings_path = claude_dir / "settings.local.json"
+    settings_path.write_text('{"permissions": {"allow": ["Bash(ls:*)"]}}', encoding="utf-8")
+    state = store.load(sid)
+    state.delivery_worktree = str(tmp_path)
+    state.repo_root = str(tmp_path)
+    store.save(state)
+    return settings_path
+
+
+def test_relayed_grant_widening_still_surfaces_settings_drift(store, fixtures_dir, tmp_path):
+    """In the relayed form a child actually ran, so what it did to a live settings
+    document is the same signal it is on any other marker: not lost behind the ask."""
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _executing(store, "gd", plan)
+    settings_path = _with_settings_file(store, "gd", tmp_path)
+
+    def runner(argv, cwd=None):
+        settings_path.write_text('{"permissions": {"allow": ["Bash(rm -rf /:*)"]}}', encoding="utf-8")
+        return RunResult(0, stdout="Summary.\n" + BLOCK)
+
+    d = _dispatch(store, "gd", runner)
+
+    assert d.action == "ask_user_permission" and "grant_widening" in d.data
+    assert "settings_drift" in d.data, \
+        "BEHAVIOUR: a relayed grant-widening ask dropped the child's settings drift"
+    assert str(settings_path) in d.data["settings_drift"]["changed"]
+    persisted = store.load("gd").settings_drift
+    assert len(persisted) == 1 and str(settings_path) in persisted[0]["changed"]
+
+
+def _once_grant_session(store, sid, fixtures_dir):
+    plan = str(fixtures_dir / "plan_two_stage.toml")
+    _executing(store, sid, plan)
+    state = store.load(sid)
+    state.runtime_grants["1"] = [
+        {"rule": "Bash(rare-cmd:*)", "provenance": "runtime", "scope": "once", "consumed": False,
+         "granted_by": "user"},
+    ]
+    store.save(state)
+
+
+def test_relayed_grant_widening_spends_the_once_grant_the_child_ran_under(store, fixtures_dir):
+    _once_grant_session(store, "go1", fixtures_dir)
+
+    d = _dispatch(store, "go1", _child_directive_runner(0, stdout="Summary.\n" + BLOCK))
+
+    assert d.action == "ask_user_permission"
+    assert store.load("go1").runtime_grants["1"][0]["consumed"] is True, \
+        "BEHAVIOUR: a child ran under a once grant and the relayed refusal left it unspent"
+
+
+def test_direct_grant_widening_refusal_launched_nothing_so_spends_nothing(store, fixtures_dir):
+    _once_grant_session(store, "go2", fixtures_dir)
+
+    d = _dispatch(store, "go2", _child_directive_runner(4, stdout=BLOCK))
+
+    assert d.action == "ask_user_permission"
+    assert store.load("go2").runtime_grants["1"][0]["consumed"] is False, \
+        "BEHAVIOUR: a refusal that launched no child burned a once grant"

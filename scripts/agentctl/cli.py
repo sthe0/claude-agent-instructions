@@ -6562,36 +6562,11 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         "evidence_dir": evidence_dir,
     }
 
-    if _is_grant_widening_refusal(result):
-        # A delegation that would widen authority beyond what the session was
-        # handed is a request for authority, not a defect of the materialized
-        # grants: park it for the user's decision. No materialization_defects row,
-        # no self_grant (the engine never widens on its own say-so), no DIAGNOSING.
-        rules = _parse_rule_lines(result.stdout)
-        sha_match = _HANDOFF_SHA_LINE_RE.search(result.stdout)
-        action = (
-            f"grant-widening refusal on stage {stage.index}: delegation holds "
-            f"{len(rules)} grant(s) beyond the session's handoff: {', '.join(rules)}"
-        )
-        state.permission_request = PermissionRequest(
-            action=action, stage_index=stage.index, raw=result.stdout
-        )
-        state.log("dispatch_refused", stage=stage.index, reason="grant-widening", rules=rules)
-        store.save(state)
-        return Directive(
-            True, state.node, "ask_user_permission",
-            f"stage {stage.index} delegation refused: it would widen grants beyond the "
-            "authority this session was handed — the user decides",
-            marker="PERMISSION-REQUEST",
-            data={
-                **base, "action": action,
-                "options": ["once", "stage", "project", "global", "deny"],
-                "grant_widening": {
-                    "rules": rules,
-                    "handoff_sha256": sha_match.group(1) if sha_match else None,
-                },
-            },
-        )
+    grant_widening = _is_grant_widening_refusal(result)
+    # The direct form is the wrapper refusing before any child launched; the relayed
+    # form is a child that DID run and handed the block back, so only it has a
+    # post-launch footprint (settings drift, transcript denials, a spent once-grant).
+    child_launched = not (grant_widening and result.returncode == _GRANT_WIDENING_EXIT)
 
     # Post-launch half of the settings_drift check: re-hash the SAME paths
     # enumerated before dispatch_stage ran. A spawned child is never granted
@@ -6617,12 +6592,45 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     # self-reported `Rule:`-line fallback for the case this transcript-based path
     # finds nothing (announcer-thread timeout, or discovery failed).
     _classify_transcript_denials(state, stage, coverage, _parse_transcript_path(result.stderr))
-    if marker not in (CHILD_INFRA_FAILURE, CHILD_EXHAUSTED):
+    if child_launched and marker not in (CHILD_INFRA_FAILURE, CHILD_EXHAUSTED):
         # A transient/resource marker means the child never meaningfully ran
         # against the once-scoped grant this launch was meant to spend — the
         # launch didn't count, so consuming a single-use grant here would
         # burn it for a re-dispatch that gets no benefit from having used it.
         _consume_once_grants(state, stage.index)
+
+    if grant_widening:
+        # A delegation that would widen authority beyond what the session was
+        # handed is a request for authority, not a defect of the materialized
+        # grants: park it for the user's decision. No materialization_defects row
+        # for the refusal itself, no self_grant (the engine never widens on its
+        # own say-so), no DIAGNOSING. `project`/`global` are not offered: they
+        # cannot materialize the per-rule runtime grant the re-delegation counts.
+        rules = _parse_rule_lines(result.stdout)
+        sha_match = _HANDOFF_SHA_LINE_RE.search(result.stdout)
+        action = (
+            f"grant-widening refusal on stage {stage.index}: delegation holds "
+            f"{len(rules)} grant(s) beyond the session's handoff: {', '.join(rules)}"
+        )
+        state.permission_request = PermissionRequest(
+            action=action, stage_index=stage.index, raw=result.stdout
+        )
+        state.log("dispatch_refused", stage=stage.index, reason="grant-widening", rules=rules)
+        store.save(state)
+        return Directive(
+            True, state.node, "ask_user_permission",
+            f"stage {stage.index} delegation refused: it would widen grants beyond the "
+            "authority this session was handed — the user decides",
+            marker="PERMISSION-REQUEST",
+            data={
+                **base, "action": action,
+                "options": ["once", "stage", "deny"],
+                "grant_widening": {
+                    "rules": rules,
+                    "handoff_sha256": sha_match.group(1) if sha_match else None,
+                },
+            },
+        )
 
     if marker == "COMPLETED":
         store.save(state)
