@@ -512,7 +512,10 @@ def _element_traceability_violations(doc) -> list[str]:
     Gated on `order.requires_traceability` (see its docstring in state.py): a check
     that would newly fail every order-bearing plan authored before it existed cannot
     bind unconditionally the way a smaller addition does — it applies only to a plan
-    that declares itself authored under the convention it grades."""
+    that declares itself authored under the convention it grades.
+
+    An optional stage is exempt: it traces to its `backlog_issue`, not to an order
+    requirement (R8), which is the whole reason a user may decline it."""
     order = doc.meta.order
     if (
         order is None
@@ -526,6 +529,8 @@ def _element_traceability_violations(doc) -> list[str]:
         return []
     out: list[str] = []
     for stage in doc.stages:
+        if stage.optional:
+            continue
         blob = " ".join(
             str(part)
             for part in (

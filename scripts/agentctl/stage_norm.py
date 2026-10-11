@@ -81,6 +81,7 @@ class StageNorm:
     delivery_place: tuple
     interface_brief: str | None = None
     supplier_interfaces: tuple = ()  # ((supplier index, its interface_digest), ...)
+    renorms: tuple = ()  # norm files the stage edits (stage.renorms), as given
 
     @classmethod
     def from_stage(cls, stage, suppliers=None, *, doc=None) -> "StageNorm":
@@ -126,6 +127,7 @@ class StageNorm:
             negative_control_place=negative_control_place(stage),
             delivery_place=delivery_place(stage),
             interface_brief=brief,
+            renorms=tuple(stage.renorms),
         )
         if not suppliers:
             return norm
@@ -150,20 +152,18 @@ class StageNorm:
             raw["landed"] = LandedSpec.from_dict(landed)
         for name in ("principle", "edges", "output_artifacts", "knowledge_place",
                      "preconditions_place", "procedure_place", "negative_control_place",
-                     "delivery_place", "supplier_interfaces"):
+                     "delivery_place", "supplier_interfaces", "renorms"):
             if name in raw:
                 raw[name] = _tuplify(raw[name])
         return cls(**raw)
 
-    def review_digest(self) -> str:
-        """Whole-stage identity: what a reviewer saw and a disposed question was
-        answered against. The payload is the one `stage_question_key` hashed before this
-        object existed -- order and `repr` serialization included -- plus the conditional
-        trailing `delivery_place`."""
-        payload = repr((
+    def _review_payload(self, *, indexed: bool) -> str:
+        """The review payload; `indexed=False` drops the supplier indices, so a stage
+        renumbered by an inserted or removed neighbour keeps the same payload."""
+        return repr((
             self.executor,
             self.capability_required,
-            tuple(sorted({e[0] for e in self.edges})),
+            tuple(sorted({e[0] for e in self.edges})) if indexed else (),
             self.done_criterion,
             self.criterion_type,
             self.verify_command,
@@ -176,7 +176,7 @@ class StageNorm:
             self.method,
             self.conditions,
             self.principle,
-            tuple((e[0], e[1], e[2]) for e in self.edges),
+            tuple((e[0], e[1], e[2]) if indexed else (e[1], e[2]) for e in self.edges),
             _normalize_string(self.verify_venue),
             _normalize_string(self.verify_kind),
             self.landed,
@@ -187,8 +187,23 @@ class StageNorm:
             *self.procedure_place,
             *self.negative_control_place,
             *self.delivery_place,
+            *((("renorms", self.renorms),) if self.renorms else ()),
         ))
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def review_digest(self) -> str:
+        """Whole-stage identity: what a reviewer saw and a disposed question was
+        answered against. The payload is the one `stage_question_key` hashed before this
+        object existed -- order and `repr` serialization included -- plus the conditional
+        trailing `delivery_place` and `renorms`."""
+        return hashlib.sha256(self._review_payload(indexed=True).encode("utf-8")).hexdigest()
+
+    def norm_digest(self) -> str:
+        """The stage's norm without its place in the plan: `review_digest` minus the
+        supplier indices (edges reduced to element and artifact) and without the stage's
+        own index. A `stage:<n>` norm target is snapshotted and later compared by this
+        digest, so renumbering the stage leaves it unchanged while any edit to a field the
+        review digest covers moves it."""
+        return hashlib.sha256(self._review_payload(indexed=False).encode("utf-8")).hexdigest()
 
     def interface_digest(self) -> str:
         """What a consumer relies on: title, result image, criterion type, done
@@ -232,6 +247,7 @@ class StageNorm:
             *self.preconditions_place,
             *self.procedure_place,
             *self.negative_control_place,
+            *((("renorms", self.renorms),) if self.renorms else ()),
         )
 
     def carry_digest(self) -> str:

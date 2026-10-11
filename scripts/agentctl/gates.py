@@ -78,6 +78,7 @@ from .plan import (
 )
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
+from .stage_norm import StageNorm
 from .state import CONCERN_OPEN, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
@@ -86,6 +87,7 @@ from .state import PLAN_PRESENTATION_KIND_ESSENCE as _PLAN_PRESENTATION_KIND_ESS
 from .state import PLAN_PRESENTATION_KIND_REPLAN_DIFF as _PLAN_PRESENTATION_KIND_REPLAN_DIFF
 from .state import Stage as _Stage
 from .state import asserts_landing
+from .state import is_settled, is_skipped
 from .text_shape import PLACEHOLDER_SET as _PLACEHOLDER_SET
 from .text_shape import normalize_string as _normalize_string
 
@@ -123,11 +125,87 @@ def plan_approval_blockers(state: SessionState) -> list[str]:
     return out
 
 
+def declined_issue_set(state: SessionState) -> set[str]:
+    """The backlog issues the customer has declined in this session.
+
+    The recorded `declined_issues`, plus the issue of every stage that is SKIPPED or still
+    marked declined right now (a state written before the list existed holds the decline
+    only on the stage)."""
+    out = set(state.declined_issues)
+    out.update(
+        s.backlog_issue for s in state.stages
+        if (is_skipped(s) or s.outcome.declined) and s.backlog_issue
+    )
+    return out
+
+
+def declined_title_set(state: SessionState) -> set[str]:
+    """Titles of the stages this session holds as declined (SKIPPED, or offered again and
+    still marked) -- the identity of a declined stage that is no longer optional."""
+    return {s.title for s in state.stages if s.outcome.declined or is_skipped(s)}
+
+
+def is_declined_stage(
+    stage: _Stage,
+    declined_issues: "set[str] | frozenset[str]",
+    declined_titles: "set[str] | frozenset[str]" = frozenset(),
+) -> bool:
+    """Whether `stage` is work the customer declined: the ONE identity rule.
+
+    An optional stage is identified by its `backlog_issue`, never by its index (a replan
+    renumbers). A stage that stopped being optional has no issue left to name -- the loader
+    forbids one on a required stage -- so it is matched by title. A re-keyed issue or a
+    renamed required stage is a different stage: the accepted limit of both halves.
+
+    Every carry site, the agent-approval blocker and the autonomy boundary read the decline
+    through this function, whether the session or the approval record holds it, so they
+    cannot disagree about what a declined stage is."""
+    if stage.optional:
+        return stage.backlog_issue in declined_issues
+    return stage.title in declined_titles
+
+
+def declined_live_optional(doc_or_stages, declined_issues, declined_titles=()) -> list[int]:
+    """Indices of the stages that are still live although the customer declined them.
+
+    `doc_or_stages` is a plan document or a list of stages; a stage that is SKIPPED is not
+    live. The issues and titles are plain collections, so a carrier other than the session
+    (an order-level record) can be passed in without touching this rule; the identity
+    itself is `is_declined_stage`'s."""
+    stages = getattr(doc_or_stages, "stages", doc_or_stages)
+    issues, titles = set(declined_issues), set(declined_titles)
+    return sorted(
+        s.index for s in stages if is_declined_stage(s, issues, titles) and not is_skipped(s)
+    )
+
+
+def declined_stage_entries(
+    state: SessionState, prior_entries: "list[dict] | None" = None,
+) -> list[dict]:
+    """The `{"issue", "title"}` pairs a customer approval stamps on the order's record.
+
+    One per issue in `state.declined_issues` whose stage title is known: from a SKIPPED
+    stage of this session, else from `prior_entries` (the previous approval record), so an
+    issue whose stage the plan no longer holds keeps its title. A title the approved plan
+    holds as a live stage is dropped -- the customer just approved that stage, so the
+    decline of it lapses with that choice."""
+    titles = {e["issue"]: e["title"] for e in (prior_entries or [])}
+    titles.update({
+        s.backlog_issue: s.title for s in state.stages if is_skipped(s) and s.backlog_issue
+    })
+    live = {s.title for s in state.stages if not is_skipped(s)}
+    return [
+        {"issue": issue, "title": titles[issue]}
+        for issue in sorted(set(state.declined_issues))
+        if titles.get(issue) and titles[issue] not in live
+    ]
+
+
 def resolution_blockers(state: SessionState) -> list[str]:
     out: list[str] = []
     if not state.stages:
         out.append("no stages defined")
-    unpassed = [s.index for s in state.stages if s.outcome.status != StageStatus.PASSED.value]
+    unpassed = [s.index for s in state.stages if not is_settled(s)]
     if unpassed:
         out.append(f"stages not PASSED: {unpassed}")
     out.extend(_acceptance_review_resolution_blockers(state))
@@ -501,6 +579,263 @@ def failure_address_blockers(state: SessionState) -> list[str]:
                 "материал/средство | нормативное: inadequate нормативное обеспечение, "
                 "норма/способ | not_applicable: routing does not apply)"]
     return []
+
+
+def _nested_label(d) -> str:
+    mismatch = (d.declaration.mismatch if d.declaration is not None else "").strip()
+    head = f"{d.uid} (level {d.level}, origin {d.origin})"
+    return f"{head}: {mismatch[:120]}" if mismatch else head
+
+
+def difficulty_stack_blockers(state: SessionState) -> list[str]:
+    """Precondition guardian for `replan` inside DIAGNOSING: a nested difficulty
+    (`difficulty-open`) is a sub-cycle of the enclosing one, and replanning with one still
+    open would clear the whole stack and re-norm the plan on an unfinished sub-record.
+    INTERNAL command precondition -- absent from GUARDIANS like difficulty_blockers.
+    [] outside DIAGNOSING and with an empty stack."""
+    if state.node != Node.DIAGNOSING.value or not state.difficulty_stack:
+        return []
+    top = state.difficulty
+    open_label = _nested_label(top) if top is not None else "(undeclared nested record)"
+    return [
+        f"a nested difficulty is still open: {open_label} -- finish it (declare -> "
+        f"investigate -> critique -> normalize) and run difficulty-close before replan"
+    ]
+
+
+def normalization_waiver_blockers(state: SessionState, waiver: str | None) -> list[str]:
+    """Refusal of a `replan --normalization-waiver` in the DIAGNOSING cycle while the open
+    record names norm target(s) the closing plan must change: such a record closes on its
+    real normalization, never on a waiver. [] == the waiver may be considered."""
+    if waiver is None or state.node != Node.DIAGNOSING.value:
+        return []
+    d = state.difficulty
+    if d is not None and d.norm_targets:
+        return ["normalization waiver on a record carrying norm targets"]
+    return []
+
+
+def difficulty_close_blockers(state: SessionState) -> list[str]:
+    """Precondition guardian for `difficulty-close`: the top (nested) record must be as
+    complete as a record closing through `replan` has to be -- difficulty_blockers (the
+    three sections, well-formed), a routed failure_address, and a recorded normalization.
+    The waiver `normalize --normalization-waiver` stored on the record stands in for the
+    normalization only while the record carries no norm targets; one that names a norm
+    the closing plan must change is closed on its real record, as in `replan`.
+    [] == may close."""
+    if state.node != Node.DIAGNOSING.value:
+        return [f"difficulty-close runs only in the DIAGNOSING cycle; node={state.node}"]
+    if not state.difficulty_stack:
+        return ["no nested difficulty is open -- the root difficulty closes with replan, "
+                "not difficulty-close"]
+    out = difficulty_blockers(state)
+    if out:
+        return out
+    out = failure_address_blockers(state)
+    if out:
+        return out
+    d = state.difficulty
+    out = normalization_blockers(state)
+    if not out:
+        return []
+    if not (d.normalization_waiver or "").strip():
+        return out
+    if d.norm_targets:
+        return ["the nested difficulty names norm target(s) the closing plan must change; its "
+                "--normalization-waiver is not accepted -- record the normalization with "
+                "normalize --factor"]
+    return []
+
+
+def file_norm_digest(path: str) -> str | None:
+    """sha256 of a norm file's bytes; None when it is missing or unreadable (a deleted
+    norm file has moved, which is all `renorm` bookkeeping asks of it)."""
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def stage_norm_digest(stage) -> str:
+    """The index-free norm digest of one stage (`StageNorm.norm_digest`) -- what a
+    `stage:<n>` norm target is snapshotted and compared by."""
+    return StageNorm.from_stage(stage).norm_digest()
+
+
+def _is_installing(target: str, installing_plan_path: str | None) -> bool:
+    """Whether `target` is the very file the replan is installing as the plan."""
+    return bool(installing_plan_path) and os.path.realpath(target) == os.path.realpath(
+        installing_plan_path)
+
+
+def _record_file_targets(state: SessionState) -> list[dict]:
+    d = state.difficulty
+    if d is None:
+        return []
+    return [t for t in d.norm_targets if t.get("kind") == "file"]
+
+
+def _stages_naming(new_plan, target: str) -> list[int]:
+    return sorted(s.index for s in new_plan.stages if target in s.renorms)
+
+
+def normative_edit_blockers(state: SessionState, new_plan, pending_indices,
+                            installing_plan_path: str | None = None) -> list[str]:
+    """Closure precondition of a DIAGNOSING replan whose difficulty record carries norm
+    targets: the corrected plan must actually be the re-norming the critique named.
+    Keyed on the record carrying targets, not on its failure_address label -- a record
+    that inherited targets from a closed nested difficulty is bound the same way. [] when
+    the record has no targets and outside DIAGNOSING.
+
+    One blocker per `stage:<n>` target while ANY stage of `new_plan` still has the
+    snapshotted index-free norm digest (keyed on the norm, so a stage merely shifted by an
+    inserted neighbour still blocks); one per file target no stage names in `renorms`; one
+    per file target whose bytes are still the baseline and whose `renorms` references all
+    sit on stages the replan does not leave pending (a reference on a carried-forward
+    PASSED stage is no consequence, that stage never runs again).
+
+    `pending_indices` is the set of `new_plan` stage indices this replan does NOT carry
+    forward as PASSED -- supplied by the caller, which owns the carry decision.
+    `installing_plan_path` is the file the replan installs as the plan: a file target that
+    is that file is no norm, its bytes move with the replan itself."""
+    if state.node != Node.DIAGNOSING.value:
+        return []
+    d = state.difficulty
+    if d is None or not d.norm_targets:
+        return []
+    pending = set(pending_indices)
+    digests = {s.index: stage_norm_digest(s) for s in new_plan.stages}
+    out: list[str] = []
+    for t in d.norm_targets:
+        target, baseline = t.get("target", ""), t.get("baseline")
+        if t.get("kind") == "stage":
+            if any(dg == baseline for dg in digests.values()):
+                out.append(
+                    f"norm target {target}: no stage of the corrected plan has a norm "
+                    f"other than the one the critique named -- edit that stage's "
+                    f"norm (title, result image, criterion, method, means, ...), "
+                    f"not just its place in the plan"
+                )
+            continue
+        if _is_installing(target, installing_plan_path):
+            out.append(
+                f"norm target {target}: is the plan file this replan installs, whose bytes "
+                f"move with the replan itself -- name a plan norm as `stage:<n>`"
+            )
+            continue
+        naming = _stages_naming(new_plan, target)
+        if not naming:
+            out.append(
+                f"norm target {target}: no stage of the corrected plan lists it in "
+                f"`renorms` -- add a re-norming stage that edits it and names it there "
+                f"(also list it in that stage's output_artifacts)"
+            )
+        elif file_norm_digest(target) == baseline and not any(i in pending for i in naming):
+            out.append(
+                f"norm target {target}: still unedited, and the only stage(s) naming it in "
+                f"`renorms` ({', '.join(str(i) for i in naming)}) are carried forward as "
+                f"PASSED and will not run again -- name it on a stage this replan leaves "
+                f"pending"
+            )
+    return out
+
+
+def open_renorms(state: SessionState) -> list[dict]:
+    """The obligations in `state.pending_renorms` whose file still has its baseline bytes.
+    A moved one is discharged: the observable is the file's digest, never the path's
+    class or who edited it."""
+    return [e for e in state.pending_renorms
+            if file_norm_digest(e.get("target", "")) == e.get("baseline")]
+
+
+def renorm_retention_blockers(state: SessionState, new_plan, pending_indices,
+                              installing_plan_path: str | None = None) -> list[str]:
+    """An obligation outlives the replan that admitted it: every later replan (of any
+    kind) must keep each still-open target of THIS plan frame named in `renorms` of a
+    stage it leaves pending. Obligations bound at another plan depth are not judged here
+    -- their stage indices belong to a different plan. An obligation whose file is the
+    plan being installed is refused whether or not its bytes moved: the replan itself
+    moves them, so the digest says nothing about a norm edit."""
+    pending = set(pending_indices)
+    depth = len(state.plan_stack)
+    out: list[str] = []
+    for e in state.pending_renorms:
+        if e.get("depth", 0) != depth:
+            continue
+        if _is_installing(e["target"], installing_plan_path):
+            out.append(
+                f"open norm-edit obligation {e['target']}: is the plan file this replan "
+                f"installs, whose bytes move with the replan itself"
+            )
+            continue
+        if file_norm_digest(e["target"]) != e.get("baseline"):
+            continue
+        naming = _stages_naming(new_plan, e["target"])
+        if not any(i in pending for i in naming):
+            out.append(
+                f"open norm-edit obligation {e['target']}: the plan must keep naming it in "
+                f"`renorms` of a stage that is still to run (it was bound to stage "
+                f"{e.get('stage')}); a reference on a carried-forward PASSED stage does "
+                f"not count"
+            )
+    return out
+
+
+def bound_renorms(state: SessionState, new_plan, pending_indices) -> list[dict]:
+    """`state.pending_renorms` as it stands after a replan that passed both gates:
+    moved obligations discharged, open ones rebound to the lowest-index pending stage
+    naming them, and the closing record's unedited file targets admitted. Pure."""
+    pending = set(pending_indices)
+    depth = len(state.plan_stack)
+    out: list[dict] = []
+    seen: set[str] = set()
+    for e in open_renorms(state):
+        entry = dict(e)
+        if entry.get("depth", 0) == depth:
+            naming = [i for i in _stages_naming(new_plan, e["target"]) if i in pending]
+            if naming:
+                entry["stage"] = naming[0]
+        out.append(entry)
+        seen.add(entry["target"])
+    if state.node == Node.DIAGNOSING.value:
+        for t in _record_file_targets(state):
+            target = t["target"]
+            if target in seen or file_norm_digest(target) != t.get("baseline"):
+                continue
+            naming = [i for i in _stages_naming(new_plan, target) if i in pending]
+            if not naming:
+                continue
+            out.append({"target": target, "baseline": t["baseline"],
+                        "stage": naming[0], "depth": depth})
+            seen.add(target)
+    return out
+
+
+def pending_renorm_stage_blockers(state: SessionState, stage_index: int) -> list[str]:
+    """record-result PASS gate: a stage bound to a still-open obligation does not pass
+    while the norm file it was to edit has its baseline bytes."""
+    depth = len(state.plan_stack)
+    return [
+        f"stage {stage_index} is bound to norm target {e['target']}, which still has its "
+        f"baseline bytes -- edit it (the re-norming act), then record the result"
+        for e in open_renorms(state)
+        if e.get("depth", 0) == depth and e.get("stage") == stage_index
+    ]
+
+
+def pending_renorm_final_blockers(state: SessionState) -> list[str]:
+    """verify-final / resolve gate: no open norm-edit obligation of THIS plan frame may
+    remain. A parent frame's obligation is not this frame's to close -- a service
+    sub-plan could otherwise never resolve and pop back to the stage that owes the edit;
+    the parent's own verify-final / resolve judge it once it is the live frame again."""
+    depth = len(state.plan_stack)
+    return [
+        f"norm target {e['target']} (bound to stage {e.get('stage')}) was named by a "
+        f"нормативное critique and its file still has its baseline bytes -- edit it, "
+        f"the re-norming act that closes the difficulty"
+        for e in open_renorms(state)
+        if e.get("depth", 0) == depth
+    ]
 
 
 def plan_review_active(state: SessionState) -> bool:
@@ -2862,7 +3197,7 @@ def _renorm_stage_residual(stage) -> tuple:
     `plan.stage_question_key` is most of it, and would have been all of it but for its
     own scope: that key answers whether a disposed Question still targets the same
     bytes, and a Question.target may only name a stage field the plan's author writes
-    as an activity element. Five engine-consumed fields fall outside that and are
+    as an activity element. The engine-consumed fields below fall outside that and are
     spliced on here, because a renormalization is defined by what it does NOT touch:
 
     * `actor.cost_tier` — the dispatch budget label and the effort-divergence estimate's
@@ -2887,16 +3222,25 @@ def _renorm_stage_residual(stage) -> tuple:
       footing as `actor.cost_tier`: no Question.target names it, but re-declaring it
       under the light path would move which `output_artifacts` entries the ephemeral-
       artifacts check is trusted to skip.
+    * `optional` / `backlog_issue` — whether the customer may decline the stage at
+      approval, and the backlog issue it traces to in place of an order requirement.
+      Either one changes what the stage IS to the customer; flipping a required stage
+      to optional under the light path would let it be declined without an approval
+      that saw it offered as declinable.
+    * `renorms` — the norm files a re-norming stage edits. Same footing again: it binds a
+      нормативное critique to its consequence, and moving it under the light path would
+      re-route which stage owns an open norm-edit obligation.
 
     Deliberately outside, and the only things outside: `index` (the key both sides are
     matched ON, so a change there is an added/removed stage, refused above), and the
-    mutable execution RECORD `outcome` / `criterion.observation` / `control` — a plan doc
-    loaded from TOML carries the defaults for those, and the live state's copies are what
-    this path exists to leave alone.
+    mutable execution RECORD `outcome` (including `outcome.declined`, the customer's
+    decline already recorded against the stage) / `criterion.observation` / `control` —
+    a plan doc loaded from TOML carries the defaults for those, and the live state's
+    copies are what this path exists to leave alone.
 
     Hand-written, like every membership list of this family, and pinned the same way:
     `test_the_stage_residual_exhausts_the_stage_s_field_set` goes red when a field is
-    added to `Stage` and to neither the key nor the five splices above."""
+    added to `Stage` and to neither the key nor the splices above."""
     return (
         stage_question_key(stage),
         stage.actor.cost_tier,
@@ -2905,6 +3249,9 @@ def _renorm_stage_residual(stage) -> tuple:
         *grants_place(stage),
         *effects_place(stage),
         stage.ephemeral_artifacts_waiver,
+        stage.optional,
+        stage.backlog_issue,
+        tuple(stage.renorms),
     )
 
 
@@ -2978,6 +3325,9 @@ def blockers(state: SessionState, gate_name: str) -> list[str]:
 AUTONOMY_REASON_NO_VERSION = "no user-approved version for this order"
 AUTONOMY_REASON_ORDER_CHANGED = "the order itself changed since the user's approval"
 AUTONOMY_REASON_OPEN_FIRE = "open spend/wall-clock fire owed to the user"
+AUTONOMY_REASON_DECLINED_STAGE = (
+    "a stage the customer declined at their approval is live in this plan"
+)
 
 
 def _identity_key(identity) -> str:
@@ -2992,13 +3342,20 @@ def _resource_name(data: dict) -> str:
 
 
 def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict | None = None,
-                      *, protected: list[str] | None = None) -> dict:
+                      *, protected: list[str] | None = None,
+                      live_optional=None) -> dict:
     """Whether the coordinator may approve `resolved_plan` (a `plan_resources.
     BoundaryView`) on the user's behalf, given the order's ledger snapshot: the same
     order, no resource outside what the user approved for it, no changed command of
     unknown effect without a first passing thinker review, no open fire owed to the
-    user. Pure: every input is a stored value; the reference is the last USER-approved
-    version, never the previous plan."""
+    user, and no stage live that the user declined at that approval.
+    Pure: every input is a stored value; the reference is the last USER-approved
+    version, never the previous plan.
+
+    `live_optional` is the plan's stages the caller holds as still on offer (a
+    `BoundaryView` carries no stages); the decline is read from the approval record, by
+    `is_declined_stage`'s identity (issue while optional, title once required), so a
+    session that never saw the decline cannot lose it."""
     from . import order_approvals as _oa
 
     last = _oa.latest_user_approved_of(ledger_snapshot)
@@ -3007,7 +3364,7 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
         "reasons": [AUTONOMY_REASON_NO_VERSION],
         "order_changed": False, "extra_resources": [], "unresolved_changed_commands": [],
         "thinker_pass": None, "open_effort_fire": bool(ledger_snapshot.get("open_effort_fires")),
-        "first_verdict_key": None,
+        "first_verdict_key": None, "declined_live_optional": [],
     }
     if last is None:
         return out
@@ -3017,6 +3374,17 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
         reasons.append(AUTONOMY_REASON_ORDER_CHANGED)
     if out["open_effort_fire"]:
         reasons.append(AUTONOMY_REASON_OPEN_FIRE)
+
+    stages = list(live_optional or [])
+    out["declined_live_optional"] = declined_live_optional(
+        stages, _oa.declined_issues_of(last), _oa.declined_titles_of(last))
+    if out["declined_live_optional"]:
+        names = {s.index: s.backlog_issue or s.title for s in stages}
+        reasons.append(
+            AUTONOMY_REASON_DECLINED_STAGE + ": " + ", ".join(
+                f"stage {i} ({names[i]})" for i in out["declined_live_optional"]
+            )
+        )
 
     approved = _oa.boundary_resources_of(ledger_snapshot)
     seen: set[str] = set()

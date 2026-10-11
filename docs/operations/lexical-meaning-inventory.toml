@@ -259,9 +259,9 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/plan.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: _LANDED_REF_RE (git ref name shape), _EXECUTOR_RE (in_thread|spawn:<kind> vocabulary), _HEREDOC_START (shell here-document introducer), CUSTOMER_QUESTIONS_HEADER_RE (the engine's own `Customer questions:` field header, tolerant of case and emphasis), _CONCERN_RE (the engine's own `blocking:`/`note:` severity tag and `re:<id>` restatement reference)."
-hits = 5
-hit_classes = ["structural", "structural", "structural", "structural", "structural"]
+ground = "Compiles: _LANDED_REF_RE (git ref name shape), _EXECUTOR_RE (in_thread|spawn:<kind> vocabulary), _BACKLOG_ISSUE_RE (an `[owner/]repo#N` issue reference), _HEREDOC_START (shell here-document introducer), CUSTOMER_QUESTIONS_HEADER_RE (the engine's own `Customer questions:` field header, tolerant of case and emphasis), _CONCERN_RE (the engine's own `blocking:`/`note:` severity tag and `re:<id>` restatement reference)."
+hits = 6
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/plan.py::_parse_landed_spec::pattern.fullmatch"]
@@ -297,7 +297,77 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/plan.py::parse_plan::pattern.match"]
 class = "structural"
-ground = "_EXECUTOR_RE.match validates the executor field against the engine's in_thread|spawn:<kind> syntax."
+ground = "_EXECUTOR_RE.match validates the executor field against the engine's in_thread|spawn:<kind> syntax; _BACKLOG_ISSUE_RE.match validates an optional stage's backlog_issue as an `[owner/]repo#N` issue reference."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan.py::optional_rest_violations::pattern.match"]
+class = "structural"
+ground = "grammar.pattern.match and FINAL_CHECK.pattern.match match a coverage control name against the engine's own control-name grammars, to read which stage or final check the control rests on."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/mandate.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: _SLUG (a mandate id slug), _ISSUE_TOKEN (GitHub's `#N` issue-reference syntax), _MANDATE_BRANCH (the cycle's own `mandate/<N>-` branch prefix), _OCTAL (git's `\\NNN` octal escape in a quoted path)."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/mandate.py::_unquote::pattern.match"]
+class = "structural"
+ground = "_OCTAL.match reads one `\\NNN` octal escape out of a git-quoted path, a fixed escape syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/mandate.py::pr_referenced_issues::pattern.findall"]
+class = "structural"
+ground = "_ISSUE_TOKEN.findall collects `#N` issue references from a PR's title and body, GitHub's own reference syntax rather than a reading of what the text means."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/mandate.py::pr_referenced_issues::pattern.match"]
+class = "structural"
+ground = "_MANDATE_BRANCH.match reads the issue number from the cycle's own `mandate/<N>-` head-branch name."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/mandate.py::require_slug::pattern.fullmatch"]
+class = "structural"
+ground = "_SLUG.fullmatch validates a mandate id as a filesystem-safe slug, a fixed syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/mandate_cycle/driver.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: VERDICT_RE (the review brief's own `VERDICT: accept|reject` reply marker) and SHA_RE (a 40-hex git commit id)."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/mandate_cycle/driver.py::Cycle._work_item::pattern.findall"]
+class = "structural"
+ground = "VERDICT_RE.findall reads the reviewer's `VERDICT: accept|reject` marker, a fixed tag the review brief requires; the accept/reject judgement itself is the reviewer model's."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/mandate_cycle/driver.py::Cycle._work_item::pattern.fullmatch"]
+class = "structural"
+ground = "SHA_RE.fullmatch validates `git rev-parse HEAD` output as a 40-hex commit id."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/mandate_cycle/driver.py::push_refspec::pattern.fullmatch"]
+class = "structural"
+ground = "SHA_RE.fullmatch validates the commit id a push refspec is built from as 40 hex digits."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/mandate_cycle/driver.py::rank_from_board::re.search"]
+class = "structural"
+ground = "re.search reads the trailing `#N` issue number from a project-board item reference, a fixed reference syntax."
 hits = 1
 reviewed_by = "developer"
 

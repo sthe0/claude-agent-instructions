@@ -30,7 +30,7 @@ def _replan_count():
     return task_accumulator.get(TASK)["per_axis_totals"]["replan_count"]
 
 
-def _to_diagnosing(store, fixtures_dir, sid, *, normalize=True):
+def _to_diagnosing(store, fixtures_dir, sid, *, normalize=True, norm_fault=True):
     """Drive a fresh session on TASK to DIAGNOSING with a complete difficulty record
     (declare/investigate/critique — what `difficulty_blockers` itself requires) and,
     unless `normalize=False`, a normalization too, so a replan that clears the
@@ -54,8 +54,10 @@ def _to_diagnosing(store, fixtures_dir, sid, *, normalize=True):
     cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
-    cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="нормативное"), store=store)
+    fault = (dict(failure_address="нормативное", norm_targets=["stage:1"]) if norm_fault
+             else dict(failure_address="ресурсное"))
+    cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt", **fault),
+                     store=store)
     if normalize:
         cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
@@ -123,7 +125,7 @@ def test_continue_clears_the_block_and_zeroes_the_accumulator(store, fixtures_di
 
 def test_rescope_also_clears_the_block(store, fixtures_dir):
     sid = "c2"
-    _to_diagnosing(store, fixtures_dir, sid)
+    _to_diagnosing(store, fixtures_dir, sid, norm_fault=False)
     _seed_to_threshold(sid)
     bigger = str(fixtures_dir / "plan_two_stage_substantive.toml")
 

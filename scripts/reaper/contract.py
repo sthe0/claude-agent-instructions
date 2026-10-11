@@ -12,7 +12,12 @@ A reaper is a Python module defining
   side effect beyond best-effort bookkeeping that checks ``ctx.dry_run`` and ``ctx.due``;
 * ``remove(path, ctx)`` — delete one item the runner approved. Raise (or return
   ``False``) when the removal did not happen;
-* optionally ``summary(verdicts) -> str | None`` — one line for the SessionStart notice.
+* optionally ``summary(verdicts) -> str | None`` — one line for the SessionStart notice;
+* optionally ``upkeep(ctx) -> list[str]`` — non-destructive, idempotent, unthrottled
+  maintenance (the ``git-worktrees`` reaper backs its branches up to origin), one report
+  line per action. Only ``runner --upkeep-only`` calls it, under a lock and with errors
+  isolated per reaper; ``scan`` and the SessionStart pass never do. When ``ctx.dry_run``
+  is set it must not write, push or fetch, and returns the lines a live run would act on.
 
 A plugin module must use ABSOLUTE imports (``from reaper.contract import Verdict``):
 ``lib.plugin_dir.load_plugin_module`` executes it under a synthetic package name.
@@ -32,12 +37,14 @@ KEEP = "keep"
 
 @dataclass(frozen=True)
 class Verdict:
-    """One reaper's opinion on one item. ``report`` marks a kept item worth a notice."""
+    """One reaper's opinion on one item. ``report`` marks a kept item worth a notice;
+    ``tags`` are labels the reaper reads back in its own ``summary`` (not compared)."""
 
     path: str
     action: str
     reason: str
     report: bool = False
+    tags: "tuple[str, ...]" = field(default=(), compare=False)
 
 
 def _at_or_inside(container: str, candidate: str) -> bool:

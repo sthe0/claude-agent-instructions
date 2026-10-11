@@ -54,6 +54,12 @@ TOML shape (minimal):
                                               # reachability lint: a verify_command path
                                               # that neither exists yet nor is declared
                                               # here by some stage is unreachable-green.
+    renorms = ["/abs/path/to/norm-file"]  # optional; the norm files this stage edits as a
+                                          # re-norming act, as given to
+                                          # `critique --norm-target`. Absolute paths only
+                                          # (normalized before comparison);
+                                          # a `stage:<n>` target is carried by editing that
+                                          # stage, not listed here.
 
 For substantive plans (meta.weight_class = "substantive") the [meta] table must
 also carry a plan-level external-research decision:
@@ -129,6 +135,7 @@ gate; wording-only edits (titles, expected-result prose) are refinements.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shlex
 import tomllib
@@ -535,6 +542,34 @@ def _validate_substantive_stage(s: dict, index: int) -> None:
         )
 
 
+def _parse_renorms(raw: object, context: str) -> list[str]:
+    """The stage's `renorms`: absolute file paths, normalized (`os.path.normpath`) as the
+    `critique --norm-target` side is, so the two compare equal. A `stage:<n>` target is carried by editing the stage
+    itself, so naming one here is refused; so is an empty, relative or non-string entry."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise PlanError(f"{context}: renorms must be a list of absolute file paths")
+    out: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str) or not entry.strip():
+            raise PlanError(
+                f"{context}: renorms entry {entry!r} must be a non-empty string"
+            )
+        if entry.startswith("stage:"):
+            raise PlanError(
+                f"{context}: renorms entry {entry!r} names a stage; a stage:<n> norm "
+                f"target is carried by editing that stage, only file targets are listed"
+            )
+        if not entry.startswith("/"):
+            raise PlanError(
+                f"{context}: renorms entry {entry!r} must be an absolute path, as given "
+                f"to `critique --norm-target`"
+            )
+        out.append(os.path.normpath(entry))
+    return out
+
+
 def _build_supplies(s: dict, index: int) -> list[Supply]:
     """Build typed Supply edges: the explicit [[stage.supplies]] plus an
     element-less edge for each flat `depends_on` index no supply already names."""
@@ -565,6 +600,118 @@ def _build_supplies(s: dict, index: int) -> list[Supply]:
         if int(d) not in named:
             supplies.append(Supply(on=int(d)))
     return supplies
+
+
+MAX_OPTIONAL_STAGES = 2
+_BACKLOG_ISSUE_RE = re.compile(r"^[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)?#[0-9]+$")
+
+
+def _rests_only_on_optional(stage_index: int | None, stages_by_index: dict) -> bool:
+    """True iff a control bound to `stage_index` — the stage itself, and for a landed
+    assertion the stage whose delivery it checks — rests on an optional stage."""
+    stage = stages_by_index.get(stage_index)
+    if stage is None:
+        return False
+    if stage.optional:
+        return True
+    landed = stage.criterion.landed
+    delivered = stages_by_index.get(landed.delivered_stage) if landed is not None else None
+    return bool(delivered is not None and delivered.optional)
+
+
+def optional_stage_violations(doc: PlanDoc) -> list[str]:
+    """Every way `doc` breaks the optional-stage rules (R8). [] == clean, and for any plan
+    declaring no optional stage this is [] by construction (nothing is consulted beyond
+    a stage's own two fields).
+
+    O1 at most MAX_OPTIONAL_STAGES optional stages. O2 an optional stage names its
+    backlog_issue, and a stage that is not optional names none. O3 no non-optional stage
+    depends on an optional one — a declined stage would strand it. O4 at least one stage
+    is non-optional. O5 no `[meta.order.coverage]` entry and no `[[final_check]]` rests
+    only on optional stages: declining them all would leave the requirement or the
+    closing check without anything that is certain to run."""
+    stages = doc.stages
+    optional = [s for s in stages if s.optional]
+    out: list[str] = []
+    if len(optional) > MAX_OPTIONAL_STAGES:
+        out.append(
+            f"optional stages (R8/O1): {len(optional)} stages are optional "
+            f"({[s.index for s in optional]}) but a plan may declare at most "
+            f"{MAX_OPTIONAL_STAGES} — move the rest to a backlog item or make them required"
+        )
+    for s in stages:
+        if s.optional and not s.backlog_issue:
+            out.append(
+                f"stage {s.index}: optional stage has no backlog_issue (R8/O2) — an optional "
+                f"stage traces to a backlog item (\"<repo>#<n>\") instead of an order requirement"
+            )
+        if not s.optional and s.backlog_issue:
+            out.append(
+                f"stage {s.index}: backlog_issue is set but the stage is not optional (R8/O2)"
+            )
+    optional_ids = {s.index for s in optional}
+    for s in stages:
+        if s.optional:
+            continue
+        bad = sorted(d for d in s.depends_on if d in optional_ids)
+        if bad:
+            out.append(
+                f"stage {s.index}: non-optional stage depends on optional stage(s) {bad} "
+                f"(R8/O3) — a declined stage would strand it"
+            )
+    if optional and len(optional) == len(stages):
+        out.append("optional stages (R8/O4): every stage is optional; a plan needs a required one")
+    if optional:
+        out.extend(optional_rest_violations(doc))
+    return out
+
+
+def optional_rest_violations(doc: PlanDoc) -> list[str]:
+    """O5, split out so `check-order-coverage.py` reports it alongside its own findings."""
+    from .controls import FINAL_CHECK, STAGE_LANDED_ASSERTION, STAGE_VERIFY_COMMAND
+    by_index = {s.index: s for s in doc.stages}
+    out: list[str] = []
+    order = doc.meta.order
+    if order is not None:
+        for req_id, controls in sorted(order.coverage.items()):
+            if not controls:
+                continue
+            rests: list[bool] = []
+            for control in controls:
+                on_optional = False
+                for grammar in (STAGE_VERIFY_COMMAND, STAGE_LANDED_ASSERTION):
+                    m = grammar.pattern.match(control)
+                    if m is not None:
+                        on_optional = _rests_only_on_optional(int(m.group(1)), by_index)
+                        break
+                else:
+                    m = FINAL_CHECK.pattern.match(control)
+                    if m is not None:
+                        on_optional = _final_check_rests_on_optional(
+                            doc, int(m.group(1)), by_index)
+                rests.append(on_optional)
+            if all(rests):
+                out.append(
+                    f"requirement {req_id!r} (R8/O5): every control in its coverage entry "
+                    f"rests on an optional stage — declining them would leave it uncovered"
+                )
+    for fi, fc in enumerate(doc.meta.final_check, 1):
+        if _final_check_rests_on_optional(doc, fi, by_index):
+            out.append(
+                f"final_check {fi} (R8/O5): rests only on optional stage "
+                f"{fc.landed.delivered_stage} — declining it would leave the check unsatisfiable"
+            )
+    return out
+
+
+def _final_check_rests_on_optional(doc: PlanDoc, number: int, by_index: dict) -> bool:
+    if number < 1 or number > len(doc.meta.final_check):
+        return False
+    landed = doc.meta.final_check[number - 1].landed
+    if landed is None:
+        return False
+    delivered = by_index.get(landed.delivered_stage)
+    return bool(delivered is not None and delivered.optional)
 
 
 def _validate_graph(stages: list[Stage], *, is_substantive: bool) -> None:
@@ -1107,12 +1254,16 @@ def verify_command_reachability_blockers(stages, final_check, repo_root) -> list
     some stage's output_artifacts — a control that can never go green honestly.
     One blocker per offending (surface, path). See the module comment above for
     the false-positive narrowing and the two named limits."""
-    declared: list[str] = []
+    declared_all: list[str] = []
+    declared_required: list[str] = []
     for s in stages:
-        declared.extend(getattr(s, "output_artifacts", []) or [])
+        outputs = getattr(s, "output_artifacts", []) or []
+        declared_all.extend(outputs)
+        if not getattr(s, "optional", False):
+            declared_required.extend(outputs)
     blockers: list[str] = []
 
-    def _check(cmd: str | None, where: str) -> None:
+    def _check(cmd: str | None, where: str, declared: list[str]) -> None:
         if not cmd:
             return
         seen: set[str] = set()
@@ -1129,11 +1280,17 @@ def verify_command_reachability_blockers(stages, final_check, repo_root) -> list
                     f"output_artifacts of the stage that produces it."
                 )
 
+    # A control that must run in every plan outcome can rest only on a producer that always
+    # runs; an optional stage's own control may rest on any producer, since both are
+    # skipped together.
     for s in stages:
-        _check(s.criterion.verify_command, f"stage {s.index} ({s.title!r}) verify_command")
+        _check(
+            s.criterion.verify_command, f"stage {s.index} ({s.title!r}) verify_command",
+            declared_all if getattr(s, "optional", False) else declared_required,
+        )
     for fi, fc in enumerate(final_check or [], 1):
         label = fc.label or fc.command
-        _check(fc.command, f"final_check {fi} ({label!r})")
+        _check(fc.command, f"final_check {fi} ({label!r})", declared_required)
     return blockers
 
 
@@ -1492,6 +1649,19 @@ def parse_plan(
             if str(s.get("ephemeral_artifacts_waiver") or "").strip()
             else None
         )
+        raw_optional = s.get("optional", False)
+        if not isinstance(raw_optional, bool):
+            raise PlanError(
+                f"{stage_ctx}: optional must be a boolean (true/false), got {raw_optional!r} (R8)"
+            )
+        raw_backlog_issue = s.get("backlog_issue")
+        if raw_backlog_issue is not None and not (
+            isinstance(raw_backlog_issue, str) and _BACKLOG_ISSUE_RE.match(raw_backlog_issue)
+        ):
+            raise PlanError(
+                f"{stage_ctx}: backlog_issue {raw_backlog_issue!r} is not of the form "
+                f"\"<repo>#<n>\" (R8)"
+            )
         stages.append(
             Stage(
                 index=index,
@@ -1545,9 +1715,12 @@ def parse_plan(
                 supplies=_build_supplies(s, index),
                 output_artifacts=[str(p) for p in s.get("output_artifacts", [])],
                 ephemeral_artifacts_waiver=ephemeral_artifacts_waiver,
+                renorms=_parse_renorms(s.get("renorms"), stage_ctx),
                 outcome=Outcome(status=StageStatus.PENDING.value),
                 grants=_parse_stage_grants(s.get("grants"), stage_ctx, strict=strict),
                 effects=_parse_stage_effects(s.get("effects"), stage_ctx),
+                optional=raw_optional,
+                backlog_issue=raw_backlog_issue,
             )
         )
 
@@ -1555,7 +1728,11 @@ def parse_plan(
     if len(set(indices)) != len(indices):
         raise PlanError(f"duplicate stage indices: {indices}")
     _validate_graph(stages, is_substantive=is_substantive)
-    return PlanDoc(meta=meta, stages=stages, raw_depends_on=raw_depends_on)
+    doc = PlanDoc(meta=meta, stages=stages, raw_depends_on=raw_depends_on)
+    problems = optional_stage_violations(doc)
+    if problems:
+        raise PlanError(problems[0])
+    return doc
 
 
 def load_plan(
@@ -1916,10 +2093,24 @@ def _structural_signature(doc: PlanDoc) -> dict:
                 s.criterion.criterion_type,
                 *grants_place(s),
                 *effects_place(s),
+                *optional_place(s),
             )
             for s in doc.stages
         },
     }
+
+
+def optional_place(stage) -> tuple:
+    """A stage's optional marking as a contribution to a change-decision key: one nested
+    element for an optional stage, EMPTY for every other stage, so a plan that declares no
+    optional stage keeps the exact key it had before the field existed."""
+    return ((("optional", stage.backlog_issue),),) if stage.optional else ()
+
+
+def optional_stages_place(doc: PlanDoc) -> tuple:
+    """The plan-level counterpart of `optional_place`, spliced onto `plan_content_digest`."""
+    marks = tuple(sorted((s.index, s.backlog_issue) for s in doc.stages if s.optional))
+    return (("optional_stages", marks),) if marks else ()
 
 
 # The absent form of the знание place: no local knowledge, no refs on either projection.
@@ -2684,6 +2875,7 @@ def _reviewed_stage_keys(stage: Stage) -> dict[str, str]:
         tuple(sorted(rules)),
         tuple(sorted(add_dirs)),
         tuple(sorted(effects[0])) if effects else (),
+        *((("renorms", tuple(stage.renorms)),) if stage.renorms else ()),
     )
     if not any(extras):
         return keys
@@ -2859,7 +3051,7 @@ def plan_content_digest(doc: PlanDoc) -> str:
         doc.meta.repo_root,
         tuple(sorted(
             (s.index, stage_element_keys(s)[WHOLE_STAGE_ELEMENT]) for s in doc.stages)),
-    ) + order_place(doc.meta))
+    ) + order_place(doc.meta) + optional_stages_place(doc))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -3331,6 +3523,9 @@ def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fals
              # dropped rather than carried by `_apply_refined_stage_fields`.
              *((("ephemeral_artifacts_waiver", s.ephemeral_artifacts_waiver),)
                if s.ephemeral_artifacts_waiver else ()),
+             # Same footing again: a stage's `renorms` is the consequence a нормативное
+             # critique is bound to, so an edit of it must not diff as 'no_change'.
+             *((("renorms", tuple(s.renorms)),) if s.renorms else ()),
              # Without this a knowledge-only correction — the exact edit an
              # overcome-difficulty replan makes when the fault addressed знание —
              # diffs to 'no_change' and is silently dropped.

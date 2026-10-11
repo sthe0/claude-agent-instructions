@@ -654,6 +654,9 @@ _STAGE_RESIDUAL_COVERAGE = {
                                   "because re-declaring it moves which output_artifacts "
                                   "entries the ephemeral-artifacts check is trusted to "
                                   "skip, same footing as actor.cost_tier above",
+    "renorms": "the residual's own splice — inside stage_question_key as a declared-only "
+               "element, and inside here because re-declaring which norm files a stage "
+               "must edit moves the obligation `normative_edit_blockers` binds to it",
     "outcome.status": "outside: the mutable execution RECORD, not the definition — a "
                       "plan doc loaded from TOML carries its defaults, and leaving the "
                       "live copy alone is what this whole path is for",
@@ -667,6 +670,12 @@ _STAGE_RESIDUAL_COVERAGE = {
     "outcome.checked_tree_identity": "outside: the mutable execution RECORD, same reason",
     "outcome.checked_tree_ok": "outside: the mutable execution RECORD, same reason",
     "outcome.record_attempts": "outside: the mutable execution RECORD, same reason",
+    "outcome.declined": "outside: the mutable execution RECORD, same reason — the "
+                        "customer's decline already recorded, not the stage's definition",
+    "optional": "the residual's own splice — outside stage_question_key because no "
+                "Question.target names it, inside here because flipping a required stage "
+                "to declinable changes what the stage IS to the customer",
+    "backlog_issue": "the residual's own splice, same reason as its sibling `optional`",
     "control": "outside: the control attestation record-result stamps, same reason",
     "subject.material": "stage_question_key",
     "subject.result": "stage_question_key",
@@ -921,7 +930,8 @@ def test_renormalize_is_not_blocked_by_the_closure_preconditions(store, tmp_path
     cli.cmd_investigate(ns(session="rn", localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session="rn", functional_ground="fg", replanning_task="rt",
-                        failure_address="нормативное"), store=store)
+                        failure_address="нормативное", norm_targets=["stage:1"]),
+                     store=store)
     assert gates.normalization_blockers(store.load("rn")), (
         "the closure gate must be armed, or this test pins nothing"
     )

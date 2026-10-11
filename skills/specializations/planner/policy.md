@@ -54,6 +54,7 @@ Budgeting a round must not legitimize one that a cheaper discriminator would hav
 - **`knowledge_refs`** — the structural projection of `knowledge`: the symbols this stage only READS to ground its method, without transforming them. An empty list reads the same as an absent key — a substantive stage that relies on nothing is not a case this grade admits.
 - **A symbol named in both `material_refs` and `knowledge_refs` is a smell.** It is not refused at the seam — a stage can legitimately read a symbol to understand its current shape and then transform that same symbol — but the overlap must be justified in the stage's own prose (why the same symbol is both a source of knowledge and a target of change), not left for a reader to wonder whether it is a copy-paste artifact.
 - **`preconditions`** — the starting requirements the stage's execution depends on (an approved upstream decision, a branch checked out, a fixture present), kept apart from `conditions` (properties the stage runs under / must preserve) because a precondition failing means the stage cannot even begin, where a condition violated mid-stage means the stage did the wrong thing.
+- **A delivery stage says "do not land", not "do not push".** *Difficulty:* "do not push" in a stage condition forbids the backup push CLAUDE.md pre-authorizes for personal branches and leaves committed work on one disk. *Rule:* a delivery stage forbids landing — no push to main/master/release-*, no `land-branch.py` — and leaves backup pushes of the personal delivery branch alone.
 - **`means.method`** / **`means.procedure`** — see `SKILL.md` § Plan format's Means & method / Procedure bullets; both are submission-required once a stage is substantive.
 
 ## Meta submission fields
@@ -133,3 +134,18 @@ python3 <scripts>/check-spawn-tool-run.py --list-denied --kind <kind>
 - **Genuinely reusable artifact that should also persist** (rare — e.g. a hand-curated anchor set meant to be read by every future run) → keep it committed, but make the plan state this explicitly as the stage's `Expected result image:` or a note, so a reviewer sees the classification was made on purpose rather than inherited from an existing convention.
 
 A convention already in the codebase (an existing `RESOURCES_DIR`/similar constant that writes pipeline output into a committed tree) is not evidence the destination is correct — it may itself be the uncorrected instance of this same difficulty. Do not defer this check to the developer stage or to code review: by the time either runs, the convention already exists and reads as settled. Second occurrence of this exact gap (2026-10-06, an internal project's `judge_calibration/` resources directory, ~54 MB of raw generation logs and run intermediates written by a pipeline CLI's own `RESOURCES_DIR` convention) found only via a direct user question, not via review — see [[committed-files-earn-their-place]] for the full incident.
+
+## Adjacent debt
+
+*Difficulty removed: while planning an order a planner often sees a nearby open backlog item the order does not ask for. Folding it in as a required stage is scope creep past the order; leaving it unmentioned loses the observation; asking the user a separate question for each one spends their attention on a side issue.*
+
+A plan may carry up to **two** stages marked `optional = true`, each naming the open issue it would close in `backlog_issue = "<repo>#<n>"` (`<repo>` may carry its owner: `owner/repo#<n>`). The user declines any of them at approval with `agentctl approve --skip-optional <stage index>` (repeatable); a declined stage becomes `SKIPPED`, is never dispatched and counts as settled for resolution. An optional stage not declined is an ordinary stage and has to pass.
+
+The loader enforces the bounds, so write the stage to fit them:
+
+- the stage traces to its `backlog_issue`, not to an order requirement — an optional stage is exempt from requirement traceability, and a required stage carries no `backlog_issue`;
+- **no required stage depends on an optional one** (an optional stage may depend on a required stage or on another optional one), so declining never strands work;
+- **no `[meta.order.coverage]` entry and no `[[final_check]]` rests only on an optional stage** — the order's requirements must be decided by required stages alone, because the user may decline every optional one;
+- at least one stage stays required.
+
+Use it for adjacent debt only: work the order does not need and that the user would plausibly want while the code is open. Not a place to park a requirement you are unsure of — that is an order question (§ Order), nor a way to make a stage "skippable" in the middle of the order's critical path.

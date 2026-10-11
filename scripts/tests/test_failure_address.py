@@ -248,7 +248,8 @@ def test_routed_critique_unblocks_replan(store, fixtures_dir):
     _to_failed_stage1(store, "e2", plan)
     _declare_investigate(store, "e2")
     cli.cmd_critique(ns(session="e2", functional_ground="fg", replanning_task="rt",
-                        failure_address="нормативное"), store=store)
+                        failure_address="нормативное", norm_targets=["stage:1"]),
+                     store=store)
     _renorm(store, "e2")
     d = cli.cmd_replan(ns(session="e2", plan=refined), store=store)
     assert d.ok is True

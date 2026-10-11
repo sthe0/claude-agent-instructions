@@ -31,12 +31,13 @@ class Fake:
     """An in-memory reaper that records scans and removals."""
 
     def __init__(self, name, verdicts=(), *, throttle=24.0, scan_exc=None, remove_exc=None,
-                 remove_result=None, summary_line=None):
+                 remove_result=None, summary_line=None, upkeep_lines=None, upkeep_exc=None):
         self.name = name
         self.verdicts = list(verdicts)
         self.scans = 0
         self.dues = []
         self.removed = []
+        self.upkeep_ctxs = []
         self.remove_hook = None
         module = types.SimpleNamespace(NAME=name, THROTTLE_HOURS=throttle)
 
@@ -58,6 +59,14 @@ class Fake:
         module.scan, module.remove = scan, remove
         if summary_line is not None:
             module.summary = lambda verdicts: summary_line
+        if upkeep_lines is not None or upkeep_exc is not None:
+            def upkeep(ctx):
+                self.upkeep_ctxs.append(ctx)
+                if upkeep_exc:
+                    raise upkeep_exc
+                return list(upkeep_lines)
+
+            module.upkeep = upkeep
         self.reaper = registry.Reaper(name, "builtin", f"/fake/{name}.py", module)
 
 
@@ -543,6 +552,115 @@ def test_hook_script_lists_the_builtin_reaper(hermetic):
         [sys.executable, str(script), "--list"], capture_output=True, text=True, check=True, env=os.environ.copy(),
     )
     assert any(line.startswith("git-worktrees builtin ") for line in out.stdout.splitlines())
+
+
+# ── upkeep mode ───────────────────────────────────────────────────────────
+
+def hold_upkeep_lock():
+    import fcntl
+
+    path = runner.upkeep_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a")
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    return handle
+
+
+def test_upkeep_only_prints_each_reapers_lines_and_neither_scans_nor_stamps(hermetic, capsys):
+    a = Fake("a", [], upkeep_lines=["a backed up x"])
+    plain = Fake("plain", [])
+    assert runner.main(["--upkeep-only"], discover=lambda project, warn: [a.reaper, plain.reaper]) == 0
+    assert capsys.readouterr().out.splitlines() == ["a backed up x"]
+    assert a.scans == plain.scans == 0
+    assert not list((hermetic / "home" / ".local" / "state" / "claude-reaper").glob("*.stamp"))
+
+
+def test_an_upkeep_that_raises_costs_one_stderr_line_and_the_others_still_run(hermetic, capsys):
+    boom = Fake("boom", [], upkeep_exc=RuntimeError("nope"))
+    fine = Fake("fine", [], upkeep_lines=["fine did y"])
+    assert runner.main(["--upkeep-only"], discover=lambda project, warn: [boom.reaper, fine.reaper]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == ["fine did y"]
+    assert captured.err.splitlines() == ["reaper boom: upkeep failed: RuntimeError: nope"]
+
+
+@pytest.mark.parametrize("argv", [[], ["--force-run"], ["--dry-run"], ["--only", "a"]])
+def test_a_pass_without_upkeep_only_never_calls_upkeep(hermetic, argv):
+    a = Fake("a", [], upkeep_lines=["pushed"])
+    assert runner.main(argv, discover=lambda project, warn: [a.reaper]) == 0
+    assert a.upkeep_ctxs == []
+
+
+def test_upkeep_only_passes_dry_run_and_honours_only(hermetic):
+    a = Fake("a", [], upkeep_lines=[])
+    b = Fake("b", [], upkeep_lines=[])
+    argv = ["--upkeep-only", "--dry-run", "--only", "a"]
+    assert runner.main(argv, discover=lambda project, warn: [a.reaper, b.reaper]) == 0
+    assert [c.dry_run for c in a.upkeep_ctxs] == [True] and b.upkeep_ctxs == []
+
+
+@pytest.mark.parametrize("argv", [["--no-wait"], ["--upkeep-only", "--bogus"]])
+def test_invalid_argv_exits_nonzero(hermetic, argv):
+    with pytest.raises(SystemExit) as exc:
+        runner.main(argv, discover=lambda project, warn: [])
+    assert exc.value.code not in (0, None)
+
+
+def test_upkeep_only_exits_zero_even_if_discovery_fails(hermetic, capsys):
+    def explode(project, warn):
+        raise RuntimeError("no discovery")
+
+    assert runner.main(["--upkeep-only"], discover=explode) == 0
+    assert "runner error" in capsys.readouterr().err
+
+
+def test_held_lock_with_no_wait_exits_zero_without_running_upkeep(hermetic):
+    a = Fake("a", [], upkeep_lines=["pushed"])
+    handle = hold_upkeep_lock()
+    try:
+        assert runner.main(["--upkeep-only", "--no-wait"], discover=lambda project, warn: [a.reaper]) == 0
+    finally:
+        handle.close()
+    assert a.upkeep_ctxs == []
+
+
+def test_held_lock_without_no_wait_gives_up_after_the_wait_and_exits_zero(hermetic, monkeypatch):
+    a = Fake("a", [], upkeep_lines=["pushed"])
+    monkeypatch.setattr(runner, "UPKEEP_LOCK_WAIT_S", 0.3)
+    monkeypatch.setattr(runner, "UPKEEP_LOCK_POLL_S", 0.05)
+    handle = hold_upkeep_lock()
+    try:
+        assert runner.main(["--upkeep-only"], discover=lambda project, warn: [a.reaper]) == 0
+    finally:
+        handle.close()
+    assert a.upkeep_ctxs == []
+
+
+def test_a_waiting_run_proceeds_once_the_lock_is_released(hermetic, monkeypatch):
+    import threading
+
+    a = Fake("a", [], upkeep_lines=["pushed"])
+    monkeypatch.setattr(runner, "UPKEEP_LOCK_WAIT_S", 5.0)
+    monkeypatch.setattr(runner, "UPKEEP_LOCK_POLL_S", 0.05)
+    handle = hold_upkeep_lock()
+    threading.Timer(0.3, handle.close).start()
+    assert runner.main(["--upkeep-only"], discover=lambda project, warn: [a.reaper]) == 0
+    assert len(a.upkeep_ctxs) == 1
+
+
+def test_upkeep_lock_is_released_after_the_run(hermetic):
+    import fcntl
+
+    a = Fake("a", [], upkeep_lines=[])
+    assert runner.main(["--upkeep-only", "--no-wait"], discover=lambda project, warn: [a.reaper]) == 0
+    with runner.upkeep_lock_path().open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_tags_survive_normalization():
+    tagged = types.SimpleNamespace(path="/p", action=KEEP, reason="r", report=False, tags=["unbacked"])
+    untagged = types.SimpleNamespace(path="/q", action=KEEP, reason="r")
+    assert [v.tags for v in runner._normalize([tagged, untagged])] == [("unbacked",), ()]
 
 
 # ── mutation catalogue ────────────────────────────────────────────────────

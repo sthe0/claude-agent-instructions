@@ -1226,3 +1226,80 @@ def test_decide_mounts_is_pure_and_orders_essential_first():
     hard = mod.decide_mounts(snap, {"/a"}, "hard", ["/e1", "/e2"])
     assert {m["target"]: m["action"] for m in hard} == {
         "/e1": "mount", "/e2": "mount", "/a": "skip-mounted", "/z": "skip-hard-disk"}
+
+
+EXIT_HOOK = """#!/bin/bash
+echo "hook $RECOVER_PHASE dry=$RECOVER_DRY_RUN level=$RECOVER_DISK_LEVEL" >> "$FAKE_LOG"
+exit {code}
+"""
+
+
+def test_restore_talks_to_tmux_only_to_find_the_session_and_open_windows(rw):
+    """Read from the journal: tmux_run ignores the exit code, so a kill that the fake refuses leaves
+    no trace in the plan."""
+    rw.reboot()
+    rw.plan()
+    verbs = {c.split()[1] for c in rw.calls() if c.startswith("tmux ")}
+    assert new_windows(rw)
+    assert verbs == {"has-session", "list-panes", "new-window"}
+
+
+def test_hook_exit_nothing_to_do_does_not_retry_the_mounts_phase(rw):
+    rw.script(rw.hooks / "20-mount.sh", EXIT_HOOK.format(code=10))
+    rw.reboot()
+    res = subprocess.run([sys.executable, str(MODULE_PATH), "--auto", "--format", "json"],
+                         capture_output=True, text=True, timeout=60, env=rw.env(boot="boot-2"))
+    assert res.returncode == 1, res.stderr
+    assert len([c for c in rw.calls() if c.startswith("hook mounts")]) == 1
+    assert "retrying" not in (rw.state / "recover.log").read_text()
+
+
+def test_hook_exit_other_than_nothing_to_do_retries_the_mounts_phase(rw):
+    rw.script(rw.hooks / "20-mount.sh", EXIT_HOOK.format(code=1))
+    rw.reboot()
+    subprocess.run([sys.executable, str(MODULE_PATH), "--auto", "--format", "json"],
+                   capture_output=True, text=True, timeout=60, env=rw.env(boot="boot-2"))
+    assert len([c for c in rw.calls() if c.startswith("hook mounts")]) > 1
+
+
+def _plan_with_hook_owned_action(rw, monkeypatch, capsys, *args):
+    """Core's menu has no hook-owned action today; the branch that settles one is driven here."""
+    mod = load_module()
+    for key, value in rw.env(boot="boot-2").items():
+        monkeypatch.setenv(key, value)
+    action = {"cmd": "hook cleanup", "class": "run", "status": "planned", "phase": "disk-pre",
+              "owner": "hook"}
+    monkeypatch.setattr(mod, "disk_actions", lambda level: [dict(action)])
+    mod.main([*args, "--format", "json"])
+    return json.loads(capsys.readouterr().out)["disk"]["actions"][0]
+
+
+@pytest.mark.parametrize("code,status", [(0, "done"), (10, "skipped"), (1, "failed")])
+def test_hook_owned_action_status_follows_the_hook_exit_codes(rw, monkeypatch, capsys, code, status):
+    rw.script(rw.hooks / "20-mount.sh", EXIT_HOOK.format(code=code))
+    rw.reboot()
+    act = _plan_with_hook_owned_action(rw, monkeypatch, capsys, "restore")
+    assert act["status"] == status
+
+
+def test_hook_owned_action_without_hooks_is_skipped(rw, monkeypatch, capsys):
+    for hook in rw.hooks.glob("*.sh"):
+        hook.unlink()
+    rw.reboot()
+    act = _plan_with_hook_owned_action(rw, monkeypatch, capsys, "restore")
+    assert act["status"] == "skipped" and "no recover.d hook" in act["detail"]
+
+
+def test_dry_run_leaves_hook_owned_action_planned(rw, monkeypatch, capsys):
+    rw.reboot()
+    act = _plan_with_hook_owned_action(rw, monkeypatch, capsys, "restore", "--dry-run")
+    assert act["status"] == "planned"
+
+
+@pytest.mark.parametrize("boot", ["../x", "a/b", ".hidden", "x y"])
+@pytest.mark.parametrize("args", [("snapshot",), ("restore", "--dry-run"), ("restore",)])
+def test_unsafe_boot_id_is_refused_before_anything_is_written(rw, boot, args):
+    res = rw.run(*args, boot=boot)
+    assert res.returncode == 2
+    assert "unsafe boot id" in res.stderr
+    assert not rw.state.exists() or not list(rw.state.rglob("*"))

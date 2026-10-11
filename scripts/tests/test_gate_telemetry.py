@@ -160,7 +160,7 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="нормативное"), store=store)
+                        failure_address="нормативное", norm_targets=["stage:1"]), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
@@ -181,27 +181,41 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     # default in the suite), then stage 5 (item B)'s replan_authorization gate
     # (vacuous here: the session is DIAGNOSING with a complete difficulty
     # record, one of the gate's own unconditional exemptions), then the
+    # normative_edit and renorm_retention gates (norm-repair consequence of a
+    # нормативное critique — vacuous here, the critique names stage 1 and the
+    # refined plan changes it), then the
     # plan_approval PLUGIN gate (stage 3: cmd_replan now composes
     # plugins.plugin_gate_blockers(state, "plan_approval") just as cmd_approve does —
     # vacuous here, premise force-off in the suite), then the replan_coverage check.
+    # Every replan also evaluates the nested-difficulty gate (an empty stack here,
+    # so it passes) right after the effort-fire precondition.
     assert gates_fired == ["effort_fire", "plan_approval",
-                           "effort_fire", "difficulty_blockers",
-                           "effort_fire", "difficulty_blockers",
+                           "effort_fire", "difficulty_stack", "difficulty_blockers",
+                           "effort_fire", "difficulty_stack", "difficulty_blockers",
                            "diagnosing_replan",
                            "normalization_blockers",
                            "failure_address_blockers", "plan_review",
                            "replan_authorization",
+                           "normative_edit", "renorm_retention",
                            "plan_approval_plugin", "replan_coverage"]
     assert rows[0]["passed"] is True   # effort_fire: no fire yet, submit_plan
     assert rows[1]["passed"] is True   # plan_approval
     assert rows[2]["passed"] is True   # effort_fire: no fire, premature replan
-    assert rows[3]["passed"] is False  # premature: record incomplete
-    assert rows[4]["passed"] is True   # effort_fire: no fire, completed replan
-    assert rows[5]["passed"] is True   # cycle complete
-    assert rows[6]["passed"] is True   # diagnosing_replan evaluated (vacuous, below ceiling)
-    assert rows[7]["passed"] is True   # normalization recorded
-    assert rows[8]["passed"] is True   # failure_address routed
-    assert rows[9]["passed"] is True   # plan_review evaluated (vacuous, gate off)
-    assert rows[10]["passed"] is True  # replan_authorization evaluated (vacuous, DIAGNOSING exempt)
-    assert rows[11]["passed"] is True  # plan_approval_plugin evaluated (vacuous)
-    assert rows[12]["passed"] is True  # coverage satisfied
+    assert rows[3]["passed"] is True   # difficulty_stack: nothing nested
+    assert rows[4]["passed"] is False  # premature: record incomplete
+    assert rows[5]["passed"] is True   # effort_fire: no fire, completed replan
+    assert rows[6]["passed"] is True   # difficulty_stack: nothing nested
+    assert rows[7]["passed"] is True   # cycle complete
+    assert rows[8]["passed"] is True   # diagnosing_replan evaluated (vacuous, below ceiling)
+    assert rows[9]["passed"] is True   # normalization recorded
+    assert rows[10]["passed"] is True  # failure_address routed
+    assert rows[11]["passed"] is True  # plan_review evaluated (vacuous, gate off)
+    assert rows[12]["passed"] is True  # replan_authorization evaluated (vacuous, DIAGNOSING exempt)
+    by_name = {r["gate"]: r for r in rows if r["gate"] in (
+        "normative_edit", "renorm_retention", "plan_approval_plugin", "replan_coverage")}
+    assert set(by_name) == {"normative_edit", "renorm_retention", "plan_approval_plugin",
+                            "replan_coverage"}
+    assert by_name["normative_edit"]["passed"] is True       # vacuous, stage 1 is edited
+    assert by_name["renorm_retention"]["passed"] is True     # vacuous
+    assert by_name["plan_approval_plugin"]["passed"] is True # vacuous
+    assert by_name["replan_coverage"]["passed"] is True      # coverage satisfied

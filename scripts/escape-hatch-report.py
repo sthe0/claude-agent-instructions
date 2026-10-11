@@ -67,6 +67,11 @@ _ESCAPE_HATCH_ARGS: "tuple[tuple[str, str, str, str], ...]" = (
         "free text only — countable as present/absent, not by kind",
     ),
     (
+        "normalize", "normalization_waiver",
+        "the requirement to record a real normalization for a nested difficulty closed with difficulty-close",
+        "free text only, stored on the difficulty record and shown in its archived entry",
+    ),
+    (
         "resolve", "landing_waiver",
         "the requirement that a plan assert its change reached trunk, for a plan with no git delivery venue",
         "free text, logged as the landing_gate state event and the quality row's landing_waiver",
