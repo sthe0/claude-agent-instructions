@@ -14,7 +14,7 @@
 
 [[script]]
 path = "scripts/land-branch.py"
-sha256 = "aa833a5200a3eea7647979c0812060d423110b84c847874d1226520a8e4a42ee"
+sha256 = "2f4c83d4f2d94eef6ed9e53899eac186cb597b9aaa99d2d5988db76205af305b"
 resolver = "land_branch"
 
 [[script]]

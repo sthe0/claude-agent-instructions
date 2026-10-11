@@ -235,10 +235,13 @@ def _smoke_gate(repo_root, assessment: Assessment, timeout_s, waiver, runner):
         stored = _stored_record(repo_root, sha)
         decision = gate.decide(paths, True, stored, sha, tip)
         if decision.allowed:
-            return None, (
-                f"SMOKE: admitted {gate.short(sha)} by stored record "
-                f"({gate.admission_summary(stored)})"
-            )
+            return None, _admitted_line(sha, stored, "stored record")
+        if waiver is not None and _waivable_stored(stored, sha, tip):
+            _, stored = gate.waive_record(repo_root, sha, waiver)
+            admitted, reason = gate.record_admits(stored, sha, tip)
+            if not admitted:
+                return f"instruction smoke gate: {reason}", None
+            return None, _admitted_line(sha, stored, "stored record")
         outcome = gate.run_smoke(
             repo_root, ref=sha, remote=remote, trunk=trunk,
             timeout_s=timeout_s, waiver=waiver, runner=runner,
@@ -247,14 +250,31 @@ def _smoke_gate(repo_root, assessment: Assessment, timeout_s, waiver, runner):
         return f"instruction smoke gate: {gate.one_line(exc, 400)}", None
     if not outcome.admitted:
         kept = f"; sandbox kept at {outcome.sandbox_root}" if outcome.sandbox_root else ""
+        note = f"; {outcome.waiver_note}" if outcome.waiver_note else ""
         return (
             f"instruction smoke gate: {outcome.record['result']} for {gate.short(sha)}: "
-            f"{outcome.reason} (record {outcome.record_path}{kept})",
+            f"{outcome.reason}{note} (record {outcome.record_path}{kept})",
             None,
         )
-    return None, (
-        f"SMOKE: ran and admitted {gate.short(sha)} "
-        f"({gate.admission_summary(outcome.record)}; record {outcome.record_path})"
+    return None, _admitted_line(sha, outcome.record, "ran", outcome.record_path)
+
+
+def _admitted_line(sha, record, how, record_path=None):
+    """The one admitted-outcome line; always starts `SMOKE: admitted` so a reader can grep it."""
+    line = f"SMOKE: admitted {gate.short(sha)} ({gate.admission_summary(record)}; {how})"
+    return f"{line} record {record_path}" if record_path else line
+
+
+def _waivable_stored(stored, sha, tip):
+    """A stored UNAVAILABLE record, unwaived, of this candidate on the live tip: waive it in
+    place instead of repeating the live launch that already could not run."""
+    return (
+        isinstance(stored, dict)
+        and stored.get("result") == gate.UNAVAILABLE
+        and stored.get("waiver") is None
+        and stored.get("candidate_sha") == sha
+        and stored.get("sandbox_core_sha") == sha
+        and stored.get("base_sha") == tip
     )
 
 

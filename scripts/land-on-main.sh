@@ -105,9 +105,20 @@ git worktree add --quiet --detach "$WT" "$REMOTE/$BRANCH"
 
   attempt=0
   while true; do
-    if git push --quiet "$REMOTE" "HEAD:$BRANCH"; then
+    if push_output="$(git push --quiet "$REMOTE" "HEAD:$BRANCH" 2>&1)"; then
+      [[ -z "$push_output" ]] || printf '%s\n' "$push_output" >&2
       break
     fi
+    printf '%s\n' "$push_output" >&2
+    # A pre-push gate refusal does not depend on the tip moving, so a rebase and a second
+    # push can only repeat it; this commit is new each attempt and can never carry a record.
+    case "$push_output" in
+      *"pre-push: refused"*)
+        echo "land-on-main.sh: $REMOTE/$BRANCH refused the push (pre-push gate); retrying cannot help." >&2
+        echo "land-on-main.sh: land a branch carrying the change with scripts/land-branch.py instead." >&2
+        exit 1
+        ;;
+    esac
     attempt=$((attempt + 1))
     if [[ "$attempt" -ge "$MAX_RETRIES" ]]; then
       echo "land-on-main.sh: push to $REMOTE/$BRANCH failed after $attempt attempt(s) (non-fast-forward?)" >&2

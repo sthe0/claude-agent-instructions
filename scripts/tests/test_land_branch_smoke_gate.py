@@ -83,7 +83,8 @@ def test_a_surface_diff_runs_the_smoke_and_lands_on_pass(world, capsys):
     runner = Counting(stub_runner())
     code, out, _ = land(world, capsys, runner=runner)
     assert code == 0 and runner.calls == 1
-    assert len(smoke_lines(out)) == 1 and "ran and admitted" in smoke_lines(out)[0]
+    assert len(smoke_lines(out)) == 1
+    assert smoke_lines(out)[0].startswith(f"SMOKE: admitted {gate.short(sha)} (PASS; ran)")
     assert remote_main(world) == sha
     stored = gate.load_record(gate.git_common_dir(world.work), sha)
     assert stored["result"] == gate.PASS and stored["base_sha"] == world.base
@@ -115,8 +116,62 @@ def test_an_unavailable_live_launch_needs_a_waiver_to_land(world, capsys):
     assert remote_main(world) == world.base
 
     code, out, _ = land(world, capsys, "--smoke-waiver", "claude offline", runner=Counting(unavailable))
-    assert code == 0 and "waived" in smoke_lines(out)[0]
+    assert code == 0 and smoke_lines(out)[0].startswith("SMOKE: admitted ")
+    assert "UNAVAILABLE, waived: claude offline" in smoke_lines(out)[0]
     assert remote_main(world) == sha
+
+
+def test_a_waiver_is_refused_for_a_failing_smoke_and_the_refusal_says_why(world, capsys):
+    feature(world, {"CLAUDE.md": "new rules\n"})
+    failing = stub_runner({"canon:unchanged": gate.FAIL})
+    code, out, err = land(world, capsys, "--smoke-waiver", "just land it", runner=Counting(failing))
+    assert code == 2 and smoke_lines(out) == []
+    assert "NOT-LANDABLE" in err and "waiver not needed: result is FAIL" in err
+    assert remote_main(world) == world.base
+
+
+def test_a_waiver_for_an_unwaivable_unavailable_check_names_the_real_cause(world, capsys):
+    feature(world, {"CLAUDE.md": "new rules\n"})
+    static_gone = stub_runner({"canon:unchanged": gate.UNAVAILABLE})
+    code, _, err = land(world, capsys, "--smoke-waiver", "tooling broken", runner=Counting(static_gone))
+    assert code == 2 and "waiver not accepted" in err and "canon:unchanged" in err
+    assert remote_main(world) == world.base
+
+
+def test_a_stored_unavailable_record_is_waived_in_place_without_a_second_launch(world, capsys):
+    sha = feature(world, {"CLAUDE.md": "new rules\n"})
+    world.store(make_record(sha, world.base, statuses={LIVE: gate.UNAVAILABLE}))
+    code, out, _ = land(world, capsys, "--smoke-waiver", "claude offline", runner=Counting())
+    assert code == 0
+    assert smoke_lines(out) == [
+        f"SMOKE: admitted {gate.short(sha)} (UNAVAILABLE, waived: claude offline "
+        f"[{LIVE}: unavailable detail]; stored record)"
+    ]
+    stored = gate.load_record(gate.git_common_dir(world.work), sha)
+    assert stored["waiver"]["reason"] == "claude offline"
+    assert remote_main(world) == sha
+
+
+def test_a_moved_remote_tip_defeats_a_stored_unavailable_record_even_with_a_waiver(world, capsys):
+    sha = feature(world, {"CLAUDE.md": "new rules\n"})
+    world.store(make_record(sha, "1" * 40, statuses={LIVE: gate.UNAVAILABLE}))
+    runner = Counting(stub_runner({LIVE: gate.UNAVAILABLE}))
+    code, out, _ = land(world, capsys, "--smoke-waiver", "claude offline", runner=runner)
+    assert code == 0 and runner.calls == 1
+    assert "; ran) record " in smoke_lines(out)[0]
+    stored = gate.load_record(gate.git_common_dir(world.work), sha)
+    assert stored["base_sha"] == world.base and stored["waiver"]["reason"] == "claude offline"
+
+
+def test_a_renamed_surface_file_still_needs_the_smoke_and_is_refused_on_its_failure(world, capsys):
+    git(world.work, "checkout", "-q", "-b", "feature")
+    git(world.work, "mv", "CLAUDE.md", "docs/x.md")
+    git(world.work, "commit", "-q", "-m", "move the rules into docs")
+    runner = Counting(stub_runner({"canon:unchanged": gate.FAIL}))
+    code, out, err = land(world, capsys, runner=runner)
+    assert code == 2 and runner.calls == 1
+    assert smoke_lines(out) == [] and "NOT-LANDABLE" in err
+    assert remote_main(world) == world.base
 
 
 def test_a_stored_admitted_record_is_reused_without_a_launch(world, capsys):
@@ -125,7 +180,7 @@ def test_a_stored_admitted_record_is_reused_without_a_launch(world, capsys):
     runner = Counting()
     code, out, _ = land(world, capsys, runner=runner)
     assert code == 0 and runner.calls == 0
-    assert "by stored record" in smoke_lines(out)[0]
+    assert smoke_lines(out) == [f"SMOKE: admitted {gate.short(sha)} (PASS; stored record)"]
     assert remote_main(world) == sha
 
 
@@ -298,5 +353,5 @@ def test_the_record_store_is_read_from_the_common_dir_of_a_linked_worktree(world
         ["-C", str(linked), "--branch", "feature", "--keep-branch", "--remote-only"], runner=Counting(),
     )
     out = capsys.readouterr().out
-    assert code == 0 and "by stored record" in out
+    assert code == 0 and "; stored record)" in out
     assert json.loads(gate.record_path(world.work / ".git", sha).read_text())["result"] == gate.PASS
