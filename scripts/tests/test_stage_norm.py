@@ -26,6 +26,7 @@ from agentctl.plan import (
     _ELEMENT_FIELDS,
     PlanError,
     _leaf_values as plan_leaf_values,
+    delivery_place,
     knowledge_place,
     load_plan,
     negative_control_place,
@@ -40,7 +41,6 @@ from agentctl.state import Stage
 from agentctl.text_shape import normalize_string
 
 _FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures"
-_PLANS_HOME = pathlib.Path.home() / ".claude-agent" / "plans"
 
 _BARE = {
     "index": 1,
@@ -87,12 +87,12 @@ def _fixture_stages():
     return stages
 
 
-def _legacy_question_key(stage) -> str:
+def _legacy_payload(stage) -> tuple:
     """The whole-stage `stage_question_key` payload exactly as it was at 02c9e55f, before
     StageNorm: an independent reference, so review_digest cannot drift with its own
     implementation."""
     p = stage.principle
-    payload = repr((
+    return (
         stage.actor.executor,
         stage.actor.capability_required,
         tuple(sorted(stage.depends_on)),
@@ -119,8 +119,11 @@ def _legacy_question_key(stage) -> str:
         *preconditions_place(stage),
         *procedure_place(stage),
         *negative_control_place(stage),
-    ))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    )
+
+
+def _legacy_question_key(stage) -> str:
+    return hashlib.sha256(repr(_legacy_payload(stage)).encode("utf-8")).hexdigest()
 
 
 # --- StageNorm as data --------------------------------------------------------------
@@ -164,17 +167,47 @@ def test_review_digest_is_the_whole_stage_question_key_for_every_fixture_stage()
         assert digest == stage_question_key(stage)
 
 
-def test_review_digest_is_the_question_key_for_the_plans_in_the_home_directory():
+def _extended_key(stage, *tail) -> str:
+    """The legacy payload with exactly `tail` appended after it, as
+    `StageNorm._review_payload` appends `delivery_place` and `renorms`."""
+    return hashlib.sha256(repr((*_legacy_payload(stage), *tail)).encode("utf-8")).hexdigest()
+
+
+def test_a_stage_with_neither_renorms_nor_delivery_hashes_as_the_legacy_key():
     StageNorm = _norm_cls()
-    paths = sorted(_PLANS_HOME.glob("*.toml"))[:60]
-    if not paths:
-        pytest.skip("no local plans to sample")
-    checked = 0
-    for _, doc in _loadable_plans(paths):
-        for stage in doc.stages:
-            assert StageNorm.from_stage(stage).review_digest() == _legacy_question_key(stage)
-            checked += 1
-    assert checked or pytest.skip("no local plan loaded")
+    stage = _doc().stages[0]
+    assert not stage.renorms and not delivery_place(stage)
+    assert StageNorm.from_stage(stage).review_digest() == _legacy_question_key(stage)
+
+
+def test_a_stage_with_renorms_hashes_as_the_legacy_key_extended_by_the_renorms_tail():
+    StageNorm = _norm_cls()
+    stage = _doc(renorms=["/abs/norm-a.md", "/abs/norm-b.md"]).stages[0]
+    assert stage.renorms
+    digest = StageNorm.from_stage(stage).review_digest()
+    assert digest == _extended_key(stage, ("renorms", tuple(stage.renorms)))
+    assert digest != _legacy_question_key(stage), "the renorms tail must move the digest"
+
+
+def test_a_stage_with_a_delivery_place_hashes_as_the_legacy_key_extended_by_the_delivery_tail():
+    StageNorm = _norm_cls()
+    _, consumer = _consumer(element="knowledge", artifact="k.md", delivery="report")
+    place = delivery_place(consumer)
+    assert place
+    digest = StageNorm.from_stage(consumer).review_digest()
+    assert digest == _extended_key(consumer, *place)
+    assert digest != _legacy_question_key(consumer), "the delivery tail must move the digest"
+
+
+def test_a_stage_with_both_tails_appends_delivery_before_renorms():
+    StageNorm = _norm_cls()
+    second = dict(_BARE, index=2, title="Consumer", renorms=["/abs/norm-a.md"],
+                  supplies=[dict(on=1, element="knowledge", delivery="artifact")])
+    doc = parse_plan({"meta": {"task_id": "t"}, "stage": [dict(_BARE), second]})
+    consumer = doc.stages[1]
+    assert StageNorm.from_stage(consumer).review_digest() == _extended_key(
+        consumer, *delivery_place(consumer), ("renorms", tuple(consumer.renorms)),
+    )
 
 
 def test_interface_digest_equals_stage_interface_digest_including_a_blank_interface():
