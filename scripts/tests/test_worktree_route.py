@@ -78,6 +78,8 @@ class Canon:
         shutil.copy(SCRIPTS_DIR / "record-experience.py", scripts)
         shutil.copy(SCRIPTS_DIR / "land-branch.py", scripts)
         shutil.copy(SCRIPTS_DIR / "lib" / "worktree_route.py", scripts / "lib")
+        shutil.copy(SCRIPTS_DIR / "lib" / "memory_retrieval_ledger.py", scripts / "lib")
+        shutil.copy(SCRIPTS_DIR / "lib" / "instruction_smoke_gate.py", scripts / "lib")
         (scripts / "lib" / "__init__.py").write_text("")
         (scripts / "lib" / "semantic_join.py").write_text(
             "tokenize = term_score = None\n")

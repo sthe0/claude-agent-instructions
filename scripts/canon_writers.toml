@@ -58,7 +58,8 @@
 # --- not-canon: writes only outside the repo, or names a write primitive without using it ---
 "scripts/lib/instruction_smoke_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes smoke records under the git common dir and a throwaway sandbox under the temp dir; no tracked file" }
 "scripts/hook-memory-retrieval.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session surfaced-leaf dedupe state under the agent state dir; reads the memory corpus, writes no tracked file" }
-"scripts/agent_commit_trailer.py" = { disposition = "not-canon", category = "not-canon", reason = "prints a commit trailer; `git commit` appears in prose only" }
+"scripts/lib/memory_retrieval_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only retrieval ledger under ~/.local/log; writes no tracked file" }
+"scripts/agent_commit_trailer.py" ={ disposition = "not-canon", category = "not-canon", reason = "prints a commit trailer; `git commit` appears in prose only" }
 "scripts/agentctl/cli.py" = { disposition = "not-canon", category = "not-canon", reason = "engine state, evidence, gate and quality logs under ~/.local and the agentctl state dir; plan snapshots under the session dir" }
 "scripts/agentctl/delivery.py" = { disposition = "not-canon", category = "not-canon", reason = "delivery receipts in the agentctl state dir" }
 "scripts/agentctl/dispatch.py" = { disposition = "not-canon", category = "not-canon", reason = "removes its own dispatch markers in the agentctl state dir" }

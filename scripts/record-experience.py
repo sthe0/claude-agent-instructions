@@ -48,6 +48,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import edit_ledger  # noqa: E402
+from lib import memory_retrieval_ledger  # noqa: E402
 from lib import semantic_join  # noqa: E402
 from lib import worktree_route  # noqa: E402
 
@@ -294,6 +295,30 @@ def read_threshold(key: str, default: int, config_path: Path = CONFIG_PATH) -> i
 # --------------------------------------------------------------------------
 # subcommands
 # --------------------------------------------------------------------------
+def ledger_record(event: str, a, query: str, targets) -> None:
+    """Log what the session used against what the hook surfaced; never affects the run.
+
+    A routed child (marked by the routing env) logs nothing: its parent logs once after
+    the child exits 0."""
+    if os.environ.get(worktree_route.GUARD_ENV):
+        return
+    try:
+        session = getattr(a, "session", None) or os.environ.get("CLAUDE_CODE_SESSION_ID")
+        memory_retrieval_ledger.record_use(
+            event, session=session, query=query, targets=[str(t) for t in targets])
+    except Exception:
+        pass
+
+
+def written_leaf(a) -> str | None:
+    """Path of the leaf a `new` run writes, or None for commands that name no single leaf."""
+    if a.cmd == "extend":
+        return a.leaf
+    if a.cmd == "new":
+        return str(experience_dir(a.scope, a.project_dir) / f"{a.date}-{a.slug}.md")
+    return None
+
+
 def cmd_search(a) -> int:
     tier = getattr(a, "tier", "experience")
     dom = getattr(a, "domain", None)
@@ -326,6 +351,7 @@ def cmd_search(a) -> int:
     noun = {"principles": "principle", "system-knowledge": "system-knowledge leaf"}.get(
         tier, "experience leaf"
     )
+    ledger_record("search", a, a.keywords, [leaf.resolve() for _, leaf, _ in scored[:3]])
     if not scored:
         print(f"no analogous {noun} found — record a NEW leaf")
         return 0
@@ -475,6 +501,7 @@ def cmd_new(a) -> int:
     edit_ledger.stamp(str(path), "record-experience:new", session=getattr(a, "session", None))
     update_subindex(exp_dir, a.date, a.title, filename, a.description,
                     session=getattr(a, "session", None))
+    ledger_record("new", a, a.difficulty, [path])
     print(f"wrote {path}\nupdated {exp_dir / 'MEMORY.md'}")
     return 0
 
@@ -511,6 +538,7 @@ def cmd_extend(a) -> int:
         text = set_fm_field(text, "last_verified", a.date)
     path.write_text(text, encoding="utf-8")
     edit_ledger.stamp(str(path), "record-experience:extend", session=getattr(a, "session", None))
+    ledger_record("extend", a, f"{a.context_label} {a.plan}", [path])
     print(f"extended {path} (now {n_ctx} context(s))")
     if n_ctx >= 2 and (not a.common or not a.variations):
         print("→ fill `## Common core & variations` to distill the general solution")
@@ -589,6 +617,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Only applied when --tier principles is set."
         ),
     )
+    s.add_argument("--session", default=None,
+                   help="session id the retrieval ledger joins this search to "
+                        "(default: $CLAUDE_CODE_SESSION_ID)")
     s.add_argument("keywords")
     s.set_defaults(func=cmd_search)
 
@@ -704,7 +735,14 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
     if needs_worktree(args) and worktree_route.should_route(REPO_ROOT):
-        return write_via_worktree(args, argv)
+        code = write_via_worktree(args, argv)
+        if code == 0:
+            leaf = written_leaf(args)
+            if leaf:
+                query = (args.difficulty if args.cmd == "new"
+                         else f"{args.context_label} {args.plan}")
+                ledger_record(args.cmd, args, query, [leaf])
+        return code
     return args.func(args)
 
 

@@ -29,6 +29,10 @@ try:
 except Exception:  # a broken or stale lib must never block a prompt: main() exits 0 below
     bm25f = None
     config_root = None
+try:
+    from lib import memory_retrieval_ledger  # noqa: E402
+except Exception:  # the ledger is telemetry: its absence must not cost the pointers
+    memory_retrieval_ledger = None
 
 # Same literal as host_llm.JUDGE_CHILD_ENV_VAR (pinned by a test); host_llm is not imported
 # because it pulls in judge machinery this hook never uses and runs on every prompt.
@@ -173,6 +177,19 @@ def write_surfaced(path: Path, surfaced: set) -> None:
     os.replace(tmp, path)
 
 
+def log_surface(payload: dict, prompt: str, fresh: list) -> None:
+    if memory_retrieval_ledger is None:
+        return
+    session = payload.get("session_id")
+    memory_retrieval_ledger.append(
+        "surface",
+        session=session if isinstance(session, str) else None,
+        query=prompt,
+        surfaced=[memory_retrieval_ledger.leaf_key(leaf.path) for leaf in fresh],
+        nonce=memory_retrieval_ledger.extract_nonce(prompt),
+    )
+
+
 def run(payload: dict) -> str:
     prompt = payload.get("prompt")
     if not isinstance(prompt, str):
@@ -182,11 +199,13 @@ def run(payload: dict) -> str:
         return ""
     corpus = load_corpus(corpus_roots(payload))
     if not corpus:
+        log_surface(payload, prompt, [])
         return ""
     hits = rank(terms, corpus)
     state = state_file(payload.get("session_id"))
     surfaced = read_surfaced(state)
     fresh = [leaf for leaf, _ in hits if leaf.path not in surfaced]
+    log_surface(payload, prompt, fresh)
     if not fresh:
         return ""
     try:
