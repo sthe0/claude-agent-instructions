@@ -84,6 +84,15 @@ _HARD_SINK_CLASSES = frozenset({"pretooluse_deny", "stop_block", "exit_code_2"})
 # id (crutch-inventory.py's content-derived hash, which survives unrelated
 # line drift). id -> (file, scope, why-safe ground).
 _KNOWN_UNGUARDED_HARD_SINKS = {
+    "470d72f243768e36": (
+        "scripts/record-experience.py", "refuse",
+        "sink-only scope with no regex: refuse() prints caller-built problems "
+        "and exits 2; every caller derives them from structure "
+        "(canonical-checkout routing, manifest JSON shape, path existence, "
+        "SLUG/CONTEXT_ID/REVISION identifier fullmatch); the judged "
+        "same-difficulty refusal in cmd_new exits via sys.exit(message), not "
+        "via refuse().",
+    ),
     "156a5c93ad796c48": (
         "scripts/hook-escalation-diagnosis-gate.py", "deny_with",
         "semantic-guarded per the registry: the judge_outage_escalation call "

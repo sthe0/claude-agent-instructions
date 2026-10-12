@@ -156,7 +156,7 @@ def test_resolve_without_tracker_key_writes_null_and_stamps_nothing(store, monke
 
 # --- resolve: workspace cleanup runs after the stamp and never blocks ---------
 
-def test_resolve_workspace_cleanup_runs_after_solved_marker_and_reports(store, monkeypatch, fixtures_dir):
+def test_resolve_workspace_cleanup_runs_after_solved_marker_and_reports(store, monkeypatch, venued_fixtures_dir):
     from agentctl import workspace_cleanup
     order = []
     report = {"enabled": True, "dry_run": False,
@@ -165,7 +165,7 @@ def test_resolve_workspace_cleanup_runs_after_solved_marker_and_reports(store, m
     monkeypatch.setattr(solved_marker, "stamp", lambda key, **kw: order.append("stamp") or
                          {"channel": None, "key": key, "stamped": False})
     monkeypatch.setattr(workspace_cleanup, "run", lambda *a, **kw: order.append("cleanup") or report)
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
 
     d = _drive_to_resolved(store, "res-ws-cleanup", plan)
 
@@ -174,13 +174,13 @@ def test_resolve_workspace_cleanup_runs_after_solved_marker_and_reports(store, m
     assert d.data["workspace_cleanup"] == report
 
 
-def test_resolve_workspace_cleanup_raising_still_completes(store, monkeypatch, fixtures_dir):
+def test_resolve_workspace_cleanup_raising_still_completes(store, monkeypatch, venued_fixtures_dir):
     from agentctl import workspace_cleanup
 
     def _raise(*a, **kw):
         raise RuntimeError("cleanup exploded")
     monkeypatch.setattr(workspace_cleanup, "run", _raise)
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
 
     d = _drive_to_resolved(store, "res-ws-cleanup-raise", plan)
 

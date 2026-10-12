@@ -3658,7 +3658,7 @@ domain = "code"
 file = "scripts/record-experience.py"
 class = "structural"
 disposition = "keep"
-ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+ground = "Sink-only scope with no regex: refuse() prints caller-built problems and exits 2; every caller derives them from structure (canonical-checkout routing, manifest JSON shape, path existence, SLUG/CONTEXT_ID/REVISION identifier fullmatch); the judged same-difficulty refusal in cmd_new exits via sys.exit(message), not via refuse()."
 
 [[entry]]
 id = "20321efa8fc53a6d"
@@ -29442,6 +29442,22 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "719f2b51a4f5f489"
+domain = "prose"
+file = "memory-global/leaves/review-accompanies-code.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "4e8a234bb3763cd5"
+domain = "prose"
+file = "memory-global/leaves/review-accompanies-code.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "7afe3b54b21e09a3"
 domain = "prose"
 file = "memory-global/leaves/review-accompanies-code.md"
 class = "perception"
