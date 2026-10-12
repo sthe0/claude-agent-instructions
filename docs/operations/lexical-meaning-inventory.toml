@@ -73,9 +73,53 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/cli.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: legacy id shape qenum-N, '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line and kind(args) resource spec, all fixed engine/markdown syntax."
-hits = 6
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Compiles: legacy id shape qenum-N, '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line, kind(args) resource spec, and the 'Refusal: grant-widening' and 'Handoff-sha256:' label lines, all fixed engine/markdown syntax."
+hits = 8
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_is_grant_widening_refusal::pattern.search"]
+class = "structural"
+ground = "_REFUSAL_LINE_RE.search finds the 'Refusal: grant-widening' label line spawn-specialist itself writes; a fixed engine label syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_parse_rule_lines::pattern.match"]
+class = "structural"
+ground = "_RULE_LINE_RE.match reads each 'Rule:' label line of a marker body, a fixed label syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::cmd_dispatch::pattern.search"]
+class = "structural"
+ground = "_HANDOFF_SHA_LINE_RE.search reads the 'Handoff-sha256:' label line spawn-specialist itself writes; a fixed engine label syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/instruction_smoke_gate.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: the push-rights wording used only to defuse a log line, the all-zero SHA and the 40/64-hex object-id shape; none decides meaning."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/instruction_smoke_gate.py::defuse::pattern.sub"]
+class = "structural"
+ground = "_PUSH_RIGHTS.sub rewrites permission/denied wording in a gate message so a downstream log scan does not misread it as a push-rights failure; output sanitization, no verdict depends on the match."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/instruction_smoke_gate.py::is_valid_sha::pattern.fullmatch"]
+class = "structural"
+ground = "_SHA.fullmatch tests the 40/64-hex object-id shape; a format check."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/instruction_smoke_gate.py::prepush_decision::pattern.fullmatch"]
+class = "structural"
+ground = "ZERO_SHA.fullmatch tests the all-zero SHA git's pre-push protocol sends for a created or deleted ref; a protocol syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/cli.py::_parse_resource_line::pattern.match"]
@@ -760,6 +804,19 @@ ground = "_ISO_DATE_RE.match checks a date string has the YYYY-MM-DD shape befor
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/hook-memory-retrieval.py::query_terms::lexical.tokenize"]
+class = "candidate-generation"
+ground = "nominates pointers; the root model judges relevance. The prompt's content words feed a BM25F ranking whose top three leaves are printed as candidates, never acted on."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-memory-retrieval.py::build_leaf::lexical.tokenize"]
+class = "candidate-generation"
+ground = "nominates pointers; the root model judges relevance. The leaf's title and body prefix are tokenized only to be ranked against the prompt."
+hits = 2
+hit_classes = ["candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
 [sites."scripts/hook-multi-mount-search-guard.py::fuse_mounts_from_text::re.sub"]
 class = "structural"
 ground = "re.sub decodes octal `\\NNN` escapes in a /proc/self/mounts mount-point field (fixed mounts-file format)."
@@ -1287,16 +1344,22 @@ ground = "nominate (BM25F word overlap) picks top-k candidates for a query, and 
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/lib/semantic_join.py::nominate::lexical.tokenize"]
+[sites."scripts/lib/bm25f.py::nominate_scored::lexical.tokenize"]
 class = "candidate-generation"
-ground = "The three tokenize calls (title, body, query) only feed nominate's BM25F ranking, which nominates candidates for the same-difficulty judge to decide."
-hits = 3
-hit_classes = ["candidate-generation", "candidate-generation", "candidate-generation"]
+ground = "The query tokenize call only feeds the BM25F ranking, whose scored candidates go to a judge (same-difficulty) or in front of the model (memory retrieval) to decide."
+hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/lib/semantic_join.py::tokenize::re.findall"]
+[sites."scripts/lib/bm25f.py::split_docs::lexical.tokenize"]
+class = "candidate-generation"
+ground = "The title and body tokenize calls only feed the BM25F ranking, whose scored candidates go to a judge (same-difficulty) or in front of the model (memory retrieval) to decide."
+hits = 2
+hit_classes = ["candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/bm25f.py::tokenize::re.findall"]
 class = "structural"
-ground = "re.findall(r\"\\w+\") only splits text into lowercased word tokens for the nomination ranking; decides nothing."
+ground = "re.findall(r\"\\w+\") only splits text into lowercased word tokens for the BM25F ranking; decides nothing."
 hits = 1
 reviewed_by = "developer"
 
@@ -1509,6 +1572,12 @@ ground = "FRONTMATTER_RE matches the leading --- frontmatter block; file structu
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/memory-retrieval-calibrate.py::positive_pairs::lexical.tokenize"]
+class = "candidate-generation"
+ground = "Tokenizes a context block into the calibration query that is scored against the corpus; the score only measures whether the leaf is nominated, and no verdict on meaning is drawn from it."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/memory_dates.py::<module>::re.compile"]
 class = "structural"
 ground = "ISO_DATE_RE compiles the strict YYYY-MM-DD date shape."
@@ -1712,9 +1781,77 @@ reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::<module>::re.compile"]
 class = "structural"
-ground = "Compile H2 (`## ` heading) and FRONTMATTER (`---` block) markdown patterns."
+ground = "Compile H2 (`## ` heading), FRONTMATTER (`---` block), CONTEXT_ID (`<n>:<12 hex>`), SLUG, REVISION (git ref charset), CONTEXTS_HEADING and SPLIT_MARKER_LINE patterns: fixed identifier, heading and marker syntax."
+hits = 7
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::_id_list::pattern.fullmatch"]
+class = "structural"
+ground = "Checks a manifest context id against the `<n>:<12 hex>` format."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::add_pointer_to_split_list::pattern.fullmatch"]
+class = "structural"
+ground = "Checks a slug against the fixed slug charset before it is written into an index pointer."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_promote::pattern.fullmatch"]
+class = "structural"
+ground = "Checks the principle slug and each induced-from slug against the fixed slug charset."
 hits = 2
 hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_promote::pattern.search"]
+class = "structural"
+ground = "Finds the `## Level <n>` heading in the principles index; markdown heading syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_promote::re.search"]
+class = "structural"
+ground = "Finds the `## Level <n>` heading in the principles index; markdown heading syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::frontmatter_values::pattern.match"]
+class = "structural"
+ground = "Splits a leaf's `---` frontmatter block from its body."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::manifest_problems::pattern.fullmatch"]
+class = "structural"
+ground = "Validates manifest context ids, git revision and slugs against fixed charsets; no meaning is decided."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::manifest_problems::re.search"]
+class = "structural"
+ground = "Rejects a manifest difficulty text that contains a markdown heading line, which would break the leaf's section structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::note_split_in_description::pattern.match"]
+class = "structural"
+ground = "Splits a leaf's `---` frontmatter block from its body before the split marker is added to the description."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::parse_contexts::pattern.fullmatch"]
+class = "structural"
+ground = "Recognises the `## Contexts` heading line to bound the section whose `### ` blocks are contexts."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/self-diagnose.py::measure_leaf::re.fullmatch"]
+class = "structural"
+ground = "Recognises the `## Contexts` heading line (with an optional suffix) to count the `### ` context blocks beneath it."
+hits = 1
 reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::section_span::pattern.search"]

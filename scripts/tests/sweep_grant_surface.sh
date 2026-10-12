@@ -30,6 +30,7 @@ SWEEP_FILES=(
     scripts/tests/test_spawn_project_settings.py
     scripts/tests/test_spawn_pytest_allowlist_hygiene.py
     scripts/tests/test_spawn_specialist_grants.py
+    scripts/tests/test_spawn_specialist_memory_write.py
     scripts/tests/test_spawn_stage2_image.py
     scripts/tests/test_stage_grants.py
     scripts/tests/test_sweep_grant_surface.py

@@ -156,6 +156,9 @@ DESIRED = [
     # Proactive OFFER (per-file debounced) to run the instruction-grooming skill once
     # a governed file crosses lint-prose-length.py's 90% WARN threshold.
     ("UserPromptSubmit", None,    "hook-instruction-grooming-due.py", 5),
+    # Lexical pointers to the memory leaves whose text overlaps the prompt (BM25F, no judge,
+    # no network); the model decides relevance.
+    ("UserPromptSubmit", None,    "hook-memory-retrieval.py",        5),
     ("PreToolUse",       "Bash|Grep|Glob", "hook-multi-mount-search-guard.py", 5),
     # Hard gate: deny a recursive rm that (worst-case, with any empty $VAR) targets
     # /, $HOME, ~/.claude, or the instruction repo — the agent's own memory/config.

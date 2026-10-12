@@ -38,6 +38,11 @@ Read-only, mechanical scans over the agent's OWN functional elements:
                         to — the reachability half of the same norm. Reachability
                         follows both markdown [](path) links and [[slug]]
                         wikilinks (resolved via a frontmatter name: index).
+  oversized-leaf        a difficulty/v1 experience leaf past a byte cap or a
+                        context-count cap, both derived from the corpus's own
+                        log-scale far-out fence (docs/operations/
+                        memory-leaf-size-calibration.json); the action it names
+                        is the memory-curator split.
   crutch-defer-overdue  a scripts/crutch_registry.toml entry disposed "defer"
                         that has gone unreviewed past a horizon, keyed to that
                         entry's own deferred_since date (an authored literal —
@@ -103,6 +108,13 @@ NEAR_DUPLICATE_JACCARD_THRESHOLD = 0.6
 # session, short enough that a route fixed last month stops being reported.
 WRITER_GATE_ADVISORY_WINDOW_DAYS = 7
 
+# Fallbacks only for a config.md that lacks the rows; the live values are read
+# from config.md and were derived by scripts/memory-leaf-size-calibrate.py.
+OVERSIZED_LEAF_DEFAULT_MAX_BYTES = 74000
+OVERSIZED_LEAF_DEFAULT_CONTEXTS_MULTIPLE = 27
+PRINCIPLE_PROMOTION_DEFAULT = 3
+OVERSIZED_LEAF_ACTION = "action: memory-curator split"
+
 _LINK_RE = re.compile(r"\]\(([^)]+)\)")
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
@@ -119,6 +131,96 @@ class Difficulty:
 
     def as_line(self) -> str:
         return f"{self.kind}: {self.path} — {self.detail}"
+
+
+def measure_leaf(text: str) -> "tuple[int, int]":
+    """(UTF-8 bytes, count of `### ` lines inside the `## Contexts` section).
+
+    Fenced code blocks are skipped, and a heading such as `## Contexts (12)` still opens the section.
+    """
+    contexts = 0
+    in_contexts = False
+    in_fence = False
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if line.startswith("## "):
+            in_contexts = re.fullmatch(r"## Contexts(\s.*)?", line.strip()) is not None
+        elif in_contexts and line.startswith("### "):
+            contexts += 1
+    return len(text.encode("utf-8")), contexts
+
+
+def is_difficulty_leaf(text: str) -> bool:
+    """True when the leaf's own frontmatter declares `schema: difficulty/v1` (quotes, comment, BOM tolerated)."""
+    lines = text.lstrip("\ufeff").splitlines()
+    if not lines or lines[0].strip() != "---":
+        return False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return False
+        key, _, value = line.partition(":")
+        if key.strip() == "schema":
+            return value.split("#", 1)[0].strip().strip("\"'") == "difficulty/v1"
+    return False
+
+
+def parse_config_int(config_text: str, key: str) -> "int | None":
+    """Value of the first digit cell in the config row whose KEY cell is `key`, else None."""
+    for line in config_text.splitlines():
+        cells = [c.strip() for c in line.split("|")]
+        if len(cells) > 3 and line.lstrip().startswith("|") and cells[1].strip("`") == key:
+            for cell in cells[2:]:
+                if cell.strip("`").isdigit():
+                    return int(cell.strip("`"))
+    return None
+
+
+def read_config_int(key: str, default: int, config_path: "Path | None" = None) -> int:
+    path = config_path if config_path is not None else REPO_ROOT / "config.md"
+    try:
+        value = parse_config_int(path.read_text(encoding="utf-8"), key)
+    except OSError:
+        value = None
+    return default if value is None else value
+
+
+def scan_oversized_leaves(
+    memory_root: Path,
+    max_bytes: "int | None" = None,
+    max_contexts: "int | None" = None,
+) -> "list[Difficulty]":
+    if max_bytes is None:
+        max_bytes = read_config_int("memory-leaf-max-bytes", OVERSIZED_LEAF_DEFAULT_MAX_BYTES)
+    if max_contexts is None:
+        max_contexts = read_config_int(
+            "memory-leaf-max-contexts-multiple", OVERSIZED_LEAF_DEFAULT_CONTEXTS_MULTIPLE
+        ) * read_config_int("principle-promotion-threshold", PRINCIPLE_PROMOTION_DEFAULT)
+    out: "list[Difficulty]" = []
+    leaves = memory_root / "leaves"
+    if not leaves.is_dir():
+        return out
+    for md in sorted(leaves.rglob("*.md")):
+        try:
+            text = md.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if not is_difficulty_leaf(text):
+            continue
+        size, contexts = measure_leaf(text)
+        if size > max_bytes or contexts > max_contexts:
+            out.append(
+                Difficulty(
+                    "oversized-leaf",
+                    str(md.relative_to(memory_root)),
+                    f"{size} bytes (cap {max_bytes}), {contexts} contexts (cap {max_contexts}); "
+                    + OVERSIZED_LEAF_ACTION,
+                )
+            )
+    return out
 
 
 def scan_oversized_indexes(
@@ -759,6 +861,8 @@ def scan(
         out.extend(scan_broken_hooks(paths))
     for root in memory_roots:
         for d in scan_oversized_indexes(root, threshold):
+            out.append(Difficulty(d.kind, _qualify(root, d.path), d.detail))
+        for d in scan_oversized_leaves(root):
             out.append(Difficulty(d.kind, _qualify(root, d.path), d.detail))
         for d in scan_dangling_pointers(root):
             out.append(Difficulty(d.kind, _qualify(root, d.path), d.detail))

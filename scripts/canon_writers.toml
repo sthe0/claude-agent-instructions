@@ -26,6 +26,8 @@
 # --- exempt-maintenance: edit tracked files, run by a maintainer in a worktree ---
 "scripts/verify-judge-prose-numbers.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "--repin rewrites its own allowlist file; a deliberate maintainer action, reviewed in the diff" }
 "scripts/verify-config-root-refs.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "--repin rewrites its own allowlist file; a deliberate maintainer action, reviewed in the diff" }
+"scripts/memory-leaf-size-calibrate.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "re-calibration rewrites docs/operations/memory-leaf-size-calibration.json, aggregates only; a deliberate maintainer action, reviewed in the diff" }
+"scripts/memory-retrieval-calibrate.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "re-calibration rewrites docs/operations/memory-retrieval-calibration.json, aggregates only; a deliberate maintainer action, reviewed in the diff" }
 
 # --- exempt-landing: the sync / landing path itself ---
 "scripts/land-branch.py" = { disposition = "exempt", category = "exempt-landing", reason = "advances main from a branch; the route calls it, so it cannot be routed through itself" }
@@ -56,7 +58,9 @@
 
 # --- not-canon: writes only outside the repo, or names a write primitive without using it ---
 "scripts/lib/instruction_smoke_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes smoke records under the git common dir and a throwaway sandbox under the temp dir; no tracked file" }
-"scripts/agent_commit_trailer.py" = { disposition = "not-canon", category = "not-canon", reason = "prints a commit trailer; `git commit` appears in prose only" }
+"scripts/hook-memory-retrieval.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session surfaced-leaf dedupe state under the agent state dir; reads the memory corpus, writes no tracked file" }
+"scripts/lib/memory_retrieval_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only retrieval ledger under ~/.local/log; writes no tracked file" }
+"scripts/agent_commit_trailer.py" ={ disposition = "not-canon", category = "not-canon", reason = "prints a commit trailer; `git commit` appears in prose only" }
 "scripts/agentctl/cli.py" = { disposition = "not-canon", category = "not-canon", reason = "engine state, evidence, gate and quality logs under ~/.local and the agentctl state dir; plan snapshots under the session dir" }
 "scripts/agentctl/delivery.py" = { disposition = "not-canon", category = "not-canon", reason = "delivery receipts in the agentctl state dir" }
 "scripts/agentctl/dispatch.py" = { disposition = "not-canon", category = "not-canon", reason = "removes its own dispatch markers in the agentctl state dir" }

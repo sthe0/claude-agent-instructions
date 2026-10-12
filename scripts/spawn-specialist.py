@@ -838,6 +838,11 @@ def prompt_exceeds_ceiling(prompt: str, model: str | None = None) -> bool:
 PLANS_WRITE_KINDS = ("planner",)
 PLANS_READ_KINDS = ("thinker", "code-reviewer", "developer")
 
+# The memory curator's deliverable is memory leaves, so its Edit grant is the
+# memory roots of the repo/worktree it runs in and nothing else: a wrong
+# judgement then cannot reach code, instructions or config.
+MEMORY_WRITE_KINDS = ("memory-curator",)
+
 # The only kind whose spawn inherits the target project's own
 # `.claude/settings.local.json` permissions (see build_child_settings) —
 # named the same way as the plans-access tuples above, rather than a
@@ -862,6 +867,17 @@ def plans_permission_rules(kind: str, plans_directory: Path) -> tuple[list[str],
     if kind in PLANS_READ_KINDS:
         return [f"Read({base})", "Bash(shasum -a 256:*)"], [f"Edit({base})"]
     return [], []
+
+
+def memory_permission_rules(kind: str, workdir: Path) -> list[str]:
+    """Edit allow rules granting `kind` its memory roots under `workdir`: the
+    `memory-global/` directory and the project's `.claude/agent-memory/`, each
+    only when present. Empty for a kind outside MEMORY_WRITE_KINDS."""
+    if kind not in MEMORY_WRITE_KINDS:
+        return []
+    root = Path(os.path.abspath(workdir))
+    candidates = (root / "memory-global", root / ".claude" / "agent-memory")
+    return [f"Edit(/{memory_root}/**)" for memory_root in candidates if memory_root.is_dir()]
 
 
 def parse_review_topo_pair(raw: str) -> str:
@@ -1576,6 +1592,8 @@ def build_child_settings(
         plans_allow, plans_deny = plans_permission_rules(kind, plans_directory)
         add_allow(plans_allow, "plans_permission_rules")
         add_deny(plans_deny, "plans_permission_rules")
+    if workdir is not None:
+        add_allow(memory_permission_rules(kind, Path(workdir)), "memory_permission_rules")
     add_deny(write_grant_cwd_deny_rules(kind, engine_grants, workdir), "write_grant_cwd_deny_rules")
     if engine_grants:
         _check_write_add_dirs_not_shadowed(engine_grants, deny)

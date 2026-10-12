@@ -92,6 +92,12 @@ def _isolate_task_quality_ledger(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_memory_retrieval_ledger(tmp_path, monkeypatch):
+    """The hook and record-experience append to this ledger; no test may touch the real one."""
+    monkeypatch.setenv("CLAUDE_MEMORY_RETRIEVAL_LEDGER", str(tmp_path / "memory-retrieval.jsonl"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_improvement_scan_board_state(tmp_path, monkeypatch):
     """Phase B writes the board to a per-machine state file by default; no test may touch the real one."""
     monkeypatch.setenv("IMPROVEMENT_SCAN_BOARD_STATE", str(tmp_path / "board-state.json"))
