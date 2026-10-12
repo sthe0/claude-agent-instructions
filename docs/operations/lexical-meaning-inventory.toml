@@ -73,9 +73,53 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/cli.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: legacy id shape qenum-N, '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line and kind(args) resource spec, all fixed engine/markdown syntax."
-hits = 6
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Compiles: legacy id shape qenum-N, '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line, kind(args) resource spec, and the 'Refusal: grant-widening' and 'Handoff-sha256:' label lines, all fixed engine/markdown syntax."
+hits = 8
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_is_grant_widening_refusal::pattern.search"]
+class = "structural"
+ground = "_REFUSAL_LINE_RE.search finds the 'Refusal: grant-widening' label line spawn-specialist itself writes; a fixed engine label syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_parse_rule_lines::pattern.match"]
+class = "structural"
+ground = "_RULE_LINE_RE.match reads each 'Rule:' label line of a marker body, a fixed label syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::cmd_dispatch::pattern.search"]
+class = "structural"
+ground = "_HANDOFF_SHA_LINE_RE.search reads the 'Handoff-sha256:' label line spawn-specialist itself writes; a fixed engine label syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/instruction_smoke_gate.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: the push-rights wording used only to defuse a log line, the all-zero SHA and the 40/64-hex object-id shape; none decides meaning."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/instruction_smoke_gate.py::defuse::pattern.sub"]
+class = "structural"
+ground = "_PUSH_RIGHTS.sub rewrites permission/denied wording in a gate message so a downstream log scan does not misread it as a push-rights failure; output sanitization, no verdict depends on the match."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/instruction_smoke_gate.py::is_valid_sha::pattern.fullmatch"]
+class = "structural"
+ground = "_SHA.fullmatch tests the 40/64-hex object-id shape; a format check."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/instruction_smoke_gate.py::prepush_decision::pattern.fullmatch"]
+class = "structural"
+ground = "ZERO_SHA.fullmatch tests the all-zero SHA git's pre-push protocol sends for a created or deleted ref; a protocol syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/cli.py::_parse_resource_line::pattern.match"]
