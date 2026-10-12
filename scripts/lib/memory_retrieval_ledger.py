@@ -71,6 +71,11 @@ def read_rows(path: Path | None = None) -> list[dict]:
     return rows
 
 
+# A row stores the session's surfaced keys for the report only; classification above uses the
+# full set, so capping the stored copy keeps every row small enough for one atomic append.
+STORED_SURFACED_MAX = 20
+
+
 def surfaced_in_session(session, path: Path | None = None) -> set:
     if not session:
         return set()
@@ -106,9 +111,11 @@ def append(event: str, *, session=None, query: str = "", surfaced=(), outcome=No
         line = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
         target_path = path or ledger_path()
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(target_path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        fd = os.open(str(target_path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         try:
-            os.write(fd, line)
+            view = memoryview(line)
+            while view:
+                view = view[os.write(fd, view):]
         finally:
             os.close(fd)
         return True
@@ -127,7 +134,7 @@ def record_use(event: str, *, session, query: str, targets, path: Path | None = 
         outcome = None
         if session and keys and event in ("extend", "search"):
             outcome = classify(keys, surfaced)
-        return append(event, session=session, query=query, surfaced=surfaced,
+        return append(event, session=session, query=query, surfaced=surfaced[-STORED_SURFACED_MAX:],
                       outcome=outcome, target=keys[0] if keys else None, path=path)
     except Exception:
         return False

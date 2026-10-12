@@ -233,6 +233,32 @@ def test_ledger_fail_open_(memroot, tmp_path, monkeypatch):
     assert _extend(leaf) == 0
 
 
+def test_ledger_file_is_private_(tmp_path):
+    path = tmp_path / "ledger.jsonl"
+
+    assert ledger.append("surface", session="s1", query="token ghp_example", path=path) is True
+    assert (path.stat().st_mode & 0o777) == 0o600
+
+
+def test_stored_surfaced_list_is_capped_but_classification_sees_all_(tmp_path):
+    path = tmp_path / "ledger.jsonl"
+    keys = [f"global:leaves/k{i}.md" for i in range(ledger.STORED_SURFACED_MAX + 15)]
+    ledger.append("surface", session="s1", surfaced=keys, path=path)
+
+    assert ledger.record_use("extend", session="s1", query="q", targets=[SCRIPTS_DIR / "k0.md"], path=path)
+    stored = ledger.read_rows(path)[-1]["surfaced"]
+
+    assert len(stored) == ledger.STORED_SURFACED_MAX
+    assert set(ledger.surfaced_in_session("s1", path)) >= set(keys)
+
+
+def test_hook_ledger_failure_does_not_raise_(monkeypatch):
+    hook = _load("hook_ledger_failure", HOOK_SCRIPT)
+    monkeypatch.setattr(hook.memory_retrieval_ledger, "leaf_key", lambda p: 1 / 0)
+
+    hook.log_surface({"session_id": "s1"}, "some prompt text here", [type("L", (), {"path": "/abs/leaf.md"})()])
+
+
 def test_report_(tmp_path):
     proc = subprocess.run([sys.executable, str(REPORT_SCRIPT), "--ledger", str(FIXTURE_LEDGER)],
                           capture_output=True, text=True, check=True)

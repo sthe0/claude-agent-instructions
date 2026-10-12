@@ -180,14 +180,17 @@ def write_surfaced(path: Path, surfaced: set) -> None:
 def log_surface(payload: dict, prompt: str, fresh: list) -> None:
     if memory_retrieval_ledger is None:
         return
-    session = payload.get("session_id")
-    memory_retrieval_ledger.append(
-        "surface",
-        session=session if isinstance(session, str) else None,
-        query=prompt,
-        surfaced=[memory_retrieval_ledger.leaf_key(leaf.path) for leaf in fresh],
-        nonce=memory_retrieval_ledger.extract_nonce(prompt),
-    )
+    try:
+        session = payload.get("session_id")
+        memory_retrieval_ledger.append(
+            "surface",
+            session=session if isinstance(session, str) else None,
+            query=prompt,
+            surfaced=[memory_retrieval_ledger.leaf_key(leaf.path) for leaf in fresh],
+            nonce=memory_retrieval_ledger.extract_nonce(prompt),
+        )
+    except Exception:  # telemetry must never cost the prompt its pointers
+        pass
 
 
 def run(payload: dict) -> str:
