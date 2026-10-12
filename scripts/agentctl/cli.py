@@ -9218,6 +9218,17 @@ def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
                          "established — ask the resolution question again; "
                          + RESOLUTION_ASK_RULE_HINT + escape_note], record
     if not after:
+        misplaced_after = [
+            inp for inp, ts, _ in calls
+            if ts is not None and ts > verified_at
+            and not transcript_turns.has_marker_option(inp, RESOLUTION_ASK_MARKER)
+            and transcript_turns.has_marker_in_question_text(inp, RESOLUTION_ASK_MARKER)
+        ]
+        if misplaced_after:
+            return [prefix + f"the {RESOLUTION_ASK_MARKER!r} marker appears in the question "
+                             "text of an ask after verify-final, but it must be in an option "
+                             "label or description — re-ask with the marker placed inside an "
+                             "option; " + RESOLUTION_ASK_RULE_HINT + escape_note], record
         return [prefix + f"the {RESOLUTION_ASK_MARKER!r} ask predates the latest verify-final — "
                          "ask the resolution question again now that final verification has passed; "
                          + RESOLUTION_ASK_RULE_HINT + escape_note], record

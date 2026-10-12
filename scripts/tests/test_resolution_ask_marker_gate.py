@@ -250,6 +250,25 @@ def test_marker_only_in_the_question_stem_does_not_count(store, tmp_path):
     assert resolve(store).ok is False
 
 
+def test_marker_in_question_text_after_verify_final_gives_placement_error_not_predates(store, tmp_path):
+    """When an older marked ask predates verify-final and a newer ask (after verify-final) has
+    the marker only in the question text, the refusal names the wrong placement — not 'predates'."""
+    to_resolution(store)
+    at = verified_at(store)
+    write_transcript(tmp_path, [
+        ask_entry("old", at - 5, label=f"Resolve {RESOLUTION_ASK_MARKER}"),
+        answer_entry("old", at - 4),
+        ask_entry("new", at + 5, question=f"{RESOLUTION_ASK_MARKER} rate?"),
+        answer_entry("new", at + 6),
+    ])
+
+    d = resolve(store)
+    assert d.ok is False
+    blockers = ask_blockers(d)
+    assert any("question text" in b for b in blockers)
+    assert not any("predates" in b for b in blockers)
+
+
 def test_an_earlier_marked_ask_does_not_cover_a_later_unanswered_one_but_any_answered_after_does(store, tmp_path):
     to_resolution(store)
     at = verified_at(store)
