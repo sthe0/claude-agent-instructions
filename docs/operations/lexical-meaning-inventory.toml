@@ -1781,9 +1781,77 @@ reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::<module>::re.compile"]
 class = "structural"
-ground = "Compile H2 (`## ` heading) and FRONTMATTER (`---` block) markdown patterns."
+ground = "Compile H2 (`## ` heading), FRONTMATTER (`---` block), CONTEXT_ID (`<n>:<12 hex>`), SLUG, REVISION (git ref charset), CONTEXTS_HEADING and SPLIT_MARKER_LINE patterns: fixed identifier, heading and marker syntax."
+hits = 7
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::_id_list::pattern.fullmatch"]
+class = "structural"
+ground = "Checks a manifest context id against the `<n>:<12 hex>` format."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::add_pointer_to_split_list::pattern.fullmatch"]
+class = "structural"
+ground = "Checks a slug against the fixed slug charset before it is written into an index pointer."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_promote::pattern.fullmatch"]
+class = "structural"
+ground = "Checks the principle slug and each induced-from slug against the fixed slug charset."
 hits = 2
 hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_promote::pattern.search"]
+class = "structural"
+ground = "Finds the `## Level <n>` heading in the principles index; markdown heading syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_promote::re.search"]
+class = "structural"
+ground = "Finds the `## Level <n>` heading in the principles index; markdown heading syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::frontmatter_values::pattern.match"]
+class = "structural"
+ground = "Splits a leaf's `---` frontmatter block from its body."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::manifest_problems::pattern.fullmatch"]
+class = "structural"
+ground = "Validates manifest context ids, git revision and slugs against fixed charsets; no meaning is decided."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::manifest_problems::re.search"]
+class = "structural"
+ground = "Rejects a manifest difficulty text that contains a markdown heading line, which would break the leaf's section structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::note_split_in_description::pattern.match"]
+class = "structural"
+ground = "Splits a leaf's `---` frontmatter block from its body before the split marker is added to the description."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::parse_contexts::pattern.fullmatch"]
+class = "structural"
+ground = "Recognises the `## Contexts` heading line to bound the section whose `### ` blocks are contexts."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/self-diagnose.py::measure_leaf::re.fullmatch"]
+class = "structural"
+ground = "Recognises the `## Contexts` heading line (with an optional suffix) to count the `### ` context blocks beneath it."
+hits = 1
 reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::section_span::pattern.search"]

@@ -24,6 +24,19 @@ Subcommands:
                       holds >=2 contexts, scaffold `## Common core & variations`.
   ticket              Write a THIN pointer leaf (record lives in the ticket)
                       and print the structured body to stdout for posting.
+  split-contexts      Read-only: list `<id> <heading>` per `### ` context of a
+                      leaf — the ids a split manifest names.
+  split-apply         Execute a split manifest the memory curator wrote: move
+                      contexts byte-exactly into per-cluster leaves, index
+                      them, shrink the source to its kept contexts plus a
+                      pointer list. Exit 2, nothing written, on an
+                      inconsistent manifest.
+  split-verify        Read-only: every context of the manifest's base appears
+                      exactly once across source and cluster leaves, and the
+                      memory verifiers pass. Prints `missing:` / `duplicate:` /
+                      `unexpected:` / `misplaced:` / `verifier:` lines.
+  promote             Write a principle/v1 skeleton, its principles/MEMORY.md
+                      pointer, and record it in a --manifest.
 
 Scope: --scope global (default; this repo's memory-global/leaves/experience)
 or --scope project --project-dir <dir> (<dir>/.claude/agent-memory/experience).
@@ -35,15 +48,24 @@ land on origin/main, fast-forward the canonical checkout and remove the
 worktree (lib/worktree_route.py); run from a linked worktree they write there.
 search and promote-scan, and --scope project, are not routed.
 
+The split flow (split-apply, promote) is deliberately NOT routed: it produces a
+proposal the user accepts, so both commands refuse (exit 2) to write under a
+root that lies in the canonical checkout and, in a linked worktree, write in
+place and commit nothing.
+
 verify-experience-leaf.py enforces the shape this tool produces.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import hashlib
+import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -587,6 +609,618 @@ def cmd_ticket(a) -> int:
 
 
 # --------------------------------------------------------------------------
+# split flow: the curator writes a manifest (judgement), code applies and
+# checks it (rule) — see skills/specializations/memory-curator/SKILL.md
+# --------------------------------------------------------------------------
+CONTEXT_ID = re.compile(r"[0-9]+:[0-9a-f]{12}")
+SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
+REVISION = re.compile(r"[0-9A-Za-z._/~^@{}-]+")
+CONTEXTS_HEADING = re.compile(r"## Contexts(\s.*)?")
+SPLIT_MARKER = "Moved by memory-curator split on"
+SPLIT_MARKER_LINE = re.compile(rf"{SPLIT_MARKER} \d{{4}}-\d{{2}}-\d{{2}}:")
+CLUSTER_TEXT_KEYS = ("slug", "name", "description", "functional_ground", "difficulty")
+CLUSTER_OPTIONAL_KEYS = ("existing_principle", "no_principle_reason")
+CARRIED_KEYS = ("type", "schema", "generality", "tier")
+LEVEL_LABELS = {1: "sibling-context rules", 2: "task-class rules", 3: "cross-domain invariants"}
+SUBPROCESS_TIMEOUT_S = 120
+
+
+def refuse(*problems: str):
+    """Exit 2 with one line per problem; nothing has been written."""
+    for problem in problems:
+        print(f"record-experience: {problem}", file=sys.stderr)
+    sys.exit(2)
+
+
+class SourceContexts:
+    """A leaf's `## Contexts` section cut into its `### ` blocks.
+
+    Delimited exactly as self-diagnose's measure_leaf counts them: fence-aware, a
+    `### ` line under `## Contexts` opens a block, the next `### ` or `## ` closes it."""
+
+    __slots__ = ("head", "preamble", "blocks", "tail")
+
+    def __init__(self, head: str, preamble: str, blocks: list[str], tail: str) -> None:
+        self.head, self.preamble, self.blocks, self.tail = head, preamble, blocks, tail
+
+
+def parse_contexts(text: str) -> SourceContexts:
+    lines = text.splitlines(keepends=True)
+    start = end = None
+    block_starts: list[int] = []
+    in_fence = in_contexts = False
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith(("```", "~~~")):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if line.startswith("## "):
+            if in_contexts:
+                end, in_contexts = i, False
+            if CONTEXTS_HEADING.fullmatch(line.strip()):
+                if start is not None:
+                    raise ValueError("more than one `## Contexts` section")
+                start, in_contexts = i, True
+        elif in_contexts and line.startswith("### "):
+            block_starts.append(i)
+    if start is None:
+        raise ValueError("no `## Contexts` section")
+    if end is None:
+        end = len(lines)
+    bounds = block_starts + [end]
+    blocks = []
+    for first, last in zip(bounds, bounds[1:]):
+        chunk = lines[first:last]
+        while chunk and not chunk[-1].strip():
+            chunk.pop()
+        block = "".join(chunk)
+        blocks.append(block if block.endswith("\n") else block + "\n")
+    head = "".join(lines[:start + 1])
+    return SourceContexts(
+        head if head.endswith("\n") else head + "\n",
+        "".join(lines[start + 1:bounds[0]]), blocks, "".join(lines[end:]))
+
+
+def context_ids(blocks: list[str]) -> list[str]:
+    """`<1-based ordinal>:<first 12 hex of sha256 of the block's bytes>` per block."""
+    return [f"{n}:{hashlib.sha256(b.encode('utf-8')).hexdigest()[:12]}"
+            for n, b in enumerate(blocks, 1)]
+
+
+def block_sha(block: str) -> str:
+    return hashlib.sha256(block.encode("utf-8")).hexdigest()[:12]
+
+
+def read_text_exact(path: Path) -> str:
+    """Decode without newline translation, so block bytes match `git show` bytes."""
+    return path.read_bytes().decode("utf-8")
+
+
+def write_text_exact(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(text.encode("utf-8"))
+
+
+def one_line(text: str) -> str:
+    return " ".join(text.split())
+
+
+class Snapshot:
+    """Remembers files before a multi-file write so a failure leaves none of it behind."""
+
+    def __init__(self, paths) -> None:
+        self.saved = {p: (p.read_bytes() if p.exists() else None) for p in paths}
+
+    def restore(self) -> None:
+        for path, data in self.saved.items():
+            if data is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(data)
+
+
+def refuse_canon(root: Path, command: str) -> None:
+    """Exit 2 when `root` lies in a checkout worktree_route would auto-land from.
+
+    The write subcommands of the split flow produce a PROPOSAL the user accepts; a
+    write in the canonical checkout would be the accepted state with no acceptance."""
+    probe = root
+    while not probe.is_dir() and probe != probe.parent:
+        probe = probe.parent
+    top = subprocess.run(["git", "-C", str(probe), "rev-parse", "--show-toplevel"],
+                         capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_S)
+    if top.returncode != 0:
+        return
+    repo = Path(top.stdout.strip())
+    if worktree_route.should_route(repo):
+        refuse(f"{command} refuses to write under {root}: it lies in the canonical "
+               f"checkout {repo}; run it from a linked worktree, where the uncommitted "
+               f"diff is the proposal")
+
+
+def read_manifest(path: str) -> tuple[dict, Path]:
+    manifest_path = Path(path).resolve()
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        refuse(f"cannot read manifest {path}: {exc}")
+    if not isinstance(manifest, dict):
+        refuse(f"manifest {path} must be a JSON object")
+    return manifest, manifest_path
+
+
+def manifest_root(manifest: dict, manifest_path: Path) -> Path:
+    """The memory root; a relative one resolves against the manifest's own directory."""
+    declared = manifest.get("root")
+    if not isinstance(declared, str) or not declared:
+        refuse("manifest 'root' must be a non-empty string")
+    return (manifest_path.parent / declared).resolve()
+
+
+def _id_list(value) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(v, str) and CONTEXT_ID.fullmatch(v) for v in value)
+
+
+def manifest_problems(manifest: dict) -> list[str]:
+    out: list[str] = []
+    if not isinstance(manifest.get("source"), str) or not manifest["source"]:
+        out.append("manifest 'source' must be a non-empty string")
+    base_rev, base_path = manifest.get("base_rev"), manifest.get("base_path")
+    if not (isinstance(base_rev, str) and base_rev) and not (isinstance(base_path, str) and base_path):
+        out.append("manifest needs 'base_rev' (a commit) or 'base_path' (a file of base bytes)")
+    if isinstance(base_rev, str) and base_rev and (
+            base_rev.startswith("-") or not REVISION.fullmatch(base_rev)):
+        out.append(f"manifest 'base_rev' {base_rev!r} is not a plain revision")
+    if not _id_list(manifest.get("keep")):
+        out.append("manifest 'keep' must be a list of context ids (<ordinal>:<12 hex>)")
+    clusters = manifest.get("clusters")
+    if not isinstance(clusters, list) or not clusters:
+        out.append("manifest 'clusters' must be a non-empty list")
+        clusters = []
+    seen: set[str] = set()
+    for i, cluster in enumerate(clusters):
+        where = f"clusters[{i}]"
+        if not isinstance(cluster, dict):
+            out.append(f"{where} must be an object")
+            continue
+        for key in CLUSTER_TEXT_KEYS:
+            if not isinstance(cluster.get(key), str) or not cluster[key].strip():
+                out.append(f"{where} '{key}' must be a non-empty string")
+        slug = cluster.get("slug")
+        if isinstance(slug, str) and slug:
+            if not SLUG.fullmatch(slug):
+                out.append(f"{where} slug {slug!r} must match [a-z0-9][a-z0-9-]*")
+            if slug in seen:
+                out.append(f"{where} slug {slug!r} is used twice")
+            seen.add(slug)
+        difficulty = cluster.get("difficulty")
+        if isinstance(difficulty, str) and re.search(r"^#{1,6} ", difficulty, re.MULTILINE):
+            out.append(f"{where} 'difficulty' must not contain markdown headings")
+        contexts = cluster.get("contexts")
+        if not _id_list(contexts) or not contexts:
+            out.append(f"{where} 'contexts' must be a non-empty list of context ids")
+        for key in CLUSTER_OPTIONAL_KEYS:
+            if key in cluster and not isinstance(cluster[key], str):
+                out.append(f"{where} '{key}' must be a string")
+    principles = manifest.get("principles", [])
+    if not isinstance(principles, list) or not all(
+            isinstance(p, str) and SLUG.fullmatch(p) for p in principles):
+        out.append("manifest 'principles' must be a list of principle slugs")
+    return out
+
+
+def assignment_problems(manifest: dict, ids: list[str]) -> list[str]:
+    """Every id kept or clustered exactly once, none unknown."""
+    known, owner, out = set(ids), {}, []
+
+    def claim(context_id: str, where: str) -> None:
+        if context_id not in known:
+            out.append(f"{where}: context {context_id} is not in the source")
+        elif context_id in owner:
+            out.append(f"{where}: context {context_id} is already assigned to {owner[context_id]}")
+        else:
+            owner[context_id] = where
+
+    for context_id in manifest["keep"]:
+        claim(context_id, "keep")
+    for cluster in manifest["clusters"]:
+        for context_id in cluster["contexts"]:
+            claim(context_id, f"cluster {cluster['slug']}")
+    out += [f"context {i} is neither kept nor clustered" for i in ids if i not in owner]
+    return out
+
+
+def frontmatter_values(text: str) -> dict[str, str]:
+    """Top-level single-line `key: value` pairs of the frontmatter, values verbatim."""
+    m = FRONTMATTER.match(text)
+    values: dict[str, str] = {}
+    for line in (m.group(1).splitlines() if m else []):
+        key, sep, value = line.partition(":")
+        if sep and key and not key[0].isspace() and key.strip() not in values:
+            values[key.strip()] = value.strip()
+    return values
+
+
+def note_split_in_description(head: str, date: str) -> str:
+    """Append a short note to a single-line `description:`; anything else is left alone."""
+    m = FRONTMATTER.match(head)
+    if not m:
+        return head
+    note = f" (contexts split by memory-curator on {date})"
+    fm_lines = m.group(1).split("\n")
+    for i, line in enumerate(fm_lines):
+        if not line.startswith("description:"):
+            continue
+        value = line[len("description:"):].strip()
+        continuation = i + 1 < len(fm_lines) and fm_lines[i + 1][:1] in (" ", "\t")
+        if not value or value[0] in ">|" or continuation or "split by memory-curator" in value:
+            return head
+        if len(value) > 1 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[:-1] + note + value[-1]
+        else:
+            value += note
+        fm_lines[i] = f"description: {value}"
+        return head[:m.start(1)] + "\n".join(fm_lines) + head[m.end(1):]
+    return head
+
+
+def pointer_bullet(target: Path, source: Path, label: str, suffix: str = "") -> str:
+    return f"- {label}({os.path.relpath(target, source.parent)}){suffix}"
+
+
+def split_pointer_list(source: Path, root: Path, clusters: list[dict],
+                       principles: list[str], date: str) -> str:
+    experience = root / "leaves/experience"
+    lines = [f"{SPLIT_MARKER} {date}:", ""]
+    for cluster in clusters:
+        n = len(cluster["contexts"])
+        lines.append(pointer_bullet(
+            experience / f"{cluster['slug']}.md", source, f"[{one_line(cluster['name'])}]",
+            f" — {n} context{'s' if n != 1 else ''}"))
+    for slug in principles:
+        lines.append(pointer_bullet(
+            root / f"leaves/principles/{slug}.md", source, f"principle: [{slug}]"))
+    return "\n".join(lines) + "\n"
+
+
+def rewritten_source(parsed: SourceContexts, kept: list[str], pointers: str, date: str) -> str:
+    out = note_split_in_description(parsed.head, date) + "\n" + pointers
+    if parsed.preamble.strip():
+        out += "\n" + parsed.preamble.strip("\n") + "\n"
+    out += "".join("\n" + block for block in kept)
+    if parsed.tail:
+        out += "\n" + parsed.tail
+    return out
+
+
+def add_pointer_to_split_list(text: str, bullet: str) -> str | None:
+    """Add `bullet` to the source's 'Moved by ...' list; None when the source is unsplit."""
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if not SPLIT_MARKER_LINE.fullmatch(line.rstrip("\r\n")):
+            continue
+        j = i + 1
+        while j < len(lines) and not lines[j].strip():
+            j += 1
+        last = i
+        while j < len(lines) and lines[j].startswith("- "):
+            last, j = j, j + 1
+        if any(l.rstrip("\r\n") == bullet for l in lines):
+            return text
+        lines.insert(last + 1, bullet + "\n")
+        return "".join(lines)
+    return None
+
+
+def cluster_leaf_text(cluster: dict, blocks: list[str], carried: dict[str, str],
+                      source: Path, leaf: Path, date: str) -> str:
+    fm = ["---", f"name: {cluster['slug']}", f"description: {one_line(cluster['description'])}"]
+    fm += [f"{key}: {carried[key]}" for key in CARRIED_KEYS if key in carried]
+    fm += [f"resolution_confirmed_by_user: {carried['resolution_confirmed_by_user']}",
+           f"created: {date}", f"last_verified: {date}", "---", ""]
+    origin = os.path.relpath(source, leaf.parent)
+    return (
+        "\n".join(fm)
+        + f"\n# {one_line(cluster['name'])}\n"
+        + f"\n## Difficulty\n{cluster['difficulty'].strip()}\n"
+        + f"\n**Functional ground:** {one_line(cluster['functional_ground'])}\n"
+        + "\n## Order & criterion\n"
+        + f"Split out of [{source.stem}]({origin}) by memory-curator split on {date}: "
+        + "the contexts below arose under that leaf's difficulty and cluster here by the "
+        + "functional ground named above. The order and acceptance check of the original "
+        + "stay in the source leaf.\n"
+        + "\n## Contexts\n\n" + "\n".join(blocks)
+        + "\n## Cost\n"
+        + f"Not costed separately: the contexts keep the cost recorded in [{source.stem}]({origin}).\n"
+    )
+
+
+def cmd_split_contexts(a) -> int:
+    source = Path(a.source)
+    if not source.is_file():
+        refuse(f"source not found: {source}")
+    try:
+        parsed = parse_contexts(read_text_exact(source))
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        refuse(f"{source}: {exc}")
+    for context_id, block in zip(context_ids(parsed.blocks), parsed.blocks):
+        print(f"{context_id} {block.split(chr(10), 1)[0][4:].strip()}")
+    return 0
+
+
+def cmd_split_apply(a) -> int:
+    manifest, manifest_path = read_manifest(a.manifest)
+    root = manifest_root(manifest, manifest_path)
+    refuse_canon(root, "split-apply")
+    problems = manifest_problems(manifest)
+    if problems:
+        refuse(*problems)
+    source = (root / manifest["source"]).resolve()
+    try:
+        source.relative_to(root)
+        text = read_text_exact(source)
+        parsed = parse_contexts(text)
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        refuse(f"source {manifest['source']}: {exc}")
+    ids = context_ids(parsed.blocks)
+    problems = assignment_problems(manifest, ids)
+    experience = root / "leaves/experience"
+    leaves = {c["slug"]: experience / f"{c['slug']}.md" for c in manifest["clusters"]}
+    problems += [f"cluster leaf already exists: {p}" for p in leaves.values()
+                 if p.exists() or p.resolve() == source]
+    principles = manifest.get("principles", [])
+    problems += [f"principle {s} is listed but {root / 'leaves/principles' / (s + '.md')} "
+                 f"does not exist" for s in principles
+                 if not (root / "leaves/principles" / f"{s}.md").is_file()]
+    carried = frontmatter_values(text)
+    if not carried.get("resolution_confirmed_by_user"):
+        problems.append("source has no resolution_confirmed_by_user to carry over")
+    carried.setdefault("type", "reference")
+    carried.setdefault("schema", "difficulty/v1")
+    if problems:
+        refuse(*problems)
+
+    pointers = split_pointer_list(source, root, manifest["clusters"], principles, a.date)
+    # blocks keep the source's own order, not the order the manifest lists them in
+    kept = set(manifest["keep"])
+    writes = {source: rewritten_source(
+        parsed, [b for i, b in zip(ids, parsed.blocks) if i in kept], pointers, a.date)}
+    for cluster in manifest["clusters"]:
+        wanted = set(cluster["contexts"])
+        blocks = [b for i, b in zip(ids, parsed.blocks) if i in wanted]
+        leaf = leaves[cluster["slug"]]
+        writes[leaf] = cluster_leaf_text(cluster, blocks, carried, source, leaf, a.date)
+
+    index = experience / "MEMORY.md"
+    snapshot = Snapshot([index, *writes])
+    try:
+        for path, content in writes.items():
+            write_text_exact(path, content)
+        for cluster in manifest["clusters"]:
+            update_subindex(experience, a.date, one_line(cluster["name"]),
+                            f"{cluster['slug']}.md", one_line(cluster["description"]),
+                            session=getattr(a, "session", None))
+    except Exception as exc:
+        snapshot.restore()
+        sys.exit(f"split-apply failed, nothing written: {exc}")
+    for path in writes:
+        edit_ledger.stamp(str(path), "record-experience:split-apply",
+                          session=getattr(a, "session", None))
+    print(f"split {source.name}: {len(manifest['clusters'])} cluster leaf/leaves written, "
+          f"{len(kept)} context(s) kept, indexed in {index}")
+    return 0
+
+
+def cmd_promote(a) -> int:
+    manifest = manifest_path = None
+    if a.manifest:
+        manifest, manifest_path = read_manifest(a.manifest)
+    if a.root:
+        root = Path(a.root).resolve()
+    elif manifest is not None:
+        root = manifest_root(manifest, manifest_path)
+    else:
+        root = (REPO_ROOT / "memory-global").resolve()
+    refuse_canon(root, "promote")
+    problems = []
+    if not SLUG.fullmatch(a.slug):
+        problems.append(f"slug {a.slug!r} must match [a-z0-9][a-z0-9-]*")
+    if manifest is not None:
+        problems += manifest_problems(manifest)
+    leaves = root / "leaves"
+    for slug in a.induced_from:
+        if not SLUG.fullmatch(slug) or not any(leaves.rglob(f"{slug}.md")):
+            problems.append(f"induced-from leaf {slug!r} not found under {leaves}")
+    path = leaves / "principles" / f"{a.slug}.md"
+    if path.exists():
+        problems.append(f"principle already exists: {path}")
+    if problems:
+        refuse(*problems)
+
+    text = (
+        "---\n"
+        f"name: {a.slug}\n"
+        f"description: {one_line(a.description)}\n"
+        "type: reference\n"
+        "schema: principle/v1\n"
+        f"generality: {a.generality}\n"
+        f"induced_from: [{', '.join(a.induced_from)}]\n"
+        + (f"domain: {a.domain}\n" if a.domain else "")
+        + f"created: {a.date}\n"
+        f"last_verified: {a.date}\n"
+        "---\n\n"
+        f"# {one_line(a.name)}\n\n"
+        f"## Principle\n\n{a.statement.strip()}\n\n"
+        "## Generality\n\n"
+        f"Level {a.generality} — TODO (curator): name the class of tasks this statement "
+        "ranges over and what it is deliberately not claimed for.\n\n"
+        "## Induced from\n\n"
+        + "".join(f"- [[{s}]] — TODO (curator): what this source contributes.\n"
+                  for s in a.induced_from)
+        + "\n## Refutation\n\n"
+        "TODO (curator): the observation that would refute this principle or force a "
+        "broader form.\n\n"
+        "## See also\n\n"
+        "- TODO (curator): sibling principles and the leaves that apply this one.\n"
+    )
+    index = leaves / "principles" / "MEMORY.md"
+    pointer = (f"- [{one_line(a.name)}]({a.slug}.md) — {one_line(a.description)} "
+               f"← {', '.join(f'`{s}`' for s in a.induced_from)}.\n")
+    index_text = read_text_exact(index) if index.exists() else (
+        "# Principles\n\nGenerality-graded, provenance-rooted, refutable principles "
+        "(schema: ../principle-leaf-schema.md).\n")
+    heading = re.search(rf"^## Level {a.generality}\b.*$", index_text, re.MULTILINE)
+    if heading:
+        nxt = H2.search(index_text, heading.end())
+        end = nxt.start() if nxt else len(index_text)
+        body = index_text[heading.end():end].rstrip("\n")
+        index_text = (index_text[:heading.end()] + (body or "\n") + "\n" + pointer
+                      + ("\n" if nxt else "") + index_text[end:])
+    else:
+        index_text = (index_text.rstrip("\n") + f"\n\n## Level {a.generality} — "
+                      f"{LEVEL_LABELS[a.generality]}\n\n{pointer}")
+
+    writes = {path: text, index: index_text}
+    if manifest is not None:
+        principles = list(manifest.get("principles", []))
+        if a.slug not in principles:
+            principles.append(a.slug)
+        manifest["principles"] = principles
+        writes[manifest_path] = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+        source = (root / manifest["source"]).resolve()
+        if source.is_file():
+            bullet = pointer_bullet(path, source, f"principle: [{a.slug}]")
+            updated = add_pointer_to_split_list(read_text_exact(source), bullet)
+            if updated is not None:
+                writes[source] = updated
+    snapshot = Snapshot(writes)
+    try:
+        for target, content in writes.items():
+            write_text_exact(target, content)
+    except Exception as exc:
+        snapshot.restore()
+        sys.exit(f"promote failed, nothing written: {exc}")
+    for target in writes:
+        edit_ledger.stamp(str(target), "record-experience:promote",
+                          session=getattr(a, "session", None))
+    print(f"wrote {path}\nupdated {index}")
+    return 0
+
+
+def read_base(manifest: dict, root: Path, source: Path) -> str:
+    base_path = manifest.get("base_path")
+    if isinstance(base_path, str) and base_path:
+        try:
+            return read_text_exact(root / base_path)
+        except (OSError, UnicodeDecodeError) as exc:
+            refuse(f"cannot read base_path {base_path}: {exc}")
+    shown = subprocess.run(
+        ["git", "-C", str(source.parent), "show", f"{manifest['base_rev']}:./{source.name}"],
+        capture_output=True, timeout=SUBPROCESS_TIMEOUT_S)
+    if shown.returncode != 0:
+        refuse(f"cannot read {source.name} at {manifest['base_rev']}: "
+               f"{shown.stderr.decode('utf-8', 'replace').strip()}")
+    return shown.stdout.decode("utf-8")
+
+
+def run_verifier(script: str, *args: str, env: dict | None = None) -> str | None:
+    """None when the verifier passes, else a one-line account of what it said."""
+    done = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve().parent / script), *args],
+        capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_S, env=env)
+    if done.returncode == 0:
+        return None
+    said = [l.strip() for l in (done.stdout + done.stderr).splitlines() if l.strip()]
+    return " | ".join(said[:5]) or f"exit {done.returncode}"
+
+
+def memory_index_verdict(root: Path) -> str | None:
+    """verify-memory-index.py wants <repo>/memory-global/leaves; present the root as that."""
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "memory-global").symlink_to(root, target_is_directory=True)
+        env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(Path(tmp).parent))
+        return run_verifier("verify-memory-index.py", "--root", tmp, env=env)
+
+
+def cmd_split_verify(a) -> int:
+    manifest, manifest_path = read_manifest(a.manifest)
+    root = manifest_root(manifest, manifest_path)
+    problems = manifest_problems(manifest)
+    if problems:
+        refuse(*problems)
+    source = (root / manifest["source"]).resolve()
+    try:
+        base = parse_contexts(read_base(manifest, root, source))
+    except ValueError as exc:
+        refuse(f"base of {manifest['source']}: {exc}")
+    base_ids = context_ids(base.blocks)
+    failures = [f"manifest: {p}" for p in assignment_problems(manifest, base_ids)]
+
+    experience = root / "leaves/experience"
+    expected = {source: list(manifest["keep"])}
+    for cluster in manifest["clusters"]:
+        expected[experience / f"{cluster['slug']}.md"] = list(cluster["contexts"])
+    present: dict[Path, list[str]] = {}
+    for leaf in expected:
+        present[leaf] = []
+        if not leaf.is_file():
+            continue
+        try:
+            present[leaf] = [block_sha(b) for b in parse_contexts(read_text_exact(leaf)).blocks]
+        except (ValueError, UnicodeDecodeError) as exc:
+            failures.append(f"verifier: {leaf}: {exc}")
+
+    base_by_sha: dict[str, list[str]] = {}
+    for context_id in base_ids:
+        base_by_sha.setdefault(context_id.split(":")[1], []).append(context_id)
+    found: dict[str, int] = {}
+    for shas in present.values():
+        for sha in shas:
+            found[sha] = found.get(sha, 0) + 1
+    for sha, ids in base_by_sha.items():
+        failures += [f"missing: {i}" for i in ids[found.get(sha, 0):]]
+        if found.get(sha, 0) > len(ids):
+            failures.append(f"duplicate: {ids[0]}")
+    for leaf, shas in present.items():
+        failures += [f"unexpected: {n}:{sha} in {leaf}"
+                     for n, sha in enumerate(shas, 1) if sha not in base_by_sha]
+
+    if not failures:
+        for leaf, ids in expected.items():
+            allowed = [i.split(":")[1] for i in ids]
+            for n, sha in enumerate(present[leaf], 1):
+                if sha in allowed:
+                    allowed.remove(sha)
+                else:
+                    failures.append(f"misplaced: {n}:{sha} in {leaf}")
+
+    checked = list(expected) + [root / "leaves/principles" / f"{s}.md"
+                                for s in manifest.get("principles", [])]
+    for leaf in checked:
+        if not leaf.is_file():
+            failures.append(f"verifier: {leaf}: file not found")
+            continue
+        for script in ("verify-experience-leaf.py", "verify-leaf-structure.py"):
+            said = run_verifier(script, str(leaf))
+            if said:
+                failures.append(f"verifier: {leaf}: {said}")
+    said = memory_index_verdict(root)
+    if said:
+        failures.append(f"verifier: {root}: {said}")
+
+    for line in failures:
+        print(line)
+    if failures:
+        print(f"split-verify: FAIL — {len(failures)} problem(s)")
+        return 1
+    print(f"split-verify: OK — {len(base_ids)} context(s) of {manifest['source']} conserved "
+          f"across {len(expected)} leaf/leaves, verifiers green")
+    return 0
+
+
+# --------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -700,6 +1334,49 @@ def build_parser() -> argparse.ArgumentParser:
         help="emit clusters as JSON instead of human-readable text",
     )
     ps.set_defaults(func=cmd_promote_scan)
+
+    def add_manifest(sp, *, required: bool = True):
+        sp.add_argument("--manifest", required=required,
+                        help="split manifest JSON written by the memory curator")
+
+    sc = sub.add_parser("split-contexts",
+                        help="list '<id> <heading>' per context block of a leaf (read-only)")
+    sc.add_argument("--source", required=True)
+    sc.set_defaults(func=cmd_split_contexts)
+
+    sa = sub.add_parser("split-apply",
+                        help="execute a split manifest: move contexts byte-exactly into "
+                             "cluster leaves (refuses the canonical checkout)")
+    add_manifest(sa)
+    sa.add_argument("--date", default=today())
+    sa.add_argument("--session", default=None,
+                    help="ledger session_id for the edit-ledger stamp of this write")
+    sa.set_defaults(func=cmd_split_apply)
+
+    sv = sub.add_parser("split-verify",
+                        help="check a split manifest: every base context present exactly "
+                             "once, verifiers green (read-only)")
+    add_manifest(sv)
+    sv.set_defaults(func=cmd_split_verify)
+
+    pr = sub.add_parser("promote",
+                        help="write a principle/v1 skeleton and its principles/MEMORY.md "
+                             "pointer (refuses the canonical checkout)")
+    pr.add_argument("--root", help="memory root (default: <repo>/memory-global, or the "
+                                   "manifest's root when --manifest is given)")
+    add_manifest(pr, required=False)
+    pr.add_argument("--slug", required=True)
+    pr.add_argument("--name", required=True)
+    pr.add_argument("--description", required=True)
+    pr.add_argument("--generality", type=int, choices=[1, 2, 3], required=True)
+    pr.add_argument("--induced-from", action="append", required=True, dest="induced_from",
+                    metavar="SLUG", help="a leaf slug this principle generalizes; repeatable")
+    pr.add_argument("--statement", required=True)
+    pr.add_argument("--domain")
+    pr.add_argument("--date", default=today())
+    pr.add_argument("--session", default=None,
+                    help="ledger session_id for the edit-ledger stamp of this write")
+    pr.set_defaults(func=cmd_promote)
     return p
 
 
