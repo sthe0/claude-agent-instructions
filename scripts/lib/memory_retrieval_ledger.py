@@ -50,9 +50,19 @@ def leaf_key(path) -> str:
 def extract_nonce(prompt) -> str | None:
     if not isinstance(prompt, str):
         return None
-    _, marker, tail = prompt.partition(NONCE_MARKER)
-    tokens = tail.split(maxsplit=1) if marker else []
-    return tokens[0] if tokens else None
+    # A brief can quote the marker in prose before the real one is stated,
+    # so a line-start marker wins over a mid-line one, and the last wins.
+    found: list[tuple[bool, str]] = []
+    start = 0
+    while (at := prompt.find(NONCE_MARKER, start)) != -1:
+        start = at + len(NONCE_MARKER)
+        tokens = prompt[start:].split(maxsplit=1)
+        if tokens:
+            found.append((at == 0 or prompt[at - 1] == "\n", tokens[0]))
+    if not found:
+        return None
+    line_start = [token for at_line_start, token in found if at_line_start]
+    return (line_start or [token for _, token in found])[-1]
 
 
 def read_rows(path: Path | None = None) -> list[dict]:

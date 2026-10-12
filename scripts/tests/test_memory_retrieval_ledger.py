@@ -127,6 +127,14 @@ def test_surface_row_(tmp_path):
     assert second["surfaced"] == [] and second["nonce"] is None
 
 
+def test_extract_nonce_prefers_the_last_line_start_marker():
+    quoted_first = "notes: `run-nonce: <token>'` is the format\n\nrun-nonce: real-1\nbody"
+    assert ledger.extract_nonce(quoted_first) == "real-1"
+    assert ledger.extract_nonce("a run-nonce: x1 then run-nonce: x2") == "x2"
+    assert ledger.extract_nonce("no marker here") is None
+    assert ledger.extract_nonce("trailing run-nonce:") is None
+
+
 def test_extend_hit_(tmp_path, memroot):
     leaf = _leaf(memroot, "2026-01-01-alpha.md", "pelican migration")
     link = tmp_path / "linked"
