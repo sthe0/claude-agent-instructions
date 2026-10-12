@@ -923,10 +923,12 @@ def _agent_renegotiation_refusal(state: SessionState, decision: str, doc) -> str
     return None
 
 
-def _handoff_grant_resources(parent_link: dict | None, venue: str) -> list:
-    """The typed resources the adopted handoff's grant entries resolve to; an entry that
-    stays unresolved (a wildcard-tail rule) contributes none, so it covers nothing."""
+def _handoff_held(parent_link: dict | None, venue: str) -> tuple[list, list]:
+    """What the adopted handoff's grant entries hold: the typed resources they resolve to,
+    and the identities of the entries that stay unresolved (a wildcard-tail rule), which
+    cover only an identical unresolved item of the child's plan."""
     held: list = []
+    held_unresolved: list = []
     for entry in (parent_link or {}).get("grants") or []:
         if entry.get("rule"):
             resolution = plan_resources.resolve_rule_grant(entry["rule"], venue)
@@ -934,7 +936,19 @@ def _handoff_grant_resources(parent_link: dict | None, venue: str) -> list:
             resolution = plan_resources.resolve_add_dir_grant(entry["path"], entry["mode"])
         if resolution.status == "resolved":
             held.extend(resolution.resources)
-    return held
+        else:
+            held_unresolved.append(list(resolution.identity or ("unresolved", entry["rule"])))
+    return held, held_unresolved
+
+
+def _self_approve_detail(autonomy: dict, *, replan: bool) -> str:
+    """The `self_approve` Directive's detail, naming the basis the plan was judged on."""
+    kind = "substantive replan" if replan else "plan"
+    if autonomy.get("basis") == gates.PARENT_NORM_BASIS:
+        return (f"{kind} is inside the norm and grants of the parent stage this session "
+                "serves; run `approve --by agent`")
+    verb = "inside" if replan else "is inside"
+    return f"{kind} {verb} the boundary the user approved for this order; run `approve --by agent`"
 
 
 def _autonomy_for(state: SessionState, doc) -> dict:
@@ -953,10 +967,13 @@ def _autonomy_for(state: SessionState, doc) -> dict:
     view = plan_resources.compute_boundary_view(doc, order_digest(doc), venue=_venue_for(doc))
     order = doc.meta.order
     if order is not None and order.parent_norm:
+        held, held_unresolved = _handoff_held(state.parent_link, _venue_for(doc))
         return gates.parent_norm_boundary(
             state.parent_link, order.parent_norm,
-            [(c.command, c.expected_exit) for c in doc.meta.final_check if c.kind == "shell"],
-            view.resources, _handoff_grant_resources(state.parent_link, _venue_for(doc)),
+            [(c.command, c.expected_exit) for c in doc.meta.final_check
+             if c.kind == CheckKind.SHELL.value],
+            view.resources, held,
+            unresolved=view.unresolved, held_unresolved=held_unresolved,
             max_depth=Thresholds().max_recursion_depth, protected=protected,
         )
     key = _ledgered_order_key(state) or order_digest(doc)
@@ -1114,10 +1131,15 @@ def _kind_within_boundary(state: SessionState, kind: str, doc, *, ledgered: bool
     """A refinement that moves the order digest, adds a resource beyond the user's
     approved set, or changes a command the engine cannot resolve to a resource is not a
     refinement: it re-enters the approval gate as substantive. `ledgered`: the order has
-    a user-approved ledger record (`_ledgered_order_key`); without one nothing is judged."""
+    a user-approved ledger record (`_ledgered_order_key`) or the plan declares a
+    `parent_norm`; without either nothing is judged. A plan judged on the parent-norm basis
+    re-enters the gate whenever its verdict is no longer eligible (a dropped parent check,
+    an uncovered resource, an unresolved item the handoff does not carry)."""
     if kind != "refinement" or not ledgered:
         return kind
     verdict = _autonomy_for(state, doc)
+    if verdict.get("basis") == gates.PARENT_NORM_BASIS and not verdict["eligible"]:
+        return "substantive"
     if (verdict["order_changed"] or verdict["extra_resources"]
             or verdict["unresolved_changed_commands"]):
         return "substantive"
@@ -1126,11 +1148,14 @@ def _kind_within_boundary(state: SessionState, kind: str, doc, *, ledgered: bool
 
 def _replan_kind(state: SessionState, old, new) -> str:
     """The kind a replan from `old` to `new` applies as. The verify-identity relaxation
-    is admitted only for a ledgered order, the one case `_kind_within_boundary` judges."""
+    is admitted only for a ledgered order; a plan that declares a `parent_norm` is judged
+    by `_kind_within_boundary` too but gets no relaxation."""
     from .plan import diff_plans
     ledgered = _ledgered_order_key(state) is not None
+    order = new.meta.order
+    parent_norm_plan = order is not None and bool(order.parent_norm)
     kind = diff_plans(old, new, relax_verify_identity=ledgered)
-    return _kind_within_boundary(state, kind, new, ledgered=ledgered)
+    return _kind_within_boundary(state, kind, new, ledgered=ledgered or parent_norm_plan)
 
 
 def _replan_pending_indices(state: SessionState, new, kind: str) -> list[int]:
@@ -3816,10 +3841,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     if autonomy["action"] == "self_approve":
         d = Directive(
             True, state.node, "self_approve",
-            ("plan is inside the norm and grants of the parent stage this session serves; run "
-             if autonomy.get("basis") == gates.PARENT_NORM_BASIS else
-             "plan is inside the boundary the user approved for this order; run ")
-            + "`approve --by agent`",
+            _self_approve_detail(autonomy, replan=False),
             data=directive_data,
         )
     else:
@@ -6125,7 +6147,8 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if snap:
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
     if agent_autonomy is not None:
-        ledger_key = None if agent_autonomy.get("basis") else _ledgered_order_key(state)
+        parent_norm_basis = agent_autonomy.get("basis") == gates.PARENT_NORM_BASIS
+        ledger_key = None if parent_norm_basis else _ledgered_order_key(state)
         approved = order_approvals.latest_user_approved_record(ledger_key) if ledger_key else None
         frozen = (approved or {}).get("effort_estimate") or {}
         if frozen:
@@ -6133,7 +6156,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             effort.rederive(state)
         state.log(
             "approve", by=args.by,
-            **({"basis": agent_autonomy["basis"]} if agent_autonomy.get("basis") else {}),
+            **({"basis": gates.PARENT_NORM_BASIS} if parent_norm_basis else {}),
             extra_resources=[e["name"] for e in agent_autonomy["extra_resources"]],
             unresolved_changed_commands=[
                 c["source"] for c in agent_autonomy["unresolved_changed_commands"]],
@@ -10630,8 +10653,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if autonomy["action"] == "self_approve":
         return _with_advisories(Directive(
             True, state.node, "self_approve",
-            "substantive replan inside the boundary the user approved for this order; run "
-            "`approve --by agent`",
+            _self_approve_detail(autonomy, replan=True),
             data=directive_data,
         ), echo_advice)
     return _with_advisories(Directive(

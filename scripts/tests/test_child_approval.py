@@ -37,6 +37,7 @@ from conftest import SUBSTANTIVE_ORDER
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "plan_two_stage.toml"
 PARENT_CHECK = "python3 -m pytest -q tests/test_mod.py"
 NOT_A_DIGEST = "f" * 64
+WILDCARD_RULE = "Bash(python3 scripts/tool.py:*)"
 
 # The digests of `FIXTURE` with `SUBSTANTIVE_ORDER` spliced before its first stage, read on
 # the base tree a80e19d6, before `Order` had a `parent_norm`.
@@ -88,12 +89,16 @@ def _parent_norm(tmp_path: Path, **kw) -> StageNorm:
 
 def _covering_grants(plan_path: str, *, without: str | None = None) -> list[dict]:
     """Handoff grant entries that cover every file resource of the plan at `plan_path`,
-    less the one whose path ends with `without`."""
+    less the one whose path ends with `without`, and the unresolved rules the plan's
+    output artifacts derive (the parent stage derived the same ones for the same
+    artifacts). A declared unresolved rule is not covered: the tests that need it add it."""
     doc = load_plan(plan_path, strict=False)
     view = plan_resources.compute_boundary_view(doc, order_digest(doc), venue=_venue_for(doc))
     entries = [{"path": r.path, "mode": r.mode} for r in view.resources
                if isinstance(r, agentctl_resources.FileResource)]
-    return [e for e in entries if not (without and e["path"].endswith(without))]
+    entries = [e for e in entries if not (without and e["path"].endswith(without))]
+    return entries + [{"rule": item["source"]} for item in view.unresolved
+                      if item["origin"] == "output_artifact"]
 
 
 class Child:
@@ -198,7 +203,8 @@ def test_in_norm_child_plan_self_approves(child):
     autonomy = _autonomy(d)
     assert autonomy.get("action") == "self_approve", (
         f"BEHAVIOUR: a plan inside the parent's norm and grants is not routed to self-approval: "
-        f"action={autonomy.get('action')} reasons={autonomy.get('reasons')}"
+        f"action={autonomy.get('action')} reasons={autonomy.get('reasons')} "
+        f"unresolved={autonomy.get('unresolved_changed_commands')}"
     )
     assert autonomy["basis"] == "parent_norm"
     approved = child.run("approve", session="child-1", by="agent")
@@ -245,6 +251,33 @@ def test_uncovered_resource_is_named(child, tmp_path):
     names = [e["name"] for e in _autonomy(d).get("extra_resources") or []]
     assert any("/tests/test_mod.py" in n for n in names), names
     _refusal(child, "resource-not-in-handoff")
+
+
+def _with_stage_grant(text: str, *rules: str) -> str:
+    quoted = ", ".join(f'"{r}"' for r in rules)
+    marker = 'output_artifacts = ["mod.py"]\n'
+    assert marker in text, "fixture changed: setup defect"
+    return text.replace(marker, marker + f"\n[stage.grants]\nallow = [{quoted}]\n", 1)
+
+
+def test_wildcard_tail_stage_grant_is_refused(child):
+    text = _with_stage_grant(
+        _spliced(parent_norm=child.digest, final_checks=((PARENT_CHECK, 0),)), WILDCARD_RULE)
+    d, _ = _linked_submit(child, plan_text=text)
+    _assert_named(d, "unresolved-not-in-handoff")
+    sources = [c["source"] for c in _autonomy(d).get("unresolved_changed_commands") or []]
+    assert WILDCARD_RULE in sources, sources
+    _refusal(child, "unresolved-not-in-handoff")
+
+
+def test_wildcard_tail_stage_grant_held_by_the_handoff_is_covered(child):
+    text = _with_stage_grant(
+        _spliced(parent_norm=child.digest, final_checks=((PARENT_CHECK, 0),)), WILDCARD_RULE)
+    plan = child.write(text)
+    child.link(grants=[*_covering_grants(plan), {"rule": WILDCARD_RULE}])
+    d = child.submit(plan)
+    assert _autonomy(d).get("eligible") is True, _autonomy(d)
+    assert child.run("approve", session="child-1", by="agent")["ok"] is True
 
 
 def test_depth_over_cap_is_named(child):
@@ -312,6 +345,54 @@ def test_plan_without_parent_norm_keeps_autonomy(child, tmp_path):
     assert refused["ok"] is False
 
 
+# --- a replan of a parent_norm plan is judged on the same basis ---------------------
+
+
+def _replan_kinds(child: Child, old_text: str, new_text: str) -> tuple[str, str]:
+    """`diff_plans`' kind and the kind the engine applies, for a replan of the submitted
+    `old_text` to `new_text` in a session linked to the parent stage."""
+    from agentctl.plan import diff_plans
+
+    old_path, new_path = child.write(old_text, "old.toml"), child.write(new_text, "new.toml")
+    child.link(grants=_covering_grants(old_path))
+    child.submit(old_path)
+    old, new = load_plan(old_path, strict=False), load_plan(new_path, strict=False)
+    return diff_plans(old, new, relax_verify_identity=False), cli._replan_kind(child.state(), old, new)
+
+
+def _tightened(text: str) -> str:
+    image = 'expected_result_image = "module file exists and imports cleanly"'
+    assert image in text, "fixture changed: setup defect"
+    return text.replace(image, image[:-1] + ' with no warnings"', 1)
+
+
+def test_replan_dropping_the_parent_check_is_substantive(child):
+    old = _spliced(parent_norm=child.digest, final_checks=((PARENT_CHECK, 0),))
+    new = _spliced(parent_norm=child.digest, final_checks=(("true", 0),))
+    _, applied = _replan_kinds(child, old, new)
+    assert applied == "substantive", f"BEHAVIOUR: dropping the parent check applies as {applied!r}"
+
+
+def test_replan_adding_an_unresolved_grant_is_substantive(child):
+    old = _spliced(parent_norm=child.digest, final_checks=((PARENT_CHECK, 0),))
+    new = _with_stage_grant(old, WILDCARD_RULE)
+    _, applied = _replan_kinds(child, old, new)
+    assert applied == "substantive", f"BEHAVIOUR: an uncovered grant applies as {applied!r}"
+
+
+def test_refinement_of_an_ineligible_parent_norm_plan_re_enters_the_gate(child):
+    old = _spliced(parent_norm=child.digest, final_checks=(("true", 0),))
+    diff_kind, applied = _replan_kinds(child, old, _tightened(old))
+    assert diff_kind == "refinement", f"setup: the edit is no refinement ({diff_kind!r})"
+    assert applied == "substantive", f"BEHAVIOUR: an ineligible plan's refinement stays {applied!r}"
+
+
+def test_refinement_of_an_eligible_parent_norm_plan_stays_a_refinement(child):
+    old = _spliced(parent_norm=child.digest, final_checks=((PARENT_CHECK, 0),))
+    diff_kind, applied = _replan_kinds(child, old, _tightened(old))
+    assert (diff_kind, applied) == ("refinement", "refinement")
+
+
 # --- the gate itself -----------------------------------------------------------------
 
 
@@ -319,30 +400,84 @@ def _link_dict(norm: StageNorm, *, depth: int = 1) -> dict:
     return {"norm": norm.to_dict(), "norm_digest": norm.norm_digest(), "grants": [], "depth": depth}
 
 
+def _gate(link, digest, final_checks, *, resources=(), held=(), unresolved=(), held_unresolved=(),
+          protected=None) -> dict:
+    from agentctl import gates
+
+    return gates.parent_norm_boundary(
+        link, digest, final_checks, list(resources), list(held), unresolved=list(unresolved),
+        held_unresolved=list(held_unresolved), max_depth=5, protected=protected)
+
+
 def test_gate_strips_whitespace_around_the_parent_check(tmp_path):
     from agentctl import gates
 
     norm = _parent_norm(tmp_path)
-    verdict = gates.parent_norm_boundary(
-        _link_dict(norm), norm.norm_digest(), [(f"  {PARENT_CHECK}\n", 0)], [], [], max_depth=5)
+    verdict = _gate(_link_dict(norm), norm.norm_digest(), [(f"  {PARENT_CHECK}\n", 0)])
     assert verdict["eligible"] is True, verdict
     assert verdict["basis"] == "parent_norm"
-    changed = gates.parent_norm_boundary(
-        _link_dict(norm), norm.norm_digest(), [(PARENT_CHECK + " -x", 0)], [], [], max_depth=5)
+    changed = _gate(_link_dict(norm), norm.norm_digest(), [(PARENT_CHECK + " -x", 0)])
     assert changed["reasons"] == ["parent-check-dropped"]
 
 
 def test_gate_reports_every_failing_condition(tmp_path):
-    from agentctl import gates
-
     norm = _parent_norm(tmp_path)
-    verdict = gates.parent_norm_boundary(
-        _link_dict(norm, depth=9), NOT_A_DIGEST, [], [], [], max_depth=5)
+    verdict = _gate(_link_dict(norm, depth=9), NOT_A_DIGEST, [])
     assert verdict["reasons"] == [
         "parent-norm-digest-mismatch", "parent-check-dropped", "depth-over-cap"]
     assert verdict["reason_texts"][0].startswith("parent-norm-digest-mismatch: ")
-    assert gates.parent_norm_boundary(None, NOT_A_DIGEST, [], [], [], max_depth=5)["reasons"] == [
-        "not-linked"]
+    assert _gate(None, NOT_A_DIGEST, [])["reasons"] == ["not-linked"]
+
+
+def test_gate_exempts_a_specialist_resource(tmp_path):
+    norm = _parent_norm(tmp_path)
+    verdict = _gate(_link_dict(norm), norm.norm_digest(), [(PARENT_CHECK, 0)],
+                    resources=[agentctl_resources.SpecialistResource("developer")])
+    assert verdict["eligible"] is True, verdict
+    assert verdict["extra_resources"] == []
+
+
+def test_gate_never_covers_a_protected_surface_by_a_handoff_grant(tmp_path):
+    norm = _parent_norm(tmp_path)
+    surface = str(tmp_path / "ledger")
+    resource = agentctl_resources.FileResource(surface, "write")
+    verdict = _gate(_link_dict(norm), norm.norm_digest(), [(PARENT_CHECK, 0)],
+                    resources=[resource], held=[resource], protected=[surface])
+    assert verdict["reasons"] == ["resource-not-in-handoff"]
+    unprotected = _gate(_link_dict(norm), norm.norm_digest(), [(PARENT_CHECK, 0)],
+                        resources=[resource], held=[resource])
+    assert unprotected["eligible"] is True, unprotected
+
+
+def test_gate_covers_an_unresolved_item_only_by_an_identical_identity(tmp_path):
+    norm = _parent_norm(tmp_path)
+    item = {"identity": ["wildcard-tail", WILDCARD_RULE], "origin": "declared", "source": WILDCARD_RULE}
+    uncovered = _gate(_link_dict(norm), norm.norm_digest(), [(PARENT_CHECK, 0)], unresolved=[item])
+    assert uncovered["reasons"] == ["unresolved-not-in-handoff"]
+    assert [c["source"] for c in uncovered["unresolved_changed_commands"]] == [WILDCARD_RULE]
+    other = [["wildcard-tail", "Bash(python3 scripts/other.py:*)"]]
+    assert _gate(_link_dict(norm), norm.norm_digest(), [(PARENT_CHECK, 0)], unresolved=[item],
+                 held_unresolved=other)["reasons"] == ["unresolved-not-in-handoff"]
+    held = [["wildcard-tail", WILDCARD_RULE]]
+    assert _gate(_link_dict(norm), norm.norm_digest(), [(PARENT_CHECK, 0)], unresolved=[item],
+                 held_unresolved=held)["eligible"] is True
+
+
+def test_gate_exempts_only_the_final_check_that_is_the_parent_norm(tmp_path):
+    norm = _parent_norm(tmp_path)
+    parent_check = {"identity": ["final-check", PARENT_CHECK], "origin": "final_check",
+                    "source": f" {PARENT_CHECK}\n"}
+    assert _gate(_link_dict(norm), norm.norm_digest(), [(PARENT_CHECK, 0)],
+                 unresolved=[parent_check])["eligible"] is True
+    as_stage_check = {**parent_check, "origin": "verify_command"}
+    assert _gate(_link_dict(norm), norm.norm_digest(), [(PARENT_CHECK, 0)],
+                 unresolved=[as_stage_check])["reasons"] == ["unresolved-not-in-handoff"]
+    other_check = {"identity": ["final-check", "true"], "origin": "final_check", "source": "true"}
+    assert _gate(_link_dict(norm), norm.norm_digest(), [(PARENT_CHECK, 0)],
+                 unresolved=[other_check])["reasons"] == ["unresolved-not-in-handoff"]
+    wrong_exit = _gate(_link_dict(norm), norm.norm_digest(), [(PARENT_CHECK, 1)],
+                       unresolved=[parent_check])
+    assert wrong_exit["reasons"] == ["parent-check-dropped", "unresolved-not-in-handoff"]
 
 
 def test_declaring_parent_norm_moves_the_order_keys(tmp_path):
