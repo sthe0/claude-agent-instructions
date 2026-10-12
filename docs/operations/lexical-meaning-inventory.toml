@@ -73,9 +73,9 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/cli.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: legacy id shape qenum-N, '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line and kind(args) resource spec, all fixed engine/markdown syntax."
-hits = 6
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Compiles: the 'Refusal: grant-widening' and 'Handoff-sha256:' label lines of a refusal block, legacy id shape qenum-N, '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line and kind(args) resource spec, all fixed engine/markdown syntax."
+hits = 8
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/cli.py::_parse_resource_line::pattern.match"]
@@ -87,6 +87,24 @@ reviewed_by = "developer"
 [sites."scripts/agentctl/cli.py::_parse_resource_spec::pattern.match"]
 class = "structural"
 ground = "_RESOURCE_SPEC_RE.match parses the kind(args) resource-spec syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_is_grant_widening_refusal::pattern.search"]
+class = "structural"
+ground = "_REFUSAL_LINE_RE.search finds the engine-authored 'Refusal: grant-widening' label line in a spawn's stdout; exit code and marker are checked separately, so the match decides a fixed label syntax, not meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_parse_rule_lines::pattern.match"]
+class = "structural"
+ground = "_RULE_LINE_RE.match reads each 'Rule:' label line of a marker body, a fixed label syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::cmd_dispatch::pattern.search"]
+class = "structural"
+ground = "_HANDOFF_SHA_LINE_RE.search reads the 'Handoff-sha256:' label line of a grant-widening refusal block, a fixed label syntax."
 hits = 1
 reviewed_by = "developer"
 
@@ -1091,6 +1109,32 @@ reviewed_by = "developer"
 class = "structural"
 ground = "Finds the '### Open violations' markdown section in a doc to read its bullets; markdown structure."
 hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/instruction_smoke_gate.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: the push-rights token list (a mirror of the sibling shell script's own regex, pinned equal by a test and used only to defuse text, never to decide), the all-zero sha and the 40/64-hex object name shape; fixed formats."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/instruction_smoke_gate.py::defuse::pattern.sub"]
+class = "structural"
+ground = "_PUSH_RIGHTS.sub inserts a separator into each matched token so the sibling script does not read the line as a push-rights failure; it rewrites text and decides nothing."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/instruction_smoke_gate.py::is_valid_sha::pattern.fullmatch"]
+class = "structural"
+ground = "_SHA.fullmatch checks that a value has the 40/64-hex shape of a git object name; a format check."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/instruction_smoke_gate.py::prepush_decision::pattern.fullmatch"]
+class = "structural"
+ground = "ZERO_SHA.fullmatch recognizes git's all-zero null object name in a pre-push input line (a deleted ref, a ref new on the remote); fixed git protocol syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/lib/permission_entry_match.py::_has_unresolved_separator::pattern.finditer"]
