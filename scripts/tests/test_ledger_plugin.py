@@ -172,10 +172,10 @@ def _drive_to_resolution(capsys, root, sid, plan, *, deliverable_kind):
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "experience", "--phase", "recorded")
 
 
-def test_e2e_resolve_blocked_until_ledger_closed_then_passes_and_retires(capsys, tmp_path, fixtures_dir):
+def test_e2e_resolve_blocked_until_ledger_closed_then_passes_and_retires(capsys, tmp_path, venued_fixtures_dir):
     root = str(tmp_path / "state")
     sid = "lg-e2e"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _drive_to_resolution(capsys, root, sid, plan, deliverable_kind="reasoning")
 
     rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
@@ -202,10 +202,10 @@ def test_e2e_resolve_blocked_until_ledger_closed_then_passes_and_retires(capsys,
     assert "ledger" in raw["plugins_archive"]
 
 
-def test_e2e_non_reasoning_session_has_no_ledger_effect(capsys, tmp_path, fixtures_dir):
+def test_e2e_non_reasoning_session_has_no_ledger_effect(capsys, tmp_path, venued_fixtures_dir):
     root = str(tmp_path / "state")
     sid = "lg-none"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _drive_to_resolution(capsys, root, sid, plan, deliverable_kind="code")
     rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
     assert rc == 0

@@ -31,7 +31,7 @@ This is a PROJECTED BRIEF of stage 3 only, out of 3 stage(s) in the plan — the
 - **Supplies** (raw provision edges this stage declares):
   - on stage 2
 - **Grants (file-access scope):**
-  - derived allow: Edit(//./.github/workflows/ci.yml)
+  - in-venue grants not derived: the plan declares no absolute repo_root or delivery_worktree
 
 ## Service declared product: stage 2 (Add tests)
 

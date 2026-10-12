@@ -12,10 +12,10 @@ def ns(**kw):
     return Namespace(**kw)
 
 
-def _start_substantive(store, fixtures_dir):
+def _start_substantive(store, venued_fixtures_dir):
     """Bring the session to EXECUTING with an active spawn stage."""
     sid = "rc-test"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
 
     cli.cmd_start(ns(session=sid, task="rc-task", goal="g",
                      done_criterion="dc", criterion_type="measurable",
@@ -33,10 +33,10 @@ def _start_substantive(store, fixtures_dir):
     return sid
 
 
-def test_recursion_cap_refusal_yields_blocked_escalate(store, fixtures_dir):
-    sid = _start_substantive(store, fixtures_dir)
+def test_recursion_cap_refusal_yields_blocked_escalate(store, venued_fixtures_dir):
+    sid = _start_substantive(store, venued_fixtures_dir)
 
-    refused_runner = lambda argv: RunResult(3, stderr="above max-recursion-depth=5\n")
+    refused_runner = lambda argv, cwd=None: RunResult(3, stderr="above max-recursion-depth=5\n")
     d = cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
                             dry_run=False), store=store, runner=refused_runner)
 
@@ -45,10 +45,10 @@ def test_recursion_cap_refusal_yields_blocked_escalate(store, fixtures_dir):
     assert d.marker == "ESCALATE"
 
 
-def test_successful_dispatch_routes_to_record_result(store, fixtures_dir):
-    sid = _start_substantive(store, fixtures_dir)
+def test_successful_dispatch_routes_to_record_result(store, venued_fixtures_dir):
+    sid = _start_substantive(store, venued_fixtures_dir)
 
-    ok_runner = lambda argv: RunResult(0, stdout="COMPLETED: done\n")
+    ok_runner = lambda argv, cwd=None: RunResult(0, stdout="COMPLETED: done\n")
     d = cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
                             dry_run=False), store=store, runner=ok_runner)
 

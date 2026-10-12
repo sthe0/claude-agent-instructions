@@ -18,7 +18,7 @@ import pytest
 
 from agentctl import cli, gates, state as state_module
 from agentctl.state import Node
-from conftest import STAGE_OBSERVATIONS
+from conftest import STAGE_OBSERVATIONS, venue_plan
 from lib import transcript_turns
 
 SID = "ask-sess"
@@ -79,7 +79,8 @@ def write_transcript(tmp_path: Path, entries: list[dict], sid: str = SID) -> Pat
 
 
 def to_resolution(store, sid: str = SID):
-    fixtures = Path(__file__).parent / "fixtures"
+    venue = store.root.parent
+    plan = venue_plan(Path(__file__).parent / "fixtures" / "plan_two_stage.toml", venue / "plans", venue)
     cli.cmd_start(ns(session=sid, task="demo", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(
@@ -88,7 +89,7 @@ def to_resolution(store, sid: str = SID):
         new_dependency=False, public_api_change=False,
     ), store=store)
     cli.cmd_plan(ns(session=sid), store=store)
-    cli.cmd_submit_plan(ns(session=sid, plan=str(fixtures / "plan_two_stage.toml")), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=str(plan)), store=store)
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)

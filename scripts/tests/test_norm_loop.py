@@ -71,8 +71,8 @@ def refusals(monkeypatch):
 
 # --- fixtures: plans, handoff records, linked sessions ------------------------
 
-def _plan_text(fixtures_dir, *, grants_toml: str = "", stage1_done: str | None = None) -> str:
-    text = (fixtures_dir / "plan_two_stage.toml").read_text()
+def _plan_text(venued_fixtures_dir, *, grants_toml: str = "", stage1_done: str | None = None) -> str:
+    text = (venued_fixtures_dir / "plan_two_stage.toml").read_text()
     if stage1_done is not None:
         text = text.replace("python -c 'import mod' exits 0", stage1_done, 1)
     if grants_toml:
@@ -82,9 +82,9 @@ def _plan_text(fixtures_dir, *, grants_toml: str = "", stage1_done: str | None =
     return text
 
 
-def _write_plan(fixtures_dir, tmp_path, name, **kw) -> str:
+def _write_plan(venued_fixtures_dir, tmp_path, name, **kw) -> str:
     out = tmp_path / name
-    out.write_text(_plan_text(fixtures_dir, **kw))
+    out.write_text(_plan_text(venued_fixtures_dir, **kw))
     return str(out)
 
 
@@ -184,12 +184,12 @@ def _engine_grants(plan_path, tmp_path, session, stage_index=1, kind="developer"
 DECLARED = "[stage.grants]\nallow = [\"Bash(git status:*)\", \"Bash(git diff:*)\"]\n"
 
 
-def _grants_plan(fixtures_dir, tmp_path):
-    return _write_plan(fixtures_dir, tmp_path, "plan_grants.toml", grants_toml=DECLARED)
+def _grants_plan(venued_fixtures_dir, tmp_path):
+    return _write_plan(venued_fixtures_dir, tmp_path, "plan_grants.toml", grants_toml=DECLARED)
 
 
 def _child_directive_runner(returncode, stdout="", stderr=""):
-    return lambda argv: RunResult(returncode, stdout=stdout, stderr=stderr)
+    return lambda argv, cwd=None: RunResult(returncode, stdout=stdout, stderr=stderr)
 
 
 def _dispatch(store, sid, runner):
@@ -199,11 +199,11 @@ def _dispatch(store, sid, runner):
 
 # --- (a) loop rule at the spawn seam ------------------------------------------
 
-def test_spawn_refuses_unchanged_norm_redelegation(store, fixtures_dir, tmp_path, monkeypatch,
+def test_spawn_refuses_unchanged_norm_redelegation(store, venued_fixtures_dir, tmp_path, monkeypatch,
                                                    capsys, refusals):
     """negative control: a linked session delegating the stage whose norm is the one it
     was itself spawned for is refused before any child launches."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     record = _record(plan, parent_session="par-s", stage_index=1, depth=1)
     _executing(store, "own", plan, record=record, tmp_path=tmp_path, monkeypatch=monkeypatch)
 
@@ -220,10 +220,10 @@ def test_spawn_refuses_unchanged_norm_redelegation(store, fixtures_dir, tmp_path
     assert not (tmp_path / "state" / "handoffs").exists(), "a refused spawn wrote a handoff"
 
 
-def test_spawn_refuses_a_norm_of_a_non_parent_ancestor(store, fixtures_dir, tmp_path, monkeypatch,
+def test_spawn_refuses_a_norm_of_a_non_parent_ancestor(store, venued_fixtures_dir, tmp_path, monkeypatch,
                                                       capsys, refusals):
     """The lineage is the whole ancestor chain, not only the immediate parent."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     root_entry = _lineage_entry(plan, 1, "root-s")
     record = _record(plan, parent_session="mid-s", stage_index=2, depth=2,
                      parent_lineage=[root_entry])
@@ -239,14 +239,14 @@ def test_spawn_refuses_a_norm_of_a_non_parent_ancestor(store, fixtures_dir, tmp_
     assert refusals[0][1]["matching"]["session"] == "root-s"
 
 
-def test_spawn_admits_an_edited_norm(store, fixtures_dir, tmp_path, monkeypatch, refusals):
+def test_spawn_admits_an_edited_norm(store, venued_fixtures_dir, tmp_path, monkeypatch, refusals):
     """A stage whose norm differs from every lineage entry -- the plan edited the done
     criterion -- is a different task and launches."""
-    parent_plan = str(fixtures_dir / "plan_two_stage.toml")
-    child_plan = _write_plan(fixtures_dir, tmp_path, "plan_edited.toml",
+    parent_plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    child_plan = _write_plan(venued_fixtures_dir, tmp_path, "plan_edited.toml",
                              stage1_done="python -c 'import mod; mod.run()' exits 0")
     record = _record(parent_plan, parent_session="par-s", stage_index=1, depth=1,
-                     grants=_rules("Bash(python3 mod.py:*)", "Edit(//./mod.py)"))
+                     grants=_rules("Bash(python3 mod.py:*)", _venue_edit(tmp_path, "/mod.py")))
     _executing(store, "edited", child_plan, record=record, tmp_path=tmp_path, monkeypatch=monkeypatch)
 
     rc, env = _spawn(monkeypatch, tmp_path, child_plan, "edited", stage_index=1)
@@ -255,8 +255,8 @@ def test_spawn_admits_an_edited_norm(store, fixtures_dir, tmp_path, monkeypatch,
     assert refusals == []
 
 
-def test_spawn_never_loop_checks_an_unlinked_session(store, fixtures_dir, tmp_path, monkeypatch, refusals):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def test_spawn_never_loop_checks_an_unlinked_session(store, venued_fixtures_dir, tmp_path, monkeypatch, refusals):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _executing(store, "free", plan)
 
     rc, env = _spawn(monkeypatch, tmp_path, plan, "free", stage_index=1)
@@ -265,8 +265,8 @@ def test_spawn_never_loop_checks_an_unlinked_session(store, fixtures_dir, tmp_pa
     assert refusals == []
 
 
-def test_dispatch_routes_a_norm_loop_refusal_to_a_loop_escalation(store, fixtures_dir, monkeypatch):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def test_dispatch_routes_a_norm_loop_refusal_to_a_loop_escalation(store, venued_fixtures_dir, monkeypatch):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _executing(store, "dl", plan)
     line = "LOOP_DETECTED: stage 1 carries the norm already delegated at stage 1 of session par-s"
 
@@ -280,8 +280,8 @@ def test_dispatch_routes_a_norm_loop_refusal_to_a_loop_escalation(store, fixture
     assert [e.get("reason") for e in events] == ["norm-loop"]
 
 
-def test_dispatch_cap_refusal_keeps_its_own_route(store, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def test_dispatch_cap_refusal_keeps_its_own_route(store, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _executing(store, "dc", plan)
 
     d = _dispatch(store, "dc", _child_directive_runner(3, stderr="above max-recursion-depth=5\n"))
@@ -294,10 +294,10 @@ def test_dispatch_cap_refusal_keeps_its_own_route(store, fixtures_dir):
 
 # --- (c) the LOOP_DETECTED return marker --------------------------------------
 
-def test_loop_detected_marker_routes_to_escalate(store, fixtures_dir):
+def test_loop_detected_marker_routes_to_escalate(store, venued_fixtures_dir):
     """negative control: a child returning LOOP_DETECTED parks the stage like ESCALATE,
     the report carried on the directive."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _executing(store, "lm", plan)
 
     d = _dispatch(store, "lm", _child_directive_runner(
@@ -317,8 +317,8 @@ def test_return_marker_tuples_are_identical_and_carry_loop_detected():
     assert tuple(engine_dispatch.RETURN_MARKERS) == tuple(planner_plan_check.RETURN_MARKERS)
 
 
-def test_other_markers_keep_their_routes(store, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def test_other_markers_keep_their_routes(store, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _executing(store, "om", plan)
     d = _dispatch(store, "om", _child_directive_runner(0, stdout="CLARIFY: which file?\n"))
     assert d.marker == "CLARIFY" and d.action == "answer_clarify"
@@ -341,8 +341,8 @@ def _linked_start(store, sid, tmp_path, monkeypatch, plan, **record_kw):
     monkeypatch.delenv(HANDOFF_ENV)
 
 
-def test_classify_at_the_sensitivity_depth_carries_the_ancestor_task(store, fixtures_dir, tmp_path, monkeypatch):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def test_classify_at_the_sensitivity_depth_carries_the_ancestor_task(store, venued_fixtures_dir, tmp_path, monkeypatch):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     threshold = cli.Thresholds().loop_sensitivity_depth
     root_entry = _lineage_entry(plan, 1, "root-s")
     _linked_start(store, "ls1", tmp_path, monkeypatch, plan, parent_session="mid-s",
@@ -360,8 +360,8 @@ def test_classify_at_the_sensitivity_depth_carries_the_ancestor_task(store, fixt
     assert "LOOP_DETECTED" in d.detail
 
 
-def test_classify_below_the_sensitivity_depth_has_no_self_check(store, fixtures_dir, tmp_path, monkeypatch):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def test_classify_below_the_sensitivity_depth_has_no_self_check(store, venued_fixtures_dir, tmp_path, monkeypatch):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     threshold = cli.Thresholds().loop_sensitivity_depth
     _linked_start(store, "ls2", tmp_path, monkeypatch, plan, depth=threshold - 1)
 
@@ -387,29 +387,36 @@ def _rules(*texts):
     return [{"rule": t} for t in texts]
 
 
-# The grants `_grants_plan`'s stage 1 holds: two declared, two derived from its outputs.
-ENGINE = ("Bash(git status:*)", "Bash(git diff:*)", "Bash(python3 mod.py:*)", "Edit(//./mod.py)")
+def _venue_edit(tmp_path, tail=""):
+    """The engine's `Edit` rule for a path under the declared venue (`tmp_path`)."""
+    return f"Edit(/{tmp_path}{tail})"
 
 
-def _grant_session(store, sid, fixtures_dir, tmp_path, monkeypatch, handoff_rules):
+def _engine(tmp_path):
+    """The grants `_grants_plan`'s stage 1 holds: two declared, two derived from its outputs."""
+    return ("Bash(git status:*)", "Bash(git diff:*)", "Bash(python3 mod.py:*)",
+            _venue_edit(tmp_path, "/mod.py"))
+
+
+def _grant_session(store, sid, venued_fixtures_dir, tmp_path, monkeypatch, handoff_rules):
     """A linked session at EXECUTING stage 1 of the grants plan whose handoff came from
     a *different* parent stage (2), so only the grant check can act on it."""
-    plan = _grants_plan(fixtures_dir, tmp_path)
+    plan = _grants_plan(venued_fixtures_dir, tmp_path)
     record = _record(plan, parent_session="par-s", stage_index=2, depth=1,
                      grants=_rules(*handoff_rules))
     _executing(store, sid, plan, record=record, tmp_path=tmp_path, monkeypatch=monkeypatch)
     return plan
 
 
-def test_engine_grants_of_the_fixture_stage_are_what_the_tests_assume(store, fixtures_dir, tmp_path):
-    plan = _grants_plan(fixtures_dir, tmp_path)
+def test_engine_grants_of_the_fixture_stage_are_what_the_tests_assume(store, venued_fixtures_dir, tmp_path):
+    plan = _grants_plan(venued_fixtures_dir, tmp_path)
     _executing(store, "eg", plan)
     got = tuple(e["rule"] for e in _engine_grants(plan, tmp_path, "eg"))
-    assert sorted(got) == sorted(ENGINE)
+    assert sorted(got) == sorted(_engine(tmp_path))
 
 
-def test_spawn_admits_grants_identical_to_the_handoff(store, fixtures_dir, tmp_path, monkeypatch, refusals):
-    plan = _grant_session(store, "g1", fixtures_dir, tmp_path, monkeypatch, ENGINE)
+def test_spawn_admits_grants_identical_to_the_handoff(store, venued_fixtures_dir, tmp_path, monkeypatch, refusals):
+    plan = _grant_session(store, "g1", venued_fixtures_dir, tmp_path, monkeypatch, _engine(tmp_path))
 
     rc, env = _spawn(monkeypatch, tmp_path, plan, "g1", stage_index=1)
 
@@ -417,10 +424,10 @@ def test_spawn_admits_grants_identical_to_the_handoff(store, fixtures_dir, tmp_p
     assert refusals == []
 
 
-def test_spawn_admits_grants_narrower_than_the_handoff(store, fixtures_dir, tmp_path, monkeypatch, refusals):
+def test_spawn_admits_grants_narrower_than_the_handoff(store, venued_fixtures_dir, tmp_path, monkeypatch, refusals):
     """A file edit the handoff's directory-wide `Edit` covers needs no identical entry."""
-    held = ("Bash(git status:*)", "Bash(git diff:*)", "Bash(python3 mod.py:*)", "Edit(//.)")
-    plan = _grant_session(store, "g2", fixtures_dir, tmp_path, monkeypatch, held)
+    held = ("Bash(git status:*)", "Bash(git diff:*)", "Bash(python3 mod.py:*)", _venue_edit(tmp_path))
+    plan = _grant_session(store, "g2", venued_fixtures_dir, tmp_path, monkeypatch, held)
 
     rc, env = _spawn(monkeypatch, tmp_path, plan, "g2", stage_index=1)
 
@@ -428,10 +435,10 @@ def test_spawn_admits_grants_narrower_than_the_handoff(store, fixtures_dir, tmp_
     assert refusals == []
 
 
-def test_spawn_refuses_grant_widening(store, fixtures_dir, tmp_path, monkeypatch, capsys, refusals):
+def test_spawn_refuses_grant_widening(store, venued_fixtures_dir, tmp_path, monkeypatch, capsys, refusals):
     """negative control: a delegated stage holding grants the handoff and the user's
     runtime grants do not cover is refused with a PERMISSION-REQUEST before launch."""
-    plan = _grant_session(store, "g3", fixtures_dir, tmp_path, monkeypatch, ("Bash(git status:*)",))
+    plan = _grant_session(store, "g3", venued_fixtures_dir, tmp_path, monkeypatch, ("Bash(git status:*)",))
 
     rc, env = _spawn(monkeypatch, tmp_path, plan, "g3", stage_index=1)
 
@@ -446,19 +453,19 @@ def test_spawn_refuses_grant_widening(store, fixtures_dir, tmp_path, monkeypatch
     sha = [ln for ln in lines if ln.startswith("Handoff-sha256: ")]
     assert len(sha) == 1 and len(sha[0].split(": ")[1]) == 64
     assert sorted(ln.removeprefix("Rule: ") for ln in lines if ln.startswith("Rule: ")) == sorted(
-        ["Bash(git diff:*)", "Bash(python3 mod.py:*)", "Edit(//./mod.py)"])
+        ["Bash(git diff:*)", "Bash(python3 mod.py:*)", _venue_edit(tmp_path, "/mod.py")])
     assert [r for r, _ in refusals] == ["grant-widening"]
     assert not (tmp_path / "state" / "handoffs").exists(), "a refused spawn wrote a handoff"
 
 
 def test_wildcard_tail_bash_rule_does_not_cover_a_narrower_one_conservatively(
-        store, fixtures_dir, tmp_path, monkeypatch, capsys, refusals):
+        store, venued_fixtures_dir, tmp_path, monkeypatch, capsys, refusals):
     """Deliberately conservative: a wildcard-tail Bash rule resolves to no bounded
     resource set, so it covers only an identical entry -- `Bash(git:*)` does not cover
     `Bash(git status:*)`, though it would in the harness's own matching. Erring toward a
     user-decided refusal, never toward a silent widening."""
-    held = ("Bash(git:*)", "Bash(git diff:*)", "Bash(python3 mod.py:*)", "Edit(//.)")
-    plan = _grant_session(store, "g4", fixtures_dir, tmp_path, monkeypatch, held)
+    held = ("Bash(git:*)", "Bash(git diff:*)", "Bash(python3 mod.py:*)", _venue_edit(tmp_path))
+    plan = _grant_session(store, "g4", venued_fixtures_dir, tmp_path, monkeypatch, held)
 
     rc, env = _spawn(monkeypatch, tmp_path, plan, "g4", stage_index=1)
 
@@ -469,11 +476,11 @@ def test_wildcard_tail_bash_rule_does_not_cover_a_narrower_one_conservatively(
     assert rules == ["Bash(git status:*)"]
 
 
-def test_a_user_resolved_runtime_grant_widens_the_covering_set(store, fixtures_dir, tmp_path,
+def test_a_user_resolved_runtime_grant_widens_the_covering_set(store, venued_fixtures_dir, tmp_path,
                                                                monkeypatch, refusals):
     """The stage's own engine grants include what the user resolved at runtime; those
     are authority the session was handed, not widening."""
-    plan = _grant_session(store, "g5", fixtures_dir, tmp_path, monkeypatch, ENGINE)
+    plan = _grant_session(store, "g5", venued_fixtures_dir, tmp_path, monkeypatch, _engine(tmp_path))
     state = store.load("g5")
     state.runtime_grants.setdefault("1", []).append({
         "rule": "Bash(git log:*)", "provenance": "runtime", "consumed": False,
@@ -496,11 +503,11 @@ def _add_runtime_grant(store, sid, rule, **kw):
     store.save(state)
 
 
-def test_an_agent_granted_runtime_grant_does_not_cover(store, fixtures_dir, tmp_path, monkeypatch,
+def test_an_agent_granted_runtime_grant_does_not_cover(store, venued_fixtures_dir, tmp_path, monkeypatch,
                                                        capsys, refusals):
     """An agent self-grant is no user decision: it is in the stage's engine grants, but
     it is not authority the session was handed, so delegating it is still a widening."""
-    plan = _grant_session(store, "g7", fixtures_dir, tmp_path, monkeypatch, ENGINE)
+    plan = _grant_session(store, "g7", venued_fixtures_dir, tmp_path, monkeypatch, _engine(tmp_path))
     _add_runtime_grant(store, "g7", "Bash(git log:*)", granted_by="agent")
 
     rc, env = _spawn(monkeypatch, tmp_path, plan, "g7", stage_index=1)
@@ -513,10 +520,10 @@ def test_an_agent_granted_runtime_grant_does_not_cover(store, fixtures_dir, tmp_
     assert [r for r, _ in refusals] == ["grant-widening"]
 
 
-def test_an_unconsumed_once_grant_the_user_resolved_covers(store, fixtures_dir, tmp_path,
+def test_an_unconsumed_once_grant_the_user_resolved_covers(store, venued_fixtures_dir, tmp_path,
                                                           monkeypatch, refusals):
     """The ask offers `once`; counting it is what keeps that option from being a dead end."""
-    plan = _grant_session(store, "g8", fixtures_dir, tmp_path, monkeypatch, ENGINE)
+    plan = _grant_session(store, "g8", venued_fixtures_dir, tmp_path, monkeypatch, _engine(tmp_path))
     _add_runtime_grant(store, "g8", "Bash(git log:*)", scope="once")
 
     rc, env = _spawn(monkeypatch, tmp_path, plan, "g8", stage_index=1)
@@ -525,13 +532,13 @@ def test_an_unconsumed_once_grant_the_user_resolved_covers(store, fixtures_dir, 
     assert refusals == []
 
 
-def test_an_entry_resolving_to_no_resource_is_not_vacuously_covered(store, fixtures_dir, tmp_path,
+def test_an_entry_resolving_to_no_resource_is_not_vacuously_covered(store, venued_fixtures_dir, tmp_path,
                                                                    monkeypatch):
     """`all(...)` over an empty resource set is True; a grant that resolves to nothing
     bounded must not ride that into "covered"."""
     from agentctl import plan_resources
 
-    plan = _grant_session(store, "g10", fixtures_dir, tmp_path, monkeypatch, ("Bash(git status:*)",))
+    plan = _grant_session(store, "g10", venued_fixtures_dir, tmp_path, monkeypatch, ("Bash(git status:*)",))
     real = plan_resources.resolve_rule_grant
 
     def resolve(rule, venue):
@@ -561,8 +568,8 @@ def test_unreadable_state_at_depth_warns_instead_of_passing_as_unlinked(tmp_path
     assert capsys.readouterr().err == "", "an unreadable state at depth 0 warned"
 
 
-def test_an_absent_or_unlinked_session_is_skipped_silently(store, fixtures_dir, tmp_path, capsys):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def test_an_absent_or_unlinked_session_is_skipped_silently(store, venued_fixtures_dir, tmp_path, capsys):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _executing(store, "quiet", plan)
 
     assert SPAWN._linked_session("quiet", tmp_path / "state", 3) is None
@@ -571,9 +578,9 @@ def test_an_absent_or_unlinked_session_is_skipped_silently(store, fixtures_dir, 
     assert capsys.readouterr().err == ""
 
 
-def test_a_linked_session_whose_plan_does_not_load_warns(store, fixtures_dir, tmp_path,
+def test_a_linked_session_whose_plan_does_not_load_warns(store, venued_fixtures_dir, tmp_path,
                                                          monkeypatch, capsys):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _executing(store, "np", plan, record=_record(plan), tmp_path=tmp_path, monkeypatch=monkeypatch)
     monkeypatch.setattr(SPAWN, "_session_plan", lambda state: None)
 
@@ -582,8 +589,8 @@ def test_a_linked_session_whose_plan_does_not_load_warns(store, fixtures_dir, tm
         "BEHAVIOUR: a linked session with an unloadable plan skipped its checks silently"
 
 
-def test_spawn_never_grant_checks_an_unlinked_session(store, fixtures_dir, tmp_path, monkeypatch, refusals):
-    plan = _grants_plan(fixtures_dir, tmp_path)
+def test_spawn_never_grant_checks_an_unlinked_session(store, venued_fixtures_dir, tmp_path, monkeypatch, refusals):
+    plan = _grants_plan(venued_fixtures_dir, tmp_path)
     _executing(store, "g6", plan)
 
     rc, env = _spawn(monkeypatch, tmp_path, plan, "g6", stage_index=1)
@@ -594,11 +601,11 @@ def test_spawn_never_grant_checks_an_unlinked_session(store, fixtures_dir, tmp_p
 
 # --- (e) refusal order ---------------------------------------------------------
 
-def test_refusal_order_is_cap_then_loop_then_grants(store, fixtures_dir, tmp_path, monkeypatch,
+def test_refusal_order_is_cap_then_loop_then_grants(store, venued_fixtures_dir, tmp_path, monkeypatch,
                                                     capsys, refusals):
     """One session that is at once a loop and a widening: the loop is refused, not the
     grants; at the recursion cap the cap is refused, not the loop."""
-    plan = _grants_plan(fixtures_dir, tmp_path)
+    plan = _grants_plan(venued_fixtures_dir, tmp_path)
     record = _record(plan, parent_session="par-s", stage_index=1, depth=1, grants=[])
     _executing(store, "ord", plan, record=record, tmp_path=tmp_path, monkeypatch=monkeypatch)
 
@@ -645,8 +652,8 @@ def _assert_parked_for_the_user(store, sid, d):
     assert d.action != "self_grant" and state.node != Node.DIAGNOSING
 
 
-def test_dispatch_routes_direct_grant_widening_refusal_to_the_user(store, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def test_dispatch_routes_direct_grant_widening_refusal_to_the_user(store, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _executing(store, "gw", plan)
 
     d = _dispatch(store, "gw", _child_directive_runner(4, stdout=BLOCK))
@@ -654,9 +661,9 @@ def test_dispatch_routes_direct_grant_widening_refusal_to_the_user(store, fixtur
     _assert_parked_for_the_user(store, "gw", d)
 
 
-def test_dispatch_routes_relayed_grant_widening_refusal_to_the_user(store, fixtures_dir):
+def test_dispatch_routes_relayed_grant_widening_refusal_to_the_user(store, venued_fixtures_dir):
     """A manager child relaying the wrapper's block exits 0 with the block on stdout."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _executing(store, "gr", plan)
 
     d = _dispatch(store, "gr", _child_directive_runner(0, stdout="Summary.\n" + BLOCK))
@@ -664,9 +671,9 @@ def test_dispatch_routes_relayed_grant_widening_refusal_to_the_user(store, fixtu
     _assert_parked_for_the_user(store, "gr", d)
 
 
-def test_dispatch_exit_4_without_the_refusal_line_is_not_a_grant_widening(store, fixtures_dir):
+def test_dispatch_exit_4_without_the_refusal_line_is_not_a_grant_widening(store, venued_fixtures_dir):
     """Exit 4 is also "claude not on PATH"; only the stdout line disambiguates."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _executing(store, "gn", plan)
 
     d = _dispatch(store, "gn", _child_directive_runner(4, stderr="claude not on PATH\n"))
@@ -686,10 +693,10 @@ def _with_settings_file(store, sid, tmp_path):
     return settings_path
 
 
-def test_relayed_grant_widening_still_surfaces_settings_drift(store, fixtures_dir, tmp_path):
+def test_relayed_grant_widening_still_surfaces_settings_drift(store, venued_fixtures_dir, tmp_path):
     """In the relayed form a child actually ran, so what it did to a live settings
     document is the same signal it is on any other marker: not lost behind the ask."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _executing(store, "gd", plan)
     settings_path = _with_settings_file(store, "gd", tmp_path)
 
@@ -707,8 +714,8 @@ def test_relayed_grant_widening_still_surfaces_settings_drift(store, fixtures_di
     assert len(persisted) == 1 and str(settings_path) in persisted[0]["changed"]
 
 
-def _once_grant_session(store, sid, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def _once_grant_session(store, sid, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _executing(store, sid, plan)
     state = store.load(sid)
     state.runtime_grants["1"] = [
@@ -718,8 +725,8 @@ def _once_grant_session(store, sid, fixtures_dir):
     store.save(state)
 
 
-def test_relayed_grant_widening_spends_the_once_grant_the_child_ran_under(store, fixtures_dir):
-    _once_grant_session(store, "go1", fixtures_dir)
+def test_relayed_grant_widening_spends_the_once_grant_the_child_ran_under(store, venued_fixtures_dir):
+    _once_grant_session(store, "go1", venued_fixtures_dir)
 
     d = _dispatch(store, "go1", _child_directive_runner(0, stdout="Summary.\n" + BLOCK))
 
@@ -728,8 +735,8 @@ def test_relayed_grant_widening_spends_the_once_grant_the_child_ran_under(store,
         "BEHAVIOUR: a child ran under a once grant and the relayed refusal left it unspent"
 
 
-def test_direct_grant_widening_refusal_launched_nothing_so_spends_nothing(store, fixtures_dir):
-    _once_grant_session(store, "go2", fixtures_dir)
+def test_direct_grant_widening_refusal_launched_nothing_so_spends_nothing(store, venued_fixtures_dir):
+    _once_grant_session(store, "go2", venued_fixtures_dir)
 
     d = _dispatch(store, "go2", _child_directive_runner(4, stdout=BLOCK))
 

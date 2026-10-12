@@ -22,6 +22,7 @@ from agentctl import cli, grants, order_approvals, plan, plan_resources, plugins
 from agentctl.plan import diff_plans, load_plan
 from agentctl.state import Node, SessionState
 from agentctl.text_shape import WHOLE_STAGE_ELEMENT
+from conftest import declare_venue
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 LAND_BRANCH = Path(__file__).resolve().parents[1] / "land-branch.py"
@@ -312,8 +313,9 @@ def _replan_verify(store, tmp_path, old_verify, new_verify, *, ledgered, sid="rv
     `ledgered`: the plan declares an order and its customer approves it, so the order has
     a user-approved ledger record; otherwise the plan has no order at all."""
     fixture = (FIXTURES / "plan_two_stage_verifyfix_grantgrowth.toml").read_text(encoding="utf-8")
-    fixture = fixture.replace('output_artifacts = ["mod.py"]',
-                              'output_artifacts = ["a.py", "b.py", "a.sh", "b.sh", "tests/a.py"]')
+    fixture = declare_venue(fixture.replace('output_artifacts = ["mod.py"]',
+                                            'output_artifacts = ["a.py", "b.py", "a.sh", "b.sh", "tests/a.py"]'),
+                            tmp_path)
     if ledgered:
         fixture = fixture.replace("\n[[stage]]\n", '\n[meta.order]\ncustomer_id = "acme"\n'
                                   'customer = "the asker"\nfunctional_place = "one place"\n\n[[stage]]\n', 1)

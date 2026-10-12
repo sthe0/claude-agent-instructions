@@ -84,12 +84,12 @@ def _replan_count(task_id: str) -> int:
     return task_accumulator.get(task_id)["per_axis_totals"]["replan_count"]
 
 
-def _to_diagnosing(store, fixtures_dir, sid: str, task: str) -> None:
+def _to_diagnosing(store, venued_fixtures_dir, sid: str, task: str) -> None:
     """Drive a fresh session on `task` to DIAGNOSING with a complete difficulty
     record and a normalization, via the real CLI dispatch path — identical in shape
     to test_replan_renegotiation.py's own `_to_diagnosing`, parameterized on task_id
     so each scenario below can use a disposable one."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(ns(session=sid, task=task, goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -159,29 +159,29 @@ def _declare_investigate_critique_normalize(store, sid: str) -> None:
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
 
-def _bare_replan(store, fixtures_dir, sid: str):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def _bare_replan(store, venued_fixtures_dir, sid: str):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     return cli.cmd_replan(ns(session=sid, plan=plan), store=store)
 
 
-def _cycle_replan(store, fixtures_dir, sid: str):
+def _cycle_replan(store, venued_fixtures_dir, sid: str):
     """Complete one DIAGNOSING difficulty record and issue one bare (non-
     renegotiated) `replan`. Reuses the SAME plan file each time, so a successful
     call is always the `no_change` kind: it re-arms the failed stage to PENDING and
     routes VERIFYING -> `next_stage`, which is exactly what lets the caller loop
     back into DIAGNOSING via `_reenter_diagnosing` for the next cycle."""
     _declare_investigate_critique_normalize(store, sid)
-    return _bare_replan(store, fixtures_dir, sid)
+    return _bare_replan(store, venued_fixtures_dir, sid)
 
 
-def _climb(store, fixtures_dir, sid: str, task: str, n: int) -> None:
+def _climb(store, venued_fixtures_dir, sid: str, task: str, n: int) -> None:
     """Run `n` successful bare-replan DIAGNOSING cycles from wherever the
     cross-session replan_count currently stands, asserting it climbs by exactly one
     each time. Leaves the session back in DIAGNOSING (a fresh failure just landed
     it there), with the NEXT cycle's difficulty record not yet started."""
     base = _replan_count(task)
     for i in range(1, n + 1):
-        d = _cycle_replan(store, fixtures_dir, sid)
+        d = _cycle_replan(store, venued_fixtures_dir, sid)
         assert d.ok is True, d.detail
         assert _replan_count(task) == base + i
         _reenter_diagnosing(store, sid)
@@ -189,18 +189,18 @@ def _climb(store, fixtures_dir, sid: str, task: str, n: int) -> None:
 
 # --- Scenario A (#177 / R1 / R3) ---------------------------------------------
 
-def test_scenario_a_replan_count_climbs_then_refuses_then_renegotiates(store, fixtures_dir):
+def test_scenario_a_replan_count_climbs_then_refuses_then_renegotiates(store, venued_fixtures_dir):
     sid, task = "sa", "renego-e2e-a"
     thr = Thresholds().effort_replan_absolute()
     assert thr == 5
-    _to_diagnosing(store, fixtures_dir, sid, task)
+    _to_diagnosing(store, venued_fixtures_dir, sid, task)
     assert _replan_count(task) == 0
 
-    _climb(store, fixtures_dir, sid, task, thr)  # 1, 2, 3 — none refused
+    _climb(store, venued_fixtures_dir, sid, task, thr)  # 1, 2, 3 — none refused
 
     # the (thr + 1)-th attempt, bare, is refused with the renegotiation-flags message
     _declare_investigate_critique_normalize(store, sid)
-    refused = _bare_replan(store, fixtures_dir, sid)
+    refused = _bare_replan(store, venued_fixtures_dir, sid)
     assert refused.ok is False
     assert refused.marker == DIRECTIVE_ESCALATE_TO_USER
     assert "--renegotiation-decision" in refused.detail
@@ -210,7 +210,7 @@ def test_scenario_a_replan_count_climbs_then_refuses_then_renegotiates(store, fi
     assert _replan_count(task) == thr                    # not consumed by the refusal
 
     # `continue` clears the block, zeroes the accumulator, and lets the replan land
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cont = cli.cmd_replan(ns(
         session=sid, plan=plan, renegotiation_decision="continue",
         renegotiated_by="user", renegotiation_note="customer wants to keep going",
@@ -226,29 +226,29 @@ def test_scenario_a_replan_count_climbs_then_refuses_then_renegotiates(store, fi
     # a FRESH session on the SAME task_id inherits the cross-session count and
     # re-fires the gate on its own, once driven straight back to the ceiling
     sid2 = "sa-fresh"
-    _to_diagnosing(store, fixtures_dir, sid2, task)
+    _to_diagnosing(store, venued_fixtures_dir, sid2, task)
     assert _replan_count(task) == 1                      # inherited, not reset by cmd_start
 
-    _climb(store, fixtures_dir, sid2, task, thr - 1)      # 2, 3
+    _climb(store, venued_fixtures_dir, sid2, task, thr - 1)      # 2, 3
 
     _declare_investigate_critique_normalize(store, sid2)
-    refused2 = _bare_replan(store, fixtures_dir, sid2)
+    refused2 = _bare_replan(store, venued_fixtures_dir, sid2)
     assert refused2.ok is False
     assert refused2.marker == DIRECTIVE_ESCALATE_TO_USER
     assert store.load(sid2).node == Node.DIAGNOSING.value
     assert _replan_count(task) == thr
 
 
-def test_scenario_a_abandon_parks_at_blocked_without_touching_the_plan(store, fixtures_dir):
+def test_scenario_a_abandon_parks_at_blocked_without_touching_the_plan(store, venued_fixtures_dir):
     sid, task = "sa-abandon", "renego-e2e-a-abandon"
     thr = Thresholds().effort_replan_absolute()
-    _to_diagnosing(store, fixtures_dir, sid, task)
-    _climb(store, fixtures_dir, sid, task, thr)
+    _to_diagnosing(store, venued_fixtures_dir, sid, task)
+    _climb(store, venued_fixtures_dir, sid, task, thr)
 
     _declare_investigate_critique_normalize(store, sid)
     before = store.load(sid)
     before_plan_path = before.plan_path
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
 
     d = cli.cmd_replan(ns(
         session=sid, plan=plan, renegotiation_decision="abandon",
@@ -393,18 +393,18 @@ def test_scenario_b_failing_verdict_at_verify_final_routes_to_diagnosing(
 # --- Scenario C (#201 / R5) ----------------------------------------------------
 
 def test_scenario_c_bare_replans_stay_refused_then_renegotiation_resets_and_a_second_independent_cycle_refires(
-    store, fixtures_dir
+    store, venued_fixtures_dir
 ):
     sid, task = "sc", "renego-e2e-c"
     thr = Thresholds().effort_replan_absolute()
-    _to_diagnosing(store, fixtures_dir, sid, task)
-    _climb(store, fixtures_dir, sid, task, thr)
+    _to_diagnosing(store, venued_fixtures_dir, sid, task)
+    _climb(store, venued_fixtures_dir, sid, task, thr)
 
     # the FIRST attempt to close the cycle once cross-session replan_count reaches
     # the ceiling is refused — the gate intercepts before a second bare replan
     # could ever manufacture a fourth, fifth, ... count.
     _declare_investigate_critique_normalize(store, sid)
-    first_refusal = _bare_replan(store, fixtures_dir, sid)
+    first_refusal = _bare_replan(store, venued_fixtures_dir, sid)
     assert first_refusal.ok is False
     assert first_refusal.marker == DIRECTIVE_ESCALATE_TO_USER
     assert _replan_count(task) == thr
@@ -413,7 +413,7 @@ def test_scenario_c_bare_replans_stay_refused_then_renegotiation_resets_and_a_se
     # indefinitely — the accumulator never gets the chance to climb to 4, 5, ...
     # 11, since the gate (not effort.py's own belt-2 re-arm) is what stops the loop.
     for _ in range(3):
-        again = _bare_replan(store, fixtures_dir, sid)
+        again = _bare_replan(store, venued_fixtures_dir, sid)
         assert again.ok is False
         assert again.marker == DIRECTIVE_ESCALATE_TO_USER
         assert _replan_count(task) == thr
@@ -435,7 +435,7 @@ def test_scenario_c_bare_replans_stay_refused_then_renegotiation_resets_and_a_se
     assert div_before is None
 
     # ONE `continue` call zeroes the shared accumulator field
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cont = cli.cmd_replan(ns(
         session=sid, plan=plan, renegotiation_decision="continue",
         renegotiated_by="user", renegotiation_note="keep going",
@@ -460,10 +460,10 @@ def test_scenario_c_bare_replans_stay_refused_then_renegotiation_resets_and_a_se
     # that lands on the identical threshold value" (3 == 3) — the live-counter-only
     # design here does not have that blind spot.
     _reenter_diagnosing(store, sid)
-    _climb(store, fixtures_dir, sid, task, thr - 1)      # 1 -> 2 -> 3
+    _climb(store, venued_fixtures_dir, sid, task, thr - 1)      # 1 -> 2 -> 3
 
     _declare_investigate_critique_normalize(store, sid)
-    second_refusal = _bare_replan(store, fixtures_dir, sid)
+    second_refusal = _bare_replan(store, venued_fixtures_dir, sid)
     assert second_refusal.ok is False
     assert second_refusal.marker == DIRECTIVE_ESCALATE_TO_USER
     assert _replan_count(task) == thr

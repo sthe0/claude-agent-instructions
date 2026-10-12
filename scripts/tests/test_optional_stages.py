@@ -40,7 +40,7 @@ from agentctl.plan import (
 from agentctl.render import render_plan_md, render_stage_brief
 from agentctl.state import InvariantError, Node, StageStatus, is_settled
 from agentctl.submission import _element_traceability_violations
-from conftest import SUBSTANTIVE_ORDER
+from conftest import SUBSTANTIVE_ORDER, declare_venue
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -53,10 +53,8 @@ _VENUE = None
 
 
 def _declare_venue(text):
-    """Insert `repo_root = <this test's tmp dir>` under `[meta]` (idempotent)."""
-    if _VENUE is None or "\nrepo_root" in text:
-        return text
-    return text.replace("[meta]\n", f'[meta]\nrepo_root = "{_VENUE}"\n', 1)
+    """`text` declaring this test's tmp dir as its venue (idempotent)."""
+    return text if _VENUE is None else declare_venue(text, _VENUE)
 
 
 @pytest.fixture(autouse=True)

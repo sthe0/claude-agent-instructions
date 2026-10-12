@@ -157,9 +157,9 @@ def _to_plan_ready(store, sid, plan):
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
 
 
-def test_first_submission_does_not_count_as_a_round(store, fixtures_dir, gate_on):
+def test_first_submission_does_not_count_as_a_round(store, venued_fixtures_dir, gate_on):
     sid = "rb-first"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     assert store.load(sid).plan_review_rounds == 0
 
@@ -170,9 +170,9 @@ def _record_revise(store, sid, plan):
                            target=plan, plan_digest=_sha256_file(plan)), store=store)
 
 
-def test_each_resubmission_after_a_review_counts_one_round(store, fixtures_dir, gate_on):
+def test_each_resubmission_after_a_review_counts_one_round(store, venued_fixtures_dir, gate_on):
     sid = "rb-resub"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     _record_revise(store, sid, plan)
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
@@ -181,12 +181,12 @@ def test_each_resubmission_after_a_review_counts_one_round(store, fixtures_dir, 
     assert store.load(sid).plan_review_rounds == 2
 
 
-def test_drafting_resubmissions_before_any_review_are_not_rounds(store, fixtures_dir, gate_on):
+def test_drafting_resubmissions_before_any_review_are_not_rounds(store, venued_fixtures_dir, gate_on):
     """A round is one turn of review-then-revise. Redrafting a plan nobody has looked
     at yet spends none of the budget — counting it would exhaust a review budget on
     rounds of review that never took place."""
     sid = "rb-draft"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     for _ in range(4):
         cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
@@ -205,9 +205,9 @@ def _to_round_budget_exhausted(store, sid, plan):
     assert store.load(sid).plan_review_rounds == 5
 
 
-def test_below_threshold_approve_payload_carries_no_release(store, fixtures_dir, gate_on):
+def test_below_threshold_approve_payload_carries_no_release(store, venued_fixtures_dir, gate_on):
     sid = "rb-none"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     _record_revise(store, sid, plan)
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)  # rounds=1, still < 5
@@ -217,9 +217,9 @@ def test_below_threshold_approve_payload_carries_no_release(store, fixtures_dir,
     assert not any(e.get("event") == "plan_review_round_release" for e in store.load(sid).history)
 
 
-def test_release_present_in_surfaced_payload_and_recorded(store, fixtures_dir, gate_on):
+def test_release_present_in_surfaced_payload_and_recorded(store, venued_fixtures_dir, gate_on):
     sid = "rb-release"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_round_budget_exhausted(store, sid, plan)
     d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert d.node == Node.PLAN_READY.value  # still refused — never auto-approves
@@ -246,14 +246,14 @@ def test_release_present_in_surfaced_payload_and_recorded(store, fixtures_dir, g
     assert [e["rounds"] for e in events] == [5, 6]
 
 
-def test_the_released_directive_names_an_act_that_actually_opens_the_gate(store, fixtures_dir,
+def test_the_released_directive_names_an_act_that_actually_opens_the_gate(store, venued_fixtures_dir,
                                                                           gate_on):
     """The release is a routing, and a routing that names no reachable exit is a
     livelock, not a route. Following the directive literally must end at APPROVED —
     otherwise the user re-runs `approve`, gets this same message, and the plan gate
     loops exactly as the machinery this stage belongs to exists to prevent."""
     sid = "rb-exit"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_round_budget_exhausted(store, sid, plan)
     released = gates.plan_review_blockers(store.load(sid), plan)[0]
     assert "plan-review --verdict override" in released
@@ -283,7 +283,7 @@ def _retitle_stage(plan, index, text):
 
 
 def test_a_stage_scoped_review_staled_by_its_own_answer_still_spends_a_round(
-        store, fixtures_dir, tmp_path, gate_on):
+        store, venued_fixtures_dir, tmp_path, gate_on):
     """The realistic stage-scoped negotiation: review stage 2, edit stage 2 to answer it,
     resubmit — which stales that very review, so no record survives the cycle. Three such
     cycles are three spent rounds and must release. Reading "did a review happen" off the
@@ -292,7 +292,7 @@ def test_a_stage_scoped_review_staled_by_its_own_answer_still_spends_a_round(
     import shutil
     sid = "rb-stage-scoped"
     plan = str(tmp_path / "p.toml")
-    shutil.copy(fixtures_dir / "plan_two_stage.toml", plan)
+    shutil.copy(venued_fixtures_dir / "plan_two_stage.toml", plan)
     _to_plan_ready(store, sid, plan)
     for n in range(5):
         cli.cmd_plan_review(ns(session=sid, verdict="revise", reviewer="thinker",
@@ -315,9 +315,9 @@ def test_a_stage_scoped_review_staled_by_its_own_answer_still_spends_a_round(
     assert store.load(sid).plan_review_rounds == 5
 
 
-def test_approval_resets_the_round_count(store, fixtures_dir, gate_on):
+def test_approval_resets_the_round_count(store, venued_fixtures_dir, gate_on):
     sid = "rb-reset"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     _record_revise(store, sid, plan)
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)  # rounds=1
@@ -364,15 +364,15 @@ def _revise_post(store, sid, plan):
                                   target=plan, plan_digest=_sha256_file(plan)), store=store)
 
 
-def _copy_fixture(fixtures_dir, tmp_path, name, as_="p.toml"):
+def _copy_fixture(venued_fixtures_dir, tmp_path, name, as_="p.toml"):
     import shutil
     dest = str(tmp_path / as_)
-    shutil.copy(fixtures_dir / name, dest)
+    shutil.copy(venued_fixtures_dir / name, dest)
     return dest
 
 
 def test_a_coverage_pass_over_one_plan_version_spends_exactly_one_round(
-        store, fixtures_dir, tmp_path, gate_on):
+        store, venued_fixtures_dir, tmp_path, gate_on):
     """(e) The regression the counting unit exists for. gates._plan_review_blockers_
     coverage surfaces ONE uncovered stage at a time, so an honest first pass over a
     three-stage plan records three stage-scoped verdicts against a single set of plan
@@ -380,7 +380,7 @@ def test_a_coverage_pass_over_one_plan_version_spends_exactly_one_round(
     release SUBSTITUTES the blocker list, "stage 3 has not been reviewed" would be
     replaced by "no further review is required", retiring a review nobody performed."""
     sid = "rr-cov"
-    plan = _copy_fixture(fixtures_dir, tmp_path, "plan_two_stage_substantive.toml", "p3.toml")
+    plan = _copy_fixture(venued_fixtures_dir, tmp_path, "plan_two_stage_substantive.toml", "p3.toml")
     _to_executing(store, sid, plan)
     digest = _sha256_file(plan)
     for stage in (1, 2, 3):
@@ -394,13 +394,13 @@ def test_a_coverage_pass_over_one_plan_version_spends_exactly_one_round(
 
 
 def test_post_approval_versions_count_and_release_lands_in_the_verdict_directive(
-        store, fixtures_dir, tmp_path, gate_on):
+        store, venued_fixtures_dir, tmp_path, gate_on):
     """(a) Three post-approval verdicts on three distinct plan versions exhaust the
     budget, and the third verdict's OWN Directive carries the release — the increment
     sits before the blockers computation precisely so the coordinator is not told to
     review again one call after the budget ran out."""
     sid = "rr-post"
-    plan = _copy_fixture(fixtures_dir, tmp_path, "plan_two_stage.toml")
+    plan = _copy_fixture(venued_fixtures_dir, tmp_path, "plan_two_stage.toml")
     _to_executing(store, sid, plan)
     assert store.load(sid).plan_review_rounds == 0
 
@@ -427,13 +427,13 @@ def test_post_approval_versions_count_and_release_lands_in_the_verdict_directive
 
 
 def test_a_verdict_before_approval_does_not_touch_the_post_approval_counter(
-        store, fixtures_dir, gate_on):
+        store, venued_fixtures_dir, gate_on):
     """(b) Pins the disjointness of the two increment sites, which otherwise rests only
     on statement order inside cmd_submit_plan (it sets approval.passed = False BEFORE
     its own increment). A verdict recorded at PLAN_READY must move neither field —
     double-counting one round would halve the budget."""
     sid = "rr-pre"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     _record_revise(store, sid, plan)
     s = store.load(sid)
@@ -441,14 +441,14 @@ def test_a_verdict_before_approval_does_not_touch_the_post_approval_counter(
     assert s.plan_review_counted_digest == ""
 
 
-def test_replan_resets_the_counter_and_the_counted_version(store, fixtures_dir, gate_on):
+def test_replan_resets_the_counter_and_the_counted_version(store, venued_fixtures_dir, gate_on):
     """(c) A replan that gets past every refusal has applied a corrected plan, so the
     rounds spent arguing about the previous one are settled. The marker resets with the
     counter: left behind, it would make the next loop's first review look already
     counted."""
     sid = "rr-reset"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_executing(store, sid, plan)
     _revise_post(store, sid, plan)
     assert store.load(sid).plan_review_rounds == 1
@@ -465,14 +465,14 @@ def test_replan_resets_the_counter_and_the_counted_version(store, fixtures_dir, 
 
 
 def test_release_reaches_the_coordinator_on_the_replan_path(
-        store, fixtures_dir, tmp_path, gate_on):
+        store, venued_fixtures_dir, tmp_path, gate_on):
     """(f) The half-delivery this stage removes: with the release active, cmd_replan
     used to keep answering "the corrected plan needs a thinker review" — naming as the
     cure the very act the valve had just retired, leaving the loop without an exit — and
     the plan_review_round_release event existed only in cmd_approve, so the telemetry
     the defect was measured with would still read zero after the fix."""
     sid = "rr-replan-release"
-    plan = _copy_fixture(fixtures_dir, tmp_path, "plan_two_stage.toml")
+    plan = _copy_fixture(venued_fixtures_dir, tmp_path, "plan_two_stage.toml")
     _to_executing(store, sid, plan)
     for n in range(5):
         _retitle_stage(plan, 2, f"Add tests, revision {n}")

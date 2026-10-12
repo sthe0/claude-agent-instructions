@@ -8,7 +8,7 @@ from agentctl.state import Node
 from conftest import STAGE_OBSERVATIONS
 
 
-def fake_runner(argv):
+def fake_runner(argv, cwd=None):
     # spawn-specialist would print a COMPLETED marker; we just succeed. The fake
     # runner itself is the no-spend guarantee (dry_run=True would short-circuit
     # into a preview and never reach marker routing — #10).
@@ -19,9 +19,9 @@ def ns(**kw):
     return Namespace(**kw)
 
 
-def test_full_substantive_cycle(store, fixtures_dir):
+def test_full_substantive_cycle(store, venued_fixtures_dir):
     sid = "wf"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
 
     d = cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="g",
                          done_criterion="dc", criterion_type="measurable",

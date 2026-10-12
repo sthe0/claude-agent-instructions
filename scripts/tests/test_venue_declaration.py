@@ -11,17 +11,21 @@ import os
 
 import pytest
 
+from agentctl import plan as plan_mod
 from agentctl import plan_resources
-from agentctl.plan import (
-    _derive_stage_grants,
-    _path_is_reachable,
-    _venue_for,
-    load_plan,
-    venue_declaration_blockers,
-)
+from agentctl.plan import _path_is_reachable, _venue_for, load_plan
 from agentctl.submission import _ephemeral_artifacts_violations, submission_violations
 from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
 from test_authoring_grant_check import _stage
+
+
+# Resolved at call time: a tree without them must fail these tests, not fail to collect.
+def venue_declaration_blockers(doc):
+    return plan_mod.venue_declaration_blockers(doc)
+
+
+def _derive_stage_grants(stage, venue):
+    return plan_mod._derive_stage_grants(stage, venue)
 
 
 def _plan(path, stages, *, repo_root=None, delivery_worktree=None, weight_class="substantive",

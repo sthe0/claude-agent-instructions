@@ -52,8 +52,8 @@ def test_render_section_shape():
 
 # --- cmd_partition transition --------------------------------------------
 
-def _to_approved(store, sid, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def _to_approved(store, sid, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(ns(session=sid, task="demo", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -65,9 +65,9 @@ def _to_approved(store, sid, fixtures_dir):
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
 
 
-def test_partition_records_state_and_advances(store, fixtures_dir):
+def test_partition_records_state_and_advances(store, venued_fixtures_dir):
     sid = "dc1"
-    _to_approved(store, sid, fixtures_dir)
+    _to_approved(store, sid, venued_fixtures_dir)
     d = cli.cmd_partition(ns(session=sid, m1=True, m2=True, m3=False, m4=False,
                              m3_severe=False, m4_severe=False), store=store)
     assert d.ok
@@ -81,25 +81,25 @@ def test_partition_records_state_and_advances(store, fixtures_dir):
     assert state.partition.m1 is True
 
 
-def test_partition_not_required_advances_to_next_stage(store, fixtures_dir):
+def test_partition_not_required_advances_to_next_stage(store, venued_fixtures_dir):
     sid = "dc2"
-    _to_approved(store, sid, fixtures_dir)
+    _to_approved(store, sid, venued_fixtures_dir)
     d = cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                              m3_severe=False, m4_severe=False), store=store)
     assert d.data["verdict"] == "not_required"
     assert d.action == "next_stage"
 
 
-def test_partition_recommended_surfaces_to_user(store, fixtures_dir):
+def test_partition_recommended_surfaces_to_user(store, venued_fixtures_dir):
     sid = "dc3"
-    _to_approved(store, sid, fixtures_dir)
+    _to_approved(store, sid, venued_fixtures_dir)
     d = cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                              m3_severe=True, m4_severe=False), store=store)
     assert d.data["verdict"] == "recommended"
     assert d.action == "surface_partition"
 
 
-def test_partition_refused_off_approved(store, fixtures_dir):
+def test_partition_refused_off_approved(store, venued_fixtures_dir):
     sid = "dc4"
     cli.cmd_start(ns(session=sid, task="demo", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)
@@ -112,7 +112,7 @@ def test_partition_refused_off_approved(store, fixtures_dir):
 
 # --- per-unit delivery routing (units) -----------------------------------
 
-def _part(sid, store, fixtures_dir, **kw):
+def _part(sid, store, venued_fixtures_dir, **kw):
     """Run cmd_partition with default markers off unless overridden."""
     base = dict(m1=False, m2=False, m3=False, m4=False, m3_severe=False,
                 m4_severe=False, unit=None)
@@ -149,11 +149,11 @@ def test_unit_malformed_spec_rejected():
     assert any("expected" in e for e in errors)
 
 
-def test_partition_records_units_and_renders_delivery_order(store, fixtures_dir):
+def test_partition_records_units_and_renders_delivery_order(store, venued_fixtures_dir):
     sid = "u1"
-    _to_approved(store, sid, fixtures_dir)
+    _to_approved(store, sid, venued_fixtures_dir)
     # stage 2 depends_on [1] -> unit 2 must be delivered "after unit 1"
-    d = _part(sid, store, fixtures_dir, m1=True, m2=True,
+    d = _part(sid, store, venued_fixtures_dir, m1=True, m2=True,
               unit=["inline|1|Core", "spawn|2|Tests"])
     assert d.ok
     section = d.data["section"]
@@ -167,10 +167,10 @@ def test_partition_records_units_and_renders_delivery_order(store, fixtures_dir)
     assert state.partition.units[1].stages == [2]
 
 
-def test_partition_invalid_units_fails_and_records_nothing(store, fixtures_dir):
+def test_partition_invalid_units_fails_and_records_nothing(store, venued_fixtures_dir):
     sid = "u2"
-    _to_approved(store, sid, fixtures_dir)
-    d = _part(sid, store, fixtures_dir, m1=True, unit=["nope|1|Bad"])
+    _to_approved(store, sid, venued_fixtures_dir)
+    d = _part(sid, store, venued_fixtures_dir, m1=True, unit=["nope|1|Bad"])
     assert d.ok is False
     assert d.action == "fix_units"
     state = store.load(sid)
@@ -178,23 +178,23 @@ def test_partition_invalid_units_fails_and_records_nothing(store, fixtures_dir):
     assert state.partition is None            # nothing recorded
 
 
-def test_partition_no_units_renders_byte_identical(store, fixtures_dir):
+def test_partition_no_units_renders_byte_identical(store, venued_fixtures_dir):
     sid = "u3"
-    _to_approved(store, sid, fixtures_dir)
-    d = _part(sid, store, fixtures_dir, m1=True, m2=True)
+    _to_approved(store, sid, venued_fixtures_dir)
+    d = _part(sid, store, venued_fixtures_dir, m1=True, m2=True)
     assert "Units:" not in d.data["section"]
     assert d.data["section"] == render_section(True, True, False, False, False, False,
                                                "recommended")
 
 
-def test_partition_units_node_gating(store, fixtures_dir):
+def test_partition_units_node_gating(store, venued_fixtures_dir):
     sid = "u4"
-    _to_approved(store, sid, fixtures_dir)
+    _to_approved(store, sid, venued_fixtures_dir)
     # before partition (node APPROVED) partition-units is refused
     d = cli.cmd_partition_units(ns(session=sid, unit=["inline|1|A"]), store=store)
     assert d.ok is False and d.action == "noop"
     # after partition (node PARTITIONED) it is allowed and replaces the list
-    _part(sid, store, fixtures_dir, m1=True, m2=True, unit=["inline|1|Old"])
+    _part(sid, store, venued_fixtures_dir, m1=True, m2=True, unit=["inline|1|Old"])
     d2 = cli.cmd_partition_units(
         ns(session=sid, unit=["inline|1|Core", "subtask|2|Split|ABC-9"]), store=store)
     assert d2.ok
@@ -203,10 +203,10 @@ def test_partition_units_node_gating(store, fixtures_dir):
     assert state.partition.units[1].ref == "ABC-9"
 
 
-def test_partition_units_rejects_invalid_and_keeps_prior(store, fixtures_dir):
+def test_partition_units_rejects_invalid_and_keeps_prior(store, venued_fixtures_dir):
     sid = "u5"
-    _to_approved(store, sid, fixtures_dir)
-    _part(sid, store, fixtures_dir, m1=True, m2=True, unit=["inline|1|Keep"])
+    _to_approved(store, sid, venued_fixtures_dir)
+    _part(sid, store, venued_fixtures_dir, m1=True, m2=True, unit=["inline|1|Keep"])
     d = cli.cmd_partition_units(ns(session=sid, unit=["inline|99|Bad"]), store=store)
     assert d.ok is False and d.action == "fix_units"
     state = store.load(sid)

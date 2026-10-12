@@ -89,11 +89,11 @@ def test_classify_ignores_bare_number(store):
 
 # --- resolve: tracker_key threads into the quality row + the stamp ------------
 
-def test_resolve_with_an_issue_key_writes_row_and_invokes_stamp(store, monkeypatch, fixtures_dir, tmp_path):
+def test_resolve_with_an_issue_key_writes_row_and_invokes_stamp(store, monkeypatch, venued_fixtures_dir, tmp_path):
     calls = []
     monkeypatch.setattr(solved_marker, "stamp", lambda key, **kw: calls.append(key) or
                          {"channel": "orgchan", "key": key, "stamped": True})
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
 
     d = _drive_to_resolved(store, "res-issue-key", plan, tracker_key="PROJ-1")
 
@@ -106,11 +106,11 @@ def test_resolve_with_an_issue_key_writes_row_and_invokes_stamp(store, monkeypat
     assert rows[-1]["tracker_key"] == "PROJ-1"
 
 
-def test_resolve_with_github_ref_invokes_stamp_with_that_ref(store, monkeypatch, fixtures_dir):
+def test_resolve_with_github_ref_invokes_stamp_with_that_ref(store, monkeypatch, venued_fixtures_dir):
     calls = []
     monkeypatch.setattr(solved_marker, "stamp", lambda key, **kw: calls.append(key) or
                          {"channel": "github", "key": key, "stamped": True})
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
 
     d = _drive_to_resolved(store, "res-github", plan, tracker_key="org/repo#7")
 
@@ -120,11 +120,11 @@ def test_resolve_with_github_ref_invokes_stamp_with_that_ref(store, monkeypatch,
     assert d.data["quality"]["tracker_key"] == "org/repo#7"
 
 
-def test_resolve_stamp_raising_still_completes_and_still_wrote_row(store, monkeypatch, fixtures_dir):
+def test_resolve_stamp_raising_still_completes_and_still_wrote_row(store, monkeypatch, venued_fixtures_dir):
     def _raise(key, **kw):
         raise RuntimeError("boom")
     monkeypatch.setattr(solved_marker, "stamp", _raise)
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
 
     d = _drive_to_resolved(store, "res-raise", plan, tracker_key="PROJ-2")
 
@@ -137,12 +137,12 @@ def test_resolve_stamp_raising_still_completes_and_still_wrote_row(store, monkey
     assert rows[-1]["quality"] == 5
 
 
-def test_resolve_without_tracker_key_writes_null_and_stamps_nothing(store, monkeypatch, fixtures_dir):
+def test_resolve_without_tracker_key_writes_null_and_stamps_nothing(store, monkeypatch, venued_fixtures_dir):
     calls = []
     monkeypatch.setattr(solved_marker, "stamp", lambda key, **kw: calls.append(key) or
                          {"channel": None, "key": key, "stamped": False,
                           "skipped_reason": "no key or unclassifiable key"})
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
 
     d = _drive_to_resolved(store, "res-none", plan, tracker_key=None)
 

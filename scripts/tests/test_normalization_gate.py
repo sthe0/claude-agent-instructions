@@ -106,9 +106,9 @@ def test_blockers_clear_with_factor_and_no_level():
 
 # --- end-to-end: block / normalize / waiver ----------------------------------
 
-def test_replan_blocked_without_normalization(store, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+def test_replan_blocked_without_normalization(store, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_failed_stage1(store, "b1", plan)
     _complete_cycle(store, "b1")
     d = cli.cmd_replan(ns(session="b1", plan=refined), store=store)
@@ -119,9 +119,9 @@ def test_replan_blocked_without_normalization(store, fixtures_dir):
     assert store.load("b1").node == Node.DIAGNOSING.value
 
 
-def test_normalize_unblocks_replan(store, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+def test_normalize_unblocks_replan(store, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_failed_stage1(store, "b2", plan)
     _complete_cycle(store, "b2")
     nd = cli.cmd_normalize(ns(session="b2", factor="reproducible cause", level="leaf"), store=store)
@@ -134,9 +134,9 @@ def test_normalize_unblocks_replan(store, fixtures_dir):
     assert state.stage(1).outcome.status == StageStatus.PENDING.value
 
 
-def test_waiver_with_reason_unblocks_and_is_recorded(store, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+def test_waiver_with_reason_unblocks_and_is_recorded(store, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_failed_stage1(store, "b3", plan)
     _complete_cycle(store, "b3")
     d = cli.cmd_replan(ns(session="b3", plan=refined,
@@ -149,9 +149,9 @@ def test_waiver_with_reason_unblocks_and_is_recorded(store, fixtures_dir):
     assert waived[0]["reason"] == "genuinely one-off, no reproducible factor"
 
 
-def test_empty_waiver_rejected(store, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+def test_empty_waiver_rejected(store, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_failed_stage1(store, "b4", plan)
     _complete_cycle(store, "b4")
     d = cli.cmd_replan(ns(session="b4", plan=refined, normalization_waiver="   "), store=store)
@@ -164,31 +164,31 @@ def test_empty_waiver_rejected(store, fixtures_dir):
 
 # --- cmd_normalize validation ------------------------------------------------
 
-def test_normalize_requires_factor(store, fixtures_dir):
-    _to_failed_stage1(store, "v1", str(fixtures_dir / "plan_two_stage.toml"))
+def test_normalize_requires_factor(store, venued_fixtures_dir):
+    _to_failed_stage1(store, "v1", str(venued_fixtures_dir / "plan_two_stage.toml"))
     _complete_cycle(store, "v1")
     d = cli.cmd_normalize(ns(session="v1", factor="   ", level=None), store=store)
     assert d.ok is False and "factor" in d.detail
     assert store.load("v1").difficulty.normalization is None
 
 
-def test_normalize_rejects_unknown_level(store, fixtures_dir):
-    _to_failed_stage1(store, "v2", str(fixtures_dir / "plan_two_stage.toml"))
+def test_normalize_rejects_unknown_level(store, venued_fixtures_dir):
+    _to_failed_stage1(store, "v2", str(venued_fixtures_dir / "plan_two_stage.toml"))
     _complete_cycle(store, "v2")
     d = cli.cmd_normalize(ns(session="v2", factor="cause", level="bogus"), store=store)
     assert d.ok is False and "level" in d.detail
 
 
-def test_normalize_out_of_order_refused(store, fixtures_dir):
+def test_normalize_out_of_order_refused(store, venued_fixtures_dir):
     # DIAGNOSING but only declared — critique missing => normalize is premature
-    _to_failed_stage1(store, "v3", str(fixtures_dir / "plan_two_stage.toml"))
+    _to_failed_stage1(store, "v3", str(venued_fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_declare(ns(session="v3", expected="e", actual="a", mismatch="m"), store=store)
     d = cli.cmd_normalize(ns(session="v3", factor="cause", level="note"), store=store)
     assert d.ok is False
     assert store.load("v3").difficulty.normalization is None
 
 
-def test_normalize_outside_diagnosing_records_without_touching_difficulty(store, fixtures_dir):
+def test_normalize_outside_diagnosing_records_without_touching_difficulty(store, venued_fixtures_dir):
     # R9: normalize is now callable outside DIAGNOSING as a plain record-only act —
     # it succeeds, logs a "normalize" event flagged in_diagnosis=False, and touches
     # no difficulty state (there is none to touch: state.difficulty stays None).

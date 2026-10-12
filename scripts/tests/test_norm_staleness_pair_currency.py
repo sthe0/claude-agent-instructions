@@ -721,6 +721,7 @@ class Engine:
         self._n += 1
         declared = copy.deepcopy(data)
         declared["meta"]["weight_class"] = "small_change"
+        declared["meta"]["repo_root"] = str(self.tmp)
         return _write(at or self.tmp / f"engine-plan-{self._n}.toml", declared)
 
     def _run(self, command: str, fn, **kw):

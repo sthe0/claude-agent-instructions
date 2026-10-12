@@ -38,6 +38,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import declare_venue
+
 from agentctl import cli
 from agentctl.plan import PlanError, diff_plans, load_plan, order_place
 from agentctl.state import Node, Order
@@ -183,16 +185,14 @@ def _write_plan(
     weight_class: str | None = "substantive",
 ) -> str:
     line = "" if weight_class is None else f'weight_class = "{weight_class}"\n'
-    path.write_text(
-        _PLAN.format(
-            goal=json.dumps(goal),
-            done_criterion=json.dumps(done_criterion),
-            weight_class=line,
-            order=_order_block(omit, coverage),
-            final_check=_FINAL_CHECK if final_check else "",
-        ),
-        encoding="utf-8",
+    text = _PLAN.format(
+        goal=json.dumps(goal),
+        done_criterion=json.dumps(done_criterion),
+        weight_class=line,
+        order=_order_block(omit, coverage),
+        final_check=_FINAL_CHECK if final_check else "",
     )
+    path.write_text(declare_venue(text, path.parent), encoding="utf-8")
     return str(path)
 
 

@@ -55,8 +55,8 @@ def _drive_to_resolved(store, sid, plan, *, deliverable_kind="", cost_log=None):
                             store=store)
 
 
-def test_quality_row_carries_weight_class_route_deliverable_kind(store, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def test_quality_row_carries_weight_class_route_deliverable_kind(store, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
 
     d = _drive_to_resolved(store, "tt-1", plan, deliverable_kind="code")
 
@@ -68,8 +68,8 @@ def test_quality_row_carries_weight_class_route_deliverable_kind(store, fixtures
     assert row["deliverable_kind"] == "code"
 
 
-def test_quality_row_deliverable_kind_null_when_unclassified(store, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def test_quality_row_deliverable_kind_null_when_unclassified(store, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
 
     _drive_to_resolved(store, "tt-2", plan, deliverable_kind="")
 
@@ -77,8 +77,8 @@ def test_quality_row_deliverable_kind_null_when_unclassified(store, fixtures_dir
     assert rows[-1]["deliverable_kind"] is None
 
 
-def test_quality_row_budget_tiers_from_matching_spawn_rows(store, fixtures_dir, tmp_path):
-    plan = fixtures_dir / "plan_two_stage.toml"
+def test_quality_row_budget_tiers_from_matching_spawn_rows(store, venued_fixtures_dir, tmp_path):
+    plan = venued_fixtures_dir / "plan_two_stage.toml"
     cost_log = tmp_path / "costs.jsonl"
     cost_log.write_text(
         json.dumps({"plan_path": str(plan), "stage_index": 1,
@@ -102,8 +102,8 @@ def test_quality_row_budget_tiers_from_matching_spawn_rows(store, fixtures_dir, 
     assert row["total_cost_usd"] == 0.5
 
 
-def test_quality_row_budget_tiers_empty_when_no_spawn_rows(store, fixtures_dir, tmp_path):
-    plan = fixtures_dir / "plan_two_stage.toml"
+def test_quality_row_budget_tiers_empty_when_no_spawn_rows(store, venued_fixtures_dir, tmp_path):
+    plan = venued_fixtures_dir / "plan_two_stage.toml"
     empty_log = tmp_path / "empty.jsonl"
     empty_log.write_text("", encoding="utf-8")
 

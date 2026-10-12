@@ -121,11 +121,11 @@ def test_submit_plan_rejects_out_of_vocabulary_executor(store, tmp_path):
     assert store.load(sid).node == Node.PLANNING.value  # nothing recorded
 
 
-def test_replan_old_side_tolerates_legacy_executor(store, fixtures_dir, tmp_path):
+def test_replan_old_side_tolerates_legacy_executor(store, venued_fixtures_dir, tmp_path):
     """A plan approved before the vocabulary existed (free-text executor) must not
     brick its session's replan: the OLD side loads with strict_executor=False."""
     sid = "voc2"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_planning(store, sid)
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
@@ -152,8 +152,8 @@ def test_replan_old_side_tolerates_legacy_executor(store, fixtures_dir, tmp_path
 
 # --- #10: pure dry-run ----------------------------------------------------------
 
-def _to_executing(store, sid, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def _to_executing(store, sid, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_planning(store, sid)
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
@@ -162,14 +162,14 @@ def _to_executing(store, sid, fixtures_dir):
     return cli.cmd_next_stage(ns(session=sid), store=store)
 
 
-def test_dry_run_is_pure_preview(store, fixtures_dir):
+def test_dry_run_is_pure_preview(store, venued_fixtures_dir):
     sid = "dry1"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     before = store.path(sid).read_bytes()
     events_before = len(store.load(sid).history)
 
     seen_argv = []
-    def runner(argv):
+    def runner(argv, cwd=None):
         seen_argv.append(argv)
         return RunResult(0, stdout="python3 spawn-specialist.py --kind developer ...\n")
 
@@ -189,12 +189,12 @@ def test_dry_run_is_pure_preview(store, fixtures_dir):
     assert store.path(sid).read_bytes() == before  # byte-identical state file
 
 
-def test_dry_run_never_routes_completed_marker(store, fixtures_dir):
+def test_dry_run_never_routes_completed_marker(store, venued_fixtures_dir):
     """Even if the previewed command's stdout resembles a marker, a dry-run must
     not route it — the stage stays ACTIVE and no record_result is suggested."""
     sid = "dry2"
-    _to_executing(store, sid, fixtures_dir)
-    runner = lambda argv: RunResult(0, stdout="COMPLETED: looks like a marker\n")
+    _to_executing(store, sid, venued_fixtures_dir)
+    runner = lambda argv, cwd=None: RunResult(0, stdout="COMPLETED: looks like a marker\n")
     d = cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
                             dry_run=True), store=store, runner=runner)
     assert d.action == "preview"
@@ -204,9 +204,9 @@ def test_dry_run_never_routes_completed_marker(store, fixtures_dir):
 
 # --- #13: explicit spawn wording -------------------------------------------------
 
-def test_next_stage_directive_names_dispatch_as_the_spawn(store, fixtures_dir):
+def test_next_stage_directive_names_dispatch_as_the_spawn(store, venued_fixtures_dir):
     sid = "word1"
-    d = _to_executing(store, sid, fixtures_dir)
+    d = _to_executing(store, sid, venued_fixtures_dir)
     assert d.action == "dispatch"
     assert "via agentctl dispatch" in d.detail
     assert "synchronous, blocking" in d.detail
@@ -251,12 +251,12 @@ def test_build_argv_omits_continue_worktree_when_unset():
     assert argv_default == argv_explicit_none  # byte-identical to pre-flag behaviour
 
 
-def test_cmd_dispatch_continues_worktree_for_dependent_spawn_stage(store, fixtures_dir):
+def test_cmd_dispatch_continues_worktree_for_dependent_spawn_stage(store, venued_fixtures_dir):
     """Stage 2 of plan_two_stage.toml depends_on [1] and both stages are
     spawn:developer — cmd_dispatch must thread --continue-worktree for stage 2
     (naming the shared delivery worktree) but never for independent stage 1."""
     sid = "cont1"
-    _to_executing(store, sid, fixtures_dir)  # stage 1 now ACTIVE
+    _to_executing(store, sid, venued_fixtures_dir)  # stage 1 now ACTIVE
     state = store.load(sid)
     state.delivery_worktree = "/repo/.claude/worktrees/demo-two-stage"
     store.save(state)
@@ -284,13 +284,15 @@ def test_cmd_dispatch_continues_worktree_for_dependent_spawn_stage(store, fixtur
     assert argv2[idx + 1] == "/repo/.claude/worktrees/demo-two-stage"
 
 
-def test_cmd_dispatch_omits_continue_worktree_without_delivery_worktree_or_repo_root(store, fixtures_dir):
+def test_cmd_dispatch_omits_continue_worktree_without_delivery_worktree_or_repo_root(store, venued_fixtures_dir):
     """Even a dependent spawn stage gets no continuation when the session carries
     neither delivery_worktree nor repo_root (nothing to anchor a default path to)."""
     sid = "cont2"
-    _to_executing(store, sid, fixtures_dir)
-    assert store.load(sid).delivery_worktree is None
-    assert store.load(sid).repo_root is None
+    _to_executing(store, sid, venued_fixtures_dir)
+    state = store.load(sid)
+    state.delivery_worktree = None
+    state.repo_root = None
+    store.save(state)
 
     seen_argv = []
 

@@ -64,26 +64,26 @@ def _to_resolution(store, sid, plan):
 
 # --- empty --by refused at the plan-approval gate ------------------------
 
-def test_approve_empty_by_is_refused(store, fixtures_dir):
+def test_approve_empty_by_is_refused(store, venued_fixtures_dir):
     sid = "ga"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     d = cli.cmd_approve(ns(session=sid, by=""), store=store)
     assert d.ok is False
     assert store.load(sid).node == Node.PLAN_READY.value  # gate held
     assert any("empty approver" in b for b in d.data["blockers"])
 
 
-def test_approve_blank_by_is_refused(store, fixtures_dir):
+def test_approve_blank_by_is_refused(store, venued_fixtures_dir):
     sid = "gab"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     d = cli.cmd_approve(ns(session=sid, by="   "), store=store)
     assert d.ok is False
     assert store.load(sid).node == Node.PLAN_READY.value
 
 
-def test_approve_nonempty_by_passes(store, fixtures_dir):
+def test_approve_nonempty_by_passes(store, venued_fixtures_dir):
     sid = "gp"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     d = cli.cmd_approve(ns(session=sid, by="alice"), store=store)
     assert d.ok is True
     assert store.load(sid).node == Node.APPROVED.value
@@ -91,18 +91,18 @@ def test_approve_nonempty_by_passes(store, fixtures_dir):
 
 # --- empty --by refused at the resolution gate ---------------------------
 
-def test_resolve_empty_by_is_refused(store, fixtures_dir):
+def test_resolve_empty_by_is_refused(store, venued_fixtures_dir):
     sid = "gr"
-    _to_resolution(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_resolution(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     d = cli.cmd_resolve(ns(session=sid, by=""), store=store)
     assert d.ok is False
     assert store.load(sid).node == Node.RESOLUTION.value  # gate held
     assert any("empty confirmer" in b for b in d.data["blockers"])
 
 
-def test_resolve_nonempty_by_passes(store, fixtures_dir):
+def test_resolve_nonempty_by_passes(store, venued_fixtures_dir):
     sid = "grp"
-    _to_resolution(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_resolution(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     d = cli.cmd_resolve(ns(session=sid, by="user", quality=5, quality_by="user-confirmed",
                            quality_note=None), store=store)
     assert d.ok is True

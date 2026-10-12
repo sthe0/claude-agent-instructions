@@ -59,7 +59,7 @@ from agentctl.state import (
 )
 from agentctl.submission import submission_violations
 
-from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
+from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER, declare_venue
 
 # A restatement: everything it says, `depends_on = [1]` already said.
 RESTATEMENT = "Stage 1 is complete and its output has landed."
@@ -144,7 +144,7 @@ def ns(**kw):
 def _write_plan(path: Path, *, conditions: str, preconditions: str | None) -> str:
     line = "" if preconditions is None else f"preconditions = {json.dumps(preconditions)}\n"
     path.write_text(
-        _PLAN.format(conditions=json.dumps(conditions), preconditions=line),
+        declare_venue(_PLAN.format(conditions=json.dumps(conditions), preconditions=line), path.parent),
         encoding="utf-8",
     )
     return str(path)

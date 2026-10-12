@@ -128,8 +128,8 @@ class TestClassifyRunnerFailure:
 class TestEscapeCommandIsRetired:
     @pytest.mark.parametrize("reason", sorted(premise.ENUMERATION_ESCAPE_REASONS))
     def test_exits_2_and_leaves_the_persisted_bag_untouched(
-            self, store, fixtures_dir, reason, capsys):
-        plan_path = str(fixtures_dir / "plan_two_stage.toml")
+            self, store, venued_fixtures_dir, reason, capsys):
+        plan_path = str(venued_fixtures_dir / "plan_two_stage.toml")
         state, _ = _legacy_bag_state(plan_path, enumerated_runner_ok=False,
                                      enumerated_runner_stderr="boom")
         store.save(state)
@@ -148,8 +148,8 @@ class TestEscapeCommandIsRetired:
 
 class TestLegacyBagsLoadAndStopBlocking:
     def test_a_failed_pass_without_an_escape_no_longer_blocks_the_blockers_list(
-            self, fixtures_dir):
-        plan_path = str(fixtures_dir / "plan_two_stage.toml")
+            self, venued_fixtures_dir):
+        plan_path = str(venued_fixtures_dir / "plan_two_stage.toml")
         state, bag = _legacy_bag_state(plan_path, enumerated_runner_ok=False,
                                        enumerated_runner_stderr="advisor timed out after 480s")
 
@@ -157,8 +157,8 @@ class TestLegacyBagsLoadAndStopBlocking:
 
         assert blockers == []
 
-    def test_an_unlanded_pass_with_a_past_deadline_no_longer_blocks(self, fixtures_dir):
-        plan_path = str(fixtures_dir / "plan_two_stage.toml")
+    def test_an_unlanded_pass_with_a_past_deadline_no_longer_blocks(self, venued_fixtures_dir):
+        plan_path = str(venued_fixtures_dir / "plan_two_stage.toml")
         state, bag = _legacy_bag_state(plan_path, enumerated=False, enumerated_at="",
                                        enumerate_deadline=1.0)
 
@@ -192,8 +192,8 @@ class TestEscapeCountsAreVisible:
         store.save(state)
         return sid
 
-    def test_status_reports_both_axes_with_the_two_families_apart(self, store, fixtures_dir):
-        sid = self._carrying_both_families(store, str(fixtures_dir / "plan_two_stage.toml"))
+    def test_status_reports_both_axes_with_the_two_families_apart(self, store, venued_fixtures_dir):
+        sid = self._carrying_both_families(store, str(venued_fixtures_dir / "plan_two_stage.toml"))
 
         counts = cli.cmd_status(ns(session=sid), store=store).data["enumeration_escapes"]
 
@@ -201,8 +201,8 @@ class TestEscapeCountsAreVisible:
         assert counts["session"] == {"runner_failure": 1, "manual": 0, "not_landed": 1}
 
     def test_a_hand_re_reading_is_counted_apart_from_the_infrastructure_failures(
-            self, store, fixtures_dir):
-        plan_path = str(fixtures_dir / "plan_two_stage.toml")
+            self, store, venued_fixtures_dir):
+        plan_path = str(venued_fixtures_dir / "plan_two_stage.toml")
         state, bag = _legacy_bag_state(plan_path, sid="manual-counts")
         bag["escapes"] = [_escape_row(plan_path, premise.ESCAPE_MANUAL_ENUMERATION_DONE)]
         store.save(state)
@@ -214,13 +214,13 @@ class TestEscapeCountsAreVisible:
         assert counts["session"] == {"runner_failure": 0, "manual": 1, "not_landed": 0}
 
     def test_an_escape_against_superseded_plan_content_leaves_only_the_session_count(
-            self, store, fixtures_dir, tmp_path):
+            self, store, venued_fixtures_dir, tmp_path):
         plan_path = tmp_path / "plan.toml"
-        plan_path.write_text((fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8"),
+        plan_path.write_text((venued_fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8"),
                              encoding="utf-8")
         sid = self._carrying_both_families(store, str(plan_path), sid="superseded")
         plan_path.write_text(
-            (fixtures_dir / "plan_two_stage_substantive.toml").read_text(encoding="utf-8"),
+            (venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text(encoding="utf-8"),
             encoding="utf-8")
 
         counts = cli.cmd_status(ns(session=sid), store=store).data["enumeration_escapes"]
@@ -260,11 +260,11 @@ class TestEscapeCountsAreVisible:
         assert counts["this_plan"] is None
         assert counts["session"] == {"runner_failure": 0, "manual": 0, "not_landed": 0}
 
-    def _refused_session(self, store, fixtures_dir, sid):
+    def _refused_session(self, store, venued_fixtures_dir, sid):
         """A plan-ready session whose bag carries one legacy runner-failure escape for
         the submitted plan's bytes, plus an OPEN question so approve still refuses —
         which is what gives the refusal payload something to carry."""
-        plan = str(fixtures_dir / "plan_two_stage.toml")
+        plan = str(venued_fixtures_dir / "plan_two_stage.toml")
         cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
                          criterion_type="measurable", recursion_depth=0), store=store)
         cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -281,9 +281,9 @@ class TestEscapeCountsAreVisible:
                                   question="still open"), store=store)
         return plan
 
-    def test_the_approve_refusal_payload_carries_the_counts(self, store, fixtures_dir):
+    def test_the_approve_refusal_payload_carries_the_counts(self, store, venued_fixtures_dir):
         sid = "refusal-counts"
-        plan = self._refused_session(store, fixtures_dir, sid)
+        plan = self._refused_session(store, venued_fixtures_dir, sid)
 
         first = cli.cmd_approve(ns(session=sid, by="user"), store=store)
         assert first.ok is False
@@ -302,13 +302,13 @@ class TestEscapeCountsAreVisible:
             "runner_failure": 1, "manual": 0, "not_landed": 0}
 
     def test_the_replan_refusal_payload_carries_them_against_the_proposed_plan(
-            self, store, fixtures_dir):
+            self, store, venued_fixtures_dir):
         """The counts are computed against the PROPOSED plan (`args.plan`), not
         state.plan_path: same plan in, the escape on record for those bytes shows; a
         corrected plan in, `this_plan` is a real zero while `session` keeps the row."""
         sid = "replan-refusal-counts"
-        plan = self._refused_session(store, fixtures_dir, sid)
-        corrected = str(fixtures_dir / "plan_two_stage_substantive.toml")
+        plan = self._refused_session(store, venued_fixtures_dir, sid)
+        corrected = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
         state = store.load(sid)
         state.plugins["premise"].setdefault("escapes", []).append(
             _escape_row(plan, premise.ESCAPE_ADVISOR_TIMEOUT))

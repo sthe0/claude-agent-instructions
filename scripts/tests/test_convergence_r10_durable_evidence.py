@@ -22,6 +22,7 @@ from agentctl.dispatch import RunResult
 from agentctl.plan import load_plan, parse_plan
 from agentctl.submission import submission_violations
 
+from conftest import venue_plan
 from test_stage_grants import _to_executing, ns
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
@@ -372,13 +373,7 @@ def test_evidence_dir_grant_keeps_approved_grants_sha256(store, fixtures_dir, tm
     from agentctl.plan import grants_sha256
 
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    venue_plan = tmp_path / "venue-plan.toml"
-    venue_plan.write_text(
-        Path(plan_path).read_text().replace(
-            "[meta]\n", f'[meta]\nrepo_root = "{GOLDEN_VENUE}"\n', 1
-        )
-    )
-    doc = load_plan(venue_plan)
+    doc = load_plan(venue_plan(Path(plan_path), tmp_path / "golden", GOLDEN_VENUE))
     assert grants_sha256(doc) == GOLDEN_GRANTS_SHA256
 
     stage1 = next(s for s in doc.stages if s.index == 1)

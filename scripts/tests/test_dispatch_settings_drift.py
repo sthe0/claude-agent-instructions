@@ -25,8 +25,8 @@ def ns(**kw):
     return Namespace(**kw)
 
 
-def _to_executing(store, sid, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def _to_executing(store, sid, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(ns(session=sid, task="t", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -43,14 +43,14 @@ def _to_executing(store, sid, fixtures_dir):
 
 # --- settings_drift --------------------------------------------------------------
 
-def test_cmd_dispatch_no_settings_drift_when_child_cwd_settings_unchanged(store, fixtures_dir, tmp_path):
+def test_cmd_dispatch_no_settings_drift_when_child_cwd_settings_unchanged(store, venued_fixtures_dir, tmp_path):
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
     settings_path = claude_dir / "settings.local.json"
     settings_path.write_text('{"permissions": {"allow": ["Bash(ls:*)"]}}', encoding="utf-8")
 
     sid = "settings-drift-none"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.delivery_worktree = str(tmp_path)
     state.repo_root = str(tmp_path)
@@ -65,14 +65,14 @@ def test_cmd_dispatch_no_settings_drift_when_child_cwd_settings_unchanged(store,
     assert store.load(sid).settings_drift == []
 
 
-def test_cmd_dispatch_records_settings_drift_when_child_cwd_settings_changes(store, fixtures_dir, tmp_path):
+def test_cmd_dispatch_records_settings_drift_when_child_cwd_settings_changes(store, venued_fixtures_dir, tmp_path):
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
     settings_path = claude_dir / "settings.local.json"
     settings_path.write_text('{"permissions": {"allow": ["Bash(ls:*)"]}}', encoding="utf-8")
 
     sid = "settings-drift-changed"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.delivery_worktree = str(tmp_path)
     state.repo_root = str(tmp_path)
@@ -96,9 +96,9 @@ def test_cmd_dispatch_records_settings_drift_when_child_cwd_settings_changes(sto
 
 # --- once-scoped runtime grant consumption ---------------------------------------
 
-def test_cmd_dispatch_consumes_once_scoped_runtime_grant_on_completed(store, fixtures_dir):
+def test_cmd_dispatch_consumes_once_scoped_runtime_grant_on_completed(store, venued_fixtures_dir):
     sid = "once-grant-consumed"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.runtime_grants["1"] = [
         {"rule": "Bash(rare-cmd:*)", "provenance": "runtime", "scope": "once", "consumed": False},
@@ -118,12 +118,12 @@ def test_cmd_dispatch_consumes_once_scoped_runtime_grant_on_completed(store, fix
     assert stage_entry["consumed"] is False
 
 
-def test_cmd_dispatch_does_not_consume_once_grant_on_child_infra_failure(store, fixtures_dir):
+def test_cmd_dispatch_does_not_consume_once_grant_on_child_infra_failure(store, venued_fixtures_dir):
     # The launch never meaningfully ran against the grant -- burning a
     # once-scoped approval here would waste it on a retry that gets no
     # benefit from having used it.
     sid = "once-grant-not-consumed-infra-failure"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.runtime_grants["1"] = [
         {"rule": "Bash(rare-cmd:*)", "provenance": "runtime", "scope": "once", "consumed": False},
@@ -179,9 +179,9 @@ class _FakeStage:
         self.title = title
 
 
-def test_rekey_runtime_grants_moves_entry_to_the_single_matching_title(store, fixtures_dir):
+def test_rekey_runtime_grants_moves_entry_to_the_single_matching_title(store, venued_fixtures_dir):
     sid = "rekey-single-match"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.runtime_grants["1"] = [
         {"rule": "Bash(x:*)", "provenance": "runtime", "stage_title": "Renamed stage"},
@@ -192,9 +192,9 @@ def test_rekey_runtime_grants_moves_entry_to_the_single_matching_title(store, fi
     assert state.runtime_grants["2"][0]["rule"] == "Bash(x:*)"
 
 
-def test_rekey_runtime_grants_drops_entry_when_title_now_ambiguous(store, fixtures_dir):
+def test_rekey_runtime_grants_drops_entry_when_title_now_ambiguous(store, venued_fixtures_dir):
     sid = "rekey-ambiguous"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.runtime_grants["1"] = [
         {"rule": "Bash(x:*)", "provenance": "runtime", "stage_title": "Shared title"},
@@ -204,9 +204,9 @@ def test_rekey_runtime_grants_drops_entry_when_title_now_ambiguous(store, fixtur
     assert state.runtime_grants == {}
 
 
-def test_rekey_runtime_grants_drops_entry_when_title_no_longer_present(store, fixtures_dir):
+def test_rekey_runtime_grants_drops_entry_when_title_no_longer_present(store, venued_fixtures_dir):
     sid = "rekey-gone"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.runtime_grants["1"] = [
         {"rule": "Bash(x:*)", "provenance": "runtime", "stage_title": "Vanished stage"},
@@ -224,9 +224,9 @@ def test_rekey_runtime_grants_drops_entry_when_title_no_longer_present(store, fi
 # replan branches, which never renumber -- it just overwrites `stage_title`
 # in place for whatever entries already sit at the given index.
 
-def test_refresh_runtime_grant_titles_overwrites_title_at_the_given_index(store, fixtures_dir):
+def test_refresh_runtime_grant_titles_overwrites_title_at_the_given_index(store, venued_fixtures_dir):
     sid = "refresh-titles-basic"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.runtime_grants["1"] = [
         {"rule": "Bash(x:*)", "provenance": "runtime", "stage_title": "Old title"},
@@ -235,9 +235,9 @@ def test_refresh_runtime_grant_titles_overwrites_title_at_the_given_index(store,
     assert state.runtime_grants["1"][0]["stage_title"] == "New title"
 
 
-def test_refresh_runtime_grant_titles_updates_every_entry_at_the_index(store, fixtures_dir):
+def test_refresh_runtime_grant_titles_updates_every_entry_at_the_index(store, venued_fixtures_dir):
     sid = "refresh-titles-multiple-entries"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.runtime_grants["1"] = [
         {"rule": "Bash(x:*)", "provenance": "runtime", "stage_title": "Old title"},
@@ -247,9 +247,9 @@ def test_refresh_runtime_grant_titles_updates_every_entry_at_the_index(store, fi
     assert all(e["stage_title"] == "New title" for e in state.runtime_grants["1"])
 
 
-def test_refresh_runtime_grant_titles_leaves_other_stage_indices_untouched(store, fixtures_dir):
+def test_refresh_runtime_grant_titles_leaves_other_stage_indices_untouched(store, venued_fixtures_dir):
     sid = "refresh-titles-other-index-untouched"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.runtime_grants["1"] = [
         {"rule": "Bash(x:*)", "provenance": "runtime", "stage_title": "Stage one"},

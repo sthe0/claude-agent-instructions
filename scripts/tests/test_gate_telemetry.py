@@ -101,13 +101,13 @@ def test_log_gate_fails_open_on_unwritable_path(store, monkeypatch, tmp_path):
 
 # --- walkthrough: one event per real gate evaluation -------------------------
 
-def test_walkthrough_logs_one_event_per_gate_evaluation(store, monkeypatch, tmp_path, fixtures_dir):
+def test_walkthrough_logs_one_event_per_gate_evaluation(store, monkeypatch, tmp_path, venued_fixtures_dir):
     """Drive a full session through approve -> verify-final -> resolve, then
     confirm exactly the expected chokepoints fired, each exactly once (except
     resolution, which is evaluated twice: once at verify-final, once at resolve)."""
     log_path = tmp_path / "gate-log.jsonl"
     monkeypatch.setattr(cli, "GATE_LOG", log_path)
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     sid = "w1"
     _to_executing_stage1(store, sid, plan)
 
@@ -138,14 +138,14 @@ def test_walkthrough_logs_one_event_per_gate_evaluation(store, monkeypatch, tmp_
     assert store.load(sid).node == Node.RESOLVED.value
 
 
-def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatch, tmp_path, fixtures_dir):
+def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatch, tmp_path, venued_fixtures_dir):
     """A failed stage enters DIAGNOSING; a premature replan logs one blocked
     difficulty_blockers evaluation, and the completed cycle logs a second (passed)
     difficulty_blockers evaluation plus one replan_coverage evaluation."""
     log_path = tmp_path / "gate-log.jsonl"
     monkeypatch.setattr(cli, "GATE_LOG", log_path)
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     sid = "w2"
     _to_executing_stage1(store, sid, plan)
 

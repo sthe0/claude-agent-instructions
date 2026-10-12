@@ -225,9 +225,9 @@ def test_cmd_reset_deletes_delivery_stamp(tmp_path, monkeypatch):
 
 # --- cmd_submit_plan advisory on both submit and revise edges -----------------
 
-def test_present_plan_advisory_on_submit_and_revise_branches(store, fixtures_dir, gate_on):
+def test_present_plan_advisory_on_submit_and_revise_branches(store, venued_fixtures_dir, gate_on):
     sid = "sub1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(
         ns(session=sid, task="demo", goal="", done_criterion="",
            criterion_type="measurable", recursion_depth=0),
@@ -247,7 +247,7 @@ def test_present_plan_advisory_on_submit_and_revise_branches(store, fixtures_dir
     assert d1.marker == "PLAN-READY"
     assert any("present-plan" in a for a in d1.data.get("advisories", []))
 
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     d2 = cli.cmd_submit_plan(ns(session=sid, plan=refined), store=store)
     assert d2.ok is True
     assert d2.node == Node.PLAN_READY.value
@@ -255,10 +255,10 @@ def test_present_plan_advisory_on_submit_and_revise_branches(store, fixtures_dir
     assert any("present-plan" in a for a in d2.data.get("advisories", []))
 
 
-def test_present_plan_advisory_absent_when_gate_off(store, fixtures_dir, monkeypatch):
+def test_present_plan_advisory_absent_when_gate_off(store, venued_fixtures_dir, monkeypatch):
     monkeypatch.setenv("AGENTCTL_PLAN_PRESENTATION", "0")
     sid = "sub2"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(
         ns(session=sid, task="demo", goal="", done_criterion="",
            criterion_type="measurable", recursion_depth=0),

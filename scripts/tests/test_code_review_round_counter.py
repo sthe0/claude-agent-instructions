@@ -136,9 +136,9 @@ def _to_executing(store, sid, plan):
     cli.cmd_next_stage(ns(session=sid), store=store)
 
 
-def test_approve_resets_code_review_rounds(store, fixtures_dir):
+def test_approve_resets_code_review_rounds(store, venued_fixtures_dir):
     sid = "cr-reset-approve"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     s = store.load(sid)
     s.code_review_rounds = 4
@@ -148,9 +148,9 @@ def test_approve_resets_code_review_rounds(store, fixtures_dir):
     assert store.load(sid).code_review_rounds == 0
 
 
-def test_replan_resets_code_review_rounds(store, fixtures_dir):
+def test_replan_resets_code_review_rounds(store, venued_fixtures_dir):
     sid = "cr-reset-replan"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing(store, sid, plan)
     s = store.load(sid)
     s.code_review_rounds = 4

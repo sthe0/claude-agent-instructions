@@ -26,6 +26,7 @@ from agentctl.state import (
     SHOW_FULL_PLAN_MARKER,
 )
 from agentctl.store import FileStateStore
+from conftest import venue_plan
 from lib import hook_wiring
 
 _DELIVERY_GATE_HOOK = Path(__file__).resolve().parent.parent / "hook-plan-delivery-gate.py"
@@ -84,13 +85,7 @@ def _declared_venue_plan(fixtures_dir, tmp_path) -> str:
     """A copy of `plan_two_stage.toml` declaring `repo_root = tmp_path`: the
     bare fixture declares no venue, so its relative `output_artifacts` derive
     no grant, and a substantive session refuses it at submit."""
-    out = tmp_path / "plan_two_stage_declared_venue.toml"
-    out.write_text(
-        (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
-        .replace("[meta]\n", f'[meta]\nrepo_root = "{tmp_path}"\n', 1),
-        encoding="utf-8",
-    )
-    return str(out)
+    return str(venue_plan(fixtures_dir / "plan_two_stage.toml", tmp_path / "declared-venue", tmp_path))
 
 
 def _grants_blocks(plan_path=None) -> str:

@@ -23,6 +23,7 @@ import pytest
 
 from agentctl import cli
 from agentctl.store import FileStateStore
+from conftest import venue_plan
 
 
 @pytest.fixture(autouse=True)
@@ -62,7 +63,9 @@ def _build_substantive(capsys, root, sid="e2e"):
          "--done-criterion", "dc", "--criterion-type", "measurable")
     _run(capsys, root, "classify", "--session", sid, "--architectural")
     _run(capsys, root, "plan", "--session", sid)
-    _run(capsys, root, "submit-plan", "--session", sid, "--plan", _PLAN)
+    venue = Path(root).parent
+    plan = venue_plan(Path(_PLAN), venue / "plans", venue)
+    _run(capsys, root, "submit-plan", "--session", sid, "--plan", str(plan))
     return sid
 
 

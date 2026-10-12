@@ -48,9 +48,9 @@ SUBSTANTIVE = dict(changed_lines=200, files=5, wall_clock_min=60, architectural=
 
 # --- drive ------------------------------------------------------------------
 
-def test_drive_to_plan_ready_stops_at_gate(store, fixtures_dir):
+def test_drive_to_plan_ready_stops_at_gate(store, venued_fixtures_dir):
     """Substantive drive with no --approved-by stops at PLAN_READY (the gate-stop)."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _start(store, "d1")
     d = cli.cmd_drive(_drive_ns("d1", plan=plan, **SUBSTANTIVE), store=store)
     assert d.node == Node.PLAN_READY.value
@@ -62,9 +62,9 @@ def test_drive_to_plan_ready_stops_at_gate(store, fixtures_dir):
     assert store.load("d1").node == Node.PLAN_READY.value
 
 
-def test_drive_to_executing_with_approver(store, fixtures_dir):
+def test_drive_to_executing_with_approver(store, venued_fixtures_dir):
     """--approved-by crosses the gate and collapses approve -> partition -> next-stage."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _start(store, "d2")
     d = cli.cmd_drive(_drive_ns("d2", plan=plan, approved_by="Fedor", **SUBSTANTIVE), store=store)
     assert d.node == Node.EXECUTING.value
@@ -73,9 +73,9 @@ def test_drive_to_executing_with_approver(store, fixtures_dir):
     assert cmds == ["classify", "plan", "submit_plan", "approve", "partition", "next_stage"]
 
 
-def test_drive_idempotent_at_executing(store, fixtures_dir):
+def test_drive_idempotent_at_executing(store, venued_fixtures_dir):
     """Re-running drive once already at EXECUTING is a no-op reporting the node."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _start(store, "d3")
     cli.cmd_drive(_drive_ns("d3", plan=plan, approved_by="Fedor", **SUBSTANTIVE), store=store)
     d = cli.cmd_drive(_drive_ns("d3", plan=plan, approved_by="Fedor", **SUBSTANTIVE), store=store)
@@ -112,16 +112,16 @@ def test_drive_substantive_without_plan_stops(store):
 
 # --- close ------------------------------------------------------------------
 
-def _drive_to_executing(store, sid, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def _drive_to_executing(store, sid, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _start(store, sid)
     cli.cmd_drive(_drive_ns(sid, plan=plan, approved_by="Fedor", **SUBSTANTIVE), store=store)
 
 
-def test_close_blocked_on_unpassed_stage(store, fixtures_dir):
+def test_close_blocked_on_unpassed_stage(store, venued_fixtures_dir):
     """Recording stage 1 leaves stage 2 pending; close reports more-stages-remain and
     does NOT fabricate the rest or reach resolution."""
-    _drive_to_executing(store, "c1", fixtures_dir)
+    _drive_to_executing(store, "c1", venued_fixtures_dir)
     d = cli.cmd_close(_close_ns("c1", status="passed", control="reviewed: ok",
                                 observation=STAGE_OBSERVATIONS[0]), store=store)
     assert d.action == "next_stage"
@@ -129,10 +129,10 @@ def test_close_blocked_on_unpassed_stage(store, fixtures_dir):
     assert store.load("c1").node == Node.VERIFYING.value
 
 
-def test_close_blocked_on_plugin_phase(store, fixtures_dir):
+def test_close_blocked_on_plugin_phase(store, venued_fixtures_dir):
     """With all stages passed but the experience plugin's phases unrecorded, close's
     resolve-probe stays at RESOLUTION and surfaces the [experience] blocker."""
-    _drive_to_executing(store, "c2", fixtures_dir)
+    _drive_to_executing(store, "c2", venued_fixtures_dir)
     # stage 1
     cli.cmd_close(_close_ns("c2", status="passed", control="reviewed: ok",
                             observation=STAGE_OBSERVATIONS[0]), store=store)
@@ -148,9 +148,9 @@ def test_close_blocked_on_plugin_phase(store, fixtures_dir):
     assert store.load("c2").node == Node.RESOLUTION.value  # probe did not transition
 
 
-def test_close_resolves_when_clean(store, fixtures_dir):
+def test_close_resolves_when_clean(store, venued_fixtures_dir):
     """Experience phases recorded + an explicit --confirmed-by resolves the session."""
-    _drive_to_executing(store, "c3", fixtures_dir)
+    _drive_to_executing(store, "c3", venued_fixtures_dir)
     cli.cmd_close(_close_ns("c3", status="passed", control="reviewed: ok",
                             observation=STAGE_OBSERVATIONS[0]), store=store)
     cli.cmd_next_stage(ns(session="c3"), store=store)
@@ -163,10 +163,10 @@ def test_close_resolves_when_clean(store, fixtures_dir):
     assert d.marker == "COMPLETED"
 
 
-def test_close_failed_stage_surfaces_diagnosing(store, fixtures_dir):
+def test_close_failed_stage_surfaces_diagnosing(store, venued_fixtures_dir):
     """A FAILED stage routes to DIAGNOSING (overcome-difficulty) and close surfaces it
     rather than swallowing it or proceeding toward resolution."""
-    _drive_to_executing(store, "c5", fixtures_dir)
+    _drive_to_executing(store, "c5", venued_fixtures_dir)
     d = cli.cmd_close(_close_ns("c5", status="failed", control="reviewed: ok",
                                 actual="boom"), store=store)
     assert d.ok is False
@@ -175,10 +175,10 @@ def test_close_failed_stage_surfaces_diagnosing(store, fixtures_dir):
     assert d.marker == "OVERCOME-DIFFICULTY"
 
 
-def test_close_with_confirmer_but_plugin_blocking(store, fixtures_dir):
+def test_close_with_confirmer_but_plugin_blocking(store, venued_fixtures_dir):
     """A non-empty --confirmed-by does not override real resolution blockers: with the
     experience phases unrecorded, close reports fix_stages with the real blockers."""
-    _drive_to_executing(store, "c6", fixtures_dir)
+    _drive_to_executing(store, "c6", venued_fixtures_dir)
     cli.cmd_close(_close_ns("c6", status="passed", control="reviewed: ok",
                             observation=STAGE_OBSERVATIONS[0]), store=store)
     cli.cmd_next_stage(ns(session="c6"), store=store)

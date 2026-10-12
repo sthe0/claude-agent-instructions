@@ -29,6 +29,7 @@ from agentctl.premise import (
     questions_to_dicts,
 )
 from agentctl.state import SessionState, WeightClass
+from conftest import declare_venue
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -69,7 +70,7 @@ depends_on = {deps}
 output_artifacts = ["s{i}.py"]
 """)
         prev = i
-    path.write_text("\n".join(body), encoding="utf-8")
+    path.write_text(declare_venue("\n".join(body), path.parent), encoding="utf-8")
     return path
 
 

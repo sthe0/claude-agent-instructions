@@ -131,10 +131,10 @@ def _drive_to_resolution(capsys, root, sid, plan, *, chat=False):
     _run(capsys, root, "verify-final", "--session", sid)
 
 
-def test_e2e_auto_activates_and_blocks_resolve_until_recorded(capsys, tmp_path, fixtures_dir):
+def test_e2e_auto_activates_and_blocks_resolve_until_recorded(capsys, tmp_path, venued_fixtures_dir):
     root = str(tmp_path / "state")
     sid = "exp-e2e"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _drive_to_resolution(capsys, root, sid, plan)
 
     # experience auto-activated at classify (no manual plugin-activate)
@@ -161,10 +161,10 @@ def test_e2e_auto_activates_and_blocks_resolve_until_recorded(capsys, tmp_path, 
     assert "experience" in raw["plugins_archive"]
 
 
-def test_e2e_skip_requires_reason_then_passes(capsys, tmp_path, fixtures_dir):
+def test_e2e_skip_requires_reason_then_passes(capsys, tmp_path, venued_fixtures_dir):
     root = str(tmp_path / "state")
     sid = "exp-skip"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _drive_to_resolution(capsys, root, sid, plan)
 
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "experience", "--phase", "searched")

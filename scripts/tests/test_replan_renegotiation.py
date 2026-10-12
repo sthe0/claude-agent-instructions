@@ -30,13 +30,13 @@ def _replan_count():
     return task_accumulator.get(TASK)["per_axis_totals"]["replan_count"]
 
 
-def _to_diagnosing(store, fixtures_dir, sid, *, normalize=True, norm_fault=True):
+def _to_diagnosing(store, venued_fixtures_dir, sid, *, normalize=True, norm_fault=True):
     """Drive a fresh session on TASK to DIAGNOSING with a complete difficulty record
     (declare/investigate/critique — what `difficulty_blockers` itself requires) and,
     unless `normalize=False`, a normalization too, so a replan that clears the
     renegotiation gate reaches the ordinary refinement/no_change/substantive branches
     exactly as it would with the gate absent."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(ns(session=sid, task=TASK, goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -68,10 +68,10 @@ def _seed_to_threshold(sid):
     return thr
 
 
-def test_below_threshold_bare_replan_is_unaffected(store, fixtures_dir):
+def test_below_threshold_bare_replan_is_unaffected(store, venued_fixtures_dir):
     sid = "a"
-    _to_diagnosing(store, fixtures_dir, sid)
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    _to_diagnosing(store, venued_fixtures_dir, sid)
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
 
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
     assert d.ok is True
@@ -80,11 +80,11 @@ def test_below_threshold_bare_replan_is_unaffected(store, fixtures_dir):
     assert state.renegotiations == []
 
 
-def test_at_threshold_bare_replan_is_refused(store, fixtures_dir):
+def test_at_threshold_bare_replan_is_refused(store, venued_fixtures_dir):
     sid = "b"
-    _to_diagnosing(store, fixtures_dir, sid)
+    _to_diagnosing(store, venued_fixtures_dir, sid)
     thr = _seed_to_threshold(sid)
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
 
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
     assert d.ok is False
@@ -97,11 +97,11 @@ def test_at_threshold_bare_replan_is_refused(store, fixtures_dir):
     assert _replan_count() == thr                       # not consumed by the refusal
 
 
-def test_continue_clears_the_block_and_zeroes_the_accumulator(store, fixtures_dir):
+def test_continue_clears_the_block_and_zeroes_the_accumulator(store, venued_fixtures_dir):
     sid = "c"
-    _to_diagnosing(store, fixtures_dir, sid)
+    _to_diagnosing(store, venued_fixtures_dir, sid)
     thr = _seed_to_threshold(sid)
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
 
     d = cli.cmd_replan(ns(
         session=sid, plan=refined, renegotiation_decision="continue",
@@ -123,11 +123,11 @@ def test_continue_clears_the_block_and_zeroes_the_accumulator(store, fixtures_di
     assert _replan_count() == 1
 
 
-def test_rescope_also_clears_the_block(store, fixtures_dir):
+def test_rescope_also_clears_the_block(store, venued_fixtures_dir):
     sid = "c2"
-    _to_diagnosing(store, fixtures_dir, sid, norm_fault=False)
+    _to_diagnosing(store, venued_fixtures_dir, sid, norm_fault=False)
     _seed_to_threshold(sid)
-    bigger = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    bigger = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
 
     d = cli.cmd_replan(ns(
         session=sid, plan=bigger, renegotiation_decision="rescope",
@@ -141,13 +141,13 @@ def test_rescope_also_clears_the_block(store, fixtures_dir):
     assert _replan_count() == 1
 
 
-def test_mismatched_renegotiated_by_is_refused(store, fixtures_dir, tmp_path):
+def test_mismatched_renegotiated_by_is_refused(store, venued_fixtures_dir, tmp_path):
     sid = "d"
-    _to_diagnosing(store, fixtures_dir, sid)
+    _to_diagnosing(store, venued_fixtures_dir, sid)
     thr = _seed_to_threshold(sid)
     ordered = tmp_path / "plan_two_stage_refined_order.toml"
     ordered.write_text(
-        (fixtures_dir / "plan_two_stage_refined.toml").read_text(encoding="utf-8")
+        (venued_fixtures_dir / "plan_two_stage_refined.toml").read_text(encoding="utf-8")
         + '\n[meta.order]\ncustomer_id = "user"\ncustomer = "the product owner"\n'
           'functional_place = "the norm this order answers"\n',
         encoding="utf-8",
@@ -165,13 +165,13 @@ def test_mismatched_renegotiated_by_is_refused(store, fixtures_dir, tmp_path):
     assert _replan_count() == thr
 
 
-def test_matching_renegotiated_by_against_a_declared_order_succeeds(store, fixtures_dir, tmp_path):
+def test_matching_renegotiated_by_against_a_declared_order_succeeds(store, venued_fixtures_dir, tmp_path):
     sid = "d2"
-    _to_diagnosing(store, fixtures_dir, sid)
+    _to_diagnosing(store, venued_fixtures_dir, sid)
     _seed_to_threshold(sid)
     ordered = tmp_path / "plan_two_stage_refined_order2.toml"
     ordered.write_text(
-        (fixtures_dir / "plan_two_stage_refined.toml").read_text(encoding="utf-8")
+        (venued_fixtures_dir / "plan_two_stage_refined.toml").read_text(encoding="utf-8")
         + '\n[meta.order]\ncustomer_id = "user"\ncustomer = "the product owner"\n'
           'functional_place = "the norm this order answers"\n',
         encoding="utf-8",
@@ -190,13 +190,13 @@ def test_matching_renegotiated_by_against_a_declared_order_succeeds(store, fixtu
     assert state.renegotiations[0]["by"] == "user"
 
 
-def test_abandon_parks_at_blocked_without_touching_the_plan(store, fixtures_dir):
+def test_abandon_parks_at_blocked_without_touching_the_plan(store, venued_fixtures_dir):
     sid = "e"
-    _to_diagnosing(store, fixtures_dir, sid)
+    _to_diagnosing(store, venued_fixtures_dir, sid)
     thr = _seed_to_threshold(sid)
     before = store.load(sid)
     before_plan_path = before.plan_path
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
 
     d = cli.cmd_replan(ns(
         session=sid, plan=refined, renegotiation_decision="abandon",
@@ -220,11 +220,11 @@ def test_abandon_parks_at_blocked_without_touching_the_plan(store, fixtures_dir)
     assert store.load(sid).node == Node.DIAGNOSING.value
 
 
-def test_empty_renegotiation_note_is_refused(store, fixtures_dir):
+def test_empty_renegotiation_note_is_refused(store, venued_fixtures_dir):
     sid = "f"
-    _to_diagnosing(store, fixtures_dir, sid)
+    _to_diagnosing(store, venued_fixtures_dir, sid)
     _seed_to_threshold(sid)
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
 
     d = cli.cmd_replan(ns(
         session=sid, plan=refined, renegotiation_decision="continue",
@@ -237,11 +237,11 @@ def test_empty_renegotiation_note_is_refused(store, fixtures_dir):
     assert state.renegotiations == []
 
 
-def test_empty_renegotiated_by_is_refused(store, fixtures_dir):
+def test_empty_renegotiated_by_is_refused(store, venued_fixtures_dir):
     sid = "g"
-    _to_diagnosing(store, fixtures_dir, sid)
+    _to_diagnosing(store, venued_fixtures_dir, sid)
     _seed_to_threshold(sid)
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
 
     d = cli.cmd_replan(ns(
         session=sid, plan=refined, renegotiation_decision="continue",
@@ -254,12 +254,12 @@ def test_empty_renegotiated_by_is_refused(store, fixtures_dir):
     assert state.renegotiations == []
 
 
-def test_renegotiating_replan_clears_the_round_release_in_the_same_call(store, fixtures_dir, monkeypatch):
+def test_renegotiating_replan_clears_the_round_release_in_the_same_call(store, venued_fixtures_dir, monkeypatch):
     sid = "rr"
-    _to_diagnosing(store, fixtures_dir, sid)
+    _to_diagnosing(store, venued_fixtures_dir, sid)
     thr = _seed_to_threshold(sid)
     task_accumulator.add(TASK, "review_rounds", thr, session_id=sid, now=None)
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
 
     seen = []
     real = cli.gates.plan_review_blockers

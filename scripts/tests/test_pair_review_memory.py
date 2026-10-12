@@ -68,9 +68,9 @@ def _sha(path) -> str:
 
 
 @pytest.fixture
-def session(store, fixtures_dir, tmp_path):
+def session(store, venued_fixtures_dir, tmp_path):
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     cli.cmd_start(ns(session=SID, task="demo", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=SID, chat=False, changed_lines=200, files=5,
@@ -342,11 +342,11 @@ def _spawn_argv(plan: Path, *extra: str) -> list[str]:
 
 
 def test_spawner_refuses_the_history_flag_without_review_topo(spawner, tmp_path, monkeypatch, capsys,
-                                                              fixtures_dir):
+                                                              venued_fixtures_dir):
     monkeypatch.setattr(spawner, "COST_LOG", tmp_path / "costs.jsonl")
     history = tmp_path / "h.json"
     history.write_text(json.dumps({"pair": PAIR, "records": [], "changed_parts_since_last": []}))
-    rc = spawner.main(_spawn_argv(fixtures_dir / "plan_two_stage.toml", "--review-topo-history", str(history)))
+    rc = spawner.main(_spawn_argv(venued_fixtures_dir / "plan_two_stage.toml", "--review-topo-history", str(history)))
     assert rc == 2
     assert "--review-topo-history" in capsys.readouterr().err
 

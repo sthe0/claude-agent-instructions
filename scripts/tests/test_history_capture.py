@@ -14,7 +14,7 @@ functions in isolation.
 Lives at scripts/tests/, beside the rest of the suite: conftest.py's autouse
 isolation fixtures (env-var gate defaults, ledger/store redirection) and its
 sys.path setup for `agentctl` apply automatically to every module in this
-directory, and `store`/`fixtures_dir` are ordinary conftest fixtures requested
+directory, and `store`/`venued_fixtures_dir` are ordinary conftest fixtures requested
 by name as test parameters — no import needed for any of them."""
 from __future__ import annotations
 
@@ -84,11 +84,10 @@ def _grants_block(plan_path, fmt="full") -> str:
     return render_plan_grants(load_plan(plan_path), fmt=fmt).strip()
 
 
-def _rendering(tmp_path, name="rendering.txt") -> str:
-    """A `full`-kind rendering covering exactly plan_two_stage.toml's two stage
-    anchors plus its grants block, so cmd_present_plan's completeness check
-    never refuses it."""
-    plan = Path(__file__).parent / "fixtures" / "plan_two_stage.toml"
+def _rendering(plan, tmp_path, name="rendering.txt") -> str:
+    """A `full`-kind rendering covering exactly `plan`'s two stage anchors plus its
+    grants block, so cmd_present_plan's completeness check never refuses it. `plan` is
+    the presented (venued) copy: its derived grants carry the venue."""
     p = tmp_path / name
     p.write_text(
         "[stage 1]\nfoo\n\n[stage 2]\nbar\n\n" + _grants_block(plan, fmt="full") + "\n",
@@ -97,14 +96,14 @@ def _rendering(tmp_path, name="rendering.txt") -> str:
     return str(p)
 
 
-def _refined_plan(fixtures_dir, tmp_path, name="plan_refined.toml") -> str:
+def _refined_plan(venued_fixtures_dir, tmp_path, name="plan_refined.toml") -> str:
     """A prose-only edit (stage 1's title) of plan_two_stage.toml: same stages,
     same structural signature, so diff_plans() classifies it 'refinement' — the
     kind whose cli.py branch logs unconditionally, unlike the true byte-for-byte
     'no_change' no-op (which, outside DIAGNOSING, returns without touching
     history at all — a pre-existing, out-of-scope behavior, not a D9 capture
     point)."""
-    text = (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+    text = (venued_fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
     text = text.replace('title = "Scaffold module"', 'title = "Scaffold module (refined)"')
     p = tmp_path / name
     p.write_text(text, encoding="utf-8")
@@ -113,9 +112,9 @@ def _refined_plan(fixtures_dir, tmp_path, name="plan_refined.toml") -> str:
 
 # --- declare -----------------------------------------------------------------
 
-def test_declare_event_captures_declaration(store, fixtures_dir):
+def test_declare_event_captures_declaration(store, venued_fixtures_dir):
     sid = "hist-d1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_diagnosing(store, plan, sid, task="hist-declare")
 
     d = cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
@@ -130,9 +129,9 @@ def test_declare_event_captures_declaration(store, fixtures_dir):
 
 # --- critique ------------------------------------------------------------------
 
-def test_critique_event_captures_critique(store, fixtures_dir):
+def test_critique_event_captures_critique(store, venued_fixtures_dir):
     sid = "hist-c1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_diagnosing(store, plan, sid, task="hist-critique")
     cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
@@ -156,9 +155,9 @@ def test_critique_event_captures_critique(store, fixtures_dir):
 
 # --- replan --------------------------------------------------------------------
 
-def test_replan_no_change_event_captures_cause_from_difficulty(store, fixtures_dir):
+def test_replan_no_change_event_captures_cause_from_difficulty(store, venued_fixtures_dir):
     sid = "hist-r1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_diagnosing(store, plan, sid, task="hist-replan-diff")
     cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
@@ -176,12 +175,12 @@ def test_replan_no_change_event_captures_cause_from_difficulty(store, fixtures_d
     assert event["replanning_task"] == "rt-cause"
 
 
-def test_replan_refinement_event_captures_cause_from_explicit_reason(store, fixtures_dir, tmp_path):
+def test_replan_refinement_event_captures_cause_from_explicit_reason(store, venued_fixtures_dir, tmp_path):
     sid = "hist-r2"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan, task="hist-replan-reason")
 
-    refined = _refined_plan(fixtures_dir, tmp_path, name="plan_refined_reason.toml")
+    refined = _refined_plan(venued_fixtures_dir, tmp_path, name="plan_refined_reason.toml")
     d = cli.cmd_replan(
         ns(session=sid, plan=refined, reason="user asked to fix a typo"), store=store,
     )
@@ -192,10 +191,10 @@ def test_replan_refinement_event_captures_cause_from_explicit_reason(store, fixt
     assert event["reason"] == "user asked to fix a typo"
 
 
-def test_replan_substantive_event_captures_cause_from_difficulty(store, fixtures_dir):
+def test_replan_substantive_event_captures_cause_from_difficulty(store, venued_fixtures_dir):
     sid = "hist-r4"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    bigger = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    bigger = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
     _to_diagnosing(store, plan, sid, task="hist-replan-substantive")
     cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
@@ -215,12 +214,12 @@ def test_replan_substantive_event_captures_cause_from_difficulty(store, fixtures
     assert event["replanning_task"] == "rt-subst"
 
 
-def test_replan_event_omits_cause_when_neither_available(store, fixtures_dir, tmp_path):
+def test_replan_event_omits_cause_when_neither_available(store, venued_fixtures_dir, tmp_path):
     sid = "hist-r3"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan, task="hist-replan-none")
 
-    refined = _refined_plan(fixtures_dir, tmp_path, name="plan_refined_none.toml")
+    refined = _refined_plan(venued_fixtures_dir, tmp_path, name="plan_refined_none.toml")
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
     assert d.ok is True, d.detail
 
@@ -230,13 +229,13 @@ def test_replan_event_omits_cause_when_neither_available(store, fixtures_dir, tm
 
 # --- present_plan ----------------------------------------------------------------
 
-def test_present_plan_event_captures_rejection_text(store, fixtures_dir, tmp_path):
+def test_present_plan_event_captures_rejection_text(store, venued_fixtures_dir, tmp_path):
     sid = "hist-p1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan, task="hist-present-plan")
 
     d = cli.cmd_present_plan(ns(
-        session=sid, kind="full", plan=None, rendering_file=_rendering(tmp_path),
+        session=sid, kind="full", plan=None, rendering_file=_rendering(plan, tmp_path),
         emit_skeleton=False, rejection_text="too verbose, trim stage 2",
     ), store=store)
     assert d.ok is True, d.detail
@@ -248,9 +247,9 @@ def test_present_plan_event_captures_rejection_text(store, fixtures_dir, tmp_pat
 
 # --- plan_review reviewer_token / reviewer_raw ------------------------------------
 
-def test_plan_review_event_captures_reviewer_token(store, fixtures_dir):
+def test_plan_review_event_captures_reviewer_token(store, venued_fixtures_dir):
     sid = "hist-pr1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan, task="hist-plan-review")
 
     d = cli.cmd_plan_review(ns(
@@ -266,9 +265,9 @@ def test_plan_review_event_captures_reviewer_token(store, fixtures_dir):
     assert event["reviewer_token"] == "thinker"
 
 
-def test_plan_review_event_captures_reviewer_raw(store, fixtures_dir):
+def test_plan_review_event_captures_reviewer_raw(store, venued_fixtures_dir):
     sid = "hist-pr2"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan, task="hist-plan-review-raw")
 
     d = cli.cmd_plan_review(ns(
@@ -285,7 +284,7 @@ def test_plan_review_event_captures_reviewer_raw(store, fixtures_dir):
 
 # --- no-new-argument behavior-unchanged control -----------------------------------
 
-def test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes(store, fixtures_dir, tmp_path):
+def test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes(store, venued_fixtures_dir, tmp_path):
     """Pins the FULL Directive — every field, not just a truthy `.ok` — of all
     seven commands this DIAGNOSING-then-VERIFYING walk drives (declare,
     investigate, critique, normalize, replan, present_plan, plan_review) when
@@ -300,7 +299,7 @@ def test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes
     absent: this test goes red on it — but that is one of seven things it
     pins, not the whole story."""
     sid = "hist-nr1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan, task="hist-no-new-args")
 
     # a FAILED stage routes to DIAGNOSING via an ok=False "go declare" directive —
@@ -363,7 +362,7 @@ def test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes
     ), f"replan mismatch: got {d}"
 
     # present_plan: legacy Namespace, no `rejection_text` attribute at all
-    rendering_file = _rendering(tmp_path, name="rendering_legacy.txt")
+    rendering_file = _rendering(plan, tmp_path, name="rendering_legacy.txt")
     d = cli.cmd_present_plan(ns(
         session=sid, kind="full", plan=None,
         rendering_file=rendering_file,
@@ -400,19 +399,19 @@ def test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes
 
 # --- argv-level: the two D9 arguments reach history through real parsing -----------
 
-def test_present_plan_argv_rejection_text_reaches_history(store, fixtures_dir, tmp_path):
+def test_present_plan_argv_rejection_text_reaches_history(store, venued_fixtures_dir, tmp_path):
     """Drives --rejection-text through build_parser()/resolve_arg_text() (the real
     argv path a coordinator invocation takes), not a hand-built Namespace — proves
     the flag is wired all the way from the command line, and doubles as the
     independent negative control's selector (`-k rejection_text`) for a deletion
     of present-plan's --rejection-text add_argument call."""
     sid = "hist-p2"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan, task="hist-present-plan-argv")
 
     argv = [
         "present-plan", "--session", sid, "--kind", "full",
-        "--rendering-file", _rendering(tmp_path, name="rendering_argv.txt"),
+        "--rendering-file", _rendering(plan, tmp_path, name="rendering_argv.txt"),
         "--rejection-text", "too verbose, trim stage 2",
     ]
     args = cli.build_parser().parse_args(argv)
@@ -425,16 +424,16 @@ def test_present_plan_argv_rejection_text_reaches_history(store, fixtures_dir, t
     assert event["rejection_text"] == "too verbose, trim stage 2"
 
 
-def test_replan_argv_reason_reaches_history(store, fixtures_dir, tmp_path):
+def test_replan_argv_reason_reaches_history(store, venued_fixtures_dir, tmp_path):
     """Drives --reason through build_parser()/resolve_arg_text() — proves the flag
     is wired all the way from the command line, and doubles as the independent
     negative control's selector (`-k reason`) for a deletion of replan's --reason
     add_argument call."""
     sid = "hist-r5"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan, task="hist-replan-argv")
 
-    refined = _refined_plan(fixtures_dir, tmp_path, name="plan_refined_argv.toml")
+    refined = _refined_plan(venued_fixtures_dir, tmp_path, name="plan_refined_argv.toml")
     argv = ["replan", "--session", sid, "--plan", refined, "--reason", "user asked to fix a typo"]
     args = cli.build_parser().parse_args(argv)
     cli.resolve_arg_text(args)

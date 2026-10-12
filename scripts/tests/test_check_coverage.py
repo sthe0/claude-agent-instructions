@@ -45,10 +45,10 @@ def _to_diagnosing_with_critique(store, sid, plan, *, invariants_to_preserve=Non
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
 
-def _fixture_with_invariant(fixtures_dir, tmp_path, *, invariant_text):
+def _fixture_with_invariant(venued_fixtures_dir, tmp_path, *, invariant_text):
     """plan_two_stage_refined.toml plus an `invariants` line on stage 1 — a
     corrected plan that DOES carry the critique's similarity forward."""
-    base = (fixtures_dir / "plan_two_stage_refined.toml").read_text()
+    base = (venued_fixtures_dir / "plan_two_stage_refined.toml").read_text()
     patched = base.replace(
         'output_artifacts = ["mod.py"]',
         f'output_artifacts = ["mod.py"]\ninvariants = "{invariant_text}"',
@@ -59,10 +59,10 @@ def _fixture_with_invariant(fixtures_dir, tmp_path, *, invariant_text):
     return str(out)
 
 
-def test_blockers_reported_and_nonzero_exit_when_invariant_dropped(store, fixtures_dir):
+def test_blockers_reported_and_nonzero_exit_when_invariant_dropped(store, venued_fixtures_dir):
     sid = "cc1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_diagnosing_with_critique(store, sid, plan)
 
     d = cli.cmd_check_coverage(ns(session=sid, new=refined), store=store)
@@ -71,21 +71,21 @@ def test_blockers_reported_and_nonzero_exit_when_invariant_dropped(store, fixtur
     assert d.data["coverage_blockers"]
 
 
-def test_ok_and_zero_exit_when_invariant_carried(store, fixtures_dir, tmp_path):
+def test_ok_and_zero_exit_when_invariant_carried(store, venued_fixtures_dir, tmp_path):
     sid = "cc2"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_diagnosing_with_critique(store, sid, plan)
-    carried = _fixture_with_invariant(fixtures_dir, tmp_path, invariant_text="keep idempotency")
+    carried = _fixture_with_invariant(venued_fixtures_dir, tmp_path, invariant_text="keep idempotency")
 
     d = cli.cmd_check_coverage(ns(session=sid, new=carried), store=store)
     assert d.ok is True
     assert d.data.get("coverage_blockers") is None
 
 
-def test_zero_exit_with_plain_message_when_no_critique(store, fixtures_dir):
+def test_zero_exit_with_plain_message_when_no_critique(store, venued_fixtures_dir):
     sid = "cc3"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_executing_stage1(store, sid, plan)  # no declare/investigate/critique -> no difficulty
 
     d = cli.cmd_check_coverage(ns(session=sid, new=refined), store=store)
@@ -94,13 +94,13 @@ def test_zero_exit_with_plain_message_when_no_critique(store, fixtures_dir):
     assert not d.data
 
 
-def test_check_coverage_mutates_no_session_state_blockers_branch(store, fixtures_dir):
+def test_check_coverage_mutates_no_session_state_blockers_branch(store, venued_fixtures_dir):
     """State-invariance on the blockers return path: bytes and mtime of the
     session's state file must be byte-for-byte identical before and after,
     when coverage blockers are found."""
     sid = "cc4"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_diagnosing_with_critique(store, sid, plan)
 
     state_path = store.path(sid)
@@ -116,14 +116,14 @@ def test_check_coverage_mutates_no_session_state_blockers_branch(store, fixtures
     assert after_mtime == before_mtime, "state file mtime changed on blockers branch"
 
 
-def test_check_coverage_mutates_no_session_state_coverage_clear_branch(store, fixtures_dir, tmp_path):
+def test_check_coverage_mutates_no_session_state_coverage_clear_branch(store, venued_fixtures_dir, tmp_path):
     """State-invariance on the coverage-clear return path: bytes and mtime of the
     session's state file must be byte-for-byte identical before and after,
     when a corrected plan clears all coverage blockers."""
     sid = "cc5"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_diagnosing_with_critique(store, sid, plan)
-    carried = _fixture_with_invariant(fixtures_dir, tmp_path, invariant_text="keep idempotency")
+    carried = _fixture_with_invariant(venued_fixtures_dir, tmp_path, invariant_text="keep idempotency")
 
     state_path = store.path(sid)
     before_bytes = state_path.read_bytes()
@@ -138,13 +138,13 @@ def test_check_coverage_mutates_no_session_state_coverage_clear_branch(store, fi
     assert after_mtime == before_mtime, "state file mtime changed on coverage-clear branch"
 
 
-def test_check_coverage_mutates_no_session_state_no_critique_branch(store, fixtures_dir):
+def test_check_coverage_mutates_no_session_state_no_critique_branch(store, venued_fixtures_dir):
     """State-invariance on the no-critique early-return path: bytes and mtime of the
     session's state file must be byte-for-byte identical before and after,
     when there is no active difficulty (nothing to cover)."""
     sid = "cc6"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_executing_stage1(store, sid, plan)  # no difficulty, no critique
 
     state_path = store.path(sid)

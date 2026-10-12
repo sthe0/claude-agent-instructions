@@ -297,17 +297,17 @@ class TestSubmitPlanWiring:
         cli.cmd_plan(ns(session=sid), store=store)
         return cli.cmd_submit_plan(ns(session=sid, plan=plan_path), store=store, runner=runner)
 
-    def test_advisory_surfaces_on_success(self, store, fixtures_dir, monkeypatch):
+    def test_advisory_surfaces_on_success(self, store, venued_fixtures_dir, monkeypatch):
         monkeypatch.setenv("AGENTCTL_ADVISOR", "1")
-        plan = str(fixtures_dir / "plan_two_stage.toml")
+        plan = str(venued_fixtures_dir / "plan_two_stage.toml")
         d = self._to_plan_ready(store, "adv-sp1", plan, _fake_runner("stage 3 is missing"))
         assert d.ok is True
         assert "advisories" in d.data
         assert "stage 3 is missing" in d.data["advisories"]
 
-    def test_ok_node_unchanged_with_loud_verdict(self, store, fixtures_dir, monkeypatch):
+    def test_ok_node_unchanged_with_loud_verdict(self, store, venued_fixtures_dir, monkeypatch):
         monkeypatch.setenv("AGENTCTL_ADVISOR", "1")
-        plan = str(fixtures_dir / "plan_two_stage.toml")
+        plan = str(venued_fixtures_dir / "plan_two_stage.toml")
         d_with = self._to_plan_ready(store, "adv-sp2", plan, _fake_runner("BLOCK THIS PLAN"))
         d_without = self._to_plan_ready(store, "adv-sp3", plan, None)
         assert d_with.ok == d_without.ok
@@ -367,18 +367,18 @@ def _do_critique(store, sid, runner=None):
 
 
 class TestCritiqueWiring:
-    def test_advisory_surfaces_in_data(self, store, fixtures_dir, monkeypatch):
+    def test_advisory_surfaces_in_data(self, store, venued_fixtures_dir, monkeypatch):
         monkeypatch.setenv("AGENTCTL_ADVISOR", "1")
-        plan = str(fixtures_dir / "plan_two_stage.toml")
+        plan = str(venued_fixtures_dir / "plan_two_stage.toml")
         _to_diagnosing(store, "adv-crit1", plan)
         d = _do_critique(store, "adv-crit1", _fake_runner("hypothesis B duplicates A in meaning"))
         assert d.ok is True
         assert "advisories" in d.data
         assert "hypothesis B duplicates A in meaning" in d.data["advisories"]
 
-    def test_ok_node_unchanged_with_loud_verdict(self, store, fixtures_dir, monkeypatch):
+    def test_ok_node_unchanged_with_loud_verdict(self, store, venued_fixtures_dir, monkeypatch):
         monkeypatch.setenv("AGENTCTL_ADVISOR", "1")
-        plan = str(fixtures_dir / "plan_two_stage.toml")
+        plan = str(venued_fixtures_dir / "plan_two_stage.toml")
         _to_diagnosing(store, "adv-crit2", plan)
         d_with = _do_critique(store, "adv-crit2", _fake_runner("BLOCK THIS CRITIQUE NOW"))
         _to_diagnosing(store, "adv-crit3", plan)
@@ -387,9 +387,9 @@ class TestCritiqueWiring:
         assert d_with.node == d_without.node
         assert d_with.action == d_without.action
 
-    def test_raising_runner_still_ok(self, store, fixtures_dir, monkeypatch):
+    def test_raising_runner_still_ok(self, store, venued_fixtures_dir, monkeypatch):
         monkeypatch.setenv("AGENTCTL_ADVISOR", "1")
-        plan = str(fixtures_dir / "plan_two_stage.toml")
+        plan = str(venued_fixtures_dir / "plan_two_stage.toml")
         _to_diagnosing(store, "adv-crit4", plan)
         d = _do_critique(store, "adv-crit4", _raising_runner)
         assert d.ok is True

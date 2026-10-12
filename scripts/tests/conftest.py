@@ -468,3 +468,77 @@ def store(tmp_path):
 @pytest.fixture
 def fixtures_dir():
     return Path(__file__).resolve().parent / "fixtures"
+
+
+def declare_venue(text: str, venue) -> str:
+    """Plan TOML `text` with `repo_root = <venue>` declared in `[meta]`.
+
+    A substantive session refuses a plan that declares no absolute venue (the engine no
+    longer falls back to the process cwd), so a test that submits one declares the
+    venue it runs under. Idempotent: a text whose `[meta]` already holds an absolute
+    `repo_root` or `delivery_worktree` is returned unchanged. "Absolute" is decided by the
+    engine's own predicate (`plan._declared_absolute_venue`), so a relative value counts
+    as undeclared here exactly as it does at the submission seam. A text without a
+    `[meta]` header gains one. The caller owns `AGENTCTL_SCRATCH_ROOTS` for a plan that
+    sits under a scratch root and is submitted as substantive."""
+    import json
+    import re
+    import tomllib
+    from types import SimpleNamespace
+
+    from agentctl.plan import _declared_absolute_venue
+
+    meta = tomllib.loads(text).get("meta") or {}
+    declared = SimpleNamespace(
+        delivery_worktree=meta.get("delivery_worktree"), repo_root=meta.get("repo_root")
+    )
+    if _declared_absolute_venue(declared) is not None:
+        return text
+    line = f"repo_root = {json.dumps(str(venue))}"
+    if "repo_root" in meta:
+        return re.sub(r"(?m)^repo_root[ \t]*=.*$", lambda _m: line, text, count=1)
+    header = re.search(r"(?m)^\[meta\][ \t]*\n", text)
+    if header is None:
+        return f"[meta]\n{line}\n\n{text}"
+    return text[: header.end()] + line + "\n" + text[header.end():]
+
+
+def venue_plan(src, dst_dir, venue) -> Path:
+    """Copy plan TOML `src` into `dst_dir` with `venue` declared (see `declare_venue`);
+    for a module that addresses a fixture plan through a path constant rather than
+    `fixtures_dir`. The copy keeps `src`'s file name."""
+    src, dst_dir = Path(src), Path(dst_dir)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / src.name
+    dst.write_text(declare_venue(src.read_text(encoding="utf-8"), venue), encoding="utf-8")
+    return dst
+
+
+@pytest.fixture
+def venued_fixtures_dir(tmp_path, tmp_path_factory):
+    """`fixtures_dir` for a module that submits the shared plan fixtures to a SUBSTANTIVE
+    session, which refuses a plan with no absolute venue.
+
+    `fixtures_dir` itself stays pristine: byte-pinned digests and tests that insert their
+    own venue into the fixture text depend on it. This one is a per-test copy, outside
+    `tmp_path` (so a plan's artifact paths never sit under the test's own tmp dir), in
+    which every top-level plan TOML gains `repo_root = <this test's tmp_path>` — the same
+    path a test passes to `declare_venue`, so a replan does not change venue between
+    plan versions. Subdirectories and non-plan files are linked, not copied: goldens such
+    as `pair_bundle_golden/` and the venue-less `grant_plans/` stay byte-identical."""
+    import tomllib
+
+    src = Path(__file__).resolve().parent / "fixtures"
+    dst = tmp_path_factory.mktemp("venued-fixtures")
+    for entry in src.iterdir():
+        target = dst / entry.name
+        if entry.is_file() and entry.suffix == ".toml":
+            text = entry.read_text(encoding="utf-8")
+            try:
+                is_plan = "meta" in tomllib.loads(text)
+            except tomllib.TOMLDecodeError:
+                is_plan = False
+            target.write_text(declare_venue(text, tmp_path) if is_plan else text, encoding="utf-8")
+        else:
+            target.symlink_to(entry)
+    return dst

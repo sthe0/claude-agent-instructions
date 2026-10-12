@@ -58,8 +58,8 @@ def test_dispatch_stage_omits_cwd_kwarg_when_unset():
 
 # --- integration: cmd_dispatch computing cwd from session state ----------------
 
-def _to_executing(store, sid, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def _to_executing(store, sid, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(ns(session=sid, task="t", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -74,9 +74,9 @@ def _to_executing(store, sid, fixtures_dir):
     return cli.cmd_next_stage(ns(session=sid), store=store)
 
 
-def test_cmd_dispatch_uses_delivery_worktree_as_cwd(store, fixtures_dir):
+def test_cmd_dispatch_uses_delivery_worktree_as_cwd(store, venued_fixtures_dir):
     sid = "cwd-delivery"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.delivery_worktree = "/repo/.claude/worktrees/demo-two-stage"
     state.repo_root = "/repo"
@@ -93,9 +93,9 @@ def test_cmd_dispatch_uses_delivery_worktree_as_cwd(store, fixtures_dir):
     assert seen_cwd == ["/repo/.claude/worktrees/demo-two-stage"]
 
 
-def test_cmd_dispatch_falls_back_to_repo_root_without_delivery_worktree(store, fixtures_dir):
+def test_cmd_dispatch_falls_back_to_repo_root_without_delivery_worktree(store, venued_fixtures_dir):
     sid = "cwd-repo-root"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.delivery_worktree = None
     state.repo_root = "/repo"
@@ -112,15 +112,17 @@ def test_cmd_dispatch_falls_back_to_repo_root_without_delivery_worktree(store, f
     assert seen_cwd == ["/repo"]
 
 
-def test_cmd_dispatch_cwd_none_when_neither_set(store, fixtures_dir):
+def test_cmd_dispatch_cwd_none_when_neither_set(store, venued_fixtures_dir):
     """Back-compat: neither delivery_worktree nor repo_root set => cwd stays
     None => the runner is invoked exactly as pre-fix (single positional arg,
-    the spawned child inherits the invoker's cwd)."""
+    the spawned child inherits the invoker's cwd). A substantive submit now records
+    the plan's venue, so a session record without one is a pre-existing record."""
     sid = "cwd-none"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
-    assert state.delivery_worktree is None
-    assert state.repo_root is None
+    state.delivery_worktree = None
+    state.repo_root = None
+    store.save(state)
 
     calls = []
 

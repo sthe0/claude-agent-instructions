@@ -33,7 +33,7 @@ def _reset_ns(sid, **kw):
     return ns(**base)
 
 
-def _to_resolved(store, fixtures_dir, sid):
+def _to_resolved(store, venued_fixtures_dir, sid):
     """Drive a substantive session on task 'demo' all the way to RESOLVED."""
     cli.cmd_start(ns(session=sid, task="demo", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
@@ -42,7 +42,7 @@ def _to_resolved(store, fixtures_dir, sid):
                         external_effect=False, new_dependency=False,
                         public_api_change=False), store=store)
     cli.cmd_plan(ns(session=sid), store=store)
-    cli.cmd_submit_plan(ns(session=sid, plan=str(fixtures_dir / "plan_two_stage.toml")),
+    cli.cmd_submit_plan(ns(session=sid, plan=str(venued_fixtures_dir / "plan_two_stage.toml")),
                         store=store)
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
@@ -126,9 +126,9 @@ def test_the_ceiling_demands_the_decision_AND_the_reason():
 
 # --- wired into cmd_reset ------------------------------------------------------
 
-def test_reopen_without_reason_is_refused_and_changes_nothing(store, fixtures_dir):
+def test_reopen_without_reason_is_refused_and_changes_nothing(store, venued_fixtures_dir):
     sid = "rr1"
-    _to_resolved(store, fixtures_dir, sid)
+    _to_resolved(store, venued_fixtures_dir, sid)
     d = cli.cmd_reset(_reset_ns(sid), store=store)
     assert d.ok is False
     assert d.action == "noop"
@@ -139,9 +139,9 @@ def test_reopen_without_reason_is_refused_and_changes_nothing(store, fixtures_di
     assert _reentry_count() == 0                      # and not counted
 
 
-def test_reopen_with_reason_succeeds_and_increments_the_axis(store, fixtures_dir):
+def test_reopen_with_reason_succeeds_and_increments_the_axis(store, venued_fixtures_dir):
     sid = "rr2"
-    _to_resolved(store, fixtures_dir, sid)
+    _to_resolved(store, venued_fixtures_dir, sid)
     d = cli.cmd_reset(_reset_ns(sid, reopen_reason="the confirmed fix missed the cron path"),
                       store=store)
     assert d.ok is True
@@ -156,25 +156,25 @@ def test_reopen_with_reason_succeeds_and_increments_the_axis(store, fixtures_dir
     assert reopens[0]["reason"] == "the confirmed fix missed the cron path"
 
 
-def test_the_count_survives_the_reset_that_zeroes_the_session(store, fixtures_dir):
+def test_the_count_survives_the_reset_that_zeroes_the_session(store, venued_fixtures_dir):
     """The whole reason the count lives in the accumulator: reopen twice, and the
     second reset must SEE the first — though the SessionState it read is gone."""
     sid = "rr3"
-    _to_resolved(store, fixtures_dir, sid)
+    _to_resolved(store, venued_fixtures_dir, sid)
     cli.cmd_reset(_reset_ns(sid, reopen_reason="first miss"), store=store)
     assert _reentry_count() == 1
-    _to_resolved(store, fixtures_dir, sid)
+    _to_resolved(store, venued_fixtures_dir, sid)
     d = cli.cmd_reset(_reset_ns(sid, reopen_reason="second miss"), store=store)
     assert d.ok is True
     assert _reentry_count() == 2
     assert d.data["resolved_reentry_count"] == 2
 
 
-def test_reopen_at_the_ceiling_demands_a_user_decision(store, fixtures_dir):
+def test_reopen_at_the_ceiling_demands_a_user_decision(store, venued_fixtures_dir):
     sid = "rr4"
     task_accumulator.add("demo", "resolved_reentry", Thresholds().effort_replan_absolute(),
                          session_id=sid, now=None)
-    _to_resolved(store, fixtures_dir, sid)
+    _to_resolved(store, venued_fixtures_dir, sid)
     d = cli.cmd_reset(_reset_ns(sid, reopen_reason="still not fixed"), store=store)
     assert d.ok is False
     assert "--reopen-user-decision" in d.detail
@@ -188,11 +188,11 @@ def test_reopen_at_the_ceiling_demands_a_user_decision(store, fixtures_dir):
     assert store.load(sid).node == Node.CLASSIFIED.value
 
 
-def test_reset_onto_a_different_task_after_resolution_is_untouched(store, fixtures_dir):
+def test_reset_onto_a_different_task_after_resolution_is_untouched(store, venued_fixtures_dir):
     """Regression guard for the ordinary path: a resolved session re-armed for a NEW
     task must not be asked for a reopen reason."""
     sid = "rr5"
-    _to_resolved(store, fixtures_dir, sid)
+    _to_resolved(store, venued_fixtures_dir, sid)
     d = cli.cmd_reset(_reset_ns(sid, task="demo2"), store=store)
     assert d.ok is True
     assert store.load(sid).task_id == "demo2"
@@ -213,7 +213,7 @@ def test_routed_prior_node_is_unaffected(store):
     assert _reentry_count() == 0
 
 
-def test_blocked_prior_node_is_unaffected(store, fixtures_dir):
+def test_blocked_prior_node_is_unaffected(store, venued_fixtures_dir):
     sid = "rr7"
     cli.cmd_start(ns(session=sid, task="demo", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)

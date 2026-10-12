@@ -9,6 +9,7 @@ from argparse import Namespace
 from agentctl import cli
 from agentctl.plan import parse_plan, verify_command_scope_warnings
 from agentctl.store import FileStateStore
+from conftest import declare_venue
 
 
 def ns(**kw):
@@ -136,7 +137,7 @@ def test_submit_plan_attaches_scope_advisory_without_blocking(tmp_path):
 
     plan = tmp_path / "plan.toml"
     plan.write_text(
-        """
+        declare_venue("""
 [meta]
 task_id = "demo"
 goal = "g"
@@ -152,7 +153,7 @@ expected_result_image = "i"
 criterion_type = "measurable"
 done_criterion = "d"
 verify_command = "python -m pytest"
-""",
+""", tmp_path),
         encoding="utf-8",
     )
     d = cli.cmd_submit_plan(ns(session=sid, plan=str(plan)), store=store)
@@ -183,7 +184,7 @@ def test_submit_plan_attaches_final_check_scope_advisory_without_blocking(tmp_pa
 
     plan = tmp_path / "plan.toml"
     plan.write_text(
-        """
+        declare_venue("""
 [meta]
 task_id = "demo"
 goal = "g"
@@ -202,7 +203,7 @@ verify_command = "pytest -k foo"
 
 [[final_check]]
 command = "python -m pytest"
-""",
+""", tmp_path),
         encoding="utf-8",
     )
     d = cli.cmd_submit_plan(ns(session=sid, plan=str(plan)), store=store)

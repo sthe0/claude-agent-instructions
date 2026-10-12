@@ -73,11 +73,11 @@ def _no_replan_authorization_gate(monkeypatch):
 
 # --- (a) normalize outside DIAGNOSING -----------------------------------------
 
-def test_normalize_outside_diagnosing_is_recorded(store, fixtures_dir):
+def test_normalize_outside_diagnosing_is_recorded(store, venued_fixtures_dir):
     from agentctl import cli
     from agentctl.state import Node
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, "r9-a1", plan)
 
     d = cli.cmd_normalize(ns(session="r9-a1", factor="flaky CI runner", level="leaf",
@@ -94,14 +94,14 @@ def test_normalize_outside_diagnosing_is_recorded(store, fixtures_dir):
     assert events[0]["factor"] == "flaky CI runner"
 
 
-def test_normalize_diagnosing_path_byte_identical_no_in_diagnosis_key(store, fixtures_dir):
+def test_normalize_diagnosing_path_byte_identical_no_in_diagnosis_key(store, venued_fixtures_dir):
     """Invariant: the DIAGNOSING branch's log call stays exactly as it was
     before R9 -- no `in_diagnosis` key at all (not even True), so a legacy
     reader that never heard of the key still sees the same event shape."""
     from agentctl import cli
     from agentctl.state import Node
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_diagnosing(store, "r9-a2", plan)
 
     d = cli.cmd_normalize(ns(session="r9-a2", factor="reproducible cause", level="leaf",
@@ -116,14 +116,14 @@ def test_normalize_diagnosing_path_byte_identical_no_in_diagnosis_key(store, fix
     assert state.difficulty.normalization.factor == "reproducible cause"
 
 
-def test_normalize_outside_diagnosing_refused_at_resolved(store, fixtures_dir):
+def test_normalize_outside_diagnosing_refused_at_resolved(store, venued_fixtures_dir):
     """normalize's docstring (and the stage-1 plan image) says CLASSIFIED to
     RESOLUTION: a record filed after `resolve` never reaches the quality row, so
     it must be refused rather than silently accepted and lost."""
     from agentctl import cli
     from conftest import STAGE_OBSERVATIONS
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     sid = "r9-a3"
     _to_executing_stage1(store, sid, plan)
     for observation in STAGE_OBSERVATIONS[:2]:
@@ -149,11 +149,11 @@ def test_normalize_outside_diagnosing_refused_at_resolved(store, fixtures_dir):
 
 # --- (b)/(a) --normalize-factor on replan -------------------------------------
 
-def test_replan_normalize_factor_records_in_same_call(store, fixtures_dir):
+def test_replan_normalize_factor_records_in_same_call(store, venued_fixtures_dir):
     from agentctl import cli
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_executing_stage1(store, "r9-b1", plan)
 
     d = cli.cmd_replan(ns(session="r9-b1", plan=refined, normalize_factor="stale fixture",
@@ -170,15 +170,15 @@ def test_replan_normalize_factor_records_in_same_call(store, fixtures_dir):
     assert len(replans) == 1
 
 
-def test_replan_normalize_factor_in_diagnosing_satisfies_the_gate(store, fixtures_dir):
+def test_replan_normalize_factor_in_diagnosing_satisfies_the_gate(store, venued_fixtures_dir):
     """Finding 1: inside DIAGNOSING, --normalize-factor must satisfy
     gates.normalization_blockers in the SAME call -- not merely log an event that
     the gate then ignores, refusing the replan it was passed to unblock."""
     from agentctl import cli
     from agentctl.state import Node
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     sid = "r9-b2"
     _to_diagnosing(store, sid, plan)
 
@@ -194,14 +194,14 @@ def test_replan_normalize_factor_in_diagnosing_satisfies_the_gate(store, fixture
     assert events[0]["factor"] == "flaky harness"
 
 
-def test_replan_normalize_factor_and_renormalize_refused_together(store, fixtures_dir):
+def test_replan_normalize_factor_and_renormalize_refused_together(store, venued_fixtures_dir):
     """The narrow incompatibility check itself (a renormalization by contract touches
     no norm): refused before any state is touched, so this alone says nothing about
     a LATER gate refusing a --normalize-factor replan -- see the next test."""
     from agentctl import cli
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     sid = "r9-b3"
     _to_executing_stage1(store, sid, plan)
 
@@ -214,7 +214,7 @@ def test_replan_normalize_factor_and_renormalize_refused_together(store, fixture
     assert not [h for h in state.history if h.get("event") == "normalize"]
 
 
-def test_replan_normalize_factor_not_double_logged_on_refused_retry(store, fixtures_dir, monkeypatch):
+def test_replan_normalize_factor_not_double_logged_on_refused_retry(store, venued_fixtures_dir, monkeypatch):
     """Required change B (round-2 review, defect A): drive a DIAGNOSING
     --normalize-factor replan against a plan whose retitled stage moves the
     order bag's covering-stage key. It reaches the bag save inside cmd_replan's
@@ -234,8 +234,8 @@ def test_replan_normalize_factor_not_double_logged_on_refused_retry(store, fixtu
 
     monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     sid = "r9-b3b"
 
     cli.cmd_start(ns(session=sid, task="r9-demo", goal="", done_criterion="",
@@ -294,11 +294,11 @@ def test_replan_normalize_factor_not_double_logged_on_refused_retry(store, fixtu
 
 # --- (b) every submitted plan version is content-addressed --------------------
 
-def test_every_submitted_plan_version_is_snapshotted(store, fixtures_dir):
+def test_every_submitted_plan_version_is_snapshotted(store, venued_fixtures_dir):
     from agentctl import cli
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     sid = "r9-c1"
     _to_executing_stage1(store, sid, plan)
     cli.cmd_replan(ns(session=sid, plan=refined), store=store)
@@ -319,11 +319,11 @@ def test_every_submitted_plan_version_is_snapshotted(store, fixtures_dir):
 
 # --- (b) replan event carries both digests, each resolvable -------------------
 
-def test_replan_event_carries_prev_and_new_digest(store, fixtures_dir):
+def test_replan_event_carries_prev_and_new_digest(store, venued_fixtures_dir):
     from agentctl import cli
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     sid = "r9-d1"
     _to_executing_stage1(store, sid, plan)
 
@@ -353,12 +353,12 @@ _DIGEST_REPLAN_KINDS = {
 
 
 @pytest.mark.parametrize("kind", sorted(_DIGEST_REPLAN_KINDS))
-def test_replan_snapshots_both_plan_versions_on_every_kind(store, fixtures_dir, kind):
+def test_replan_snapshots_both_plan_versions_on_every_kind(store, venued_fixtures_dir, kind):
     from agentctl import cli
     from agentctl.plan import diff_plans, load_plan
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    new_plan = str(fixtures_dir / _DIGEST_REPLAN_KINDS[kind])
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    new_plan = str(venued_fixtures_dir / _DIGEST_REPLAN_KINDS[kind])
     sid = f"r9-digest-{kind}"
     _to_executing_stage1(store, sid, plan)
     assert diff_plans(load_plan(Path(plan), strict=False), load_plan(Path(new_plan))) == kind
@@ -435,11 +435,11 @@ def _drive_to_resolved_with_normalizations(store, sid, plan, refined):
                               quality_note=None, cost_log=None), store=store)
 
 
-def test_quality_row_counts_normalizations(store, fixtures_dir):
+def test_quality_row_counts_normalizations(store, venued_fixtures_dir):
     from agentctl import cli
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     d = _drive_to_resolved_with_normalizations(store, "r9-e1", plan, refined)
     assert d.ok is True
 
@@ -453,11 +453,11 @@ def test_quality_row_counts_normalizations(store, fixtures_dir):
 
 # --- (d) non-blocking replan hint ----------------------------------------------
 
-def test_replan_directive_hints_normalize_factor(store, fixtures_dir):
+def test_replan_directive_hints_normalize_factor(store, venued_fixtures_dir):
     from agentctl import cli
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     sid = "r9-f1"
     _to_executing_stage1(store, sid, plan)
 
@@ -468,11 +468,11 @@ def test_replan_directive_hints_normalize_factor(store, fixtures_dir):
     assert any("--normalize-factor" in a for a in advisories)
 
 
-def test_replan_directive_no_hint_when_normalize_factor_given(store, fixtures_dir):
+def test_replan_directive_no_hint_when_normalize_factor_given(store, venued_fixtures_dir):
     from agentctl import cli
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     sid = "r9-f2"
     _to_executing_stage1(store, sid, plan)
 
@@ -484,14 +484,14 @@ def test_replan_directive_no_hint_when_normalize_factor_given(store, fixtures_di
     assert not any("--normalize-factor" in a for a in advisories)
 
 
-def test_replan_directive_no_hint_when_diagnosing_normalize_already_recorded(store, fixtures_dir):
+def test_replan_directive_no_hint_when_diagnosing_normalize_already_recorded(store, venued_fixtures_dir):
     """Finding 5: a separate `normalize` call satisfying the DIAGNOSING gate
     already recorded a normalization for this cycle -- the ensuing replan must
     not claim "no normalize event recorded", which the gate itself refutes."""
     from agentctl import cli
 
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     sid = "r9-f3"
     _to_diagnosing(store, sid, plan)
     cli.cmd_normalize(ns(session=sid, factor="separately recorded", level=None,

@@ -286,7 +286,7 @@ def test_effort_check_stdout_is_pure_json(tmp_path):
     assert mod.worst_scale(parsed) is None
 
 
-def test_it_speaks_on_a_divergence_the_accumulator_supplied(store, fixtures_dir,
+def test_it_speaks_on_a_divergence_the_accumulator_supplied(store, venued_fixtures_dir,
                                                             monkeypatch, capsys,
                                                             tmp_path):
     """The resolved-reentry shape, driven through the REAL report.
@@ -307,7 +307,7 @@ def test_it_speaks_on_a_divergence_the_accumulator_supplied(store, fixtures_dir,
                                public_api_change=False), store=store)
     cli.cmd_plan(Namespace(session=sid), store=store)
     cli.cmd_submit_plan(Namespace(session=sid,
-                                  plan=str(fixtures_dir / "plan_two_stage.toml")),
+                                  plan=str(venued_fixtures_dir / "plan_two_stage.toml")),
                         store=store)
     cli.cmd_approve(Namespace(session=sid, by="user"), store=store)
     assert effort.replan_count(store.load(sid)) == 0

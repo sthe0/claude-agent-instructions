@@ -14,8 +14,8 @@ def ns(**kw):
     return Namespace(**kw)
 
 
-def _to_executing(store, sid, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def _to_executing(store, sid, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(ns(session=sid, task="perm-demo", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -31,7 +31,7 @@ def _to_executing(store, sid, fixtures_dir):
 
 
 def _dispatch(store, sid, stdout, perm_checker):
-    runner = lambda argv: RunResult(0, stdout=stdout)
+    runner = lambda argv, cwd=None: RunResult(0, stdout=stdout)
     return cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
                                dry_run=False), store=store, runner=runner,
                             perm_checker=perm_checker)
@@ -51,13 +51,13 @@ def test_check_permission_denied_on_nonzero_exit():
 
 # --- dispatch routing -------------------------------------------------------
 
-def test_global_checker_grant_never_skips_the_ask(store, fixtures_dir):
+def test_global_checker_grant_never_skips_the_ask(store, venued_fixtures_dir):
     """A permissions-cli global grant is checked (its own audit row is still
     written) but its answer no longer auto-continues the spawn: that grant never
     reaches the child's --settings/--add-dir, so the old skip just re-spawned into
     the identical denial. Absent any materialized (declared/derived/runtime) grant
     covering the action, dispatch still parks and asks."""
-    _to_executing(store, "p1", fixtures_dir)
+    _to_executing(store, "p1", venued_fixtures_dir)
     d = _dispatch(store, "p1", "PERMISSION-REQUEST: deploy to staging\n",
                   perm_checker=lambda action: True)
     assert d.ok is True
@@ -76,13 +76,13 @@ def test_global_checker_grant_never_skips_the_ask(store, fixtures_dir):
 
 
 def test_self_reported_rule_line_covered_by_runtime_grant_is_materialization_defect(
-        store, fixtures_dir):
+        store, venued_fixtures_dir):
     """A PERMISSION-REQUEST whose body carries a `Rule:` line already covered by the
     stage's effective grant set (here: a runtime grant) is a materialization
     defect — the grant existed, the child's own settings just didn't carry it — so
     the stage is recorded FAILED and the session routed straight to DIAGNOSING, no
     re-ask, no re-dispatch."""
-    _to_executing(store, "p6", fixtures_dir)
+    _to_executing(store, "p6", venued_fixtures_dir)
     state = store.load("p6")
     state.runtime_grants["1"] = [
         {"rule": "Bash(git push origin release:*)", "provenance": "runtime",
@@ -109,8 +109,8 @@ def test_self_reported_rule_line_covered_by_runtime_grant_is_materialization_def
     assert not after.planning_misses  # covered -> never counted as a miss
 
 
-def test_ungranted_parks_and_asks(store, fixtures_dir):
-    _to_executing(store, "p2", fixtures_dir)
+def test_ungranted_parks_and_asks(store, venued_fixtures_dir):
+    _to_executing(store, "p2", venued_fixtures_dir)
     d = _dispatch(store, "p2", "PERMISSION-REQUEST: push to release branch\n",
                   perm_checker=lambda action: False)
     assert d.ok is True
@@ -126,8 +126,8 @@ def test_ungranted_parks_and_asks(store, fixtures_dir):
     assert d.node == Node.EXECUTING.value  # node unchanged — still executing
 
 
-def test_resolve_permission_granted_clears_and_continues(store, fixtures_dir):
-    _to_executing(store, "p3", fixtures_dir)
+def test_resolve_permission_granted_clears_and_continues(store, venued_fixtures_dir):
+    _to_executing(store, "p3", venued_fixtures_dir)
     _dispatch(store, "p3", "PERMISSION-REQUEST: push to release branch\n",
               perm_checker=lambda action: False)
     d = cli.cmd_resolve_permission(
@@ -142,11 +142,11 @@ def test_resolve_permission_granted_clears_and_continues(store, fixtures_dir):
     assert store.load("p3").permission_request is None
 
 
-def test_resolve_permission_scope_global_refuses_rule(store, fixtures_dir):
+def test_resolve_permission_scope_global_refuses_rule(store, venued_fixtures_dir):
     """Finding S8: --rule/--add-dir is silently dropped for --scope
     project/global today (no persistence path exists for either scope) --
     refuse the whole call instead."""
-    _to_executing(store, "p3b", fixtures_dir)
+    _to_executing(store, "p3b", venued_fixtures_dir)
     _dispatch(store, "p3b", "PERMISSION-REQUEST: push to release branch\n",
               perm_checker=lambda action: False)
     d = cli.cmd_resolve_permission(
@@ -158,8 +158,8 @@ def test_resolve_permission_scope_global_refuses_rule(store, fixtures_dir):
     assert store.load("p3b").permission_request is not None
 
 
-def test_resolve_permission_denied_clears_and_continues(store, fixtures_dir):
-    _to_executing(store, "p4", fixtures_dir)
+def test_resolve_permission_denied_clears_and_continues(store, venued_fixtures_dir):
+    _to_executing(store, "p4", venued_fixtures_dir)
     _dispatch(store, "p4", "PERMISSION-REQUEST: drop the table\n",
               perm_checker=lambda action: False)
     d = cli.cmd_resolve_permission(
@@ -171,8 +171,8 @@ def test_resolve_permission_denied_clears_and_continues(store, fixtures_dir):
     assert store.load("p4").permission_request is None
 
 
-def test_resolve_permission_without_pending_is_noop(store, fixtures_dir):
-    _to_executing(store, "p5", fixtures_dir)
+def test_resolve_permission_without_pending_is_noop(store, venued_fixtures_dir):
+    _to_executing(store, "p5", venued_fixtures_dir)
     d = cli.cmd_resolve_permission(
         ns(session="p5", decision="granted", scope="once"), store=store)
     assert d.ok is False

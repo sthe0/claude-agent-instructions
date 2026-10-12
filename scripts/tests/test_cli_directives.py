@@ -4,7 +4,6 @@ PLAN-READY hard gate; resolve -> COMPLETED; loop guard -> ESCALATE)."""
 import json as _json
 import sys
 from argparse import Namespace
-from pathlib import Path
 
 import pytest
 
@@ -12,7 +11,7 @@ from agentctl import cli, plan, plugins
 from agentctl import plugins_premise as pp
 from agentctl.directive import Directive
 from agentctl.state import Node, StageStatus
-from conftest import STAGE_OBSERVATIONS
+from conftest import STAGE_OBSERVATIONS, declare_venue
 
 
 def ns(**kw):
@@ -28,28 +27,6 @@ def _no_replan_authorization_gate(monkeypatch):
     behavior are covered directly in test_replan_authorization.py; here it is
     switched off so this module keeps testing what it was written to test."""
     monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
-
-
-def _declare_venue(text, root):
-    """Insert `repo_root = <root>` under `[meta]` (idempotent).
-
-    The engine no longer falls back to the process cwd: a plan must declare an absolute
-    venue in `[meta]`, so every plan this module submits carries the test's tmp dir."""
-    if "\nrepo_root" in text:
-        return text
-    return text.replace("[meta]\n", f'[meta]\nrepo_root = "{root}"\n', 1)
-
-
-@pytest.fixture
-def fixtures_dir(tmp_path):
-    """The shared plan fixtures, copied into tmp with an absolute venue declared."""
-    src = Path(__file__).resolve().parent / "fixtures"
-    dst = tmp_path / "plan-fixtures"
-    dst.mkdir()
-    for path in src.glob("*.toml"):
-        (dst / path.name).write_text(
-            _declare_venue(path.read_text(encoding="utf-8"), tmp_path), encoding="utf-8")
-    return dst
 
 
 def _start(store, sid):
@@ -88,15 +65,15 @@ def test_classify_substantive_directive(store):
     assert "reasons" in d.data
 
 
-def test_submit_plan_is_hard_gate_directive(store, fixtures_dir):
-    d = _to_plan_ready(store, "d3", str(fixtures_dir / "plan_two_stage.toml"))
+def test_submit_plan_is_hard_gate_directive(store, venued_fixtures_dir):
+    d = _to_plan_ready(store, "d3", str(venued_fixtures_dir / "plan_two_stage.toml"))
     assert d.ok is True
     assert d.node == Node.PLAN_READY.value
     assert d.action == "await_user_approval"
     assert d.marker == "PLAN-READY"
 
 
-def test_failed_submit_plan_does_not_strand(store, fixtures_dir, tmp_path):
+def test_failed_submit_plan_does_not_strand(store, venued_fixtures_dir, tmp_path):
     """Regression: a failed plan verification must NOT advance to PLAN_READY.
 
     The strand bug (recovered by hand on 2026-06-25 via `reset --force`):
@@ -127,7 +104,7 @@ def test_failed_submit_plan_does_not_strand(store, fixtures_dir, tmp_path):
     assert not (state.approval and state.approval.passed)
 
     # recovery: a corrected plan submitted from PLANNING advances normally
-    d2 = cli.cmd_submit_plan(ns(session=sid, plan=str(fixtures_dir / "plan_two_stage.toml")),
+    d2 = cli.cmd_submit_plan(ns(session=sid, plan=str(venued_fixtures_dir / "plan_two_stage.toml")),
                              store=store)
     assert d2.ok is True
     assert d2.marker == "PLAN-READY"
@@ -183,16 +160,16 @@ def test_small_change_markdown_plan_refused(store, tmp_path):
     assert "toml" in d.detail.lower()
 
 
-def test_substantive_toml_plan_still_accepted(store, fixtures_dir):
+def test_substantive_toml_plan_still_accepted(store, venued_fixtures_dir):
     """A substantive session with a .toml plan still advances to PLAN_READY (regression guard)."""
-    d = _to_plan_ready(store, "subst-toml", str(fixtures_dir / "plan_two_stage.toml"))
+    d = _to_plan_ready(store, "subst-toml", str(venued_fixtures_dir / "plan_two_stage.toml"))
     assert d.ok is True
     assert d.marker == "PLAN-READY"
 
 
-def test_resolve_completed_marker(store, fixtures_dir):
+def test_resolve_completed_marker(store, venued_fixtures_dir):
     sid = "d4"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
@@ -212,9 +189,9 @@ def test_resolve_completed_marker(store, fixtures_dir):
     assert d.marker == "COMPLETED"
 
 
-def test_record_result_loop_guard_escalate_marker(store, fixtures_dir):
+def test_record_result_loop_guard_escalate_marker(store, venued_fixtures_dir):
     sid = "d5"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
@@ -238,11 +215,11 @@ def test_record_result_loop_guard_escalate_marker(store, fixtures_dir):
     assert d.marker == "ESCALATE"
 
 
-def test_critique_persists_the_structured_split(store, fixtures_dir):
+def test_critique_persists_the_structured_split(store, venued_fixtures_dir):
     """A critique invocation carrying repeatable --invariant-to-preserve /
     --difference-to-remove persists both lists on the Critique."""
     sid = "csplit"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
@@ -260,8 +237,8 @@ def test_critique_persists_the_structured_split(store, fixtures_dir):
     assert crit.differences_to_remove == ["means: ad-hoc retry"]
 
 
-def _to_diagnosing(store, sid, fixtures_dir):
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+def _to_diagnosing(store, sid, venued_fixtures_dir):
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
@@ -270,7 +247,7 @@ def _to_diagnosing(store, sid, fixtures_dir):
     cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
 
 
-def test_critique_does_not_announce_replan_while_blocked(store, fixtures_dir):
+def test_critique_does_not_announce_replan_while_blocked(store, venued_fixtures_dir):
     """Regression: cmd_critique used to announce 'replan is now unblocked' as soon
     as the three difficulty sections existed, without reading the shape checks
     gates.difficulty_blockers enforces (>=2 distinct hypotheses). A one-hypothesis
@@ -279,7 +256,7 @@ def test_critique_does_not_announce_replan_while_blocked(store, fixtures_dir):
     can proceed without redoing the declaration.
     """
     sid = "cblocked"
-    _to_diagnosing(store, sid, fixtures_dir)
+    _to_diagnosing(store, sid, venued_fixtures_dir)
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1"]), store=store)
     d = cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
@@ -290,11 +267,11 @@ def test_critique_does_not_announce_replan_while_blocked(store, fixtures_dir):
     assert store.load(sid).difficulty.critique is not None
 
 
-def test_critique_announces_replan_when_record_is_complete(store, fixtures_dir):
+def test_critique_announces_replan_when_record_is_complete(store, venued_fixtures_dir):
     """Happy-path text must stay byte-identical: a well-shaped record (>=2 distinct
     hypotheses, non-placeholder declaration) still gets exactly today's directive."""
     sid = "ccomplete"
-    _to_diagnosing(store, sid, fixtures_dir)
+    _to_diagnosing(store, sid, venued_fixtures_dir)
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     d = cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
@@ -304,12 +281,12 @@ def test_critique_announces_replan_when_record_is_complete(store, fixtures_dir):
     assert d.detail == "difficulty cycle complete; replan is now unblocked"
 
 
-def test_measurable_record_result_requires_observation_on_substantive_session(store, fixtures_dir):
+def test_measurable_record_result_requires_observation_on_substantive_session(store, venued_fixtures_dir):
     """Defect 2: a substantive-session measurable pass is refused with no --observation,
     and proceeds once a genuine one is supplied — control compares result with goal at
     every stage, not just acceptance_review ones."""
     sid = "meas-obs"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
@@ -363,10 +340,10 @@ def test_start_if_absent_no_prior_creates(store):
     assert store.load("ia1").node == Node.CLASSIFIED.value
 
 
-def test_start_if_absent_on_live_session_is_noop(store, fixtures_dir):
+def test_start_if_absent_on_live_session_is_noop(store, venued_fixtures_dir):
     sid = "ia2"
     # drive to APPROVED
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert store.load(sid).node == Node.APPROVED.value
     d = _start_if_absent(store, sid)
@@ -376,9 +353,9 @@ def test_start_if_absent_on_live_session_is_noop(store, fixtures_dir):
     assert store.load(sid).node == Node.APPROVED.value
 
 
-def test_reset_from_resolved_rearms(store, fixtures_dir):
+def test_reset_from_resolved_rearms(store, venued_fixtures_dir):
     sid = "rs1"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
@@ -417,9 +394,9 @@ def test_reset_from_routed_rearms(store):
     assert store.load(sid).node == Node.CLASSIFIED.value
 
 
-def test_reset_from_live_without_force_refuses(store, fixtures_dir):
+def test_reset_from_live_without_force_refuses(store, venued_fixtures_dir):
     sid = "rs3"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert store.load(sid).node == Node.APPROVED.value
     d = cli.cmd_reset(_reset_ns(sid), store=store)
@@ -431,9 +408,9 @@ def test_reset_from_live_without_force_refuses(store, fixtures_dir):
     assert after.task_id == "demo"
 
 
-def test_reset_from_live_with_force_rearms(store, fixtures_dir):
+def test_reset_from_live_with_force_rearms(store, venued_fixtures_dir):
     sid = "rs4"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     d = cli.cmd_reset(_reset_ns(sid, force=True), store=store)
     assert d.ok is True
@@ -446,7 +423,7 @@ def test_final_check_carried_to_state_at_submit(store, tmp_path):
     """[[final_check]] tables in a TOML plan are parsed and carried to session state."""
     plan = tmp_path / "plan_with_fc.toml"
     plan.write_text(
-        _declare_venue(
+        declare_venue(
             '[meta]\ntask_id = "fc-test"\ngoal = "g"\ndone_criterion = "dc"\n'
             'criterion_type = "measurable"\nweight_class = "small_change"\n\n'
             '[[stage]]\nindex = 1\ntitle = "s"\nexecutor = "in_thread"\n'
@@ -473,9 +450,9 @@ def test_final_check_carried_to_state_at_submit(store, tmp_path):
 
 # --- cost attribution via --cost-log -----------------------------------------
 
-def _to_executing_spawn(store, sid, fixtures_dir):
+def _to_executing_spawn(store, sid, venued_fixtures_dir):
     """Drive a session to EXECUTING with a spawn:developer stage 1 active."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
@@ -484,10 +461,10 @@ def _to_executing_spawn(store, sid, fixtures_dir):
     return plan
 
 
-def test_record_result_spawn_stage_attributes_cost(store, fixtures_dir, tmp_path):
+def test_record_result_spawn_stage_attributes_cost(store, venued_fixtures_dir, tmp_path):
     """record-result with --cost-log populates Outcome cost fields on spawn stages."""
     sid = "cost-attr"
-    plan = _to_executing_spawn(store, sid, fixtures_dir)
+    plan = _to_executing_spawn(store, sid, venued_fixtures_dir)
 
     cost_log = tmp_path / "costs.jsonl"
     cost_log.write_text(
@@ -510,10 +487,10 @@ def test_record_result_spawn_stage_attributes_cost(store, fixtures_dir, tmp_path
     assert stage1.outcome.spawn_count == 1
 
 
-def test_record_result_spawn_stage_sums_multiple_log_rows(store, fixtures_dir, tmp_path):
+def test_record_result_spawn_stage_sums_multiple_log_rows(store, venued_fixtures_dir, tmp_path):
     """Multiple log rows for the same stage are summed (retries)."""
     sid = "cost-sum"
-    plan = _to_executing_spawn(store, sid, fixtures_dir)
+    plan = _to_executing_spawn(store, sid, venued_fixtures_dir)
 
     cost_log = tmp_path / "costs.jsonl"
     cost_log.write_text(
@@ -537,10 +514,10 @@ def test_record_result_spawn_stage_sums_multiple_log_rows(store, fixtures_dir, t
     assert stage1.outcome.spawn_count == 2
 
 
-def test_record_result_missing_cost_log_leaves_none(store, fixtures_dir, tmp_path):
+def test_record_result_missing_cost_log_leaves_none(store, venued_fixtures_dir, tmp_path):
     """A non-existent cost log degrades gracefully — cost fields stay None."""
     sid = "cost-none"
-    _to_executing_spawn(store, sid, fixtures_dir)
+    _to_executing_spawn(store, sid, venued_fixtures_dir)
 
     missing = tmp_path / "no_such_file.jsonl"
 
@@ -557,10 +534,10 @@ def test_record_result_missing_cost_log_leaves_none(store, fixtures_dir, tmp_pat
     assert stage1.outcome.spawn_count == 0
 
 
-def test_verify_final_populates_state_cost(store, fixtures_dir, tmp_path):
+def test_verify_final_populates_state_cost(store, venued_fixtures_dir, tmp_path):
     """verify-final computes a CostRollup and stores it on state.cost."""
     sid = "cost-vf"
-    plan = _to_executing_spawn(store, sid, fixtures_dir)
+    plan = _to_executing_spawn(store, sid, venued_fixtures_dir)
 
     cost_log = tmp_path / "costs.jsonl"
     cost_log.write_text(
@@ -598,10 +575,10 @@ def test_verify_final_populates_state_cost(store, fixtures_dir, tmp_path):
     assert d.data["cost"]["attributed_stages"] == 1
 
 
-def test_resolve_directive_carries_cost(store, fixtures_dir, tmp_path):
+def test_resolve_directive_carries_cost(store, venued_fixtures_dir, tmp_path):
     """resolve Directive.data includes the plan cost total."""
     sid = "cost-res"
-    plan = _to_executing_spawn(store, sid, fixtures_dir)
+    plan = _to_executing_spawn(store, sid, venued_fixtures_dir)
 
     cost_log = tmp_path / "costs.jsonl"
     cost_log.write_text(
@@ -638,10 +615,10 @@ def test_resolve_directive_carries_cost(store, fixtures_dir, tmp_path):
     assert d.data["cost"]["attributed_stages"] == 2
 
 
-def test_resolve_without_attributed_cost_has_empty_cost_dict(store, fixtures_dir):
+def test_resolve_without_attributed_cost_has_empty_cost_dict(store, venued_fixtures_dir):
     """When no cost was attributed, resolve Directive still carries cost key (empty)."""
     sid = "cost-empty"
-    _to_executing_spawn(store, sid, fixtures_dir)
+    _to_executing_spawn(store, sid, venued_fixtures_dir)
 
     for observation in STAGE_OBSERVATIONS[:2]:
         cli.cmd_record_result(
@@ -707,7 +684,7 @@ def _to_verifying_all_passed_failing_finalcheck(store, sid, tmp_path):
     final_check itself."""
     plan = tmp_path / "plan_failing_finalcheck.toml"
     plan.write_text(
-        _declare_venue(
+        declare_venue(
         '[meta]\n'
         'task_id = "demo-failing-finalcheck"\n'
         'goal = "Pin verify-final routing a failing final_check into DIAGNOSING"\n'
@@ -783,12 +760,12 @@ def test_verify_final_failure_routes_to_diagnosing(store, tmp_path):
     assert d2.action == "investigate"
 
 
-def test_verify_final_pending_stage_stays_fix_stages(store, fixtures_dir):
+def test_verify_final_pending_stage_stays_fix_stages(store, venued_fixtures_dir):
     """A merely-unfinished (not yet PASSED) stage is NOT a difficulty — the
     gates.blockers(state, "resolution") early-return must keep returning
     fix_stages at VERIFYING, untouched by the new failing-final_check routing."""
     sid = "vf-pending"
-    plan = _to_executing_spawn(store, sid, fixtures_dir)
+    plan = _to_executing_spawn(store, sid, venued_fixtures_dir)
     # Only stage 1 is passed; stage 2 remains PENDING.
     cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
                            control="reviewed: ok",
@@ -815,7 +792,7 @@ def _venue(tmp_path, monkeypatch):
 
 
 def _two_stage_plan_text(final_check_cmd="true", stage2_verify_cmd="true"):
-    return _declare_venue(
+    return declare_venue(
         '[meta]\n'
         'task_id = "demo-refresh"\n'
         'goal = "Pin approve/no_change refreshing final_check/stage caches"\n'

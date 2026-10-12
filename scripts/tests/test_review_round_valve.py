@@ -43,9 +43,9 @@ def _sha(path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def _plan(fixtures_dir, tmp_path, name="p.toml") -> str:
+def _plan(venued_fixtures_dir, tmp_path, name="p.toml") -> str:
     dest = tmp_path / name
-    dest.write_bytes((fixtures_dir / "plan_two_stage.toml").read_bytes())
+    dest.write_bytes((venued_fixtures_dir / "plan_two_stage.toml").read_bytes())
     return str(dest)
 
 
@@ -116,12 +116,12 @@ def _release_active(store, sid) -> bool:
 
 # --- replay: the shape of the real task that never saw the valve ----------------
 
-def test_replay_c5ceb718_shape(store, fixtures_dir, tmp_path, gate_on):
+def test_replay_c5ceb718_shape(store, venued_fixtures_dir, tmp_path, gate_on):
     """Many pair verdicts over `threshold` distinct plan versions, approve/replan
     resets in between: `plan_review_rounds` stays far below the threshold (pair records
     never advanced it) yet the task's review_rounds reaches it and the valve fires."""
     sid = "rv-replay"
-    plan = _plan(fixtures_dir, tmp_path)
+    plan = _plan(venued_fixtures_dir, tmp_path)
     _to_plan_ready(store, sid, plan)
     pairs = _review_ids(plan)
     assert len(pairs) >= 2
@@ -139,10 +139,10 @@ def test_replay_c5ceb718_shape(store, fixtures_dir, tmp_path, gate_on):
     assert _release_active(store, sid)
 
 
-def test_replay_same_version_counts_one_round(store, fixtures_dir, tmp_path, gate_on):
+def test_replay_same_version_counts_one_round(store, venued_fixtures_dir, tmp_path, gate_on):
     """Every pair of one plan version is ONE round, however many pairs are reviewed."""
     sid = "rv-one"
-    plan = _plan(fixtures_dir, tmp_path)
+    plan = _plan(venued_fixtures_dir, tmp_path)
     _to_plan_ready(store, sid, plan)
     for pair in _review_ids(plan):
         _pair_record(store, sid, plan, pair)
@@ -222,9 +222,9 @@ def test_replay_race_harness_catches_a_split_read_then_write(tmp_path, monkeypat
     assert _race_two_counters(_split_read_then_write_add, tmp_path, monkeypatch) == 2
 
 
-def _refined_plan(fixtures_dir, tmp_path) -> str:
+def _refined_plan(venued_fixtures_dir, tmp_path) -> str:
     dest = tmp_path / "refined.toml"
-    dest.write_bytes((fixtures_dir / "plan_two_stage_refined.toml").read_bytes())
+    dest.write_bytes((venued_fixtures_dir / "plan_two_stage_refined.toml").read_bytes())
     return str(dest)
 
 
@@ -239,11 +239,11 @@ def _drive_to_executing(store, sid, plan, *, record_pass=True) -> None:
     assert store.load(sid).node == Node.EXECUTING.value
 
 
-def test_replay_release_stays_active_after_replan(store, fixtures_dir, tmp_path, gate_on):
+def test_replay_release_stays_active_after_replan(store, venued_fixtures_dir, tmp_path, gate_on):
     """Approve and a real replan zero plan_review_rounds; review_rounds is not reset by
     either, so a valve that has fired stays fired across them."""
     sid = "rv-replan"
-    plan = _plan(fixtures_dir, tmp_path)
+    plan = _plan(venued_fixtures_dir, tmp_path)
     _to_plan_ready(store, sid, plan)
     thr = _threshold()
     for version in range(thr):
@@ -258,7 +258,7 @@ def test_replay_release_stays_active_after_replan(store, fixtures_dir, tmp_path,
     assert after_approve.review_rounds >= thr
     assert gates.plan_review_round_release_active(after_approve)
 
-    refined = _refined_plan(fixtures_dir, tmp_path)
+    refined = _refined_plan(venued_fixtures_dir, tmp_path)
     cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker", concerns=None,
                            note="", target=refined, plan_digest=_sha(refined)), store=store)
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
@@ -278,15 +278,15 @@ def _assert_utc_ts(event) -> None:
     assert dt.datetime.fromisoformat(ts).utcoffset() == dt.timedelta(0)
 
 
-def test_replay_ts_events_carry_utc_timestamp(store, fixtures_dir, tmp_path, gate_on):
+def test_replay_ts_events_carry_utc_timestamp(store, venued_fixtures_dir, tmp_path, gate_on):
     """submit_plan, plan_pair_review, replan and verify_final — driven by real commands —
     and every other event on the way each carry an ISO-8601 UTC `ts`."""
     sid = "rv-ts"
-    plan = _plan(fixtures_dir, tmp_path)
+    plan = _plan(venued_fixtures_dir, tmp_path)
     _to_plan_ready(store, sid, plan)
     _pair_record(store, sid, plan, _pairs(plan)[0])
     _drive_to_executing(store, sid, plan)
-    refined = _refined_plan(fixtures_dir, tmp_path)
+    refined = _refined_plan(venued_fixtures_dir, tmp_path)
     cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker", concerns=None,
                            note="", target=refined, plan_digest=_sha(refined)), store=store)
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
@@ -371,15 +371,15 @@ def test_replay_ts_first_event_of_new_session(store, if_absent):
 # --- the counter's contract ----------------------------------------------------------
 
 def test_review_rounds_survives_approve_and_replan_and_second_session(
-        store, fixtures_dir, tmp_path, gate_on):
+        store, venued_fixtures_dir, tmp_path, gate_on):
     sid = "rv-surv"
-    plan = _plan(fixtures_dir, tmp_path)
+    plan = _plan(venued_fixtures_dir, tmp_path)
     _to_plan_ready(store, sid, plan)
     _whole_record(store, sid, plan, verdict="pass")
     assert store.load(sid).review_rounds == 1
     _drive_to_executing(store, sid, plan, record_pass=False)
     assert store.load(sid).review_rounds == 1
-    refined = _refined_plan(fixtures_dir, tmp_path)
+    refined = _refined_plan(venued_fixtures_dir, tmp_path)
     cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker", concerns=None,
                            note="", target=refined, plan_digest=_sha(refined)), store=store)
     assert store.load(sid).review_rounds == 2
@@ -396,8 +396,8 @@ def test_review_rounds_survives_approve_and_replan_and_second_session(
 
 
 def test_second_session_does_not_double_count_a_counted_digest(
-        store, fixtures_dir, tmp_path, gate_on):
-    plan = _plan(fixtures_dir, tmp_path)
+        store, venued_fixtures_dir, tmp_path, gate_on):
+    plan = _plan(venued_fixtures_dir, tmp_path)
     _to_plan_ready(store, "rv-d1", plan, task="dedupe")
     pair = _pairs(plan)[0]
     _pair_record(store, "rv-d1", plan, pair)
@@ -410,9 +410,9 @@ def test_second_session_does_not_double_count_a_counted_digest(
 
 
 def test_compose_override_and_refused_records_do_not_count(
-        store, fixtures_dir, tmp_path, gate_on):
+        store, venued_fixtures_dir, tmp_path, gate_on):
     sid = "rv-nocount"
-    plan = _plan(fixtures_dir, tmp_path)
+    plan = _plan(venued_fixtures_dir, tmp_path)
     _to_plan_ready(store, sid, plan)
     pair = _pairs(plan)[0]
     # an override is a decision, not a review round
@@ -432,9 +432,9 @@ def test_compose_override_and_refused_records_do_not_count(
 
 
 def test_whole_plan_and_stage_records_each_add_one_and_a_pair_after_adds_nothing(
-        store, fixtures_dir, tmp_path, gate_on):
+        store, venued_fixtures_dir, tmp_path, gate_on):
     sid = "rv-kinds"
-    plan = _plan(fixtures_dir, tmp_path)
+    plan = _plan(venued_fixtures_dir, tmp_path)
     _to_plan_ready(store, sid, plan)
     _whole_record(store, sid, plan, verdict="revise")
     assert _rounds(sid, store) == 1

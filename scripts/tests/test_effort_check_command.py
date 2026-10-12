@@ -25,7 +25,7 @@ def ns(**kw):
     return Namespace(**base)
 
 
-def _to_approved(store, fixtures_dir, sid, task="demo"):
+def _to_approved(store, venued_fixtures_dir, sid, task="demo"):
     cli.cmd_start(ns(session=sid, task=task, goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -33,7 +33,7 @@ def _to_approved(store, fixtures_dir, sid, task="demo"):
                         external_effect=False, new_dependency=False,
                         public_api_change=False), store=store)
     cli.cmd_plan(ns(session=sid), store=store)
-    cli.cmd_submit_plan(ns(session=sid, plan=str(fixtures_dir / "plan_two_stage.toml")),
+    cli.cmd_submit_plan(ns(session=sid, plan=str(venued_fixtures_dir / "plan_two_stage.toml")),
                         store=store)
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
 
@@ -58,9 +58,9 @@ def test_unarmed_session_reports_unarmed(store):
     assert d.data["scales"] == []
 
 
-def test_reports_every_scale_with_its_comparand(store, fixtures_dir):
+def test_reports_every_scale_with_its_comparand(store, venued_fixtures_dir):
     sid = "ec1"
-    _to_approved(store, fixtures_dir, sid)
+    _to_approved(store, venued_fixtures_dir, sid)
     d = cli.cmd_effort_check(ns(session=sid), store=store)
     assert d.ok is True
     assert d.data["armed"] is True
@@ -76,11 +76,11 @@ def test_reports_every_scale_with_its_comparand(store, fixtures_dir):
     assert "no scale at or past its threshold" in d.detail
 
 
-def test_reports_a_scale_past_its_threshold(store, fixtures_dir, monkeypatch):
+def test_reports_a_scale_past_its_threshold(store, venued_fixtures_dir, monkeypatch):
     """Drive the REPLANS scale past its absolute trigger by hand (the accounting
     itself is effort.py's own tests' subject) and check the report names it."""
     sid = "ec2"
-    _to_approved(store, fixtures_dir, sid)
+    _to_approved(store, venued_fixtures_dir, sid)
     state = store.load(sid)
     for _ in range(Thresholds().effort_replan_absolute()):
         state.log("replan")
@@ -96,7 +96,7 @@ def test_reports_a_scale_past_its_threshold(store, fixtures_dir, monkeypatch):
     assert row["past_own_trigger"] >= 1.0
 
 
-def test_the_report_agrees_with_would_fire_across_sessions(store, fixtures_dir):
+def test_the_report_agrees_with_would_fire_across_sessions(store, venued_fixtures_dir):
     """The load-bearing agreement: a scale the gate WOULD fire on must be a scale the
     report says is at or past its threshold.
 
@@ -109,7 +109,7 @@ def test_the_report_agrees_with_would_fire_across_sessions(store, fixtures_dir):
     not on `would_fire` — would stay silent through it.
     """
     sid = "ec-cross"
-    _to_approved(store, fixtures_dir, sid, task="cross-demo")
+    _to_approved(store, venued_fixtures_dir, sid, task="cross-demo")
     state = store.load(sid)
     assert effort.replan_count(state) == 0          # this session has logged none
     task_accumulator.add("cross-demo", "replan_count",
@@ -125,7 +125,7 @@ def test_the_report_agrees_with_would_fire_across_sessions(store, fixtures_dir):
     assert "effort divergence on" in d.detail
 
 
-def test_every_scale_row_agrees_with_would_fire(store, fixtures_dir):
+def test_every_scale_row_agrees_with_would_fire(store, venued_fixtures_dir):
     """`would_fire`, when set, is always one of `over_threshold` -- checked here on the
     replans row specifically (the one this change made cross-session), NOT as a general
     claim about every scale: `would_fire` can legitimately be None with `over_threshold`
@@ -135,14 +135,14 @@ def test_every_scale_row_agrees_with_would_fire(store, fixtures_dir):
     (or otherwise non-session-local) source should extend this same replans-shaped check
     for its own row, not lean on this one to have generalized for it."""
     sid = "ec-agree"
-    _to_approved(store, fixtures_dir, sid, task="agree-demo")
+    _to_approved(store, venued_fixtures_dir, sid, task="agree-demo")
     task_accumulator.add("agree-demo", "replan_count", 99, session_id=sid, now=None)
     d = cli.cmd_effort_check(ns(session=sid), store=store)
     assert d.data["would_fire"] == effort.SCALE_REPLANS
     assert d.data["would_fire"] in d.data["over_threshold"]
 
 
-def test_writes_nothing(store, fixtures_dir, tmp_path):
+def test_writes_nothing(store, venued_fixtures_dir, tmp_path):
     """The load-bearing property: byte-identical state file, and no fire recorded.
 
     The cost row is deliberately large, so `effort.refresh_spend` has something to
@@ -151,7 +151,7 @@ def test_writes_nothing(store, fixtures_dir, tmp_path):
     with no `store.save` behind it, none of it reaches disk.
     """
     sid = "ec3"
-    _to_approved(store, fixtures_dir, sid)
+    _to_approved(store, venued_fixtures_dir, sid)
     cost_log = tmp_path / "cost.jsonl"
     cost_log.write_text(
         json.dumps({"plan_path": store.load(sid).plan_path, "cost_usd": 99.0}) + "\n",
