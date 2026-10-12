@@ -33,12 +33,14 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import NamedTuple, Sequence
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from agentctl import grants  # the sole validator every materialized rule/add_dir passes through
 from agentctl import norm_handoff  # the one definition of the handoff record the child engine adopts
+from agentctl.own_contour import OWN_CONTOUR_VERBS, OWN_SESSION_ENV  # the channel's env name and verb set
 from agentctl.plan import (  # parse the TOML plan for a single-stage brief projection
     PlanError,
     is_unit_id,
@@ -207,6 +209,50 @@ def brief_eligible(args: argparse.Namespace) -> bool:
     return brief_plan_path(args) is not None
 
 
+def own_contour_brief_lines(args: argparse.Namespace) -> list[str]:
+    """The brief section of a linked child, in place of `## The engine belongs to the
+    parent`: its own engine contour, the channel that moves it, the route for a norm
+    that is wrong, and the terminal state. The verbs are quoted from the channel's own
+    verb set so the brief cannot name a set the channel does not run."""
+    verbs = ", ".join(f"`{v}`" for v in sorted(OWN_CONTOUR_VERBS))
+    channel = f"python3 {Path(SCRIPTS_DIR) / 'agentctl-own.py'}"
+    marker_source = (
+        "one of the markers your brief names"
+        if is_manager_kind(getattr(args, "kind", None))
+        else "see § Return markers"
+    )
+    return [
+        "## Your own engine contour",
+        "",
+        "You are a linked child: your own `agentctl` session (`AGENTCTL_OWN_SESSION`) "
+        "holds the parent stage's norm as its handoff, and your production edits are "
+        "released only while that session is at EXECUTING, VERIFYING or RESOLUTION. The "
+        "parent's session and plan stay the parent's; you move your own only through "
+        f"the channel `{channel} <verb> ...`, which places `--session` itself (never "
+        f"pass one) and runs only: {verbs}. `approve` takes `--by agent` only, and "
+        "`partition` takes no `--m*`/`--unit` flag — the delivery-partition decision "
+        "stays the root's. Every other verb (`resolve`, `resolve-permission`, "
+        "`present-plan`, `reset`, ...) is the parent's: return a marker "
+        f"({marker_source}) instead of calling it.",
+        "",
+        "Path to EXECUTING: `classify`, `plan`, write a plan of your own that declares "
+        "the parent stage's norm digest as `[meta.order] parent_norm` and carries its "
+        "`verify_command` verbatim in its final checks, `submit-plan`, `plan-review` "
+        "(an independent thinker's review), `approve --by agent`, `partition` (no "
+        "flags), `next-stage`.",
+        "",
+        "If the norm itself is wrong — it cannot be met as stated — run `declare`, "
+        "`investigate`, then `critique --failure-address нормативное --norm-target "
+        "parent` through the channel, and return `REPLAN:`; do not rewrite the "
+        "parent's norm or plan.",
+        "",
+        "Terminal state: when your stage's own check is green, run `verify-final` on "
+        "your own session through the channel, then return `COMPLETED:`. `resolve` and "
+        "the parent's `record-result` are the parent's.",
+        "",
+    ]
+
+
 def assemble_prompt(
     args: argparse.Namespace,
     depth: int,
@@ -218,6 +264,7 @@ def assemble_prompt(
     stage_grant_entries: "list[dict] | None" = None,
     evidence_dir: "str | None" = None,
     topo_bundle: "str | None" = None,
+    own_contour: bool = False,
 ) -> str:
     plan = argv_text.read_required_file(args.plan, "--plan")
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
@@ -297,28 +344,31 @@ def assemble_prompt(
             scope_lines.extend(stage_grant_provenance_lines(stage_grant_entries))
         scope_lines.append("")
         sections += scope_lines
-    sections += [
-        "## The engine belongs to the parent",
-        "",
-        "The `agentctl` session and plan driving this task are the parent's, not "
-        "yours — never call a user-authority verb (AGENTCTL_USER_AUTHORITY_VERBS in "
-        "scripts/lib/widening_targets.py: approve, resolve-permission, resolve, "
-        "dispatch, record-result, replan, and the rest of that set). The read-only "
-        "verbs this brief prescribes, and `classify`/`status` on your own "
-        "session, are allowed. Keep cwd at your working directory root and run "
-        "repo-relative commands without `cd`-ing first: `python3 "
-        "<abs-path>/agentctl-cli.py <verb> ...` works from any cwd; the "
-        "repo-relative `python3 scripts/agentctl-cli.py <verb> ...` only when your "
-        "cwd already is the repo/worktree root. If your work needs a parent-engine "
-        "action, return a marker "
-        + (
-            "(one of the markers your brief names)"
-            if is_manager_kind(getattr(args, "kind", None))
-            else "(see § Return markers)"
-        )
-        + " instead of calling it yourself.",
-        "",
-    ]
+    if own_contour:
+        sections += own_contour_brief_lines(args)
+    else:
+        sections += [
+            "## The engine belongs to the parent",
+            "",
+            "The `agentctl` session and plan driving this task are the parent's, not "
+            "yours — never call a user-authority verb (AGENTCTL_USER_AUTHORITY_VERBS in "
+            "scripts/lib/widening_targets.py: approve, resolve-permission, resolve, "
+            "dispatch, record-result, replan, and the rest of that set). The read-only "
+            "verbs this brief prescribes, and `classify`/`status` on your own "
+            "session, are allowed. Keep cwd at your working directory root and run "
+            "repo-relative commands without `cd`-ing first: `python3 "
+            "<abs-path>/agentctl-cli.py <verb> ...` works from any cwd; the "
+            "repo-relative `python3 scripts/agentctl-cli.py <verb> ...` only when your "
+            "cwd already is the repo/worktree root. If your work needs a parent-engine "
+            "action, return a marker "
+            + (
+                "(one of the markers your brief names)"
+                if is_manager_kind(getattr(args, "kind", None))
+                else "(see § Return markers)"
+            )
+            + " instead of calling it yourself.",
+            "",
+        ]
     if getattr(args, "kind", None) == "planner":
         sections += [
             "## Prescribed research commands",
@@ -1826,47 +1876,43 @@ def grant_widening_refusal(linked, stage_index: int, kind: str, uncovered: "list
     return "\n".join(lines) + "\n"
 
 
-def norm_handoff_env_value(
-    session_id: "str | None",
-    stage_index: "int | None",
+def norm_handoff_record(
+    session_id: str,
+    stage_index: int,
     kind: str,
     depth: int,
     engine_grants: "list[dict] | None",
-    state_root: "Path | None" = None,
-) -> "str | None":
-    """Write the norm-handoff record for the stage this spawn works for and return the
-    `AGENTCTL_NORM_HANDOFF` value (`<path>:<sha256>`), or `None` when the spawn is not
-    linkable: no session or stage given, the session or its plan unreadable, or the stage
-    absent from the plan. A write failure is reported on stderr and leaves the spawn
-    unlinked -- it never fails the spawn. Same in-process engine seam as
-    `load_engine_stage_grants`; never writes the parent session's state file."""
-    if not session_id or stage_index is None:
+    *,
+    store,
+) -> "dict | None":
+    """The handoff record for the stage this spawn works for, or `None` when the
+    session, its plan or the stage is unavailable (the spawn is then not linked).
+    Writes nothing: the caller writes the record (`norm_handoff.write_record`) once the
+    brief has assembled. Same in-process engine seam as
+    `load_engine_stage_grants`; never touches the parent session's state file."""
+    state = store.load(session_id)
+    if state is None:
         return None
-    from agentctl.store import FileStateStore
+    doc = _session_plan(state)
+    norm = _stage_norm(doc, stage_index) if doc is not None else None
+    if norm is None:
+        return None
+    return norm_handoff.build_record(
+        parent_session=session_id,
+        stage_index=stage_index,
+        kind=kind,
+        norm=norm,
+        grants=engine_grants,
+        depth=depth,
+        parent_lineage=(state.parent_link or {}).get("norm_lineage"),
+    )
 
-    store = FileStateStore(state_root) if state_root is not None else FileStateStore()
-    try:
-        state = store.load(session_id)
-        if state is None:
-            return None
-        doc = _session_plan(state)
-        norm = _stage_norm(doc, stage_index) if doc is not None else None
-        if norm is None:
-            return None
-        record = norm_handoff.build_record(
-            parent_session=session_id,
-            stage_index=stage_index,
-            kind=kind,
-            norm=norm,
-            grants=engine_grants,
-            depth=depth,
-            parent_lineage=(state.parent_link or {}).get("norm_lineage"),
-        )
-        path, sha = norm_handoff.write_record(store.root, record)
-    except Exception as exc:
-        print(f"warning: norm handoff not written, spawning unlinked: {exc}", file=sys.stderr)
-        return None
-    return norm_handoff.format_env_value(path, sha)
+
+def own_contour_allow_rule() -> str:
+    """The one permission rule a linked child receives for driving its own session: the
+    channel script by absolute path. Never an `agentctl-cli.py` rule — the verbs the
+    channel runs are user-authority verbs `grants.validate_rule` refuses to allow."""
+    return f"Bash(python3 {Path(SCRIPTS_DIR) / 'agentctl-own.py'}:*)"
 
 
 def load_or_create_evidence_dir(
@@ -2447,6 +2493,26 @@ def main(argv: list[str] | None = None) -> int:
             log_refused("evidence-dir-refused", {"kind": args.kind, "stage_index": args.stage_index})
             return 2
 
+    # A spawn is linked when the engine can name the stage it works for: the child then
+    # gets a norm handoff and a pre-assigned session id its own-contour channel is pinned
+    # to. The record is only decided here and written once the brief assembles, so the
+    # brief, the argv, the settings and the env all see one decision.
+    handoff_record: "dict | None" = None
+    handoff_store = None
+    if args.session and args.stage_index is not None:
+        from agentctl.store import FileStateStore
+
+        handoff_store = FileStateStore(args.state_root) if args.state_root is not None else FileStateStore()
+        try:
+            handoff_record = norm_handoff_record(
+                args.session, args.stage_index, args.kind, depth_next, engine_grants,
+                store=handoff_store,
+            )
+        except Exception as exc:
+            print(f"warning: norm handoff unavailable, spawning unlinked: {exc}", file=sys.stderr)
+    child_linked = handoff_record is not None
+    own_session = str(uuid.uuid4()) if child_linked else None
+
     add_dir_argv: list[str] = []
     if topo_pair is not None:
         # --review-topo withholds the plans-directory grant entirely -- the
@@ -2478,8 +2544,8 @@ def main(argv: list[str] | None = None) -> int:
                 topo_doc, topo_pair, plan_sha256=topo_plan_sha256, view_dir=topo_view_dir,
                 history=topo_history,
             )
-    try:
-        prompt = assemble_prompt(
+    def brief(own_contour: bool) -> str:
+        return assemble_prompt(
             args,
             depth_next,
             perms,
@@ -2489,7 +2555,11 @@ def main(argv: list[str] | None = None) -> int:
             stage_grant_entries=engine_grants,
             evidence_dir=evidence_dir,
             topo_bundle=topo_bundle,
+            own_contour=own_contour,
         )
+
+    try:
+        prompt = brief(child_linked)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         log_refused(
@@ -2497,6 +2567,17 @@ def main(argv: list[str] | None = None) -> int:
             {"kind": args.kind, "plan": argv_text.abbreviate(args.plan), "stage_index": args.stage_index},
         )
         return 2
+    handoff_env_value: "str | None" = None
+    if handoff_record is not None and not args.dry_run:
+        # Written only now: a brief that cannot be assembled leaves no record behind. A
+        # record that cannot be written makes the spawn unlinked -- brief included.
+        try:
+            path, sha = norm_handoff.write_record(handoff_store.root, handoff_record)
+            handoff_env_value = norm_handoff.format_env_value(path, sha)
+        except Exception as exc:
+            print(f"warning: norm handoff not written, spawning unlinked: {exc}", file=sys.stderr)
+            handoff_record, child_linked, own_session = None, False, None
+            prompt = brief(False)
     model = resolve_model(args)
 
     ceiling_chars = dispatch_prompt_ceiling_chars(model)
@@ -2556,6 +2637,11 @@ def main(argv: list[str] | None = None) -> int:
         child_permissions.setdefault("allow", []).extend(view_allow)
         child_permissions.setdefault("deny", []).extend(view_deny)
 
+    if child_linked:
+        child_settings.setdefault("permissions", {}).setdefault("allow", []).append(
+            own_contour_allow_rule()
+        )
+
     cmd = [
         "claude",
         "-p",
@@ -2577,6 +2663,10 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(child_settings),
     ]
     cmd.extend(add_dir_argv)
+    if own_session is not None:
+        # The harness session id becomes this uuid, which is also the id the child's
+        # engine autostarts under, so AGENTCTL_OWN_SESSION names that engine session.
+        cmd.extend(["--session-id", own_session])
     if permission_mode is not None:
         cmd.extend(["--permission-mode", permission_mode])
     cmd.extend(["--model", model])
@@ -2619,14 +2709,14 @@ def main(argv: list[str] | None = None) -> int:
     parent_difficulty = parent_difficulty_env_value(args.session, args.state_root)
     if parent_difficulty is not None:
         env[PARENT_DIFFICULTY_ENV] = parent_difficulty
-    # Same rule: an inherited handoff names an ancestor's stage, never this spawn's own.
+    # Same rule: an inherited handoff names an ancestor's stage, never this spawn's own;
+    # an inherited own-contour session names the spawner's engine session, which an
+    # unlinked helper must neither drive nor be gated as.
     env.pop(norm_handoff.NORM_HANDOFF_ENV, None)
-    handoff = norm_handoff_env_value(
-        args.session, args.stage_index, args.kind, depth_next, engine_grants,
-        state_root=args.state_root,
-    )
-    if handoff is not None:
-        env[norm_handoff.NORM_HANDOFF_ENV] = handoff
+    env.pop(OWN_SESSION_ENV, None)
+    if handoff_env_value is not None:
+        env[norm_handoff.NORM_HANDOFF_ENV] = handoff_env_value
+        env[OWN_SESSION_ENV] = own_session
 
     # Snapshot existing transcripts BEFORE spawning so we can identify the
     # child's new jsonl (the parent manager's own live transcript would

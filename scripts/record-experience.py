@@ -808,7 +808,54 @@ def manifest_problems(manifest: dict) -> list[str]:
     if not isinstance(principles, list) or not all(
             isinstance(p, str) and SLUG.fullmatch(p) for p in principles):
         out.append("manifest 'principles' must be a list of principle slugs")
+    out += rewrite_shape_problems(manifest.get("rewrites", []))
     return out
+
+
+def rewrite_shape_problems(rewrites) -> list[str]:
+    if not isinstance(rewrites, list):
+        return ["manifest 'rewrites' must be a list of {contexts, replace} objects"]
+    out: list[str] = []
+    for i, entry in enumerate(rewrites):
+        where = f"rewrites[{i}]"
+        if not isinstance(entry, dict):
+            out.append(f"{where} must be an object")
+            continue
+        if not _id_list(entry.get("contexts")) or not entry["contexts"]:
+            out.append(f"{where} 'contexts' must be a non-empty list of context ids")
+        replace = entry.get("replace")
+        if not isinstance(replace, list) or not replace:
+            out.append(f"{where} 'replace' must be a non-empty list of {{from, to}} objects")
+            continue
+        for j, pair in enumerate(replace):
+            if not (isinstance(pair, dict) and isinstance(pair.get("from"), str)
+                    and isinstance(pair.get("to"), str)):
+                out.append(f"{where} replace[{j}] must be an object with string 'from' and 'to'")
+    return out
+
+
+def rewritten_blocks(manifest: dict, blocks: list[str], ids: list[str]) -> tuple[list[str], list[str]]:
+    """Base blocks with the manifest's declared replacements applied, plus problems.
+
+    Ids always name the ORIGINAL blocks, so the manifest keeps one id space."""
+    by_id = dict(zip(ids, blocks))
+    problems: list[str] = []
+    for entry in manifest.get("rewrites", []):
+        for context_id in entry["contexts"]:
+            if context_id not in by_id:
+                problems.append(f"rewrite: {context_id} is not in the source")
+                continue
+            for pair in entry["replace"]:
+                old, new = pair["from"], pair["to"]
+                if not old or old == new:
+                    problems.append(f"rewrite: {context_id} replacement {old!r} -> {new!r} "
+                                    f"must have a non-empty 'from' that differs from 'to'")
+                elif old not in by_id[context_id]:
+                    problems.append(f"rewrite: {context_id} text {old!r} does not occur "
+                                    f"in the context")
+                else:
+                    by_id[context_id] = by_id[context_id].replace(old, new)
+    return [by_id[i] for i in ids], problems
 
 
 def assignment_problems(manifest: dict, ids: list[str]) -> list[str]:
@@ -966,6 +1013,8 @@ def cmd_split_apply(a) -> int:
         refuse(f"source {manifest['source']}: {exc}")
     ids = context_ids(parsed.blocks)
     problems = assignment_problems(manifest, ids)
+    moved_blocks, rewrite_problems = rewritten_blocks(manifest, parsed.blocks, ids)
+    problems += rewrite_problems
     experience = root / "leaves/experience"
     leaves = {c["slug"]: experience / f"{c['slug']}.md" for c in manifest["clusters"]}
     problems += [f"cluster leaf already exists: {p}" for p in leaves.values()
@@ -986,10 +1035,10 @@ def cmd_split_apply(a) -> int:
     # blocks keep the source's own order, not the order the manifest lists them in
     kept = set(manifest["keep"])
     writes = {source: rewritten_source(
-        parsed, [b for i, b in zip(ids, parsed.blocks) if i in kept], pointers, a.date)}
+        parsed, [b for i, b in zip(ids, moved_blocks) if i in kept], pointers, a.date)}
     for cluster in manifest["clusters"]:
         wanted = set(cluster["contexts"])
-        blocks = [b for i, b in zip(ids, parsed.blocks) if i in wanted]
+        blocks = [b for i, b in zip(ids, moved_blocks) if i in wanted]
         leaf = leaves[cluster["slug"]]
         writes[leaf] = cluster_leaf_text(cluster, blocks, carried, source, leaf, a.date)
 
@@ -1157,6 +1206,9 @@ def cmd_split_verify(a) -> int:
         refuse(f"base of {manifest['source']}: {exc}")
     base_ids = context_ids(base.blocks)
     failures = [f"manifest: {p}" for p in assignment_problems(manifest, base_ids)]
+    moved_blocks, rewrite_problems = rewritten_blocks(manifest, base.blocks, base_ids)
+    failures += rewrite_problems
+    expected_sha = {i: block_sha(b) for i, b in zip(base_ids, moved_blocks)}
 
     experience = root / "leaves/experience"
     expected = {source: list(manifest["keep"])}
@@ -1174,7 +1226,7 @@ def cmd_split_verify(a) -> int:
 
     base_by_sha: dict[str, list[str]] = {}
     for context_id in base_ids:
-        base_by_sha.setdefault(context_id.split(":")[1], []).append(context_id)
+        base_by_sha.setdefault(expected_sha[context_id], []).append(context_id)
     found: dict[str, int] = {}
     for shas in present.values():
         for sha in shas:
@@ -1189,7 +1241,7 @@ def cmd_split_verify(a) -> int:
 
     if not failures:
         for leaf, ids in expected.items():
-            allowed = [i.split(":")[1] for i in ids]
+            allowed = [expected_sha.get(i, i.split(":")[1]) for i in ids]
             for n, sha in enumerate(present[leaf], 1):
                 if sha in allowed:
                     allowed.remove(sha)

@@ -907,7 +907,7 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "n/a: re-attests the stage under dispatch (current_stage), never a SKIPPED one; the "
         "stash it reads holds PASSED prior outcomes only"
     ),
-    ("agentctl/cli.py", "_diagnose_materialization_defect"): (
+    ("agentctl/cli.py", "_fail_stage_into_diagnosing"): (
         "n/a: receives the stage a spawn just ran (ACTIVE) from its caller"
     ),
     ("agentctl/cli.py", "cmd_pop_subplan"): (

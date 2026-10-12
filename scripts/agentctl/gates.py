@@ -79,7 +79,7 @@ from .plan import (
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
 from .stage_norm import StageNorm
-from .state import CONCERN_OPEN, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
+from .state import CONCERN_OPEN, CriterionType, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
@@ -668,6 +668,10 @@ def _is_installing(target: str, installing_plan_path: str | None) -> bool:
         installing_plan_path)
 
 
+NORM_TARGET_PARENT = "parent"
+NORM_TARGET_KIND_PARENT = "parent_norm"
+
+
 def _record_file_targets(state: SessionState) -> list[dict]:
     d = state.difficulty
     if d is None:
@@ -692,7 +696,8 @@ def normative_edit_blockers(state: SessionState, new_plan, pending_indices,
     inserted neighbour still blocks); one per file target no stage names in `renorms`; one
     per file target whose bytes are still the baseline and whose `renorms` references all
     sit on stages the replan does not leave pending (a reference on a carried-forward
-    PASSED stage is no consequence, that stage never runs again).
+    PASSED stage is no consequence, that stage never runs again). A parent norm target
+    always blocks: no replan of this session edits the parent stage's norm.
 
     `pending_indices` is the set of `new_plan` stage indices this replan does NOT carry
     forward as PASSED -- supplied by the caller, which owns the carry decision.
@@ -716,6 +721,14 @@ def normative_edit_blockers(state: SessionState, new_plan, pending_indices,
                     f"norm (title, result image, criterion, method, means, ...), "
                     f"not just its place in the plan"
                 )
+            continue
+        if t.get("kind") == NORM_TARGET_KIND_PARENT:
+            out.append(
+                f"norm target {target}: the fault was handed back to the parent stage, "
+                f"whose norm this session cannot edit -- end the session with `REPLAN:` "
+                f"and let the parent's dispatch verify the record; a replan here cannot "
+                f"close it"
+            )
             continue
         if _is_installing(target, installing_plan_path):
             out.append(
@@ -3456,3 +3469,118 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
     out["eligible"] = not reasons
     out["reason"] = reasons[0] if reasons else "inside the boundary the user approved for this order"
     return out
+
+
+# --- the parent-norm basis -----------------------------------------------------------
+#
+# A child session linked to a parent stage by the norm handoff may self-approve a plan
+# that serves that stage's norm: the parent stage's own approval is the boundary, held in
+# the child's state as `parent_link`, in place of an order-approvals ledger record.
+
+PARENT_NORM_BASIS = "parent_norm"
+PARENT_NORM_NOT_LINKED = "not-linked"
+PARENT_NORM_DIGEST_MISMATCH = "parent-norm-digest-mismatch"
+PARENT_NORM_ACCEPTANCE_REVIEW = "parent-acceptance-review"
+PARENT_NORM_CHECK_DROPPED = "parent-check-dropped"
+PARENT_NORM_RESOURCE_NOT_IN_HANDOFF = "resource-not-in-handoff"
+PARENT_NORM_UNRESOLVED_NOT_IN_HANDOFF = "unresolved-not-in-handoff"
+PARENT_NORM_DEPTH_OVER_CAP = "depth-over-cap"
+
+_PARENT_NORM_REASON_TEXT = {
+    PARENT_NORM_NOT_LINKED: "the session has no adopted norm handoff, so there is no parent stage to serve",
+    PARENT_NORM_DIGEST_MISMATCH: "the plan's parent_norm is not the norm digest of the adopted handoff",
+    PARENT_NORM_ACCEPTANCE_REVIEW: (
+        "the parent stage is decided by the user's acceptance, not by a check the child can run"
+    ),
+    PARENT_NORM_CHECK_DROPPED: (
+        "no final_check carries the parent stage's verify_command, byte-for-byte after "
+        "stripping surrounding whitespace, with the parent's expected_exit"
+    ),
+    PARENT_NORM_RESOURCE_NOT_IN_HANDOFF: "a resource of the plan is not covered by a handoff grant",
+    PARENT_NORM_UNRESOLVED_NOT_IN_HANDOFF: (
+        "a grant or engine-executed command of the plan cannot be resolved to a resource and the "
+        "handoff does not carry the identical unresolved text"
+    ),
+    PARENT_NORM_DEPTH_OVER_CAP: "the child's recursion depth is over the cap",
+}
+
+
+def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None,
+                         final_checks, resources, held_resources, *,
+                         unresolved, held_unresolved, max_depth: int,
+                         protected: list[str] | None = None) -> dict:
+    """Whether a linked child may approve its own plan on the parent-norm basis.
+
+    Pure: every input is a stored value. `parent_link` is the adopted handoff
+    (`SessionState.parent_link`); `final_checks` the plan's `(command, expected_exit)`
+    pairs; `resources` the plan's typed resources (`BoundaryView.resources`);
+    `held_resources` the resources the handoff's grant entries resolve to; `unresolved`
+    the plan's unresolved items (`BoundaryView.unresolved`: identity, origin, source) and
+    `held_unresolved` the identities of the handoff's own unresolved grant entries. An
+    unresolved item is covered only by an identical identity in the handoff, or, when it
+    is the final check that carries the parent's own `verify_command`, because it is the
+    norm itself. Every other engine-executed fixed text the engine cannot resolve is
+    refused unless the handoff carries it. Every failing condition is reported, not only
+    the first; a session with no link reports only `not-linked`, as the conditions that
+    read the link have nothing to read.
+
+    The result carries the shape `autonomy_boundary` returns (its callers render it
+    alike), plus `basis`."""
+    reasons: list[str] = []
+    extra: list[dict] = []
+    unresolved_uncovered: list[dict] = []
+    if parent_link is None:
+        reasons.append(PARENT_NORM_NOT_LINKED)
+    else:
+        norm = parent_link.get("norm") or {}
+        if (order_parent_norm or "") != parent_link.get("norm_digest"):
+            reasons.append(PARENT_NORM_DIGEST_MISMATCH)
+        if norm.get("criterion_type") != CriterionType.MEASURABLE.value:
+            reasons.append(PARENT_NORM_ACCEPTANCE_REVIEW)
+        verify = (norm.get("verify_command") or "").strip()
+        expected_exit = norm.get("expected_exit")
+        carried = bool(verify) and any(
+            (command or "").strip() == verify and exit_code == expected_exit
+            for command, exit_code in final_checks
+        )
+        if not carried:
+            reasons.append(PARENT_NORM_CHECK_DROPPED)
+        from . import order_approvals as _oa
+        seen: set[str] = set()
+        for requested in resources:
+            data = _oa.resource_to_dict(requested)
+            if data["kind"] == "specialist":
+                continue
+            if any(held.covers(requested, protected=protected) for held in held_resources):
+                continue
+            name = _resource_name(data)
+            if name in seen:
+                continue
+            seen.add(name)
+            extra.append({**data, "name": name,
+                          "reason": f"{name} is not covered by a grant of the parent's handoff"})
+        if extra:
+            reasons.append(PARENT_NORM_RESOURCE_NOT_IN_HANDOFF)
+        held_identities = [list(identity) for identity in held_unresolved]
+        for item in unresolved:
+            is_the_norm = (carried and item.get("origin") == "final_check"
+                           and (item.get("source") or "").strip() == verify)
+            if is_the_norm or list(item["identity"]) in held_identities:
+                continue
+            unresolved_uncovered.append({**item, "needs_user": True})
+        if unresolved_uncovered:
+            reasons.append(PARENT_NORM_UNRESOLVED_NOT_IN_HANDOFF)
+        depth = parent_link.get("depth")
+        if not isinstance(depth, int) or isinstance(depth, bool) or depth > max_depth:
+            reasons.append(PARENT_NORM_DEPTH_OVER_CAP)
+    return {
+        "eligible": not reasons, "basis": PARENT_NORM_BASIS,
+        "reason": (f"{reasons[0]}: {_PARENT_NORM_REASON_TEXT[reasons[0]]}" if reasons
+                   else "inside the norm and grants of the parent stage this session was handed"),
+        "reasons": reasons,
+        "reason_texts": [f"{r}: {_PARENT_NORM_REASON_TEXT[r]}" for r in reasons],
+        "order_changed": False, "extra_resources": extra,
+        "unresolved_changed_commands": unresolved_uncovered,
+        "thinker_pass": None, "open_effort_fire": False,
+        "first_verdict_key": None, "declined_live_optional": [],
+    }

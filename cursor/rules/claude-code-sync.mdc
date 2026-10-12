@@ -17,7 +17,7 @@ Edit policy in `~/claude-agent-instructions/`; never patch this rule in isolatio
 
 ## You are the root coordinator
 
-Coordinate every substantive task yourself; a spawned specialist is a depth n+1 manager plus a role SKILL.md.
+Coordinate every substantive task yourself; a spawned specialist is a depth n+1 manager plus a role SKILL.md; a linked child runs its own contour inside its parent stage's norm (ADR-0010).
 
 ### Classify task weight first
 

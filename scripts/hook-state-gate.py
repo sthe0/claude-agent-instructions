@@ -36,6 +36,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import gates as _gates  # noqa: E402
 from agentctl.exempt_paths import is_gated_path, is_plan_file  # noqa: E402
+from agentctl.norm_handoff import NORM_HANDOFF_ENV  # noqa: E402
+from agentctl.own_contour import OWN_SESSION_ENV  # noqa: E402
 from agentctl.state import SessionState as _SessionState  # noqa: E402
 from lib import config_root  # noqa: E402
 
@@ -78,10 +80,11 @@ def diagnosing_plan_write_ok(path: Path) -> bool:
     return not _gates.difficulty_blockers(state)
 
 
-def load_gate_fields(path: Path) -> tuple[str | None, str, str | None] | None:
-    """Return (weight_class, node, plan_path) from the state file. weight_class and
-    plan_path may be None. Corrupt/unreadable state or a missing/non-string node ->
-    None, so main() falls through to allow (unchanged safety)."""
+def load_gate_fields(path: Path) -> tuple[str | None, str, str | None, bool] | None:
+    """Return (weight_class, node, plan_path, linked) from the state file. weight_class
+    and plan_path may be None; `linked` is whether the session holds a norm handoff
+    (`parent_link`). Corrupt/unreadable state or a missing/non-string node -> None, so
+    main() falls through to allow unless the env carries an own-contour signal."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -92,7 +95,7 @@ def load_gate_fields(path: Path) -> tuple[str | None, str, str | None] | None:
     weight = data.get("weight_class")
     weight = weight if isinstance(weight, str) else None
     plan_path = data.get("plan_path")
-    return weight, node, plan_path
+    return weight, node, plan_path, isinstance(data.get("parent_link"), dict)
 
 
 def foreign_plan_owner(file_path: str, own_state: Path) -> tuple[Path, str | None, str] | None:
@@ -113,7 +116,7 @@ def foreign_plan_owner(file_path: str, own_state: Path) -> tuple[Path, str | Non
             fields = load_gate_fields(entry)
             if fields is None:
                 continue
-            weight, node, plan_path = fields
+            weight, node, plan_path, _linked = fields
             if node == "RESOLVED" or not isinstance(plan_path, str) or not plan_path:
                 continue
             if os.path.realpath(plan_path) == target:
@@ -166,6 +169,45 @@ def gate_decision(weight_class: str | None, node: str, is_plan: bool = False,
     return "deny", f"plan-approval gate not passed (node={node}); approve the plan first"
 
 
+def contour_signal_denial(session_id: str, linked: bool) -> str | None:
+    """Why a session that carries an own-contour signal in its env may not edit, else
+    None. The signals are `AGENTCTL_OWN_SESSION` and the norm handoff; each is exported
+    only to a child whose own engine session adopted that handoff (`parent_link`), so
+    one without the other means the child's contour is not the one the spawn built, and
+    the depth bypass is not available to it either."""
+    own = os.environ.get(OWN_SESSION_ENV, "").strip()
+    handoff = os.environ.get(NORM_HANDOFF_ENV, "").strip()
+    if (own or handoff) and not linked:
+        named = OWN_SESSION_ENV if own else NORM_HANDOFF_ENV
+        return (
+            f"{named} is set but this session holds no norm handoff (parent_link), so its "
+            "own contour is unverified; a linked child's engine adopts the handoff at "
+            "start — report this to your parent instead of editing"
+        )
+    if own and config_root.sanitize_session_id(own) != config_root.sanitize_session_id(session_id):
+        return (
+            f"{OWN_SESSION_ENV} names a session other than this one; the channel "
+            "scripts/agentctl-own.py is pinned to a session this hook does not gate"
+        )
+    return None
+
+
+def linked_decision(weight_class: str | None, node: str) -> tuple[str, str]:
+    """The gate for a linked child's production code: it is an executor of the stage
+    its own plan was approved for, so only the execution nodes release an edit — CHAT
+    included, which the root gate lets through before EXECUTING. The reason names the
+    channel the child moves its own node with."""
+    if node in ALLOW_NODES:
+        return "allow", ""
+    _, reason = gate_decision(weight_class, node)
+    reason = reason or f"production edits are released only at {', '.join(sorted(ALLOW_NODES))}"
+    return "deny", (
+        f"{reason}; as a linked child drive your own session with "
+        "`python3 <scripts>/agentctl-own.py <verb>` (classify, plan, submit-plan, "
+        "approve --by agent, next-stage …)"
+    )
+
+
 def recursion_depth() -> int:
     """AGENT_RECURSION_DEPTH (0 for a top-level/root session). A spawned
     specialist runs at depth >= 1. Non-int/unset -> 0."""
@@ -203,6 +245,12 @@ def main() -> int:
 
     sp = resolve_state_path(session_id)
     if sp is None:
+        # No engine state: allow, unless the env says this is a linked child — then the
+        # missing state is a contour that never started, not a session nobody drives.
+        if is_gated_path(file_path):
+            denial = contour_signal_denial(session_id, linked=False)
+            if denial is not None:
+                deny_with("(no engine state)", denial)
         return 0
 
     if not is_gated_path(file_path):
@@ -210,8 +258,18 @@ def main() -> int:
 
     fields = load_gate_fields(sp)
     if fields is None:
+        # State that cannot be read says nothing about a link: the contour signals
+        # alone decide whether this is a child whose contour is not verifiable.
+        denial = contour_signal_denial(session_id, linked=False)
+        if denial is not None:
+            deny_with("(unreadable engine state)", denial)
         return 0
-    weight_class, node, plan_path = fields
+    weight_class, node, plan_path, linked = fields
+
+    denial = contour_signal_denial(session_id, linked)
+    if denial is not None:
+        deny_with(node, denial)
+        return 0
 
     in_plans_dir = is_plan_file(file_path)
     is_tracked = bool(plan_path) and os.path.realpath(file_path) == os.path.realpath(plan_path)
@@ -247,6 +305,15 @@ def main() -> int:
     # Plan files stay gated: is_plan flows through gate_decision's node-aware rule
     # (the child's own plan only at its planning-position nodes), and a plan owned
     # by another live session is governed by the owner check above.
+    #
+    # A LINKED child (its engine holds the parent stage's norm handoff) has a contour
+    # of its own, so it never takes this bypass: its code edits are released by its own
+    # node, which it moves through scripts/agentctl-own.py.
+    if linked and not is_plan:
+        decision, reason = linked_decision(weight_class, node)
+        if decision == "deny":
+            deny_with(node, reason)
+        return 0
     if not is_plan and recursion_depth() >= 1:
         return 0
 

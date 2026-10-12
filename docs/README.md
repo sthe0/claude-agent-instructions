@@ -39,7 +39,7 @@ The skills, agents, hooks, scripts, memory scopes, settings, and the Cursor mirr
 
 - [Skills](components/skills.md) — the machine-checked inventory of flat skills (inline) and specializations (spawned).
 - [Agents and the spawn model](components/agents.md) — the specialization roles the manager delegates to, and how each is spawned.
-- [Hooks](components/hooks.md) — the harness-run scripts that enforce the non-skippable gates and fire the reminders.
+- [Hooks](components/hooks.md) — the harness-run scripts that enforce the non-skippable gates and fire the reminders, including the memory-retrieval hook that nominates relevant memory leaves for each prompt.
 - [Scripts](components/scripts.md) — the coordination engine, the verification guards, the setup wiring, and the experience tooling.
 - [Memory scopes](components/memory-scopes.md) — the three scopes (personal / global / project) and the shared leaf-and-index shape.
 - [Settings and permissions](components/settings-and-permissions.md) — the layered settings.json, the permissions CLI, and the action taxonomy.
@@ -67,4 +67,4 @@ Setup and distribution, the git workflow, the verification-guard suite, and laye
 
 ## Decisions — architecture decision records
 
-The [ADR index](adr/README.md) records the significant, hard-to-reverse design decisions. [ADR-0007](adr/0007-stage-norm.md) records `StageNorm`, the stage-norm object behind review scope, PASSED-stage carry-forward and typed edge delivery (operational summary: [agentctl README § StageNorm](../scripts/agentctl/README.md#stagenorm--the-stages-norm-and-its-three-identities)). [ADR-0009](adr/0009-specialist-as-manager.md) records how a parent stage's norm reaches a spawned specialist as its order (`0009-specialist-as-manager.md`: handoff record, loop refusal, grant narrowing).
+The [ADR index](adr/README.md) records the significant, hard-to-reverse design decisions. [ADR-0007](adr/0007-stage-norm.md) records `StageNorm`, the stage-norm object behind review scope, PASSED-stage carry-forward and typed edge delivery (operational summary: [agentctl README § StageNorm](../scripts/agentctl/README.md#stagenorm--the-stages-norm-and-its-three-identities)). [ADR-0009](adr/0009-specialist-as-manager.md) records how a parent stage's norm reaches a spawned specialist as its order (`0009-specialist-as-manager.md`: handoff record, loop refusal, grant narrowing). [ADR-0010](adr/0010-child-contour.md) records the child's own contour inside that norm (`0010-child-contour.md`: `parent_norm` self-approval, norm-mismatch escalation, the linked child's state gate and `agentctl-own.py`).

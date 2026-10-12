@@ -629,6 +629,107 @@ def test_split_apply_then_verify_rejects_the_output_after_a_context_is_deleted(e
     assert "missing: 3:e51c0fc04bb0" in done.stdout.splitlines()
 
 
+# --- declared rewrites -------------------------------------------------------
+
+REWRITE = {"contexts": ["2:66a81f81a879"],
+           "replace": [{"from": "three stages", "to": "four stages"}]}
+
+
+def rewritten_work(tmp_path, rewrites):
+    """Fixture copy whose DRIFT leaf carries the replacement the manifest declares."""
+    work = fixture_copy(tmp_path)
+    leaf = work / "good" / DRIFT
+    leaf.write_text(leaf.read_text(encoding="utf-8").replace("three stages", "four stages"),
+                    encoding="utf-8")
+    manifest = json.loads((work / "good.json").read_text(encoding="utf-8"))
+    manifest["rewrites"] = rewrites
+    return work, write_manifest(work / "rewritten.json", manifest)
+
+
+def test_split_rewrites_verify_accepts_a_declared_replacement(env, tmp_path):
+    work, manifest_path = rewritten_work(tmp_path, [REWRITE])
+    done = run(env, "split-verify", "--manifest", manifest_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_split_rewrites_verify_rejects_the_same_edit_when_undeclared(env, tmp_path):
+    work, _ = rewritten_work(tmp_path, [REWRITE])
+    done = run(env, "split-verify", "--manifest", work / "good.json")
+    assert done.returncode == 1
+    assert "missing: 2:66a81f81a879" in done.stdout.splitlines()
+
+
+def test_split_rewrites_verify_rejects_absent_from_(env, tmp_path):
+    work, manifest_path = rewritten_work(
+        tmp_path, [{"contexts": ["2:66a81f81a879"],
+                    "replace": [{"from": "no such text", "to": "x"}]}])
+    done = run(env, "split-verify", "--manifest", manifest_path)
+    assert done.returncode == 1
+    assert any(l.startswith("rewrite: 2:66a81f81a879 ") for l in done.stdout.splitlines())
+
+
+def test_split_rewrites_committed_negative_fixture_fails_with_a_rewrite_line(env):
+    done = run(env, "split-verify", "--manifest", FIXTURES / "rewrite_absent.json")
+    assert done.returncode == 1
+    assert any(l.startswith("rewrite: 2:66a81f81a879 ") for l in done.stdout.splitlines())
+
+
+@pytest.mark.parametrize("bad", [
+    {"contexts": ["2:66a81f81a879"]},
+    {"contexts": [], "replace": [{"from": "a", "to": "b"}]},
+    {"contexts": ["nope"], "replace": [{"from": "a", "to": "b"}]},
+    {"contexts": ["2:66a81f81a879"], "replace": []},
+    {"contexts": ["2:66a81f81a879"], "replace": [{"from": "a"}]},
+    {"contexts": ["2:66a81f81a879"], "replace": [{"from": 1, "to": "b"}]},
+    "not an object",
+])
+def test_split_rewrites_manifest_rejects_malformed_(env, tmp_path, bad):
+    work, manifest_path = rewritten_work(tmp_path, [bad])
+    done = run(env, "split-verify", "--manifest", manifest_path)
+    assert done.returncode == 2
+    assert "rewrites" in done.stderr
+
+
+def test_split_rewrites_manifest_rejects_non_list_(env, tmp_path):
+    work, manifest_path = rewritten_work(tmp_path, {"contexts": []})
+    assert run(env, "split-verify", "--manifest", manifest_path).returncode == 2
+
+
+def test_split_rewrites_only_named_contexts_(env, tmp_path):
+    work, manifest_path = rewritten_work(tmp_path, [REWRITE])
+    leaf = work / "good" / DRIFT
+    leaf.write_text(leaf.read_text(encoding="utf-8").replace("two stages", "six stages"),
+                    encoding="utf-8")
+    done = run(env, "split-verify", "--manifest", manifest_path)
+    assert done.returncode == 1
+    lines = done.stdout.splitlines()
+    assert "missing: 3:e51c0fc04bb0" in lines
+    assert "missing: 2:66a81f81a879" not in lines
+
+
+def test_split_rewrites_apply_then_verify_(env, tmp_path):
+    root, manifest_path, manifest = fresh_work(tmp_path)
+    manifest["rewrites"] = [REWRITE]
+    write_manifest(manifest_path, manifest)
+    done = run(env, "split-apply", "--manifest", manifest_path, "--date", DATE)
+    assert done.returncode == 0, done.stderr
+    moved = (root / DRIFT).read_text(encoding="utf-8")
+    assert "four stages" in moved and "three stages" not in moved
+    assert run(env, "promote", "--manifest", manifest_path, *PROMOTE_ARGS).returncode == 0
+    done = run(env, "split-verify", "--manifest", manifest_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_split_rewrites_apply_refuses_absent_from_and_writes_nothing_(env, tmp_path):
+    root, manifest_path, manifest = fresh_work(tmp_path)
+    manifest["rewrites"] = [{"contexts": ["2:66a81f81a879"],
+                             "replace": [{"from": "no such text", "to": "x"}]}]
+    write_manifest(manifest_path, manifest)
+    original = tree(root)
+    done = run(env, "split-apply", "--manifest", manifest_path, "--date", DATE)
+    _refused(done, root, original, "rewrite: 2:66a81f81a879")
+
+
 def test_split_commands_not_in_write_commands_so_nothing_is_auto_landed():
     for command in ("split-contexts", "split-apply", "split-verify", "promote"):
         assert command not in re_mod.WRITE_COMMANDS

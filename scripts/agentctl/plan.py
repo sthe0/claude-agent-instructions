@@ -2049,6 +2049,9 @@ def order_place(meta) -> tuple:
     leaves, so an edit that turns a readable order into an unreadable one — or that
     changes how much of it is unreadable — would otherwise move no key at all.
 
+    `parent_norm` is the one member that rides only when set: an order that does not
+    declare it keeps the exact key it had before the field existed.
+
     The membership below is a hand-written list, not a derivation over
     `dataclasses.fields(Order)`, because each field needs its own normalization into a
     hashable, order-stable form. So "everything the order holds" is a claim a reader
@@ -2066,6 +2069,7 @@ def order_place(meta) -> tuple:
         order.malformed,
         order.requirements_dropped,
         order.requires_traceability,
+        *((order.parent_norm,) if order.parent_norm else ()),
     ),)
 
 
@@ -2564,6 +2568,7 @@ def order_digest(doc: PlanDoc) -> str:
         functional_place = order.functional_place
         requires_traceability = order.requires_traceability
         requirement_set = frozenset((r.id, r.text) for r in order.requirements)
+    parent_norm = order.parent_norm if order is not None else None
     payload = repr((
         doc.meta.goal,
         doc.meta.done_criterion,
@@ -2574,6 +2579,7 @@ def order_digest(doc: PlanDoc) -> str:
         functional_place,
         requires_traceability,
         tuple(sorted(requirement_set)),
+        *((parent_norm,) if parent_norm else ()),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

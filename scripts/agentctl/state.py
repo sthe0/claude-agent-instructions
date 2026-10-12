@@ -1591,6 +1591,11 @@ class Order:
     # `malformed` is: it is the same malformation's own drop count, not a place of its
     # own. Only `from_dict` ever sets it.
     requirements_dropped: tuple[int, int] | None = None
+    # The `norm_digest` of the parent stage a linked child's plan serves. Set only by a
+    # child plan that asks to be self-approved inside its parent's norm
+    # (`gates.parent_norm_boundary`); every digest and key built from the order includes
+    # it only when set, so a plan without it keeps the digests it had before the field.
+    parent_norm: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Order":
@@ -1625,6 +1630,13 @@ class Order:
             if raw_cov is not None:
                 malformed.append("coverage")
 
+        raw_parent = d.get("parent_norm")
+        parent_norm: str | None = None
+        if isinstance(raw_parent, str):
+            parent_norm = raw_parent.strip() or None
+        elif raw_parent is not None:
+            malformed.append("parent_norm")
+
         return cls(
             customer_id=str(d.get("customer_id", "")),
             customer=str(d.get("customer", "")),
@@ -1634,6 +1646,7 @@ class Order:
             malformed=tuple(malformed),
             requirements_dropped=requirements_dropped,
             requires_traceability=bool(d.get("requires_traceability", False)),
+            parent_norm=parent_norm,
         )
 
 

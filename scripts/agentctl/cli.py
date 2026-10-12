@@ -924,17 +924,60 @@ def _agent_renegotiation_refusal(state: SessionState, decision: str, doc) -> str
     return None
 
 
+def _handoff_held(parent_link: dict | None, venue: str) -> tuple[list, list]:
+    """What the adopted handoff's grant entries hold: the typed resources they resolve to,
+    and the identities of the entries the engine cannot resolve (a wildcard-tail rule),
+    which cover only an identical unresolved item of the child's plan."""
+    held: list = []
+    held_unresolved: list = []
+    for entry in (parent_link or {}).get("grants") or []:
+        if entry.get("rule"):
+            resolution = plan_resources.resolve_rule_grant(entry["rule"], venue)
+        else:
+            resolution = plan_resources.resolve_add_dir_grant(entry["path"], entry["mode"])
+        if resolution.status == "resolved":
+            held.extend(resolution.resources)
+        else:
+            held_unresolved.append(list(resolution.identity or ("unresolved", entry["rule"])))
+    return held, held_unresolved
+
+
+def _self_approve_detail(autonomy: dict, *, replan: bool) -> str:
+    """The `self_approve` Directive's detail, naming the basis the plan was judged on."""
+    kind = "substantive replan" if replan else "plan"
+    if autonomy.get("basis") == gates.PARENT_NORM_BASIS:
+        return (f"{kind} is inside the norm and grants of the parent stage this session "
+                "serves; run `approve --by agent`")
+    return f"{kind} is inside the boundary the user approved for this order; run `approve --by agent`"
+
+
 def _autonomy_for(state: SessionState, doc) -> dict:
     """`gates.autonomy_boundary` for `doc`, against the ledger of the order this session
     was user-approved under (the baseline plan's order key), so a changed order reads as
-    `order_changed` rather than as an empty ledger of its own."""
-    key = _ledgered_order_key(state) or order_digest(doc)
-    ledger = order_approvals.get(key)
+    `order_changed` rather than as an empty ledger of its own.
+
+    A plan that declares `[meta.order] parent_norm` is judged by `gates.
+    parent_norm_boundary` against the adopted handoff alone and never falls back to the
+    ledger: the parent stage's own approval is the boundary it serves, and a ledger
+    record, if one exists, belongs to a different order."""
     protected = _resources.protected_permission_surfaces(
         repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
         ledger_dir=str(order_approvals._root(None)),
     )
     view = plan_resources.compute_boundary_view(doc, order_digest(doc), venue=_venue_for(doc))
+    order = doc.meta.order
+    if order is not None and order.parent_norm:
+        held, held_unresolved = _handoff_held(state.parent_link, _venue_for(doc))
+        return gates.parent_norm_boundary(
+            state.parent_link, order.parent_norm,
+            [(c.command, c.expected_exit) for c in doc.meta.final_check
+             if c.kind == CheckKind.SHELL.value],
+            view.resources, held,
+            unresolved=view.unresolved, held_unresolved=held_unresolved,
+            max_depth=Thresholds().max_recursion_depth, protected=protected,
+        )
+    key = _ledgered_order_key(state) or order_digest(doc)
+    ledger = order_approvals.get(key)
     # A decline this session holds is enforced where the stage is carried and at the agent's
     # approval; the ledger's copy is what a session that never saw the decline (a new session,
     # a reset) is held to, so only the stages the session does not already know are offered.
@@ -1088,10 +1131,15 @@ def _kind_within_boundary(state: SessionState, kind: str, doc, *, ledgered: bool
     """A refinement that moves the order digest, adds a resource beyond the user's
     approved set, or changes a command the engine cannot resolve to a resource is not a
     refinement: it re-enters the approval gate as substantive. `ledgered`: the order has
-    a user-approved ledger record (`_ledgered_order_key`); without one nothing is judged."""
+    a user-approved ledger record (`_ledgered_order_key`) or the plan declares a
+    `parent_norm`; without either nothing is judged. A plan judged on the parent-norm basis
+    re-enters the gate whenever its verdict is no longer eligible (a dropped parent check,
+    an uncovered resource, an unresolved item the handoff does not carry)."""
     if kind != "refinement" or not ledgered:
         return kind
     verdict = _autonomy_for(state, doc)
+    if verdict.get("basis") == gates.PARENT_NORM_BASIS:
+        return kind if verdict["eligible"] else "substantive"
     if (verdict["order_changed"] or verdict["extra_resources"]
             or verdict["unresolved_changed_commands"]):
         return "substantive"
@@ -1100,11 +1148,21 @@ def _kind_within_boundary(state: SessionState, kind: str, doc, *, ledgered: bool
 
 def _replan_kind(state: SessionState, old, new) -> str:
     """The kind a replan from `old` to `new` applies as. The verify-identity relaxation
-    is admitted only for a ledgered order, the one case `_kind_within_boundary` judges."""
+    is admitted only for a ledgered order; a plan that declares a `parent_norm` is judged
+    by `_kind_within_boundary` too but gets no relaxation. `parent_norm` sits in the order
+    place, which diffs as a refinement, so removing or changing the one the baseline
+    declared is substantive here: the plan would otherwise leave the parent-norm basis
+    (and its parent check) through an edit nobody judges."""
     from .plan import diff_plans
     ledgered = _ledgered_order_key(state) is not None
+    old_order, order = old.meta.order, new.meta.order
+    old_parent_norm = old_order.parent_norm if old_order is not None else None
+    parent_norm = order.parent_norm if order is not None else None
+    if old_parent_norm and old_parent_norm != parent_norm:
+        return "substantive"
+    parent_norm_plan = bool(parent_norm)
     kind = diff_plans(old, new, relax_verify_identity=ledgered)
-    return _kind_within_boundary(state, kind, new, ledgered=ledgered)
+    return _kind_within_boundary(state, kind, new, ledgered=ledgered or parent_norm_plan)
 
 
 def _replan_pending_indices(state: SessionState, new, kind: str) -> list[int]:
@@ -3796,8 +3854,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     if autonomy["action"] == "self_approve":
         d = Directive(
             True, state.node, "self_approve",
-            "plan is inside the boundary the user approved for this order; run "
-            "`approve --by agent`",
+            _self_approve_detail(autonomy, replan=False),
             data=directive_data,
         )
     else:
@@ -5982,7 +6039,11 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # The coordinator approves only inside the boundary the user approved for this
         # order (a ledger entry and an eligible verdict on the CURRENT bytes); it never
         # stamps the ledger, so its approval is never a later boundary.
-        if _approved_doc is not None and _ledgered_order_key(state) is not None:
+        # A plan that declares a parent_norm is judged on that basis and needs no ledger.
+        _declared_order = _approved_doc.meta.order if _approved_doc is not None else None
+        _parent_norm_plan = bool(_declared_order is not None and _declared_order.parent_norm)
+        if _approved_doc is not None and (
+                _parent_norm_plan or _ledgered_order_key(state) is not None):
             agent_autonomy = _autonomy_for(state, _approved_doc)
         if agent_autonomy is None:
             blockers = blockers + [
@@ -5992,7 +6053,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         elif not agent_autonomy["eligible"]:
             blockers = blockers + [
                 f"--by {args.by!r} refused: outside the approved boundary -- "
-                + "; ".join(agent_autonomy["reasons"])
+                + "; ".join(agent_autonomy.get("reason_texts") or agent_autonomy["reasons"])
             ]
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
@@ -6099,13 +6160,16 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if snap:
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
     if agent_autonomy is not None:
-        approved = order_approvals.latest_user_approved_record(_ledgered_order_key(state))
+        parent_norm_basis = agent_autonomy.get("basis") == gates.PARENT_NORM_BASIS
+        ledger_key = None if parent_norm_basis else _ledgered_order_key(state)
+        approved = order_approvals.latest_user_approved_record(ledger_key) if ledger_key else None
         frozen = (approved or {}).get("effort_estimate") or {}
         if frozen:
             state.order_effort_frozen = {scale: float(value) for scale, value in frozen.items()}
             effort.rederive(state)
         state.log(
             "approve", by=args.by,
+            **({"basis": gates.PARENT_NORM_BASIS} if parent_norm_basis else {}),
             extra_resources=[e["name"] for e in agent_autonomy["extra_resources"]],
             unresolved_changed_commands=[
                 c["source"] for c in agent_autonomy["unresolved_changed_commands"]],
@@ -6792,6 +6856,11 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             data={**base, "question": body, "continuation": continuations.clarify(body)},
         )
     if marker == "REPLAN":
+        mismatch, unverified = _child_norm_mismatch(state, store, stage, result.stderr)
+        if mismatch is not None:
+            return _open_norm_mismatch(state, store, stage, mismatch, base)
+        if unverified:
+            state.log("norm_mismatch_unverified", stage=stage.index, reason=unverified)
         store.save(state)
         return Directive(
             False, state.node, "replan",
@@ -7645,33 +7714,47 @@ def _classify_transcript_denials(
         state.planning_misses.append({**row_base, "asked_user": False, "source": "transcript"})
 
 
+def _fail_stage_into_diagnosing(
+    state: SessionState, store: StateStore, stage: Stage, *, note: str, event: str,
+    declaration: Declaration, **event_fields,
+):
+    """FAILED / DIAGNOSING on `stage` for a fault no re-dispatch of the stage unchanged
+    would remove: mirrors `cmd_record_result`'s failed-stage branch, including its two-step
+    EXECUTING -> VERIFYING -> DIAGNOSING transition (`machine.TRANSITIONS` permits
+    `diagnose` only from VERIFYING), with the Declaration pre-framed by the caller. Returns
+    the opened difficulty, or None when the difficulty cap refused it; the state is saved
+    either way and each caller builds its own Directive."""
+    stage.outcome.status = StageStatus.FAILED.value
+    stage.outcome.actual = (stage.outcome.actual + "\n" + note) if stage.outcome.actual else note
+    state.log(event, stage=stage.index, **event_fields)
+    state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
+    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
+    opened = _open_difficulty(state, declaration=declaration)
+    store.save(state)
+    return opened
+
+
 def _diagnose_materialization_defect(
     state: SessionState, store: StateStore, stage: Stage, *, action: str, evidence: str,
 ) -> Directive:
     """Route a PERMISSION-REQUEST whose denied call WAS covered by the stage's
     effective grant set into FAILED/DIAGNOSING -- the grant existed, materialization
     into the child's --settings/--add-dir simply failed to carry it, so re-asking the
-    user (or re-dispatching unchanged) would only reproduce the same denial. Mirrors
-    `cmd_record_result`'s failed-stage branch, including its two-step EXECUTING ->
-    VERIFYING -> DIAGNOSING transition (`machine.TRANSITIONS` permits `diagnose`
-    only from VERIFYING), but pre-frames the Declaration from the grant/call/evidence
-    triple instead of leaving it for a human to write from scratch. The caller is
-    responsible for having already appended the triggering row to
-    `state.materialization_defects` -- this function only transitions and reports."""
-    stage.outcome.status = StageStatus.FAILED.value
-    note = f"permission request already covered by materialized grants ({evidence}): {action}"
-    stage.outcome.actual = (stage.outcome.actual + "\n" + note) if stage.outcome.actual else note
-    state.log("materialization_defect", stage=stage.index, action=action, evidence=evidence)
-    state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
-    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
-    opened = _open_difficulty(state, declaration=Declaration(
-        expected=f"stage {stage.index}'s materialized grants should have covered: {action}",
-        actual=f"the child was denied and asked permission for: {action}",
-        mismatch="the effective grant set declares/derives coverage for this call, but "
-                 "the child's own --settings/--add-dir materialization failed to carry "
-                 "it through -- a materialization defect, not a planning miss.",
-    ))
-    store.save(state)
+    user (or re-dispatching unchanged) would only reproduce the same denial. The
+    Declaration is pre-framed from the grant/call/evidence triple instead of being left
+    for a human to write from scratch. The caller is responsible for having already
+    appended the triggering row to `state.materialization_defects` -- this function only
+    transitions and reports."""
+    opened = _fail_stage_into_diagnosing(
+        state, store, stage, event="materialization_defect", action=action, evidence=evidence,
+        note=f"permission request already covered by materialized grants ({evidence}): {action}",
+        declaration=Declaration(
+            expected=f"stage {stage.index}'s materialized grants should have covered: {action}",
+            actual=f"the child was denied and asked permission for: {action}",
+            mismatch="the effective grant set declares/derives coverage for this call, but "
+                     "the child's own --settings/--add-dir materialization failed to carry "
+                     "it through -- a materialization defect, not a planning miss.",
+        ))
     if opened is None:
         return _difficulty_cap_directive(
             state, f"stage {stage.index} permission request was already covered by its "
@@ -7683,6 +7766,91 @@ def _diagnose_materialization_defect(
         "a planning miss; run overcome-difficulty (investigate why materialization "
         "failed to carry the grant, then critique); no re-dispatch, no user ask",
         marker="OVERCOME-DIFFICULTY",
+    )
+
+
+def _child_norm_mismatch(
+    state: SessionState, store: StateStore, stage: Stage, stderr: str,
+) -> tuple[dict | None, str]:
+    """`(record, "")` when the child this dispatch just ran holds, in its own state, a
+    current difficulty routed to this stage's norm; else `(None, reason)`.
+
+    The decision rests on the child's state record -- never on the REPLAN text -- and holds
+    only when all of these do: the transcript path the launch reported names the child's
+    session id (its stem) and that state loads; the child's handoff names this session and
+    this stage; its open difficulty carries a `parent` norm target whose baseline is the
+    stage's current norm digest (a replan of the stage since the spawn moves it, and the
+    child's baseline is then stale); and its declaration states all three of expected,
+    actual and mismatch. The child's state is only read, never written.
+
+    A rejection is `(None, reason)`, and the caller logs the reason. `(None, "")` is a
+    spawn with nothing to report -- no transcript, no readable state record, or a record
+    that holds no parent link -- whose REPLAN is the ordinary one and writes no row."""
+    if state.node != Node.EXECUTING.value:
+        return None, ""
+    path = _parse_transcript_path(stderr)
+    if path is None:
+        return None, ""
+    child_id = Path(path).stem
+    if not child_id or child_id == state.session_id:
+        return None, ""
+    try:
+        child = store.load(child_id)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return None, f"child state {child_id} is unreadable: {exc}"
+    if child is None or not child.parent_link:
+        return None, ""
+    link = child.parent_link
+    if link.get("parent_session") != state.session_id or link.get("stage_index") != stage.index:
+        return None, (f"child {child_id} is not linked to stage {stage.index} of this session "
+                      f"(parent_session={link.get('parent_session')!r}, "
+                      f"stage_index={link.get('stage_index')!r})")
+    opened = child.difficulty
+    if opened is None:
+        return None, f"child {child_id} holds no open difficulty"
+    current = gates.stage_norm_digest(stage)
+    targets = [t for t in opened.norm_targets
+               if t.get("target") == gates.NORM_TARGET_PARENT
+               and t.get("kind") == gates.NORM_TARGET_KIND_PARENT]
+    if not targets:
+        return None, f"child {child_id}'s open difficulty names no parent norm target"
+    if not any(t.get("baseline") == current for t in targets):
+        return None, (f"child {child_id}'s parent norm target is stale: its baseline is not "
+                      f"stage {stage.index}'s current norm digest")
+    decl = opened.declaration
+    if decl is None or not all((getattr(decl, f) or "").strip()
+                               for f in ("expected", "actual", "mismatch")):
+        return None, f"child {child_id}'s declaration lacks expected, actual or mismatch"
+    return {"child_session": child_id, "stage_index": stage.index, "norm_digest": current,
+            "declaration": {"expected": decl.expected, "actual": decl.actual,
+                            "mismatch": decl.mismatch}}, ""
+
+
+def _open_norm_mismatch(
+    state: SessionState, store: StateStore, stage: Stage, mismatch: dict, base: dict,
+) -> Directive:
+    """Route a REPLAN whose child record `_child_norm_mismatch` verified into FAILED /
+    DIAGNOSING on this stage, with the child's own declaration as the opened difficulty:
+    the fault is in the stage's norm, so re-dispatching it unchanged would only repeat it.
+    Same transition as `_diagnose_materialization_defect`."""
+    decl = mismatch["declaration"]
+    opened = _fail_stage_into_diagnosing(
+        state, store, stage, event="norm_mismatch", child_session=mismatch["child_session"],
+        norm_digest=mismatch["norm_digest"], declaration=Declaration(**decl),
+        note=(f"the child (session {mismatch['child_session']}) reported a mismatch in this "
+              f"stage's norm: {decl['mismatch']}"))
+    if opened is None:
+        return _difficulty_cap_directive(
+            state, f"stage {stage.index}'s child reported a mismatch in the stage's norm",
+            data={"norm_mismatch": mismatch})
+    return Directive(
+        False, state.node, "investigate",
+        f"stage {stage.index}'s child session recorded a difficulty addressed to this "
+        "stage's norm (verified on its state record); its declaration is the opened "
+        "difficulty -- run overcome-difficulty (investigate, then critique the stage's "
+        "norm); no re-dispatch of the stage unchanged",
+        marker="OVERCOME-DIFFICULTY",
+        data={**base, "norm_mismatch": mismatch},
     )
 
 
@@ -9303,10 +9471,29 @@ def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[lis
     stage that actually ran, which refinement replans rebuild and `--renormalize` patches
     -- never from a plan file, which is editable while DIAGNOSING. A stage the state does
     not hold is refused, not read from the approved snapshot, which `--renormalize`
-    leaves on the approved bytes."""
+    leaves on the approved bytes.
+
+    `parent` names the norm of the stage that spawned this session: it is snapshotted from
+    the adopted handoff (`parent_link.norm_digest`), needs a linked session, and stands
+    alone -- the child cannot edit that norm, it hands the fault back with REPLAN."""
     entries: list[dict] = []
     for raw in targets:
         raw = (raw or "").strip()
+        if raw == gates.NORM_TARGET_PARENT:
+            if len(targets) != 1:
+                return [], (f"--norm-target {gates.NORM_TARGET_PARENT} stands alone: the norm of "
+                            f"the parent stage is not this session's to edit, so a fault "
+                            f"routed to it is handed back with REPLAN, not mixed with "
+                            f"targets this session's own replan would change")
+            link = state.parent_link
+            if link is None or not link.get("norm_digest"):
+                return [], (f"--norm-target {gates.NORM_TARGET_PARENT} names the norm of the "
+                            f"stage that spawned this session; this session holds no "
+                            f"norm handoff (it is not linked to a parent stage)")
+            entries.append({"target": gates.NORM_TARGET_PARENT,
+                            "kind": gates.NORM_TARGET_KIND_PARENT,
+                            "baseline": link["norm_digest"], "source": "critique"})
+            continue
         if raw.startswith("stage:"):
             try:
                 index = int(raw[len("stage:"):])
@@ -9401,6 +9588,19 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
     if blockers:
         action = "investigate" if any("investigation" in b for b in blockers) else "declare"
         return Directive(False, state.node, action, "; ".join(blockers), data={"blockers": blockers})
+    if any(t.get("kind") == gates.NORM_TARGET_KIND_PARENT
+           for t in state.difficulty.norm_targets):
+        return Directive(
+            True, state.node, "return_replan",
+            "the fault is in the norm of the parent stage this session serves, which this "
+            "session cannot edit: end the session with `REPLAN:` naming the mismatch -- the "
+            "parent's dispatch verifies this record and opens its own difficulty; do not "
+            "replan or normalize here",
+            marker="REPLAN",
+            data={"norm_target": gates.NORM_TARGET_PARENT,
+                  "parent_session": (state.parent_link or {}).get("parent_session"),
+                  "stage_index": (state.parent_link or {}).get("stage_index")},
+        )
     if state.node != Node.DIAGNOSING.value:
         d = Directive(True, state.node, "normalize",
                       "reflection record complete; record the re-norming (normalize --factor) "
@@ -10602,8 +10802,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if autonomy["action"] == "self_approve":
         return _with_advisories(Directive(
             True, state.node, "self_approve",
-            "substantive replan inside the boundary the user approved for this order; run "
-            "`approve --by agent`",
+            _self_approve_detail(autonomy, replan=True),
             data=directive_data,
         ), echo_advice)
     return _with_advisories(Directive(
@@ -11685,13 +11884,19 @@ def resolve_arg_text(args: argparse.Namespace) -> None:
         )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="agentctl", description="deterministic coordination state machine")
+def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
+    """The agentctl parser. `allow_abbrev=False` is the exact-spelling form the own
+    channel (scripts/agentctl-own.py) runs: argparse does not pass `allow_abbrev` on to
+    a subparser, so it is set on the top parser and on every verb's own."""
+    p = argparse.ArgumentParser(
+        prog="agentctl", description="deterministic coordination state machine",
+        allow_abbrev=allow_abbrev,
+    )
     p.add_argument("--state-root", help="override state directory (tests/inspection)")
     sub = p.add_subparsers(dest="command", required=True)
 
     def add(name, **kw):
-        return sub.add_parser(name, **kw)
+        return sub.add_parser(name, allow_abbrev=allow_abbrev, **kw)
 
     sp = add("start"); sp.add_argument("--session", required=True); sp.add_argument("--task", required=True)
     sp.add_argument("--goal", default=""); sp.add_argument("--done-criterion", dest="done_criterion", default="")
@@ -12233,7 +12438,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "plan) or the absolute path of an existing norm file (a linked "
                          "worktree of the instructions repo, a memory leaf, or a file under "
                          "the agent home's skills/ or plans/); the closing replan must "
-                         "change it")
+                         "change it. `parent` (alone, in a session linked to a parent "
+                         "stage) names that stage's norm instead: the session hands the "
+                         "fault back with REPLAN and the parent's dispatch verifies the "
+                         "record")
     sp = add("normalize"); sp.add_argument("--session", required=True)
     sp.add_argument("--factor", default=None,
                     help="the reproducible cause the difficulty exposed, being re-normed "
@@ -12471,12 +12679,12 @@ def _inject_default_session(argv: list[str], harness: str | None) -> list[str]:
     return list(argv) + ["--session", harness]
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, allow_abbrev: bool = True) -> int:
     harness = os.environ.get("CLAUDE_CODE_SESSION_ID")
     raw = _inject_default_session(
         list(sys.argv[1:] if argv is None else argv), harness
     )
-    args = build_parser().parse_args(raw)
+    args = build_parser(allow_abbrev).parse_args(raw)
     resolve_arg_text(args)
     if harness and getattr(args, "session", None) and args.session != harness:
         print(
