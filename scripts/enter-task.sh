@@ -371,6 +371,11 @@ else
 
   if [[ -z "$DRY_RUN" ]]; then
     backend_compose "$project_dir" || die "backend_compose failed"
+    # No engine session exists yet, so leave a pending binding that `agentctl resolve`
+    # claims by its cwd. Best-effort: a miss only leaves the workspace to the reaper.
+    python3 "$_SCRIPT_DIR/agentctl-cli.py" workspace-register --pending "$project_dir" \
+      --backend "$ws_name" --name "$name" >/dev/null \
+      || log "enter-task: warning: could not register workspace $project_dir for cleanup"
   else
     log "enter-task: [dry-run] skipping compose for $project_dir"
   fi

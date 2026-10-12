@@ -111,6 +111,15 @@ else
       "(the conflict detector will keep seeing the OLD root until this session's next heartbeat)"
 fi
 
+# ── Register the workspace so `agentctl resolve` can clean it up ────────────
+# Best-effort bookkeeping: a failure here only means the workspace is left for the
+# reaper, so it never fails the isolation.
+if [[ -n "$session_id" && -z "${CLAUDE_DRY_RUN:-}" ]]; then
+  python3 "$_SCRIPT_DIR/agentctl-cli.py" workspace-register "$project_dir" \
+    --backend "$ws_name" --name "$name" --session "$session_id" >/dev/null \
+    || log "session-isolate: warning: could not register workspace $project_dir for cleanup"
+fi
+
 log "session-isolate: isolated workspace ready at $project_dir"
 log "session-isolate: continue the task there, e.g.:  cd \"$project_dir\""
 log "session-isolate: when done, stage your change there and land it back:"

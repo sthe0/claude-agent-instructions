@@ -228,6 +228,27 @@ KIND_BASELINES: dict[str, list[str]] = {
         # in-harness-observation stage above drives it via host_llm's argv
         # builder inside the already-permitted python3 process).
     ],
+    # memory-curator: reads leaves, runs the split/promote subcommands and the
+    # memory verifiers. Deliberately NOT built on _READ_ONLY_INSPECTION: its
+    # `find` can delete or exec, and a role whose whole write surface is the
+    # memory roots (MEMORY_WRITE_KINDS) gets no general Bash, no `git commit`,
+    # fetch, rebase or push — the uncommitted diff is the proposal the user
+    # accepts.
+    "memory-curator": [
+        "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)",
+        "Bash(grep:*)", "Bash(rg:*)", "Bash(stat:*)", "Bash(pwd)",
+        "Bash(shasum:*)", "Bash(sha256sum:*)",
+        "Bash(git rev-parse:*)", "Bash(git status:*)", "Bash(git diff:*)",
+        "Bash(git log:*)", "Bash(git show:*)",
+        *_abs_and_relative_script_rules(
+            "record-experience.py search", "record-experience.py promote",
+            "record-experience.py split-apply", "record-experience.py split-verify",
+            "record-experience.py split-contexts",
+            "verify-experience-leaf.py", "verify-leaf-structure.py",
+            "verify-memory-index.py", "self-diagnose.py",
+            "agentctl-cli.py classify", "agentctl-cli.py status",
+        ),
+    ],
     # default: any kind with no dedicated row above (e.g. a project-local
     # specialization under <cwd>/.claude/skills/specializations/) gets the
     # read-only bucket and nothing role-specific — same principle as every

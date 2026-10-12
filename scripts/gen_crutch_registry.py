@@ -203,6 +203,32 @@ CODE_PARTITIONS = [
         "hint-active precondition holds, and only the judge's verdict decides.",
     ),
     (
+        "scripts/hook-memory-retrieval.py (candidate-only)",
+        lambda f: f == "scripts/hook-memory-retrieval.py",
+        "semantic-guarded",
+        "keep",
+        "A UserPromptSubmit reminder, not a guardian: its BM25F ranking of memory "
+        "pointers against the prompt only NOMINATES leaves, and what a pointer means "
+        "for the task is left to the root model reading it. Nothing is blocked or "
+        "decided on the score — a missed or spurious nomination costs one line of "
+        "context, and the hook is fail-open. So the `hook-*.py` row below, which "
+        "grounds a structural verdict on command and path syntax, misdescribes this "
+        "file.",
+    ),
+    (
+        "scripts/lib/bm25f.py (candidate-only)",
+        lambda f: f == "scripts/lib/bm25f.py",
+        "semantic-guarded",
+        "keep",
+        "The word-overlap scorer behind `semantic_join.nominate` and the memory "
+        "retrieval hook. A score only ORDERS candidate texts; the callers never "
+        "treat it as a verdict on meaning — one hands the ranked candidates to a "
+        "judge, the other to the root model. The `\\w+` split in `tokenize` is word "
+        "boundary syntax. So the `scripts/lib/**` row below, which grounds its "
+        "structural verdict on literal denylists and command syntax, misdescribes "
+        "this file.",
+    ),
+    (
         "scripts/hook-*.py (other guardian hooks)",
         lambda f: Path(f).name.startswith("hook-"),
         "structural",

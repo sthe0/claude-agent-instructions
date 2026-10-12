@@ -104,6 +104,10 @@ What it deliberately keeps, and why:
 | `<session>.delivery.json` sidecars | the delivery record of a session is read after the session ends |
 | `.bak-*`, `.SUPERSEDED.json`, `.PHANTOM-backup.json` and other dotted names | hand-made backups and repair records; whoever made them decides when they go |
 
+## Cleanup at `resolve`, not by a reaper
+
+A reaper handles residue nobody reclaimed. The workspaces of a task that finished normally are reclaimed at its end instead: `agentctl resolve` removes the clean, landed workspaces the task registered (`scripts/agentctl/workspace_cleanup.py`, report in `data['workspace_cleanup']`). Whatever it keeps (dirty, unlanded, protected, a failed teardown) stays with a stated reason and remains for the `git-worktrees` reaper above. The rule, the registry and the controls are in `scripts/agentctl/README.md` § Workspace cleanup on `resolve`. A task that never reaches `resolve` registers its workspaces and loses nothing: they stay for the reaper.
+
 ## Tests and the mutation catalogue
 
 `scripts/tests/test_reaper_runner.py`, `scripts/tests/test_reaper_git_worktrees.py` and `scripts/tests/test_reaper_agentctl_state.py` are hermetic: throw-away git repositories, and `HOME`, the config root, the plugin dir, the project dir and `TMPDIR` redirected under `tmp_path`. A test never runs the real runner against a real checkout.

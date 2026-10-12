@@ -852,6 +852,58 @@ def check_enumeration_writers() -> list[str]:
     return problems
 
 
+FORCE_TOKENS = frozenset({"--force", "-f", "-D", "--force-delete"})
+
+
+def _attribute_calls(tree: ast.AST, owner: str, attr: str) -> list[ast.Call]:
+    return [n for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == attr and isinstance(n.func.value, ast.Name)
+            and n.func.value.id == owner]
+
+
+def check_workspace_cleanup() -> list[str]:
+    """Pin the three properties that make resolve-time workspace cleanup safe:
+    it runs fail-open and after the solved-marker stamp, `execute` consults both the
+    shared decision rule and its own guard, and no removal argv carries a forced flag.
+    """
+    problems: list[str] = []
+    cli_tree = ast.parse((AGENTCTL_ROOT / "cli.py").read_text(encoding="utf-8"))
+    resolve = next((n for n in ast.walk(cli_tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == "cmd_resolve"), None)
+    if resolve is None:
+        return ["cli.py: cmd_resolve not found"]
+    cleanup = _attribute_calls(resolve, "workspace_cleanup", "run")
+    stamp = _attribute_calls(resolve, "solved_marker", "stamp")
+    if len(cleanup) != 1:
+        problems.append("cli.py: cmd_resolve must call workspace_cleanup.run exactly once")
+    elif not stamp or cleanup[0].lineno < stamp[0].lineno:
+        problems.append("cli.py: workspace_cleanup.run must run after solved_marker.stamp "
+                        "in cmd_resolve, so the cleanup is the last post-resolve effect")
+    else:
+        guarded = any(isinstance(n, ast.Try)
+                      and any(cleanup[0] is c for s in n.body for c in ast.walk(s))
+                      for n in ast.walk(resolve))
+        if not guarded:
+            problems.append("cli.py: workspace_cleanup.run in cmd_resolve must sit inside a "
+                            "try/except — a cleanup fault must never cancel the resolve")
+
+    module = ast.parse((AGENTCTL_ROOT / "workspace_cleanup.py").read_text(encoding="utf-8"))
+    execute = next((n for n in ast.walk(module)
+                    if isinstance(n, ast.FunctionDef) and n.name == "execute"), None)
+    called = {c.func.id for c in ast.walk(execute) if isinstance(c, ast.Call)
+              and isinstance(c.func, ast.Name)} if execute else set()
+    for needed in ("classify", "_guard"):
+        if needed not in called:
+            problems.append(f"workspace_cleanup.py: execute() must call {needed}() before removing")
+    forced = sorted({n.value for n in ast.walk(module) if isinstance(n, ast.Constant)
+                     and isinstance(n.value, str) and n.value in FORCE_TOKENS})
+    if forced:
+        problems.append(f"workspace_cleanup.py: forced-removal flag(s) {forced} — removal "
+                        f"must stay unforced so git itself refuses a dirty tree")
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--staged", action="store_true", help="ignored; accepted for verify-all uniformity")
@@ -886,6 +938,7 @@ def main(argv: list[str] | None = None) -> int:
     problems += check_code_review_precondition()
     problems += check_obligations()
     problems += check_enumeration_writers()
+    problems += check_workspace_cleanup()
 
     if problems:
         print("verify-agentctl: FAIL")

@@ -34,6 +34,7 @@ Canonical path in repo: `skills/specializations/<name>/SKILL.md`. Symlinked flat
 |---|---|---|
 | `code-reviewer` | Maintainability / readability / reusability review of a diff (self-review or independent) | [skills/specializations/code-reviewer/SKILL.md](../../skills/specializations/code-reviewer/SKILL.md) |
 | `developer` | Writing, refactoring, debugging, reviewing production code | [skills/specializations/developer/SKILL.md](../../skills/specializations/developer/SKILL.md) |
+| `memory-curator` | A `self-diagnose` `oversized-leaf` finding (action: memory-curator split): split a grown experience leaf by functional ground into per-cluster leaves and principle candidates, as an uncommitted diff the user accepts | [skills/specializations/memory-curator/SKILL.md](../../skills/specializations/memory-curator/SKILL.md) |
 | `planner` | Decomposition, stages, dependencies, risks, done criteria | [skills/specializations/planner/SKILL.md](../../skills/specializations/planner/SKILL.md) |
 | `tech-writer` | README / documentation authoring and polishing plans & long comments, in the language of the dialogue | [skills/specializations/tech-writer/SKILL.md](../../skills/specializations/tech-writer/SKILL.md) |
 | `thinker` | Independent reasoning check on a non-trivial chain | [skills/specializations/thinker/SKILL.md](../../skills/specializations/thinker/SKILL.md) |

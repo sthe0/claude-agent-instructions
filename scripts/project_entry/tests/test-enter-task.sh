@@ -60,6 +60,7 @@ EOF
 chmod +x "$GITSTUB" "$GHSTUB"
 export GIT_BIN="$GITSTUB" GH_BIN="$GHSTUB"
 export CLAUDE_PROJECT_PLUGIN_DIR="$TMP/plugins"; mkdir -p "$CLAUDE_PROJECT_PLUGIN_DIR"
+export AGENTCTL_WORKSPACE_REGISTRY_DIR="$TMP/workspace-registry"
 
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); printf '  [ OK ] %s\n' "$1"; }
@@ -79,6 +80,8 @@ check "dry-run --name: no \`worktree add\` recorded" \
   '! grep -q "worktree add" "$GIT_CALLS"'
 check "dry-run --name: no gh calls at all" \
   '[[ ! -s "$GH_CALLS" ]]'
+check "dry-run --name: no pending workspace record written" \
+  '[[ ! -e "$AGENTCTL_WORKSPACE_REGISTRY_DIR/pending.d" ]]'
 
 # 2. non-dry --name create: a `worktree add ... -b <branch>` IS recorded.
 : >"$GIT_CALLS"; : >"$WT_LIST"
@@ -87,6 +90,8 @@ check "non-dry --name: prints .../myrepo-feat-y" \
   '[[ "$REPLY" == "$TMP/myrepo-feat-y" ]]'
 check "non-dry --name: records \`worktree add\` on branch feat-y" \
   'grep -q "worktree add $TMP/myrepo-feat-y -b feat-y" "$GIT_CALLS"'
+check "non-dry --name: leaves a pending workspace record for the new worktree" \
+  'grep -q "$TMP/myrepo-feat-y" "$AGENTCTL_WORKSPACE_REGISTRY_DIR"/pending.d/*.json'
 
 # 3. worktree-exists path -> reuse, NO `worktree add`.
 : >"$GIT_CALLS"

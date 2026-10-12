@@ -1,0 +1,5 @@
+{"ts": 1790000000.0, "event": "surface", "session": "s1", "query": "pelican migration schedule", "nonce": null, "surfaced": ["global:leaves/fixture-hit.md"], "outcome": null, "target": null}
+{"ts": 1790000010.0, "event": "extend", "session": "s1", "query": "pelican context", "nonce": null, "surfaced": ["global:leaves/fixture-hit.md"], "outcome": "hit", "target": "global:leaves/fixture-hit.md"}
+{"ts": 1790000020.0, "event": "extend", "session": "s1", "query": "harbour tides recurring failure", "nonce": null, "surfaced": ["global:leaves/fixture-hit.md"], "outcome": "miss", "target": "global:leaves/fixture-target.md"}
+{"ts": 1790000030.0, "event": "new", "session": "s1", "query": "a brand new difficulty", "nonce": null, "surfaced": ["global:leaves/fixture-hit.md"], "outcome": null, "target": "global:leaves/experience/2026-10-01-fresh.md"}
+{"ts": 1790000040.0, "event": "search", "session": null, "query": "lighthouse keeper", "nonce": null, "surfaced": [], "outcome": null, "target": "global:leaves/fixture-other.md"}

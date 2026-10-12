@@ -93,6 +93,12 @@ def _isolate_task_quality_ledger(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_memory_retrieval_ledger(tmp_path, monkeypatch):
+    """The hook and record-experience append to this ledger; no test may touch the real one."""
+    monkeypatch.setenv("CLAUDE_MEMORY_RETRIEVAL_LEDGER", str(tmp_path / "memory-retrieval.jsonl"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_improvement_scan_board_state(tmp_path, monkeypatch):
     """Phase B writes the board to a per-machine state file by default; no test may touch the real one."""
     monkeypatch.setenv("IMPROVEMENT_SCAN_BOARD_STATE", str(tmp_path / "board-state.json"))
@@ -234,6 +240,19 @@ def _landing_gate_off_by_default(monkeypatch):
     block/pass/waiver behaviour is proven end-to-end by test_resolve_landing_gate.py,
     which explicitly re-enables it."""
     monkeypatch.setenv("AGENTCTL_LANDING_GATE", "0")
+
+
+@pytest.fixture(autouse=True)
+def _workspace_cleanup_off_by_default(tmp_path, monkeypatch):
+    """Default the resolve-time workspace cleanup OFF and route the registry into tmp,
+    the same accommodation as `_landing_gate_off_by_default` above: `cmd_resolve` runs
+    `workspace_cleanup.run` after every successful resolve, which would otherwise
+    read (and, for a registered path, remove) real workspaces under the developer's
+    HOME. AGENTCTL_WORKSPACE_CLEANUP=0 is the documented force-off knob; its real
+    behaviour is proven by test_workspace_cleanup.py, which re-enables it against
+    temp git repos."""
+    monkeypatch.setenv("AGENTCTL_WORKSPACE_CLEANUP", "0")
+    monkeypatch.setenv("AGENTCTL_WORKSPACE_REGISTRY_DIR", str(tmp_path / "workspace-registry"))
 
 
 @pytest.fixture(autouse=True)

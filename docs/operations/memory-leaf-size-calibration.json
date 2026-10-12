@@ -1,0 +1,636 @@
+{
+  "method": "Tukey far-out fence Q3 + 3*IQR on the natural log of each axis, exponentiated back; quartiles are statistics.quantiles(n=4, method='inclusive'); log axis is log(max(x, 1)); bytes cap rounded up to the next 1000, contexts multiple = ceil(context fence / principle-promotion-threshold); the quotient is rounded to 6 decimals before the ceil so exp/log float noise cannot push an exact integer fence up by one",
+  "measured_on": "2026-10-11",
+  "rev": "bb7dd4ab",
+  "n_leaves": 97,
+  "principle_promotion_threshold": 3,
+  "quartiles": {
+    "raw": {
+      "bytes": {
+        "q1": 3760.0,
+        "median": 5530.0,
+        "q3": 7919.0,
+        "iqr": 4159.0
+      },
+      "contexts": {
+        "q1": 1.0,
+        "median": 1.0,
+        "q3": 3.0,
+        "iqr": 2.0
+      }
+    },
+    "log": {
+      "bytes": {
+        "q1": 8.23217423638394,
+        "median": 8.61794309451638,
+        "q3": 8.977020214210413,
+        "iqr": 0.744845977826472
+      },
+      "contexts": {
+        "q1": 0.0,
+        "median": 0.0,
+        "q3": 1.0986122886681098,
+        "iqr": 1.0986122886681098
+      }
+    }
+  },
+  "fences": {
+    "raw": {
+      "bytes": 20396.0,
+      "contexts": 9.0
+    },
+    "log_derived": {
+      "bytes": 73980.59793122065,
+      "contexts": 81.00000000000003
+    }
+  },
+  "values": {
+    "memory-leaf-max-bytes": 74000,
+    "memory-leaf-max-contexts-multiple": 27
+  },
+  "n_flagged": 1,
+  "leaves": [
+    {
+      "path": "memory-global/leaves/experience/2026-05-24-silent-architectural-decision-config-as-file.md",
+      "bytes": 3011,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-05-25-resolution-gate-confirm-before-record.md",
+      "bytes": 4769,
+      "contexts": 3,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-05-26-agent-system-plan-vs-reality-drift.md",
+      "bytes": 9949,
+      "contexts": 6,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-05-29-logical-pwd-self-locating-script.md",
+      "bytes": 3009,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-04-non-english-skill-content-language-wall.md",
+      "bytes": 3231,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-04-org-specific-vs-global-placement.md",
+      "bytes": 2873,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-04-verify-load-bearing-axis.md",
+      "bytes": 21114,
+      "contexts": 10,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-11-project-memory-migrate-existing-native.md",
+      "bytes": 3388,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-24-developer-marker-not-on-line-1-false-block.md",
+      "bytes": 18584,
+      "contexts": 7,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-24-gate-exemption-is-category-error-for-result-images.md",
+      "bytes": 4392,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-24-prose-to-code-migration-consumer-and-superset.md",
+      "bytes": 15768,
+      "contexts": 7,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-25-claude-md-reduction-floor.md",
+      "bytes": 4521,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-25-state-gate-needs-acting-session-at-executing-via-toml.md",
+      "bytes": 5552,
+      "contexts": 3,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-26-critique-primitive-unifies-conflict-and-principle.md",
+      "bytes": 9372,
+      "contexts": 3,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-26-guard-coupled-doc-relocation.md",
+      "bytes": 8383,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-27-critique-output-must-be-code-verified-into-downstream-artifact.md",
+      "bytes": 5753,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-27-stub-mechanism-not-deployable-until-caller-cli-onboarding.md",
+      "bytes": 7877,
+      "contexts": 3,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md",
+      "bytes": 172182,
+      "contexts": 63,
+      "flagged": true
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-29-cost-tracking-three-levels-attribution.md",
+      "bytes": 3015,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-29-org-portable-core-internal-coupling-opt-in.md",
+      "bytes": 6709,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-29-resume-paused-task-isolated-worktree-pinned-sha.md",
+      "bytes": 6122,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-30-2026-06-30-verify-spawned-developer-commit-scope-shared-tree.md",
+      "bytes": 3639,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-30-importlib-hyphenated-script-dataclass-sys-modules.md",
+      "bytes": 2877,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-30-mechanize-subdifficulty-extraction-and-audit.md",
+      "bytes": 4121,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-30-policy-as-code-split-judgment-defer-blocked-layer.md",
+      "bytes": 5075,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-30-shared-tree-suite-failure-wrong-ownership-attribution.md",
+      "bytes": 6584,
+      "contexts": 4,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-06-30-validator-tightening-newly-enforces-latent-violations.md",
+      "bytes": 2437,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-01-2026-07-01-engine-spawn-proc-tree-macos-and-rm-empty-var.md",
+      "bytes": 5096,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-01-additive-settings-merge-cannot-prune-install-time-invariant.md",
+      "bytes": 5530,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-01-imagined-permission-vs-deterministic-scoped-wrapper.md",
+      "bytes": 3663,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-01-isolate-tool-config-root-per-root-auth.md",
+      "bytes": 8767,
+      "contexts": 3,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-01-monitor-self-defeats-verify-its-own-run.md",
+      "bytes": 6996,
+      "contexts": 3,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-01-non-interactive-external-deploy-from-agent-bash.md",
+      "bytes": 4929,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-01-ssh-agent-forward-mosh-orphan-loop-flapping.md",
+      "bytes": 7475,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-next-writer.md",
+      "bytes": 6820,
+      "contexts": 4,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-02-periodic-instruction-refresh-offer-not-silent-pull.md",
+      "bytes": 3760,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-02-seam-stub-tests-never-exercise-default.md",
+      "bytes": 2540,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-02-spawn-sandbox-excludes-declared-stage-material.md",
+      "bytes": 6220,
+      "contexts": 3,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-03-engine-replan-artifact-discipline.md",
+      "bytes": 10942,
+      "contexts": 5,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-03-foreign-wip-schema-leaks-into-session-state.md",
+      "bytes": 5281,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-03-quality-regression-tracking-instrument.md",
+      "bytes": 3487,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-04-arc-task-mount-teardown-forget.md",
+      "bytes": 9901,
+      "contexts": 4,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-04-spawn-budget-death-forensics-before-respawn.md",
+      "bytes": 12342,
+      "contexts": 6,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-04-topological-gate-when-signal-unobservable.md",
+      "bytes": 7763,
+      "contexts": 3,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-08-secret-on-argv-curl-config-stdin.md",
+      "bytes": 3211,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-09-gate-must-execute-what-it-attests.md",
+      "bytes": 21645,
+      "contexts": 10,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-09-landed-not-deployed-checkout-parked-on-feature-branch.md",
+      "bytes": 5724,
+      "contexts": 4,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-11-detect-compiled-claude-exe-via-ps-comm-not-pgrep-argv.md",
+      "bytes": 2755,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-14-claim-provenance-ledger-reasoning-deliverable.md",
+      "bytes": 9133,
+      "contexts": 3,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-14-determinize-memory-org-principle-in-code.md",
+      "bytes": 5549,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-14-smd-principle-norm-category-error-and-budget-exhaustion.md",
+      "bytes": 5618,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-16-benchmark-measurement-contamination-env-resource-artifact.md",
+      "bytes": 5609,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-16-onboarding-drift-after-crosscutting-refactor-needs-mechanical-guard.md",
+      "bytes": 3343,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-17-2026-07-17-core-pr-landing-with-fine-grained-pat.md",
+      "bytes": 7615,
+      "contexts": 3,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-17-reviewer-claim-accepted-on-authority.md",
+      "bytes": 3979,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-18-plan-presentation-two-act-delivery-gate.md",
+      "bytes": 9035,
+      "contexts": 3,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-20-agentctl-premise-gate-blocks-venue-refinement-replan.md",
+      "bytes": 14650,
+      "contexts": 9,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-20-git-index-file-env-leak-empty-commit-nested-worktree.md",
+      "bytes": 3634,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-20-stage-verify-command-narrower-than-final-check.md",
+      "bytes": 4260,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-21-agentctl-acceptance-judge-stale-verdict-nested-claude-unavailable.md",
+      "bytes": 9302,
+      "contexts": 4,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-21-agentctl-dispatch-no-worktree-continuity-dependent-stages.md",
+      "bytes": 3136,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-21-cwd-keyed-hook-cross-repo-blind.md",
+      "bytes": 7328,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-22-semantic-gate-regex-to-judge.md",
+      "bytes": 3645,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-23-expected-image-stale-vs-codereview-normative-reconcile.md",
+      "bytes": 4220,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-28-agent-emitted-value-leaks-org-key-into-public-history.md",
+      "bytes": 3395,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-28-spawn-repro-must-not-touch-live-data.md",
+      "bytes": 5837,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-29-crutch-registry-standing-prevention.md",
+      "bytes": 4944,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-31-generated-config-fix-the-generator-not-the-artifact.md",
+      "bytes": 4196,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-07-31-second-agent-cli-launcher-seam.md",
+      "bytes": 3617,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md",
+      "bytes": 8690,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer.md",
+      "bytes": 16585,
+      "contexts": 3,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-05-scope-substitution-at-plan-authoring.md",
+      "bytes": 6640,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-11-review-loop-cannot-measure-its-own-convergence.md",
+      "bytes": 13130,
+      "contexts": 6,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-11-sync-stash-identity-not-position.md",
+      "bytes": 5971,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-12-symlinked-write-path-defeats-path-based-guard.md",
+      "bytes": 4903,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-17-diagnosing-has-no-exit-to-the-customer.md",
+      "bytes": 29377,
+      "contexts": 11,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-18-fail-open-gate-exit-zero-and-underfetched-listing.md",
+      "bytes": 3533,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-20-staged-vs-full-verification-and-generated-registry.md",
+      "bytes": 4710,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-20-transcript-token-accounting-must-be-price-weighted.md",
+      "bytes": 3412,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-22-acceptance-carveout-for-multiweek-measurement.md",
+      "bytes": 3901,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-24-required-flag-strands-stubbed-callers.md",
+      "bytes": 4233,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-25-unisolated-judge-subprocess-recursion.md",
+      "bytes": 6950,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-26-plan-delivery-gate-exact-content-match.md",
+      "bytes": 5315,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-27-bash-background-cd-chain-cwd-reset.md",
+      "bytes": 2982,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-08-27-self-attested-identity-field-needs-declared-principal-check.md",
+      "bytes": 10404,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-09-03-hygiene-sweep-ownership-check-argument-order-bug.md",
+      "bytes": 4382,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-09-03-published-text-writer-gate-effort-divergence-deadlock.md",
+      "bytes": 5344,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-09-15-subagent-self-authorized-destructive-action.md",
+      "bytes": 5551,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-09-18-precedent-retrieval-gap-missing-system-knowledge-search-tier.md",
+      "bytes": 4525,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-09-22-tool-scope-judged-by-contract-not-pattern.md",
+      "bytes": 4056,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-09-23-dispatch-missing-target-project-permissions-forwarding.md",
+      "bytes": 5126,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-09-27-claude-code-cli-2-1-197-cpu-hang-pin-2-0-30.md",
+      "bytes": 2489,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-09-27-negative-finding-amplified-from-bounded-probe.md",
+      "bytes": 7865,
+      "contexts": 3,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-09-29-tracker-publish-gate-missed-per-stage-artifacts.md",
+      "bytes": 8908,
+      "contexts": 2,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/experience/2026-10-06-season2-metric-instruction-tuning.md",
+      "bytes": 7919,
+      "contexts": 1,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/policy-effectiveness-tracking.md",
+      "bytes": 13025,
+      "contexts": 0,
+      "flagged": false
+    },
+    {
+      "path": "memory-global/leaves/published-text-writer-gate.md",
+      "bytes": 23476,
+      "contexts": 0,
+      "flagged": false
+    }
+  ]
+}

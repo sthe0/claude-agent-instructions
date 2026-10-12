@@ -68,6 +68,7 @@ def _run(
     # developer machine's real isolated root.
     env.pop("CLAUDE_CONFIG_DIR", None)
     env.pop("CLAUDE_AGENT_HOME", None)
+    env.pop("AGENTCTL_WORKSPACE_REGISTRY_DIR", None)
     env["GIT_BIN"] = str(_stub_git(tmp_path, fake_toplevel, git_calls, wt_list))
     env["PATH"] = "/usr/bin:/bin"
     if session_id is not None:
@@ -149,6 +150,49 @@ def test_non_dry_run_creates_worktree_via_backend(tmp_path):
 
     rec = registry.load(_scopes_dir(home), "s-me")
     assert rec is not None and rec.repo_root == expected_dir
+
+
+def _registry_records(home: Path, session_id: str) -> list:
+    import json
+    directory = home / ".claude" / "agentctl" / "workspace-registry" / session_id
+    return [json.loads(p.read_text()) for p in sorted(directory.glob("*.json"))]
+
+
+def test_non_dry_run_registers_workspace_for_cleanup(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    fake_toplevel = tmp_path / "myrepo"
+    fake_toplevel.mkdir()
+    git_calls = tmp_path / "git-calls.log"
+    wt_list = tmp_path / "wt-list.txt"
+    git_calls.write_text("")
+    wt_list.write_text("")
+
+    proc = _run(tmp_path, "task-name", home, fake_toplevel, git_calls, wt_list, dry_run=False)
+
+    assert proc.returncode == 0, proc.stderr
+    records = _registry_records(home, "s-me")
+    assert len(records) == 1
+    assert records[0]["path"] == str(tmp_path / "myrepo-task-name")
+    assert records[0]["kind"] == "git-worktree"
+    assert records[0]["backend"] == "git"
+    assert records[0]["name"] == "task-name"
+
+
+def test_dry_run_registers_nothing_for_cleanup(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    fake_toplevel = tmp_path / "myrepo"
+    fake_toplevel.mkdir()
+    git_calls = tmp_path / "git-calls.log"
+    wt_list = tmp_path / "wt-list.txt"
+    git_calls.write_text("")
+    wt_list.write_text("")
+
+    proc = _run(tmp_path, "task-name", home, fake_toplevel, git_calls, wt_list, dry_run=True)
+
+    assert proc.returncode == 0, proc.stderr
+    assert _registry_records(home, "s-me") == []
 
 
 def test_existing_worktree_is_reused_not_recreated(tmp_path):

@@ -102,3 +102,41 @@ def test_walker_ignores_unrelated_keys_and_reads():
         "    bag.update({'also_unrelated': 1})\n"
     )
     assert mod.enumeration_bag_writers(ast.parse(src)) == set()
+
+
+def _agentctl_copy(tmp_path, monkeypatch, mod, *, cli_edit=None, module_edit=None):
+    root = tmp_path / "agentctl"
+    root.mkdir()
+    for name, edit in (("cli.py", cli_edit), ("workspace_cleanup.py", module_edit)):
+        text = (mod.AGENTCTL_ROOT / name).read_text(encoding="utf-8")
+        if edit is not None:
+            old, new = edit
+            assert old in text
+            text = text.replace(old, new, 1)
+        (root / name).write_text(text, encoding="utf-8")
+    monkeypatch.setattr(mod, "AGENTCTL_ROOT", root)
+
+
+def test_workspace_cleanup_check_passes_on_the_real_sources():
+    assert _load_module().check_workspace_cleanup() == []
+
+
+def test_workspace_cleanup_check_flags_a_forced_removal_flag(tmp_path, monkeypatch):
+    mod = _load_module()
+    _agentctl_copy(tmp_path, monkeypatch, mod,
+                   module_edit=('"worktree", "remove", item.path]', '"worktree", "remove", "-f", item.path]'))
+    assert any("forced-removal" in p for p in mod.check_workspace_cleanup())
+
+
+def test_workspace_cleanup_check_flags_a_missing_resolve_call(tmp_path, monkeypatch):
+    mod = _load_module()
+    _agentctl_copy(tmp_path, monkeypatch, mod,
+                   cli_edit=("workspace_cleanup.run(", "workspace_cleanup.run_later("))
+    assert any("exactly once" in p for p in mod.check_workspace_cleanup())
+
+
+def test_workspace_cleanup_check_flags_execute_skipping_its_guard(tmp_path, monkeypatch):
+    mod = _load_module()
+    _agentctl_copy(tmp_path, monkeypatch, mod,
+                   module_edit=("    refusal = _guard(item)\n", "    refusal = None\n"))
+    assert any("_guard" in p for p in mod.check_workspace_cleanup())
