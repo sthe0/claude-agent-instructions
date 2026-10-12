@@ -235,3 +235,37 @@ def test_recursive_corpus_reaches_subdirectories_and_skips_indexes(env):
     lines = _mod.run(_payload(TARGET_TERMS)).splitlines()
 
     assert [POINTER_RE.match(ln).group(3) for ln in lines[1:]] == [os.path.realpath(target)]
+
+
+def test_exhausted_load_budget_reads_no_further_leaves(env, monkeypatch):
+    _filler(env, 10)
+    monkeypatch.setattr(_mod, "LOAD_BUDGET_S", -1.0)
+
+    assert _mod.load_corpus([env]) == []
+
+
+def test_broken_lib_import_still_exits_zero_with_empty_stdout(tmp_path):
+    scripts = tmp_path / "scripts"
+    (scripts / "lib").mkdir(parents=True)
+    (scripts / "hook-memory-retrieval.py").write_text(HOOK_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    (scripts / "lib" / "__init__.py").write_text("raise RuntimeError('broken lib')\n", encoding="utf-8")
+
+    done = subprocess.run(
+        [sys.executable, str(scripts / "hook-memory-retrieval.py")],
+        input=json.dumps(_payload(TARGET_TERMS)),
+        capture_output=True,
+        text=True,
+    )
+
+    assert (done.returncode, done.stdout) == (0, "")
+
+
+def test_run_raising_exits_zero_with_empty_stdout(env, monkeypatch, capsys):
+    def boom(payload):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(_mod, "run", boom)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_payload(TARGET_TERMS))))
+
+    assert _mod.main() == 0
+    assert capsys.readouterr().out == ""

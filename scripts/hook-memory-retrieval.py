@@ -18,12 +18,17 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import bm25f  # noqa: E402
-from lib import config_root  # noqa: E402
+try:
+    from lib import bm25f  # noqa: E402
+    from lib import config_root  # noqa: E402
+except Exception:  # a broken or stale lib must never block a prompt: main() exits 0 below
+    bm25f = None
+    config_root = None
 
 # Same literal as host_llm.JUDGE_CHILD_ENV_VAR (pinned by a test); host_llm is not imported
 # because it pulls in judge machinery this hook never uses and runs on every prompt.
@@ -49,6 +54,10 @@ MIN_SCORE = 5.32
 BODY_PREFIX_CHARS = 500
 # A pointer line is read on every matching prompt; the full description is one open away.
 DESCRIPTION_MAX_CHARS = 160
+# Leaves are read from disk on every prompt, and one corpus root may sit on a network mount; past
+# this budget the leaves read so far are ranked and the rest are skipped, so the hook stays
+# well inside its timeout (the calibration records the warm-disk p95 separately).
+LOAD_BUDGET_S = 0.8
 
 HEADER = (
     "[memory-retrieval] Candidate memory leaves matched lexically to this prompt: "
@@ -95,10 +104,13 @@ def leaf_paths(root: Path) -> list[Path]:
 def load_corpus(roots, body_prefix_chars: int = BODY_PREFIX_CHARS) -> list[Leaf]:
     seen = set()
     corpus = []
+    deadline = time.monotonic() + LOAD_BUDGET_S
     for root in roots:
         if not root.is_dir():
             continue
         for path in leaf_paths(Path(os.path.realpath(root))):
+            if time.monotonic() > deadline:
+                return corpus
             real = os.path.realpath(path)
             if real in seen:
                 continue
@@ -185,7 +197,7 @@ def run(payload: dict) -> str:
 
 
 def main() -> int:
-    if os.environ.get(JUDGE_CHILD_ENV_VAR):
+    if os.environ.get(JUDGE_CHILD_ENV_VAR) or bm25f is None:
         return 0
     try:
         payload = json.load(sys.stdin)
