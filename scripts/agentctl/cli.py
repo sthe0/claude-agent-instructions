@@ -923,17 +923,44 @@ def _agent_renegotiation_refusal(state: SessionState, decision: str, doc) -> str
     return None
 
 
+def _handoff_grant_resources(parent_link: dict | None, venue: str) -> list:
+    """The typed resources the adopted handoff's grant entries resolve to; an entry that
+    stays unresolved (a wildcard-tail rule) contributes none, so it covers nothing."""
+    held: list = []
+    for entry in (parent_link or {}).get("grants") or []:
+        if entry.get("rule"):
+            resolution = plan_resources.resolve_rule_grant(entry["rule"], venue)
+        else:
+            resolution = plan_resources.resolve_add_dir_grant(entry["path"], entry["mode"])
+        if resolution.status == "resolved":
+            held.extend(resolution.resources)
+    return held
+
+
 def _autonomy_for(state: SessionState, doc) -> dict:
     """`gates.autonomy_boundary` for `doc`, against the ledger of the order this session
     was user-approved under (the baseline plan's order key), so a changed order reads as
-    `order_changed` rather than as an empty ledger of its own."""
-    key = _ledgered_order_key(state) or order_digest(doc)
-    ledger = order_approvals.get(key)
+    `order_changed` rather than as an empty ledger of its own.
+
+    A plan that declares `[meta.order] parent_norm` is judged by `gates.
+    parent_norm_boundary` against the adopted handoff alone and never falls back to the
+    ledger: the parent stage's own approval is the boundary it serves, and a ledger
+    record, if one exists, belongs to a different order."""
     protected = _resources.protected_permission_surfaces(
         repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
         ledger_dir=str(order_approvals._root(None)),
     )
     view = plan_resources.compute_boundary_view(doc, order_digest(doc), venue=_venue_for(doc))
+    order = doc.meta.order
+    if order is not None and order.parent_norm:
+        return gates.parent_norm_boundary(
+            state.parent_link, order.parent_norm,
+            [(c.command, c.expected_exit) for c in doc.meta.final_check if c.kind == "shell"],
+            view.resources, _handoff_grant_resources(state.parent_link, _venue_for(doc)),
+            max_depth=Thresholds().max_recursion_depth, protected=protected,
+        )
+    key = _ledgered_order_key(state) or order_digest(doc)
+    ledger = order_approvals.get(key)
     # A decline this session holds is enforced where the stage is carried and at the agent's
     # approval; the ledger's copy is what a session that never saw the decline (a new session,
     # a reset) is held to, so only the stages the session does not already know are offered.
@@ -3789,8 +3816,10 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     if autonomy["action"] == "self_approve":
         d = Directive(
             True, state.node, "self_approve",
-            "plan is inside the boundary the user approved for this order; run "
-            "`approve --by agent`",
+            ("plan is inside the norm and grants of the parent stage this session serves; run "
+             if autonomy.get("basis") == gates.PARENT_NORM_BASIS else
+             "plan is inside the boundary the user approved for this order; run ")
+            + "`approve --by agent`",
             data=directive_data,
         )
     else:
@@ -5975,7 +6004,11 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         # The coordinator approves only inside the boundary the user approved for this
         # order (a ledger entry and an eligible verdict on the CURRENT bytes); it never
         # stamps the ledger, so its approval is never a later boundary.
-        if _approved_doc is not None and _ledgered_order_key(state) is not None:
+        # A plan that declares a parent_norm is judged on that basis and needs no ledger.
+        _declared_order = _approved_doc.meta.order if _approved_doc is not None else None
+        _parent_norm_plan = bool(_declared_order is not None and _declared_order.parent_norm)
+        if _approved_doc is not None and (
+                _parent_norm_plan or _ledgered_order_key(state) is not None):
             agent_autonomy = _autonomy_for(state, _approved_doc)
         if agent_autonomy is None:
             blockers = blockers + [
@@ -5985,7 +6018,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         elif not agent_autonomy["eligible"]:
             blockers = blockers + [
                 f"--by {args.by!r} refused: outside the approved boundary -- "
-                + "; ".join(agent_autonomy["reasons"])
+                + "; ".join(agent_autonomy.get("reason_texts") or agent_autonomy["reasons"])
             ]
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
@@ -6092,13 +6125,15 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if snap:
         state.plan_snapshot_path, state.plan_snapshot_hash = snap
     if agent_autonomy is not None:
-        approved = order_approvals.latest_user_approved_record(_ledgered_order_key(state))
+        ledger_key = None if agent_autonomy.get("basis") else _ledgered_order_key(state)
+        approved = order_approvals.latest_user_approved_record(ledger_key) if ledger_key else None
         frozen = (approved or {}).get("effort_estimate") or {}
         if frozen:
             state.order_effort_frozen = {scale: float(value) for scale, value in frozen.items()}
             effort.rederive(state)
         state.log(
             "approve", by=args.by,
+            **({"basis": agent_autonomy["basis"]} if agent_autonomy.get("basis") else {}),
             extra_resources=[e["name"] for e in agent_autonomy["extra_resources"]],
             unresolved_changed_commands=[
                 c["source"] for c in agent_autonomy["unresolved_changed_commands"]],

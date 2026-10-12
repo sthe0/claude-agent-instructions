@@ -3456,3 +3456,95 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
     out["eligible"] = not reasons
     out["reason"] = reasons[0] if reasons else "inside the boundary the user approved for this order"
     return out
+
+
+# --- the parent-norm basis -----------------------------------------------------------
+#
+# A child session linked to a parent stage by the norm handoff may self-approve a plan
+# that serves that stage's norm: the parent stage's own approval is the boundary, held in
+# the child's state as `parent_link`, in place of an order-approvals ledger record.
+
+PARENT_NORM_BASIS = "parent_norm"
+PARENT_NORM_NOT_LINKED = "not-linked"
+PARENT_NORM_DIGEST_MISMATCH = "parent-norm-digest-mismatch"
+PARENT_NORM_ACCEPTANCE_REVIEW = "parent-acceptance-review"
+PARENT_NORM_CHECK_DROPPED = "parent-check-dropped"
+PARENT_NORM_RESOURCE_NOT_IN_HANDOFF = "resource-not-in-handoff"
+PARENT_NORM_DEPTH_OVER_CAP = "depth-over-cap"
+
+_PARENT_NORM_REASON_TEXT = {
+    PARENT_NORM_NOT_LINKED: "the session has no adopted norm handoff, so there is no parent stage to serve",
+    PARENT_NORM_DIGEST_MISMATCH: "the plan's parent_norm is not the norm digest of the adopted handoff",
+    PARENT_NORM_ACCEPTANCE_REVIEW: (
+        "the parent stage is decided by the user's acceptance, not by a check the child can run"
+    ),
+    PARENT_NORM_CHECK_DROPPED: (
+        "no final_check carries the parent stage's verify_command, byte-for-byte after "
+        "stripping surrounding whitespace, with the parent's expected_exit"
+    ),
+    PARENT_NORM_RESOURCE_NOT_IN_HANDOFF: "a resource of the plan is not covered by a handoff grant",
+    PARENT_NORM_DEPTH_OVER_CAP: "the child's recursion depth is over the cap",
+}
+
+
+def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None,
+                         final_checks, resources, held_resources, *, max_depth: int,
+                         protected: list[str] | None = None) -> dict:
+    """Whether a linked child may approve its own plan on the parent-norm basis.
+
+    Pure: every input is a stored value. `parent_link` is the adopted handoff
+    (`SessionState.parent_link`); `final_checks` the plan's `(command, expected_exit)`
+    pairs; `resources` the plan's typed resources (`BoundaryView.resources`);
+    `held_resources` the resources the handoff's grant entries resolve to. Every failing
+    condition is reported, not only the first; a session with no link reports only
+    `not-linked`, as the conditions that read the link have nothing to read.
+
+    The result carries the shape `autonomy_boundary` returns (its callers render it
+    alike), plus `basis`."""
+    reasons: list[str] = []
+    extra: list[dict] = []
+    if parent_link is None:
+        reasons.append(PARENT_NORM_NOT_LINKED)
+    else:
+        norm = parent_link.get("norm") or {}
+        if (order_parent_norm or "") != parent_link.get("norm_digest"):
+            reasons.append(PARENT_NORM_DIGEST_MISMATCH)
+        if norm.get("criterion_type") != "measurable":
+            reasons.append(PARENT_NORM_ACCEPTANCE_REVIEW)
+        verify = (norm.get("verify_command") or "").strip()
+        expected_exit = norm.get("expected_exit")
+        carried = bool(verify) and any(
+            (command or "").strip() == verify and exit_code == expected_exit
+            for command, exit_code in final_checks
+        )
+        if not carried:
+            reasons.append(PARENT_NORM_CHECK_DROPPED)
+        from . import order_approvals as _oa
+        seen: set[str] = set()
+        for requested in resources:
+            data = _oa.resource_to_dict(requested)
+            if data["kind"] == "specialist":
+                continue
+            if any(held.covers(requested, protected=protected) for held in held_resources):
+                continue
+            name = _resource_name(data)
+            if name in seen:
+                continue
+            seen.add(name)
+            extra.append({**data, "name": name,
+                          "reason": f"{name} is not covered by a grant of the parent's handoff"})
+        if extra:
+            reasons.append(PARENT_NORM_RESOURCE_NOT_IN_HANDOFF)
+        depth = parent_link.get("depth")
+        if not isinstance(depth, int) or isinstance(depth, bool) or depth > max_depth:
+            reasons.append(PARENT_NORM_DEPTH_OVER_CAP)
+    return {
+        "eligible": not reasons, "basis": PARENT_NORM_BASIS,
+        "reason": (f"{reasons[0]}: {_PARENT_NORM_REASON_TEXT[reasons[0]]}" if reasons
+                   else "inside the norm and grants of the parent stage this session was handed"),
+        "reasons": reasons,
+        "reason_texts": [f"{r}: {_PARENT_NORM_REASON_TEXT[r]}" for r in reasons],
+        "order_changed": False, "extra_resources": extra, "unresolved_changed_commands": [],
+        "thinker_pass": None, "open_effort_fire": False,
+        "first_verdict_key": None, "declined_live_optional": [],
+    }

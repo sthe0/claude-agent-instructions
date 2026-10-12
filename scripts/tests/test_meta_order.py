@@ -69,6 +69,12 @@ _NOT_REQUIRED: dict[str, str] = {
         "its omission would defeat the exact grandfather it exists to provide. See "
         "Order.requires_traceability in state.py."
     ),
+    "parent_norm": (
+        "not a part of the order the customer states -- it is the link a child plan "
+        "declares to the parent stage whose norm it serves, and only a plan the engine "
+        "spawned for a stage has one. Its absence means 'an ordinary order', not "
+        "'missing'. See Order.parent_norm in state.py and gates.parent_norm_boundary."
+    ),
 }
 
 # THE PARAMETRIZATION. Derived from the type, never typed out beside it.
@@ -288,10 +294,17 @@ def test_order_place_exhausts_the_order_s_field_set():
     at equal count. It is the strongest check available without a normalization registry,
     and it fires on the case that has actually occurred in this stage."""
     fields = {f.name for f in dataclasses.fields(Order)}
+    # `parent_norm` rides only when set, so an order that omits it keeps the key it had
+    # before the field existed: the full arity is read with it set, the base with it unset.
     place = order_place(
+        Namespace(order=Order(customer_id="u", customer="c", functional_place="p",
+                              parent_norm="0" * 64))
+    )
+    base = order_place(
         Namespace(order=Order(customer_id="u", customer="c", functional_place="p"))
     )
     assert len(place) == 1, "order_place contributes one element for a declared order"
+    assert len(base[0]) == len(fields) - 1, "an unset parent_norm adds no member to the key"
     assert len(place[0]) == len(fields), (
         f"order_place carries {len(place[0])} member(s) for {len(fields)} Order field(s) "
         f"({sorted(fields)}). A field added to Order and not listed in order_place belongs "
