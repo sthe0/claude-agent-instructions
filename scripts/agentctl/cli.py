@@ -6852,7 +6852,8 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         mismatch, unverified = _child_norm_mismatch(state, store, stage, result.stderr)
         if mismatch is not None:
             return _open_norm_mismatch(state, store, stage, mismatch, base)
-        state.log("norm_mismatch_unverified", stage=stage.index, reason=unverified)
+        if unverified:
+            state.log("norm_mismatch_unverified", stage=stage.index, reason=unverified)
         store.save(state)
         return Directive(
             False, state.node, "replan",
@@ -7706,33 +7707,47 @@ def _classify_transcript_denials(
         state.planning_misses.append({**row_base, "asked_user": False, "source": "transcript"})
 
 
+def _fail_stage_into_diagnosing(
+    state: SessionState, store: StateStore, stage: Stage, *, note: str, event: str,
+    declaration: Declaration, **event_fields,
+):
+    """FAILED / DIAGNOSING on `stage` for a fault no re-dispatch of the stage unchanged
+    would remove: mirrors `cmd_record_result`'s failed-stage branch, including its two-step
+    EXECUTING -> VERIFYING -> DIAGNOSING transition (`machine.TRANSITIONS` permits
+    `diagnose` only from VERIFYING), with the Declaration pre-framed by the caller. Returns
+    the opened difficulty, or None when the difficulty cap refused it; the state is saved
+    either way and each caller builds its own Directive."""
+    stage.outcome.status = StageStatus.FAILED.value
+    stage.outcome.actual = (stage.outcome.actual + "\n" + note) if stage.outcome.actual else note
+    state.log(event, stage=stage.index, **event_fields)
+    state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
+    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
+    opened = _open_difficulty(state, declaration=declaration)
+    store.save(state)
+    return opened
+
+
 def _diagnose_materialization_defect(
     state: SessionState, store: StateStore, stage: Stage, *, action: str, evidence: str,
 ) -> Directive:
     """Route a PERMISSION-REQUEST whose denied call WAS covered by the stage's
     effective grant set into FAILED/DIAGNOSING -- the grant existed, materialization
     into the child's --settings/--add-dir simply failed to carry it, so re-asking the
-    user (or re-dispatching unchanged) would only reproduce the same denial. Mirrors
-    `cmd_record_result`'s failed-stage branch, including its two-step EXECUTING ->
-    VERIFYING -> DIAGNOSING transition (`machine.TRANSITIONS` permits `diagnose`
-    only from VERIFYING), but pre-frames the Declaration from the grant/call/evidence
-    triple instead of leaving it for a human to write from scratch. The caller is
-    responsible for having already appended the triggering row to
-    `state.materialization_defects` -- this function only transitions and reports."""
-    stage.outcome.status = StageStatus.FAILED.value
-    note = f"permission request already covered by materialized grants ({evidence}): {action}"
-    stage.outcome.actual = (stage.outcome.actual + "\n" + note) if stage.outcome.actual else note
-    state.log("materialization_defect", stage=stage.index, action=action, evidence=evidence)
-    state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
-    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
-    opened = _open_difficulty(state, declaration=Declaration(
-        expected=f"stage {stage.index}'s materialized grants should have covered: {action}",
-        actual=f"the child was denied and asked permission for: {action}",
-        mismatch="the effective grant set declares/derives coverage for this call, but "
-                 "the child's own --settings/--add-dir materialization failed to carry "
-                 "it through -- a materialization defect, not a planning miss.",
-    ))
-    store.save(state)
+    user (or re-dispatching unchanged) would only reproduce the same denial. The
+    Declaration is pre-framed from the grant/call/evidence triple instead of being left
+    for a human to write from scratch. The caller is responsible for having already
+    appended the triggering row to `state.materialization_defects` -- this function only
+    transitions and reports."""
+    opened = _fail_stage_into_diagnosing(
+        state, store, stage, event="materialization_defect", action=action, evidence=evidence,
+        note=f"permission request already covered by materialized grants ({evidence}): {action}",
+        declaration=Declaration(
+            expected=f"stage {stage.index}'s materialized grants should have covered: {action}",
+            actual=f"the child was denied and asked permission for: {action}",
+            mismatch="the effective grant set declares/derives coverage for this call, but "
+                     "the child's own --settings/--add-dir materialization failed to carry "
+                     "it through -- a materialization defect, not a planning miss.",
+        ))
     if opened is None:
         return _difficulty_cap_directive(
             state, f"stage {stage.index} permission request was already covered by its "
@@ -7759,22 +7774,26 @@ def _child_norm_mismatch(
     this stage; its open difficulty carries a `parent` norm target whose baseline is the
     stage's current norm digest (a replan of the stage since the spawn moves it, and the
     child's baseline is then stale); and its declaration states all three of expected,
-    actual and mismatch. The child's state is only read, never written."""
+    actual and mismatch. The child's state is only read, never written.
+
+    A rejection is `(None, reason)`, and the caller logs the reason. `(None, "")` is a
+    spawn with nothing to report -- no transcript, no readable state record, or a record
+    that holds no parent link -- whose REPLAN is the ordinary one and writes no row."""
     if state.node != Node.EXECUTING.value:
-        return None, f"the session is at {state.node}, not EXECUTING"
+        return None, ""
     path = _parse_transcript_path(stderr)
     if path is None:
-        return None, "the launch reported no transcript path"
+        return None, ""
     child_id = Path(path).stem
     if not child_id or child_id == state.session_id:
-        return None, f"the transcript path names no child session: {path}"
+        return None, ""
     try:
         child = store.load(child_id)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return None, f"child state {child_id} is unreadable: {exc}"
-    if child is None:
-        return None, f"no state record for child session {child_id}"
-    link = child.parent_link or {}
+    if child is None or not child.parent_link:
+        return None, ""
+    link = child.parent_link
     if link.get("parent_session") != state.session_id or link.get("stage_index") != stage.index:
         return None, (f"child {child_id} is not linked to stage {stage.index} of this session "
                       f"(parent_session={link.get('parent_session')!r}, "
@@ -7784,7 +7803,8 @@ def _child_norm_mismatch(
         return None, f"child {child_id} holds no open difficulty"
     current = gates.stage_norm_digest(stage)
     targets = [t for t in opened.norm_targets
-               if t.get("target") == PARENT_NORM_TARGET and t.get("kind") == PARENT_NORM_KIND]
+               if t.get("target") == gates.NORM_TARGET_PARENT
+               and t.get("kind") == gates.NORM_TARGET_KIND_PARENT]
     if not targets:
         return None, f"child {child_id}'s open difficulty names no parent norm target"
     if not any(t.get("baseline") == current for t in targets):
@@ -7805,19 +7825,13 @@ def _open_norm_mismatch(
     """Route a REPLAN whose child record `_child_norm_mismatch` verified into FAILED /
     DIAGNOSING on this stage, with the child's own declaration as the opened difficulty:
     the fault is in the stage's norm, so re-dispatching it unchanged would only repeat it.
-    Same two-step EXECUTING -> VERIFYING -> DIAGNOSING transition as
-    `_diagnose_materialization_defect`."""
+    Same transition as `_diagnose_materialization_defect`."""
     decl = mismatch["declaration"]
-    stage.outcome.status = StageStatus.FAILED.value
-    note = (f"the child (session {mismatch['child_session']}) reported a mismatch in this "
-            f"stage's norm: {decl['mismatch']}")
-    stage.outcome.actual = (stage.outcome.actual + "\n" + note) if stage.outcome.actual else note
-    state.log("norm_mismatch", stage=stage.index, child_session=mismatch["child_session"],
-              norm_digest=mismatch["norm_digest"])
-    state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
-    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
-    opened = _open_difficulty(state, declaration=Declaration(**decl))
-    store.save(state)
+    opened = _fail_stage_into_diagnosing(
+        state, store, stage, event="norm_mismatch", child_session=mismatch["child_session"],
+        norm_digest=mismatch["norm_digest"], declaration=Declaration(**decl),
+        note=(f"the child (session {mismatch['child_session']}) reported a mismatch in this "
+              f"stage's norm: {decl['mismatch']}"))
     if opened is None:
         return _difficulty_cap_directive(
             state, f"stage {stage.index}'s child reported a mismatch in the stage's norm",
@@ -9444,10 +9458,6 @@ def _norm_file_refusal(state: SessionState, target: str) -> str | None:
             f"plans/)")
 
 
-PARENT_NORM_TARGET = "parent"
-PARENT_NORM_KIND = "parent_norm"
-
-
 def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[list[dict], str | None]:
     """The `norm_targets` entries for a нормативное critique's --norm-target values, or
     the first refusal. A stage target is snapshotted from the live state's stage -- the
@@ -9462,18 +9472,19 @@ def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[lis
     entries: list[dict] = []
     for raw in targets:
         raw = (raw or "").strip()
-        if raw == PARENT_NORM_TARGET:
+        if raw == gates.NORM_TARGET_PARENT:
             if len(targets) != 1:
-                return [], (f"--norm-target {PARENT_NORM_TARGET} stands alone: the norm of "
+                return [], (f"--norm-target {gates.NORM_TARGET_PARENT} stands alone: the norm of "
                             f"the parent stage is not this session's to edit, so a fault "
                             f"routed to it is handed back with REPLAN, not mixed with "
                             f"targets this session's own replan would change")
             link = state.parent_link
             if link is None or not link.get("norm_digest"):
-                return [], (f"--norm-target {PARENT_NORM_TARGET} names the norm of the "
+                return [], (f"--norm-target {gates.NORM_TARGET_PARENT} names the norm of the "
                             f"stage that spawned this session; this session holds no "
                             f"norm handoff (it is not linked to a parent stage)")
-            entries.append({"target": PARENT_NORM_TARGET, "kind": PARENT_NORM_KIND,
+            entries.append({"target": gates.NORM_TARGET_PARENT,
+                            "kind": gates.NORM_TARGET_KIND_PARENT,
                             "baseline": link["norm_digest"], "source": "critique"})
             continue
         if raw.startswith("stage:"):
@@ -9570,7 +9581,8 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
     if blockers:
         action = "investigate" if any("investigation" in b for b in blockers) else "declare"
         return Directive(False, state.node, action, "; ".join(blockers), data={"blockers": blockers})
-    if any(t.get("kind") == PARENT_NORM_KIND for t in state.difficulty.norm_targets):
+    if any(t.get("kind") == gates.NORM_TARGET_KIND_PARENT
+           for t in state.difficulty.norm_targets):
         return Directive(
             True, state.node, "return_replan",
             "the fault is in the norm of the parent stage this session serves, which this "
@@ -9578,7 +9590,7 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
             "parent's dispatch verifies this record and opens its own difficulty; do not "
             "replan or normalize here",
             marker="REPLAN",
-            data={"norm_target": PARENT_NORM_TARGET,
+            data={"norm_target": gates.NORM_TARGET_PARENT,
                   "parent_session": (state.parent_link or {}).get("parent_session"),
                   "stage_index": (state.parent_link or {}).get("stage_index")},
         )

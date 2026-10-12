@@ -20,8 +20,9 @@ from argparse import Namespace
 
 import pytest
 
-from agentctl import cli, norm_handoff
+from agentctl import cli, gates, norm_handoff
 from agentctl.dispatch import RunResult
+from agentctl.plan import load_plan
 from agentctl.state import Node, StageStatus
 from agentctl.stage_norm import StageNorm
 
@@ -67,11 +68,10 @@ def _parent(store, fixtures_dir):
     _executing(store, PARENT, fixtures_dir)
 
 
-def _child(store, fixtures_dir, tmp_path, monkeypatch, *, parent_session=PARENT,
-           stage_index=1, norm=None, sid=CHILD):
-    """A child session linked to a parent stage, failed into DIAGNOSING with its
-    declaration and investigation recorded. The handoff names `norm` (stage 1 of the
-    parent as it stands, by default) exactly as a spawn writes it."""
+def _linked_session(store, fixtures_dir, tmp_path, monkeypatch, *, parent_session=PARENT,
+                    stage_index=1, norm=None, sid=CHILD):
+    """A session at EXECUTING that adopted a handoff to a parent stage. The handoff names
+    `norm` (stage 1 of the parent as it stands, by default) exactly as a spawn writes it."""
     norm = norm or StageNorm.from_stage(store.load(PARENT).stage(1))
     record = norm_handoff.build_record(
         parent_session=parent_session, stage_index=stage_index, kind="developer",
@@ -80,6 +80,12 @@ def _child(store, fixtures_dir, tmp_path, monkeypatch, *, parent_session=PARENT,
     monkeypatch.setenv(norm_handoff.NORM_HANDOFF_ENV, norm_handoff.format_env_value(path, sha))
     _executing(store, sid, fixtures_dir)
     monkeypatch.delenv(norm_handoff.NORM_HANDOFF_ENV)
+
+
+def _child(store, fixtures_dir, tmp_path, monkeypatch, *, sid=CHILD, **link):
+    """A child session linked to a parent stage, failed into DIAGNOSING with its
+    declaration and investigation recorded."""
+    _linked_session(store, fixtures_dir, tmp_path, monkeypatch, sid=sid, **link)
     cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
     cli.cmd_declare(ns(session=sid, expected=EXPECTED, actual=ACTUAL, mismatch=MISMATCH),
                     store=store)
@@ -109,7 +115,10 @@ def _dispatch(store, stdout=REPLAN_TEXT, *, child=CHILD, transcript=True):
                                dry_run=False), store=store, runner=runner)
 
 
-def _assert_directive_kept(d, store):
+def _assert_directive_kept(d, store, reason):
+    """The directive is the plain REPLAN one and the history says why the child's record
+    did not verify: a row whose reason contains `reason`, or -- `reason` None -- no
+    `norm_mismatch_unverified` row at all (a spawn with no linked record to judge)."""
     assert d.ok is False
     assert d.action == "replan"
     assert d.marker == "REPLAN"
@@ -118,6 +127,11 @@ def _assert_directive_kept(d, store):
     state = store.load(PARENT)
     assert state.node == Node.EXECUTING.value
     assert state.difficulty is None
+    rows = [e for e in state.history if e.get("event") == "norm_mismatch_unverified"]
+    if reason is None:
+        assert rows == []
+    else:
+        assert len(rows) == 1 and reason in rows[0]["reason"], rows
 
 
 def test_parent_norm_target_is_recorded(store, fixtures_dir, tmp_path, monkeypatch):
@@ -170,12 +184,11 @@ def test_critique_parent_target_refused_unlinked(store, fixtures_dir):
     cli.cmd_declare(ns(session=PARENT, expected="e", actual="a", mismatch="m"), store=store)
     cli.cmd_investigate(ns(session=PARENT, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
-    try:
-        d = _critique(store, PARENT)
-    except SystemExit as exit_:
-        assert exit_.code == 2, "BEHAVIOUR: argparse refused --norm-target parent"
-        return
+    d = _critique(store, PARENT)
     assert d.ok is False
+    assert "not linked to a parent stage" in d.detail, (
+        f"BEHAVIOUR: the unlinked session's --norm-target parent was refused for another "
+        f"reason ({d.detail!r})")
     assert store.load(PARENT).difficulty.norm_targets == []
 
 
@@ -197,14 +210,25 @@ def test_parent_target_stands_alone(store, fixtures_dir, tmp_path, monkeypatch):
     assert store.load(CHILD).difficulty.norm_targets == []
 
 
+def test_parent_target_stands_alone_beside_a_file(store, fixtures_dir, tmp_path, monkeypatch):
+    _parent(store, fixtures_dir)
+    _child(store, fixtures_dir, tmp_path, monkeypatch)
+    norm_file = tmp_path / "norm.md"
+    norm_file.write_text("a norm\n", encoding="utf-8")
+    d = _critique(store, targets=("parent", str(norm_file)))
+    assert d.ok is False
+    assert "stands alone" in d.detail
+    assert store.load(CHILD).difficulty.norm_targets == []
+
+
 def test_replan_other_parent_keeps_directive(store, fixtures_dir, tmp_path, monkeypatch):
     _routed_child(store, fixtures_dir, tmp_path, monkeypatch, parent_session="someone-else")
-    _assert_directive_kept(_dispatch(store), store)
+    _assert_directive_kept(_dispatch(store), store, "parent_session='someone-else'")
 
 
 def test_replan_other_stage_keeps_directive(store, fixtures_dir, tmp_path, monkeypatch):
     _routed_child(store, fixtures_dir, tmp_path, monkeypatch, stage_index=2)
-    _assert_directive_kept(_dispatch(store), store)
+    _assert_directive_kept(_dispatch(store), store, "stage_index=2")
 
 
 def test_replan_stale_baseline_keeps_directive(store, fixtures_dir, tmp_path, monkeypatch):
@@ -212,7 +236,7 @@ def test_replan_stale_baseline_keeps_directive(store, fixtures_dir, tmp_path, mo
     state = store.load(PARENT)
     state.stage(1).criterion.done_criterion = "a done criterion the parent's replan rewrote"
     store.save(state)
-    _assert_directive_kept(_dispatch(store), store)
+    _assert_directive_kept(_dispatch(store), store, "is stale")
 
 
 def test_replan_incomplete_declaration_keeps_directive(store, fixtures_dir, tmp_path, monkeypatch):
@@ -220,18 +244,24 @@ def test_replan_incomplete_declaration_keeps_directive(store, fixtures_dir, tmp_
     child = store.load(CHILD)
     child.difficulty.declaration.mismatch = "  "
     store.save(child)
-    _assert_directive_kept(_dispatch(store), store)
+    _assert_directive_kept(_dispatch(store), store, "lacks expected, actual or mismatch")
 
 
 def test_replan_no_transcript_keeps_directive(store, fixtures_dir, tmp_path, monkeypatch):
     _routed_child(store, fixtures_dir, tmp_path, monkeypatch)
-    _assert_directive_kept(_dispatch(store, transcript=False), store)
+    _assert_directive_kept(_dispatch(store, transcript=False), store, None)
 
 
 def test_replan_unreadable_state_keeps_directive(store, fixtures_dir, tmp_path, monkeypatch):
     _routed_child(store, fixtures_dir, tmp_path, monkeypatch)
     store.path(CHILD).write_text("{not json", encoding="utf-8")
-    _assert_directive_kept(_dispatch(store), store)
+    _assert_directive_kept(_dispatch(store), store, "is unreadable")
+
+
+def test_replan_malformed_state_keeps_directive(store, fixtures_dir, tmp_path, monkeypatch):
+    _routed_child(store, fixtures_dir, tmp_path, monkeypatch)
+    store.path(CHILD).write_text("[]", encoding="utf-8")
+    _assert_directive_kept(_dispatch(store), store, "is unreadable")
 
 
 def test_replan_text_without_record_keeps_directive(store, fixtures_dir, tmp_path, monkeypatch):
@@ -246,6 +276,59 @@ def test_replan_text_without_record_keeps_directive(store, fixtures_dir, tmp_pat
     state = store.load(PARENT)
     assert state.node == Node.EXECUTING.value
     assert state.difficulty is None
+
+
+def test_replan_child_without_a_parent_target_keeps_directive(store, fixtures_dir, tmp_path,
+                                                              monkeypatch):
+    _parent(store, fixtures_dir)
+    _child(store, fixtures_dir, tmp_path, monkeypatch)
+    _critique(store, failure_address="ресурсное", targets=())
+    _assert_directive_kept(_dispatch(store), store, "names no parent norm target")
+
+
+def test_replan_transcript_naming_no_state_record_keeps_directive(store, fixtures_dir, tmp_path,
+                                                                  monkeypatch):
+    _routed_child(store, fixtures_dir, tmp_path, monkeypatch)
+    _assert_directive_kept(_dispatch(store, child="ghost-session"), store, None)
+
+
+def test_replan_transcript_naming_the_parent_keeps_directive(store, fixtures_dir, tmp_path,
+                                                             monkeypatch):
+    _routed_child(store, fixtures_dir, tmp_path, monkeypatch)
+    _assert_directive_kept(_dispatch(store, child=PARENT), store, None)
+
+
+def test_replan_linked_child_without_difficulty_keeps_directive(store, fixtures_dir, tmp_path,
+                                                                monkeypatch):
+    _parent(store, fixtures_dir)
+    _linked_session(store, fixtures_dir, tmp_path, monkeypatch)
+    _assert_directive_kept(_dispatch(store), store, "holds no open difficulty")
+
+
+def test_replan_unlinked_spawn_writes_no_history_row(store, fixtures_dir):
+    _parent(store, fixtures_dir)
+    _executing(store, CHILD, fixtures_dir)
+    _assert_directive_kept(_dispatch(store), store, None)
+
+
+def test_a_linked_childs_replan_is_refused_with_the_parent_reason(store, fixtures_dir, tmp_path,
+                                                                  monkeypatch):
+    _routed_child(store, fixtures_dir, tmp_path, monkeypatch)
+    plan_path = str(fixtures_dir / "plan_two_stage.toml")
+    blockers = gates.normative_edit_blockers(
+        store.load(CHILD), load_plan(plan_path), {1, 2}, installing_plan_path=plan_path)
+    assert len(blockers) == 1
+    assert "handed back to the parent stage" in blockers[0]
+    assert "REPLAN:" in blockers[0]
+    assert "renorms" not in blockers[0]
+
+    cli.cmd_normalize(ns(session=CHILD, factor="reproducible cause", level="note"), store=store)
+    d = cli.cmd_replan(
+        ns(session=CHILD, plan=plan_path, renormalize=False, coverage_waiver=None,
+           normalization_waiver=None, cost_log=None),
+        store=store, runner=lambda argv, timeout=None: RunResult(1, stdout="", stderr=""))
+    assert d.ok is False
+    assert d.data["blockers"] == blockers, d.data
 
 
 def test_parent_never_writes_the_child_state(store, fixtures_dir, tmp_path, monkeypatch):

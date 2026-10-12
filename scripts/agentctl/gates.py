@@ -668,6 +668,10 @@ def _is_installing(target: str, installing_plan_path: str | None) -> bool:
         installing_plan_path)
 
 
+NORM_TARGET_PARENT = "parent"
+NORM_TARGET_KIND_PARENT = "parent_norm"
+
+
 def _record_file_targets(state: SessionState) -> list[dict]:
     d = state.difficulty
     if d is None:
@@ -692,7 +696,8 @@ def normative_edit_blockers(state: SessionState, new_plan, pending_indices,
     inserted neighbour still blocks); one per file target no stage names in `renorms`; one
     per file target whose bytes are still the baseline and whose `renorms` references all
     sit on stages the replan does not leave pending (a reference on a carried-forward
-    PASSED stage is no consequence, that stage never runs again).
+    PASSED stage is no consequence, that stage never runs again). A parent norm target
+    always blocks: no replan of this session edits the parent stage's norm.
 
     `pending_indices` is the set of `new_plan` stage indices this replan does NOT carry
     forward as PASSED -- supplied by the caller, which owns the carry decision.
@@ -716,6 +721,14 @@ def normative_edit_blockers(state: SessionState, new_plan, pending_indices,
                     f"norm (title, result image, criterion, method, means, ...), "
                     f"not just its place in the plan"
                 )
+            continue
+        if t.get("kind") == NORM_TARGET_KIND_PARENT:
+            out.append(
+                f"norm target {target}: the fault was handed back to the parent stage, "
+                f"whose norm this session cannot edit -- end the session with `REPLAN:` "
+                f"and let the parent's dispatch verify the record; a replan here cannot "
+                f"close it"
+            )
             continue
         if _is_installing(target, installing_plan_path):
             out.append(
