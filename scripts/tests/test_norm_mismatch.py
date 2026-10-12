@@ -39,6 +39,11 @@ def ns(**kw):
     return Namespace(**kw)
 
 
+@pytest.fixture
+def fixtures_dir(venued_fixtures_dir):
+    return venued_fixtures_dir
+
+
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch):
     monkeypatch.delenv("AGENT_RECURSION_DEPTH", raising=False)
@@ -110,7 +115,7 @@ def _routed_child(store, fixtures_dir, tmp_path, monkeypatch, **link):
 
 def _dispatch(store, stdout=REPLAN_TEXT, *, child=CHILD, transcript=True):
     stderr = f"spawn-specialist: transcript=/nowhere/projects/{child}.jsonl\n" if transcript else ""
-    runner = lambda argv: RunResult(0, stdout=stdout, stderr=stderr)
+    runner = lambda argv, cwd=None: RunResult(0, stdout=stdout, stderr=stderr)
     return cli.cmd_dispatch(ns(session=PARENT, budget="medium", complexity="medium",
                                dry_run=False), store=store, runner=runner)
 
