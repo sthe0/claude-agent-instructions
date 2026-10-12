@@ -755,3 +755,106 @@ def test_scan_can_skip_the_advisory_scan(tmp_path, monkeypatch):
     assert called == []
     sd.scan([], None, scan_hooks=False, scan_advisories=True)
     assert called == [True]
+
+
+# ── scan_oversized_leaves ───────────────────────────────────────────────────
+
+def _dleaf(schema: str = "difficulty/v1", contexts: int = 1, filler: int = 0) -> str:
+    body = "".join(f"### ctx {i}\n\ntext\n\n" for i in range(contexts))
+    return (
+        f"---\nname: x\ndescription: x\ntype: reference\nschema: {schema}\n---\n\n"
+        f"## Difficulty\n\n{'x' * filler}\n\n## Contexts\n\n{body}## Cost\n\n### not a context\n"
+    )
+
+
+def _root_with(tmp_path, text: str, name: str = "big.md"):
+    (tmp_path / "leaves" / "experience").mkdir(parents=True)
+    (tmp_path / "leaves" / "experience" / name).write_text(text, encoding="utf-8")
+    return tmp_path
+
+
+def test_oversized_leaf_bytes_over(tmp_path):
+    root = _root_with(tmp_path, _dleaf(contexts=1, filler=5000))
+    f = sd.scan_oversized_leaves(root, max_bytes=2000, max_contexts=50)
+    assert [(d.kind, d.path) for d in f] == [("oversized-leaf", "leaves/experience/big.md")]
+
+
+def test_oversized_leaf_contexts_over(tmp_path):
+    root = _root_with(tmp_path, _dleaf(contexts=6))
+    f = sd.scan_oversized_leaves(root, max_bytes=10**6, max_contexts=5)
+    assert len(f) == 1 and "6 contexts (cap 5)" in f[0].detail
+    assert sd.scan_oversized_leaves(root, max_bytes=10**6, max_contexts=6) == []
+
+
+def test_oversized_leaf_under_(tmp_path):
+    root = _root_with(tmp_path, _dleaf(contexts=2, filler=100))
+    assert sd.scan_oversized_leaves(root, max_bytes=10**5, max_contexts=5) == []
+
+
+def test_oversized_leaf_ignores_non_difficulty_(tmp_path):
+    root = _root_with(tmp_path, _dleaf(schema="leaf/v1", contexts=9, filler=9000))
+    assert sd.scan_oversized_leaves(root, max_bytes=100, max_contexts=1) == []
+
+
+def test_oversized_leaf_detail_names_split_(tmp_path):
+    root = _root_with(tmp_path, _dleaf(filler=5000))
+    f = sd.scan_oversized_leaves(root, max_bytes=100, max_contexts=50)
+    assert f[0].detail.endswith("action: memory-curator split")
+
+
+def test_measure_leaf_counts_only_contexts_section_headings():
+    size, contexts = sd.measure_leaf(_dleaf(contexts=4))
+    assert contexts == 4  # the `### ` under ## Cost is not a context
+    assert size == len(_dleaf(contexts=4).encode("utf-8"))
+
+
+def test_oversized_leaf_wired_into_scan_and_config_reader(tmp_path):
+    root = _root_with(tmp_path, _dleaf(filler=5000))
+    cfg =tmp_path / "config.md"
+    cfg.write_text("| `memory-leaf-max-bytes` | `100` | x |\n", encoding="utf-8")
+    assert sd.read_config_int("memory-leaf-max-bytes", 7, cfg) == 100
+    assert sd.read_config_int("absent-key", 7, cfg) == 7
+    kinds = {d.kind for d in sd.scan([root], None, scan_hooks=False, scan_advisories=False)}
+    assert "oversized-leaf" not in kinds  # real config.md caps (74000) are not exceeded
+    big = _root_with(tmp_path / "big", _dleaf(filler=80000))
+    kinds = {d.kind for d in sd.scan([big], None, scan_hooks=False, scan_advisories=False)}
+    assert "oversized-leaf" in kinds
+
+
+def test_oversized_leaf_calibration_():
+    import math
+    import statistics
+
+    repo = Path(__file__).resolve().parent.parent.parent
+    d = json.loads((repo / "docs/operations/memory-leaf-size-calibration.json").read_text())
+    rows = d["leaves"]
+    assert len(rows) == d["n_leaves"]
+
+    def fence(values):
+        q1, _, q3 = statistics.quantiles(values, n=4, method="inclusive")
+        return math.exp(q3 + 3 * (q3 - q1))
+
+    def log(x):
+        return math.log(max(x, 1))
+
+    bytes_fence = fence([log(r["bytes"]) for r in rows])
+    ctx_fence = fence([log(r["contexts"]) for r in rows])
+    promotion = d["principle_promotion_threshold"]
+    max_bytes = math.ceil(round(bytes_fence, 6) / 1000) * 1000
+    multiple = math.ceil(round(ctx_fence / promotion, 6))
+    assert d["values"] == {
+        "memory-leaf-max-bytes": max_bytes,
+        "memory-leaf-max-contexts-multiple": multiple,
+    }
+    cfg = repo / "config.md"
+    assert sd.read_config_int("memory-leaf-max-bytes", -1, cfg) == max_bytes
+    assert sd.read_config_int("memory-leaf-max-contexts-multiple", -1, cfg) == multiple
+    assert sd.read_config_int("principle-promotion-threshold", -1, cfg) == promotion
+    assert (sd.OVERSIZED_LEAF_DEFAULT_MAX_BYTES, sd.OVERSIZED_LEAF_DEFAULT_CONTEXTS_MULTIPLE) == (
+        max_bytes,
+        multiple,
+    )
+
+    flagged = [r["bytes"] > max_bytes or r["contexts"] > multiple * promotion for r in rows]
+    assert [r["flagged"] for r in rows] == flagged
+    assert d["n_flagged"] == sum(flagged) <= 3

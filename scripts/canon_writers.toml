@@ -26,6 +26,7 @@
 # --- exempt-maintenance: edit tracked files, run by a maintainer in a worktree ---
 "scripts/verify-judge-prose-numbers.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "--repin rewrites its own allowlist file; a deliberate maintainer action, reviewed in the diff" }
 "scripts/verify-config-root-refs.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "--repin rewrites its own allowlist file; a deliberate maintainer action, reviewed in the diff" }
+"scripts/memory-leaf-size-calibrate.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "re-calibration rewrites docs/operations/memory-leaf-size-calibration.json, aggregates only; a deliberate maintainer action, reviewed in the diff" }
 "scripts/memory-retrieval-calibrate.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "re-calibration rewrites docs/operations/memory-retrieval-calibration.json, aggregates only; a deliberate maintainer action, reviewed in the diff" }
 
 # --- exempt-landing: the sync / landing path itself ---
