@@ -1,6 +1,7 @@
 """Make the `agentctl` package importable and provide shared fixtures."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -454,10 +455,23 @@ def _evidence_root_isolated_by_default(tmp_path_factory, monkeypatch):
     baseline deny for that tree shadows a write grant synthesized for an
     evidence dir nested underneath it.
 
-    Deliberately does NOT touch $AGENTCTL_SCRATCH_ROOTS, which its own test
-    exercises with this override unset."""
+    Does not touch $AGENTCTL_SCRATCH_ROOTS; `_hermetic_scratch_roots` owns it."""
     root = tmp_path_factory.mktemp("evidence-root")
     monkeypatch.setenv("AGENTCTL_EVIDENCE_ROOT", str(root))
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_scratch_roots(tmp_path_factory, monkeypatch):
+    """Pin $AGENTCTL_SCRATCH_ROOTS so no verdict depends on where the suite runs.
+
+    Without it exempt_paths.scratch_roots() adds $TMPDIR and gettempdir(), so a
+    checkout whose own absolute path sits under the ambient temp root (TMPDIR=/var/tmp
+    and a checkout under its realpath) is classified ephemeral and every plan that
+    declares it as its venue is refused. `tmp_path` lies under the pytest base temp, so
+    it stays scratch; "/tmp" stays scratch by convention. A test exercising
+    scratch_roots' own default resolution deletes or sets the variable itself."""
+    roots = ["/tmp", str(tmp_path_factory.getbasetemp())]
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", os.pathsep.join(roots))
 
 
 @pytest.fixture
