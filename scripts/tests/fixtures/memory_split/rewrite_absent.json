@@ -1,0 +1,49 @@
+{
+  "root": "good",
+  "source": "leaves/experience/2026-01-05-sample-venue-difficulty.md",
+  "base_path": "base.md",
+  "keep": [
+    "1:5dbabc969e13"
+  ],
+  "clusters": [
+    {
+      "slug": "2026-01-05-sample-venue-drift",
+      "name": "A control runs where the commits are not",
+      "description": "A sample cluster for the split fixture — the verification venue differs from the venue that holds the commits",
+      "functional_ground": "the venue a control runs in is chosen once and silently diverges from where the judged commits live",
+      "difficulty": "A stage's control is executed in a checkout that lacks the commits it judges, so a genuinely green stage is recorded as failed.",
+      "contexts": [
+        "2:66a81f81a879",
+        "3:e51c0fc04bb0"
+      ]
+    },
+    {
+      "slug": "2026-02-15-sample-fetch-hang",
+      "name": "A network call in a control hangs the engine",
+      "description": "A sample cluster for the split fixture — a fetch inside an auto-run check wedges the engine",
+      "functional_ground": "an auto-run check has no timeout, so any blocking call in it blocks the engine instead of failing",
+      "difficulty": "A network call placed in an engine-run check never returns, and the engine, which runs it without a timeout, waits forever.",
+      "contexts": [
+        "4:0372ce75d1b7",
+        "5:403a7a175eaa"
+      ],
+      "no_principle_reason": "two contexts, below the promotion threshold"
+    }
+  ],
+  "principles": [
+    "sample-venue-principle"
+  ],
+  "rewrites": [
+    {
+      "contexts": [
+        "2:66a81f81a879"
+      ],
+      "replace": [
+        {
+          "from": "five stages; the worktree held every commit",
+          "to": "four stages; the worktree held every commit"
+        }
+      ]
+    }
+  ]
+}
