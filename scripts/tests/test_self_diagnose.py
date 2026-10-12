@@ -16,6 +16,8 @@ import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _SD_PATH = Path(__file__).resolve().parent.parent / "self-diagnose.py"
@@ -857,4 +859,54 @@ def test_oversized_leaf_calibration_():
 
     flagged = [r["bytes"] > max_bytes or r["contexts"] > multiple * promotion for r in rows]
     assert [r["flagged"] for r in rows] == flagged
-    assert d["n_flagged"] == sum(flagged) <= 3
+    assert d["n_flagged"] == sum(flagged) == 1
+
+
+def test_measure_leaf_ignores_fenced_lines_and_accepts_heading_suffix():
+    text = (
+        "---\nschema: difficulty/v1\n---\n\n## Contexts (3)\n\n### a\n\n```bash\n## comment\n### fenced\n```\n\n"
+        "### b\n\n## Cost\n\n### not a context\n"
+    )
+    assert sd.measure_leaf(text)[1] == 2
+
+
+@pytest.mark.parametrize("prefix,fm", [
+    ("", 'schema: "difficulty/v1"'),
+    ("", "schema: difficulty/v1  # note"),
+    ("﻿", "schema: difficulty/v1"),
+])
+def test_is_difficulty_leaf_tolerates_quotes_comment_and_bom(prefix, fm):
+    assert sd.is_difficulty_leaf(f"{prefix}---\n{fm}\n---\n")
+
+
+def test_is_difficulty_leaf_rejects_other_schemas():
+    assert not sd.is_difficulty_leaf("---\nschema: difficulty/v10\n---\n")
+    assert not sd.is_difficulty_leaf("---\nschema: leaf/v1\n---\n")
+
+
+def test_parse_config_int_matches_the_key_cell_only():
+    cfg = (
+        "| `other-key` | `5` | mentions `wanted-key` in prose |\n"
+        "| `wanted-key` | `7` | meaning |\n"
+    )
+    assert sd.parse_config_int(cfg, "wanted-key") == 7
+    assert sd.parse_config_int(cfg, "absent") is None
+
+
+def test_default_caps_come_from_the_real_config_and_decide_the_boundary(tmp_path):
+    cap_b = sd.read_config_int("memory-leaf-max-bytes", -1)
+    multiple = sd.read_config_int("memory-leaf-max-contexts-multiple", -1)
+    promotion = sd.read_config_int("principle-promotion-threshold", -1)
+    cap_c = multiple * promotion
+    assert (cap_b, multiple) == (74000, 27)
+
+    at_cap = _root_with(tmp_path / "a", _dleaf(contexts=cap_c))
+    over_ctx = _root_with(tmp_path / "b", _dleaf(contexts=cap_c + 1))
+    assert sd.scan_oversized_leaves(at_cap) == []
+    assert len(sd.scan_oversized_leaves(over_ctx)) == 1
+
+    base = len(_dleaf(contexts=1).encode("utf-8"))
+    just_under = _root_with(tmp_path / "c", _dleaf(contexts=1, filler=cap_b - base))
+    just_over = _root_with(tmp_path / "d", _dleaf(contexts=1, filler=cap_b - base + 1))
+    assert sd.scan_oversized_leaves(just_under) == []
+    assert len(sd.scan_oversized_leaves(just_over)) == 1

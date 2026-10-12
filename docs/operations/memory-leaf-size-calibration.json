@@ -1,6 +1,6 @@
 {
   "method": "Tukey far-out fence Q3 + 3*IQR on the natural log of each axis, exponentiated back; quartiles are statistics.quantiles(n=4, method='inclusive'); log axis is log(max(x, 1)); bytes cap rounded up to the next 1000, contexts multiple = ceil(context fence / principle-promotion-threshold); the quotient is rounded to 6 decimals before the ceil so exp/log float noise cannot push an exact integer fence up by one",
-  "measured_on": "2026-10-12",
+  "measured_on": "2026-10-11",
   "rev": "bb7dd4ab",
   "n_leaves": 97,
   "principle_promotion_threshold": 3,

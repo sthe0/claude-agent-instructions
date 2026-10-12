@@ -28,7 +28,6 @@ import math
 import statistics
 import subprocess
 import sys
-from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -54,10 +53,12 @@ def _load_self_diagnose():
     return mod
 
 
+def _git_bytes(repo: Path, *args: str) -> bytes:
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=True).stdout
+
+
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
-    ).stdout
+    return _git_bytes(repo, *args).decode("utf-8")
 
 
 def quartiles(values: "list[float]") -> "dict[str, float]":
@@ -75,10 +76,18 @@ def _log(x: int) -> float:
 
 def calibrate(repo: Path, rev: str) -> dict:
     sd = _load_self_diagnose()
+    try:
+        commit = _git(repo, "rev-parse", "--verify", f"{rev}^{{commit}}").strip()
+        committed_on = _git(repo, "show", "-s", "--format=%cs", commit).strip()
+    except subprocess.CalledProcessError:
+        raise SystemExit(f"{rev!r} is not a commit in {repo}")
     names = _git(repo, "ls-tree", "-r", "--name-only", rev, LEAVES_PREFIX).splitlines()
     rows = []
     for name in sorted(n for n in names if n.endswith(".md")):
-        text = _git(repo, "show", f"{rev}:{name}")
+        try:
+            text = _git_bytes(repo, "show", f"{rev}:{name}").decode("utf-8")
+        except UnicodeDecodeError:
+            continue
         if not sd.is_difficulty_leaf(text):
             continue
         size, contexts = sd.measure_leaf(text)
@@ -94,18 +103,10 @@ def calibrate(repo: Path, rev: str) -> dict:
     fence_ctx_log = math.exp(far_out_fence(lqc))
 
     try:
-        config = _git(repo, "show", f"{rev}:config.md")
-        promotion = int(
-            next(
-                cell
-                for line in config.splitlines()
-                if "`principle-promotion-threshold`" in line
-                for cell in (c_.strip().strip("`") for c_ in line.split("|")[2:])
-                if cell.isdigit()
-            )
-        )
-    except (subprocess.CalledProcessError, StopIteration):
-        promotion = sd.PRINCIPLE_PROMOTION_DEFAULT
+        found = sd.parse_config_int(_git(repo, "show", f"{rev}:config.md"), "principle-promotion-threshold")
+    except subprocess.CalledProcessError:
+        found = None
+    promotion = sd.PRINCIPLE_PROMOTION_DEFAULT if found is None else found
 
     max_bytes = math.ceil(round(fence_bytes_log, 6) / 1000) * 1000
     multiple = math.ceil(round(fence_ctx_log / promotion, 6))
@@ -114,7 +115,7 @@ def calibrate(repo: Path, rev: str) -> dict:
 
     return {
         "method": METHOD,
-        "measured_on": date.today().isoformat(),
+        "measured_on": committed_on,
         "rev": rev,
         "n_leaves": len(rows),
         "principle_promotion_threshold": promotion,

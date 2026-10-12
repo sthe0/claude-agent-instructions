@@ -134,20 +134,29 @@ class Difficulty:
 
 
 def measure_leaf(text: str) -> "tuple[int, int]":
-    """(UTF-8 bytes, count of `### ` lines inside the `## Contexts` section)."""
+    """(UTF-8 bytes, count of `### ` lines inside the `## Contexts` section).
+
+    Fenced code blocks are skipped, and a heading such as `## Contexts (12)` still opens the section.
+    """
     contexts = 0
     in_contexts = False
+    in_fence = False
     for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
         if line.startswith("## "):
-            in_contexts = line.strip() == "## Contexts"
+            in_contexts = re.fullmatch(r"## Contexts(\s.*)?", line.strip()) is not None
         elif in_contexts and line.startswith("### "):
             contexts += 1
     return len(text.encode("utf-8")), contexts
 
 
 def is_difficulty_leaf(text: str) -> bool:
-    """True when the leaf's own frontmatter declares `schema: difficulty/v1`."""
-    lines = text.splitlines()
+    """True when the leaf's own frontmatter declares `schema: difficulty/v1` (quotes, comment, BOM tolerated)."""
+    lines = text.lstrip("\ufeff").splitlines()
     if not lines or lines[0].strip() != "---":
         return False
     for line in lines[1:]:
@@ -155,21 +164,28 @@ def is_difficulty_leaf(text: str) -> bool:
             return False
         key, _, value = line.partition(":")
         if key.strip() == "schema":
-            return value.strip() == "difficulty/v1"
+            return value.split("#", 1)[0].strip().strip("\"'") == "difficulty/v1"
     return False
+
+
+def parse_config_int(config_text: str, key: str) -> "int | None":
+    """Value of the first digit cell in the config row whose KEY cell is `key`, else None."""
+    for line in config_text.splitlines():
+        cells = [c.strip() for c in line.split("|")]
+        if len(cells) > 3 and line.lstrip().startswith("|") and cells[1].strip("`") == key:
+            for cell in cells[2:]:
+                if cell.strip("`").isdigit():
+                    return int(cell.strip("`"))
+    return None
 
 
 def read_config_int(key: str, default: int, config_path: "Path | None" = None) -> int:
     path = config_path if config_path is not None else REPO_ROOT / "config.md"
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.lstrip().startswith("|") and "`" + key + "`" in line:
-                for cell in (c.strip().strip("`") for c in line.split("|")[2:]):
-                    if cell.isdigit():
-                        return int(cell)
+        value = parse_config_int(path.read_text(encoding="utf-8"), key)
     except OSError:
-        pass
-    return default
+        value = None
+    return default if value is None else value
 
 
 def scan_oversized_leaves(
