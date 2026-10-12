@@ -1,0 +1,176 @@
+{
+  "root": "..",
+  "source": "leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md",
+  "base_rev": "2d8ed07e2a9a01b03522e9dfad2e53079a83323d",
+  "keep": [
+    "1:19fcb0d3e729",
+    "2:c9e13bf99651",
+    "3:1bd429e542af",
+    "4:79856ecf96f4",
+    "6:6e4df9db7aed"
+  ],
+  "clusters": [
+    {
+      "slug": "2026-10-12-stage-control-venue-lifetime",
+      "name": "A stage control addresses a venue the delivery's own later steps delete, restore or never populated",
+      "description": "verify_command / final_check pinned to a worktree, repo_root, settings file or scaffold that landing or a later stage destroys, restores or replaces, so the re-run at verify-final short-circuits or goes green over the pre-change baseline.",
+      "functional_ground": "A control's declared venue (the checkout, worktree or file it observes) is treated as a fixed place, but the engine re-runs stage checks at verify-final after the delivery's own landing and cleanup have destroyed, restored or replaced that place.",
+      "difficulty": "A stage check is authored against the venue that exists mid-execution: a delivery worktree, a repo_root pinned to it, a scaffold, a settings file. The delivery's own later steps (landing, cleanup, a stage that restores or deletes the tree) then remove or replace that venue, so verify-final re-runs the check against a place that no longer holds the artifacts, or that holds only the pre-change baseline and passes for the wrong reason. The venue's lifetime is a property the author never stated, and the engine could not infer it from a `cd <path>` in the command text.",
+      "contexts": [
+        "8:da683cd8a1fc",
+        "17:43bbeae91ddc",
+        "19:6643a7033125",
+        "24:b323622ef14a",
+        "25:896b92e56b91",
+        "28:98c90b2b568c",
+        "33:5147e36cf80e",
+        "35:acdc1439f3fb",
+        "40:63a980805e5f",
+        "44:0d0c5c3dcf97",
+        "45:f5798749fe26",
+        "47:67e046e3458b",
+        "48:95d8c4fc232f",
+        "61:7191965fba18"
+      ]
+    },
+    {
+      "slug": "2026-10-12-stage-control-baseline-hostage",
+      "name": "A stage control asserts an absolute property of a suite or tree the delivery does not own",
+      "description": "Whole-suite, whole-tree and registry-wide assertions that go red on a change-independent failure, an unrelated commit or untracked parallel work, so a correct delivery cannot pass and the control is blamed on the wrong owner.",
+      "functional_ground": "A control reads state the delivery shares with others (the test suite, the registry, the working tree) and asserts it absolutely, so the delivery is held hostage to failures it neither caused nor can fix.",
+      "difficulty": "A stage verifies its own change by asserting that a whole suite, a whole registry or a whole working tree is clean. The shared resource already carries a change-independent red, or acquires one from an unrelated commit or an untracked parallel edit between authoring and run, so the control fails for a reason outside the delivery. The honest repair is a base-relative assertion, but the first reaction is to weaken the control or to attribute the red to the delivery.",
+      "contexts": [
+        "5:2221890b6c48",
+        "7:daf3414c80bd",
+        "23:c3446000467b",
+        "30:da52849feb0a",
+        "32:3339c57cd26e",
+        "34:f24dbdfc1c78",
+        "38:10d7d2c85bb0",
+        "56:dab74c359bf7",
+        "63:e6d2b58244c3"
+      ],
+      "existing_principle": "shared-resource-health-asserted-relative-to-a-pinned-base"
+    },
+    {
+      "slug": "2026-10-12-landed-state-identity-by-coordinate",
+      "name": "A landed-ness or identity check binds to a coordinate that a moving trunk or a squash merge invalidates",
+      "description": "SHA equality, commit-range sweeps, path:line pins, tip-commit proxies and trailer matches that false-fail after trunk advances, a squash merge rewrites history or a line shifts, while the delivered content is intact.",
+      "functional_ground": "A check establishes that a delivery landed, or that an artifact is the one it names, by a positional coordinate (a sha, a range, a line number, a trailer) instead of by content or ancestry, so any unrelated movement of the shared history falsifies it.",
+      "difficulty": "Landed-ness and artifact identity are checked through a coordinate: the delivered head sha, a range off a base, a `path:line` pin, a task trailer. Trunk advances, a squash merge orphans the frozen head, or an unrelated edit shifts a line, and the check goes red while the delivered content is byte-identical on trunk. The same movement can also hide a genuine edit behind an unchanged coordinate, so the fragility cuts both ways.",
+      "contexts": [
+        "26:bded536cb75f",
+        "27:07ed6b6a442b",
+        "31:78fd680a9d16",
+        "49:17a22f2006a3",
+        "59:c78939e632ed",
+        "60:e9bf6db7b807",
+        "62:e6949a31140d"
+      ]
+    },
+    {
+      "slug": "2026-10-12-stage-control-phase-of-evaluation",
+      "name": "A stage control describes the state of one phase but is evaluated in another",
+      "description": "Pre-action probes wired as post-conditions, pre-commit observables re-run post-commit, equality assertions a later stage deliberately breaks, and literals frozen before the world they describe changed.",
+      "functional_ground": "A control observes a state that is true only in one phase of the plan's own lifecycle (before the action, before the commit, before a later stage), yet the engine re-runs it in a different phase, so it is unsatisfiable or false-red by construction.",
+      "difficulty": "Each stage control is authored as a snapshot of one phase: a probe that is correct before the action, a working-tree diff that is correct before the commit, an exact equality that is correct before a later stage broadens it. The engine evaluates it again at record-result and at verify-final, in a phase where the observable is empty, superseded or stale. The control cannot go green for the right reason there, and nothing in the plan states which phase it was written for.",
+      "contexts": [
+        "11:b18b1a70b866",
+        "16:8c594408db56",
+        "18:0b4f202dcb33",
+        "20:96040ba9e45c",
+        "51:7fc9100aa27c",
+        "58:c46d3ec30d12"
+      ]
+    },
+    {
+      "slug": "2026-10-12-stage-control-authoring-interface-mismatch",
+      "name": "A stage control is wrong about the interface, literal or observable it reads, and nothing ran it to find out",
+      "description": "Typos, wrong CLI signatures, ambient variables, unquoted or retyped literals, derived tokens never written verbatim, prose pins and permission-denied invocations, found only when the engine finally runs the check.",
+      "functional_ground": "A control is authored from a mental model of an interface or a literal (a CLI signature, a field format, an environment, a derived token) and shipped as text that no gate executes, so its mechanical defect is discovered only at record-result.",
+      "difficulty": "The check is syntactically plausible and semantically wrong about what it reads: a positional argument that changed, a field whose spec allows a trailing reason, a variable the command never sees, a token that is derived rather than written, a phrase that pins the destination's language. Every gate on the submit path reads the command as text, so each defect survives review and surfaces at the stage-result run, one correction cycle per defect. The common remedy, running the command once read-only before submission, is cheap and was repeatedly skipped.",
+      "contexts": [
+        "10:22b5b4baa0f0",
+        "29:e325a0f7e57f",
+        "36:d55bc73e0654",
+        "37:41cee20815df",
+        "39:3a45cb6dde6e",
+        "41:f10dc1fd81c5",
+        "50:00ab66294cdd",
+        "53:9d173b307363",
+        "54:fd885b0a2801",
+        "57:dd36f4157045"
+      ],
+      "existing_principle": "a-judging-artefact-is-executed-before-it-judges"
+    },
+    {
+      "slug": "2026-10-12-stage-control-liveness-nondeterminism",
+      "name": "A stage control's verdict rests on a live or non-reproducing read, so a transient failure is scored as a defect",
+      "description": "Network and live-API reads and a local exit-1 that does not reproduce, scored as a missing artifact or a failed stage, plus a loop guard that cannot tell a repeat from a new failure.",
+      "functional_ground": "A control consumes an input that is not hermetic (a network read, a live API, a flaky local run) and has no way to separate a transient failure from a real one, so one non-reproducing exit code costs a full difficulty cycle.",
+      "difficulty": "A stage check reads a live external resource, or a local suite that sometimes exits 1 without a reproducible cause. A single transient failure is recorded as a failed stage and routed into diagnosis, where manual re-runs come back clean and no factual cause can be named. The loop guard meanwhile treats the repeat as a new digest or as noise, so the system can neither retry cheaply nor stop honestly.",
+      "contexts": [
+        "42:12eaee061a35",
+        "52:951b9542a0a6",
+        "55:d589ff585177"
+      ]
+    },
+    {
+      "slug": "2026-10-12-stage-control-recorded-norm-not-mobilized",
+      "name": "A norm or advisory that is already recorded does not reach the act of authoring the control",
+      "description": "Known vectors repeated in a plan authored after they were recorded, and a fired suite-scope advisory dismissed as intentional, because retrieval and the warning are advisory and the baseline check stays residual perception.",
+      "functional_ground": "The remedy for a control-authoring defect exists in memory or in an engine advisory, but nothing places it in front of the author at the moment the control is written, so the defect recurs against a known remedy.",
+      "difficulty": "The vector catalogue and its remedies are recorded, and in one case the engine even mechanized an advisory at submit-plan. The author, working in a fresh plan or session, still writes the same control, or reads the fired advisory and dismisses it as intentional. A recorded norm is only as strong as its trigger into the authoring act; prose recall and warn-only gates leave the decision to the same judgement that already failed.",
+      "contexts": [
+        "9:0c797b96a41e",
+        "12:6c2e2bc5bab5",
+        "13:f70e7a08a014",
+        "43:5a081052d9f4",
+        "46:353a29e54b21"
+      ]
+    },
+    {
+      "slug": "2026-10-12-replan-gate-machinery-wedges-correction",
+      "name": "The replan gates that must admit a correction stall it, or strand the session, instead",
+      "description": "A refinement replan blocked by premise-enumeration staleness, and a criterion-narrowing replan classified substantive that strands the session at PARTITIONED with every stage passed, until an engine refinement landed.",
+      "functional_ground": "The correction path for a defective control passes through gates (premise enumeration, replan classification, coverage) whose own state or classification can stall it, so the repair of an authoring slip needs a second repair of the machinery.",
+      "difficulty": "Once a control defect is diagnosed the repair is routed through replan. The premise gate's enumeration goes stale and blocks a refinement until the canonical plan content is synced; a replan that only narrows a done criterion is classed substantive and leaves the session at PARTITIONED with all stages passed; the coverage gate's encoding for a control-only change was not obvious. Each wedge turns a one-line repair into a recovery exercise with no reachable route.",
+      "contexts": [
+        "14:8d78169a72f9",
+        "15:0812f99669b7",
+        "21:58b0d73f1275",
+        "22:09d34177d51d"
+      ],
+      "existing_principle": "verdict-covers-the-evidence-domain-it-claims"
+    }
+  ],
+  "principles": [
+    "a-control-names-a-venue-that-outlives-its-last-rerun",
+    "delivered-identity-is-established-by-content-or-ancestry",
+    "a-rerunnable-control-asserts-a-phase-independent-property",
+    "a-control-over-a-non-hermetic-read-separates-unreadable-from-failed",
+    "a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs"
+  ],
+  "rewrites": [
+    {
+      "contexts": ["31:78fd680a9d16"],
+      "replace": [{"from": "pinned each vetted `~/\u002eclaude` reference", "to": "pinned each vetted legacy-config-root reference"}]
+    },
+    {
+      "contexts": ["14:8d78169a72f9"],
+      "replace": [{"from": "`~/\u002eclaude/plans/…toml`", "to": "`<config-root>/plans/…toml`"}]
+    },
+    {
+      "contexts": ["7:daf3414c80bd"],
+      "replace": [{"from": "editing ~/\u002eclaude/plans/*.toml", "to": "editing <config-root>/plans/*.toml"}]
+    },
+    {
+      "contexts": ["20:96040ba9e45c"],
+      "replace": [{"from": "legacy `~/\u002eclaude` quotes", "to": "legacy config-root quotes"}]
+    },
+    {
+      "contexts": ["19:6643a7033125"],
+      "replace": [{"from": "~/\u002eclaude/settings.json", "to": "<harness-config-dir>/settings.json"}]
+    }
+  ]
+}
