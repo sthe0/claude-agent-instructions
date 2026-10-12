@@ -69,6 +69,7 @@ _KIND_FILES: dict[str, tuple[str, ...]] = {
         "skills/specializations/planner/policy.md",
     ),
     "tech-writer": ("skills/specializations/tech-writer/SKILL.md",),
+    "memory-curator": ("skills/specializations/memory-curator/SKILL.md",),
 }
 
 # (kind, span) -> one-line reason. Every entry here is a span the regex would flag

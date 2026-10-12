@@ -29,6 +29,12 @@ The three memory scopes (personal / global / project) say *where* a fact goes bu
 - **Known limits.** The cutoff is tuned on long prompts; prompts under about ten content words rarely clear it, and fewer than three content words are never scored. Measured recall and the thin margin over the best negative are recorded in `docs/operations/memory-retrieval-calibration.json`.
 - **Re-calibrate** after the corpus changes materially (hundreds of added or rewritten leaves): run `python3 scripts/memory-retrieval-calibrate.py`, then update `MIN_SCORE` and `BODY_PREFIX_CHARS` in the hook to the JSON's `min_score` and `body_prefix_chars` — `test_calibration_json_matches_the_hook_constants` fails until they agree. The JSON holds aggregates only, never prompt text.
 
+## Curating grown leaves
+
+*Difficulty removed: a leaf that keeps gaining contexts outgrows reading and retrieval, and nobody owns splitting it.*
+
+When `self-diagnose` reports an `oversized-leaf` finding (action: memory-curator split), the root spawns `memory-curator` (`spawn-specialist.py --kind memory-curator`, `--workdir` a linked worktree brought to the intended base) with the leaf named. The curator clusters the leaf's contexts by functional ground, moves each cluster into its own leaf, writes principle candidates, and stops with an uncommitted diff — it never commits. The root shows that diff to the user and commits it only on an explicit accept; a rejected diff is discarded with the worktree. See `skills/specializations/memory-curator/SKILL.md`.
+
 ## See also
 
 - [memory-hierarchy.md](memory-hierarchy.md) — when to spin off `<subdir>/MEMORY.md` sub-indexes.
