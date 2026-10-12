@@ -9091,6 +9091,94 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "d934050be5a1f261"
+domain = "code"
+file = "scripts/tests/test_norm_mismatch.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "e2a93d0cdf40bc7f"
+domain = "code"
+file = "scripts/tests/test_norm_mismatch.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "8a5d3ed27691b089"
+domain = "code"
+file = "scripts/tests/test_norm_mismatch.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "ec40de11b73d09b8"
+domain = "code"
+file = "scripts/tests/test_norm_mismatch.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "36dcc421cb26a641"
+domain = "code"
+file = "scripts/tests/test_norm_mismatch.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "04e45c8c1a424da6"
+domain = "code"
+file = "scripts/tests/test_norm_mismatch.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "2589322034069ebb"
+domain = "code"
+file = "scripts/tests/test_norm_mismatch.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "36aa3720a6e99d93"
+domain = "code"
+file = "scripts/tests/test_norm_mismatch.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b2711c5f08519d89"
+domain = "code"
+file = "scripts/tests/test_norm_mismatch.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "2b99429dbf68c1d0"
+domain = "code"
+file = "scripts/tests/test_norm_mismatch.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "953a7c72fbf43c0f"
+domain = "code"
+file = "scripts/tests/test_norm_mismatch.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "b86d2f7ab496d8e5"
 domain = "code"
 file = "scripts/tests/test_norm_staleness_gates.py"
@@ -16707,6 +16795,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "2092a52638ee23e3"
+domain = "code_file_rollup"
+file = "scripts/tests/test_norm_mismatch.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "b9877dabf75dedff"
 domain = "code_file_rollup"
 file = "scripts/tests/test_norm_staleness_gates.py"
@@ -19896,6 +19992,14 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "ab2695ce4f18500f"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "e4316789a3a27340"
 domain = "prose"
 file = "memory-global/leaves/effort-divergence-trigger.md"
 class = "perception"
@@ -30599,6 +30703,14 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "0840b4e6e790644e"
+domain = "prose"
+file = "memory-global/leaves/verify-command-scope-and-frozen-revision.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "165d7121e24735ab"
 domain = "prose"
 file = "memory-global/leaves/verify-command-scope-and-frozen-revision.md"
@@ -31112,14 +31224,6 @@ ground = "Policy files elaborate the judgment procedure a specialization follows
 
 [[entry]]
 id = "af852db4e73f4883"
-domain = "prose"
-file = "skills/overcome-difficulty/policy.md"
-class = "perception"
-disposition = "keep"
-ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
-
-[[entry]]
-id = "5ad25ca533a7861f"
 domain = "prose"
 file = "skills/overcome-difficulty/policy.md"
 class = "perception"

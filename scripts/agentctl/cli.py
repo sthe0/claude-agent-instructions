@@ -6849,6 +6849,10 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             data={**base, "question": body, "continuation": continuations.clarify(body)},
         )
     if marker == "REPLAN":
+        mismatch, unverified = _child_norm_mismatch(state, store, stage, result.stderr)
+        if mismatch is not None:
+            return _open_norm_mismatch(state, store, stage, mismatch, base)
+        state.log("norm_mismatch_unverified", stage=stage.index, reason=unverified)
         store.save(state)
         return Directive(
             False, state.node, "replan",
@@ -7740,6 +7744,92 @@ def _diagnose_materialization_defect(
         "a planning miss; run overcome-difficulty (investigate why materialization "
         "failed to carry the grant, then critique); no re-dispatch, no user ask",
         marker="OVERCOME-DIFFICULTY",
+    )
+
+
+def _child_norm_mismatch(
+    state: SessionState, store: StateStore, stage: Stage, stderr: str,
+) -> tuple[dict | None, str]:
+    """`(record, "")` when the child this dispatch just ran holds, in its own state, a
+    current difficulty routed to this stage's norm; else `(None, reason)`.
+
+    The decision rests on the child's state record -- never on the REPLAN text -- and holds
+    only when all of these do: the transcript path the launch reported names the child's
+    session id (its stem) and that state loads; the child's handoff names this session and
+    this stage; its open difficulty carries a `parent` norm target whose baseline is the
+    stage's current norm digest (a replan of the stage since the spawn moves it, and the
+    child's baseline is then stale); and its declaration states all three of expected,
+    actual and mismatch. The child's state is only read, never written."""
+    if state.node != Node.EXECUTING.value:
+        return None, f"the session is at {state.node}, not EXECUTING"
+    path = _parse_transcript_path(stderr)
+    if path is None:
+        return None, "the launch reported no transcript path"
+    child_id = Path(path).stem
+    if not child_id or child_id == state.session_id:
+        return None, f"the transcript path names no child session: {path}"
+    try:
+        child = store.load(child_id)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return None, f"child state {child_id} is unreadable: {exc}"
+    if child is None:
+        return None, f"no state record for child session {child_id}"
+    link = child.parent_link or {}
+    if link.get("parent_session") != state.session_id or link.get("stage_index") != stage.index:
+        return None, (f"child {child_id} is not linked to stage {stage.index} of this session "
+                      f"(parent_session={link.get('parent_session')!r}, "
+                      f"stage_index={link.get('stage_index')!r})")
+    opened = child.difficulty
+    if opened is None:
+        return None, f"child {child_id} holds no open difficulty"
+    current = gates.stage_norm_digest(stage)
+    targets = [t for t in opened.norm_targets
+               if t.get("target") == PARENT_NORM_TARGET and t.get("kind") == PARENT_NORM_KIND]
+    if not targets:
+        return None, f"child {child_id}'s open difficulty names no parent norm target"
+    if not any(t.get("baseline") == current for t in targets):
+        return None, (f"child {child_id}'s parent norm target is stale: its baseline is not "
+                      f"stage {stage.index}'s current norm digest")
+    decl = opened.declaration
+    if decl is None or not all((getattr(decl, f) or "").strip()
+                               for f in ("expected", "actual", "mismatch")):
+        return None, f"child {child_id}'s declaration lacks expected, actual or mismatch"
+    return {"child_session": child_id, "stage_index": stage.index, "norm_digest": current,
+            "declaration": {"expected": decl.expected, "actual": decl.actual,
+                            "mismatch": decl.mismatch}}, ""
+
+
+def _open_norm_mismatch(
+    state: SessionState, store: StateStore, stage: Stage, mismatch: dict, base: dict,
+) -> Directive:
+    """Route a REPLAN whose child record `_child_norm_mismatch` verified into FAILED /
+    DIAGNOSING on this stage, with the child's own declaration as the opened difficulty:
+    the fault is in the stage's norm, so re-dispatching it unchanged would only repeat it.
+    Same two-step EXECUTING -> VERIFYING -> DIAGNOSING transition as
+    `_diagnose_materialization_defect`."""
+    decl = mismatch["declaration"]
+    stage.outcome.status = StageStatus.FAILED.value
+    note = (f"the child (session {mismatch['child_session']}) reported a mismatch in this "
+            f"stage's norm: {decl['mismatch']}")
+    stage.outcome.actual = (stage.outcome.actual + "\n" + note) if stage.outcome.actual else note
+    state.log("norm_mismatch", stage=stage.index, child_session=mismatch["child_session"],
+              norm_digest=mismatch["norm_digest"])
+    state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
+    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
+    opened = _open_difficulty(state, declaration=Declaration(**decl))
+    store.save(state)
+    if opened is None:
+        return _difficulty_cap_directive(
+            state, f"stage {stage.index}'s child reported a mismatch in the stage's norm",
+            data={"norm_mismatch": mismatch})
+    return Directive(
+        False, state.node, "investigate",
+        f"stage {stage.index}'s child session recorded a difficulty addressed to this "
+        "stage's norm (verified on its state record); its declaration is the opened "
+        "difficulty -- run overcome-difficulty (investigate, then critique the stage's "
+        "norm); no re-dispatch of the stage unchanged",
+        marker="OVERCOME-DIFFICULTY",
+        data={**base, "norm_mismatch": mismatch},
     )
 
 
@@ -9354,16 +9444,38 @@ def _norm_file_refusal(state: SessionState, target: str) -> str | None:
             f"plans/)")
 
 
+PARENT_NORM_TARGET = "parent"
+PARENT_NORM_KIND = "parent_norm"
+
+
 def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[list[dict], str | None]:
     """The `norm_targets` entries for a нормативное critique's --norm-target values, or
     the first refusal. A stage target is snapshotted from the live state's stage -- the
     stage that actually ran, which refinement replans rebuild and `--renormalize` patches
     -- never from a plan file, which is editable while DIAGNOSING. A stage the state does
     not hold is refused, not read from the approved snapshot, which `--renormalize`
-    leaves on the approved bytes."""
+    leaves on the approved bytes.
+
+    `parent` names the norm of the stage that spawned this session: it is snapshotted from
+    the adopted handoff (`parent_link.norm_digest`), needs a linked session, and stands
+    alone -- the child cannot edit that norm, it hands the fault back with REPLAN."""
     entries: list[dict] = []
     for raw in targets:
         raw = (raw or "").strip()
+        if raw == PARENT_NORM_TARGET:
+            if len(targets) != 1:
+                return [], (f"--norm-target {PARENT_NORM_TARGET} stands alone: the norm of "
+                            f"the parent stage is not this session's to edit, so a fault "
+                            f"routed to it is handed back with REPLAN, not mixed with "
+                            f"targets this session's own replan would change")
+            link = state.parent_link
+            if link is None or not link.get("norm_digest"):
+                return [], (f"--norm-target {PARENT_NORM_TARGET} names the norm of the "
+                            f"stage that spawned this session; this session holds no "
+                            f"norm handoff (it is not linked to a parent stage)")
+            entries.append({"target": PARENT_NORM_TARGET, "kind": PARENT_NORM_KIND,
+                            "baseline": link["norm_digest"], "source": "critique"})
+            continue
         if raw.startswith("stage:"):
             try:
                 index = int(raw[len("stage:"):])
@@ -9458,6 +9570,18 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
     if blockers:
         action = "investigate" if any("investigation" in b for b in blockers) else "declare"
         return Directive(False, state.node, action, "; ".join(blockers), data={"blockers": blockers})
+    if any(t.get("kind") == PARENT_NORM_KIND for t in state.difficulty.norm_targets):
+        return Directive(
+            True, state.node, "return_replan",
+            "the fault is in the norm of the parent stage this session serves, which this "
+            "session cannot edit: end the session with `REPLAN:` naming the mismatch -- the "
+            "parent's dispatch verifies this record and opens its own difficulty; do not "
+            "replan or normalize here",
+            marker="REPLAN",
+            data={"norm_target": PARENT_NORM_TARGET,
+                  "parent_session": (state.parent_link or {}).get("parent_session"),
+                  "stage_index": (state.parent_link or {}).get("stage_index")},
+        )
     if state.node != Node.DIAGNOSING.value:
         d = Directive(True, state.node, "normalize",
                       "reflection record complete; record the re-norming (normalize --factor) "
@@ -12289,7 +12413,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "plan) or the absolute path of an existing norm file (a linked "
                          "worktree of the instructions repo, a memory leaf, or a file under "
                          "the agent home's skills/ or plans/); the closing replan must "
-                         "change it")
+                         "change it. `parent` (alone, in a session linked to a parent "
+                         "stage) names that stage's norm instead: the session hands the "
+                         "fault back with REPLAN and the parent's dispatch verifies the "
+                         "record")
     sp = add("normalize"); sp.add_argument("--session", required=True)
     sp.add_argument("--factor", default=None,
                     help="the reproducible cause the difficulty exposed, being re-normed "
