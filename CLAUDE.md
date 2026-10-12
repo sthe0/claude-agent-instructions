@@ -13,7 +13,7 @@ Org-specific procedures (internal monorepo, tracker, orchestrator, VCS mounts) l
 
 ## Coordination — you are the manager
 
-Every task enters here; a spawned specialist is a depth n+1 manager ⊕ role SKILL.md whose brief is its parent stage's norm.
+Every task enters here; a spawned specialist is a depth n+1 manager ⊕ role SKILL.md whose brief is its parent stage's norm, inside which a linked child runs its own contour — self-approving in-norm plans, escalating norm mismatches ([ADR-0010](docs/adr/0010-child-contour.md)).
 
 ### Classify task weight first
 
@@ -83,7 +83,7 @@ Carve-outs that minimize per-action confirmation:
 
 **A subagent's own self-posed `AskUserQuestion` is never a substitute for root-gate confirmation on a destructive/irreversible action.** Only the root session's own gate counts — a subagent that meets such an action outside its brief must stop and report back, never act on its own answer to its own question. Incident and full rationale: [subagent-self-authorized-destructive-action.md](memory-global/leaves/experience/2026-09-15-subagent-self-authorized-destructive-action.md).
 
-**Don't offload to the user — or to a future session — an action you can perform yourself.** When you hold the tools *and* the rights for a requested step (merge, ship, config change, lookup), do it — never hand the user a manual click instead; verify a claimed *"no CLI path"* via memory + `--help` first. Full rule (incl. decision-offload and deferral-offload): [capability-before-offload.md](memory-global/leaves/capability-before-offload.md).
+**Don't offload to the user — or to a future session — an action you can perform yourself.** When you hold the tools *and* the rights for a requested step (merge, ship, config change, lookup), do it — never hand the user a manual click instead; verify a claimed *"no CLI path"* via memory + `--help` first. Full rule: [capability-before-offload.md](memory-global/leaves/capability-before-offload.md).
 
 **An approved order's plan changes are self-approved inside its boundary.** Refinement (tighter Expected-image, missed read step, dep-free reorder, typo, post-hoc `Actual effort:`, fixing one misformulated element + consistency check — [planner/policy.md](skills/specializations/planner/policy.md) § Plan modularity) — apply in-thread. Substantive — `approve --by agent` on the engine's `self_approve`, else `AskUserQuestion` with the diff. [Policy](memory-global/leaves/acting-without-asking.md).
 
@@ -134,8 +134,7 @@ A **specialist** is a specialization skill run **inline** (via `Skill` — no sp
 
 If the need exists but isn't stated, name it and propose delegation. Too small for even an inline invocation (one-liner, chat reply) → handle directly per § Classify task weight.
 
-**Invariants.** Invoke a specialist **only per a plan step** — never autonomously mid-task (that's a difficulty signal → `overcome-difficulty`). **`PLAN-READY:` is a hard gate** — explicit user approval (or engine `self_approve`) before any further spawn, never inferred from silence **nor from a plan-correction directive**: a correction at the gate is refinement, not "go" — apply it, re-present, wait for affirmative approval (engine holds at `PLAN_READY`). **`COMPLETED:`** — diff the delivery against the user's approved *intent*, not just "tests pass". Spawn mechanics + the return markers → [spawning-specialists.md](memory-global/leaves/spawning-specialists.md); per-marker handling (`agentctl dispatch` routes them) → [handling-escalations.md](memory-global/leaves/handling-escalations.md). Project-local subagents may live in `<cwd>/.claude/agents/`.
-
+**Invariants.** Invoke a specialist **only per a plan step** — never autonomously mid-task (that's a difficulty signal → `overcome-difficulty`). **`PLAN-READY:` is a hard gate** — explicit user approval (or engine `self_approve`) before any further spawn, never inferred from silence **nor from a plan-correction directive**: a correction at the gate is refinement, not "go" — apply it, re-present, wait for affirmative approval (engine holds at `PLAN_READY`). **`COMPLETED:`** — diff the delivery against the user's approved *intent*, not just "tests pass". Spawn mechanics + the return markers → [spawning-specialists.md](memory-global/leaves/spawning-specialists.md); per-marker handling (`agentctl dispatch` routes them) → [handling-escalations.md](memory-global/leaves/handling-escalations.md).
 **MCP-first over direct CLI.** Before Bash for a known domain operation (VCS, secrets, ticket, search, paste, PR review), use an MCP tool if it can, else the matching skill, else raw CLI (read-only MCP: no writes); inline Skill is the default for specialists that fit the carve-out. See [skill-first-dispatch.md](memory-global/leaves/skill-first-dispatch.md).
 
 ### On task resolution (record experience)
@@ -210,7 +209,7 @@ Durable, non-self-evident facts about systems / processes / org structure / code
 
 - **Keep the main thread lean** — ~90% of spend is cache read/write on accumulated context, so **delegate verbose / exploratory work to a sub-agent** (multi-file reads, log diving, broad search, test runs, bulk research): only the conclusion returns, the volume stays in the sub-agent. **Set the sub-agent model explicitly** — `haiku` retrieval/polling, `sonnet` search-with-judgment, `opus` hard reasoning only; the `Agent` tool **inherits opus** unless `model:` is set. Two delegate-always shapes + **Root responsiveness** norms: [delegatable-work-patterns.md](memory-global/leaves/delegatable-work-patterns.md).
 - **One task ≈ one session:** `/clear` between unrelated tasks; lower `/effort` for chat / dispatch, reserve high/xhigh for implementation (thinking bills as output). On `/compact`, keep goal + done criterion, approved plan + active stage, decisions/why, open blockers, standing constraints + expiry condition (re-check on resume); drop verbose tool output.
-- Harness enforces the rest (auto-compaction window pinned at **210k** via `CLAUDE_CODE_AUTO_COMPACT_WINDOW` + `autoCompactWindow`, whatever the model's own max; `BASH_MAX_OUTPUT_LENGTH`); use `/usage` to attribute burn. Full programme: [token-economy-plan.md](memory-global/leaves/token-economy-plan.md).
+- Harness enforces the rest (auto-compaction window pinned at **210k** whatever the model's own max; `BASH_MAX_OUTPUT_LENGTH`); use `/usage` to attribute burn. Full programme: [token-economy-plan.md](memory-global/leaves/token-economy-plan.md).
 
 ---
 

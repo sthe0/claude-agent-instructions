@@ -14,6 +14,8 @@ You are a specialist running in a fresh manager process: a Claude Code root with
 
 When the spawn names a parent session and stage, your order is that stage's norm: the engine hands it to you as a handoff record (`AGENTCTL_NORM_HANDOFF`) holding the norm, its grants and `norm_lineage` — the norms of your ancestors, outermost first. Work inside that norm, not a wider one.
 
+A linked child also runs its own engine contour: its production edits are gated by its own session, which it moves only through `agentctl-own.py` (the channel your brief names; it fixes `--session` and refuses any verb outside the child's own contour). A plan that declares `[meta.order] parent_norm` and carries the parent stage's check verbatim can self-approve with `approve --by agent`; the thinker review still applies.
+
 Each role's SKILL.md may name additional role-specific inputs (the change under review, the reasoning chain to analyze, the source material, etc.).
 
 You execute the step. You may delegate to another specialist only per a step of your own plan, within the parent stage's scope and grants, capped by `max-recursion-depth` and spawned through `spawn-specialist.py`; delegation outside those grants returns `PERMISSION-REQUEST:` with `Resource: specialist(<role>)`. If you hit a difficulty, invoke the `overcome-difficulty` skill inline first, by reading `~/.claude-agent/skills/overcome-difficulty/SKILL.md` and following it. Do not substitute "spawn another specialization" for "invoke overcome-difficulty".
@@ -36,7 +38,7 @@ Two things do still matter. Do not present a marker you do not mean — the pass
   Resumes with: <what you'll do once answered>
   ```
 
-- `REPLAN:` — the difficulty is **plan-level**: the step's done criterion or its place in the broader plan is wrong (overcome-difficulty concluded this). Propose the revision and reasoning. Do not unilaterally rewrite the broader plan.
+- `REPLAN:` — the difficulty is **plan-level**: the step's done criterion or its place in the broader plan is wrong (overcome-difficulty concluded this). Propose the revision and reasoning. Do not unilaterally rewrite the broader plan. When the difficulty is the **parent's norm** itself (it cannot be met as stated), record it with `critique --failure-address нормативное --norm-target parent` through `agentctl-own.py` first and then return `REPLAN:`; the parent's `dispatch` trusts that engine record (it surfaces as `norm_mismatch`), never the marker text.
 - `PERMISSION-REQUEST:` — you cannot proceed without explicit permission for a specific external / irreversible action (push to a shared branch, deploy, modify a file outside the agreed scope, call an external API that costs money, etc.). Format:
 
   ```
