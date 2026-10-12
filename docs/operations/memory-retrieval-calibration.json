@@ -1,0 +1,94 @@
+{
+  "sample_source": "memory-corpus-leave-one-out",
+  "date": "2026-10-12",
+  "corpus": {
+    "root": "memory-global/leaves",
+    "leaves": 216
+  },
+  "n_positive_pairs": 283,
+  "n_negative_prompts": 14,
+  "top_k": 3,
+  "query_terms": 10,
+  "recall_at_3": {
+    "no_cutoff": 0.3,
+    "with_cutoff": 0.251
+  },
+  "min_score": 5.32,
+  "max_negative_score": 4.923,
+  "body_prefix_chars": 500,
+  "prefix_sweep": [
+    {
+      "body_prefix_chars": 500,
+      "n_pairs": 283,
+      "recall_no_cutoff": 0.3,
+      "recall_ceiling_score": 5.321,
+      "cutoff": 5.32,
+      "recall_with_cutoff": 0.251,
+      "negative_max_score": 4.923,
+      "feasible": true
+    },
+    {
+      "body_prefix_chars": 1000,
+      "n_pairs": 283,
+      "recall_no_cutoff": 0.314,
+      "recall_ceiling_score": 5.491,
+      "cutoff": 5.49,
+      "recall_with_cutoff": 0.265,
+      "negative_max_score": 6.725,
+      "feasible": false
+    },
+    {
+      "body_prefix_chars": 2000,
+      "n_pairs": 283,
+      "recall_no_cutoff": 0.346,
+      "recall_ceiling_score": 5.662,
+      "cutoff": 5.66,
+      "recall_with_cutoff": 0.297,
+      "negative_max_score": 6.363,
+      "feasible": false
+    },
+    {
+      "body_prefix_chars": 4000,
+      "n_pairs": 283,
+      "recall_no_cutoff": 0.385,
+      "recall_ceiling_score": 5.162,
+      "cutoff": 5.16,
+      "recall_with_cutoff": 0.336,
+      "negative_max_score": 5.857,
+      "feasible": false
+    },
+    {
+      "body_prefix_chars": 8000,
+      "n_pairs": 283,
+      "recall_no_cutoff": 0.399,
+      "recall_ceiling_score": 5.185,
+      "cutoff": 5.18,
+      "recall_with_cutoff": 0.35,
+      "negative_max_score": 5.765,
+      "feasible": false
+    }
+  ],
+  "recall_by_query_terms": {
+    "5": {
+      "n_pairs": 283,
+      "no_cutoff": 0.155,
+      "with_cutoff": 0.067
+    },
+    "10": {
+      "n_pairs": 283,
+      "no_cutoff": 0.3,
+      "with_cutoff": 0.251
+    },
+    "25": {
+      "n_pairs": 283,
+      "no_cutoff": 0.544,
+      "with_cutoff": 0.544
+    }
+  },
+  "latency_ms": {
+    "p50": 101.9,
+    "p95": 108.1,
+    "runs": 15
+  },
+  "bias": "Optimistic against live prompts: a context block is written in its leaf's own vocabulary and the other blocks of that leaf stay in the target, so this recall is an upper bound on what a free-form prompt achieves. The retrieval ledger measures live recall."
+}

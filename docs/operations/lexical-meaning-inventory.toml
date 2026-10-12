@@ -804,6 +804,19 @@ ground = "_ISO_DATE_RE.match checks a date string has the YYYY-MM-DD shape befor
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/hook-memory-retrieval.py::query_terms::lexical.tokenize"]
+class = "candidate-generation"
+ground = "nominates pointers; the root model judges relevance. The prompt's content words feed a BM25F ranking whose top three leaves are printed as candidates, never acted on."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-memory-retrieval.py::build_leaf::lexical.tokenize"]
+class = "candidate-generation"
+ground = "nominates pointers; the root model judges relevance. The leaf's title and body prefix are tokenized only to be ranked against the prompt."
+hits = 2
+hit_classes = ["candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
 [sites."scripts/hook-multi-mount-search-guard.py::fuse_mounts_from_text::re.sub"]
 class = "structural"
 ground = "re.sub decodes octal `\\NNN` escapes in a /proc/self/mounts mount-point field (fixed mounts-file format)."
@@ -1331,16 +1344,22 @@ ground = "nominate (BM25F word overlap) picks top-k candidates for a query, and 
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/lib/semantic_join.py::nominate::lexical.tokenize"]
+[sites."scripts/lib/bm25f.py::nominate_scored::lexical.tokenize"]
 class = "candidate-generation"
-ground = "The three tokenize calls (title, body, query) only feed nominate's BM25F ranking, which nominates candidates for the same-difficulty judge to decide."
-hits = 3
-hit_classes = ["candidate-generation", "candidate-generation", "candidate-generation"]
+ground = "The query tokenize call only feeds the BM25F ranking, whose scored candidates go to a judge (same-difficulty) or in front of the model (memory retrieval) to decide."
+hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/lib/semantic_join.py::tokenize::re.findall"]
+[sites."scripts/lib/bm25f.py::split_docs::lexical.tokenize"]
+class = "candidate-generation"
+ground = "The title and body tokenize calls only feed the BM25F ranking, whose scored candidates go to a judge (same-difficulty) or in front of the model (memory retrieval) to decide."
+hits = 2
+hit_classes = ["candidate-generation", "candidate-generation"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/bm25f.py::tokenize::re.findall"]
 class = "structural"
-ground = "re.findall(r\"\\w+\") only splits text into lowercased word tokens for the nomination ranking; decides nothing."
+ground = "re.findall(r\"\\w+\") only splits text into lowercased word tokens for the BM25F ranking; decides nothing."
 hits = 1
 reviewed_by = "developer"
 
@@ -1550,6 +1569,12 @@ reviewed_by = "developer"
 [sites."scripts/memory-audit.py::parse_frontmatter::pattern.match"]
 class = "structural"
 ground = "FRONTMATTER_RE matches the leading --- frontmatter block; file structure."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/memory-retrieval-calibrate.py::positive_pairs::lexical.tokenize"]
+class = "candidate-generation"
+ground = "Tokenizes a context block into the calibration query that is scored against the corpus; the score only measures whether the leaf is nominated, and no verdict on meaning is drawn from it."
 hits = 1
 reviewed_by = "developer"
 

@@ -16,6 +16,8 @@
 # scripts/hook-escalation-diagnosis-gate.py (judge-guarded)  | code   | semantic-guarded
 # scripts/hook-deferring-disposition-gate.py (judge-guarded) | code   | semantic-guarded
 # scripts/hook-resolution-reminder.py (judge-guarded)        | code   | semantic-guarded
+# scripts/hook-memory-retrieval.py (candidate-only)          | code   | semantic-guarded
+# scripts/lib/bm25f.py (candidate-only)                      | code   | semantic-guarded
 # scripts/hook-*.py (other guardian hooks)                   | code   | structural
 # scripts/lib/prompt_judges.py (judge-guarded)               | code   | semantic-guarded
 # scripts/lib/semantic_join.py (judge-guarded)               | code   | semantic-guarded
@@ -2427,6 +2429,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "d28723d86914623c"
+domain = "code"
+file = "scripts/lib/bm25f.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "The word-overlap scorer behind `semantic_join.nominate` and the memory retrieval hook. A score only ORDERS candidate texts; the callers never treat it as a verdict on meaning — one hands the ranked candidates to a judge, the other to the root model. The `\\w+` split in `tokenize` is word boundary syntax. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and command syntax, misdescribes this file."
+
+[[entry]]
 id = "6c7be3eda8d17d86"
 domain = "code"
 file = "scripts/lib/instruction_smoke_gate.py"
@@ -2673,14 +2683,6 @@ file = "scripts/lib/review_block.py"
 class = "structural"
 disposition = "keep"
 ground = "Parses the closed REVIEW reply contract the thinker's SKILL.md fixes — the `REVIEW:` / `Verdict:` / `Plan digest:` / condition-prefix tokens, the `Customer questions:` header and `Q:` line prefix, the `blocking:` / `note:` severity tag and `re:<id>` restatement token, and list-numbering/emphasis decoration — never the meaning of a concern's text: the verdict is read from its token, and a message without that token is returned as no block so the marker extractor's model judges it instead."
-
-[[entry]]
-id = "464715fd8ffd4a9c"
-domain = "code"
-file = "scripts/lib/semantic_join.py"
-class = "semantic-guarded"
-disposition = "keep"
-ground = "The shared 'are these two texts the same thing' primitive. Its only lexical matching (`tokenize`'s word split, `nominate`'s BM25F ranking) picks CANDIDATE pairs; every join, match and cluster membership is a genuine judge verdict (`_decide_pair`, requiring a confirming second ask for a YES), fail-open answers are never cached, and pairs left undecided are counted as unjudged instead of joined. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and command syntax, misdescribes this file."
 
 [[entry]]
 id = "a5b6daa3bdedad0c"
@@ -3086,6 +3088,22 @@ ground = "Regexes found are markdown/frontmatter/command-syntax parsing (heading
 id = "eae32488842edb65"
 domain = "code"
 file = "scripts/memory-audit.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "92a8cbb85b7d0258"
+domain = "code"
+file = "scripts/memory-retrieval-calibrate.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "84ff95f75a973b68"
+domain = "code"
+file = "scripts/memory-retrieval-calibrate.py"
 class = "structural"
 disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
@@ -7286,6 +7304,54 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "3dce04048c40019f"
 domain = "code"
 file = "scripts/tests/test_hook_import_blindness.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "6b0890681563fb37"
+domain = "code"
+file = "scripts/tests/test_hook_memory_retrieval.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "ea0b1c3a3ae52055"
+domain = "code"
+file = "scripts/tests/test_hook_memory_retrieval.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "6ba10c73532c77d1"
+domain = "code"
+file = "scripts/tests/test_hook_memory_retrieval.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "a0e2815bb3617fe7"
+domain = "code"
+file = "scripts/tests/test_hook_memory_retrieval.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b6af5621c5c5d6a5"
+domain = "code"
+file = "scripts/tests/test_hook_memory_retrieval.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "16389ce5c78ec470"
+domain = "code"
+file = "scripts/tests/test_hook_memory_retrieval.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -15491,6 +15557,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "8496c6df7262c500"
+domain = "code_file_rollup"
+file = "scripts/lib/bm25f.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "The word-overlap scorer behind `semantic_join.nominate` and the memory retrieval hook. A score only ORDERS candidate texts; the callers never treat it as a verdict on meaning — one hands the ranked candidates to a judge, the other to the root model. The `\\w+` split in `tokenize` is word boundary syntax. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and command syntax, misdescribes this file. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "742822a310126b82"
 domain = "code_file_rollup"
 file = "scripts/lib/instruction_smoke_gate.py"
@@ -15545,14 +15619,6 @@ file = "scripts/lib/review_block.py"
 class = "structural"
 disposition = "keep"
 ground = "Parses the closed REVIEW reply contract the thinker's SKILL.md fixes — the `REVIEW:` / `Verdict:` / `Plan digest:` / condition-prefix tokens, the `Customer questions:` header and `Q:` line prefix, the `blocking:` / `note:` severity tag and `re:<id>` restatement token, and list-numbering/emphasis decoration — never the meaning of a concern's text: the verdict is read from its token, and a message without that token is returned as no block so the marker extractor's model judges it instead. (file-level rollup of the file's scopes.)"
-
-[[entry]]
-id = "eaf4a7a8c0c520e3"
-domain = "code_file_rollup"
-file = "scripts/lib/semantic_join.py"
-class = "semantic-guarded"
-disposition = "keep"
-ground = "The shared 'are these two texts the same thing' primitive. Its only lexical matching (`tokenize`'s word split, `nominate`'s BM25F ranking) picks CANDIDATE pairs; every join, match and cluster membership is a genuine judge verdict (`_decide_pair`, requiring a confirming second ask for a YES), fail-open answers are never cached, and pairs left undecided are counted as unjudged instead of joined. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and command syntax, misdescribes this file. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "8ae0d0962c4ae1a7"
@@ -15654,6 +15720,14 @@ ground = "Regexes found are markdown/frontmatter/command-syntax parsing (heading
 id = "e15a663a7aa828cb"
 domain = "code_file_rollup"
 file = "scripts/memory-audit.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "57cb49f76bc07cd1"
+domain = "code_file_rollup"
+file = "scripts/memory-retrieval-calibrate.py"
 class = "structural"
 disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
@@ -16478,6 +16552,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "e1e8ec80d98e6685"
 domain = "code_file_rollup"
 file = "scripts/tests/test_hook_import_blindness.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "68b762731cbcdcc9"
+domain = "code_file_rollup"
+file = "scripts/tests/test_hook_memory_retrieval.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -19896,6 +19978,14 @@ ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's
 
 [[entry]]
 id = "ab2695ce4f18500f"
+domain = "prose"
+file = "memory-global/leaves/effort-divergence-trigger.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "e4316789a3a27340"
 domain = "prose"
 file = "memory-global/leaves/effort-divergence-trigger.md"
 class = "perception"
@@ -26151,6 +26241,30 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "cecd52800ed808ef"
+domain = "prose"
+file = "memory-global/leaves/memory-usage.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "086bd7018fb4542b"
+domain = "prose"
+file = "memory-global/leaves/memory-usage.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "c1f18a8983e45b92"
+domain = "prose"
+file = "memory-global/leaves/memory-usage.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "090e35111e268759"
 domain = "prose"
 file = "memory-global/leaves/mini-od-self-devised-workaround.md"
@@ -30599,6 +30713,14 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "0840b4e6e790644e"
+domain = "prose"
+file = "memory-global/leaves/verify-command-scope-and-frozen-revision.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "165d7121e24735ab"
 domain = "prose"
 file = "memory-global/leaves/verify-command-scope-and-frozen-revision.md"
@@ -31112,14 +31234,6 @@ ground = "Policy files elaborate the judgment procedure a specialization follows
 
 [[entry]]
 id = "af852db4e73f4883"
-domain = "prose"
-file = "skills/overcome-difficulty/policy.md"
-class = "perception"
-disposition = "keep"
-ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
-
-[[entry]]
-id = "5ad25ca533a7861f"
 domain = "prose"
 file = "skills/overcome-difficulty/policy.md"
 class = "perception"
