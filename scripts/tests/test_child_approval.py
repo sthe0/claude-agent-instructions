@@ -280,6 +280,31 @@ def test_wildcard_tail_stage_grant_held_by_the_handoff_is_covered(child):
     assert child.run("approve", session="child-1", by="agent")["ok"] is True
 
 
+def _with_stage_verify(text: str, command: str) -> str:
+    marker = "depends_on = []\n"
+    assert marker in text, "fixture changed: setup defect"
+    return text.replace(marker, marker + f'verify_command = "{command}"\n', 1)
+
+
+def test_unresolved_stage_verify_command_is_covered_only_by_the_identical_handoff_rule(child):
+    """The identity `resolve_rule_grant` gives the handoff's entry is the one
+    `compute_boundary_view` gives the plan's item, so a handoff carrying exactly
+    `Bash(<that command>)` covers it and no other."""
+    command = "python3 mod.py --check"
+    text = _with_stage_verify(
+        _spliced(parent_norm=child.digest, final_checks=((PARENT_CHECK, 0),)), command)
+    d, plan = _linked_submit(child, plan_text=text)
+    _assert_named(d, "unresolved-not-in-handoff")
+    sources = [c["source"] for c in _autonomy(d).get("unresolved_changed_commands") or []]
+    assert command in sources, sources
+    _refusal(child, "unresolved-not-in-handoff")
+
+    child.link(grants=[*_covering_grants(plan), {"rule": f"Bash({command})"}])
+    d = child.submit(plan, sid="child-2")
+    assert _autonomy(d).get("eligible") is True, _autonomy(d)
+    assert child.run("approve", session="child-2", by="agent")["ok"] is True
+
+
 def test_depth_over_cap_is_named(child):
     d, _ = _linked_submit(child, depth=Thresholds().max_recursion_depth + 1)
     _assert_named(d, "depth-over-cap")
@@ -371,6 +396,14 @@ def test_replan_dropping_the_parent_check_is_substantive(child):
     new = _spliced(parent_norm=child.digest, final_checks=(("true", 0),))
     _, applied = _replan_kinds(child, old, new)
     assert applied == "substantive", f"BEHAVIOUR: dropping the parent check applies as {applied!r}"
+
+
+def test_replan_removing_parent_norm_is_substantive(child):
+    old = _spliced(parent_norm=child.digest, final_checks=((PARENT_CHECK, 0),))
+    new = _spliced(final_checks=(("true", 0),))
+    diff_kind, applied = _replan_kinds(child, old, new)
+    assert diff_kind == "refinement", f"setup: the edit is no refinement ({diff_kind!r})"
+    assert applied == "substantive", f"BEHAVIOUR: dropping parent_norm applies as {applied!r}"
 
 
 def test_replan_adding_an_unresolved_grant_is_substantive(child):

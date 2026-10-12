@@ -3557,7 +3557,7 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
             unresolved_uncovered.append({**item, "needs_user": True})
         if unresolved_uncovered:
             reasons.append(PARENT_NORM_UNRESOLVED_NOT_IN_HANDOFF)
-        depth =parent_link.get("depth")
+        depth = parent_link.get("depth")
         if not isinstance(depth, int) or isinstance(depth, bool) or depth > max_depth:
             reasons.append(PARENT_NORM_DEPTH_OVER_CAP)
     return {

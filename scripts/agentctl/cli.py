@@ -925,8 +925,8 @@ def _agent_renegotiation_refusal(state: SessionState, decision: str, doc) -> str
 
 def _handoff_held(parent_link: dict | None, venue: str) -> tuple[list, list]:
     """What the adopted handoff's grant entries hold: the typed resources they resolve to,
-    and the identities of the entries that stay unresolved (a wildcard-tail rule), which
-    cover only an identical unresolved item of the child's plan."""
+    and the identities of the entries the engine cannot resolve (a wildcard-tail rule),
+    which cover only an identical unresolved item of the child's plan."""
     held: list = []
     held_unresolved: list = []
     for entry in (parent_link or {}).get("grants") or []:
@@ -947,8 +947,7 @@ def _self_approve_detail(autonomy: dict, *, replan: bool) -> str:
     if autonomy.get("basis") == gates.PARENT_NORM_BASIS:
         return (f"{kind} is inside the norm and grants of the parent stage this session "
                 "serves; run `approve --by agent`")
-    verb = "inside" if replan else "is inside"
-    return f"{kind} {verb} the boundary the user approved for this order; run `approve --by agent`"
+    return f"{kind} is inside the boundary the user approved for this order; run `approve --by agent`"
 
 
 def _autonomy_for(state: SessionState, doc) -> dict:
@@ -1138,8 +1137,8 @@ def _kind_within_boundary(state: SessionState, kind: str, doc, *, ledgered: bool
     if kind != "refinement" or not ledgered:
         return kind
     verdict = _autonomy_for(state, doc)
-    if verdict.get("basis") == gates.PARENT_NORM_BASIS and not verdict["eligible"]:
-        return "substantive"
+    if verdict.get("basis") == gates.PARENT_NORM_BASIS:
+        return kind if verdict["eligible"] else "substantive"
     if (verdict["order_changed"] or verdict["extra_resources"]
             or verdict["unresolved_changed_commands"]):
         return "substantive"
@@ -1149,11 +1148,18 @@ def _kind_within_boundary(state: SessionState, kind: str, doc, *, ledgered: bool
 def _replan_kind(state: SessionState, old, new) -> str:
     """The kind a replan from `old` to `new` applies as. The verify-identity relaxation
     is admitted only for a ledgered order; a plan that declares a `parent_norm` is judged
-    by `_kind_within_boundary` too but gets no relaxation."""
+    by `_kind_within_boundary` too but gets no relaxation. `parent_norm` sits in the order
+    place, which diffs as a refinement, so removing or changing the one the baseline
+    declared is substantive here: the plan would otherwise leave the parent-norm basis
+    (and its parent check) through an edit nobody judges."""
     from .plan import diff_plans
     ledgered = _ledgered_order_key(state) is not None
-    order = new.meta.order
-    parent_norm_plan = order is not None and bool(order.parent_norm)
+    old_order, order = old.meta.order, new.meta.order
+    old_parent_norm = old_order.parent_norm if old_order is not None else None
+    parent_norm = order.parent_norm if order is not None else None
+    if old_parent_norm and old_parent_norm != parent_norm:
+        return "substantive"
+    parent_norm_plan = bool(parent_norm)
     kind = diff_plans(old, new, relax_verify_identity=ledgered)
     return _kind_within_boundary(state, kind, new, ledgered=ledgered or parent_norm_plan)
 
