@@ -39,7 +39,7 @@ The skills, agents, hooks, scripts, memory scopes, settings, and the Cursor mirr
 
 - [Skills](components/skills.md) — the machine-checked inventory of flat skills (inline) and specializations (spawned).
 - [Agents and the spawn model](components/agents.md) — the specialization roles the manager delegates to, and how each is spawned.
-- [Hooks](components/hooks.md) — the harness-run scripts that enforce the non-skippable gates and fire the reminders.
+- [Hooks](components/hooks.md) — the harness-run scripts that enforce the non-skippable gates and fire the reminders, including the memory-retrieval hook that nominates relevant memory leaves for each prompt.
 - [Scripts](components/scripts.md) — the coordination engine, the verification guards, the setup wiring, and the experience tooling.
 - [Memory scopes](components/memory-scopes.md) — the three scopes (personal / global / project) and the shared leaf-and-index shape.
 - [Settings and permissions](components/settings-and-permissions.md) — the layered settings.json, the permissions CLI, and the action taxonomy.
