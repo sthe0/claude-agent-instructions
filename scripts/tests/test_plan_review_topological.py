@@ -19,6 +19,7 @@ import io
 import json
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -331,39 +332,56 @@ def max_concurrency(events) -> int:
     return peak
 
 
-def run_level_with_cap(make_rig, monkeypatch, drv, cap, pairs, *extra):
+def run_level_with_cap(make_rig, monkeypatch, drv, cap, pairs, *extra, width):
     constants = {} if cap is None else {"review-parallel-max": str(cap)}
     monkeypatch.setattr(drv, "parse_config_md", lambda: constants, raising=False)
     rig = make_rig(FakeEngine([list(pairs)]))
-    rig.specs = {p: {"delay": 0.05} for p in pairs}
+    # One-shot rendezvous: hold each spawn until `width` of them have started,
+    # so the peak reflects the driver's width rather than scheduler timing.
+    lock = threading.Lock()
+    started = [0]
+    reached = threading.Event()
+
+    def on_spawn(_pair):
+        with lock:
+            started[0] += 1
+            if started[0] >= width:
+                reached.set()
+        reached.wait(5)
+
+    rig.specs = {p: {"delay": 0.05, "on_spawn": on_spawn} for p in pairs}
     rc, _ = rig.run(*extra)
     assert rc == 0
     return rig
 
 
 def test_default_parallel_level_width(make_rig, drv, monkeypatch):
-    rig = run_level_with_cap(make_rig, monkeypatch, drv, 6, "abc")
+    rig = run_level_with_cap(make_rig, monkeypatch, drv, 6, "abc", width=3)
     assert max_concurrency(rig.events) == 3
 
 
 def test_default_parallel_cap_binds(make_rig, drv, monkeypatch):
-    rig = run_level_with_cap(make_rig, monkeypatch, drv, 2, "abcd")
+    rig = run_level_with_cap(make_rig, monkeypatch, drv, 2, "abcd", width=2)
     assert max_concurrency(rig.events) == 2
 
 
 def test_default_parallel_explicit_override(make_rig, drv, monkeypatch):
-    rig = run_level_with_cap(make_rig, monkeypatch, drv, 3, "abc")
+    rig = run_level_with_cap(make_rig, monkeypatch, drv, 3, "abc", width=3)
     assert max_concurrency(rig.events) == 3
-    rig = run_level_with_cap(make_rig, monkeypatch, drv, 3, "abc", "--parallel", "2")
+    rig = run_level_with_cap(
+        make_rig, monkeypatch, drv, 3, "abc", "--parallel", "2", width=2
+    )
     assert max_concurrency(rig.events) == 2
-    rig = run_level_with_cap(make_rig, monkeypatch, drv, 3, "abc", "--parallel", "1")
+    rig = run_level_with_cap(
+        make_rig, monkeypatch, drv, 3, "abc", "--parallel", "1", width=1
+    )
     assert max_concurrency(rig.events) == 1
 
 
 def test_default_parallel_missing_key(make_rig, drv, monkeypatch):
-    rig = run_level_with_cap(make_rig, monkeypatch, drv, 3, "ab")
+    rig = run_level_with_cap(make_rig, monkeypatch, drv, 3, "ab", width=2)
     assert max_concurrency(rig.events) == 2
-    rig = run_level_with_cap(make_rig, monkeypatch, drv, None, "ab")
+    rig = run_level_with_cap(make_rig, monkeypatch, drv, None, "ab", width=1)
     assert max_concurrency(rig.events) == 1
 
 
