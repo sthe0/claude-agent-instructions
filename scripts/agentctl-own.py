@@ -11,19 +11,23 @@ script places `--session` itself and runs only the verbs in OWN_CONTOUR_VERBS.
 
 It refuses, and never reaches the engine, when:
   * AGENTCTL_OWN_SESSION is unset (the caller is not a linked child's own shell);
-  * the argv names a session in any form (`--session X`, `--session=X`, `--sess X`),
-    or any option the verb does not declare under that exact spelling — an
-    abbreviation is how a flag the wrapper checks arrives as one it does not;
+  * the argv names a session (`--session X`, `--session=X`);
+  * the argv does not parse under the engine's own parser built with abbreviations
+    off — an abbreviated option (`--sess`, `--b=user x`) is how a flag the checks
+    below read arrives as one they do not;
   * the session has no engine state, or no `parent_link` (it is not a linked child);
   * the verb is outside OWN_CONTOUR_VERBS;
   * `approve` is not `--by agent`, or `partition` carries a marker/unit flag — the
-    delivery-partition decision and every user-approved act stay the root's.
+    delivery-partition decision and every user-approved act stay the root's. These
+    two are read from the parsed namespace, the one the engine then runs.
 
 Exit 2 on a refusal; otherwise the engine's own exit code and JSON directive.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import os
 import sys
 from pathlib import Path
@@ -31,19 +35,12 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-OWN_SESSION_ENV = "AGENTCTL_OWN_SESSION"
-
-OWN_CONTOUR_VERBS = frozenset({
-    "classify", "status", "plan", "next-stage", "submit-plan", "plan-review",
-    "plan-review-delta", "approve", "partition", "dispatch", "record-result",
-    "code-review", "verify-final", "declare", "investigate", "critique",
-    "normalize", "replan", "stage-grants", "plan-grants", "question-raise",
-    "question-dispose",
-})
-
-PARTITION_REFUSED_FLAGS = frozenset({
-    "--m1", "--m2", "--m3", "--m4", "--m3-severe", "--m4-severe", "--unit",
-})
+from agentctl.own_contour import (  # noqa: E402
+    APPROVE_BY,
+    OWN_CONTOUR_VERBS,
+    OWN_SESSION_ENV,
+    PARTITION_REFUSED_FLAGS,
+)
 
 EXIT_REFUSED = 2
 
@@ -58,50 +55,24 @@ def _usage() -> str:
         "usage: agentctl-own.py <verb> [options]\n"
         "drives the engine session named by AGENTCTL_OWN_SESSION; never pass --session.\n"
         f"verbs: {', '.join(sorted(OWN_CONTOUR_VERBS))}\n"
-        "approve takes --by agent only; partition takes no --m*/--unit flag.\n"
+        f"options are matched by exact spelling; approve takes --by {APPROVE_BY} only, "
+        "and partition takes no --m*/--unit flag.\n"
     )
 
 
-def _declared_options(parser: argparse.ArgumentParser, verb: str) -> frozenset[str] | None:
-    """The exact option strings the engine's `verb` subparser declares, else None."""
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            sub = action.choices.get(verb)
-            if sub is None:
-                return None
-            return frozenset(s for a in sub._actions for s in a.option_strings)
-    return None
+def _names_session(rest: list[str]) -> bool:
+    return any(t == "--session" or t.startswith("--session=") for t in rest)
 
 
-def _option_refusal(rest: list[str], declared: frozenset[str]) -> str | None:
-    for token in rest:
-        if not token.startswith("-") or len(token) < 2 or " " in token:
-            continue
-        if token == "--":
-            return "`--` is not accepted"
-        if token.lstrip("-").replace(".", "", 1).isdigit():
-            continue
-        name = token.split("=", 1)[0]
-        if len(name) >= 3 and "--session".startswith(name):
-            return (
-                f"{token!r} names a session; this channel is pinned to the session in "
-                f"{OWN_SESSION_ENV} and takes no --session"
-            )
-        if name not in declared:
-            return f"option {name!r} is not an exact option of this verb (abbreviations are refused)"
-    return None
-
-
-def _verb_refusal(verb: str, rest: list[str]) -> str | None:
-    names = {t.split("=", 1)[0] for t in rest if t.startswith("--")}
-    if verb == "approve":
-        probe = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-        probe.add_argument("--by")
-        by = probe.parse_known_args(rest)[0].by
-        if by != "agent":
-            return "approve is available only as `approve --by agent`"
+def _verb_refusal(verb: str, parsed: argparse.Namespace) -> str | None:
+    if verb == "approve" and parsed.by != APPROVE_BY:
+        return f"approve is available only as `approve --by {APPROVE_BY}`"
     if verb == "partition":
-        flags = sorted(names & PARTITION_REFUSED_FLAGS)
+        # argparse's own default dest for a flag: `--m3-severe` -> m3_severe
+        flags = sorted(
+            f for f in PARTITION_REFUSED_FLAGS
+            if getattr(parsed, f.lstrip("-").replace("-", "_"), None)
+        )
         if flags:
             return (
                 f"partition takes no {', '.join(flags)}: the delivery-partition decision "
@@ -123,14 +94,28 @@ def main(argv: list[str] | None = None) -> int:
     verb, rest = args[0], args[1:]
     if verb not in OWN_CONTOUR_VERBS:
         return _refuse(f"verb {verb!r} is outside the own contour; return a marker to your parent instead")
+    if _names_session(rest):
+        return _refuse(
+            f"this channel is pinned to the session in {OWN_SESSION_ENV} and takes no --session"
+        )
 
     from agentctl import cli
     from agentctl.store import FileStateStore
 
-    declared = _declared_options(cli.build_parser(), verb)
-    if declared is None:
-        return _refuse(f"verb {verb!r} is not an agentctl command")
-    reason = _option_refusal(rest, declared) or _verb_refusal(verb, rest)
+    engine_argv = [verb, *rest, f"--session={session}"]
+    diagnostics = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(diagnostics):
+            parsed = cli.build_parser(allow_abbrev=False).parse_args(engine_argv)
+    except SystemExit as exit_:
+        if exit_.code in (0, None):
+            return 0
+        detail = diagnostics.getvalue().strip().splitlines()
+        return _refuse(
+            f"{detail[-1] if detail else 'the arguments do not parse'} (options are matched "
+            "by exact spelling, and this channel takes no --session)"
+        )
+    reason = _verb_refusal(verb, parsed)
     if reason is not None:
         return _refuse(reason)
 
@@ -142,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
             f"session {session!r} holds no norm handoff (parent_link): it is not a linked "
             "child, so it has no own contour to drive through this channel"
         )
-    return cli.main([verb, *rest, "--session", session])
+    return cli.main(engine_argv, allow_abbrev=False)
 
 
 if __name__ == "__main__":

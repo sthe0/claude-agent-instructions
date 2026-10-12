@@ -145,7 +145,9 @@ def _reason(proc: subprocess.CompletedProcess) -> str:
 def test_linked_child_edit_denied_outside_execution(tmp_path):
     for node, weight in (("CLASSIFIED", "SUBSTANTIVE"), ("PLANNING", "SUBSTANTIVE"),
                          ("PLAN_READY", "SUBSTANTIVE"), ("APPROVED", "SUBSTANTIVE"),
-                         ("PARTITIONED", "SUBSTANTIVE"), ("ROUTED", "CHAT")):
+                         ("PARTITIONED", "SUBSTANTIVE"), ("ROUTED", "CHAT"),
+                         ("DIAGNOSING", "SUBSTANTIVE"), ("RESOLVED", "SUBSTANTIVE"),
+                         ("BLOCKED", "SUBSTANTIVE")):
         _write_state(tmp_path, CHILD, node, linked=True, weight_class=weight)
         proc = _edit(tmp_path, CHILD, **{OWN_ENV: CHILD})
         assert proc.returncode == 0
@@ -200,6 +202,16 @@ def test_own_session_env_without_link_is_denied(tmp_path, monkeypatch):
         f"{OWN_ENV} naming another session was accepted for this one"
     )
     assert not _denied(_edit(tmp_path, CHILD, **{OWN_ENV: CHILD}))
+
+    # state that cannot be read does not make a contour signal trustworthy
+    (_state_dir(tmp_path) / "corrupt-s.json").write_text("{not json", encoding="utf-8")
+    assert _denied(_edit(tmp_path, "corrupt-s", **{OWN_ENV: "corrupt-s"})), (
+        f"BEHAVIOUR: a session whose state is unreadable was allowed to edit with {OWN_ENV} in its env"
+    )
+    assert _denied(_edit(tmp_path, "corrupt-s", **{HANDOFF_ENV: "/nowhere/h.json:" + "0" * 64}))
+    assert not _denied(_edit(tmp_path, "corrupt-s")), (
+        "unreadable state with no contour signal must stay allowed, as it was"
+    )
 
     # the signals reach a child only from its own spawn: an unlinked spawn clears both
     _parent_session(tmp_path / "home")
@@ -329,7 +341,7 @@ def test_own_channel_refuses_explicit_session(contour):
     _cli(contour.root, "start", session=OTHER, task="other", goal="g", done_criterion="dc")
     before = {s: contour.state_bytes(s) for s in (CHILD, OTHER, PARENT)}
     for session_args in (["--session", OTHER], [f"--session={OTHER}"], ["--sess", OTHER],
-                         ["--se", OTHER]):
+                         ["--se", OTHER], [f"--sess={OTHER}"]):
         proc = contour.own("status", *session_args)
         assert proc.returncode == 2, (session_args, proc.stdout, proc.stderr)
         assert REFUSED in proc.stderr and "session" in proc.stderr, (session_args, proc.stderr)
@@ -389,25 +401,36 @@ def test_own_channel_verb_set_is_exact(contour):
     assert set(channel.OWN_CONTOUR_VERBS) == OWN_CONTOUR_VERBS
     assert OWN_CONTOUR_VERBS <= _agentctl_subcommands(), "a verb of the set is no agentctl command"
     assert "partition-units" not in OWN_CONTOUR_VERBS
+    before = {s: contour.state_bytes(s) for s in (CHILD, PARENT)}
     for flag in (*PARTITION_MARKER_FLAGS, "--unit"):
         argv = ["partition", flag] + (["1:routing"] if flag == "--unit" else [])
         proc = contour.own(*argv)
         assert proc.returncode == 2, (flag, proc.stdout, proc.stderr)
         assert REFUSED in proc.stderr and "stays the root's" in proc.stderr, (flag, proc.stderr)
         assert proc.stdout == ""
-    for argv in (("approve",), ("approve", "--by", "user"), ("approve", "--by=user"),
-                 ("approve", "--by", "agentx")):
+    for argv in (("approve", "--by", "user"), ("approve", "--by=user"),
+                 ("approve", "--by", "agentx"), ("approve", "--by", "agent", "--by", "user")):
         proc = contour.own(*argv)
         assert proc.returncode == 2 and "available only as" in proc.stderr, (argv, proc.stderr)
-    # `--by agent` passes the wrapper's own checks: what refuses here is the engine
+        assert proc.stdout == ""
+    # an abbreviation of a declared option is how a checked flag arrives unchecked: the
+    # parser the channel runs matches exact spellings only, so none of these reaches the
+    # engine, whatever value the abbreviated flag carries
+    for argv in (("partition", "--m3-sev"), ("partition", "--un=a b"), ("partition", "--unit=x"),
+                 ("partition", "--un", "x"), ("approve", "--by", "agent", "--b=user x"),
+                 ("approve", "--b", "user"), ("approve", "--by", "agent", "--skip-opt", "1"),
+                 ("status", "--no-such-option"), ("approve",), ("approve", "--by")):
+        proc = contour.own(*argv)
+        assert proc.returncode == 2, (argv, proc.returncode, proc.stdout, proc.stderr)
+        assert REFUSED in proc.stderr, (argv, proc.stderr)
+        assert proc.stdout == "", f"{argv} reached the engine: {proc.stdout!r}"
+    assert {s: contour.state_bytes(s) for s in before} == before, (
+        "a refused call changed an engine state file"
+    )
+    # `--by agent` passes the wrapper's own checks: what answers here is the engine
     reached = contour.own("approve", "--by", "agent")
-    assert "available only as" not in reached.stderr
+    assert "available only as" not in reached.stderr and REFUSED not in reached.stderr
     assert reached.stdout.strip(), "approve --by agent never reached the engine"
-    # an abbreviation of a declared option is how a checked flag arrives unchecked
-    abbreviated = contour.own("partition", "--m3-sev")
-    assert abbreviated.returncode == 2 and "abbreviations are refused" in abbreviated.stderr
-    typo = contour.own("status", "--no-such-option")
-    assert typo.returncode == 2 and REFUSED in typo.stderr
 
 
 def test_own_channel_reaches_own_session(contour):
@@ -584,6 +607,23 @@ def test_linked_spawn_exports_own_session(tmp_path, monkeypatch):
     assert not any("agentctl-cli.py" in rule and "approve" in rule for rule in _settings_allow(launched.cmd))
 
 
+def test_own_contour_names_have_one_definition():
+    """The env name and the verb set are read from `agentctl.own_contour` by the gate, the
+    channel and the spawner -- none of them keeps a copy that could drift."""
+    own_contour = importlib.import_module("agentctl.own_contour")
+    hook_spec = importlib.util.spec_from_file_location("hook_state_gate_one_definition", HOOK)
+    hook = importlib.util.module_from_spec(hook_spec)
+    hook_spec.loader.exec_module(hook)
+    channel, spawn = _load_channel(), _load_spawn()
+    assert own_contour.OWN_SESSION_ENV == OWN_ENV
+    assert hook.OWN_SESSION_ENV is own_contour.OWN_SESSION_ENV
+    assert spawn.OWN_SESSION_ENV is own_contour.OWN_SESSION_ENV
+    assert channel.OWN_SESSION_ENV is own_contour.OWN_SESSION_ENV
+    assert channel.OWN_CONTOUR_VERBS is own_contour.OWN_CONTOUR_VERBS
+    assert spawn.OWN_CONTOUR_VERBS is own_contour.OWN_CONTOUR_VERBS
+    assert set(own_contour.OWN_CONTOUR_VERBS) == OWN_CONTOUR_VERBS
+
+
 def test_linked_brief_names_own_contour(tmp_path, capsys):
     _parent_session(tmp_path / "home")
     argv = _spawn_argv(tmp_path / "home", tmp_path, 1) + ["--dry-run"]
@@ -613,9 +653,10 @@ def test_unlinked_spawn_unchanged(tmp_path, monkeypatch, capsys):
 
 
 def test_preassigned_id_is_engine_session_id(tmp_path, monkeypatch):
-    """The id the spawn pre-assigns is the one the harness reports as `session_id`, so
-    the child's autostarted engine session -- the one that adopts the exported handoff --
-    is the session the channel is pinned to."""
+    # Shows only that the spawn exports the very uuid it passes as `--session-id` and that
+    # the engine autostart under that id adopts the exported handoff. That the harness
+    # reports the `--session-id` value as the hook payload's `session_id` is assumed, not
+    # proved here.
     home = tmp_path / "home"
     store = _parent_session(home)
     launched = _launch(monkeypatch, tmp_path, stage_index=1)

@@ -11877,13 +11877,19 @@ def resolve_arg_text(args: argparse.Namespace) -> None:
         )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="agentctl", description="deterministic coordination state machine")
+def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
+    """The agentctl parser. `allow_abbrev=False` is the exact-spelling form the own
+    channel (scripts/agentctl-own.py) runs: argparse does not pass `allow_abbrev` on to
+    a subparser, so it is set on the top parser and on every verb's own."""
+    p = argparse.ArgumentParser(
+        prog="agentctl", description="deterministic coordination state machine",
+        allow_abbrev=allow_abbrev,
+    )
     p.add_argument("--state-root", help="override state directory (tests/inspection)")
     sub = p.add_subparsers(dest="command", required=True)
 
     def add(name, **kw):
-        return sub.add_parser(name, **kw)
+        return sub.add_parser(name, allow_abbrev=allow_abbrev, **kw)
 
     sp = add("start"); sp.add_argument("--session", required=True); sp.add_argument("--task", required=True)
     sp.add_argument("--goal", default=""); sp.add_argument("--done-criterion", dest="done_criterion", default="")
@@ -12666,12 +12672,12 @@ def _inject_default_session(argv: list[str], harness: str | None) -> list[str]:
     return list(argv) + ["--session", harness]
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, allow_abbrev: bool = True) -> int:
     harness = os.environ.get("CLAUDE_CODE_SESSION_ID")
     raw = _inject_default_session(
         list(sys.argv[1:] if argv is None else argv), harness
     )
-    args = build_parser().parse_args(raw)
+    args = build_parser(allow_abbrev).parse_args(raw)
     resolve_arg_text(args)
     if harness and getattr(args, "session", None) and args.session != harness:
         print(

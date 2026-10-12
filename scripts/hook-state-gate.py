@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import gates as _gates  # noqa: E402
 from agentctl.exempt_paths import is_gated_path, is_plan_file  # noqa: E402
 from agentctl.norm_handoff import NORM_HANDOFF_ENV  # noqa: E402
+from agentctl.own_contour import OWN_SESSION_ENV  # noqa: E402
 from agentctl.state import SessionState as _SessionState  # noqa: E402
 from lib import config_root  # noqa: E402
 
@@ -63,10 +64,6 @@ PLAN_MUTABLE_NODES = {"CLASSIFIED", "ROUTED", "PLANNING", "PLAN_READY"}
 # record is complete — gate_decision applies that conditional guard, not blanket allow.
 PLAN_WRITE_POSITION_NODES = PLAN_MUTABLE_NODES | {"DIAGNOSING"}
 
-# The session a spawn pins its child's own-contour channel (scripts/agentctl-own.py)
-# to; the wrapper reads the same name.
-OWN_SESSION_ENV = "AGENTCTL_OWN_SESSION"
-
 
 def diagnosing_plan_write_ok(path: Path) -> bool:
     """At DIAGNOSING a plan write is authoring the CORRECTED plan — legitimate iff the
@@ -87,7 +84,7 @@ def load_gate_fields(path: Path) -> tuple[str | None, str, str | None, bool] | N
     """Return (weight_class, node, plan_path, linked) from the state file. weight_class
     and plan_path may be None; `linked` is whether the session holds a norm handoff
     (`parent_link`). Corrupt/unreadable state or a missing/non-string node -> None, so
-    main() falls through to allow (unchanged safety)."""
+    main() falls through to allow unless the env carries an own-contour signal."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -261,6 +258,11 @@ def main() -> int:
 
     fields = load_gate_fields(sp)
     if fields is None:
+        # State that cannot be read says nothing about a link: the contour signals
+        # alone decide whether this is a child whose contour is not verifiable.
+        denial = contour_signal_denial(session_id, linked=False)
+        if denial is not None:
+            deny_with("(unreadable engine state)", denial)
         return 0
     weight_class, node, plan_path, linked = fields
 

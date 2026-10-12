@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fnmatch
-import importlib.util
 import json
 import os
 import re
@@ -41,6 +40,7 @@ from typing import NamedTuple, Sequence
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from agentctl import grants  # the sole validator every materialized rule/add_dir passes through
 from agentctl import norm_handoff  # the one definition of the handoff record the child engine adopts
+from agentctl.own_contour import OWN_CONTOUR_VERBS, OWN_SESSION_ENV  # the channel's env name and verb set
 from agentctl.plan import (  # parse the TOML plan for a single-stage brief projection
     PlanError,
     is_unit_id,
@@ -212,9 +212,9 @@ def brief_eligible(args: argparse.Namespace) -> bool:
 def own_contour_brief_lines(args: argparse.Namespace) -> list[str]:
     """The brief section of a linked child, in place of `## The engine belongs to the
     parent`: its own engine contour, the channel that moves it, the route for a norm
-    that is wrong, and the terminal state. The verbs are quoted from the channel script
-    so the brief cannot name a set the channel does not run."""
-    verbs = ", ".join(f"`{v}`" for v in sorted(own_contour_module().OWN_CONTOUR_VERBS))
+    that is wrong, and the terminal state. The verbs are quoted from the channel's own
+    verb set so the brief cannot name a set the channel does not run."""
+    verbs = ", ".join(f"`{v}`" for v in sorted(OWN_CONTOUR_VERBS))
     channel = f"python3 {Path(SCRIPTS_DIR) / 'agentctl-own.py'}"
     marker_source = (
         "one of the markers your brief names"
@@ -1858,38 +1858,6 @@ def grant_widening_refusal(linked, stage_index: int, kind: str, uncovered: "list
     return "\n".join(lines) + "\n"
 
 
-def norm_handoff_env_value(
-    session_id: "str | None",
-    stage_index: "int | None",
-    kind: str,
-    depth: int,
-    engine_grants: "list[dict] | None",
-    state_root: "Path | None" = None,
-) -> "str | None":
-    """Write the norm-handoff record for the stage this spawn works for and return the
-    `AGENTCTL_NORM_HANDOFF` value (`<path>:<sha256>`), or `None` when the spawn is not
-    linkable: no session or stage given, the session or its plan unreadable, or the stage
-    absent from the plan. A write failure is reported on stderr and leaves the spawn
-    unlinked -- it never fails the spawn. Same in-process engine seam as
-    `load_engine_stage_grants`; never writes the parent session's state file."""
-    if not session_id or stage_index is None:
-        return None
-    from agentctl.store import FileStateStore
-
-    store = FileStateStore(state_root) if state_root is not None else FileStateStore()
-    try:
-        record = norm_handoff_record(
-            session_id, stage_index, kind, depth, engine_grants, store=store,
-        )
-        if record is None:
-            return None
-        path, sha = norm_handoff.write_record(store.root, record)
-    except Exception as exc:
-        print(f"warning: norm handoff not written, spawning unlinked: {exc}", file=sys.stderr)
-        return None
-    return norm_handoff.format_env_value(path, sha)
-
-
 def norm_handoff_record(
     session_id: str,
     stage_index: int,
@@ -1900,8 +1868,10 @@ def norm_handoff_record(
     store,
 ) -> "dict | None":
     """The handoff record for the stage this spawn works for, or `None` when the
-    session, its plan or the stage is unavailable. Writes nothing, so `--dry-run` can
-    ask whether the spawn would be linked."""
+    session, its plan or the stage is unavailable (the spawn is then not linked).
+    Writes nothing: the caller writes the record (`norm_handoff.write_record`) once the
+    brief has assembled. Same in-process engine seam as
+    `load_engine_stage_grants`; never touches the parent session's state file."""
     state = store.load(session_id)
     if state is None:
         return None
@@ -1918,18 +1888,6 @@ def norm_handoff_record(
         depth=depth,
         parent_lineage=(state.parent_link or {}).get("norm_lineage"),
     )
-
-
-def own_contour_module():
-    """The own-contour channel script, loaded by path: its hyphenated name is not
-    importable, and the verb set and env name it defines are the one definition the
-    spawn's allow rule, env and brief all quote."""
-    spec = importlib.util.spec_from_file_location(
-        "agentctl_own_contour", Path(SCRIPTS_DIR) / "agentctl-own.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def own_contour_allow_rule() -> str:
@@ -2518,29 +2476,23 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     # A spawn is linked when the engine can name the stage it works for: the child then
-    # gets a norm handoff (written here, so the brief, the argv, the settings and the env
-    # all see one decision) and a pre-assigned session id its own-contour channel is
-    # pinned to. --dry-run writes nothing, so it only asks whether a record would exist.
-    handoff: "str | None" = None
-    if args.dry_run:
-        if args.session is not None and args.stage_index is not None:
-            from agentctl.store import FileStateStore
+    # gets a norm handoff and a pre-assigned session id its own-contour channel is pinned
+    # to. The record is only decided here and written once the brief assembles, so the
+    # brief, the argv, the settings and the env all see one decision.
+    handoff_record: "dict | None" = None
+    handoff_store = None
+    if args.session and args.stage_index is not None:
+        from agentctl.store import FileStateStore
 
-            try:
-                child_linked = norm_handoff_record(
-                    args.session, args.stage_index, args.kind, depth_next, engine_grants,
-                    store=FileStateStore(args.state_root) if args.state_root is not None else FileStateStore(),
-                ) is not None
-            except Exception:
-                child_linked = False
-        else:
-            child_linked = False
-    else:
-        handoff = norm_handoff_env_value(
-            args.session, args.stage_index, args.kind, depth_next, engine_grants,
-            state_root=args.state_root,
-        )
-        child_linked = handoff is not None
+        handoff_store = FileStateStore(args.state_root) if args.state_root is not None else FileStateStore()
+        try:
+            handoff_record = norm_handoff_record(
+                args.session, args.stage_index, args.kind, depth_next, engine_grants,
+                store=handoff_store,
+            )
+        except Exception as exc:
+            print(f"warning: norm handoff unavailable, spawning unlinked: {exc}", file=sys.stderr)
+    child_linked = handoff_record is not None
     own_session = str(uuid.uuid4()) if child_linked else None
 
     add_dir_argv: list[str] = []
@@ -2574,8 +2526,8 @@ def main(argv: list[str] | None = None) -> int:
                 topo_doc, topo_pair, plan_sha256=topo_plan_sha256, view_dir=topo_view_dir,
                 history=topo_history,
             )
-    try:
-        prompt = assemble_prompt(
+    def brief(own_contour: bool) -> str:
+        return assemble_prompt(
             args,
             depth_next,
             perms,
@@ -2585,8 +2537,11 @@ def main(argv: list[str] | None = None) -> int:
             stage_grant_entries=engine_grants,
             evidence_dir=evidence_dir,
             topo_bundle=topo_bundle,
-            own_contour=child_linked,
+            own_contour=own_contour,
         )
+
+    try:
+        prompt = brief(child_linked)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         log_refused(
@@ -2594,6 +2549,17 @@ def main(argv: list[str] | None = None) -> int:
             {"kind": args.kind, "plan": argv_text.abbreviate(args.plan), "stage_index": args.stage_index},
         )
         return 2
+    handoff_env_value: "str | None" = None
+    if handoff_record is not None and not args.dry_run:
+        # Written only now: a brief that cannot be assembled leaves no record behind. A
+        # record that cannot be written makes the spawn unlinked -- brief included.
+        try:
+            path, sha = norm_handoff.write_record(handoff_store.root, handoff_record)
+            handoff_env_value = norm_handoff.format_env_value(path, sha)
+        except Exception as exc:
+            print(f"warning: norm handoff not written, spawning unlinked: {exc}", file=sys.stderr)
+            handoff_record, child_linked, own_session = None, False, None
+            prompt = brief(False)
     model = resolve_model(args)
 
     ceiling_chars = dispatch_prompt_ceiling_chars(model)
@@ -2729,10 +2695,10 @@ def main(argv: list[str] | None = None) -> int:
     # an inherited own-contour session names the spawner's engine session, which an
     # unlinked helper must neither drive nor be gated as.
     env.pop(norm_handoff.NORM_HANDOFF_ENV, None)
-    env.pop(own_contour_module().OWN_SESSION_ENV, None)
-    if handoff is not None:
-        env[norm_handoff.NORM_HANDOFF_ENV] = handoff
-        env[own_contour_module().OWN_SESSION_ENV] = own_session
+    env.pop(OWN_SESSION_ENV, None)
+    if handoff_env_value is not None:
+        env[norm_handoff.NORM_HANDOFF_ENV] = handoff_env_value
+        env[OWN_SESSION_ENV] = own_session
 
     # Snapshot existing transcripts BEFORE spawning so we can identify the
     # child's new jsonl (the parent manager's own live transcript would
