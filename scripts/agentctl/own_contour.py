@@ -16,13 +16,15 @@ OWN_SESSION_ENV = "AGENTCTL_OWN_SESSION"
 # The spine verbs a linked child moves its own session with. `plan` (ROUTED->PLANNING)
 # and marker-free `partition` (APPROVED->PARTITIONED, one delivery unit) are the
 # transitions machine.py requires on the way to EXECUTING; every user-authority verb
-# stays with the parent.
+# stays with the parent. The `plan-review-*` walk/history/compose verbs are what the
+# topological review driver (`plan-review-topological.py`) runs for the child's plan.
 OWN_CONTOUR_VERBS = frozenset({
     "classify", "status", "plan", "next-stage", "submit-plan", "plan-review",
     "plan-review-delta", "approve", "partition", "dispatch", "record-result",
     "code-review", "verify-final", "declare", "investigate", "critique",
     "normalize", "replan", "stage-grants", "plan-grants", "question-raise",
     "question-dispose", "order-raise", "order-dispose",
+    "plan-review-walk", "plan-review-pair-history", "plan-review-compose",
 })
 
 # `partition` options a child may not set: the delivery-partition decision stays the

@@ -91,3 +91,25 @@ Premise questions of the order, with the disposition and the answer (or, for an 
 - If the record write fails, the spawn prints a warning and still launches. That re-dispatch then mints a fresh session, which is the behaviour before this amendment.
 - A child resumed before its engine adopted any handoff has no `parent_link` to compare, so the digest check admits it; it then adopts the handoff it is given at this spawn, which carries the current norm.
 - Concurrent dispatch of the same stage is not guarded. Dispatch is assumed serial per stage: two spawns racing on one record could both resume the same child session, and the later record write wins.
+
+## Amendment (child-plan-review)
+
+- Plan: `child-plan-review.toml`, stage 2 (R1, R2, R4–R7)
+
+**Difficulty.** A linked child must have its plan reviewed before `approve --by agent`, but the topological review driver (`plan-review-topological.py`) could not run on the child's contour: it needs `--session` against `agentctl-cli.py`, which the channel neither grants nor can (a prefix rule over `agentctl-cli.py` cannot fix `--session`), and the verbs it runs — `plan-review-walk`, `plan-review-pair-history`, `plan-review-compose` — were outside `OWN_CONTOUR_VERBS`. The child either skipped review or relied on the root to run it for it.
+
+**Decision (D1).**
+
+1. **Three channel verbs.** `OWN_CONTOUR_VERBS` gains `plan-review-walk`, `plan-review-pair-history` and `plan-review-compose` (`plan-review` and `plan-review-delta` were already in it). Each acts only on the child's own session; a foreign `--session` is still refused and `compose` only composes pair records already recorded.
+2. **One seam-produced driver rule.** For a linked spawn only, `spawn-specialist.py` adds `own_contour_review_rule()` — exactly `Bash(python3 <scripts>/plan-review-topological.py:*)` — next to `own_contour_allow_rule()`, and the brief names `python3 <scripts>/plan-review-topological.py --plan <plan>`. An unlinked spawn, reviewers included, gets neither.
+3. **Driver own mode.** When `AGENTCTL_OWN_SESSION` is set, the driver takes the session from it, refuses a `--session` that differs and `--ledger` (exit 2, before any engine call), and sends every engine call — `plan-review-walk`, `plan-review-pair-history`, the `plan-review` records, `plan-review-compose` — through `agentctl-own.py` with no `--session`. Without the variable it behaves as before, byte for byte.
+4. **Why the grant does not widen the child.** The rule names one script. The driver's reviewer spawn argv is fixed (kind `thinker`, `--review-topo`, no `--session`, no `--stage-index`), so every reviewer is an unlinked thinker — the spawner drops the own-contour env for an unlinked spawn — with the read-only topological view, at the child's depth + 1 under `max-recursion-depth`. The engine calls pass the channel, which refuses user-authority verbs, `approve` other than `--by agent`, and any foreign session.
+5. **Where the driver writes.** The pair-history temp dir (`topo-history-*`), the materialized unit tree (`agentctl/topo-units` under the config root), the spawn cost log (`claude-spawn-costs.jsonl`) and the child's own session state through the channel — never another session's state. The README (§ The own contour of a linked child) lists the same locations.
+
+**Premise answers.**
+
+- Q1 (mechanism): a seam-produced exact driver rule, `own_contour_review_rule`, plus the three channel verbs, rather than per-plan declared grants.
+- Q5 (`--ledger`): refused in own mode, because a ledger path is a write location outside the child's own session state.
+- Q8 (names): `own_contour_review_rule` for the seam in `spawn-specialist.py`; `review_check_script_dirs` is the name fixed for the reviewer's check-script-directory view, introduced by the next stage of the same plan and not present at this amendment.
+
+**Remaining gap (Q2).** This is a known limitation: the thinker review of a linked child's plan still rests on the child's word. A `plan-review --reviewer thinker --verdict pass` the child records by hand through the channel is admitted exactly as one the driver recorded, so a hand-recorded pass is indistinguishable from a driver-produced one. This amendment does not close it — the user kept it out of scope (Q2). The driver makes the honest path available on the child's own contour; it does not make the dishonest one impossible. A Core follow-up issue is filed by the root after landing.

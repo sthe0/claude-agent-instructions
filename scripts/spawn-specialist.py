@@ -216,6 +216,7 @@ def own_contour_brief_lines(args: argparse.Namespace) -> list[str]:
     verb set so the brief cannot name a set the channel does not run."""
     verbs = ", ".join(f"`{v}`" for v in sorted(OWN_CONTOUR_VERBS))
     channel = f"python3 {Path(SCRIPTS_DIR) / 'agentctl-own.py'}"
+    review_driver = f"python3 {Path(SCRIPTS_DIR) / 'plan-review-topological.py'}"
     marker_source = (
         "one of the markers your brief names"
         if is_manager_kind(getattr(args, "kind", None))
@@ -240,6 +241,13 @@ def own_contour_brief_lines(args: argparse.Namespace) -> list[str]:
         "`verify_command` verbatim in its final checks, `submit-plan`, `plan-review` "
         "(an independent thinker's review), `approve --by agent`, `partition` (no "
         "flags), `next-stage`.",
+        "",
+        f"To have your plan reviewed, run `{review_driver} --plan <plan>`: it walks the "
+        "plan, spawns one read-only thinker per unit and per pair, records each verdict "
+        "and composes the pass on your own session. Pass no `--session` — it comes from "
+        "your contour (`AGENTCTL_OWN_SESSION`) — and no `--ledger`. A `revise` verdict "
+        "blocks `approve --by agent`: amend the plan, `submit-plan` it again and re-run "
+        "the command.",
         "",
         "If the norm itself is wrong — it cannot be met as stated — run `declare`, "
         "`investigate`, then `critique --failure-address нормативное --norm-target "
@@ -1915,6 +1923,13 @@ def own_contour_allow_rule() -> str:
     return f"Bash(python3 {Path(SCRIPTS_DIR) / 'agentctl-own.py'}:*)"
 
 
+def own_contour_review_rule() -> str:
+    """The rule that lets a linked child review its own plan: the topological review
+    driver by absolute path. The driver reaches the engine only through the channel
+    when `AGENTCTL_OWN_SESSION` is set, and its reviewers are spawned unlinked."""
+    return f"Bash(python3 {Path(SCRIPTS_DIR) / 'plan-review-topological.py'}:*)"
+
+
 def load_or_create_evidence_dir(
     session_id: str,
     stage_index: int,
@@ -2707,8 +2722,8 @@ def main(argv: list[str] | None = None) -> int:
         child_permissions.setdefault("deny", []).extend(view_deny)
 
     if child_linked:
-        child_settings.setdefault("permissions", {}).setdefault("allow", []).append(
-            own_contour_allow_rule()
+        child_settings.setdefault("permissions", {}).setdefault("allow", []).extend(
+            [own_contour_allow_rule(), own_contour_review_rule()]
         )
 
     cmd = [

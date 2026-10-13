@@ -399,6 +399,15 @@ def _no_ambient_norm_handoff(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_own_session(monkeypatch):
+    """Drop the ambient AGENTCTL_OWN_SESSION: the topological review driver reads
+    it as "run on this contour's session", so a suite run from inside a linked
+    child would otherwise put every base-mode driver test into own mode. Tests
+    that own the contour set the variable themselves."""
+    monkeypatch.delenv("AGENTCTL_OWN_SESSION", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_project_dir(monkeypatch):
     """Drop the ambient CLAUDE_PROJECT_DIR for the suite at large.
 
