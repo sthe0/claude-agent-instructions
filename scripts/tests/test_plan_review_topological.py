@@ -101,7 +101,7 @@ class FakeEngine:
     def verbs(self, verb):
         return [argv for argv, _ in self.calls if argv[0] == verb]
 
-    def run(self, argv, env):
+    def run(self, argv, env, script=None):
         self.calls.append((list(argv), dict(env)))
         verb = argv[0]
         if verb == "plan-review-walk":
@@ -143,7 +143,7 @@ class RealEngine:
     def verbs(self, verb):
         return [argv for argv, _ in self.calls if argv[0] == verb]
 
-    def run(self, argv, env):
+    def run(self, argv, env, script=None):
         self.calls.append((list(argv), dict(env)))
         if argv[0] == "plan-review-walk":
             self.events.append(("walk",))

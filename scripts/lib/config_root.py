@@ -353,12 +353,19 @@ def plans_dir() -> Path:
 def agentctl_topo_units_dir() -> Path:
     """Materialized ``--review-topo`` unit tree root (``<root>/agentctl/
     topo-units`` — see agentctl/render.py's ``materialize_topo_units``). One
-    subdirectory per plan content sha256. Honors an
-    ``$AGENTCTL_TOPO_UNITS_DIR`` override at the call site
-    (spawn-specialist.py), mirroring ``agentctl_task_accumulator_dir()``'s
-    role for task-accumulators — every test sets the override to a temp
-    directory so materialization never writes under this default root."""
+    subdirectory per plan content sha256. The default root only: a caller
+    that must honor ``$AGENTCTL_TOPO_UNITS_DIR`` (every test sets it to a
+    temp directory so materialization never writes under this root) calls
+    ``topo_units_root()``."""
     return agentctl_dir() / "topo-units"
+
+
+def topo_units_root() -> Path:
+    """The ``--review-topo`` unit tree root in effect: the
+    ``$AGENTCTL_TOPO_UNITS_DIR`` override when set, else
+    ``agentctl_topo_units_dir()``."""
+    override = os.environ.get("AGENTCTL_TOPO_UNITS_DIR")
+    return Path(override) if override else agentctl_topo_units_dir()
 
 
 def legacy_home() -> Path:

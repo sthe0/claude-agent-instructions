@@ -66,7 +66,9 @@ def _observe_submit_plan(state, bag) -> list[PluginDirective]:
     return [PluginDirective(
         "tracker", "publish_plan",
         "post a reader-facing rendering of the plan, in the dialogue language, to the "
-        "ticket BEFORE asking the user for approval — never the raw plan bytes",
+        "ticket BEFORE asking the user for approval — never the raw plan bytes in the "
+        "comment; attach the plan TOML to the ticket as an attachment and record it with "
+        "`plugin-record --plugin tracker --phase plan --attachment <id|url>`",
         blocking=True, data={"tracker_key": _key(bag), "phase": "plan"},
     )]
 
@@ -95,9 +97,10 @@ def _observe_approve(state, bag) -> list[PluginDirective]:
         PluginDirective(
             "tracker", "publish_plan",
             "the plan is approved: the comment body must carry a reader-facing rendering "
-            "of the plan in the dialogue language, with the approved plan SNAPSHOT "
-            "attached or linked via tracker_publish_plan — never pasted into the comment "
-            "body — then `plugin-record --plugin tracker --phase plan`. If the backend "
+            "of the plan in the dialogue language, and the approved plan SNAPSHOT (the "
+            "TOML) must be attached to the ticket as a ticket attachment — never pasted "
+            "into the comment body — then `plugin-record --plugin tracker --phase plan "
+            "--attachment <id|url>` (refused without --attachment). If the backend "
             "defines no tracker_publish_plan, record the skip instead: "
             "`plugin-record --plugin tracker --phase plan --skipped --note \"<why>\"` — "
             "never leave the mandatory plan phase silently unrecorded",

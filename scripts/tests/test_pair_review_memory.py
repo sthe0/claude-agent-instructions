@@ -396,7 +396,7 @@ class _Engine:
         self.records = records
         self.calls: list[list[str]] = []
 
-    def run(self, argv, env):
+    def run(self, argv, env, script=None):
         self.calls.append(list(argv))
         if argv[0] == "plan-review-pair-history":
             return {"ok": True, "data": {"pair": PAIR, "records": self.records,
@@ -466,7 +466,7 @@ def test_a_failing_history_verb_stays_fail_open_but_is_named(drv, monkeypatch, t
     plan = tmp_path / "plan.toml"
     plan.write_text("x")
     driver, _, spawned, _ = _driver(drv, monkeypatch, plan, [RECORD])
-    monkeypatch.setattr(drv, "run_agentctl", lambda argv, env: {"ok": False, "detail": "boom", "data": {}})
+    monkeypatch.setattr(drv, "run_agentctl", lambda argv, env, script: {"ok": False, "detail": "boom", "data": {}})
     driver.launch({"pair": PAIR, "status": "revise"})
     assert "--review-topo-history" not in spawned[0]
     line = next(l for l in capsys.readouterr().out.splitlines() if l.startswith("TOPO-HISTORY-UNAVAILABLE"))
