@@ -113,7 +113,10 @@ def _run_driver(drv, argv):
 
 def test_own_channel_admits_review_verbs(contour):
     channel = importlib.import_module("agentctl.own_contour")
-    assert set(REVIEW_VERBS) <= OWN_CONTOUR_VERBS, "setup: the pinned verb set lacks the review verbs"
+    assert set(REVIEW_VERBS) <= set(channel.OWN_CONTOUR_VERBS), (
+        f"BEHAVIOUR: the own-contour verb set lacks "
+        f"{sorted(set(REVIEW_VERBS) - set(channel.OWN_CONTOUR_VERBS))}"
+    )
     assert set(channel.OWN_CONTOUR_VERBS) == OWN_CONTOUR_VERBS, (
         f"BEHAVIOUR: the own-contour verb set lacks "
         f"{sorted(OWN_CONTOUR_VERBS - set(channel.OWN_CONTOUR_VERBS))}"
