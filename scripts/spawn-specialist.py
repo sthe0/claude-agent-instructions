@@ -216,7 +216,7 @@ def own_contour_brief_lines(args: argparse.Namespace) -> list[str]:
     verb set so the brief cannot name a set the channel does not run."""
     verbs = ", ".join(f"`{v}`" for v in sorted(OWN_CONTOUR_VERBS))
     channel = f"python3 {Path(SCRIPTS_DIR) / 'agentctl-own.py'}"
-    review_driver = f"python3 {Path(SCRIPTS_DIR) / 'plan-review-topological.py'}"
+    review_driver = own_contour_review_command()
     marker_source = (
         "one of the markers your brief names"
         if is_manager_kind(getattr(args, "kind", None))
@@ -1923,11 +1923,19 @@ def own_contour_allow_rule() -> str:
     return f"Bash(python3 {Path(SCRIPTS_DIR) / 'agentctl-own.py'}:*)"
 
 
+def own_contour_review_command() -> str:
+    """The topological review driver by absolute path, in own mode. `--own` is part of
+    the granted prefix so the child's grant covers own mode only: the driver then
+    reaches the engine only through the channel, and refuses to run when
+    `AGENTCTL_OWN_SESSION` is unset — the mode never depends on how the harness
+    matches an env-prefixed command."""
+    return f"python3 {Path(SCRIPTS_DIR) / 'plan-review-topological.py'} --own"
+
+
 def own_contour_review_rule() -> str:
-    """The rule that lets a linked child review its own plan: the topological review
-    driver by absolute path. The driver reaches the engine only through the channel
-    when `AGENTCTL_OWN_SESSION` is set, and its reviewers are spawned unlinked."""
-    return f"Bash(python3 {Path(SCRIPTS_DIR) / 'plan-review-topological.py'}:*)"
+    """The rule that lets a linked child review its own plan; its reviewers are
+    spawned unlinked."""
+    return f"Bash({own_contour_review_command()}:*)"
 
 
 def load_or_create_evidence_dir(

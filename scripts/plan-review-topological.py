@@ -15,14 +15,17 @@ already has a record is re-reviewed with `agentctl plan-review-pair-history` han
 the spawner (`--review-topo-history`). Cost, duration and pull counts are printed as
 telemetry; nothing is gated on them.
 
-  plan-review-topological.py --session <sid> --plan <plan.toml>
+  plan-review-topological.py (--session <sid> | --own) --plan <plan.toml>
       [--complexity low|medium|high | --model <m>] [--dry-run] [--early-stop]
       [--parallel <k>] [--pairs <p,...>] [--ledger <path>]
 
-Own mode: with `AGENTCTL_OWN_SESSION` set (a linked child's contour) the session is
-that one, `--session` is optional and must match it, `--ledger` is refused, and every
-engine call goes through `agentctl-own.py` -- the child's channel -- without a
-`--session`. The reviewers it spawns are the same unlinked read-only thinkers.
+Own mode (`--own`, a linked child's contour): the session is the one
+`AGENTCTL_OWN_SESSION` names, which must be set and non-empty; `--session` is optional
+and must match it, `--ledger` is refused, and every engine call goes through
+`agentctl-own.py` -- the child's channel -- without a `--session`. The reviewers it
+spawns are the same unlinked read-only thinkers. The mode is chosen by the flag alone,
+never by the environment: `AGENTCTL_OWN_SESSION` set without `--own` is a usage error,
+so a child cannot reach base mode.
 
 Output lines: TOPO-PAIR, TOPO-REFUSED, TOPO-CURRENT, TOPO-WAITING, TOPO-DRY,
 TOPO-HISTORY-UNAVAILABLE (the history verb failed; the pair is reviewed without it),
@@ -118,9 +121,9 @@ def spawn_pair(argv: list[str]) -> tuple[int, str, str]:
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def run_agentctl(argv: list[str], env: dict, script: "Path | None" = None) -> dict:
+def run_agentctl(argv: list[str], env: dict, script: Path = AGENTCTL_CLI) -> dict:
     proc = subprocess.run(
-        [sys.executable, str(script or AGENTCTL_CLI), *argv], capture_output=True, text=True, env=env
+        [sys.executable, str(script), *argv], capture_output=True, text=True, env=env
     )
     try:
         directive = json.loads(proc.stdout)
@@ -424,7 +427,7 @@ class Driver:
         self.args = args
         self.plan_path = plan_path
         self.env = env
-        self.own = own
+        self.engine_script = AGENTCTL_OWN if own else AGENTCTL_CLI
         self.sid = None if own else args.session
         self.named = set(args.pairs.split(",")) if args.pairs else None
         self.spawned: set[str] = set()
@@ -436,9 +439,7 @@ class Driver:
         self.history_lock = threading.Lock()
 
     def engine(self, argv: list[str]) -> dict:
-        if self.own:
-            return run_agentctl(argv, self.env, AGENTCTL_OWN)
-        return run_agentctl(argv, self.env)
+        return run_agentctl(argv, self.env, self.engine_script)
 
     def agentctl(self, verb: str, *extra: str) -> dict:
         return self.engine([verb, *session_args(self.sid), "--target", self.plan_path, *extra])
@@ -580,13 +581,12 @@ class Driver:
                 history_path = self.history_file(row)
                 spawn_cmd = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
                                              history_path=HISTORY_PLACEHOLDER if history_path else None)
-                engine_script = AGENTCTL_OWN if self.own else AGENTCTL_CLI
                 if history_path:
-                    emit(f"  history: {shlex.join([sys.executable, str(engine_script), 'plan-review-pair-history', *session_args(self.sid), '--target', self.plan_path, '--pair', pair])}"
+                    emit(f"  history: {shlex.join([sys.executable, str(self.engine_script), 'plan-review-pair-history', *session_args(self.sid), '--target', self.plan_path, '--pair', pair])}"
                          f" > {HISTORY_PLACEHOLDER}")
                 emit("  spawn: " + shlex.join([sys.executable, str(SPAWNER), *spawn_cmd]))
                 emit("  record: " + shlex.join(
-                    [sys.executable, str(engine_script),
+                    [sys.executable, str(self.engine_script),
                      *record_argv(self.sid, self.plan_path, pair, "<pass|revise>", "<sha256>", [])]))
                 rc, out, err = spawn_pair(build_spawn_argv(self.args, pair, self.plan_path, dry_run=True,
                                                            history_path=history_path))
@@ -679,9 +679,12 @@ class Driver:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--session", required=OWN_SESSION_ENV not in os.environ,
-                   help=f"engine session id owning the plan review (optional under {OWN_SESSION_ENV}, "
-                        "where it must name that session)")
+    p.add_argument("--session", default=None,
+                   help="engine session id owning the plan review (required without --own; "
+                        f"with --own optional, and must name the session {OWN_SESSION_ENV} names)")
+    p.add_argument("--own", action="store_true",
+                   help=f"own mode for a linked child: the session is {OWN_SESSION_ENV} (which "
+                        "must be set) and every engine call goes through agentctl-own.py")
     p.add_argument("--plan", required=True, help="plan file to review (the walk target)")
     selector = p.add_mutually_exclusive_group()
     selector.add_argument("--complexity", choices=("low", "medium", "high"), default=None,
@@ -700,8 +703,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pairs", default=None, help="comma list of pair ids to review, in walk order")
     p.add_argument("--ledger", default=None,
                    help="condition-4 gap ledger path (sets AGENTCTL_ESCALATION_LEDGER); "
-                        f"refused under {OWN_SESSION_ENV}")
+                        "refused with --own")
     return p
+
+
+def check_mode(parser: argparse.ArgumentParser, args) -> None:
+    """Exit 2 unless the flags and `AGENTCTL_OWN_SESSION` agree on one mode."""
+    if not args.own:
+        if OWN_SESSION_ENV in os.environ:
+            parser.error(f"{OWN_SESSION_ENV} is set: a linked child reviews only with --own")
+        if args.session is None:
+            parser.error("--session is required without --own")
+        return
+    own_session = os.environ.get(OWN_SESSION_ENV, "").strip()
+    if not own_session:
+        parser.error(f"--own needs {OWN_SESSION_ENV} set to the contour's session")
+    if args.session is not None and args.session != own_session:
+        parser.error(f"--session {args.session} is not the session {OWN_SESSION_ENV} names; "
+                     "under a linked child's contour the review runs on that session only")
+    if args.ledger:
+        parser.error("--ledger is not available with --own")
 
 
 def main(argv: "list[str] | None" = None) -> int:
@@ -709,18 +730,7 @@ def main(argv: "list[str] | None" = None) -> int:
     args = parser.parse_args(argv)
     if args.parallel is not None and args.parallel < 1:
         parser.error("--parallel must be at least 1")
-    own_session = os.environ.get(OWN_SESSION_ENV)
-    own = own_session is not None
-    if own:
-        own_session = own_session.strip()
-        if not own_session:
-            parser.error(f"{OWN_SESSION_ENV} is set but empty")
-        if args.session is not None and args.session != own_session:
-            parser.error(f"--session {args.session} is not the session {OWN_SESSION_ENV} names; "
-                         "under a linked child's contour the review runs on that session only")
-        if args.ledger:
-            parser.error(f"--ledger is not available under {OWN_SESSION_ENV}")
-        args.session = own_session
+    check_mode(parser, args)
     plan_path = Path(args.plan).resolve()
     if not plan_path.is_file():
         parser.error(f"--plan {args.plan}: no such file")
@@ -730,7 +740,7 @@ def main(argv: "list[str] | None" = None) -> int:
         ledger.parent.mkdir(parents=True, exist_ok=True)
         ledger.touch()
         env["AGENTCTL_ESCALATION_LEDGER"] = str(ledger)
-    return Driver(args, str(plan_path), env, own).run(parser)
+    return Driver(args, str(plan_path), env, args.own).run(parser)
 
 
 if __name__ == "__main__":

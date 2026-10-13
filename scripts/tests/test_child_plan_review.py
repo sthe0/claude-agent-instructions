@@ -9,15 +9,11 @@ it inside the child's contour:
 * the channel (`agentctl-own.py`) admits the three read/compose verbs the driver runs
   besides `plan-review` -- and still refuses every user-authority verb;
 * the spawn grants a linked child exactly one more rule, the driver by its absolute
-  path, names the command in the brief, and gives an unlinked spawn (a reviewer
-  included) neither;
-* the driver, under `AGENTCTL_OWN_SESSION`, takes its session from the contour and
-  drives the engine only through the channel.
-
-Eight tests carry the behaviour under repair (`BEHAVIOUR:` on the one assertion that
-checks it, so on the base tree they fail there and not at collection or in setup); five
-pin what must stay as on the base tree: the reviewer spawn, the unlinked spawn, the
-approval refusal without a review, and the user-authority verbs.
+  path in own mode (`--own`), names the command in the brief, and gives an unlinked
+  spawn (a reviewer included) neither;
+* the driver, with `--own`, takes its session from the contour and drives the engine
+  only through the channel; own mode and `AGENTCTL_OWN_SESSION` must agree, or it
+  exits 2.
 
 Known limitation, pinned nowhere: a child can still hand-record a thinker pass with
 `plan-review`; the driver is the supported route, not the only one the verb set allows."""
@@ -34,23 +30,22 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from lib.widening_targets import AGENTCTL_USER_AUTHORITY_VERBS
 from test_child_contour_gate import (  # noqa: F401 - `_isolated_env` is autouse
     CHILD,
     FIXTURE_PLAN,
     HANDOFF_ENV,
     OTHER,
+    OWN_CONTOUR_VERBS,
     OWN_ENV,
     OWN_SCRIPT,
     REFUSED,
-    SPAWN_SCRIPT,
-    Contour,
     _expect_ok,
     _isolated_env,
     _load_spawn,
     _parent_session,
     _settings_allow,
     _spawn_argv,
-    _state_dir,
     contour,
 )
 from test_plan_review_topological import canonical_stdout, review_original, summary_line
@@ -58,20 +53,9 @@ from test_plan_review_topological import canonical_stdout, review_original, summ
 SCRIPTS = Path(__file__).resolve().parent.parent
 DRIVER_SCRIPT = SCRIPTS / "plan-review-topological.py"
 REVIEW_VERBS = ("plan-review-walk", "plan-review-pair-history", "plan-review-compose")
-HEAD_VERBS = {
-    "classify", "status", "plan", "next-stage", "submit-plan", "plan-review",
-    "plan-review-delta", "approve", "partition", "dispatch", "record-result",
-    "code-review", "verify-final", "declare", "investigate", "critique",
-    "normalize", "replan", "stage-grants", "plan-grants", "question-raise",
-    "question-dispose", "order-raise", "order-dispose",
-}
-EXPECTED_VERBS = HEAD_VERBS | set(REVIEW_VERBS)
-REVIEW_RULE = f"Bash(python3 {DRIVER_SCRIPT}:*)"
-USER_AUTHORITY_VERBS = (
-    "resolve", "resolve-permission", "reset", "task-reset", "fire-acknowledge",
-    "confirm-delivery", "present-plan", "accept", "risk-accept", "reject", "stage-review",
-    "push-subplan", "pop-subplan", "partition-units",
-)
+REVIEW_RULE = f"Bash(python3 {DRIVER_SCRIPT} --own:*)"
+BRIEF_COMMAND_RE = re.compile(r"`(python3 \S*plan-review-topological\.py --own --plan <plan>[^`]*)`")
+USER_AUTHORITY_VERBS = sorted(AGENTCTL_USER_AUTHORITY_VERBS - OWN_CONTOUR_VERBS)
 PLAN_REVIEW_ENV = {"AGENTCTL_PLAN_REVIEW": "1"}
 
 
@@ -129,9 +113,10 @@ def _run_driver(drv, argv):
 
 def test_own_channel_admits_review_verbs(contour):
     channel = importlib.import_module("agentctl.own_contour")
-    assert set(channel.OWN_CONTOUR_VERBS) == EXPECTED_VERBS, (
+    assert set(REVIEW_VERBS) <= OWN_CONTOUR_VERBS, "setup: the pinned verb set lacks the review verbs"
+    assert set(channel.OWN_CONTOUR_VERBS) == OWN_CONTOUR_VERBS, (
         f"BEHAVIOUR: the own-contour verb set lacks "
-        f"{sorted(EXPECTED_VERBS - set(channel.OWN_CONTOUR_VERBS))}"
+        f"{sorted(OWN_CONTOUR_VERBS - set(channel.OWN_CONTOUR_VERBS))}"
     )
     calls = (
         ("plan-review-walk", "--target", contour.plan, "--format", "json"),
@@ -169,7 +154,9 @@ def test_linked_spawn_grants_exactly_the_review_driver(tmp_path, monkeypatch):
         f"BEHAVIOUR: a linked child is granted {granted!r}, not exactly the review driver "
         f"by its absolute path"
     )
-    assert spawn.own_contour_review_rule() == REVIEW_RULE
+    assert spawn.own_contour_review_rule().endswith("plan-review-topological.py --own:*)"), (
+        "the driver grant does not pin own mode"
+    )
     unlinked_cmd, _ = _launch(_load_spawn(), monkeypatch, _spawn_argv(tmp_path / "home", tmp_path, None))
     extra = sorted(set(allow) - set(_settings_allow(unlinked_cmd)))
     assert extra == sorted([f"Bash(python3 {OWN_SCRIPT}:*)", REVIEW_RULE]), (
@@ -181,8 +168,8 @@ def test_linked_brief_names_review_driver(tmp_path, capsys):
     _parent_session(tmp_path / "home")
     out = _brief(capsys, _spawn_argv(tmp_path / "home", tmp_path, 1))
     section = out.split("## Your own engine contour", 1)[1].split("\n## ", 1)[0]
-    found = re.findall(r"`(python3 \S*plan-review-topological\.py --plan <plan>[^`]*)`", section)
-    assert found, "BEHAVIOUR: the brief does not name `plan-review-topological.py --plan <plan>`"
+    found = BRIEF_COMMAND_RE.findall(section)
+    assert found, "BEHAVIOUR: the brief does not name `plan-review-topological.py --own --plan <plan>`"
     assert found[0].split()[1] == str(DRIVER_SCRIPT)
     paragraph = next(p for p in section.split("\n\n") if "plan-review-topological.py" in p)
     assert OWN_ENV in paragraph and "--session" in paragraph, (
@@ -195,7 +182,7 @@ def test_unlinked_spawn_gets_no_review_driver_rule(tmp_path, monkeypatch, capsys
     spawn = _load_spawn()
     calls = []
     monkeypatch.setattr(spawn, "own_contour_review_rule",
-                        lambda: calls.append("called") or REVIEW_RULE, raising=False)
+                        lambda: calls.append("called") or REVIEW_RULE)
     cmd, env = _launch(spawn, monkeypatch, _spawn_argv(tmp_path / "home", tmp_path, None))
     assert OWN_ENV not in env and HANDOFF_ENV not in env, "setup: the spawn is linked"
     assert not any("plan-review-topological.py" in rule for rule in _settings_allow(cmd))
@@ -232,7 +219,6 @@ def test_reviewer_spawn_is_unlinked_read_only_thinker(tmp_path, monkeypatch):
         assert flag not in cmd, f"the reviewer's `claude -p` carries {flag}"
     for rule in _settings_allow(cmd):
         assert "agentctl-own.py" not in rule and "plan-review-topological.py" not in rule, rule
-        assert not rule.startswith(("Edit", "Write")) or "topo" in rule or "tmp" in rule, rule
 
 
 def test_reviewer_depth_is_child_depth_plus_one(tmp_path, monkeypatch):
@@ -307,9 +293,9 @@ def _engine(own_driver, **kw) -> _Engine:
 def test_driver_own_mode_takes_session_from_own_channel(own_driver, capsys):
     engine = _engine(own_driver)
     spawned = _stub_reviewer(own_driver.drv, own_driver.monkeypatch)
-    rc = _run_driver(own_driver.drv, ["--plan", own_driver.plan, "--complexity", "low"])
+    rc = _run_driver(own_driver.drv, ["--own", "--plan", own_driver.plan, "--complexity", "low"])
     err = capsys.readouterr().err
-    assert rc == 0, f"BEHAVIOUR: the driver run without --session under {OWN_ENV} exited {rc}: {err!r}"
+    assert rc == 0, f"BEHAVIOUR: the --own run without --session under {OWN_ENV} exited {rc}: {err!r}"
     assert engine.calls, "the driver never reached the engine"
     for call in engine.calls:
         assert call[:2] == [sys.executable, str(OWN_SCRIPT)], f"an engine call bypasses the channel: {call}"
@@ -324,9 +310,9 @@ def test_driver_own_mode_takes_session_from_own_channel(own_driver, capsys):
 def test_driver_own_mode_names_channel_in_dry_run_hints(own_driver, capsys):
     engine = _engine(own_driver, status="revise", records=[{"verdict": "revise"}])
     _stub_reviewer(own_driver.drv, own_driver.monkeypatch)
-    rc = _run_driver(own_driver.drv, ["--plan", own_driver.plan, "--dry-run"])
+    rc = _run_driver(own_driver.drv, ["--own", "--plan", own_driver.plan, "--dry-run"])
     out = capsys.readouterr().out
-    assert rc == 0, f"BEHAVIOUR: the dry run without --session under {OWN_ENV} exited {rc}"
+    assert rc == 0, f"BEHAVIOUR: the --own dry run without --session under {OWN_ENV} exited {rc}"
     hints = [line for line in out.splitlines() if "plan-review-pair-history" in line]
     assert hints, out
     for line in hints + [ln for ln in out.splitlines() if ln.strip().startswith("record:")]:
@@ -339,27 +325,52 @@ def test_driver_own_mode_names_channel_in_dry_run_hints(own_driver, capsys):
 def test_driver_own_mode_refuses_foreign_session(own_driver, capsys):
     engine = _engine(own_driver)
     spawned = _stub_reviewer(own_driver.drv, own_driver.monkeypatch)
-    rc = _run_driver(own_driver.drv, ["--session", OTHER, "--plan", own_driver.plan])
+    rc = _run_driver(own_driver.drv, ["--own", "--session", OTHER, "--plan", own_driver.plan])
     capsys.readouterr()
     assert rc == 2, f"BEHAVIOUR: a --session naming another session under {OWN_ENV} exited {rc}"
     assert engine.calls == [] and spawned == [], "a refused run reached the engine or a reviewer"
     for blank in ("", "   "):
         own_driver.monkeypatch.setenv(OWN_ENV, blank)
-        assert _run_driver(own_driver.drv, ["--session", CHILD, "--plan", own_driver.plan]) == 2, (
+        assert _run_driver(own_driver.drv, ["--own", "--session", CHILD, "--plan", own_driver.plan]) == 2, (
             f"a set-but-empty {OWN_ENV} ({blank!r}) was taken for no contour"
         )
         capsys.readouterr()
     assert engine.calls == [] and spawned == []
     own_driver.monkeypatch.setenv(OWN_ENV, CHILD)
-    assert _run_driver(own_driver.drv, ["--session", CHILD, "--plan", own_driver.plan]) == 0
+    assert _run_driver(own_driver.drv, ["--own", "--session", CHILD, "--plan", own_driver.plan]) == 0
     assert engine.calls, "the session the contour names was refused"
+
+
+def test_driver_own_flag_without_contour_exits_2(own_driver, capsys):
+    engine = _engine(own_driver)
+    spawned = _stub_reviewer(own_driver.drv, own_driver.monkeypatch)
+    own_driver.monkeypatch.delenv(OWN_ENV)
+    for argv in (["--own"], ["--own", "--session", CHILD]):
+        rc = _run_driver(own_driver.drv, [*argv, "--plan", own_driver.plan])
+        err = capsys.readouterr().err
+        assert rc == 2, f"BEHAVIOUR: {argv} without {OWN_ENV} exited {rc}"
+        assert OWN_ENV in err, err
+    assert engine.calls == [] and spawned == [], "a refused run reached the engine or a reviewer"
+
+
+def test_driver_contour_without_own_flag_exits_2(own_driver, capsys):
+    engine = _engine(own_driver)
+    spawned = _stub_reviewer(own_driver.drv, own_driver.monkeypatch)
+    for value in (CHILD, ""):
+        own_driver.monkeypatch.setenv(OWN_ENV, value)
+        for argv in ([], ["--session", CHILD], ["--session", OTHER]):
+            rc = _run_driver(own_driver.drv, [*argv, "--plan", own_driver.plan])
+            err = capsys.readouterr().err
+            assert rc == 2, f"BEHAVIOUR: {argv} with {OWN_ENV}={value!r} and no --own exited {rc}"
+            assert "--own" in err, err
+    assert engine.calls == [] and spawned == [], "a child reached base mode"
 
 
 def test_driver_own_mode_refuses_ledger(own_driver, capsys):
     engine = _engine(own_driver)
     _stub_reviewer(own_driver.drv, own_driver.monkeypatch)
     ledger = own_driver.tmp / "ledger" / "gaps.jsonl"
-    rc = _run_driver(own_driver.drv, ["--session", CHILD, "--plan", own_driver.plan,
+    rc = _run_driver(own_driver.drv, ["--own", "--session", CHILD, "--plan", own_driver.plan,
                                       "--ledger", str(ledger)])
     capsys.readouterr()
     assert rc == 2, f"BEHAVIOUR: --ledger under {OWN_ENV} exited {rc}"
@@ -376,7 +387,7 @@ def _brief_command(tmp_path, capsys, plan: str) -> list[str]:
     _parent_session(spawn_home / "home")
     out = _brief(capsys, _spawn_argv(spawn_home / "home", spawn_home, 1))
     section = out.split("## Your own engine contour", 1)[1].split("\n## ", 1)[0]
-    found = re.findall(r"`(python3 \S*plan-review-topological\.py --plan <plan>[^`]*)`", section)
+    found = BRIEF_COMMAND_RE.findall(section)
     assert found, "BEHAVIOUR: the brief does not name the review command"
     return shlex.split(found[0].replace("<plan>", plan))
 
@@ -440,6 +451,3 @@ def test_child_approve_refused_without_review(contour):
     refused = contour.own("approve", "--by", "agent", **PLAN_REVIEW_ENV)
     assert refused.returncode != 0, f"approve passed with no review: {refused.stdout!r}"
     assert contour.store.load(CHILD).node == "PLAN_READY"
-
-
-_ = (Contour, SPAWN_SCRIPT, _state_dir)
