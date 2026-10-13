@@ -255,6 +255,7 @@ def test_declaring_under_the_release_supersedes_the_previous_record(eng):
 
 CROSSED = "agent_backstop_crossed"
 WIDENING = ("brand_new_module.py",)
+SPEND_ESTIMATE = 10.0
 
 
 def arm(eng: Eng, sid: str, *, spent: float = 0.0) -> None:
@@ -262,7 +263,7 @@ def arm(eng: Eng, sid: str, *, spent: float = 0.0) -> None:
     a zero baseline and `spent` dollars already booked. A session that has not been
     approved yet has none, so nothing bounds a backstop crossing there."""
     state = eng.state(sid)
-    state.effort_estimate = {effort.SCALE_SPEND: 10.0, effort.SCALE_WALL_CLOCK: 1000.0}
+    state.effort_estimate = {effort.SCALE_SPEND: SPEND_ESTIMATE, effort.SCALE_WALL_CLOCK: 1000.0}
     state.effort_baseline = {scale: 0.0 for scale in effort.SCALE_ORDER}
     state.effort_actuals[effort.ACTUAL_SPEND_KEY] = spent
     eng.store.save(state)
@@ -378,6 +379,9 @@ def test_agent_override_admitted_past_the_review_round_backstop_inside_the_bound
         f"{d['detail']}")
     assert eng.state("o1").plan_review.verdict == "override"
     assert [c["decision"] for c in crossings(eng, "o1")] == ["plan_review_override"]
+    disclosed = d["data"][CROSSED]
+    assert (disclosed["decision"], disclosed["axis"]) == (
+        "plan_review_override", ROUNDS_AXIS), f"BEHAVIOUR: {d['data']}"
 
 
 def test_agent_fire_acknowledge_admitted_past_the_replan_backstop_inside_the_boundary(eng):
@@ -396,6 +400,9 @@ def test_agent_renegotiation_continue_admitted_past_the_replan_backstop_inside_t
         f"{d['detail']}")
     assert eng.state("a1").renegotiations[-1]["by"] == "agent"
     assert [c["decision"] for c in crossings(eng, "a1")] == ["renegotiation_continue"]
+    disclosed = d["data"][CROSSED]
+    assert (disclosed["decision"], disclosed["axis"]) == (
+        "renegotiation_continue", REPLANS_AXIS), f"BEHAVIOUR: {d['data']}"
 
 
 def test_backstop_crossing_is_recorded_once_with_its_axis_count_and_backstop(eng):
@@ -449,13 +456,14 @@ def test_backstop_refusal_outside_the_boundary_names_the_boundary_reasons(eng):
     d = agent_override(eng, "o1", plan)
     assert d["ok"] is False
     assert "outside the autonomy boundary" in d["detail"], f"BEHAVIOUR: {d['detail']}"
+    assert "the effort bound does not hold" not in d["detail"], f"BEHAVIOUR: {d['detail']}"
     assert_not_crossed(eng, "o1", d)
 
 
 def test_backstop_crossings_stop_once_spend_reaches_the_divergence_multiple(eng):
     plan = released_order(eng, "o1")
     multiple = Thresholds().effort_divergence_multiple()
-    arm(eng, "o1", spent=10.0 * (multiple - 0.1))
+    arm(eng, "o1", spent=SPEND_ESTIMATE * (multiple - 0.1))
     reflect(eng, "o1")
     set_total("o1", ROUNDS_AXIS, Thresholds().review_round_backstop())
     below = agent_override(eng, "o1", plan)
@@ -463,13 +471,62 @@ def test_backstop_crossings_stop_once_spend_reaches_the_divergence_multiple(eng)
         f"BEHAVIOUR: an override below the divergence multiple was refused: {below['detail']}")
     eng.open("o2", plan)
     release_review_rounds(eng, "o2")
-    arm(eng, "o2", spent=10.0 * multiple)
+    arm(eng, "o2", spent=SPEND_ESTIMATE * multiple)
     reflect(eng, "o2")
     set_total("o2", ROUNDS_AXIS, Thresholds().review_round_backstop())
     at = agent_override(eng, "o2", plan)
     assert at["ok"] is False
+    assert "the effort bound does not hold" in at["detail"], f"BEHAVIOUR: {at['detail']}"
     assert "effort-divergence-multiple" in at["detail"], f"BEHAVIOUR: {at['detail']}"
+    assert "outside the autonomy boundary" not in at["detail"], f"BEHAVIOUR: {at['detail']}"
     assert_not_crossed(eng, "o2", at)
+
+
+def test_backstop_crossing_refused_when_no_estimate_is_armed(eng):
+    plan = released_order(eng)
+    state = eng.state("o1")
+    state.effort_estimate = {}
+    eng.store.save(state)
+    reflect(eng, "o1")
+    set_total("o1", ROUNDS_AXIS, Thresholds().review_round_backstop())
+    d = agent_override(eng, "o1", plan)
+    assert d["ok"] is False
+    assert "no armed spend or wall-clock estimate bounds the loop" in d["detail"], (
+        f"BEHAVIOUR: {d['detail']}")
+    assert eng.state("o1").plan_review is None
+    assert_not_crossed(eng, "o1", d)
+
+
+def test_backstop_crossing_refused_for_a_session_with_no_user_approved_version(eng, monkeypatch):
+    plan = released_order(eng)
+    arm(eng, "o1")
+    reflect(eng, "o1")
+    set_total("o1", ROUNDS_AXIS, Thresholds().review_round_backstop())
+    monkeypatch.setattr(cli, "_ledgered_order_key", lambda state: None)
+    d = agent_override(eng, "o1", plan)
+    assert d["ok"] is False
+    assert "no user-approved version of the order" in d["detail"], f"BEHAVIOUR: {d['detail']}"
+    assert eng.state("o1").plan_review is None
+    assert_not_crossed(eng, "o1", d)
+
+
+def test_renegotiation_crossing_is_kept_when_a_later_gate_refuses_the_replan(eng, monkeypatch):
+    at_ceiling(eng)
+    replanned = eng.write(plan_text(stage3=True, revised=True))
+    ceiling_refusal(eng, "a1", replanned)
+    eng.diagnose("a1", "b")
+    set_total("a1", REPLANS_AXIS, Thresholds().effort_replan_backstop())
+    with monkeypatch.context() as owed:
+        owed.setattr(gates, "plan_review_blockers", lambda state, target: ["a review is owed"])
+        refused = renegotiate(eng, "a1", replanned)
+    assert refused["ok"] is False and refused["action"] == "plan_review", f"BEHAVIOUR: {refused}"
+    assert refused["data"][CROSSED]["decision"] == "renegotiation_continue", f"BEHAVIOUR: {refused}"
+    assert [c["decision"] for c in crossings(eng, "a1")] == ["renegotiation_continue"], (
+        f"BEHAVIOUR: the crossing the refused replan earned was not saved: {refused}")
+    assert eng.state("a1").renegotiations[-1]["by"] == "agent"
+    plain = eng.run("replan", session="a1", plan=replanned)
+    assert plain["ok"] is True, plain
+    assert [c["decision"] for c in crossings(eng, "a1")] == ["renegotiation_continue"]
 
 
 def test_agent_override_refused_past_the_backstop_with_an_open_spend_fire(eng):

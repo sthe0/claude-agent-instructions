@@ -859,6 +859,7 @@ def _since_user_total(state: SessionState, axis: str) -> int:
 _BACKSTOP_CROSSED_EVENT = "agent_backstop_crossed"
 _PLAN_DOES_NOT_LOAD = "the plan does not load"
 _NO_ARMED_ESTIMATE = "no armed spend or wall-clock estimate bounds the loop"
+_NO_APPROVED_VERSION = "no user-approved version of the order"
 
 
 def _crossing_bound_reasons(state: SessionState) -> list[str]:
@@ -887,7 +888,10 @@ def _since_user_backstop_gate(
     (`_autonomy_for`, the predicate the next `approve --by agent` is held to) AND the spend
     and wall-clock fires still bound the loop; then it returns the crossing for the caller
     to record once the decision is applied. Otherwise the refusal names every reason.
-    `doc` None is the plan that does not load."""
+    `doc` None is the plan that does not load. A session with no user-approved order
+    version is outside whatever `_autonomy_for` says of the plan: without one the effort
+    window is not frozen, so the spend bound would not be measured against the user's
+    approval."""
     backstopped = _since_user_backstop_refusal(state, axis, backstop, what, cleared_by)
     if backstopped is None:
         return None, None
@@ -896,9 +900,16 @@ def _since_user_backstop_gate(
     else:
         boundary = _autonomy_for(state, doc)
         outside = [] if boundary["eligible"] else list(boundary.get("reasons") or [boundary["reason"]])
+    if _ledgered_order_key(state) is None:
+        outside.append(_NO_APPROVED_VERSION)
     bound = _crossing_bound_reasons(state)
     if outside or bound:
-        return f"{backstopped}; outside the autonomy boundary: " + "; ".join(outside + bound), None
+        clauses = []
+        if outside:
+            clauses.append("outside the autonomy boundary: " + "; ".join(outside))
+        if bound:
+            clauses.append("the effort bound does not hold: " + "; ".join(bound))
+        return f"{backstopped}; " + "; ".join(clauses), None
     return None, {
         "event": _BACKSTOP_CROSSED_EVENT, "decision": decision, "axis": axis,
         "spent": _since_user_total(state, axis), "backstop": backstop,
@@ -915,15 +926,15 @@ def _crossing_data(crossing: dict | None) -> dict:
     return {_BACKSTOP_CROSSED_EVENT: crossing} if crossing is not None else {}
 
 
-def _backstop_crossings_surface(state: SessionState) -> list[dict]:
+def _backstop_crossings(state: SessionState) -> list[dict]:
     """The agent backstop crossings on record, for verify-final and the resolution summary
     to surface verbatim ([] when none)."""
     return [dict(e) for e in state.history if e.get("event") == _BACKSTOP_CROSSED_EVENT]
 
 
-def _surface_backstop_crossings(state: SessionState, data: dict, detail: str) -> str:
+def _disclose_backstop_crossings(state: SessionState, data: dict, detail: str) -> str:
     """Put the crossings on `data` and, when there are any, name them in `detail`."""
-    crossings = _backstop_crossings_surface(state)
+    crossings = _backstop_crossings(state)
     data["agent_backstop_crossings"] = crossings
     if not crossings:
         return detail
@@ -9008,7 +9019,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     if acceptance_bypass is not None:
         data["acceptance_bypass"] = acceptance_bypass
         detail += "; WARNING: acceptance recorded via bypass, not judge corroboration (see acceptance_bypass)"
-    detail = _surface_backstop_crossings(state, data, detail)
+    detail = _disclose_backstop_crossings(state, data, detail)
     return Directive(True, state.node, "await_user_confirmation", detail, data=data)
 
 
@@ -9326,7 +9337,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if acceptance_bypass is not None:
         data["acceptance_bypass"] = acceptance_bypass
         detail += " (acceptance recorded via bypass; see acceptance_bypass)"
-    detail = _surface_backstop_crossings(state, data, detail)
+    detail = _disclose_backstop_crossings(state, data, detail)
     if landing["override"] is not None:
         data["landing_gate_override"] = landing["override"]
         detail += (f" (landing gate overridden by AGENTCTL_LANDING_GATE={landing['override']}; "
@@ -10127,10 +10138,9 @@ def _replan_cause(state: SessionState, explicit_reason: str | None) -> dict:
 
 
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
-    before = _persisted_crossing_count(store, args.session)
-    d = _cmd_replan(args, store=store, runner=runner)
-    if _persisted_crossing_count(store, args.session) > before:
-        d.data.update(_crossing_data(_backstop_crossings_surface(store.load(args.session))[-1]))
+    crossed: list[dict] = []
+    d = _cmd_replan(args, store=store, runner=runner, crossed=crossed)
+    d.data.update(_crossing_data(crossed[0] if crossed else None))
     # Only on something to say: an unconditional setdefault would add an empty
     # `advisories` key to every replan Directive, which test_history_capture's
     # exact-equality pin reads as a changed contract.
@@ -10139,11 +10149,6 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         d.data.setdefault("advisories", []).extend(advisories)
     _report_acceptance_staleness(d, args, store)
     return d
-
-
-def _persisted_crossing_count(store: StateStore, session: str) -> int:
-    state = store.load(session)
-    return len(_backstop_crossings_surface(state)) if state is not None else 0
 
 
 def _report_acceptance_staleness(d: Directive, args, store: StateStore) -> None:
@@ -10179,7 +10184,9 @@ def _replan_spelling_advisories(plan_path: str) -> list[str]:
     return grant_shadow.mixed_spelling_advisories(doc)
 
 
-def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
+                crossed: list[dict] | None = None) -> Directive:
+    """`crossed`, when given, receives the backstop crossing a renegotiation applied."""
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load
     from .stage_norm import stage_carried
@@ -10348,6 +10355,11 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         task_accumulator.reset(state.task_id)
         state.review_rounds = 0
         state.review_release_difficulty_id = None
+        # The reset above is already on disk, so the record of the decision that earned it
+        # lands with it: a later gate below may still refuse this replan.
+        store.save(state)
+        if crossing is not None and crossed is not None:
+            crossed.append(crossing)
 
     # The renormalization branch sits HERE deliberately: after difficulty_blockers (a
     # renormalization offers a whole plan, and offering one while the difficulty record

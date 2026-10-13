@@ -184,6 +184,25 @@ CATALOGUE: "dict[str, Mutant]" = {
         "            for scale, ratio in armed.items() if False]\n",
         _ids("test_backstop_crossings_stop_once_spend_reaches_the_divergence_multiple"),
     ),
+    "backstop-no-estimate-admitted": Mutant(
+        CLI,
+        "        return [_NO_ARMED_ESTIMATE]\n",
+        "        return []\n",
+        _ids("test_backstop_crossing_refused_when_no_estimate_is_armed"),
+    ),
+    "backstop-unapproved-session-admitted": Mutant(
+        CLI,
+        "    if _ledgered_order_key(state) is None:\n        outside.append(_NO_APPROVED_VERSION)\n",
+        "    if False:\n        outside.append(_NO_APPROVED_VERSION)\n",
+        _ids("test_backstop_crossing_refused_for_a_session_with_no_user_approved_version"),
+    ),
+    "backstop-renegotiation-crossing-unsaved": Mutant(
+        CLI,
+        "        # lands with it: a later gate below may still refuse this replan.\n"
+        "        store.save(state)\n",
+        "        # lands with it: a later gate below may still refuse this replan.\n",
+        _ids("test_renegotiation_crossing_is_kept_when_a_later_gate_refuses_the_replan"),
+    ),
     "backstop-crossing-skips-later-checks": Mutant(
         CLI,
         '            return f"an agent-authored override is refused: {backstopped}", None\n'
