@@ -149,6 +149,34 @@ def test_crossings_of_distinct_tasks_are_kept_apart(tmp_path):
     assert ta.get("task-b", root=tmp_path)["agent_backstop_crossings"] == []
 
 
+def test_discard_crossings_removes_only_the_entries_named(tmp_path):
+    later = {**CROSSING, "session": "sess-2", "ts": 20.0}
+    ta.record_crossing("task-a", CROSSING, root=tmp_path)
+    ta.record_crossing("task-a", later, root=tmp_path)
+    disclosed = ta.get("task-a", root=tmp_path)["agent_backstop_crossings"]
+    other_session = {**CROSSING, "session": "sess-3", "ts": 30.0}
+    ta.record_crossing("task-a", other_session, root=tmp_path)
+    ta.discard_crossings("task-a", disclosed, now=40.0, root=tmp_path)
+    data = ta.get("task-a", root=tmp_path)
+    assert data["agent_backstop_crossings"] == [other_session]
+    assert data["last_updated"] == 40.0
+
+
+def test_discard_crossings_leaves_other_tasks_and_unrecorded_entries_alone(tmp_path):
+    ta.record_crossing("task-a", CROSSING, root=tmp_path)
+    ta.record_crossing("task-b", CROSSING, root=tmp_path)
+    ta.discard_crossings("task-a", [{**CROSSING, "ts": 99.0}, {"event": "keyless"}], root=tmp_path)
+    assert ta.get("task-a", root=tmp_path)["agent_backstop_crossings"] == [CROSSING]
+    ta.discard_crossings("task-b", [CROSSING], root=tmp_path)
+    assert ta.get("task-b", root=tmp_path)["agent_backstop_crossings"] == []
+    assert ta.get("task-a", root=tmp_path)["agent_backstop_crossings"] == [CROSSING]
+
+
+def test_discard_crossings_creates_no_file_for_a_task_without_one(tmp_path):
+    ta.discard_crossings("task-a", [CROSSING], root=tmp_path)
+    assert not ta._path("task-a", root=tmp_path).exists()
+
+
 def test_a_file_without_a_crossing_list_reads_as_none_recorded(tmp_path):
     ta.add("task-a", "replan_count", 2, root=tmp_path)
     path = ta._path("task-a", root=tmp_path)

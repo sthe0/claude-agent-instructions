@@ -9371,6 +9371,10 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if resolution_ask["unverifiable"] is not None:
         data["resolution_ask_unverifiable"] = resolution_ask["unverifiable"]
         detail += " (resolution ask unverifiable, escape used; see resolution_ask_unverifiable)"
+    # The crossings are now disclosed and accepted: drop exactly those entries from the task's
+    # record, so a reopened task or a later task sharing the id does not disclose them again.
+    task_accumulator.discard_crossings(
+        state.task_id, data["agent_backstop_crossings"], now=_utcnow())
     return Directive(True, state.node, "done", detail, marker="COMPLETED", data=data)
 
 

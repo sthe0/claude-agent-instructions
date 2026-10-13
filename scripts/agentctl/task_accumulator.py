@@ -48,9 +48,11 @@ real cross-machine accumulator directory::
 `agent_backstop_crossings` is the task's own record of every since-user backstop the agent
 crossed (`record_crossing`): the counters those crossings are measured on are per task, so the
 disclosure owed at verify-final and at resolve has to be per task too -- a session's history
-alone would drop a crossing made by an earlier session of the same task. It is append-only:
-`reset()` carries it over and no user decision clears it, because the disclosure is owed for
-every crossing of the task until the task resolves.
+alone would drop a crossing made by an earlier session of the same task. `reset()` carries it
+over and no user decision clears it, because the disclosure is owed for every crossing of the
+task until the task resolves. Resolve then clears exactly the entries it disclosed
+(`discard_crossings`), so a reopened task, or a later task that shares the id, starts without
+the crossings the user has already accepted.
 
 Concurrency: two live sessions on the same `task_id` may call `add()` at the
 same time. `add()` and `reset()` both hold an exclusive `fcntl.flock` on a
@@ -124,8 +126,8 @@ SCHEMA_VERSION = 1
 #: dropping just the new axis's count, not the whole file (the same holds for the
 #: `agent_backstop_crossings` list, which such a worktree also rebuilds without).
 #: Smaller blast radius than a version bump (which would zero every axis), and
-#: still the reason a genuinely
-#: new axis is worth landing everywhere before any worktree starts relying on it.
+#: still the reason a genuinely new axis is worth landing everywhere before any
+#: worktree starts relying on it.
 READABLE_SCHEMA_VERSIONS = (1, 2)
 
 
@@ -371,6 +373,27 @@ def record_crossing(
         if now is not None:
             data["last_updated"] = now
         _write_atomic(path, data)
+        return data
+
+
+def discard_crossings(
+    task_id: str, crossings: list[dict], *, now: float | str | None = None,
+    root: Path | None = None,
+) -> dict:
+    """Remove from the task's record exactly the entries whose `crossing_key` matches one of
+    `crossings` -- what a resolve has just disclosed. Matched under the lock against the file
+    as it is now, so an entry another session recorded since the caller took its snapshot
+    survives. Writes nothing when nothing matches (nor creates a file for a task without one)."""
+    keys = {crossing_key(c) for c in crossings} - {None}
+    path = _path(task_id, root)
+    with _FileLock(path):
+        data = _coerce(path.read_text(encoding="utf-8"), task_id) if path.exists() else _empty(task_id)
+        kept = [c for c in data["agent_backstop_crossings"] if crossing_key(c) not in keys]
+        if len(kept) != len(data["agent_backstop_crossings"]):
+            data["agent_backstop_crossings"] = kept
+            if now is not None:
+                data["last_updated"] = now
+            _write_atomic(path, data)
         return data
 
 

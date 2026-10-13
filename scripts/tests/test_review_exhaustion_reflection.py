@@ -448,8 +448,9 @@ def test_backstop_crossing_is_disclosed_at_verify_final_and_resolve(eng):
     assert "crossed a since-user backstop" in resolved["detail"], f"BEHAVIOUR: {resolved['detail']}"
 
 
-def finish_session(eng: Eng, sid: str) -> tuple[dict, dict]:
-    """Carry an executing session through every stage, its final verification and resolution."""
+def reach_resolution(eng: Eng, sid: str) -> dict:
+    """Carry an executing session through every stage and its final verification, to the gate
+    `resolve` is asked at; returns the verify-final Directive."""
     for index, observation in enumerate(OBSERVATIONS):
         recorded = eng.run("record_result", session=sid, status="passed", actual="ok",
                            control="reviewed: ok", observation=observation)
@@ -461,6 +462,12 @@ def finish_session(eng: Eng, sid: str) -> tuple[dict, dict]:
     for phase in ("searched", "skipped"):
         eng.run("plugin_record", session=sid, plugin="experience", phase=phase,
                 note="test fixture, nothing to record")
+    return final
+
+
+def finish_session(eng: Eng, sid: str) -> tuple[dict, dict]:
+    """Carry an executing session through every stage, its final verification and resolution."""
+    final = reach_resolution(eng, sid)
     resolved = eng.run("resolve", session=sid, by="user", quality=5, quality_by="user-confirmed")
     assert resolved["ok"] is True, resolved
     return final, resolved
@@ -511,6 +518,78 @@ def test_backstop_crossing_record_survives_the_accumulator_reset(eng):
     kept = task_accumulator.get(task)["agent_backstop_crossings"]
     assert [c["decision"] for c in kept] == ["renegotiation_continue"], (
         f"BEHAVIOUR: the accumulator reset dropped the crossing record: {kept}")
+
+
+def test_resolve_clears_the_crossings_it_disclosed_so_a_later_session_of_the_task_starts_clean(eng):
+    crossed = cross_by_fire_acknowledge(eng)
+    assert crossed["ok"] is True, f"BEHAVIOUR: the crossing was not admitted: {crossed['detail']}"
+    plan = eng.state("a1").plan_path
+    task = eng.state("a1").task_id
+    assert [c["decision"] for c in task_accumulator.get(task)["agent_backstop_crossings"]] == [
+        "fire_acknowledge"]
+    for sid in ("b1", "c1"):
+        assert action(eng.open(sid, plan, task=task)) == "self_approve"
+        assert eng.run("approve", session=sid, by="agent")["ok"] is True
+        eng.execute(sid)
+        final, resolved = finish_session(eng, sid)
+        if sid == "b1":
+            assert_disclosed_once(final, resolved)
+            continue
+        for step in (final, resolved):
+            assert step["data"]["agent_backstop_crossings"] == [], (
+                f"BEHAVIOUR: an accepted crossing was disclosed again: {step['data']}")
+            assert "crossed a since-user backstop" not in step["detail"], f"BEHAVIOUR: {step['detail']}"
+    assert task_accumulator.get(task)["agent_backstop_crossings"] == []
+
+
+def test_resolve_keeps_a_crossing_recorded_after_the_disclosure_snapshot(eng, monkeypatch):
+    crossed = cross_by_fire_acknowledge(eng)
+    assert crossed["ok"] is True, f"BEHAVIOUR: the crossing was not admitted: {crossed['detail']}"
+    plan = eng.state("a1").plan_path
+    task = eng.state("a1").task_id
+    assert action(eng.open("b1", plan, task=task)) == "self_approve"
+    assert eng.run("approve", session="b1", by="agent")["ok"] is True
+    eng.execute("b1")
+    reach_resolution(eng, "b1")
+    late = {"event": CROSSED, "decision": "renegotiation_continue", "axis": REPLANS_AXIS,
+            "spent": 9, "backstop": 6, "session": "late-session", "ts": "late-moment"}
+    disclose = cli._disclose_backstop_crossings
+
+    def disclose_then_let_another_session_cross(state, data, detail):
+        detail = disclose(state, data, detail)
+        task_accumulator.record_crossing(task, late, session_id="late-session", now="late-moment")
+        return detail
+
+    monkeypatch.setattr(cli, "_disclose_backstop_crossings", disclose_then_let_another_session_cross)
+    resolved = eng.run("resolve", session="b1", by="user", quality=5, quality_by="user-confirmed")
+    assert resolved["ok"] is True, resolved
+    assert [c["decision"] for c in resolved["data"]["agent_backstop_crossings"]] == [
+        "fire_acknowledge"]
+    kept = task_accumulator.get(task)["agent_backstop_crossings"]
+    assert [(c["session"], c["decision"]) for c in kept] == [
+        ("late-session", "renegotiation_continue")], (
+        f"BEHAVIOUR: resolve cleared a crossing it never disclosed, or kept one it did: {kept}")
+
+
+def test_a_refused_resolve_leaves_the_crossing_record_in_place(eng):
+    crossed = cross_by_fire_acknowledge(eng)
+    assert crossed["ok"] is True, f"BEHAVIOUR: the crossing was not admitted: {crossed['detail']}"
+    plan = eng.state("a1").plan_path
+    task = eng.state("a1").task_id
+    assert action(eng.open("b1", plan, task=task)) == "self_approve"
+    assert eng.run("approve", session="b1", by="agent")["ok"] is True
+    eng.execute("b1")
+    reach_resolution(eng, "b1")
+    refused = eng.run("resolve", session="b1", by="user")
+    assert refused["ok"] is False, f"BEHAVIOUR: resolve without a rating was not refused: {refused}"
+    kept = task_accumulator.get(task)["agent_backstop_crossings"]
+    assert [c["decision"] for c in kept] == ["fire_acknowledge"], (
+        f"BEHAVIOUR: a refused resolve cleared the crossing record: {kept}")
+    resolved = eng.run("resolve", session="b1", by="user", quality=5, quality_by="user-confirmed")
+    assert resolved["ok"] is True, resolved
+    assert [c["decision"] for c in resolved["data"]["agent_backstop_crossings"]] == [
+        "fire_acknowledge"], f"BEHAVIOUR: {resolved['data']}"
+    assert task_accumulator.get(task)["agent_backstop_crossings"] == []
 
 
 def test_backstop_crossing_is_disclosed_to_a_session_with_no_history_of_its_own(eng):

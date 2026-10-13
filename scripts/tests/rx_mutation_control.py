@@ -213,6 +213,33 @@ CATALOGUE: "dict[str, Mutant]" = {
         "        data[\"agent_backstop_crossings\"] = []\n",
         _ids("test_backstop_crossing_is_disclosed_after_the_session_is_reset_and_a_user_decision"),
     ),
+    "backstop-crossings-not-cleared-at-resolve": Mutant(
+        CLI,
+        "    task_accumulator.discard_crossings(\n"
+        '        state.task_id, data["agent_backstop_crossings"], now=_utcnow())\n',
+        "",
+        _ids(
+            "test_resolve_clears_the_crossings_it_disclosed_so_a_later_session_of_the_task_starts_clean",
+            "test_resolve_keeps_a_crossing_recorded_after_the_disclosure_snapshot",
+            "test_a_refused_resolve_leaves_the_crossing_record_in_place",
+        ),
+    ),
+    "backstop-crossings-cleared-wholesale-at-resolve": Mutant(
+        CLI,
+        '        state.task_id, data["agent_backstop_crossings"], now=_utcnow())\n',
+        '        state.task_id, task_accumulator.get(state.task_id)["agent_backstop_crossings"],\n'
+        "        now=_utcnow())\n",
+        _ids("test_resolve_keeps_a_crossing_recorded_after_the_disclosure_snapshot"),
+    ),
+    "backstop-crossings-cleared-before-the-resolve-gates": Mutant(
+        CLI,
+        "def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:\n"
+        "    state = _require(store, args.session)\n",
+        "def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:\n"
+        "    state = _require(store, args.session)\n"
+        "    task_accumulator.discard_crossings(state.task_id, _backstop_crossings(state))\n",
+        _ids("test_a_refused_resolve_leaves_the_crossing_record_in_place"),
+    ),
     "backstop-spend-bound-ignored": Mutant(
         CLI,
         "            for scale, ratio in armed.items() if ratio >= multiple]\n",
