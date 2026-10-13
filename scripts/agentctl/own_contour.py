@@ -22,7 +22,7 @@ OWN_CONTOUR_VERBS = frozenset({
     "plan-review-delta", "approve", "partition", "dispatch", "record-result",
     "code-review", "verify-final", "declare", "investigate", "critique",
     "normalize", "replan", "stage-grants", "plan-grants", "question-raise",
-    "question-dispose",
+    "question-dispose", "order-raise", "order-dispose",
 })
 
 # `partition` options a child may not set: the delivery-partition decision stays the

@@ -11,6 +11,10 @@ the child's depth and the ancestor-norm chain, and exports it as
 This module is the only place that knows the record's shape: the writer
 (`scripts/spawn-specialist.py`) and the reader (`cli._adopt_norm_handoff`) both go
 through it, so they cannot drift.
+
+It also keeps the child-session record `<state_root>/child-sessions/<parent>-<stage>.json`:
+the engine session and workdir of the linked child last spawned for a parent stage, which
+a re-dispatch of that stage resumes instead of minting a new session.
 """
 from __future__ import annotations
 
@@ -27,6 +31,10 @@ from .store import safe_session_id
 NORM_HANDOFF_ENV = "AGENTCTL_NORM_HANDOFF"
 HANDOFF_SCHEMA = "norm-handoff/v1"
 HANDOFF_DIRNAME = "handoffs"
+# Beside `handoffs/`, never inside the parent's session state: no engine code that loads
+# and saves that state reads this directory, so an engine that predates it cannot drop
+# or reject the record.
+CHILD_SESSIONS_DIRNAME = "child-sessions"
 
 
 def lineage_entry(parent_session: str, stage_index: int, norm: StageNorm) -> dict:
@@ -151,3 +159,44 @@ def verify_env_value(raw: str) -> tuple[dict | None, str | None]:
         "depth": depth,
         "norm_lineage": lineage,
     }, None
+
+
+def child_session_path(state_root: Path | str, parent_session: str, stage_index: int) -> Path:
+    return Path(state_root) / CHILD_SESSIONS_DIRNAME / f"{safe_session_id(parent_session)}-{stage_index}.json"
+
+
+def write_child_session(
+    state_root: Path | str, parent_session: str, stage_index: int, *, session: str, workdir: str,
+) -> Path:
+    """Record the engine session and spawn workdir of the linked child last spawned for
+    `(parent_session, stage_index)`, replacing any earlier record (temp file + rename)."""
+    final = child_session_path(state_root, parent_session, stage_index)
+    final.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"session": session, "workdir": workdir}, sort_keys=True) + "\n"
+    fd, tmp = tempfile.mkstemp(dir=final.parent, prefix=".child-session-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        os.replace(tmp, final)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return final
+
+
+def read_child_session(state_root: Path | str, parent_session: str, stage_index: int) -> dict | None:
+    """The `{"session", "workdir"}` record of the previous linked child of the stage, or
+    None when there is none or it cannot be read -- a fresh child is then spawned."""
+    try:
+        record = json.loads(child_session_path(state_root, parent_session, stage_index).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    session, workdir = record.get("session"), record.get("workdir")
+    if not (isinstance(session, str) and session and isinstance(workdir, str) and workdir):
+        return None
+    return {"session": session, "workdir": workdir}

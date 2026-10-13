@@ -50,7 +50,7 @@ from agentctl.plan import (  # parse the TOML plan for a single-stage brief proj
     parse_unit,
 )
 from agentctl.stage_norm import StageNorm
-from agentctl.state import PARENT_DIFFICULTY_ENV, format_parent_difficulty
+from agentctl.state import PARENT_DIFFICULTY_ENV, Node, format_parent_difficulty
 from agentctl.render import (  # pure PlanDoc(+index) -> markdown; TopoUnitsCorrupt/materialize_topo_units do the one bit of I/O
     TopoUnitsCorrupt,
     materialize_topo_units,
@@ -1968,6 +1968,47 @@ def _iter_workdir_transcripts(workdir: str) -> list[Path]:
     return sorted(out)
 
 
+def resumable_child_session(store, parent_session: str, stage_index: int, workdir: str):
+    """`(session, transcript)` of the linked child last spawned for the parent stage when
+    a re-dispatch can resume it, else None (the spawn then mints a fresh session).
+
+    Resumable only when its engine session is not RESOLVED, this spawn runs in the
+    workdir it ran in, and its transcript is under that workdir's project directory:
+    the harness stores and resumes a conversation through the project directory named
+    after the cwd, so a resume anywhere else, or without the transcript, has nothing
+    to continue."""
+    record = norm_handoff.read_child_session(store.root, parent_session, stage_index)
+    if record is None or record["workdir"] != workdir:
+        return None
+    session = record["session"]
+    try:
+        state = store.load(session)
+    except Exception:
+        return None
+    if state is not None and state.node == Node.RESOLVED.value:
+        return None
+    name = _project_dir_name(workdir)
+    for root in projects_roots():
+        transcript = root / name / f"{session}.jsonl"
+        if transcript.is_file():
+            return session, transcript
+    return None
+
+
+def adopted_handoff_env_value(store, session: str) -> "str | None":
+    """The handoff value a resumed child's engine session adopted, or None when it holds
+    none yet. Exporting that value rather than a freshly written record keeps the env the
+    child reads equal to its own `parent_link`, which the engine never replaces."""
+    try:
+        state = store.load(session)
+    except Exception:
+        return None
+    link = (state.parent_link if state is not None else None) or {}
+    if not (link.get("handoff") and link.get("sha256")):
+        return None
+    return norm_handoff.format_env_value(link["handoff"], link["sha256"])
+
+
 def _snapshot_transcripts(workdir: str) -> set[Path]:
     """Set of the `--workdir`-scoped project's `*.jsonl` transcripts that exist
     right now, across both config roots — a child spawned by a bare-`claude`
@@ -2511,7 +2552,17 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"warning: norm handoff unavailable, spawning unlinked: {exc}", file=sys.stderr)
     child_linked = handoff_record is not None
-    own_session = str(uuid.uuid4()) if child_linked else None
+    # A re-dispatch of the stage continues the previous child's engine session, so what
+    # the root recorded on it between the two spawns reaches the child.
+    resumed = (
+        resumable_child_session(handoff_store, args.session, args.stage_index, workdir)
+        if child_linked else None
+    )
+    resumed_transcript: "Path | None" = None
+    if resumed is not None:
+        own_session, resumed_transcript = resumed
+    else:
+        own_session = str(uuid.uuid4()) if child_linked else None
 
     add_dir_argv: list[str] = []
     if topo_pair is not None:
@@ -2568,7 +2619,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     handoff_env_value: "str | None" = None
-    if handoff_record is not None and not args.dry_run:
+    if resumed is not None and not args.dry_run:
+        handoff_env_value = adopted_handoff_env_value(handoff_store, own_session)
+    if handoff_record is not None and handoff_env_value is None and not args.dry_run:
         # Written only now: a brief that cannot be assembled leaves no record behind. A
         # record that cannot be written makes the spawn unlinked -- brief included.
         try:
@@ -2576,8 +2629,17 @@ def main(argv: list[str] | None = None) -> int:
             handoff_env_value = norm_handoff.format_env_value(path, sha)
         except Exception as exc:
             print(f"warning: norm handoff not written, spawning unlinked: {exc}", file=sys.stderr)
-            handoff_record, child_linked, own_session = None, False, None
+            handoff_record, child_linked, own_session, resumed_transcript = None, False, None, None
             prompt = brief(False)
+    if child_linked and not args.dry_run:
+        try:
+            norm_handoff.write_child_session(
+                handoff_store.root, args.session, args.stage_index,
+                session=own_session, workdir=workdir,
+            )
+        except Exception as exc:
+            print(f"warning: child-session record not written, a re-dispatch will start a "
+                  f"fresh session: {exc}", file=sys.stderr)
     model = resolve_model(args)
 
     ceiling_chars = dispatch_prompt_ceiling_chars(model)
@@ -2663,7 +2725,9 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(child_settings),
     ]
     cmd.extend(add_dir_argv)
-    if own_session is not None:
+    if resumed_transcript is not None:
+        cmd.extend(["--resume", own_session])
+    elif own_session is not None:
         # The harness session id becomes this uuid, which is also the id the child's
         # engine autostarts under, so AGENTCTL_OWN_SESSION names that engine session.
         cmd.extend(["--session-id", own_session])
@@ -2748,7 +2812,9 @@ def main(argv: list[str] | None = None) -> int:
     # is what avoids the pipe-buffer deadlock a manual write()+read() would risk.
     def _announce_transcript() -> None:
         nonlocal transcript_path
-        transcript_path = _discover_transcript_path(workdir, transcripts_before, timeout=10.0)
+        transcript_path = resumed_transcript or _discover_transcript_path(
+            workdir, transcripts_before, timeout=10.0
+        )
         if transcript_path is not None:
             print(f"spawn-specialist: transcript={transcript_path}", file=sys.stderr, flush=True)
         else:

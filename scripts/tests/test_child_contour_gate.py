@@ -64,7 +64,7 @@ OWN_CONTOUR_VERBS = {
     "plan-review-delta", "approve", "partition", "dispatch", "record-result",
     "code-review", "verify-final", "declare", "investigate", "critique",
     "normalize", "replan", "stage-grants", "plan-grants", "question-raise",
-    "question-dispose",
+    "question-dispose", "order-raise", "order-dispose",
 }
 PARTITION_MARKER_FLAGS = ("--m1", "--m2", "--m3", "--m4", "--m3-severe", "--m4-severe")
 NAMED_EXCLUDED_VERBS = (

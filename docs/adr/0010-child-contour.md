@@ -63,3 +63,29 @@ Premise questions of the order, with the disposition and the answer (or, for an 
 - **The channel trusts its env (QK).** A child that writes an env prefix (`AGENTCTL_OWN_SESSION=<other> python3 .../agentctl-own.py ...`) may act on another session if the harness matches that command to the allow rule. The wrapper still refuses an unlinked target, so only another linked session is reachable and only through `OWN_CONTOUR_VERBS`. Closing it needs a caller identity the harness does not expose to a Bash subprocess.
 - **A handoff record can be orphaned.** A spawn refusal after the record is written (prompt-size ceiling, missing `claude`) leaves it unused, as on base.
 - **Parent-side accounting is portion 4c.** A child's spend and wall-clock rolled into the parent stage's effort measure, and cross-session difficulty closure, have no plan yet.
+
+## Amendment (child-session-reuse)
+
+- Plan: `child-plan-review.toml`, stage R12
+
+**Difficulty.** Each dispatch of a linked stage minted a fresh child session. Anything the root recorded on the previous child's engine session between two spawns never reached the next child: a plan approval, a review-pair override, order elements.
+
+**Decision.**
+
+1. **The record.** For each linked spawn, `spawn-specialist.py` writes `child-sessions/<parent session>-<stage index>.json` under the engine state root, beside `handoffs/`. The file holds `{"session", "workdir"}` for the child it is about to launch and replaces any earlier record for that stage. It is written before the launch and never in a dry run. `scripts/agentctl/norm_handoff.py` owns the record's shape (`child_session_path`, `write_child_session`, `read_child_session`).
+2. **The reuse rule.** A linked re-dispatch of stage S of parent P resumes the recorded child session only when all four of these hold:
+   - a record exists for (P, S);
+   - the child's engine session is not `RESOLVED` (the terminal-state test);
+   - this spawn's workdir equals the recorded workdir;
+   - the transcript `<id>.jsonl` exists under that workdir's project directory in one of the projects roots.
+
+   The workdir check comes before the transcript check because the harness keys transcripts by working directory: a different workdir has no transcript to resume. When all four hold, the spawn runs `claude -p --resume <id>` without `--session-id`, keeps `AGENTCTL_OWN_SESSION=<id>`, and exports the handoff the child's session already adopted. `_adopt_norm_handoff` keeps the first link and ignores a differing value, so the child gets the adopted value rather than a fresh handoff. If any condition fails (including an unreadable record or child state), the spawn mints a fresh uuid as before and replaces the record. Unlinked spawns neither read nor write the record.
+3. **Why the record is not in the parent's stage state.** The base `Stage.from_dict` drops an unknown top-level key and raises on an unknown key inside a nested group such as `outcome`. The base engine also loads and saves the parent's state on every verb until the stage that ships the new engine. A key added there would be silently lost on the next save, or would make the parent's state fail to load. No engine code that loads and saves session state reads a separate file, and the parent's session state carries no new key.
+4. **Two more own-channel verbs.** `OWN_CONTOUR_VERBS` gains `order-raise` and `order-dispose`. This lets a linked child satisfy the order-coverage gate on its own plan through `agentctl-own.py`. `question-raise` and `question-dispose` were already admitted. Both new verbs act only on the child's own session, and a foreign `--session` is still refused.
+
+**Consequence.** A resumed child keeps its engine session. Approvals of its plan, review-pair overrides and the order elements recorded on it between the two spawns survive the re-dispatch. A child whose contour reached `RESOLVED`, or a re-dispatch in another workdir, starts clean as before.
+
+**Remaining gaps, accepted.**
+
+- If the record write fails, the spawn prints a warning and still launches. That re-dispatch then mints a fresh session, which is the behaviour before this amendment.
+- A resumed child keeps the `parent_link` it adopted first. If a replan changed the parent stage's norm between the two spawns, the brief carries the new norm while the child's engine still holds the old `norm_digest`. The reuse rule does not compare digests.
