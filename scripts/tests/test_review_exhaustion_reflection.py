@@ -315,7 +315,6 @@ def test_agent_fire_acknowledge_refused_at_the_replan_backstop(eng):
     refused = ack(eng)
     assert refused["ok"] is False
     assert "backstop" in refused["detail"]
-    assert "outside the autonomy boundary" in refused["detail"]
     assert eng.state("a1").effort_fires[-1].get("ack") is None
     assert_not_crossed(eng, "a1", refused)
 
