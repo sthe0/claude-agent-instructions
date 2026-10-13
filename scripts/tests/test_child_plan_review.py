@@ -185,7 +185,7 @@ def test_unlinked_spawn_gets_no_review_driver_rule(tmp_path, monkeypatch, capsys
     spawn = _load_spawn()
     calls = []
     monkeypatch.setattr(spawn, "own_contour_review_rule",
-                        lambda: calls.append("called") or REVIEW_RULE)
+                        lambda: calls.append("called") or REVIEW_RULE, raising=False)
     cmd, env = _launch(spawn, monkeypatch, _spawn_argv(tmp_path / "home", tmp_path, None))
     assert OWN_ENV not in env and HANDOFF_ENV not in env, "setup: the spawn is linked"
     assert not any("plan-review-topological.py" in rule for rule in _settings_allow(cmd))
@@ -329,8 +329,10 @@ def test_driver_own_mode_refuses_foreign_session(own_driver, capsys):
     engine = _engine(own_driver)
     spawned = _stub_reviewer(own_driver.drv, own_driver.monkeypatch)
     rc = _run_driver(own_driver.drv, ["--own", "--session", OTHER, "--plan", own_driver.plan])
-    capsys.readouterr()
-    assert rc == 2, f"BEHAVIOUR: a --session naming another session under {OWN_ENV} exited {rc}"
+    err = capsys.readouterr().err
+    assert rc == 2 and "is not the session" in err, (
+        f"BEHAVIOUR: a --session naming another session under {OWN_ENV} was not refused as foreign (rc={rc}): {err!r}"
+    )
     assert engine.calls == [] and spawned == [], "a refused run reached the engine or a reviewer"
     for blank in ("", "   "):
         own_driver.monkeypatch.setenv(OWN_ENV, blank)
@@ -375,8 +377,10 @@ def test_driver_own_mode_refuses_ledger(own_driver, capsys):
     ledger = own_driver.tmp / "ledger" / "gaps.jsonl"
     rc = _run_driver(own_driver.drv, ["--own", "--session", CHILD, "--plan", own_driver.plan,
                                       "--ledger", str(ledger)])
-    capsys.readouterr()
-    assert rc == 2, f"BEHAVIOUR: --ledger under {OWN_ENV} exited {rc}"
+    err = capsys.readouterr().err
+    assert rc == 2 and "--ledger is not available with --own" in err, (
+        f"BEHAVIOUR: --ledger under {OWN_ENV} was not refused (rc={rc}): {err!r}"
+    )
     assert engine.calls == [], "a refused --ledger run reached the engine"
     assert not ledger.exists() and not ledger.parent.exists(), "the ledger path was created"
 
