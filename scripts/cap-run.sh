@@ -11,7 +11,7 @@
 # See memory-global/leaves/fanout-trial-under-cap.md.
 set -u
 
-extra=256 # config.md: fanout-cap-extra-tasks
+extra=512 # config.md: fanout-cap-extra-tasks
 secs=3600 # config.md: fanout-cap-timeout-s
 
 usage() {
