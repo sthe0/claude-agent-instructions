@@ -2683,8 +2683,15 @@ def cmd_plugin_record(args, *, store: StateStore, runner: Runner | None = None) 
         )
     if phase == "skipped" and not (note and note.strip()):
         return Directive(False, state.node, "noop", "a skip must carry a reason: pass --note")
+    attachment = (getattr(args, "attachment", None) or "").strip()
+    needs_attachment = args.plugin == "tracker" and phase == "plan"
+    if needs_attachment and not attachment:
+        return Directive(False, state.node, "noop",
+                         "the tracker plan phase needs the plan TOML attached to the ticket: "
+                         "pass --attachment <id|url>, or --skipped --note <why> if the "
+                         "backend cannot attach")
     published = bag.setdefault("published_phases", {})
-    published[key] = True
+    published[key] = {"attachment": attachment} if needs_attachment else True
     # top-level bool-flag convention: a plugin whose bag seeds a bool keyed by the
     # phase name (e.g. experience: searched/recorded/skipped) reads those flags in
     # its gate; flip it true. Tracker's bag has no such keys, so it is untouched.
@@ -11931,6 +11938,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("criterion_type", ("start", "reset"), "one of two fixed verification kinds"),
     ("plugin", ("plugin-activate", "plugin-deactivate", "plugin-record"), "plugin registry name"),
     ("phase", ("plugin-record",), "plugin phase name from a fixed vocabulary"),
+    ("attachment", ("plugin-record",), "ticket attachment id or URL, not a file to read"),
     ("tracker_key", ("plugin-activate", "classify", "drive"), "tracker issue key (ABC-123)"),
     ("id", ("ledger-add", "ledger-candidate", "ledger-dispose", "question-raise",
             "question-research", "question-dispose", "question-rebind", "question-retire",
@@ -12111,6 +12119,9 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
                          "of the bare phase name — used by the tracker plugin's per-stage "
                          "progress journal gate, e.g. --phase progress --stage 4")
     sp.add_argument("--note", default=None)
+    sp.add_argument("--attachment", default=None,
+                    help="id or URL of the ticket attachment carrying the plan TOML; "
+                         "required for --plugin tracker --phase plan (unless --skipped)")
     sp.add_argument("--skipped", action="store_true",
                     help="record the phase as an honest SKIP (transport unavailable): "
                          "stores a marker+reason under the phase key so the gate is "
