@@ -307,14 +307,15 @@ def test_agent_override_admitted_just_below_the_review_round_backstop(eng):
 
 def test_agent_fire_acknowledge_refused_at_the_replan_backstop(eng):
     replans_fire(eng)
-    plan = str(eng.tmp / "approved.toml")
-    agent_session(eng, "a2", plan)
-    eng.spend_fire("a2", plan)
+    state = eng.state("a1")
+    state.plan_path = eng.write(plan_text(extra_outputs=WIDENING), "widened.toml")
+    eng.store.save(state)
     eng.diagnose("a1")
     set_total("a1", REPLANS_AXIS, Thresholds().effort_replan_backstop())
     refused = ack(eng)
     assert refused["ok"] is False
     assert "backstop" in refused["detail"]
+    assert "outside the autonomy boundary" in refused["detail"]
     assert eng.state("a1").effort_fires[-1].get("ack") is None
     assert_not_crossed(eng, "a1", refused)
 
@@ -413,9 +414,19 @@ def test_backstop_crossing_is_recorded_once_with_its_axis_count_and_backstop(eng
 def test_backstop_crossing_is_disclosed_at_verify_final_and_resolve(eng):
     d = cross_by_fire_acknowledge(eng)
     assert d["ok"] is True, f"BEHAVIOUR: the crossing was not admitted: {d['detail']}"
-    assert eng.run("next_stage", session="a1")["ok"] is True
-    assert eng.run("record_result", session="a1", status="passed", actual="ok",
-                   control="reviewed: ok", observation=OBSERVATIONS[1])["ok"] is True
+    replanned = eng.run("replan", session="a1", plan=eng.write(plan_text(stage3=True, revised=True)))
+    assert replanned["ok"] is True, replanned
+    approved = eng.run("approve", session="a1", by="agent")
+    assert approved["ok"] is True, approved
+    eng.execute("a1")
+    observations = (*OBSERVATIONS, "the CI config is on disk and its lint step ran and exited zero")
+    for index, observation in enumerate(observations):
+        recorded = eng.run("record_result", session="a1", status="passed", actual="ok",
+                           control="reviewed: ok", observation=observation)
+        assert recorded["ok"] is True, recorded
+        if index + 1 < len(observations):
+            advanced = eng.run("next_stage", session="a1")
+            assert advanced["ok"] is True, advanced
     final = eng.run("verify_final", session="a1")
     assert final["ok"] is True, final
     assert [c["decision"] for c in final["data"]["agent_backstop_crossings"]] == [
@@ -518,9 +529,11 @@ def test_crossing_inside_the_boundary_keeps_every_other_condition(eng, case):
             eng.open(sid, plan)
         else:
             plan = released_order(eng)
-            assert thinker_review(eng, sid, plan, "revise", "agent")["ok"] is True
         arm(eng, sid)
-        reflect(eng, sid)
+        if case != "override-without-release":
+            reflect(eng, sid)
+        if case == "override-by-the-reviewer-it-overrides":
+            assert thinker_review(eng, sid, plan, "revise", "agent")["ok"] is True
         set_total(sid, ROUNDS_AXIS, rounds)
         d = agent_override(eng, sid, plan)
     elif case.startswith("fire-acknowledge"):

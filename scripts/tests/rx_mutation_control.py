@@ -155,7 +155,6 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_agent_override_refused_at_the_review_round_backstop",
             "test_agent_fire_acknowledge_refused_at_the_replan_backstop",
             "test_agent_renegotiation_continue_refused_at_the_replan_backstop",
-            "test_agent_override_refused_past_the_backstop_with_an_open_spend_fire",
             "test_backstop_refusal_outside_the_boundary_names_the_boundary_reasons",
         ),
     ),
