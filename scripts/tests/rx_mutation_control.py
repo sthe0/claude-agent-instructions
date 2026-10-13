@@ -215,9 +215,9 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "backstop-crossings-not-cleared-at-resolve": Mutant(
         CLI,
-        "    task_accumulator.discard_crossings(\n"
-        '        state.task_id, data["agent_backstop_crossings"], now=_utcnow())\n',
-        "",
+        "        task_accumulator.discard_crossings(\n"
+        '            state.task_id, data["agent_backstop_crossings"], now=_utcnow())\n',
+        "        pass\n",
         _ids(
             "test_resolve_clears_the_crossings_it_disclosed_so_a_later_session_of_the_task_starts_clean",
             "test_resolve_keeps_a_crossing_recorded_after_the_disclosure_snapshot",
