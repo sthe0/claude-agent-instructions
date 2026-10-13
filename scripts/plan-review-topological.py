@@ -59,7 +59,7 @@ from agentctl.config import Thresholds, parse_config_md  # noqa: E402
 from agentctl.own_contour import OWN_SESSION_ENV  # noqa: E402
 from agentctl.render import topo_pair_view_dirname  # noqa: E402
 from lib import review_block  # noqa: E402
-from lib.config_root import agentctl_topo_units_dir  # noqa: E402
+from lib.config_root import topo_units_root  # noqa: E402
 
 SPAWNER = SCRIPTS_DIR / "spawn-specialist.py"
 AGENTCTL_CLI = SCRIPTS_DIR / "agentctl-cli.py"
@@ -385,9 +385,7 @@ def count_pulls(transcript: "str | None", view_dir: str) -> "int | None":
 
 
 def view_dir_for(pair: str, sha: str) -> str:
-    override = os.environ.get("AGENTCTL_TOPO_UNITS_DIR")
-    root = Path(override) if override else agentctl_topo_units_dir()
-    return str(root / sha / topo_pair_view_dirname(pair))
+    return str(topo_units_root() / sha / topo_pair_view_dirname(pair))
 
 
 def pair_telemetry(launched: Launched, pair: str) -> tuple["float | None", "int | None", "int | None", "str | None"]:

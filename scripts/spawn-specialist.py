@@ -64,7 +64,7 @@ from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 from agentctl import tool_contracts  # the one parser of an interpreter call's script operand
 from lib import shell_tokens
-from lib.config_root import agent_home, agentctl_topo_units_dir, plans_dir, projects_roots, skills_dir  # config-root resolver (isolated system root)
+from lib.config_root import agent_home, plans_dir, projects_roots, skills_dir, topo_units_root  # config-root resolver (isolated system root)
 from lib.kind_baselines import (  # re-exported below so `MOD.KIND_BASELINES` etc. keep working for importlib callers
     KIND_BASELINES,
     PLANNER_CHECK_ORDER_COVERAGE_RULE,
@@ -925,65 +925,79 @@ def review_topo_view_permission_rules(view_dir: Path) -> tuple[list[str], list[s
 _CHECK_INTERPRETERS = frozenset({"bash", "sh", "python3"})
 
 
-def topo_units_root() -> Path:
-    override = os.environ.get("AGENTCTL_TOPO_UNITS_DIR")
-    return Path(override) if override else agentctl_topo_units_dir()
-
-
 def _check_script_operand(command: str) -> "str | None":
     """The absolute script path a single-segment `bash`/`sh`/`python3` call runs, else None."""
     if grants.top_level_segment_count(command) != 1:
         return None
     try:
         tokens = shell_tokens.separator_exact_split(command)
-    except Exception:
+    except ValueError:
         return None
-    program = tool_contracts._real_program(tokens)
-    if program is None or program[0] not in _CHECK_INTERPRETERS:
-        return None
-    script, _argv = tool_contracts._script_and_argv(program[1])
+    script = tool_contracts.interpreter_script_operand(tokens, _CHECK_INTERPRETERS)
     return script if script is not None and os.path.isabs(script) else None
 
 
-def _withheld_check_dir(directory: Path, plan_path: Path) -> bool:
-    """Whether a reviewer must not be granted `directory`: a filesystem root, the temp
-    root, $HOME, the config root and its direct children, the plans root, the plan file's
-    directory, the topo-units root, or any ancestor of these (a grant there would open
-    the whole tree under it)."""
-    if directory == Path(directory.anchor) or directory.parent == agent_home().resolve():
-        return True
-    roots = [
-        Path(tempfile.gettempdir()), Path.home(), agent_home(), plans_dir(),
-        plan_path.resolve().parent, topo_units_root(),
-    ]
-    return any(
-        directory == root.resolve() or directory in root.resolve().parents for root in roots
-    )
+class _WithheldCheckDirs(NamedTuple):
+    """Directories a `--review-topo` reviewer must not be granted, resolved once per spawn."""
+
+    config_root: Path
+    roots: tuple[Path, ...]
+    subtree_roots: tuple[Path, ...]
+
+    @classmethod
+    def for_plan(cls, plan_path: Path) -> "_WithheldCheckDirs":
+        resolve = lambda path: Path(path).resolve()  # noqa: E731
+        plans_root, topo_root = resolve(plans_dir()), resolve(topo_units_root())
+        return cls(
+            config_root=resolve(agent_home()),
+            roots=tuple(
+                resolve(root) for root in (
+                    tempfile.gettempdir(), Path.home(), agent_home(), plans_dir(),
+                    plan_path.resolve().parent, topo_units_root(),
+                )
+            ),
+            subtree_roots=(topo_root,),
+        )
+
+    def withholds(self, directory: Path) -> bool:
+        """A filesystem root, a direct child of the config root, one of the roots (temp
+        root, $HOME, config root, plans root, the plan file's directory, topo-units
+        root), any ancestor of these (a grant there would open the whole tree under it),
+        or a descendant of the topo-units root (per-unit view trees). A check directory
+        below the plans root is granted: that is where a plan's own check scripts live."""
+        if directory == Path(directory.anchor) or directory.parent == self.config_root:
+            return True
+        return (
+            any(directory == root or directory in root.parents for root in self.roots)
+            or any(root in directory.parents for root in self.subtree_roots)
+        )
 
 
 def review_check_scripts(plan, plan_path: Path) -> list[Path]:
     """Existing scripts the plan's `verify_command`, `negative_control` and `[[final_check]]`
     texts run, resolved through `..` and symlinks, that sit in a directory a reviewer may
-    be granted (see `_withheld_check_dir`)."""
+    be granted (see `_WithheldCheckDirs.withholds`)."""
     texts = [
         text
         for stage in plan.stages
         for text in (stage.criterion.verify_command, stage.criterion.negative_control)
         if text
     ] + [check.command for check in plan.meta.final_check]
+    withheld = _WithheldCheckDirs.for_plan(plan_path)
     scripts: set[Path] = set()
     for text in texts:
         operand = _check_script_operand(text)
         if operand is None:
             continue
         real = Path(os.path.realpath(operand))
-        if real.is_file() and not _withheld_check_dir(real.parent, plan_path):
+        if real.is_file() and not withheld.withholds(real.parent):
             scripts.add(real)
     return sorted(scripts)
 
 
-def review_check_script_dirs(plan, plan_path: Path) -> list[Path]:
-    return sorted({script.parent for script in review_check_scripts(plan, plan_path)})
+def review_check_script_dirs(scripts: list[Path]) -> list[Path]:
+    """The directories a reviewer is granted read-only for `scripts` (`review_check_scripts`)."""
+    return sorted({script.parent for script in scripts})
 
 
 def check_scripts_brief_section(scripts: list[Path]) -> str:
@@ -2522,6 +2536,7 @@ def main(argv: list[str] | None = None) -> int:
     topo_doc = None
     topo_history: "dict | None" = None
     topo_check_scripts: list[Path] = []
+    topo_check_dirs: list[Path] = []
     if args.review_topo_history is not None and args.review_topo is None:
         print("error: --review-topo-history is only valid with --review-topo.", file=sys.stderr)
         log_refused("review-topo-history-without-review-topo", {"kind": args.kind})
@@ -2581,6 +2596,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
         topo_root = topo_units_root()
         topo_check_scripts = review_check_scripts(topo_doc, Path(args.plan))
+        topo_check_dirs = review_check_script_dirs(topo_check_scripts)
         # A unit bundle is self-contained: the unit has no view directory, no
         # Read grant and nothing to materialize.
         if not is_unit_id(topo_pair):
@@ -2681,7 +2697,7 @@ def main(argv: list[str] | None = None) -> int:
         # would carry.
         if topo_view_dir is not None:
             add_dir_argv.extend(["--add-dir", str(topo_view_dir)])
-        for check_dir in sorted({script.parent for script in topo_check_scripts}):
+        for check_dir in topo_check_dirs:
             add_dir_argv.extend(["--add-dir", str(check_dir)])
     else:
         add_dir_argv.extend(plans_add_dir_args(args.kind, plans_directory))
@@ -2807,9 +2823,7 @@ def main(argv: list[str] | None = None) -> int:
     # directory (a pair only) and the directories of the plan's check scripts
     # instead (Read allow + Edit deny, same directional pair plans_permission_rules
     # uses for its own read kinds).
-    topo_read_dirs = [d for d in [topo_view_dir] if d is not None] + sorted(
-        {script.parent for script in topo_check_scripts}
-    )
+    topo_read_dirs = [d for d in [topo_view_dir] if d is not None] + topo_check_dirs
     for read_dir in topo_read_dirs:
         read_allow, read_deny = review_topo_view_permission_rules(read_dir)
         child_permissions = child_settings.setdefault("permissions", {})

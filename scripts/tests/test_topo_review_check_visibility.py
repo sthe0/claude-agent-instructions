@@ -5,8 +5,10 @@ that lives outside the repo; a reviewer that cannot open it reviews the check bl
 `review_check_script_dirs` derives, from the plan alone, the directories of those
 scripts, and the spawn grants each one read-only (`--add-dir`, a `Read` allow, an `Edit`
 deny) and lists the script paths in the brief. A directory the reviewer must never see
-(the plans root, the config root, the home, the temp root, the topo-units root, or any
-ancestor of these) is never granted, whatever script sits in it.
+(the plans root, the config root, the home, the temp root, the topo-units root, any
+ancestor of these, or any descendant of the topo-units root) is never granted,
+whatever script sits in it. A script named after an interpreter flag (`python3 -X f`,
+`bash -c f`) is not a script operand and grants nothing.
 
 The tests reach the grant through the spawn seam (`MOD.main` dry-run), not through the
 function, and move every excluded root under `tmp_path` so that a granted directory is
@@ -255,12 +257,10 @@ def test_plans_root_never_granted_to_topo_reviewer(world, capsys):
     link = world.checks / "link.sh"
     link.symlink_to(world.script(world.plans, "target.sh"))
     ordinary_below = world.script(world.plans / "task-checks", "below.sh")
-    granted = _granted_among(world, capsys, in_plans, in_plan_dir, via_dotdot, link)
+    granted = _granted_among(world, capsys, in_plans, in_plan_dir, via_dotdot, link, ordinary_below)
     _assert_not_granted_all(world, granted, [world.plans, world.plan_dir])
-    assert world.plans / "task-checks" not in granted
-    below = _granted_among(world, capsys, ordinary_below)
-    assert world.plans / "task-checks" in below, (
-        "BEHAVIOUR: a checks directory below the plans root is withheld with the root"
+    assert world.plans / "task-checks" in granted, (
+        f"BEHAVIOUR: a check-script directory below the plans root is not granted: {granted}"
     )
 
 
@@ -323,3 +323,25 @@ def test_non_script_check_grants_nothing_new(world, capsys):
     assert granted == [world.checks], (
         f"BEHAVIOUR: a check that is not a single script call widened the grant: {granted}"
     )
+
+
+def test_topo_units_root_descendant_never_granted(world, capsys):
+    unit_tree = world.script(world.topo / ("0" * 64) / "view-2-1", "nested.sh")
+    control = world.script(world.checks, "control.sh")
+    result = _spawn(capsys, world.plan(f"bash {control}", f"bash {unit_tree}"), "unit:base")
+    all_dirs = [Path(d) for d in result.add_dirs]
+    _assert_not_granted_all(world, all_dirs, [world.topo / ("0" * 64), unit_tree.parent])
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["python3 -X {script}", "python3 -W {script}", "bash -o {script}", "bash -c {script}"],
+)
+def test_interpreter_flag_before_script_grants_nothing(world, capsys, command):
+    flagged = world.script(world.root / "flagged")
+    plan = world.plan(f"bash {world.script(world.checks, 'control.sh')}", command.format(script=flagged))
+    granted = _read_dirs(_spawn(capsys, plan, "unit:base"))
+    assert world.root / "flagged" not in granted, (
+        f"BEHAVIOUR: `{command}` granted the directory of the operand after an interpreter flag: {granted}"
+    )
+    assert granted == [world.checks], f"BEHAVIOUR: a flagged call widened the grant: {granted}"
