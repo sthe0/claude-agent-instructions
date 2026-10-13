@@ -6,7 +6,7 @@ schema: difficulty/v1
 generality: 0
 resolution_confirmed_by_user: "fedor (AskUserQuestion: 'Да — решено')"
 created: 2026-10-12
-last_verified: 2026-10-12
+last_verified: 2026-10-13
 ---
 
 # A stage control asserts an absolute property of a suite or tree the delivery does not own
@@ -62,6 +62,16 @@ Split out of [2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan
 ### 2026-10-11 — review-budget-reflection-exit, final verification on a shared canon (2026-10-11)
 - Where it arose: agentctl verify-final, stage 2/3 verify_commands and final_check on the canonical checkout
 - Working plan: Stage verify_commands that run verifiers over the canonical working tree were green at record-result and red at verify-final, because a parallel session had left one uncommitted memory-leaf edit in the same canon whose reference broke verify-cross-refs; fixed by the owner cleaning the file, then a no-change replan (coverage and normalization waivers) to re-arm verification.
+
+
+### 2026-10-13 — core-backstop-autonomy-scope: snapshot-vs-live fidelity check red on elapsed wall-clock
+- Where it arose: stage 2 check-r24.sh exit 6 at verify-final, 2026-10-13
+- Working plan: A replay control compared a boundary computation on a frozen snapshot of a live harness session with the same computation on the live files, demanding exact equality of the spend/wall-clock bound reasons. Its drift step already ignored the three hook-telemetry fields (active_minutes among them), but the fidelity step still compared the wall-clock ratio reason those fields drive; hours later the live ratio crossed 5x and the correct landed change failed its own replay. Fix: compare time-derived quantities monotonically (live may add or grow a wall_clock reason, everything else exact), unit-check the predicate on its six edge cases, re-run the negative control.
+
+## Common core & variations
+**Common:** the control asserts equality on a quantity that changes independently of the delivered change (time, unrelated commits, parallel work)
+
+**Variations:** here the independent driver is elapsed wall-clock of the observed live session itself, excluded at one comparison step but not at the next
 
 ## Cost
 Not costed separately: the contexts keep the cost recorded in [2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan](2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md).
