@@ -169,6 +169,11 @@ DESIRED = [
     # own AskUserQuestion (2026-09-14 incident). Reuses hook-guard-destructive-rm.py's
     # own detector. Fail-open on error; never wedges the workflow.
     ("PreToolUse",       "Bash",  "hook-guard-subagent-destructive-action.py", 5),
+    # Hard gate: deny an Agent/Task call whose prompt or description names a
+    # skills/.../SKILL.md path — a general Agent standing in for a specialist has
+    # no spawn-costs row, marker validation or permission digest. Literal path
+    # token only; fail-open on error.
+    ("PreToolUse",       "Agent|Task", "hook-guard-agent-specialist-stand-in.py", 5),
     # Hard gate (asks, never denies): a Bash/Edit call that would widen the
     # live permission surface outside the plan-stage grant channel -- G1 a
     # write onto live settings/agentctl state, G2 a `claude` re-invocation

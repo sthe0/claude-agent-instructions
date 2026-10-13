@@ -167,6 +167,14 @@ _KNOWN_UNGUARDED_HARD_SINKS = {
         "freezes the results) then collect_blockers() — the propagation "
         "point where the judge-guarded booleans reach this stop_block sink.",
     ),
+    "43ad016e7533db1e": (
+        "scripts/hook-guard-agent-specialist-stand-in.py", "main",
+        "structural per the registry: main() calls decide(), which matches a "
+        "literal `skills/.../SKILL.md` path token in the Agent/Task prompt and "
+        "description fields — path syntax, no natural-language classification; "
+        "the deny verdict rests on the token's presence, not on what the prompt "
+        "means — confirmed by reading decide() at source.",
+    ),
     "69a68ca9bdda4152": (
         "scripts/hook-guard-subagent-destructive-action.py", "main",
         "structural per the registry: main() calls decide(), which gates on "
