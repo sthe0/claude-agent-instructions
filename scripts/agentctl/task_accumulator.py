@@ -41,8 +41,16 @@ real cross-machine accumulator directory::
       },
       "review_rounds_last_sha256": "<plan digest the last review round was counted for>",
       "session_ids_contributing": ["18fb6860", "2442a5ac"],
+      "agent_backstop_crossings": [{"event": "agent_backstop_crossed", "session": "...", "ts": 0.0}],
       "last_updated": "<caller-supplied timestamp, e.g. an ISO8601 string>"
     }
+
+`agent_backstop_crossings` is the task's own record of every since-user backstop the agent
+crossed (`record_crossing`): the counters those crossings are measured on are per task, so the
+disclosure owed at verify-final and at resolve has to be per task too -- a session's history
+alone would drop a crossing made by an earlier session of the same task. It is append-only:
+`reset()` carries it over and no user decision clears it, because the disclosure is owed for
+every crossing of the task until the task resolves.
 
 Concurrency: two live sessions on the same `task_id` may call `add()` at the
 same time. `add()` and `reset()` both hold an exclusive `fcntl.flock` on a
@@ -113,8 +121,10 @@ SCHEMA_VERSION = 1
 #: not on whatever keys the file happens to hold. An older-commit worktree whose
 #: `AXES` predates a newly-added axis still reads schema_version 1 as its own, so
 #: its next `add()` writes a `per_axis_totals` with that axis silently absent --
-#: dropping just the new axis's count, not the whole file. Smaller blast radius than
-#: a version bump (which would zero every axis), and still the reason a genuinely
+#: dropping just the new axis's count, not the whole file (the same holds for the
+#: `agent_backstop_crossings` list, which such a worktree also rebuilds without).
+#: Smaller blast radius than a version bump (which would zero every axis), and
+#: still the reason a genuinely
 #: new axis is worth landing everywhere before any worktree starts relying on it.
 READABLE_SCHEMA_VERSIONS = (1, 2)
 
@@ -148,6 +158,7 @@ def _empty(task_id: str) -> dict:
         "per_axis_totals": {axis: 0 for axis in AXES},
         "review_rounds_last_sha256": "",
         "session_ids_contributing": [],
+        "agent_backstop_crossings": [],
         "last_updated": None,
     }
 
@@ -173,6 +184,8 @@ def _coerce(raw: str, task_id: str) -> dict:
         "per_axis_totals": {axis: int(totals.get(axis, 0) or 0) for axis in AXES},
         "review_rounds_last_sha256": str(data.get("review_rounds_last_sha256") or ""),
         "session_ids_contributing": list(data.get("session_ids_contributing") or []),
+        "agent_backstop_crossings": [
+            dict(c) for c in data.get("agent_backstop_crossings") or [] if isinstance(c, dict)],
         "last_updated": data.get("last_updated"),
     }
 
@@ -320,15 +333,45 @@ def reset(task_id: str, *, root: Path | None = None) -> dict:
 
     The `SINCE_USER_AXES` survive: an agent's own continue decision is one of the
     callers, and zeroing the since-user counters there would let that decision
-    reset the very backstop that bounds it."""
+    reset the very backstop that bounds it. So does the list of recorded backstop
+    crossings, which the same decision is itself one of the writers of."""
     path = _path(task_id, root)
     with _FileLock(path):
         previous = _coerce(path.read_text(encoding="utf-8"), task_id) if path.exists() else _empty(task_id)
         data = _empty(task_id)
         for axis in SINCE_USER_AXES:
             data["per_axis_totals"][axis] = previous["per_axis_totals"][axis]
+        data["agent_backstop_crossings"] = previous["agent_backstop_crossings"]
         _write_atomic(path, data)
     return data
+
+
+def crossing_key(crossing: dict) -> tuple | None:
+    """What identifies one recorded crossing -- the session that made it and when -- or None
+    for an entry that carries neither (it then never matches another one)."""
+    session, ts = crossing.get("session"), crossing.get("ts")
+    return None if session is None and ts is None else (session, ts)
+
+
+def record_crossing(
+    task_id: str, crossing: dict, *, session_id: str | None = None,
+    now: float | str | None = None, root: Path | None = None,
+) -> dict:
+    """Append `crossing` to the task's record of agent backstop crossings, once: an entry
+    with the same `crossing_key` already on record is left as it is. Held under the same lock
+    as every other read-modify-write here, so two live sessions never drop one another's."""
+    path = _path(task_id, root)
+    with _FileLock(path):
+        data = _coerce(path.read_text(encoding="utf-8"), task_id) if path.exists() else _empty(task_id)
+        key = crossing_key(crossing)
+        if key is None or all(crossing_key(c) != key for c in data["agent_backstop_crossings"]):
+            data["agent_backstop_crossings"].append(dict(crossing))
+        if session_id and session_id not in data["session_ids_contributing"]:
+            data["session_ids_contributing"].append(session_id)
+        if now is not None:
+            data["last_updated"] = now
+        _write_atomic(path, data)
+        return data
 
 
 def clear_since_user_decision(
@@ -338,7 +381,8 @@ def clear_since_user_decision(
     """Zero only the `SINCE_USER_AXES`: the user took a decision (approval,
     fire-acknowledgement, renegotiation, review override, task-reset), so the
     agent's autonomous-decision backstops start counting again from here. Leaves
-    every other axis and the review digest as they are."""
+    every other axis, the review digest and the recorded backstop crossings as they
+    are: a user decision restarts the counters, it does not forgive a crossing."""
     path = _path(task_id, root)
     with _FileLock(path):
         data = _coerce(path.read_text(encoding="utf-8"), task_id) if path.exists() else _empty(task_id)

@@ -42,6 +42,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = SCRIPTS_DIR.parent
 GATES = "agentctl/gates.py"
 CLI = "agentctl/cli.py"
+TASK_ACCUMULATOR = "agentctl/task_accumulator.py"
 T_RX = "tests/test_review_exhaustion_reflection.py"
 CATALOGUE_TEST = "test_rx_mutation_catalogue_kills_every_mutant"
 SIBLING_DATA = ("config.md", "docs/operations/review-backstop-arming.json")
@@ -170,13 +171,47 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "backstop-crossing-unrecorded": Mutant(
         CLI,
-        "    if crossing is not None:\n        state.log(**crossing)\n",
-        "    if crossing is not None:\n        return\n",
+        "    crossing.update(session=state.session_id, ts=_utcnow())\n",
+        "    return\n    crossing.update(session=state.session_id, ts=_utcnow())\n",
         _ids(
             "test_backstop_crossing_is_recorded_once_with_its_axis_count_and_backstop",
             "test_backstop_crossing_is_disclosed_at_verify_final_and_resolve",
             "test_agent_override_admitted_past_the_review_round_backstop_inside_the_boundary",
         ),
+    ),
+    "backstop-crossing-not-kept-per-task": Mutant(
+        CLI,
+        "    task_accumulator.record_crossing(\n"
+        '        state.task_id, crossing, session_id=state.session_id, now=crossing["ts"])\n',
+        "",
+        _ids(
+            "test_backstop_crossing_is_disclosed_by_a_later_session_of_the_same_task",
+            "test_backstop_crossing_is_disclosed_after_the_session_is_reset_and_a_user_decision",
+            "test_backstop_crossing_is_disclosed_to_a_session_with_no_history_of_its_own",
+        ),
+    ),
+    "backstop-task-record-not-read": Mutant(
+        CLI,
+        '    recorded = task_accumulator.get(state.task_id)["agent_backstop_crossings"]\n',
+        "    recorded = []\n",
+        _ids(
+            "test_backstop_crossing_is_disclosed_by_a_later_session_of_the_same_task",
+            "test_backstop_crossing_is_disclosed_after_the_session_is_reset_and_a_user_decision",
+            "test_backstop_crossing_is_disclosed_to_a_session_with_no_history_of_its_own",
+        ),
+    ),
+    "backstop-crossing-record-reset": Mutant(
+        TASK_ACCUMULATOR,
+        '        data["agent_backstop_crossings"] = previous["agent_backstop_crossings"]\n',
+        "",
+        _ids("test_backstop_crossing_record_survives_the_accumulator_reset"),
+    ),
+    "backstop-crossing-record-user-cleared": Mutant(
+        TASK_ACCUMULATOR,
+        "        for axis in SINCE_USER_AXES:\n            data[\"per_axis_totals\"][axis] = 0\n",
+        "        for axis in SINCE_USER_AXES:\n            data[\"per_axis_totals\"][axis] = 0\n"
+        "        data[\"agent_backstop_crossings\"] = []\n",
+        _ids("test_backstop_crossing_is_disclosed_after_the_session_is_reset_and_a_user_decision"),
     ),
     "backstop-spend-bound-ignored": Mutant(
         CLI,

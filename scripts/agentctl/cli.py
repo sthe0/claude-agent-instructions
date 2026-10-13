@@ -878,23 +878,24 @@ def _crossing_bound_reasons(state: SessionState) -> list[str]:
 
 
 def _since_user_backstop_gate(
-    state: SessionState, doc, *, decision: str, axis: str, backstop: int, what: str,
+    state: SessionState, load_doc, *, decision: str, axis: str, backstop: int, what: str,
     cleared_by: str,
 ) -> tuple[str | None, dict | None]:
     """The since-user backstop step of an agent self-decision, as (refusal, crossing).
 
-    Below the backstop: (None, None), the boundary and the bound are not consulted. At or
-    past it the decision stays the agent's only while `doc` is inside the autonomy boundary
-    (`_autonomy_for`, the predicate the next `approve --by agent` is held to) AND the spend
-    and wall-clock fires still bound the loop; then it returns the crossing for the caller
-    to record once the decision is applied. Otherwise the refusal names every reason.
-    `doc` None is the plan that does not load. A session with no user-approved order
-    version is outside whatever `_autonomy_for` says of the plan: without one the effort
-    window is not frozen, so the spend bound would not be measured against the user's
-    approval."""
+    Below the backstop: (None, None), the plan is not loaded and neither the boundary nor
+    the bound is consulted. At or past it the decision stays the agent's only while the
+    plan `load_doc()` returns is inside the autonomy boundary (`_autonomy_for`, the
+    predicate the next `approve --by agent` is held to) AND the spend and wall-clock fires
+    still bound the loop; then it returns the crossing for the caller to record once the
+    decision is applied. Otherwise the refusal names every reason. A `load_doc()` of None
+    is the plan that does not load. A session with no user-approved order version is
+    outside whatever `_autonomy_for` says of the plan: without one the effort window is
+    not frozen, so the spend bound would not be measured against the user's approval."""
     backstopped = _since_user_backstop_refusal(state, axis, backstop, what, cleared_by)
     if backstopped is None:
         return None, None
+    doc = load_doc()
     if doc is None:
         outside = [_PLAN_DOES_NOT_LOAD]
     else:
@@ -918,8 +919,14 @@ def _since_user_backstop_gate(
 
 
 def _record_backstop_crossing(state: SessionState, crossing: dict | None) -> None:
-    if crossing is not None:
-        state.log(**crossing)
+    """Stamp the crossing with its session and moment, put it in the session's history and
+    in the task's own record (`task_accumulator`), which outlives the session."""
+    if crossing is None:
+        return
+    crossing.update(session=state.session_id, ts=_utcnow())
+    state.log(**crossing)
+    task_accumulator.record_crossing(
+        state.task_id, crossing, session_id=state.session_id, now=crossing["ts"])
 
 
 def _crossing_data(crossing: dict | None) -> dict:
@@ -928,8 +935,18 @@ def _crossing_data(crossing: dict | None) -> dict:
 
 def _backstop_crossings(state: SessionState) -> list[dict]:
     """The agent backstop crossings on record, for verify-final and the resolution summary
-    to surface verbatim ([] when none)."""
-    return [dict(e) for e in state.history if e.get("event") == _BACKSTOP_CROSSED_EVENT]
+    to surface verbatim ([] when none): every one of the task's, whichever session made it,
+    merged with this session's own history by (session, ts)."""
+    recorded = task_accumulator.get(state.task_id)["agent_backstop_crossings"]
+    seen = {task_accumulator.crossing_key(c) for c in recorded} - {None}
+    merged = [dict(c) for c in recorded]
+    for event in state.history:
+        if event.get("event") != _BACKSTOP_CROSSED_EVENT:
+            continue
+        key = task_accumulator.crossing_key(event)
+        if key is None or key not in seen:
+            merged.append(dict(event))
+    return merged
 
 
 def _disclose_backstop_crossings(state: SessionState, data: dict, detail: str) -> str:
@@ -983,12 +1000,14 @@ def _agent_fire_ack_refusal(
         return "an open spend/wall-clock fire is owed to the user, not the agent", None
     if decision != "revise":
         return f"decision {decision!r} on a fire is the user's; the agent may only revise", None
-    try:
-        doc = load_plan(state.plan_path, strict=False)
-    except (OSError, PlanError):
-        doc = None
+    def load_doc():
+        try:
+            return load_plan(state.plan_path, strict=False)
+        except (OSError, PlanError):
+            return None
+
     backstopped, crossing = _since_user_backstop_gate(
-        state, doc, decision="fire_acknowledge", axis="replans_since_user_decision",
+        state, load_doc, decision="fire_acknowledge", axis="replans_since_user_decision",
         backstop=Thresholds().effort_replan_backstop(), what="acknowledging an effort fire",
         cleared_by="a user approval, fire-acknowledgement or renegotiation")
     if backstopped is not None:
@@ -1016,7 +1035,7 @@ def _agent_renegotiation_refusal(
                     "is open"), None
         return "no ceiling refusal is recorded; run the replan without a decision first", None
     backstopped, crossing = _since_user_backstop_gate(
-        state, doc, decision="renegotiation_continue", axis="replans_since_user_decision",
+        state, lambda: doc, decision="renegotiation_continue", axis="replans_since_user_decision",
         backstop=Thresholds().effort_replan_backstop(), what="continuing a renegotiation",
         cleared_by="a user approval, fire-acknowledgement or renegotiation")
     if backstopped is not None:
@@ -1025,9 +1044,12 @@ def _agent_renegotiation_refusal(
         state, state.renegotiation_ceiling_difficulty_id, event="the ceiling event")
     if refused is not None:
         return refused, None
-    boundary = _autonomy_for(state, doc)
-    if not boundary["eligible"]:
-        return f"the plan is outside the approved boundary: {boundary['reason']}", None
+    # Past the backstop the gate has just held `doc` to the boundary; only below it is the
+    # boundary still unjudged.
+    if crossing is None:
+        boundary = _autonomy_for(state, doc)
+        if not boundary["eligible"]:
+            return f"the plan is outside the approved boundary: {boundary['reason']}", None
     return None, crossing
 
 
@@ -1202,7 +1224,7 @@ def _plan_review_override_refusal(
             ), None
         _sync_release_anchor(state)
         backstopped, crossing = _since_user_backstop_gate(
-            state, doc, decision="plan_review_override",
+            state, lambda: doc, decision="plan_review_override",
             axis="review_rounds_since_user_decision",
             backstop=Thresholds().review_round_backstop(),
             what="recording a plan-review override",

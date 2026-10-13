@@ -448,6 +448,81 @@ def test_backstop_crossing_is_disclosed_at_verify_final_and_resolve(eng):
     assert "crossed a since-user backstop" in resolved["detail"], f"BEHAVIOUR: {resolved['detail']}"
 
 
+def finish_session(eng: Eng, sid: str) -> tuple[dict, dict]:
+    """Carry an executing session through every stage, its final verification and resolution."""
+    for index, observation in enumerate(OBSERVATIONS):
+        recorded = eng.run("record_result", session=sid, status="passed", actual="ok",
+                           control="reviewed: ok", observation=observation)
+        assert recorded["ok"] is True, recorded
+        if index + 1 < len(OBSERVATIONS):
+            assert eng.run("next_stage", session=sid)["ok"] is True
+    final = eng.run("verify_final", session=sid)
+    assert final["ok"] is True, final
+    for phase in ("searched", "skipped"):
+        eng.run("plugin_record", session=sid, plugin="experience", phase=phase,
+                note="test fixture, nothing to record")
+    resolved = eng.run("resolve", session=sid, by="user", quality=5, quality_by="user-confirmed")
+    assert resolved["ok"] is True, resolved
+    return final, resolved
+
+
+def assert_disclosed_once(final: dict, resolved: dict) -> None:
+    for step in (final, resolved):
+        assert [c["decision"] for c in step["data"]["agent_backstop_crossings"]] == [
+            "fire_acknowledge"], f"BEHAVIOUR: {step['data']}"
+        assert "crossed a since-user backstop" in step["detail"], f"BEHAVIOUR: {step['detail']}"
+
+
+def test_backstop_crossing_is_disclosed_by_a_later_session_of_the_same_task(eng):
+    crossed = cross_by_fire_acknowledge(eng)
+    assert crossed["ok"] is True, f"BEHAVIOUR: the crossing was not admitted: {crossed['detail']}"
+    plan = eng.state("a1").plan_path
+    assert action(eng.open("b1", plan, task="task-a1")) == "self_approve"
+    assert eng.run("approve", session="b1", by="agent")["ok"] is True
+    eng.execute("b1")
+    assert not crossings(eng, "b1")
+    final, resolved = finish_session(eng, "b1")
+    assert_disclosed_once(final, resolved)
+
+
+def test_backstop_crossing_is_disclosed_after_the_session_is_reset_and_a_user_decision(eng):
+    crossed = cross_by_fire_acknowledge(eng)
+    assert crossed["ok"] is True, f"BEHAVIOUR: the crossing was not admitted: {crossed['detail']}"
+    plan = eng.state("a1").plan_path
+    task_accumulator.clear_since_user_decision("task-a1")
+    reset = eng.run("reset", session="a1", task="task-a1", goal="g", done_criterion="dc", force=True)
+    assert reset["ok"] is True, reset
+    assert not crossings(eng, "a1")
+    eng.run("classify", session="a1", architectural=True, files=5, changed_lines=200,
+            wall_clock_min=60)
+    eng.run("plan", session="a1")
+    assert action(eng.run("submit_plan", session="a1", plan=plan)) == "self_approve"
+    assert eng.run("approve", session="a1", by="agent")["ok"] is True
+    eng.execute("a1")
+    final, resolved = finish_session(eng, "a1")
+    assert_disclosed_once(final, resolved)
+
+
+def test_backstop_crossing_record_survives_the_accumulator_reset(eng):
+    d = cross_by_renegotiation(eng)
+    assert d["ok"] is True, f"BEHAVIOUR: the crossing was not admitted: {d['detail']}"
+    task = eng.state("a1").task_id
+    task_accumulator.reset(task)
+    kept = task_accumulator.get(task)["agent_backstop_crossings"]
+    assert [c["decision"] for c in kept] == ["renegotiation_continue"], (
+        f"BEHAVIOUR: the accumulator reset dropped the crossing record: {kept}")
+
+
+def test_backstop_crossing_is_disclosed_to_a_session_with_no_history_of_its_own(eng):
+    d = cross_by_fire_acknowledge(eng)
+    assert d["ok"] is True, f"BEHAVIOUR: the crossing was not admitted: {d['detail']}"
+    session = eng.state("a1")
+    assert [c["decision"] for c in cli._backstop_crossings(session)] == ["fire_acknowledge"]
+    session.history = []
+    assert [c["decision"] for c in cli._backstop_crossings(session)] == ["fire_acknowledge"], (
+        "BEHAVIOUR: the task's own record was not read")
+
+
 def test_backstop_refusal_outside_the_boundary_names_the_boundary_reasons(eng):
     plan = widened_order(eng)
     arm(eng, "o1")
@@ -502,6 +577,9 @@ def test_backstop_crossing_refused_for_a_session_with_no_user_approved_version(e
     arm(eng, "o1")
     reflect(eng, "o1")
     set_total("o1", ROUNDS_AXIS, Thresholds().review_round_backstop())
+    # The only real session that is inside the boundary yet has no ledgered version is a
+    # `parent_norm` order, which needs an adopted parent handoff; the ledger lookup is what
+    # that session differs by.
     monkeypatch.setattr(cli, "_ledgered_order_key", lambda state: None)
     d = agent_override(eng, "o1", plan)
     assert d["ok"] is False
