@@ -39,6 +39,11 @@ from typing import NamedTuple, Sequence
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from agentctl import grants  # the sole validator every materialized rule/add_dir passes through
+from agentctl.config import (  # the one definition of the child-contour kill switch
+    CHILD_CONTOUR_LINKING_ENV,
+    CHILD_CONTOUR_LINKING_KEY,
+    child_contour_linking_enabled,
+)
 from agentctl import norm_handoff  # the one definition of the handoff record the child engine adopts
 from agentctl.own_contour import OWN_CONTOUR_VERBS, OWN_SESSION_ENV  # the channel's env name and verb set
 from agentctl.plan import (  # parse the TOML plan for a single-stage brief projection
@@ -2496,10 +2501,18 @@ def main(argv: list[str] | None = None) -> int:
     # A spawn is linked when the engine can name the stage it works for: the child then
     # gets a norm handoff and a pre-assigned session id its own-contour channel is pinned
     # to. The record is only decided here and written once the brief assembles, so the
-    # brief, the argv, the settings and the env all see one decision.
+    # brief, the argv, the settings and the env all see one decision. The kill switch
+    # (ADR-0010 § Amendment) turns it off; off is the same unlinked path a failed record takes.
     handoff_record: "dict | None" = None
     handoff_store = None
-    if args.session and args.stage_index is not None:
+    names_a_stage = bool(args.session) and args.stage_index is not None
+    if names_a_stage and not child_contour_linking_enabled(constants=constants):
+        print(
+            f"note: child-contour linking is off ({CHILD_CONTOUR_LINKING_KEY} in config.md, "
+            f"override {CHILD_CONTOUR_LINKING_ENV}=1), spawning unlinked",
+            file=sys.stderr,
+        )
+    elif names_a_stage:
         from agentctl.store import FileStateStore
 
         handoff_store = FileStateStore(args.state_root) if args.state_root is not None else FileStateStore()

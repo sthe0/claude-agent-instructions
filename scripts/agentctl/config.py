@@ -7,13 +7,18 @@ the shared, typed accessor for the agentctl engine.
 """
 from __future__ import annotations
 
+import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_MD = REPO_ROOT / "config.md"
 
 CONFIG_KEY_RE = re.compile(r"^\|\s*`([a-z0-9-]+)`\s*\|\s*`([^`]+)`\s*\|")
+
+CHILD_CONTOUR_LINKING_KEY = "child-contour-linking"
+CHILD_CONTOUR_LINKING_ENV = "AGENTCTL_CHILD_LINKING"
 
 
 def parse_config_md(path: Path | None = None) -> dict[str, str]:
@@ -25,6 +30,29 @@ def parse_config_md(path: Path | None = None) -> dict[str, str]:
         if m:
             constants[m.group(1)] = m.group(2)
     return constants
+
+
+def child_contour_linking_enabled(
+    env: Mapping[str, str] | None = None,
+    constants: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether a spawn for a parent stage is linked into the child contour (ADR-0010).
+
+    AGENTCTL_CHILD_LINKING `1` / `0` wins in both directions; otherwise config.md's
+    `child-contour-linking` row decides, and only exactly `on` links. Anything else --
+    another value, a missing row, an unreadable config.md -- is the safe unlinked state."""
+    environ = os.environ if env is None else env
+    forced = environ.get(CHILD_CONTOUR_LINKING_ENV)
+    if forced == "1":
+        return True
+    if forced == "0":
+        return False
+    if constants is None:
+        try:
+            constants = parse_config_md()
+        except (OSError, UnicodeDecodeError):
+            return False
+    return constants.get(CHILD_CONTOUR_LINKING_KEY) == "on"
 
 
 class Thresholds:

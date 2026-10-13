@@ -295,6 +295,18 @@ def _advisor_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _child_contour_linking_on_by_default(monkeypatch):
+    """Keep child-contour linking ON for the suite at large, although config.md ships
+    `child-contour-linking` as `off`.
+
+    The norm-handoff, own-contour and child-approval tests exist to test linking; with the
+    shipped default they would pass only because every spawn is unlinked. AGENTCTL_CHILD_LINKING=1
+    is the documented force-on knob. test_child_contour_switch.py proves the switch itself and
+    sets or deletes the variable in each test, overriding this default."""
+    monkeypatch.setenv("AGENTCTL_CHILD_LINKING", "1")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_self_diagnose_store(tmp_path, monkeypatch):
     """Redirect the self-diagnose findings store to tmp for the suite at large.
 

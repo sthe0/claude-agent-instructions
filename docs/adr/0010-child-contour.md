@@ -63,3 +63,13 @@ Premise questions of the order, with the disposition and the answer (or, for an 
 - **The channel trusts its env (QK).** A child that writes an env prefix (`AGENTCTL_OWN_SESSION=<other> python3 .../agentctl-own.py ...`) may act on another session if the harness matches that command to the allow rule. The wrapper still refuses an unlinked target, so only another linked session is reachable and only through `OWN_CONTOUR_VERBS`. Closing it needs a caller identity the harness does not expose to a Bash subprocess.
 - **A handoff record can be orphaned.** A spawn refusal after the record is written (prompt-size ceiling, missing `claude`) leaves it unused, as on base.
 - **Parent-side accounting is portion 4c.** A child's spend and wall-clock rolled into the parent stage's effort measure, and cross-session difficulty closure, have no plan yet.
+
+## Amendment (kill switch)
+
+*Difficulty removed:* the gaps above make a linked child stumble when parallel sessions share the machine, and backing the contour out would cost a revert of every portion.
+
+Linking ships **off by default**. The `child-contour-linking` row of `config.md` (`off` | `on`) decides it, and the `AGENTCTL_CHILD_LINKING` env var overrides the row in both directions (`1` forces on, `0` forces off). Only `agentctl.config.child_contour_linking_enabled` resolves the two; a missing row, any other value or an unreadable `config.md` resolves to off, and the resolver never raises.
+
+`spawn-specialist.py` asks the resolver at **one decision point**, the branch that would write the norm handoff for a `--session` + `--stage-index` spawn; it never reads the env var itself. When the switch is off, the spawner skips `norm_handoff_record`, prints one stderr line naming the key and the variable, and takes the pre-linking unlinked path, the same one a handoff record that cannot be written takes: no handoff, no own session id, no `agentctl-own.py` allow rule, and the brief's "The engine belongs to the parent" section. Everything this ADR decides is unchanged for a spawn the switch links.
+
+To turn linking on, change the value of the `child-contour-linking` row in `config.md` from `off` to `on` (one line), or export `AGENTCTL_CHILD_LINKING=1` for one spawn. The test suite pins the variable to `1` in `scripts/tests/conftest.py`, so the linked path stays covered while the default is off.
