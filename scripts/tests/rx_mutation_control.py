@@ -67,6 +67,10 @@ def _ids(*names: str) -> "tuple[str, ...]":
 _SINCE_ROUNDS_AXIS = '"review_rounds_since_user_decision"'
 _SINCE_REPLANS_AXIS = '"replans_since_user_decision"'
 _BACKSTOP_GUARD = "    if spent < backstop:\n        return None\n"
+_BOUNDARY_OUTSIDE = (
+    '        outside = [] if boundary["eligible"] else '
+    'list(boundary.get("reasons") or [boundary["reason"]])\n'
+)
 
 CATALOGUE: "dict[str, Mutant]" = {
     "reflection-listed-first": Mutant(
@@ -142,6 +146,53 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_user_renegotiation_zeroes_the_since_user_counters",
             "test_user_plan_review_override_zeroes_the_since_user_counters",
         ),
+    ),
+    "backstop-boundary-ignored": Mutant(
+        CLI,
+        _BOUNDARY_OUTSIDE,
+        "        outside = []\n",
+        _ids(
+            "test_agent_override_refused_at_the_review_round_backstop",
+            "test_agent_fire_acknowledge_refused_at_the_replan_backstop",
+            "test_agent_renegotiation_continue_refused_at_the_replan_backstop",
+            "test_agent_override_refused_past_the_backstop_with_an_open_spend_fire",
+            "test_backstop_refusal_outside_the_boundary_names_the_boundary_reasons",
+        ),
+    ),
+    "backstop-boundary-always-outside": Mutant(
+        CLI,
+        _BOUNDARY_OUTSIDE,
+        '        outside = ["forced outside the boundary"]\n',
+        _ids(
+            "test_agent_override_admitted_past_the_review_round_backstop_inside_the_boundary",
+            "test_agent_fire_acknowledge_admitted_past_the_replan_backstop_inside_the_boundary",
+            "test_agent_renegotiation_continue_admitted_past_the_replan_backstop_inside_the_boundary",
+        ),
+    ),
+    "backstop-crossing-unrecorded": Mutant(
+        CLI,
+        "    if crossing is not None:\n        state.log(**crossing)\n",
+        "    if crossing is not None:\n        return\n",
+        _ids(
+            "test_backstop_crossing_is_recorded_once_with_its_axis_count_and_backstop",
+            "test_backstop_crossing_is_disclosed_at_verify_final_and_resolve",
+            "test_agent_override_admitted_past_the_review_round_backstop_inside_the_boundary",
+        ),
+    ),
+    "backstop-spend-bound-ignored": Mutant(
+        CLI,
+        "            for scale, ratio in armed.items() if ratio >= multiple]\n",
+        "            for scale, ratio in armed.items() if False]\n",
+        _ids("test_backstop_crossings_stop_once_spend_reaches_the_divergence_multiple"),
+    ),
+    "backstop-crossing-skips-later-checks": Mutant(
+        CLI,
+        '            return f"an agent-authored override is refused: {backstopped}", None\n'
+        "        refused = _agent_self_decision_refusal(\n",
+        '            return f"an agent-authored override is refused: {backstopped}", None\n'
+        "        if crossing is not None:\n            return None, crossing\n"
+        "        refused = _agent_self_decision_refusal(\n",
+        _ids("test_crossing_inside_the_boundary_still_needs_the_reflection_exit"),
     ),
     "exhaustion-record-not-reused": Mutant(
         CLI,

@@ -23,14 +23,14 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, gates, task_accumulator
+from agentctl import cli, effort, gates, task_accumulator
 from agentctl.config import Thresholds
 from agentctl.state import (
     Critique, Declaration, Difficulty, Investigation, Normalization, PlanReview, SessionState,
 )
 from test_replan_autonomy_boundary import (
-    Eng, action, ack, agent_session, approved_order, at_ceiling, ceiling_refusal, plan_text,
-    release_review_rounds, renegotiate, replans_fire, thinker_review,
+    OBSERVATIONS, Eng, action, ack, agent_session, approved_order, at_ceiling, ceiling_refusal,
+    plan_text, release_review_rounds, renegotiate, replans_fire, thinker_review,
 )
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
@@ -253,14 +253,49 @@ def test_declaring_under_the_release_supersedes_the_previous_record(eng):
 # --- the since-user-decision backstops -----------------------------------------------------
 
 
+CROSSED = "agent_backstop_crossed"
+WIDENING = ("brand_new_module.py",)
+
+
+def arm(eng: Eng, sid: str, *, spent: float = 0.0) -> None:
+    """Open the session's effort window as approval would: an estimate on both ratio scales,
+    a zero baseline and `spent` dollars already booked. A session that has not been
+    approved yet has none, so nothing bounds a backstop crossing there."""
+    state = eng.state(sid)
+    state.effort_estimate = {effort.SCALE_SPEND: 10.0, effort.SCALE_WALL_CLOCK: 1000.0}
+    state.effort_baseline = {scale: 0.0 for scale in effort.SCALE_ORDER}
+    state.effort_actuals[effort.ACTUAL_SPEND_KEY] = spent
+    eng.store.save(state)
+
+
+def crossings(eng: Eng, sid: str) -> list[dict]:
+    return [e for e in eng.state(sid).history if e.get("event") == CROSSED]
+
+
+def assert_not_crossed(eng: Eng, sid: str, directive: dict) -> None:
+    assert not crossings(eng, sid)
+    assert CROSSED not in (directive.get("data") or {})
+
+
+def widened_order(eng: Eng, sid: str = "o1") -> str:
+    """An order session whose plan adds a file the user never approved, past the round release."""
+    approved_order(eng)
+    plan = eng.write(plan_text(extra_outputs=WIDENING), "widened.toml")
+    eng.open(sid, plan)
+    release_review_rounds(eng, sid)
+    return plan
+
+
 def test_agent_override_refused_at_the_review_round_backstop(eng):
-    plan = released_order(eng)
+    plan = widened_order(eng)
+    arm(eng, "o1")
     reflect(eng, "o1")
     set_total("o1", ROUNDS_AXIS, Thresholds().review_round_backstop())
     d = agent_override(eng, "o1", plan)
     assert d["ok"] is False
     assert "backstop" in d["detail"]
     assert eng.state("o1").plan_review is None
+    assert_not_crossed(eng, "o1", d)
 
 
 def test_agent_override_admitted_just_below_the_review_round_backstop(eng):
@@ -272,12 +307,16 @@ def test_agent_override_admitted_just_below_the_review_round_backstop(eng):
 
 def test_agent_fire_acknowledge_refused_at_the_replan_backstop(eng):
     replans_fire(eng)
+    plan = str(eng.tmp / "approved.toml")
+    agent_session(eng, "a2", plan)
+    eng.spend_fire("a2", plan)
     eng.diagnose("a1")
     set_total("a1", REPLANS_AXIS, Thresholds().effort_replan_backstop())
     refused = ack(eng)
     assert refused["ok"] is False
     assert "backstop" in refused["detail"]
     assert eng.state("a1").effort_fires[-1].get("ack") is None
+    assert_not_crossed(eng, "a1", refused)
 
 
 def test_agent_fire_acknowledge_admitted_just_below_the_replan_backstop(eng):
@@ -289,14 +328,15 @@ def test_agent_fire_acknowledge_admitted_just_below_the_replan_backstop(eng):
 
 def test_agent_renegotiation_continue_refused_at_the_replan_backstop(eng):
     at_ceiling(eng)
-    replanned = eng.write(plan_text(stage3=True, revised=True))
-    ceiling_refusal(eng, "a1", replanned)
+    widened = eng.write(plan_text(stage3=True, revised=True, extra_outputs=WIDENING))
+    ceiling_refusal(eng, "a1", widened)
     eng.diagnose("a1", "b")
     set_total("a1", REPLANS_AXIS, Thresholds().effort_replan_backstop())
-    refused = renegotiate(eng, "a1", replanned)
+    refused = renegotiate(eng, "a1", widened)
     assert refused["ok"] is False
     assert "backstop" in refused["detail"]
     assert not eng.state("a1").renegotiations
+    assert_not_crossed(eng, "a1", refused)
 
 
 def test_agent_renegotiation_continue_admitted_just_below_the_replan_backstop(eng):
@@ -306,6 +346,236 @@ def test_agent_renegotiation_continue_admitted_just_below_the_replan_backstop(en
     eng.diagnose("a1", "b")
     set_total("a1", REPLANS_AXIS, Thresholds().effort_replan_backstop() - 1)
     assert renegotiate(eng, "a1", replanned)["ok"] is True
+
+
+# --- past the backstop, inside the autonomy boundary ----------------------------------------
+
+
+def cross_by_fire_acknowledge(eng: Eng) -> dict:
+    replans_fire(eng)
+    eng.diagnose("a1")
+    set_total("a1", REPLANS_AXIS, Thresholds().effort_replan_backstop())
+    return ack(eng)
+
+
+def cross_by_renegotiation(eng: Eng) -> dict:
+    at_ceiling(eng)
+    replanned = eng.write(plan_text(stage3=True, revised=True))
+    ceiling_refusal(eng, "a1", replanned)
+    eng.diagnose("a1", "b")
+    set_total("a1", REPLANS_AXIS, Thresholds().effort_replan_backstop())
+    return renegotiate(eng, "a1", replanned)
+
+
+def test_agent_override_admitted_past_the_review_round_backstop_inside_the_boundary(eng):
+    plan = released_order(eng)
+    arm(eng, "o1")
+    reflect(eng, "o1")
+    set_total("o1", ROUNDS_AXIS, Thresholds().review_round_backstop())
+    d = agent_override(eng, "o1", plan)
+    assert d["ok"] is True, (
+        f"BEHAVIOUR: an in-boundary agent override at the review-round backstop was refused: "
+        f"{d['detail']}")
+    assert eng.state("o1").plan_review.verdict == "override"
+    assert [c["decision"] for c in crossings(eng, "o1")] == ["plan_review_override"]
+
+
+def test_agent_fire_acknowledge_admitted_past_the_replan_backstop_inside_the_boundary(eng):
+    d = cross_by_fire_acknowledge(eng)
+    assert d["ok"] is True, (
+        f"BEHAVIOUR: an in-boundary agent fire acknowledgement at the replan backstop was "
+        f"refused: {d['detail']}")
+    assert eng.state("a1").effort_fires[-1]["ack"]["by"] == "agent"
+    assert [c["decision"] for c in crossings(eng, "a1")] == ["fire_acknowledge"]
+
+
+def test_agent_renegotiation_continue_admitted_past_the_replan_backstop_inside_the_boundary(eng):
+    d = cross_by_renegotiation(eng)
+    assert d["ok"] is True, (
+        f"BEHAVIOUR: an in-boundary agent renegotiation at the replan backstop was refused: "
+        f"{d['detail']}")
+    assert eng.state("a1").renegotiations[-1]["by"] == "agent"
+    assert [c["decision"] for c in crossings(eng, "a1")] == ["renegotiation_continue"]
+
+
+def test_backstop_crossing_is_recorded_once_with_its_axis_count_and_backstop(eng):
+    d = cross_by_fire_acknowledge(eng)
+    backstop = Thresholds().effort_replan_backstop()
+    recorded = crossings(eng, "a1")
+    assert len(recorded) == 1, (
+        f"BEHAVIOUR: expected exactly one {CROSSED} event, found {len(recorded)}: {d['detail']}")
+    event = recorded[0]
+    assert (event["decision"], event["axis"], event["spent"], event["backstop"]) == (
+        "fire_acknowledge", REPLANS_AXIS, backstop, backstop), f"BEHAVIOUR: {event}"
+    assert d["data"][CROSSED]["decision"] == "fire_acknowledge", f"BEHAVIOUR: {d['data']}"
+
+
+def test_backstop_crossing_is_disclosed_at_verify_final_and_resolve(eng):
+    d = cross_by_fire_acknowledge(eng)
+    assert d["ok"] is True, f"BEHAVIOUR: the crossing was not admitted: {d['detail']}"
+    assert eng.run("next_stage", session="a1")["ok"] is True
+    assert eng.run("record_result", session="a1", status="passed", actual="ok",
+                   control="reviewed: ok", observation=OBSERVATIONS[1])["ok"] is True
+    final = eng.run("verify_final", session="a1")
+    assert final["ok"] is True, final
+    assert [c["decision"] for c in final["data"]["agent_backstop_crossings"]] == [
+        "fire_acknowledge"], f"BEHAVIOUR: {final['data']}"
+    assert "crossed a since-user backstop" in final["detail"], f"BEHAVIOUR: {final['detail']}"
+    for phase in ("searched", "skipped"):
+        eng.run("plugin_record", session="a1", plugin="experience", phase=phase,
+                note="test fixture, nothing to record")
+    resolved = eng.run("resolve", session="a1", by="user", quality=5, quality_by="user-confirmed")
+    assert resolved["ok"] is True, resolved
+    assert [c["decision"] for c in resolved["data"]["agent_backstop_crossings"]] == [
+        "fire_acknowledge"], f"BEHAVIOUR: {resolved['data']}"
+    assert "crossed a since-user backstop" in resolved["detail"], f"BEHAVIOUR: {resolved['detail']}"
+
+
+def test_backstop_refusal_outside_the_boundary_names_the_boundary_reasons(eng):
+    plan = widened_order(eng)
+    arm(eng, "o1")
+    reflect(eng, "o1")
+    set_total("o1", ROUNDS_AXIS, Thresholds().review_round_backstop())
+    d = agent_override(eng, "o1", plan)
+    assert d["ok"] is False
+    assert "outside the autonomy boundary" in d["detail"], f"BEHAVIOUR: {d['detail']}"
+    assert_not_crossed(eng, "o1", d)
+
+
+def test_backstop_crossings_stop_once_spend_reaches_the_divergence_multiple(eng):
+    plan = released_order(eng, "o1")
+    multiple = Thresholds().effort_divergence_multiple()
+    arm(eng, "o1", spent=10.0 * (multiple - 0.1))
+    reflect(eng, "o1")
+    set_total("o1", ROUNDS_AXIS, Thresholds().review_round_backstop())
+    below = agent_override(eng, "o1", plan)
+    assert below["ok"] is True, (
+        f"BEHAVIOUR: an override below the divergence multiple was refused: {below['detail']}")
+    eng.open("o2", plan)
+    release_review_rounds(eng, "o2")
+    arm(eng, "o2", spent=10.0 * multiple)
+    reflect(eng, "o2")
+    set_total("o2", ROUNDS_AXIS, Thresholds().review_round_backstop())
+    at = agent_override(eng, "o2", plan)
+    assert at["ok"] is False
+    assert "effort-divergence-multiple" in at["detail"], f"BEHAVIOUR: {at['detail']}"
+    assert_not_crossed(eng, "o2", at)
+
+
+def test_agent_override_refused_past_the_backstop_with_an_open_spend_fire(eng):
+    plan = approved_order(eng)
+    agent_session(eng, "a1", plan)
+    eng.spend_fire("a1", plan)
+    eng.open("o1", plan)
+    release_review_rounds(eng, "o1")
+    arm(eng, "o1")
+    reflect(eng, "o1")
+    set_total("o1", ROUNDS_AXIS, Thresholds().review_round_backstop())
+    d = agent_override(eng, "o1", plan)
+    assert d["ok"] is False
+    assert "backstop" in d["detail"]
+    assert eng.state("o1").plan_review is None
+    assert_not_crossed(eng, "o1", d)
+
+
+def test_agent_fire_acknowledge_refused_past_the_backstop_when_the_plan_does_not_load(eng):
+    replans_fire(eng)
+    eng.diagnose("a1")
+    set_total("a1", REPLANS_AXIS, Thresholds().effort_replan_backstop())
+    Path(eng.state("a1").plan_path).unlink()
+    refused = ack(eng)
+    assert refused["ok"] is False
+    assert "backstop" in refused["detail"]
+    assert eng.state("a1").effort_fires[-1].get("ack") is None
+    assert_not_crossed(eng, "a1", refused)
+
+
+def test_crossing_inside_the_boundary_still_needs_the_reflection_exit(eng):
+    plan = released_order(eng)
+    arm(eng, "o1")
+    set_total("o1", ROUNDS_AXIS, Thresholds().review_round_backstop())
+    d = agent_override(eng, "o1", plan)
+    assert d["ok"] is False
+    assert eng.state("o1").plan_review is None
+    assert_not_crossed(eng, "o1", d)
+
+
+@pytest.mark.parametrize("case", [
+    "override-without-release",
+    "override-by-the-reviewer-it-overrides",
+    "fire-acknowledge-continue",
+    "fire-acknowledge-spend-scale",
+    "fire-acknowledge-record-predates-fire",
+    "renegotiation-without-ceiling-refusal",
+    "renegotiation-record-predates-ceiling",
+])
+def test_crossing_inside_the_boundary_keeps_every_other_condition(eng, case):
+    rounds, replans = Thresholds().review_round_backstop(), Thresholds().effort_replan_backstop()
+    if case.startswith("override"):
+        sid = "o1"
+        if case == "override-without-release":
+            plan = approved_order(eng)
+            eng.open(sid, plan)
+        else:
+            plan = released_order(eng)
+            assert thinker_review(eng, sid, plan, "revise", "agent")["ok"] is True
+        arm(eng, sid)
+        reflect(eng, sid)
+        set_total(sid, ROUNDS_AXIS, rounds)
+        d = agent_override(eng, sid, plan)
+    elif case.startswith("fire-acknowledge"):
+        sid = "a1"
+        if case == "fire-acknowledge-spend-scale":
+            plan = approved_order(eng)
+            agent_session(eng, sid, plan)
+            eng.spend_fire(sid, plan)
+        else:
+            replans_fire(eng)
+        eng.diagnose(sid)
+        if case == "fire-acknowledge-record-predates-fire":
+            state = eng.state(sid)
+            state.effort_fires[-1]["difficulty_id_at_fire"] = cli._difficulty_id(state.difficulty)
+            eng.store.save(state)
+        set_total(sid, REPLANS_AXIS, replans)
+        d = ack(eng, decision="continue" if case == "fire-acknowledge-continue" else "revise")
+    else:
+        sid = "a1"
+        at_ceiling(eng)
+        replanned = eng.write(plan_text(stage3=True, revised=True))
+        if case == "renegotiation-record-predates-ceiling":
+            ceiling_refusal(eng, sid, replanned)
+        else:
+            eng.diagnose(sid, "b")
+        set_total(sid, REPLANS_AXIS, replans)
+        d = renegotiate(eng, sid, replanned)
+    assert d["ok"] is False, d
+    assert_not_crossed(eng, sid, d)
+
+
+def test_agent_decisions_neither_reset_the_order_effort_window_nor_raise_its_estimate(eng):
+    replans_fire(eng)
+    plan = str(eng.tmp / "approved.toml")
+    eng.diagnose("a1")
+    backstop = Thresholds().effort_replan_backstop()
+    set_total("a1", REPLANS_AXIS, backstop)
+    before = eng.ledger(plan)
+    estimate = dict(eng.state("a1").effort_estimate)
+    ack(eng)
+    after = eng.ledger(plan)
+    assert after["effort_since_user_approval"] == before["effort_since_user_approval"]
+    assert [(r["by"], r.get("effort_estimate")) for r in after["records"]] == [
+        (r["by"], r.get("effort_estimate")) for r in before["records"]]
+    assert eng.state("a1").effort_estimate == estimate
+    assert total("a1", REPLANS_AXIS) == backstop
+
+
+def test_no_backstop_crossing_recorded_below_the_backstop(eng):
+    replans_fire(eng)
+    eng.diagnose("a1")
+    set_total("a1", REPLANS_AXIS, Thresholds().effort_replan_backstop() - 1)
+    d = ack(eng)
+    assert d["ok"] is True
+    assert_not_crossed(eng, "a1", d)
 
 
 def test_spend_and_wall_clock_fires_stay_the_users_with_a_complete_record(eng):

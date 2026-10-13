@@ -845,11 +845,93 @@ def _since_user_backstop_refusal(state: SessionState, axis: str, backstop: int,
                                  what: str, cleared_by: str) -> str | None:
     """Why the since-user backstop stops an agent decision, or None below it. The counter
     is the task's cross-session `axis` total since the last decision the user took."""
-    spent = task_accumulator.get(state.task_id)["per_axis_totals"].get(axis, 0)
+    spent = _since_user_total(state, axis)
     if spent < backstop:
         return None
     return (f"{axis} is {spent}, at or past its backstop of {backstop}: {what} is no longer "
             f"the agent's to take; {cleared_by} zeroes it")
+
+
+def _since_user_total(state: SessionState, axis: str) -> int:
+    return task_accumulator.get(state.task_id)["per_axis_totals"].get(axis, 0)
+
+
+_BACKSTOP_CROSSED_EVENT = "agent_backstop_crossed"
+_PLAN_DOES_NOT_LOAD = "the plan does not load"
+_NO_ARMED_ESTIMATE = "no armed spend or wall-clock estimate bounds the loop"
+
+
+def _crossing_bound_reasons(state: SessionState) -> list[str]:
+    """Why a backstop crossing is no longer the agent's, or [] while the spend and
+    wall-clock fires still bound the loop: at least one of the two ratios is armed and
+    every armed one is below `effort-divergence-multiple`. Read-only -- the totals are the
+    ones `divergence()` itself compares, measured since the last user approval."""
+    multiple = Thresholds().effort_divergence_multiple()
+    ratios = effort.effective_ratios(state, cross_session_totals=_effort_cross_totals(state))
+    armed = {s: ratios[s] for s in (effort.SCALE_SPEND, effort.SCALE_WALL_CLOCK)
+             if ratios[s] is not None}
+    if not armed:
+        return [_NO_ARMED_ESTIMATE]
+    return [f"{scale} is {ratio:.1f}x the estimate, at or past effort-divergence-multiple {multiple:g}"
+            for scale, ratio in armed.items() if ratio >= multiple]
+
+
+def _since_user_backstop_gate(
+    state: SessionState, doc, *, decision: str, axis: str, backstop: int, what: str,
+    cleared_by: str,
+) -> tuple[str | None, dict | None]:
+    """The since-user backstop step of an agent self-decision, as (refusal, crossing).
+
+    Below the backstop: (None, None), the boundary and the bound are not consulted. At or
+    past it the decision stays the agent's only while `doc` is inside the autonomy boundary
+    (`_autonomy_for`, the predicate the next `approve --by agent` is held to) AND the spend
+    and wall-clock fires still bound the loop; then it returns the crossing for the caller
+    to record once the decision is applied. Otherwise the refusal names every reason.
+    `doc` None is the plan that does not load."""
+    backstopped = _since_user_backstop_refusal(state, axis, backstop, what, cleared_by)
+    if backstopped is None:
+        return None, None
+    if doc is None:
+        outside = [_PLAN_DOES_NOT_LOAD]
+    else:
+        boundary = _autonomy_for(state, doc)
+        outside = [] if boundary["eligible"] else list(boundary.get("reasons") or [boundary["reason"]])
+    bound = _crossing_bound_reasons(state)
+    if outside or bound:
+        return f"{backstopped}; outside the autonomy boundary: " + "; ".join(outside + bound), None
+    return None, {
+        "event": _BACKSTOP_CROSSED_EVENT, "decision": decision, "axis": axis,
+        "spent": _since_user_total(state, axis), "backstop": backstop,
+        "difficulty_id": _difficulty_id(state.difficulty),
+    }
+
+
+def _record_backstop_crossing(state: SessionState, crossing: dict | None) -> None:
+    if crossing is not None:
+        state.log(**crossing)
+
+
+def _crossing_data(crossing: dict | None) -> dict:
+    return {_BACKSTOP_CROSSED_EVENT: crossing} if crossing is not None else {}
+
+
+def _backstop_crossings_surface(state: SessionState) -> list[dict]:
+    """The agent backstop crossings on record, for verify-final and the resolution summary
+    to surface verbatim ([] when none)."""
+    return [dict(e) for e in state.history if e.get("event") == _BACKSTOP_CROSSED_EVENT]
+
+
+def _surface_backstop_crossings(state: SessionState, data: dict, detail: str) -> str:
+    """Put the crossings on `data` and, when there are any, name them in `detail`."""
+    crossings = _backstop_crossings_surface(state)
+    data["agent_backstop_crossings"] = crossings
+    if not crossings:
+        return detail
+    named = ", ".join(
+        f"{c.get('decision')} ({c.get('axis')} {c.get('spent')}/{c.get('backstop')})"
+        for c in crossings)
+    return (f"{detail}; WARNING: {len(crossings)} agent decision(s) crossed a since-user backstop "
+            f"inside the autonomy boundary: {named} (see agent_backstop_crossings)")
 
 
 # Stands for "no difficulty record was open" at the release event: no real record id can
@@ -879,49 +961,63 @@ def _sync_release_anchor(state: SessionState) -> bool:
     return False
 
 
-def _agent_fire_ack_refusal(state: SessionState, last: dict, decision: str) -> str | None:
-    """Why an agent-authored fire-acknowledge is refused, or None when it may proceed."""
+def _agent_fire_ack_refusal(
+    state: SessionState, last: dict, decision: str,
+) -> tuple[str | None, dict | None]:
+    """(refusal, crossing) of an agent-authored fire-acknowledge: a refusal when it may not
+    proceed, else None and the backstop crossing it would be (None below the backstop)."""
     if _ledgered_order_key(state) is None:
-        return "the order has no user-approved version; the fire is the user's decision"
+        return "the order has no user-approved version; the fire is the user's decision", None
     if last.get("scale") != effort.SCALE_REPLANS:
-        return "an open spend/wall-clock fire is owed to the user, not the agent"
+        return "an open spend/wall-clock fire is owed to the user, not the agent", None
     if decision != "revise":
-        return f"decision {decision!r} on a fire is the user's; the agent may only revise"
-    backstopped = _since_user_backstop_refusal(
-        state, "replans_since_user_decision", Thresholds().effort_replan_backstop(),
-        "acknowledging an effort fire", "a user approval, fire-acknowledgement or renegotiation")
+        return f"decision {decision!r} on a fire is the user's; the agent may only revise", None
+    try:
+        doc = load_plan(state.plan_path, strict=False)
+    except (OSError, PlanError):
+        doc = None
+    backstopped, crossing = _since_user_backstop_gate(
+        state, doc, decision="fire_acknowledge", axis="replans_since_user_decision",
+        backstop=Thresholds().effort_replan_backstop(), what="acknowledging an effort fire",
+        cleared_by="a user approval, fire-acknowledgement or renegotiation")
     if backstopped is not None:
-        return backstopped
-    return _agent_self_decision_refusal(
+        return backstopped, None
+    refused = _agent_self_decision_refusal(
         state, last.get("difficulty_id_at_fire"),
         event="the fire", consumed="an earlier fire", decision="fire")
+    return (refused, None) if refused is not None else (None, crossing)
 
 
-def _agent_renegotiation_refusal(state: SessionState, decision: str, doc) -> str | None:
-    """Why an agent-authored renegotiation at the diagnosing-replan ceiling is refused,
-    or None when a `continue` may proceed."""
+def _agent_renegotiation_refusal(
+    state: SessionState, decision: str, doc,
+) -> tuple[str | None, dict | None]:
+    """(refusal, crossing) of an agent-authored renegotiation at the diagnosing-replan
+    ceiling: a refusal when a `continue` may not proceed, else None and the backstop
+    crossing it would be (None below the backstop)."""
     if decision != "continue":
-        return f"{decision!r} changes the order's scope or ends it; that is the user's decision"
+        return f"{decision!r} changes the order's scope or ends it; that is the user's decision", None
     if doc is None or _ledgered_order_key(state) is None:
-        return "the order has no user-approved version to continue within"
+        return "the order has no user-approved version to continue within", None
     if state.renegotiation_ceiling_difficulty_id is None:
         diff = state.difficulty
         if _difficulty_id(diff) is None or not diff.complete():
-            return "no complete planning-difficulty record (declare, investigate, critique) is open"
-        return "no ceiling refusal is recorded; run the replan without a decision first"
-    backstopped = _since_user_backstop_refusal(
-        state, "replans_since_user_decision", Thresholds().effort_replan_backstop(),
-        "continuing a renegotiation", "a user approval, fire-acknowledgement or renegotiation")
+            return ("no complete planning-difficulty record (declare, investigate, critique) "
+                    "is open"), None
+        return "no ceiling refusal is recorded; run the replan without a decision first", None
+    backstopped, crossing = _since_user_backstop_gate(
+        state, doc, decision="renegotiation_continue", axis="replans_since_user_decision",
+        backstop=Thresholds().effort_replan_backstop(), what="continuing a renegotiation",
+        cleared_by="a user approval, fire-acknowledgement or renegotiation")
     if backstopped is not None:
-        return backstopped
+        return backstopped, None
     refused = _agent_self_decision_refusal(
         state, state.renegotiation_ceiling_difficulty_id, event="the ceiling event")
     if refused is not None:
-        return refused
+        return refused, None
     boundary = _autonomy_for(state, doc)
     if not boundary["eligible"]:
-        return f"the plan is outside the approved boundary: {boundary['reason']}"
-    return None
+        return f"the plan is outside the approved boundary: {boundary['reason']}", None
+    return None, crossing
 
 
 def _handoff_held(parent_link: dict | None, venue: str) -> tuple[list, list]:
@@ -1046,16 +1142,18 @@ def _consume_override_record(state: SessionState, scope: str) -> None:
     state.log("agent_review_override_record", scope=scope, difficulty_id=did)
 
 
-def _settle_override_decision(state: SessionState, review, scope: str) -> None:
+def _settle_override_decision(state: SessionState, review, scope: str,
+                              crossing: dict | None = None) -> None:
     """What a recorded review does to the self-decision machinery. An agent-authored
-    override spends the record that earned it. A user's override restarts the
-    since-user backstops, and so does the release it ends: a non-agent override or an
-    attested whole-plan pass leaves no release event for a later record to be
-    measured against."""
+    override spends the record that earned it, and records the backstop crossing it
+    made, if any. A user's override restarts the since-user backstops, and so does the
+    release it ends: a non-agent override or an attested whole-plan pass leaves no
+    release event for a later record to be measured against."""
     reviewer = (review.reviewer or "").strip()
     if review.verdict == gates._PLAN_REVIEW_OVERRIDE:
         if reviewer.casefold() == AGENT_ACTOR:
             _consume_override_record(state, scope)
+            _record_backstop_crossing(state, crossing)
             return
         _clear_since_user_decision(state, reviewer)
         state.review_release_difficulty_id = None
@@ -1063,19 +1161,26 @@ def _settle_override_decision(state: SessionState, review, scope: str) -> None:
         state.review_release_difficulty_id = None
 
 
-def _plan_review_override_refusal(state: SessionState, prev, reviewer: str, order) -> str | None:
-    """Why an override by `reviewer` is refused, or None. `prev` is the prior record
-    of the SAME scope and plan path (or None). An override is the customer's escape
-    from a reviewer's `revise` deadlock: never by that reviewer itself, by the
-    coordinator only while a round/friction release names the decision as its own,
-    and by the order's customer_id when one is declared."""
+def _plan_review_override_refusal(
+    state: SessionState, prev, reviewer: str, doc,
+) -> tuple[str | None, dict | None]:
+    """(refusal, crossing) of an override by `reviewer`: a refusal when it may not be
+    recorded, else None and the since-user backstop crossing an agent-authored one would
+    be (None below the backstop and for any other author). `prev` is the prior record
+    of the SAME scope and plan path (or None); `doc` is the plan under review (None when
+    it does not load). An override is the customer's escape from a reviewer's `revise`
+    deadlock: never by that reviewer itself, by the coordinator only while a
+    round/friction release names the decision as its own, and by the order's customer_id
+    when one is declared."""
     if (prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE
             and reviewer and reviewer == (prev.reviewer or "").strip()):
         return (
             f"override must come from a distinct reviewer: {reviewer!r} is the "
             "reviewer whose 'revise' verdict it would override (the user is the "
             "expected override author)"
-        )
+        ), None
+    crossing = None
+    order = doc.meta.order if doc is not None else None
     if reviewer.casefold() == AGENT_ACTOR:
         # The override never counts as a passing first verdict for the autonomy
         # boundary (it is not written to the ledger).
@@ -1083,14 +1188,16 @@ def _plan_review_override_refusal(state: SessionState, prev, reviewer: str, orde
             return (
                 "an agent-authored override is refused: it is available only once the "
                 "review-round or cross-axis friction release is active"
-            )
+            ), None
         _sync_release_anchor(state)
-        backstopped = _since_user_backstop_refusal(
-            state, "review_rounds_since_user_decision", Thresholds().review_round_backstop(),
-            "recording a plan-review override",
-            "a user approval, fire-acknowledgement, renegotiation or plan-review override")
+        backstopped, crossing = _since_user_backstop_gate(
+            state, doc, decision="plan_review_override",
+            axis="review_rounds_since_user_decision",
+            backstop=Thresholds().review_round_backstop(),
+            what="recording a plan-review override",
+            cleared_by="a user approval, fire-acknowledgement, renegotiation or plan-review override")
         if backstopped is not None:
-            return f"an agent-authored override is refused: {backstopped}"
+            return f"an agent-authored override is refused: {backstopped}", None
         refused = _agent_self_decision_refusal(
             state, state.review_release_difficulty_id,
             event="the release", decision="override")
@@ -1099,13 +1206,13 @@ def _plan_review_override_refusal(state: SessionState, prev, reviewer: str, orde
                 f"an agent-authored override is refused: {refused}. Run the reflection exit "
                 "first (declare, investigate, critique with differences_to_remove, normalize "
                 "with a real factor) after the release, then override"
-            )
+            ), None
     elif order is not None and order.customer_id and reviewer != order.customer_id:
         return (
             f"override reviewer {reviewer!r} does not match order customer_id "
             f"{order.customer_id!r}; record it as the customer of record, or correct --reviewer"
-        )
-    return None
+        ), None
+    return None, crossing
 
 
 def _record_first_thinker_verdict(state: SessionState, doc, review, scope: str) -> None:
@@ -4767,10 +4874,11 @@ def _cmd_plan_review_pair(
     prev = state.plan_pair_reviews.get(pair)
     if prev is not None and prev.plan_path != target:
         prev = None
+    crossing = None
     if verdict == gates._PLAN_REVIEW_OVERRIDE:
         if not reviewer or not note:
             return refuse("a pair override needs a non-empty --reviewer and --note")
-        refusal = _plan_review_override_refusal(state, prev, reviewer, doc.meta.order)
+        refusal, crossing = _plan_review_override_refusal(state, prev, reviewer, doc)
         if refusal:
             return refuse(refusal)
     regression_command = (getattr(args, "regression_command", "") or "").strip()
@@ -4822,7 +4930,7 @@ def _cmd_plan_review_pair(
     elif verdict == gates._PLAN_REVIEW_OVERRIDE and prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE:
         ledger = _condition4_ledger_rows(state, doc, target, prev, prev.concerns, "false-alarm")
     state.plan_pair_reviews[pair] = review
-    _settle_override_decision(state, review, plan_review_scope_for_pair(pair))
+    _settle_override_decision(state, review, plan_review_scope_for_pair(pair), crossing)
     question_ids = _record_review_questions(state, pair, question_texts)
     if _is_counted_review(review.verdict, reviewer):
         _count_review_round(state, live)
@@ -4841,7 +4949,8 @@ def _cmd_plan_review_pair(
         f"pair review recorded for {pair!r} against {target} (verdict={verdict}); "
         f"pair status: {status}",
         data={"pair": pair, "pair_status": status, "ledger_lines": len(ledger),
-              "concern_ids": review.concern_ids, **_question_data(state, args, question_ids)},
+              "concern_ids": review.concern_ids, **_question_data(state, args, question_ids),
+              **_crossing_data(crossing)},
     )
 
 
@@ -4963,15 +5072,15 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     # here, before the record is overwritten and the prior reviewer's identity lost.
     # Scope-aware: an override of a STAGE-scoped revise compares against the prior
     # review of that SAME scope, never against the whole-plan record.
+    crossing = None
     if args.verdict == gates._PLAN_REVIEW_OVERRIDE:
         prev = state.plan_stage_reviews.get(scope) if scope else state.plan_review
         if prev is not None and prev.plan_path != target:
             prev = None
         # Mirrors cmd_accept's author/customer_id check; degrades to a pass-through
         # when the plan has no [meta.order] or an empty customer_id, same as cmd_accept.
-        refusal = _plan_review_override_refusal(
-            state, prev, (getattr(args, "reviewer", "") or "").strip(),
-            doc.meta.order if doc is not None else None,
+        refusal, crossing = _plan_review_override_refusal(
+            state, prev, (getattr(args, "reviewer", "") or "").strip(), doc,
         )
         if refusal:
             return Directive(False, state.node, "noop", refusal)
@@ -5159,7 +5268,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         # CONTRACT INVERSION note on the pass path of _plan_review_verdict_blockers),
         # so it must not become a terminal pass either.
         state.plan_review_passes[scope] = review
-    _settle_override_decision(state, review, scope)
+    _settle_override_decision(state, review, scope, crossing)
     _record_first_thinker_verdict(state, doc, review, scope)
     # POST-APPROVAL round counting. cmd_submit_plan's increment covers only the
     # pre-approval resubmission loop; review cycles overwhelmingly recur AFTER
@@ -5214,6 +5323,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                 **_question_data(state, args, question_ids),
                 "plan_review_round_release": round_release,
                 "regression_command_error": regression_command_error,
+                **_crossing_data(crossing),
             },
         )
     out_of_scope_note = ""
@@ -5226,7 +5336,8 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         True, state.node, "continue",
         f"thinker review recorded for {target} (verdict={review.verdict}); "
         "the plan-review gate is now satisfied for this plan version" + out_of_scope_note,
-        data={"concern_ids": review.stable_ids, **_question_data(state, args, question_ids)},
+        data={"concern_ids": review.stable_ids, **_question_data(state, args, question_ids),
+              **_crossing_data(crossing)},
     )
 
 
@@ -8897,6 +9008,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     if acceptance_bypass is not None:
         data["acceptance_bypass"] = acceptance_bypass
         detail += "; WARNING: acceptance recorded via bypass, not judge corroboration (see acceptance_bypass)"
+    detail = _surface_backstop_crossings(state, data, detail)
     return Directive(True, state.node, "await_user_confirmation", detail, data=data)
 
 
@@ -9214,6 +9326,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if acceptance_bypass is not None:
         data["acceptance_bypass"] = acceptance_bypass
         detail += " (acceptance recorded via bypass; see acceptance_bypass)"
+    detail = _surface_backstop_crossings(state, data, detail)
     if landing["override"] is not None:
         data["landing_gate_override"] = landing["override"]
         detail += (f" (landing gate overridden by AGENTCTL_LANDING_GATE={landing['override']}; "
@@ -10014,7 +10127,10 @@ def _replan_cause(state: SessionState, explicit_reason: str | None) -> dict:
 
 
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    before = _persisted_crossing_count(store, args.session)
     d = _cmd_replan(args, store=store, runner=runner)
+    if _persisted_crossing_count(store, args.session) > before:
+        d.data.update(_crossing_data(_backstop_crossings_surface(store.load(args.session))[-1]))
     # Only on something to say: an unconditional setdefault would add an empty
     # `advisories` key to every replan Directive, which test_history_capture's
     # exact-equality pin reads as a changed contract.
@@ -10023,6 +10139,11 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         d.data.setdefault("advisories", []).extend(advisories)
     _report_acceptance_staleness(d, args, store)
     return d
+
+
+def _persisted_crossing_count(store: StateStore, session: str) -> int:
+    state = store.load(session)
+    return len(_backstop_crossings_surface(state)) if state is not None else 0
 
 
 def _report_acceptance_staleness(d: Directive, args, store: StateStore) -> None:
@@ -10172,8 +10293,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         except (OSError, PlanError):
             order_doc = None
         order = order_doc.meta.order if order_doc is not None else None
+        crossing = None
         if renegotiated_by.casefold() == AGENT_ACTOR:
-            refusal = _agent_renegotiation_refusal(state, decision, order_doc)
+            refusal, crossing = _agent_renegotiation_refusal(state, decision, order_doc)
             if refusal is not None:
                 return Directive(
                     False, state.node, "renegotiate",
@@ -10198,6 +10320,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             "task_replan_count_at_decision": cross_replan_count,
         })
         state.log("renegotiation", decision=decision, by=renegotiated_by)
+        _record_backstop_crossing(state, crossing)
         _clear_since_user_decision(state, renegotiated_by)
         if decision == "abandon":
             # mirrors cmd_block's own bypass-transition idiom (and fire-acknowledge's
@@ -10848,8 +10971,9 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
     if not args.by or not args.by.strip():
         return Directive(False, state.node, "noop", "empty --by: must name who decided")
     by_agent = args.by.strip().casefold() == AGENT_ACTOR
+    crossing = None
     if by_agent:
-        refusal = _agent_fire_ack_refusal(state, last, decision)
+        refusal, crossing = _agent_fire_ack_refusal(state, last, decision)
         if refusal is not None:
             return Directive(
                 False, state.node, "fire_acknowledge",
@@ -10871,6 +10995,7 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
         "note": getattr(args, "note", None),
     }
     state.log("fire_acknowledge", by=args.by, decision=decision)
+    _record_backstop_crossing(state, crossing)
     _clear_since_user_decision(state, args.by)
     _clear_open_fires_if_customer(state, args.by)
     if decision == "abandon":
@@ -10887,7 +11012,7 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
     next_action = "declare" if state.difficulty is not None else "next_stage"
     return Directive(True, state.node, next_action,
                      f"fire acknowledged (decision={decision}); resuming",
-                     data={"fire": last})
+                     data={"fire": last, **_crossing_data(crossing)})
 
 
 def cmd_block(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
