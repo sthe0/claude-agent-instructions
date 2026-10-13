@@ -1968,15 +1968,21 @@ def _iter_workdir_transcripts(workdir: str) -> list[Path]:
     return sorted(out)
 
 
-def resumable_child_session(store, parent_session: str, stage_index: int, workdir: str):
-    """`(session, transcript)` of the linked child last spawned for the parent stage when
-    a re-dispatch can resume it, else None (the spawn then mints a fresh session).
+def resumable_child_session(
+    store, parent_session: str, stage_index: int, workdir: str, norm_digest: str,
+):
+    """`(session, transcript, state)` of the linked child last spawned for the parent
+    stage when a re-dispatch can resume it, else None (the spawn then mints a fresh
+    session). `state` is the child's engine session state, None when its engine never
+    started.
 
-    Resumable only when its engine session is not RESOLVED, this spawn runs in the
-    workdir it ran in, and its transcript is under that workdir's project directory:
-    the harness stores and resumes a conversation through the project directory named
-    after the cwd, so a resume anywhere else, or without the transcript, has nothing
-    to continue."""
+    Resumable only when this spawn runs in the workdir it ran in, its engine session is
+    not RESOLVED, the norm it adopted is the stage's current norm (`norm_digest`), and
+    its transcript is under that workdir's project directory. The engine never replaces
+    an adopted `parent_link`, so a child resumed after the stage's norm changed would
+    keep working to the old one. The harness stores and resumes a conversation through
+    the project directory named after the cwd, so a resume anywhere else, or without
+    the transcript, has nothing to continue."""
     record = norm_handoff.read_child_session(store.root, parent_session, stage_index)
     if record is None or record["workdir"] != workdir:
         return None
@@ -1987,22 +1993,21 @@ def resumable_child_session(store, parent_session: str, stage_index: int, workdi
         return None
     if state is not None and state.node == Node.RESOLVED.value:
         return None
+    link = state.parent_link if state is not None else None
+    if link is not None and link.get("norm_digest") != norm_digest:
+        return None
     name = _project_dir_name(workdir)
     for root in projects_roots():
         transcript = root / name / f"{session}.jsonl"
         if transcript.is_file():
-            return session, transcript
+            return session, transcript, state
     return None
 
 
-def adopted_handoff_env_value(store, session: str) -> "str | None":
+def adopted_handoff_env_value(state) -> "str | None":
     """The handoff value a resumed child's engine session adopted, or None when it holds
     none yet. Exporting that value rather than a freshly written record keeps the env the
     child reads equal to its own `parent_link`, which the engine never replaces."""
-    try:
-        state = store.load(session)
-    except Exception:
-        return None
     link = (state.parent_link if state is not None else None) or {}
     if not (link.get("handoff") and link.get("sha256")):
         return None
@@ -2555,12 +2560,14 @@ def main(argv: list[str] | None = None) -> int:
     # A re-dispatch of the stage continues the previous child's engine session, so what
     # the root recorded on it between the two spawns reaches the child.
     resumed = (
-        resumable_child_session(handoff_store, args.session, args.stage_index, workdir)
+        resumable_child_session(
+            handoff_store, args.session, args.stage_index, workdir, handoff_record["norm_digest"],
+        )
         if child_linked else None
     )
     resumed_transcript: "Path | None" = None
     if resumed is not None:
-        own_session, resumed_transcript = resumed
+        own_session, resumed_transcript, resumed_state = resumed
     else:
         own_session = str(uuid.uuid4()) if child_linked else None
 
@@ -2620,7 +2627,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     handoff_env_value: "str | None" = None
     if resumed is not None and not args.dry_run:
-        handoff_env_value = adopted_handoff_env_value(handoff_store, own_session)
+        handoff_env_value = adopted_handoff_env_value(resumed_state)
     if handoff_record is not None and handoff_env_value is None and not args.dry_run:
         # Written only now: a brief that cannot be assembled leaves no record behind. A
         # record that cannot be written makes the spawn unlinked -- brief included.

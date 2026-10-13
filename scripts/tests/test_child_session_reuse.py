@@ -4,12 +4,13 @@ Every dispatch of a linked stage used to mint a fresh child session, so what the
 recorded on the child's session between two spawns (an approval of its plan, a review
 override, order elements) never reached the next child. The spawn now keeps a record
 `<state root>/child-sessions/<parent>-<stage>.json` naming the child's session and its
-workdir, and resumes that session (`claude -p --resume <id>`) when it is not RESOLVED,
-the workdir is the same and its transcript exists; otherwise it mints a fresh one as
-before. The own channel also admits `order-raise` / `order-dispose`.
+workdir, and resumes that session (`claude -p --resume <id>`) when the workdir is the
+same, it is not RESOLVED, the norm it adopted is the stage's current norm and its
+transcript exists; otherwise it mints a fresh one as before. The own channel also admits
+`order-raise` / `order-dispose`.
 
-Six tests fail on the base tree at their `BEHAVIOUR:` assertion; six pin what must stay
-as on base. The spawn is driven up to the child launch through the stubbed launcher of
+Six tests fail on the base tree at their `BEHAVIOUR:` assertion; the rest pin what must
+stay as on base. The spawn is driven up to the child launch through the stubbed launcher of
 `test_child_contour_gate`; the launcher writes no transcript, so a test that expects a
 resume creates the previous child's `<id>.jsonl` itself."""
 from __future__ import annotations
@@ -20,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from agentctl import norm_handoff
+from agentctl.own_contour import OWN_CONTOUR_VERBS
 from agentctl.store import FileStateStore
 from test_child_contour_gate import (
     CHILD,
@@ -74,8 +77,9 @@ class Spawned:
         return {name: self.option(name) for name in ("--session-id", "--resume") if name in self.cmd}
 
 
-def _spawn(monkeypatch, home: Path, workdir: Path) -> Spawned:
-    """One linked spawn for stage 1 of the parent session, run up to the child launch."""
+def _spawn(monkeypatch, home: Path, workdir: Path, *, stage_index: int | None = STAGE) -> Spawned:
+    """One spawn for the parent session, run up to the child launch; linked for stage 1
+    unless `stage_index` is None."""
     spawn = _load_spawn()
     monkeypatch.setattr(spawn.shutil, "which", lambda *a, **k: "/usr/bin/claude")
 
@@ -85,10 +89,23 @@ def _spawn(monkeypatch, home: Path, workdir: Path) -> Spawned:
     monkeypatch.setattr(spawn.proc_tree, "launch_supervised", launch)
     workdir.mkdir(parents=True, exist_ok=True)
     try:
-        rc = spawn.main(_spawn_argv(home, workdir, STAGE))
+        rc = spawn.main(_spawn_argv(home, workdir, stage_index))
     except _Launched as launched:
         return Spawned(launched.cmd, launched.env, launched.cwd)
     raise AssertionError(f"setup: the spawn did not reach the launch (rc={rc})")
+
+
+def _record_path(home: Path) -> Path:
+    return norm_handoff.child_session_path(_state_dir(home), PARENT, STAGE)
+
+
+def _start_child_engine(monkeypatch, home: Path, first: Spawned) -> FileStateStore:
+    """The first child's engine session, started under the handoff it was spawned with."""
+    child = first.option("--session-id")
+    monkeypatch.setenv(HANDOFF_ENV, first.env[HANDOFF_ENV])
+    _cli(_state_dir(home), "start", session=child, task="child", goal="g", done_criterion="dc")
+    monkeypatch.delenv(HANDOFF_ENV)
+    return FileStateStore(_state_dir(home))
 
 
 def _first_child(monkeypatch, tmp_path: Path) -> tuple[Path, Path, Spawned]:
@@ -119,7 +136,7 @@ def _assert_resumed(second: Spawned, child: str) -> None:
 def _assert_fresh(spawned: Spawned, previous: str | None) -> None:
     fresh = spawned.option("--session-id")
     assert fresh and fresh != previous and "--resume" not in spawned.cmd, (
-        f"BEHAVIOUR: the spawn did not mint a fresh child session: {spawned.session_args()}"
+        f"the spawn did not mint a fresh child session: {spawned.session_args()}"
     )
     assert spawned.env.get(OWN_ENV) == fresh
 
@@ -217,6 +234,73 @@ def test_missing_transcript_mints_fresh_session(tmp_path, monkeypatch):
     _assert_fresh(second, child)
 
 
+def test_changed_stage_norm_mints_fresh_session(tmp_path, monkeypatch):
+    home, workdir, first = _first_child(monkeypatch, tmp_path)
+    child = first.option("--session-id")
+    store = _start_child_engine(monkeypatch, home, first)
+    stale = store.load(child).to_dict()
+    assert stale["parent_link"]["norm_digest"], "setup: the child engine adopted no handoff"
+    stale["parent_link"]["norm_digest"] = "0" * 64
+    store.path(child).write_text(json.dumps(stale), encoding="utf-8")
+    _write_transcript(workdir, child)
+    second = _spawn(monkeypatch, home, workdir)
+    _assert_fresh(second, child)
+
+
+def test_dry_run_writes_no_child_session_record(tmp_path, monkeypatch):
+    home, workdir = tmp_path / "home", tmp_path / "work"
+    _parent_session(home)
+    workdir.mkdir()
+    spawn = _load_spawn()
+    monkeypatch.setattr(spawn.shutil, "which", lambda *a, **k: "/usr/bin/claude")
+    assert spawn.main([*_spawn_argv(home, workdir, STAGE), "--dry-run"]) == 0
+    assert not _record_path(home).exists()
+
+
+def test_unlinked_spawn_neither_reads_nor_writes_record(tmp_path, monkeypatch):
+    home, workdir = tmp_path / "home", tmp_path / "work"
+    _parent_session(home)
+    calls: list[str] = []
+    monkeypatch.setattr(norm_handoff, "read_child_session", lambda *a, **k: calls.append("read"))
+    monkeypatch.setattr(norm_handoff, "write_child_session", lambda *a, **k: calls.append("write"))
+    spawned = _spawn(monkeypatch, home, workdir, stage_index=None)
+    assert OWN_ENV not in spawned.env, "setup: the spawn without a stage index is linked"
+    assert calls == []
+    assert not _record_path(home).parent.exists()
+
+
+def test_corrupt_record_mints_fresh_session(tmp_path, monkeypatch):
+    home, workdir, first = _first_child(monkeypatch, tmp_path)
+    child = first.option("--session-id")
+    _write_transcript(workdir, child)
+    _record_path(home).write_text("{not json", encoding="utf-8")
+    second = _spawn(monkeypatch, home, workdir)
+    _assert_fresh(second, child)
+
+
+def test_corrupt_child_state_mints_fresh_session(tmp_path, monkeypatch):
+    home, workdir, first = _first_child(monkeypatch, tmp_path)
+    child = first.option("--session-id")
+    FileStateStore(_state_dir(home)).path(child).write_text("{not json", encoding="utf-8")
+    _write_transcript(workdir, child)
+    second = _spawn(monkeypatch, home, workdir)
+    _assert_fresh(second, child)
+
+
+def test_failed_handoff_write_after_resume_decision_spawns_unlinked(tmp_path, monkeypatch):
+    home, workdir, first = _first_child(monkeypatch, tmp_path)
+    child = first.option("--session-id")
+    _write_transcript(workdir, child)
+
+    def refuse(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(norm_handoff, "write_record", refuse)
+    second = _spawn(monkeypatch, home, workdir)
+    assert "--resume" not in second.cmd and "--session-id" not in second.cmd, second.session_args()
+    assert OWN_ENV not in second.env and HANDOFF_ENV not in second.env
+
+
 # --- the own channel --------------------------------------------------------------------
 
 
@@ -246,7 +330,12 @@ def test_own_channel_order_verbs_refuse_foreign_session(contour):  # noqa: F811
                  ("order-dispose", "--id", "o1", "--as", "cut", "--reason", "r")):
         proc = contour.own(*argv, "--session", OTHER)
         assert proc.returncode == 2 and REFUSED in proc.stderr and proc.stdout == "", (
-            f"BEHAVIOUR: {argv[0]} with a foreign --session was not refused: {proc.stderr!r}"
+            f"{argv[0]} with a foreign --session was not refused: {proc.stderr!r}"
+        )
+        # A tree whose channel does not admit the verb refuses it before reading --session.
+        reason = "takes no --session" if argv[0] in OWN_CONTOUR_VERBS else "outside the own contour"
+        assert reason in proc.stderr, (
+            f"{argv[0]} was not refused with {reason!r}: {proc.stderr!r}"
         )
     assert contour.state_bytes(OTHER) == before
 
