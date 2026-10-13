@@ -1645,6 +1645,30 @@ disposition = "keep"
 ground = "Already fixed by the prior audit (regex-not-for-semantic-classification.md): `decide()` runs the `outage_escalation_detect` prefilter AND `agentctl.advisor.judge_outage_escalation` before returning non-None; both enumerated scopes (`main`, `deny_with`) only reach the deny sink downstream of that guarded `decide()` call — confirmed by reading the source. File-rollup judge_guarded=True corroborates."
 
 [[entry]]
+id = "ad4d1dfb2f0f9269"
+domain = "code"
+file = "scripts/hook-guard-agent-specialist-stand-in.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "a3e25dba8d6b743a"
+domain = "code"
+file = "scripts/hook-guard-agent-specialist-stand-in.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
+id = "43ad016e7533db1e"
+domain = "code"
+file = "scripts/hook-guard-agent-specialist-stand-in.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
 id = "f2ac1173736c445a"
 domain = "code"
 file = "scripts/hook-guard-bash-source-edit.py"
@@ -15835,6 +15859,14 @@ file = "scripts/hook-escalation-diagnosis-gate.py"
 class = "semantic-guarded"
 disposition = "keep"
 ground = "Already fixed by the prior audit (regex-not-for-semantic-classification.md): `decide()` runs the `outage_escalation_detect` prefilter AND `agentctl.advisor.judge_outage_escalation` before returning non-None; both enumerated scopes (`main`, `deny_with`) only reach the deny sink downstream of that guarded `decide()` call — confirmed by reading the source. File-rollup judge_guarded=True corroborates. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "a42988be8300d625"
+domain = "code_file_rollup"
+file = "scripts/hook-guard-agent-specialist-stand-in.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "4bb8051841625a9e"

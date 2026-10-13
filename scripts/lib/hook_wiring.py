@@ -152,6 +152,10 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
      "denies a subagent-issued recursive rm against any target, regardless of "
      "path; absent, a spawned/forked agent can self-authorize a destructive "
      "delete outside the coordination spine, as in the 2026-09-14 incident"),
+    ("hook-guard-agent-specialist-stand-in.py",
+     "denies an Agent/Task call whose prompt or description names a "
+     "skills/.../SKILL.md path; absent, a general Agent can impersonate a "
+     "specialist with no spawn-costs row, marker validation or permission digest"),
     ("hook-guard-permission-surface.py",
      "asks before a Bash/Edit call widens the live permission surface outside "
      "the plan-stage grant channel (G1 live-settings/agentctl-state writes, "
