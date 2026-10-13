@@ -18473,7 +18473,15 @@ disposition = "keep"
 ground = "CLAUDE.md's own § Coordination heading names this class explicitly: \"Cognition the engine does NOT replace (always yours)\" — escalation timing, task-weight judgment, verification-axis discipline, and outcome framing are judgment calls over conversational/task content, not predicates decidable from observable repo/engine state."
 
 [[entry]]
-id = "5fb367d353af2891"
+id = "ce3e85e780486571"
+domain = "prose"
+file = "CLAUDE.md"
+class = "perception"
+disposition = "keep"
+ground = "CLAUDE.md's own § Coordination heading names this class explicitly: \"Cognition the engine does NOT replace (always yours)\" — escalation timing, task-weight judgment, verification-axis discipline, and outcome framing are judgment calls over conversational/task content, not predicates decidable from observable repo/engine state."
+
+[[entry]]
+id = "c1ca5e12fd43d149"
 domain = "prose"
 file = "CLAUDE.md"
 class = "perception"
@@ -21577,54 +21585,6 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
-id = "09c114ca65603583"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "118887a18e58365f"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "282390a667f6c8bf"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "499b823b36b17333"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "e5aa00cfd9ef5411"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "f607c5c0188e2384"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
 id = "4fe959aeb05f4931"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
@@ -21634,6 +21594,22 @@ ground = "Experience leaves (difficulty/v1) are historical narrative records of 
 
 [[entry]]
 id = "c6122c79328d3361"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "c9bf40167c709e11"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "da805013202e62c6"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
 class = "not-normative"
@@ -21689,22 +21665,6 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
-id = "5d89acaff29876a1"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "8c36f4677dd1d11f"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
 id = "25f745ddfcfcdfeb"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
@@ -21727,950 +21687,6 @@ file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktre
 class = "already-mechanized"
 disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "24ac6fed82e19e6f"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "18af547c6877dc27"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "5f0538f79e260314"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "c04802ee4e6a44f5"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "fe7063b92bdc0882"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "5ced11e870717f1b"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "c484841dddc3aeeb"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "5431387c749c3119"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "fecce37d2637e141"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "ddbaf175d34bd688"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "8f3426052d8050f1"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "2f5b83b7d3628a30"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "6fbfe8e42218c5ac"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "b15b8568cf79eee1"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "c648fa8da16af7f6"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "3d21a25feba0483e"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "bd1ad37fed018d06"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "3cf3f02e021145fb"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "e2d9322b58fb1a98"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "a293ed88dc88e804"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "1e71b3f7866b0e21"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "a4248ebefd1b4fa6"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "e7734873e4d29503"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "1f987e23cf02a68a"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "52ab5cf1e60d2d41"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "c23442ad2bced739"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "ad5c950f36548c3d"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "9835939166c27535"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "ec03f60aafc4af5f"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "811fd320f0ca4556"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "d3570ea9929f8fbc"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "809b28f0a1414a44"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "a10631c8b97aac33"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "d91a654828c6edb0"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "e065705ac9fc9a11"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "3646d7156e5f566a"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "80564eb09650afe9"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "cafc809265140de8"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "ebe5f1ee67896514"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "204be8f6a2fbc347"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "39323e9f7745a7a2"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "595b9ed788c3f655"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "7c70496f52c291d6"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "88d0c0b1462ef503"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "d0c97150ca634527"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "a400fdd3e1f04fb9"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "4d2cc349b1361d9d"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "faa389ea527c5f69"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "d3c895d2a91d6f28"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "d104cd1948ed9dbb"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "a4e7855003b86ec7"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "b924777642053ebe"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "2ba19897e4c05e9b"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "556a578bf9e1e6cf"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "382a039c5d23c252"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "5f919632987c33de"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "e01516a6fd4ef926"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "6ebfadb77b4dbfd1"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "b1e32f71f95bbb3b"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "c12a411001b55f8c"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "ddd5072934dcf466"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "1044179e7e391f81"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "1ff5ad4176c67e65"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "f0832718192cb2de"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "5eea023f74fc11e8"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "f8eadc48fd135030"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "04b18f1c19ce4be0"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "4c8a580fe0bc8c94"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "9612fdf5ef15ba22"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "0b5bc5b18fe9b321"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "59abd3d3f40bf8b2"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "de112bd075c0193c"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "7e9f94ea21054413"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "a81ed45eaddc3cb6"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "22c13c72a058e400"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "22646ebbda641542"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "24c81e7be6b5eff7"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "994478700f72627c"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "d221636174a3ad4d"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "33ef989d543c794f"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "1dad7dda2089e3b6"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "accaebc0fd85cc49"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "3ebf6c1a91442088"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "03f31392a1bec412"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "14500b99df7d9302"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "888731418f6ebbf4"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "faf20a13a9b3a4ec"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "fc08e291d604b302"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "1c5fc750d4b736dd"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "92b109713fcea815"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "fb59ca9eeda92a08"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "b7bd5cb9aea1763d"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "6bb3e8fed366d8a8"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "d08f12c6778e42c9"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "3ef7ff973e511bf7"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "f7b6c29fbdf4d356"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "36a49bab734c60df"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "bb25f496d8b090d2"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "3dba33e1c0393c5c"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "7a21e645bdc660e2"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "53cea2ec7f20a3f7"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "9b0a55444340bc55"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "dba6d568d1588a14"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "fe6d27bd9567f022"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "4bc8e72e6519fab1"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "683009b82d7d744a"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "8877d9b6076171e1"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "a4cc589c74295aa9"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "2222fd49bda49abf"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "7c0636607d475de5"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "a13714c49e6be3c8"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "810dc625ce222095"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "ef9065fd9e6ee20a"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "fd8aa9d4634f7792"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "7b01460b4691bdd4"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "81bdcd9d44b6d8cc"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "3cefa3ac5e1b8c50"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "79c61e4e2bc00a97"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
 id = "4ffb813896f24171"
@@ -25361,6 +24377,1054 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
+id = "39ca8ff6e7b87111"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "3d9bd82e153f2c52"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "66a7978676ecca09"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "18b5e98dc52617c7"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "aa07a1781f57d03c"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "893538a84203b9b8"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "2dbf61a88c45c5de"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "30fab0c378c1bbb3"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "8c5893e5b1d210f7"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "a6729cb52b8fabc7"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "1cccce9d7a3e4b52"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "b4356589d19c109c"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "c45eb307f147a77d"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "32cfff8939eb1048"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "0968115746c98383"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "66232b8164f7cca7"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "f3824b8123d51b90"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "e866b7e19b3e907f"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "5364a99929c59cc5"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "fdf3e6415eadd0c6"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "04975936361567df"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "17caf143bd363120"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "77c721dbee066d78"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "75d4eb9db7399979"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "2f57dd5ef9152aa6"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-replan-gate-machinery-wedges-correction.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "6deb9729559a31d3"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-replan-gate-machinery-wedges-correction.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "914a681a25a59f2d"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-replan-gate-machinery-wedges-correction.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "725ba8892796538c"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-replan-gate-machinery-wedges-correction.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "caab5692bdd62335"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-replan-gate-machinery-wedges-correction.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "2ead384d3de0a77a"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-replan-gate-machinery-wedges-correction.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "2fdf14f06eea7641"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-replan-gate-machinery-wedges-correction.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "7046829a72af0833"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-replan-gate-machinery-wedges-correction.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "0f38f5c0e8268462"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-replan-gate-machinery-wedges-correction.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "d70431afbf706503"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-replan-gate-machinery-wedges-correction.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "526c36a82ea7a148"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-replan-gate-machinery-wedges-correction.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "bc3322d762955c6c"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-replan-gate-machinery-wedges-correction.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "e90a37a479b11157"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "7c7d55b273813447"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "f2db70b9cf3a3a6e"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "64d2c6340100a76c"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "755dc4bc8e9355d3"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "e921f1182908a042"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "1548a553ed0460c1"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "01f56a82470fab86"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "513553dfb955d321"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "b30b9b7ab45444f4"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "82e9e938e65d1c69"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "c1600b6b71575e14"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "dca8a2ed40b92f93"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "ea9eb63f56b9a1a1"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "4c3c04f8170c5c42"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "3b3684bd380d9e5b"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "e7a6bf68a3b16093"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "3da81bc22da1ca04"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "dba51f30bcde3a48"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "e81d42dd35d964ad"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "aef55f91e5c112a8"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "d8b45fd0dd63bf69"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "f8e403dff704c3aa"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "bdc6ce813af1cae2"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "cf52f3726369b35c"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "4e8b5c05b6f8a757"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "fd64f9ee6b4b6deb"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "19cb530c7f59f8ce"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "6d27710686c31e31"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "a481c1d98482c1d4"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "e83b0fb53351aec7"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-baseline-hostage.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "b15194eb59083f2c"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-liveness-nondeterminism.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "82c52fe1bc770915"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-liveness-nondeterminism.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "927056c2d4b1f293"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-liveness-nondeterminism.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "8b1b9d4ae1f0e6d9"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "f967eb897cf4d37f"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "7ec83f7ec556990b"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "261d3e58a19825bd"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "9fe907ea543e812b"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "ffa12eb8bc3ccf37"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "2806ef97e2f62bc8"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "6dc590048c71235a"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "3a9bf1633f52f0c8"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "77bee0fd7f569c52"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "2da27e545f26fe2b"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "4ab312ccc6091a77"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "c5ac6f6d31fd0811"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "9c28742fb5aa5094"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "fc74746a06c653d1"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "3d39b7cc0c0c1040"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "62d9c5c450190883"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-recorded-norm-not-mobilized.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "7085a5241fd00285"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-recorded-norm-not-mobilized.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "209559db2fbe9182"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-recorded-norm-not-mobilized.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "7fb143c44fe56270"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-recorded-norm-not-mobilized.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "a81a5e52effe8bc6"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-recorded-norm-not-mobilized.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "742105fb0ac9866d"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-recorded-norm-not-mobilized.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "9b4902c0f13016d6"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-recorded-norm-not-mobilized.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "43869c2cbf594e22"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-recorded-norm-not-mobilized.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "295afe9473fc5a7a"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-recorded-norm-not-mobilized.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "a864778701b5ba6e"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-recorded-norm-not-mobilized.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "ecf4fdcbfb20b275"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "94152d1093917a2b"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "75a26350489f6387"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "1ddc6b53964a186b"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "8d620eb59e54c237"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "adbb1d9c5494e593"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "f8034be9919c0a60"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "2e16c9a48b683b1b"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "731daed4db42e594"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "92cabb626796245b"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "e4f02a17fec9e41f"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "bc96beed4f32c283"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "832ba52d168d2611"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "11a9cd407a308ca6"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "75dfc154a012e174"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "d31d0f9e3d0e596e"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "48548ea462e3709a"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "785604fca9236d61"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "5291458cf10fcbaf"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "5f6336f3869035de"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "a0fc1b68f596acf8"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "3297374f8a484931"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "3558c68e45926cc8"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "f0efc78afcd7586a"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "719daf6cd845faac"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "8ae29ee6bfd19d67"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "e070af1a548d624c"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "4683f3d88b653b6d"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "78b35adaf2b46e02"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "add98d14a249ccc3"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-12-stage-control-venue-lifetime.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "79f0f476dd6dddb5"
+domain = "prose"
+file = "memory-global/leaves/experience/MEMORY.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "133f5ca8a70ff23d"
+domain = "prose"
+file = "memory-global/leaves/experience/MEMORY.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "359dcfe657ee8536"
+domain = "prose"
+file = "memory-global/leaves/experience/MEMORY.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "675130609629a40a"
+domain = "prose"
+file = "memory-global/leaves/experience/MEMORY.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "5a92b6036393d945"
+domain = "prose"
+file = "memory-global/leaves/experience/MEMORY.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
 id = "f0ee161e41ccd26b"
 domain = "prose"
 file = "memory-global/leaves/experience/MEMORY.md"
@@ -28001,6 +28065,94 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
+id = "f659111f50d4728d"
+domain = "prose"
+file = "memory-global/leaves/principles/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "8ca0f70dbc9b6502"
+domain = "prose"
+file = "memory-global/leaves/principles/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "d4dda5070bff89dc"
+domain = "prose"
+file = "memory-global/leaves/principles/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "8bdb1a30731d98ce"
+domain = "prose"
+file = "memory-global/leaves/principles/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "fdd07e2f756d2673"
+domain = "prose"
+file = "memory-global/leaves/principles/a-control-names-a-venue-that-outlives-its-last-rerun.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "269ffade82cd7939"
+domain = "prose"
+file = "memory-global/leaves/principles/a-control-names-a-venue-that-outlives-its-last-rerun.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "505b20af5d5634d3"
+domain = "prose"
+file = "memory-global/leaves/principles/a-control-names-a-venue-that-outlives-its-last-rerun.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "2e1ded2977622d96"
+domain = "prose"
+file = "memory-global/leaves/principles/a-control-over-a-non-hermetic-read-separates-unreadable-from-failed.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "b804164c3bce02e9"
+domain = "prose"
+file = "memory-global/leaves/principles/a-control-over-a-non-hermetic-read-separates-unreadable-from-failed.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "d624e2beec4679bf"
+domain = "prose"
+file = "memory-global/leaves/principles/a-control-over-a-non-hermetic-read-separates-unreadable-from-failed.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "20b11865e4256b58"
+domain = "prose"
+file = "memory-global/leaves/principles/a-control-over-a-non-hermetic-read-separates-unreadable-from-failed.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
 id = "0c80b8f95057b85c"
 domain = "prose"
 file = "memory-global/leaves/principles/a-judging-artefact-is-executed-before-it-judges.md"
@@ -28065,6 +28217,46 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
+id = "acafaf458d49c2f9"
+domain = "prose"
+file = "memory-global/leaves/principles/a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "aaff6184f01cdfbf"
+domain = "prose"
+file = "memory-global/leaves/principles/a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "8cdecef7ab11b312"
+domain = "prose"
+file = "memory-global/leaves/principles/a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "4c15992350269304"
+domain = "prose"
+file = "memory-global/leaves/principles/a-rerunnable-control-asserts-a-phase-independent-property.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "da9b741161fb968f"
+domain = "prose"
+file = "memory-global/leaves/principles/a-rerunnable-control-asserts-a-phase-independent-property.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
 id = "7e283b86d387b03a"
 domain = "prose"
 file = "memory-global/leaves/principles/coordinator-executes-through-specialists.md"
@@ -28076,6 +28268,46 @@ ground = "Principle leaves (principle/v1) are deliberately generality-graded pro
 id = "df3ba2f70a893580"
 domain = "prose"
 file = "memory-global/leaves/principles/coordinator-executes-through-specialists.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "8fdcc8b9ac8d04e2"
+domain = "prose"
+file = "memory-global/leaves/principles/delivered-identity-is-established-by-content-or-ancestry.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "86b6589e79504829"
+domain = "prose"
+file = "memory-global/leaves/principles/delivered-identity-is-established-by-content-or-ancestry.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "4d27df291821f9a5"
+domain = "prose"
+file = "memory-global/leaves/principles/delivered-identity-is-established-by-content-or-ancestry.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "763ae01e103cd23b"
+domain = "prose"
+file = "memory-global/leaves/principles/delivered-identity-is-established-by-content-or-ancestry.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "b8b6ba22b11a8581"
+domain = "prose"
+file = "memory-global/leaves/principles/delivered-identity-is-established-by-content-or-ancestry.md"
 class = "perception"
 disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
