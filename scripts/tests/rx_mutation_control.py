@@ -240,6 +240,14 @@ CATALOGUE: "dict[str, Mutant]" = {
         "    task_accumulator.discard_crossings(state.task_id, _backstop_crossings(state))\n",
         _ids("test_a_refused_resolve_leaves_the_crossing_record_in_place"),
     ),
+    "backstop-crossings-clearing-not-fail-open": Mutant(
+        CLI,
+        "    except Exception as exc:  # noqa: BLE001 - fail-open by design\n"
+        '        data["agent_backstop_crossings_cleared"] = False\n',
+        "    except KeyError as exc:  # noqa: BLE001 - fail-open by design\n"
+        '        data["agent_backstop_crossings_cleared"] = False\n',
+        _ids("test_resolve_survives_a_fault_clearing_the_crossing_record"),
+    ),
     "backstop-spend-bound-ignored": Mutant(
         CLI,
         "            for scale, ratio in armed.items() if ratio >= multiple]\n",

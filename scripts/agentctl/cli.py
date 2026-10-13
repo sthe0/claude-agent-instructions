@@ -9336,8 +9336,9 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         marker_status = {"channel": None, "key": tracker_key, "stamped": False,
                           "skipped_reason": str(exc)}
     # Same shape as the marker stamp: resolution is already saved, so a cleanup fault
-    # is reported, never allowed to undo it. Runs last of the post-resolve effects
-    # because it may remove the very directory the engine was invoked from.
+    # is reported, never allowed to undo it. Runs last of the post-resolve effects that
+    # act on the working directory, because it may remove the very directory the engine
+    # was invoked from.
     try:
         cleanup_report = workspace_cleanup.run(
             state.session_id, cwd=workspace_cleanup.current_dir(),
@@ -9373,8 +9374,17 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         detail += " (resolution ask unverifiable, escape used; see resolution_ask_unverifiable)"
     # The crossings are now disclosed and accepted: drop exactly those entries from the task's
     # record, so a reopened task or a later task sharing the id does not disclose them again.
-    task_accumulator.discard_crossings(
-        state.task_id, data["agent_backstop_crossings"], now=_utcnow())
+    # Fail-open like the effects above: a fault here is reported, never allowed to lose the
+    # disclosure; the entries then stay on record and are disclosed once more.
+    try:
+        task_accumulator.discard_crossings(
+            state.task_id, data["agent_backstop_crossings"], now=_utcnow())
+        data["agent_backstop_crossings_cleared"] = True
+    except Exception as exc:  # noqa: BLE001 - fail-open by design
+        data["agent_backstop_crossings_cleared"] = False
+        data["agent_backstop_crossings_clear_error"] = str(exc)
+        detail += (" (the task's backstop crossing record could not be cleared: "
+                   f"{exc}; see agent_backstop_crossings_clear_error)")
     return Directive(True, state.node, "done", detail, marker="COMPLETED", data=data)
 
 

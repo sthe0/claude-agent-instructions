@@ -383,7 +383,10 @@ def discard_crossings(
     """Remove from the task's record exactly the entries whose `crossing_key` matches one of
     `crossings` -- what a resolve has just disclosed. Matched under the lock against the file
     as it is now, so an entry another session recorded since the caller took its snapshot
-    survives. Writes nothing when nothing matches (nor creates a file for a task without one)."""
+    survives. Writes nothing when nothing matches (nor creates the task's record; the lock
+    still creates the directory and its `.lock` file). An entry with neither `session` nor
+    `ts` (`crossing_key` None) is never discarded: `record_crossing` stamps both, so only a
+    hand-edited or foreign file can hold one."""
     keys = {crossing_key(c) for c in crossings} - {None}
     path = _path(task_id, root)
     with _FileLock(path):

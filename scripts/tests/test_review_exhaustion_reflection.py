@@ -592,6 +592,32 @@ def test_a_refused_resolve_leaves_the_crossing_record_in_place(eng):
     assert task_accumulator.get(task)["agent_backstop_crossings"] == []
 
 
+def test_resolve_survives_a_fault_clearing_the_crossing_record(eng, monkeypatch):
+    crossed = cross_by_fire_acknowledge(eng)
+    assert crossed["ok"] is True, f"BEHAVIOUR: the crossing was not admitted: {crossed['detail']}"
+    plan = eng.state("a1").plan_path
+    task = eng.state("a1").task_id
+    assert action(eng.open("b1", plan, task=task)) == "self_approve"
+    assert eng.run("approve", session="b1", by="agent")["ok"] is True
+    eng.execute("b1")
+    reach_resolution(eng, "b1")
+
+    def failing_discard(*args, **kwargs):
+        raise OSError("accumulator volume is read-only")
+
+    monkeypatch.setattr(task_accumulator, "discard_crossings", failing_discard)
+    resolved = eng.run("resolve", session="b1", by="user", quality=5, quality_by="user-confirmed")
+    assert resolved["ok"] is True and resolved["marker"] == "COMPLETED", (
+        f"BEHAVIOUR: a fault clearing the crossing record lost the resolution: {resolved}")
+    assert eng.state("b1").node == "RESOLVED"
+    data = resolved["data"]
+    assert [c["decision"] for c in data["agent_backstop_crossings"]] == ["fire_acknowledge"]
+    assert "crossed a since-user backstop" in resolved["detail"], f"BEHAVIOUR: {resolved['detail']}"
+    assert data["agent_backstop_crossings_cleared"] is False, f"BEHAVIOUR: {data}"
+    assert "read-only" in data["agent_backstop_crossings_clear_error"], f"BEHAVIOUR: {data}"
+    assert "agent_backstop_crossings_clear_error" in resolved["detail"], f"BEHAVIOUR: {resolved['detail']}"
+
+
 def test_backstop_crossing_is_disclosed_to_a_session_with_no_history_of_its_own(eng):
     d = cross_by_fire_acknowledge(eng)
     assert d["ok"] is True, f"BEHAVIOUR: the crossing was not admitted: {d['detail']}"
