@@ -228,7 +228,12 @@ class PlanDoc:
 
 
 class PlanError(Exception):
-    """The TOML plan is missing required structure."""
+    """The TOML plan is missing required structure.
+
+    `ref_kind` is set by the reference resolver on a refusal of a hash-pinned reference
+    (missing, mismatch, cycle, depth, escape, malformed, position, index)."""
+
+    ref_kind: str | None = None
 
 
 _CHECK_VENUE_VALUES = {v.value for v in CheckVenue}
@@ -1743,8 +1748,24 @@ def parse_plan(
     return doc
 
 
+def _resolve_plan_refs(raw: dict, path: Path, base_dir, root, read) -> dict:
+    """Substitute the plan's hash-pinned references (ADR-0011) before `parse_plan` sees
+    the dict. A plan without any reference comes back equal to `raw`."""
+    from . import plan_refs
+
+    resolved, _ = plan_refs.resolve_refs(
+        raw,
+        base_dir if base_dir is not None else path.parent,
+        root if root is not None else plan_refs.default_root(path),
+        read=read,
+        index_path=path,
+    )
+    return resolved
+
+
 def load_plan(
-    path: str | Path, *, strict: bool = True, strict_executor: bool | None = None
+    path: str | Path, *, strict: bool = True, strict_executor: bool | None = None,
+    base_dir: str | Path | None = None, root: str | Path | None = None, read=None,
 ) -> PlanDoc:
     p = Path(path)
     if not p.exists():
@@ -1759,11 +1780,13 @@ def load_plan(
             data = tomllib.load(fh)
         except tomllib.TOMLDecodeError as exc:
             raise PlanError(f"malformed TOML in plan file {p}: {exc}") from exc
+    data = _resolve_plan_refs(data, p, base_dir, root, read)
     return parse_plan(data, strict=strict, strict_executor=strict_executor)
 
 
 def load_plan_with_digest(
     path: str | Path, *, strict: bool = True, strict_executor: bool | None = None,
+    base_dir: str | Path | None = None, root: str | Path | None = None, read=None,
 ) -> tuple[PlanDoc, bytes, str]:
     """Read the plan file's bytes exactly once and derive the parsed doc, the raw
     bytes and their sha256 digest all from that single buffer.
@@ -1782,6 +1805,7 @@ def load_plan_with_digest(
         raw = tomllib.loads(data.decode("utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise PlanError(f"malformed TOML in plan file {p}: {exc}") from exc
+    raw = _resolve_plan_refs(raw, p, base_dir, root, read)
     doc = parse_plan(raw, strict=strict, strict_executor=strict_executor)
     digest = hashlib.sha256(data).hexdigest()
     return doc, data, digest
@@ -3067,6 +3091,33 @@ def plan_content_digest(doc: PlanDoc) -> str:
             (s.index, stage_element_keys(s)[WHOLE_STAGE_ELEMENT]) for s in doc.stages)),
     ) + order_place(doc.meta) + optional_stages_place(doc))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def stage_closure_digest(doc: PlanDoc, n: int) -> str:
+    """A digest of stage `n` together with every stage it relies on, transitively: it
+    moves when the stage's own whole-stage element key moves or when the closure digest of
+    any stage in its `reliance_set` does. Raises PlanError on a reliance cycle (a
+    supplies-only one included) before computing anything. The memo lives for one call."""
+    _raise_on_reliance_cycle(doc, n)
+    memo: dict[int, str] = {}
+    pending = [n]
+    while pending:
+        m = pending[-1]
+        if m in memo:
+            pending.pop()
+            continue
+        deps = sorted(reliance_set(doc, m))
+        waiting = [d for d in deps if d not in memo]
+        if waiting:
+            pending.extend(waiting)
+            continue
+        payload = repr((
+            stage_element_keys(_stage_by_index(doc, m))[WHOLE_STAGE_ELEMENT],
+            tuple((d, memo[d]) for d in deps),
+        ))
+        memo[m] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        pending.pop()
+    return memo[n]
 
 
 def changed_parts(doc: PlanDoc, baseline_digests: dict) -> tuple[bool, set[int]]:

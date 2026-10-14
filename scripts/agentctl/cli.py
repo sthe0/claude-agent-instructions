@@ -27,7 +27,7 @@ from pathlib import Path
 
 from lib import argv_text, config_root, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_refs, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -11812,6 +11812,9 @@ COMMANDS = {
     "plan-render": cmd_plan_render,
     "plan-grants": cmd_plan_grants,
     "plan-resources": plan_resources.cmd_plan_resources,
+    "plan-digest": plan_refs.cmd_plan_digest,
+    "plan-externalize": plan_refs.cmd_plan_externalize,
+    "plan-seal": plan_refs.cmd_plan_seal,
     "submit-plan": cmd_submit_plan,
     "present-plan": cmd_present_plan,
     "confirm-delivery": cmd_confirm_delivery,
@@ -11900,7 +11903,8 @@ _SESSION_COMMANDS = (
     "question-enumerate", "question-enumerate-worker", "question-enumerate-escape",
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
-    "plan-render", "plan-grants", "plan-resources", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
+    "plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
+    "plan-seal", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
     "risk-accept", "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
@@ -11983,11 +11987,16 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("control", ("question-raise",),
      "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
      "grammar-bound name, never the prose --control of record-result/close"),
-    ("plan", ("plan-render", "plan-grants", "plan-resources", "plan-review-delta", "submit-plan", "replan", "drive",
+    ("plan", ("plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
+              "plan-seal", "plan-review-delta", "submit-plan", "replan", "drive",
               "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
               "question-rebind", "question-raise", "present-plan", "order-dispose"),
      "plan file path"),
+    ("field", ("plan-externalize",), "name of a plan field — an identifier, not narrative"),
+    ("meta_field", ("plan-externalize",), "name of a [meta] field — an identifier, not narrative"),
+    ("order_field", ("plan-externalize",),
+     "name of a [meta.order] field — an identifier, not narrative"),
     ("corpus", ("plan-resources",), "directory/ies to scan for *.toml plans — file paths, not narrative"),
     ("commands_file", ("plan-resources",), "path to a file of literal command lines — a file path"),
     ("dump_commands", ("plan-resources",), "output file path for the collected command list"),
@@ -12355,6 +12364,26 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
         help="corpus mode: fail (non-ok Directive) if any command resolves to "
              "reason_class=unknown-program")
     # Session-free read, same reason as plan-render's suppressed --session above.
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-digest"); sp.add_argument("--plan", required=True,
+        help="TOML plan whose root digest, verified references and per-stage closure "
+             "digests to report (read-only)")
+    sp.add_argument("--stage", type=int, default=None,
+        help="report the closure digest of this stage only")
+    sp.add_argument("--format", choices=["text", "json"], default="text")
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-externalize"); sp.add_argument("--plan", required=True,
+        help="TOML plan holding the field to move into its own hash-pinned file")
+    sp.add_argument("--stage", type=int, default=None,
+        help="stage index of the field named by --field")
+    sp.add_argument("--field", default=None, help="string field of the stage to externalize")
+    sp.add_argument("--meta-field", dest="meta_field", default=None,
+        help="string field of [meta] to externalize")
+    sp.add_argument("--order-field", dest="order_field", default=None,
+        help="string field of [meta.order] to externalize")
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-seal"); sp.add_argument("--plan", required=True,
+        help="TOML plan whose reference hashes to recompute bottom-up after an edit")
     sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
     sp = add("submit-plan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
     sp.add_argument("--cost-log", dest="cost_log", default=None,
