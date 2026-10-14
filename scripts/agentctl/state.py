@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 52  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 53  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -89,6 +89,8 @@ SCHEMA_VERSION = 52  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # watermarks of the subtree roll-up)
                      # 52: SessionState gains order_descendant_credited (per-descendant
                      # spend already marked flushed in the order window)
+                     # 53: SessionState gains effort_child_runs (the intervals a linked
+                     # child ran for this session's dispatches, summed into wall-clock)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -2210,6 +2212,11 @@ class SessionState:
     #                      deliberately NOT a PlanFrame field: a linked descendant's
     #                      spend belongs to the session, so sub-plan push/pop leave the
     #                      watermarks untouched and pop's actuals merge counts it once.
+    #   effort_child_runs  one {child_session, stage_index, started, ended | None,
+    #                      dispatcher_pid} per linked dispatch (cmd_dispatch); the union
+    #                      of the intervals is added to the wall-clock actual
+    #                      (effort.child_run_minutes). SESSION-scoped like
+    #                      effort_subtree_seen, so push/pop leave it alone.
     #   user_prompt_count  interactions actual, stamped by hook-engine-start.py.
     #   effort_crossings   RECORD_ONLY_SCALES observations (effort.record_crossing) —
     #                      SESSION-scoped like user_prompt_count itself, deliberately NOT
@@ -2223,6 +2230,7 @@ class SessionState:
     effort_fires: list[dict] = field(default_factory=list)
     effort_spend_seen: dict = field(default_factory=dict)
     effort_subtree_seen: dict = field(default_factory=dict)
+    effort_child_runs: list[dict] = field(default_factory=list)
     user_prompt_count: int = 0
     effort_crossings: list[dict] = field(default_factory=list)
     # Order-keyed effort custody (autonomy boundary). Only meaningful for a session

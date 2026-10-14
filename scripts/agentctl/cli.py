@@ -27,9 +27,10 @@ from pathlib import Path
 
 from lib import argv_text, config_root, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
+from . import config as agentctl_config
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
 from .directive import Directive, DIRECTIVE_ESCALATE_TO_USER
@@ -539,7 +540,8 @@ def _ledgered_order_key(state: SessionState) -> str | None:
     return key if order_approvals.latest_user_approved_record(key) is not None else None
 
 
-def _effort_cross_totals(state: SessionState) -> dict:
+def _effort_cross_totals(state: SessionState, now: float | None = None, *,
+                         store: StateStore | None = None) -> dict:
     """`task_accumulator`'s per_axis_totals, plus — for a ledgered order — the order's
     spend/wall-clock total since the last user approval (ledger window + this
     session's unflushed delta, minus the total at this session's last fire), under the
@@ -553,7 +555,7 @@ def _effort_cross_totals(state: SessionState) -> dict:
     if flushed is None and _is_linked(state):
         flushed = {effort.SCALE_SPEND: 0.0}
     flushed = flushed or {}
-    actual = effort.actual(state)
+    actual = _order_actual(state, now, store=store)
     base = state.order_effort_base or {}
     for scale, total_key in _ORDER_EFFORT_SCALES:
         unflushed = max(0.0, actual[scale] - float(flushed.get(scale, actual[scale])))
@@ -569,7 +571,38 @@ def _is_linked(state: SessionState) -> bool:
     return isinstance(link, dict) and bool(link.get("parent_session"))
 
 
-def _seed_linked_flush_baseline(state: SessionState) -> None:
+def _order_actual(state: SessionState, now: float | None = None, *,
+                  store: StateStore | None = None) -> dict:
+    """`effort.actual` as the order window counts it. A linked session leaves out of its
+    wall-clock the part of its own child runs that its parent's run of it covers: that run
+    spans them and the parent flushes it, so counting them here would book the grandchild's
+    minutes once per level. What no parent run covers — the session has no parent run
+    (spawned straight through spawn-specialist), or the parent's run ended earlier than the
+    child's run — stays here, so it is booked by someone. Without a store the parent cannot be
+    read and nothing is left out."""
+    actual = effort.actual(state, now=now)
+    state_dir = _state_dir(store) if store is not None else None
+    if _is_linked(state) and state_dir is not None and state.effort_child_runs:
+        cover = child_runs.parent_cover(
+            state_dir, state.parent_link["parent_session"], state.session_id)
+        if cover is None:
+            # The parent's file is mid-save: what its run covers is unknown, so the
+            # wall-clock stays where the last flush left it and is settled by a later one.
+            watermark = (state.order_effort_flushed or {}).get(effort.SCALE_WALL_CLOCK)
+            if watermark is not None:
+                actual[effort.SCALE_WALL_CLOCK] = float(watermark)
+            else:
+                # Nothing flushed yet to hold it at: leave out every child-run minute, the most
+                # the parent can cover, so the first watermark is never above what a later read
+                # settles at and the later flush cannot under-count.
+                actual[effort.SCALE_WALL_CLOCK] -= effort.child_run_minutes(state, now)
+            return actual
+        own = effort.child_run_intervals(state.effort_child_runs, now)
+        actual[effort.SCALE_WALL_CLOCK] -= effort.overlap_seconds(own, cover) / 60.0
+    return actual
+
+
+def _seed_linked_flush_baseline(state: SessionState, *, store: StateStore | None = None) -> None:
     """A linked session's order window counts from the user's approval, which reached it
     through its parent: whatever it spent before its first ledgered flush was spent after
     that approval (except across a later user re-approval while the session has never
@@ -578,17 +611,18 @@ def _seed_linked_flush_baseline(state: SessionState) -> None:
     if state.order_effort_flushed is None and _is_linked(state):
         state.order_effort_flushed = {
             effort.SCALE_SPEND: 0.0,
-            effort.SCALE_WALL_CLOCK: effort.actual(state)[effort.SCALE_WALL_CLOCK],
+            effort.SCALE_WALL_CLOCK: _order_actual(state, store=store)[effort.SCALE_WALL_CLOCK],
         }
 
 
-def _flush_order_effort(state: SessionState, key: str | None = None) -> None:
+def _flush_order_effort(state: SessionState, key: str | None = None, *,
+                        store: StateStore | None = None) -> None:
     """Move this session's unflushed spend/wall-clock into its order's ledger window."""
     key = key or _ledgered_order_key(state)
     if key is None:
         return
-    _seed_linked_flush_baseline(state)
-    actual = effort.actual(state)
+    _seed_linked_flush_baseline(state, store=store)
+    actual = _order_actual(state, store=store)
     flushed = state.order_effort_flushed
     if flushed is not None:
         spend = max(0.0, actual[effort.SCALE_SPEND] - float(flushed.get(effort.SCALE_SPEND) or 0.0))
@@ -627,7 +661,8 @@ def _open_effort_fire(state: SessionState) -> list[dict]:
     return list(order_approvals.get(key)["open_effort_fires"]) if key else []
 
 
-def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: float) -> dict:
+def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: float,
+                        store: StateStore | None = None) -> dict:
     """`effort.record_fire` plus, on a spend/wall-clock fire of a ledgered order, the
     open user-owed marker and the order-level baseline rebase."""
     fire = effort.record_fire(state, div, now=now)
@@ -635,7 +670,7 @@ def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: f
     if div.scale in effort.RATIO_SCALES:
         key = _ledgered_order_key(state)
         if key is not None:
-            _flush_order_effort(state, key)
+            _flush_order_effort(state, key, store=store)
             order_approvals.record_effort_fire(
                 key, scale=div.scale, detail={"actual": div.actual, "estimate": div.estimate,
                                                "multiple": div.multiple},
@@ -1844,7 +1879,7 @@ def _diagnose_venue_refusal(
     data = {}
     if div is not None and gates.effort_active(state):
         now = _utcnow()
-        data["effort_divergence"] = _record_effort_fire(state, div, now=now)
+        data["effort_divergence"] = _record_effort_fire(state, div, now=now, store=store)
     store.save(state)
     if opened is None:
         return _difficulty_cap_directive(state, message, data)
@@ -2256,7 +2291,7 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         )
     if prior is not None:
         _refresh_spend(prior, store, _cost_rows(args), prior.plan_path)
-        _flush_order_effort(prior)
+        _flush_order_effort(prior, store=store)
     new = SessionState(
         session_id=args.session,
         task_id=args.task,
@@ -3753,7 +3788,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     if efblock:
         return _effort_fire_refusal(state, "submit_plan", efblock)
     _refresh_spend(state, store, _cost_rows(args), state.plan_path)
-    _flush_order_effort(state)
+    _flush_order_effort(state, store=store)
     plan_path = args.plan
     # #15: a resubmission — the coordinator revised the plan at PLAN_READY (after a
     # thinker `revise` verdict, or the user's own pre-approval edit) and re-runs
@@ -6125,7 +6160,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             - offered)
     if skip_optional:
         state.log("skip_optional", by=args.by, stages=skip_optional)
-    effort.arm(state)  # opens the effort-divergence window — see effort.py's ARMED-ONLY
+    effort.arm(state, now=_effort_now(store, state))  # opens the effort-divergence window — see effort.py's ARMED-ONLY
     # Fold this session's review-round counts into the cross-session task accumulator
     # (item B) BEFORE the reset-to-0 below — approval is the reset point, so this is
     # the last moment these session-local counts are readable.
@@ -6233,13 +6268,13 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                     state, order_approvals.declined_stages_of(previous)),
             )
             state.order_effort_frozen = armed_estimate
-            actual_now = effort.actual(state)
+            actual_now = _order_actual(state, store=store)
             state.order_effort_flushed = {
                 scale: actual_now[scale] for scale, _ in _ORDER_EFFORT_SCALES
             }
             state.order_effort_base = {}
         else:
-            _flush_order_effort(state)
+            _flush_order_effort(state, store=store)
     store.save(state)
     return _with_advisories(Directive(
         True, state.node, "partition",
@@ -6720,25 +6755,35 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         if stage.spawn_kind() == "developer":
             return Directive(False, state.node, "noop", f"dispatch refused: {exc}")
         evidence_dir = None
-    result = dispatch_stage(
-        stage, state.plan_path or "",
-        runner=runner,
-        budget=tier,
-        complexity=getattr(args, "complexity", "medium"),
-        effort=effort_tier,
-        continue_worktree=_continuation_worktree(state, stage),
-        constraints=getattr(args, "constraints", "") or "",
-        dry_run=dry_run,
-        # A hard-sandboxed spawned child can only write the tree it is
-        # launched in, so pin its cwd to the plan's delivery venue rather
-        # than relying on the dispatching process's ambient cwd. Always
-        # "delivery" — dispatch has no verify_venue/venue of its own to read,
-        # and delivery is where a spawned developer must write.
-        cwd=child_cwd,
-        runtime_host=host,
-        project_settings=_dispatch_project_settings_path(state),
-        session_id=state.session_id,
-    )
+    child_run = None if dry_run else _begin_child_run(store, state, stage)
+    result = None
+    try:
+        result = dispatch_stage(
+            stage, state.plan_path or "",
+            runner=runner,
+            budget=tier,
+            complexity=getattr(args, "complexity", "medium"),
+            effort=effort_tier,
+            continue_worktree=_continuation_worktree(state, stage),
+            constraints=getattr(args, "constraints", "") or "",
+            dry_run=dry_run,
+            # A hard-sandboxed spawned child can only write the tree it is
+            # launched in, so pin its cwd to the plan's delivery venue rather
+            # than relying on the dispatching process's ambient cwd. Always
+            # "delivery" — dispatch has no verify_venue/venue of its own to read,
+            # and delivery is where a spawned developer must write.
+            cwd=child_cwd,
+            runtime_host=host,
+            project_settings=_dispatch_project_settings_path(state),
+            session_id=state.session_id,
+        )
+    finally:
+        if child_run is None:
+            if not dry_run:
+                _carry_hook_stamps(store, state)
+        else:
+            transcript = _parse_transcript_path(getattr(result, "stderr", "") or "")
+            _end_child_run(store, state, child_run, Path(transcript).stem if transcript else None)
     if dry_run:
         # #10: a dry-run is a pure preview — no event log, no state save, no
         # marker routing. The echoed command is the whole result.
@@ -8331,7 +8376,7 @@ def _refresh_spend(state: SessionState, store: StateStore, rows: list[dict], pat
     if booked:
         key = _ledgered_order_key(state)
         if key is not None:
-            _seed_linked_flush_baseline(state)
+            _seed_linked_flush_baseline(state, store=store)
             if state.order_effort_flushed is not None:
                 _credit_descendant_order_flush(state, key, chains, booked)
     return delta
@@ -8400,6 +8445,119 @@ def _utcnow() -> float:
     """The one clock read behind every `effort.record_fire(..., now=...)` call site —
     collapses five copy-pasted `dt.datetime.now(dt.timezone.utc).timestamp()` calls."""
     return dt.datetime.now(dt.timezone.utc).timestamp()
+
+
+def _state_dir(store: StateStore) -> Path | None:
+    root = getattr(store, "root", None)
+    return Path(root) if root is not None else None
+
+
+def _effort_now(store: StateStore, state: SessionState) -> float:
+    """The `now` for an effort read: runs of a dead dispatcher closed first (in memory; the
+    next save keeps it, and the prompt hook closes the same run the same way), then the
+    clock. A store with no state directory cannot attribute a child, so its runs stay as
+    recorded."""
+    state_dir = _state_dir(store)
+    if state_dir is not None:
+        child_runs.close_dead_runs(state.effort_child_runs, state_dir, state.session_id)
+    return _utcnow()
+
+
+def _spawn_would_link() -> bool:
+    """Whether the spawn `cmd_dispatch` is about to make can be linked at all — the kill
+    switch spawn-specialist consults. A dispatch that cannot link records no run: during the
+    blocking spawn the prompt hook would otherwise leave the gap to a run that is later
+    dropped."""
+    resolver = getattr(agentctl_config, "child_contour_linking_enabled", None)
+    return resolver() if callable(resolver) else True
+
+
+def _begin_child_run(store: StateStore, state: SessionState, stage) -> dict | None:
+    """Record the dispatch as an open child run and persist it BEFORE the blocking spawn,
+    so a hook or a second reader sees the interval while the child is still running. Runs a
+    dead dispatcher left open are closed first: the new run's child would otherwise be
+    attributed to the oldest of them. None when the spawn cannot be linked: nothing is
+    recorded."""
+    if not _spawn_would_link():
+        return None
+    state_dir = _state_dir(store)
+    if state_dir is not None:
+        child_runs.close_dead_runs(state.effort_child_runs, state_dir, state.session_id)
+    run = {
+        "child_session": None, "stage_index": stage.index, "started": _utcnow(),
+        "ended": None, "dispatcher_pid": os.getpid(),
+    }
+    state.effort_child_runs.append(run)
+    store.save(state)
+    return run
+
+
+def _carry_closed_runs(state: SessionState, fresh: SessionState, own: dict) -> None:
+    """Take over, for each run other than `own`, the close the hook or a reader saved into
+    the state file while the spawn ran. This process's copy predates it, and saving that
+    copy would reopen the run — letting a flush in between lower its watermark and the
+    re-close book the interval twice."""
+    saved = {(r.get("started"), r.get("dispatcher_pid"), r.get("stage_index")): r
+             for r in fresh.effort_child_runs if isinstance(r, dict)}
+    for run in state.effort_child_runs:
+        if run is own or run.get("ended") is not None:
+            continue
+        closed = saved.get((run.get("started"), run.get("dispatcher_pid"), run.get("stage_index")))
+        if closed is not None and closed.get("ended") is not None:
+            run["ended"] = closed["ended"]
+            run["child_session"] = closed.get("child_session")
+
+
+def _carry_hook_stamps(store: StateStore, state: SessionState) -> SessionState | None:
+    """Take over the keys the prompt hook owns (active minutes, last prompt, prompt count)
+    from the state file, which a prompt may have stamped while the blocking spawn ran — the
+    spawn's `state` predates them and saving it as is would overwrite them. Returns the
+    state read, None when it cannot be (nothing is carried; never an error)."""
+    try:
+        fresh = store.load(state.session_id)
+    except Exception:
+        return None
+    if effort.ACTUAL_MINUTES_KEY in fresh.effort_actuals:
+        state.effort_actuals[effort.ACTUAL_MINUTES_KEY] = fresh.effort_actuals[effort.ACTUAL_MINUTES_KEY]
+    state.last_user_prompt_ts = fresh.last_user_prompt_ts
+    state.user_prompt_count = fresh.user_prompt_count
+    return fresh
+
+
+def _end_child_run(store: StateStore, state: SessionState, run: dict,
+                   reported_session: str | None = None) -> None:
+    """Close `run` after the spawn returned or raised, and persist. The prompt stamps the
+    hook wrote into the state file during the run (active minutes, last prompt, prompt
+    count) are carried over first, because this process's `state` predates them; when that
+    state file cannot be read they are skipped, never allowed to fail the close — this runs
+    from a `finally`, and must neither mask the spawn's own exception nor lose the marker of
+    a child that finished. The run's child is the session the spawn reported if it is a
+    child of this stage, else the earliest unclaimed one found in the state directory. A
+    spawn that made no linked child was unlinked: its run is dropped."""
+    fresh = _carry_hook_stamps(store, state)
+    if fresh is not None:
+        _carry_closed_runs(state, fresh, run)
+    state_dir = _state_dir(store)
+    if state_dir is not None and not run.get("child_session"):
+        taken = {r.get("child_session") for r in state.effort_child_runs if r is not run}
+        if (reported_session and reported_session not in taken and child_runs.is_child_of(
+                state_dir, state.session_id, reported_session, run.get("stage_index"))):
+            run["child_session"] = reported_session
+        else:
+            run["child_session"] = child_runs.discover_child(
+                state_dir, state.session_id, run, state.effort_child_runs)
+    if run.get("child_session"):
+        run["ended"] = max(run["started"], _utcnow())
+    else:
+        state.effort_child_runs[:] = [r for r in state.effort_child_runs if r is not run]
+        # The hook left the part of each prompt gap inside this run to it (and noted it on
+        # the run in the file); the run is gone, so book it as the hook would have.
+        lost = child_runs.gap_loss_min(fresh.effort_child_runs if fresh is not None else (), run)
+        if lost:
+            actuals = state.effort_actuals
+            actuals[effort.ACTUAL_MINUTES_KEY] = float(
+                actuals.get(effort.ACTUAL_MINUTES_KEY) or 0.0) + lost
+    store.save(state)
 
 
 def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -8762,11 +8920,12 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     # unconditionally — only ACTING on a fire is gated by gates.effort_active — see
     # effort.py's module docstring and gates.effort_active's docstring.
     _refresh_spend(state, store, _rows, state.plan_path)
-    _flush_order_effort(state)
-    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state))
+    _flush_order_effort(state, store=store)
+    _now = _effort_now(store, state)
+    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state, _now, store=store), now=_now)
     if effort.armed(state):
-        _cross = _effort_cross_totals(state)
-        _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross)
+        _cross = _effort_cross_totals(state, _now, store=store)
+        _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross, now=_now)
         _ro_comparand = effort.comparands(state, Thresholds())
         for _ro_scale in effort.RECORD_ONLY_SCALES:
             if _ro_comparand[_ro_scale] > 0 and _ro_delta[_ro_scale] >= _ro_comparand[_ro_scale]:
@@ -8786,7 +8945,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         state.log("record_result", stage=stage.index, status="passed")
         if div is not None and gates.effort_active(state):
             now = _utcnow()
-            fire = _record_effort_fire(state, div, now=now)
+            fire = _record_effort_fire(state, div, now=now, store=store)
             return _diagnose_effort_divergence(state, store, div, fire)
         store.save(state)
         if state.all_stages_settled():
@@ -8829,7 +8988,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         # instead of re-transitioning or opening a second Difficulty, but still honor
         # divergence()'s CALLER OBLIGATION (record the fire so it doesn't re-trip).
         now = _utcnow()
-        data["effort_divergence"] = _record_effort_fire(state, div, now=now)
+        data["effort_divergence"] = _record_effort_fire(state, div, now=now, store=store)
     store.save(state)
     if opened is None:
         return _difficulty_cap_directive(state, f"stage {stage.index} failed", data)
@@ -8896,11 +9055,12 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # plan_path (including engine-mandated review spawns no stage attributes), the
     # rollup needs only what record-result already stamped onto each Outcome.
     _refresh_spend(state, store, _cost_rows(args), state.plan_path)
-    _flush_order_effort(state)
-    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state))
+    _flush_order_effort(state, store=store)
+    _now = _effort_now(store, state)
+    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state, _now, store=store), now=_now)
     if effort.armed(state):
-        _cross = _effort_cross_totals(state)
-        _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross)
+        _cross = _effort_cross_totals(state, _now, store=store)
+        _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross, now=_now)
         _ro_comparand = effort.comparands(state, Thresholds())
         for _ro_scale in effort.RECORD_ONLY_SCALES:
             if _ro_comparand[_ro_scale] > 0 and _ro_delta[_ro_scale] >= _ro_comparand[_ro_scale]:
@@ -8986,7 +9146,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             # record_result's failed branch (still honoring divergence()'s CALLER
             # OBLIGATION: record the fire so it doesn't re-trip).
             now = _utcnow()
-            data["effort_divergence"] = _record_effort_fire(state, div, now=now)
+            data["effort_divergence"] = _record_effort_fire(state, div, now=now, store=store)
         store.save(state)
         if opened is None:
             return _difficulty_cap_directive(
@@ -9003,7 +9163,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # record-result to fire from).
     if div is not None and gates.effort_active(state):
         now = _utcnow()
-        fire = _record_effort_fire(state, div, now=now)
+        fire = _record_effort_fire(state, div, now=now, store=store)
         return _diagnose_effort_divergence(state, store, div, fire)
 
     # Compute whole-plan cost rollup from already-attributed stage outcomes.
@@ -9276,7 +9436,8 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # weakness): carries both vectors into the quality ledger so the thresholds — and
     # the estimate() formula itself — can be recalibrated against what they actually
     # caught, not just whether this one session happened to fire.
-    _effort_ratios = [v for v in effort.ratios(state).values() if v is not None]
+    _now = _effort_now(store, state)
+    _effort_ratios = [v for v in effort.ratios(state, now=_now).values() if v is not None]
     quality_row = {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
         "task_id": state.task_id,
@@ -9311,7 +9472,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         "route": state.route,
         "budget_tiers": budget_tiers,
         "effort_estimate": state.effort_estimate,
-        "effort_actual": effort.deltas(state),
+        "effort_actual": effort.deltas(state, now=_now),
         "effort_ratio_max": max(_effort_ratios) if _effort_ratios else None,
         "effort_fires": state.effort_fires,
         "effort_interactions": state.user_prompt_count,
@@ -10774,7 +10935,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # is not lost by refreshing against the old path here — it is simply picked up by
     # the NEXT refresh against the new path, once a branch below rewrites plan_path.
     _refresh_spend(state, store, _cost_rows(args), state.plan_path)
-    _flush_order_effort(state)
+    _flush_order_effort(state, store=store)
 
     if kind == "no_change":
         # A legacy session with no approved-plan snapshot (plan_snapshot_path=None)
@@ -11130,11 +11291,12 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
     # decided on the cross-session one is how a watch goes silent on exactly the case it
     # exists for: a resolved re-entry hands the fresh SessionState a replan count of 0
     # while the accumulator still holds the prior laps. See effort.effective_deltas.
-    cross_totals = _effort_cross_totals(state)
-    local = effort.deltas(state)
-    delta = effort.effective_deltas(state, cross_session_totals=cross_totals)
+    now = _effort_now(store, state)
+    cross_totals = _effort_cross_totals(state, now, store=store)
+    local = effort.deltas(state, now=now)
+    delta = effort.effective_deltas(state, cross_session_totals=cross_totals, now=now)
     comparand = effort.comparands(state, thr)
-    ratio = effort.effective_ratios(state, thr, cross_session_totals=cross_totals)
+    ratio = effort.effective_ratios(state, thr, cross_session_totals=cross_totals, now=now)
     scales = []
     for scale in effort.SCALE_ORDER:
         label, unit = effort.describe(scale)
@@ -11159,7 +11321,7 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
             "cross_session": delta[scale] > local[scale],
             "record_only": record_only,
         })
-    div = effort.divergence(state, thr, cross_session_totals=cross_totals)
+    div = effort.divergence(state, thr, cross_session_totals=cross_totals, now=now)
     over = [s["scale"] for s in scales if s["at_or_past_threshold"]]
     # Separate from `over_threshold`: the true crossing state of a record-only scale,
     # reported for visibility but never folded into `over`/`would_fire` — those two

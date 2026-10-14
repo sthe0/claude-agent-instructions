@@ -115,6 +115,18 @@ against `plan_path`. `effort_subtree_seen` is session-scoped and deliberately ou
 `PlanFrame`, so push and pop neither reset nor merge it and a descendant is counted once
 across sub-plan custody. With no descendants the result is exactly `refresh_spend`.
 
+CHILD RUNS. The wall-clock scale also owns the time a linked child ran. `cmd_dispatch`
+records each linked dispatch as an interval in `state.effort_child_runs` ({child_session,
+stage_index, started, ended | None, dispatcher_pid}); `actual(state, now=...)` adds the
+measure of the UNION of those intervals (an open one ends at `now`) to the session's own
+`active_minutes`. The prompt-gap hook books only the part of a gap no child run covers
+(`covered_seconds`), so an interval is counted once by whichever clock owns it. The union
+is session-scoped like `effort_subtree_seen` and a grandchild's run lives in the child's
+state, so it reaches the parent only inside the child's own interval. Without `now`
+(or without runs) the wall-clock actual is exactly `active_minutes`. A run whose dispatcher
+died is closed in the state it belongs to (`child_runs.close_dead_runs`, shared by the CLI
+and the hook) before any of this reads it, so the hook and `actual` see one `ended`.
+
 Purity: this module reads only the state object it is handed plus config.md's constants.
 It never shells out, opens a socket, or reads a clock — the cost-ledger read belongs to
 the CALLER (cli.py) and arrives as data, and the wall-clock accumulation happens in
@@ -126,6 +138,7 @@ from __future__ import annotations
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 
+from .child_runs import pid_alive
 from .config import Thresholds
 from .state import SessionState, WeightClass, is_skipped
 
@@ -319,7 +332,64 @@ def replan_count(state: SessionState) -> int:
     return sum(1 for h in state.history if h.get("event") == "replan")
 
 
-def actual(state: SessionState) -> dict:
+def child_run_intervals(runs, now: float | None = None) -> list[tuple[float, float]]:
+    """`(start, end)` seconds of each child run, malformed rows skipped.
+
+    A closed run is `(started, max(started, ended))`. An open run is `(started, now)`;
+    with `now=None` it is skipped. A run whose dispatcher died is closed by the caller
+    first (`child_runs.close_dead_runs`); one it could not close yet (held open for a state
+    file that may be its child) has no known end and counts nothing, never growing to `now`."""
+    intervals: list[tuple[float, float]] = []
+    for run in runs or ():
+        if not isinstance(run, dict):
+            continue
+        started = run.get("started")
+        if not isinstance(started, (int, float)):
+            continue
+        ended = run.get("ended")
+        if isinstance(ended, (int, float)):
+            end = float(ended)
+        elif now is not None and pid_alive(run.get("dispatcher_pid")):
+            end = now
+        else:
+            continue
+        intervals.append((float(started), max(float(started), float(end))))
+    return intervals
+
+
+def _merge_intervals(intervals) -> list[tuple[float, float]]:
+    merged: list[list[float]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [(start, end) for start, end in merged]
+
+
+def union_seconds(intervals) -> float:
+    """The measure of the union of `intervals` — overlapping runs count once."""
+    return sum(end - start for start, end in _merge_intervals(intervals))
+
+
+def covered_seconds(intervals, lo: float, hi: float) -> float:
+    """The part of `[lo, hi]` that `intervals` cover, each instant once."""
+    return sum(
+        max(0.0, min(end, hi) - max(start, lo)) for start, end in _merge_intervals(intervals)
+    )
+
+
+def overlap_seconds(intervals, cover) -> float:
+    """The measure of the part of `intervals` that `cover` also covers, each instant once."""
+    return sum(covered_seconds(intervals, lo, hi) for lo, hi in _merge_intervals(cover))
+
+
+def child_run_minutes(state: SessionState, now: float | None = None) -> float:
+    """Minutes covered by this session's child runs, each instant once (see CHILD RUNS)."""
+    return union_seconds(child_run_intervals(state.effort_child_runs, now)) / 60.0
+
+
+def actual(state: SessionState, *, now: float | None = None) -> dict:
     """The accumulated actual vector, on all four scales.
 
     Two entries are read from monotone accumulators written elsewhere (`effort_actuals`,
@@ -333,13 +403,14 @@ def actual(state: SessionState) -> dict:
     actuals = state.effort_actuals
     return {
         SCALE_SPEND: float(actuals.get(ACTUAL_SPEND_KEY) or 0.0),
-        SCALE_WALL_CLOCK: float(actuals.get(ACTUAL_MINUTES_KEY) or 0.0),
+        SCALE_WALL_CLOCK: float(actuals.get(ACTUAL_MINUTES_KEY) or 0.0)
+        + child_run_minutes(state, now),
         SCALE_REPLANS: float(replan_count(state)),
         SCALE_INTERACTIONS: float(state.user_prompt_count or 0),
     }
 
 
-def deltas(state: SessionState) -> dict:
+def deltas(state: SessionState, *, now: float | None = None) -> dict:
     """The arming-relative actual: `actual - baseline`, per scale.
 
     Never negative, by construction and with no clamp: every accumulator this
@@ -351,7 +422,7 @@ def deltas(state: SessionState) -> dict:
 
     An unarmed session has no baseline; its deltas are then the raw actuals, which is
     reporting-only — `divergence()` refuses to fire without a baseline."""
-    acts = actual(state)
+    acts = actual(state, now=now)
     base = state.effort_baseline or {}
     return {
         scale: acts[scale] - float(base.get(scale) or 0.0)
@@ -391,7 +462,9 @@ def describe(scale: str) -> tuple[str, str]:
     return _LABEL[scale], _UNIT[scale]
 
 
-def effective_deltas(state: SessionState, *, cross_session_totals: dict | None = None) -> dict:
+def effective_deltas(
+    state: SessionState, *, cross_session_totals: dict | None = None, now: float | None = None,
+) -> dict:
     """The delta vector every comparison in this module runs against: `deltas()`, with
     the REPLANS scale raised to the task's cross-session replan total when that is larger
     (see the module docstring's CROSS-SESSION section for why larger-of, not sum).
@@ -406,7 +479,7 @@ def effective_deltas(state: SessionState, *, cross_session_totals: dict | None =
     on the very session `divergence()` would have fired on. One function, both callers.
 
     `cross_session_totals=None` reproduces `deltas()` exactly."""
-    delta = deltas(state)
+    delta = deltas(state, now=now)
     totals = cross_session_totals or {}
     cross_replans = float(totals.get("replan_count") or 0.0)
     if cross_replans > delta[SCALE_REPLANS]:
@@ -420,7 +493,7 @@ def effective_deltas(state: SessionState, *, cross_session_totals: dict | None =
 
 def effective_ratios(
     state: SessionState, thr: Thresholds | None = None, *,
-    cross_session_totals: dict | None = None,
+    cross_session_totals: dict | None = None, now: float | None = None,
 ) -> dict:
     """Per-scale `effective_delta / comparand`, or None where the scale is inapplicable.
 
@@ -428,20 +501,20 @@ def effective_ratios(
     count for an absolute one. None means "this scale cannot fire and cannot be ranked":
     an unarmed session, a zero estimate, or a zero (accounting-only) threshold."""
     comparand = comparands(state, thr)
-    delta = effective_deltas(state, cross_session_totals=cross_session_totals)
+    delta = effective_deltas(state, cross_session_totals=cross_session_totals, now=now)
     return {
         scale: (delta[scale] / comparand[scale]) if comparand[scale] > 0 else None
         for scale in SCALE_ORDER
     }
 
 
-def ratios(state: SessionState, thr: Thresholds | None = None) -> dict:
+def ratios(state: SessionState, thr: Thresholds | None = None, *, now: float | None = None) -> dict:
     """The session-local ratio vector — `effective_ratios` with no cross-session totals.
 
     Kept as its own name because the quality-ledger row wants exactly this: what THIS
     session consumed, not what the task accumulated across every session that touched
     it. A caller deciding or reporting on a divergence wants `effective_ratios`."""
-    return effective_ratios(state, thr)
+    return effective_ratios(state, thr, now=now)
 
 
 def _replans_since_last_fire(state: SessionState) -> int:
@@ -472,7 +545,8 @@ def _framing(scale: str, kind: str, act: float, comparand: float, multiple: floa
 
 
 def divergence(
-    state: SessionState, thr: Thresholds | None = None, *, cross_session_totals: dict | None = None
+    state: SessionState, thr: Thresholds | None = None, *,
+    cross_session_totals: dict | None = None, now: float | None = None,
 ) -> Divergence | None:
     """The scale on which this session has diverged past the multiple, or None.
 
@@ -521,11 +595,11 @@ def divergence(
     thr = thr if thr is not None else Thresholds()
     multiple = thr.effort_divergence_multiple()
     comparands_by_scale = comparands(state, thr)
-    delta = effective_deltas(state, cross_session_totals=cross_session_totals)
-    rat = effective_ratios(state, thr, cross_session_totals=cross_session_totals)
+    delta = effective_deltas(state, cross_session_totals=cross_session_totals, now=now)
+    rat = effective_ratios(state, thr, cross_session_totals=cross_session_totals, now=now)
     # True when the accumulator, not this session's own history, supplied the replan
     # count — the only thing this module still needs the session-local vector for.
-    replans_cross_session = delta[SCALE_REPLANS] > deltas(state)[SCALE_REPLANS]
+    replans_cross_session = delta[SCALE_REPLANS] > deltas(state, now=now)[SCALE_REPLANS]
 
     candidates: list[Divergence] = []
     for scale in SCALE_ORDER:
@@ -588,13 +662,15 @@ def rederive(state: SessionState, thr: Thresholds | None = None) -> dict:
     return state.effort_estimate
 
 
-def arm(state: SessionState, thr: Thresholds | None = None) -> dict:
+def arm(state: SessionState, thr: Thresholds | None = None, *, now: float | None = None) -> dict:
     """Open the measurement window: re-derive the estimate, and snapshot the baseline
     ONLY IF it is unset (ARMED AT MOST ONCE / SUB-PLAN CUSTODY's sentinel note, module
-    docstring — "unset" means `is None`, never a zeroed dict)."""
+    docstring — "unset" means `is None`, never a zeroed dict). `now` counts a child run
+    still in progress up to the moment of arming, so the baseline does not leave out time
+    every later delta includes."""
     rederive(state, thr)
     if state.effort_baseline is None:
-        state.effort_baseline = actual(state)
+        state.effort_baseline = actual(state, now=now)
     return state.effort_estimate
 
 
@@ -713,7 +789,7 @@ def record_fire(state: SessionState, div: Divergence, *, now: float) -> dict:
     `agentctl fire-acknowledge` appends one (never replaces the record; the audit
     trail stays append-only)."""
     replaced_baseline = dict(state.effort_baseline or {})
-    state.effort_baseline = actual(state)
+    state.effort_baseline = actual(state, now=now)
     record = {
         "replaced_baseline": replaced_baseline,
         "scale": div.scale,
