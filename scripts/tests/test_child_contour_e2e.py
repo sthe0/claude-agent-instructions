@@ -33,7 +33,7 @@ from conftest import declare_venue
 from test_child_approval import (
     PARENT_CHECK, _parent_plan, _spliced, _with_stage_grant, _with_stage_verify,
 )
-from test_child_contour_gate import (
+from test_child_contour_gate import (  # noqa: F401 -- _isolated_env is the shared autouse fixture
     ENGINE_START_HOOK, HANDOFF_ENV, HOOK, OWN_ENV, PARENT, Launch, _child_env, _cli, _denied,
     _expect_ok, _isolated_env, _Launched, _load_spawn, _own, _reason, _settings_allow, _state_dir,
 )
@@ -43,7 +43,6 @@ SPECIALIZATIONS = SCRIPTS.parent / "skills" / "specializations"
 PYTEST_WILDCARD = "Bash(python3 -m pytest:*)"
 CHILD_CHECK = "python3 -m pytest -q -x tests/test_mod.py"
 OUTSIDE_CHECK = "python3 -m unittest tests.test_mod"
-__all__ = ["_isolated_env"]  # the autouse fixture shared with test_child_contour_gate.py
 
 
 class Scene:
@@ -84,7 +83,10 @@ class Scene:
             env=_child_env(self.home, CLAUDE_CONFIG_DIR=str(self.agent_home),
                            **{HANDOFF_ENV: self.launch.env[HANDOFF_ENV]}),
         )
-        assert started.returncode == 0, f"setup: the child's engine autostart failed: {started.stderr}"
+        child = FileStateStore(self.root).load(self.own_session)
+        assert child is not None, f"setup: the child's engine autostart did not run: {started.stderr}"
+        assert child.parent_link and child.parent_link["parent_session"] == PARENT \
+            and child.parent_link["stage_index"] == 1, f"setup: the autostart did not adopt the handoff: {child.parent_link!r}"
         (self.venue / "tests").mkdir()
         (self.venue / "tests" / "test_mod.py").write_text("", encoding="utf-8")
 
