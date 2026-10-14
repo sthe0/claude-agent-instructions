@@ -33,6 +33,8 @@ import os
 import re
 import tempfile
 
+from lib import config_root
+
 # Edits to files matching this pattern are *candidates* for the gate; anything
 # else (prose .txt, images, data) is never gated. ``.md`` / ``.mdc`` are included
 # so the agent's own instructions (CLAUDE.md, skills/**/*.md, the Cursor mirror)
@@ -118,13 +120,51 @@ def is_engine_exempt(path: str) -> bool:
     return _under_local_state(rp)
 
 
+def own_plan_owner(path: str) -> "str | None":
+    """The session id whose own plan `path` reaches, else None. Decided on the
+    realpath, so a symlink or `..` path that leads to session X's
+    `own_plans_dir()/X/plan.toml` returns X and a sibling file in the directory
+    returns None. The refusal of a foreign write keys on this predicate, so no alias
+    of a child's plan escapes it."""
+    if not path:
+        return None
+    root = os.path.realpath(config_root.own_plans_dir())
+    resolved = os.path.realpath(path)
+    if not resolved.startswith(root + os.sep):
+        return None
+    parts = resolved[len(root) + 1:].split(os.sep)
+    if len(parts) == 2 and parts[0] and parts[1] == "plan.toml":
+        return parts[0]
+    return None
+
+
+def is_own_plan_file(path: str) -> "str | None":
+    """The session id when `path` is the canonical text of a child's own plan, else
+    None: absolute, no `..` component, equal as text to `own_plans_dir()/<sid>/plan.toml`
+    and resolving to that same file. A symlinked agent home passes; a symlinked sid
+    directory or plan.toml does not, so only the canonical path earns its owner the
+    plan-write permission."""
+    if not path or not os.path.isabs(path) or ".." in path.split(os.sep):
+        return None
+    base = str(config_root.own_plans_dir())
+    if not path.startswith(base + os.sep):
+        return None
+    parts = path[len(base) + 1:].split(os.sep)
+    if len(parts) != 2 or not parts[0] or parts[1] != "plan.toml":
+        return None
+    if os.path.realpath(path) != os.path.join(os.path.realpath(base), parts[0], "plan.toml"):
+        return None
+    return parts[0]
+
+
 def is_plan_file(path: str) -> bool:
     """True if the path is a coordination plan artifact under ~/.claude/plans/ or
-    the isolated-root ~/.claude-agent/plans/. Such files are gated, but the gate
+    the isolated-root ~/.claude-agent/plans/, or a linked child's own plan (the
+    canonical path only — see is_own_plan_file). Such files are gated, but the gate
     applies a node-aware rule (writable only at a planning-position node) instead
     of the standard EXECUTING-only rule."""
     p = path or ""
-    return any(seg in p for seg in _PLAN_SUBSTRINGS)
+    return any(seg in p for seg in _PLAN_SUBSTRINGS) or is_own_plan_file(p) is not None
 
 
 def is_gated_path(path: str) -> bool:

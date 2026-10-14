@@ -45,7 +45,7 @@ from agentctl.config import (  # the one definition of the child-contour kill sw
     child_contour_linking_enabled,
 )
 from agentctl import norm_handoff  # the one definition of the handoff record the child engine adopts
-from agentctl.own_contour import OWN_CONTOUR_VERBS, OWN_SESSION_ENV  # the channel's env name and verb set
+from agentctl.own_contour import OWN_CONTOUR_VERBS, OWN_SESSION_ENV, own_plan_path  # the channel's env name, verb set and plan path
 from agentctl.plan import (  # parse the TOML plan for a single-stage brief projection
     PlanError,
     is_unit_id,
@@ -216,11 +216,12 @@ def brief_eligible(args: argparse.Namespace) -> bool:
     return brief_plan_path(args) is not None
 
 
-def own_contour_brief_lines(args: argparse.Namespace) -> list[str]:
+def own_contour_brief_lines(args: argparse.Namespace, own_plan: "Path | None" = None) -> list[str]:
     """The brief section of a linked child, in place of `## The engine belongs to the
-    parent`: its own engine contour, the channel that moves it, the route for a norm
-    that is wrong, and the terminal state. The verbs are quoted from the channel's own
-    verb set so the brief cannot name a set the channel does not run."""
+    parent`: its own engine contour, the channel that moves it, the plan file it alone
+    may write, the route for a norm that is wrong, and the terminal state. The verbs are
+    quoted from the channel's own verb set so the brief cannot name a set the channel
+    does not run."""
     verbs = ", ".join(f"`{v}`" for v in sorted(OWN_CONTOUR_VERBS))
     channel = f"python3 {Path(SCRIPTS_DIR) / 'agentctl-own.py'}"
     review_driver = own_contour_review_command()
@@ -249,6 +250,16 @@ def own_contour_brief_lines(args: argparse.Namespace) -> list[str]:
         "(an independent thinker's review), `approve --by agent`, `partition` (no "
         "flags), `next-stage`.",
         "",
+        *(
+            [
+                f"Your plan file is `{own_plan}`: yours alone, writable while you plan and "
+                "frozen once you execute (to change it then, `replan`); submit it with "
+                f"`{channel} submit-plan --plan {own_plan}`.",
+                "",
+            ]
+            if own_plan is not None
+            else []
+        ),
         f"To have your plan reviewed, run `{review_driver} --plan <plan>`: it walks the "
         "plan, spawns one read-only thinker per unit and per pair, records each verdict "
         "and composes the pass on your own session. Pass no `--session` — it comes from "
@@ -280,6 +291,7 @@ def assemble_prompt(
     evidence_dir: "str | None" = None,
     topo_bundle: "str | None" = None,
     own_contour: bool = False,
+    own_plan: "Path | None" = None,
 ) -> str:
     plan = argv_text.read_required_file(args.plan, "--plan")
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
@@ -360,7 +372,7 @@ def assemble_prompt(
         scope_lines.append("")
         sections += scope_lines
     if own_contour:
-        sections += own_contour_brief_lines(args)
+        sections += own_contour_brief_lines(args, own_plan)
     else:
         sections += [
             "## The engine belongs to the parent",
@@ -2020,6 +2032,14 @@ def own_contour_allow_rule() -> str:
     return f"Bash(python3 {Path(SCRIPTS_DIR) / 'agentctl-own.py'}:*)"
 
 
+def own_plan_allow_rule(session_id: str) -> str:
+    """The Edit rule that lets a linked child write its own plan file and nothing else.
+    Emitted here, at the seam, and not through `grants.validate_rule`: a declared rule
+    under the agent home stays refused, so this path is granted only to the child it
+    belongs to."""
+    return f"Edit(/{own_plan_path(session_id)})"
+
+
 def own_contour_review_command() -> str:
     """The topological review driver by absolute path, in own mode. `--own` is part of
     the granted prefix so the child's grant covers own mode only: the driver then
@@ -2715,6 +2735,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         add_dir_argv.extend(plans_add_dir_args(args.kind, plans_directory))
     add_dir_argv.extend(repo_root_add_dir_args(args.kind, workdir))
+    own_plan_dir_at = len(add_dir_argv)
+    if child_linked:
+        add_dir_argv.extend(["--add-dir", str(own_plan_path(own_session).parent)])
     if engine_grants:
         add_dir_argv.extend(stage_grant_add_dir_args(engine_grants))
     if evidence_dir:
@@ -2749,6 +2772,7 @@ def main(argv: list[str] | None = None) -> int:
             evidence_dir=evidence_dir,
             topo_bundle=topo_bundle,
             own_contour=own_contour,
+            own_plan=own_plan_path(own_session) if own_contour else None,
         )
 
     try:
@@ -2772,8 +2796,15 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"warning: norm handoff not written, spawning unlinked: {exc}", file=sys.stderr)
             handoff_record, child_linked, own_session, resumed_transcript = None, False, None, None
+            del add_dir_argv[own_plan_dir_at:own_plan_dir_at + 2]
+            add_dir_paths = _paths_from_add_dir_argv(add_dir_argv)
             prompt = brief(False)
     if child_linked and not args.dry_run:
+        try:
+            own_plan_path(own_session).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            own_plan_path(own_session).parent.chmod(0o700)
+        except OSError as exc:
+            print(f"warning: own plan directory not created: {exc}", file=sys.stderr)
         try:
             norm_handoff.write_child_session(
                 handoff_store.root, args.session, args.stage_index,
@@ -2844,8 +2875,20 @@ def main(argv: list[str] | None = None) -> int:
         child_permissions.setdefault("deny", []).extend(read_deny)
 
     if child_linked:
-        child_settings.setdefault("permissions", {}).setdefault("allow", []).extend(
-            [own_contour_allow_rule(), own_contour_review_rule()]
+        own_plan_rule = own_plan_allow_rule(own_session)
+        child_permissions = child_settings.setdefault("permissions", {})
+        child_denies = child_permissions.get("deny", [])
+        try:
+            _check_no_allow_fully_denied(
+                [own_plan_rule], child_denies, {own_plan_rule: "own_plan_allow_rule"},
+                {rule: "child settings" for rule in child_denies},
+            )
+        except GrantShadowError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
+            return 2
+        child_permissions.setdefault("allow", []).extend(
+            [own_contour_allow_rule(), own_contour_review_rule(), own_plan_rule]
         )
 
     cmd = [

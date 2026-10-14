@@ -9,6 +9,10 @@ available to), and imported by all three.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+from lib import config_root
+
 # The engine session the channel is pinned to; exported only to a child whose own
 # session adopted the norm handoff.
 OWN_SESSION_ENV = "AGENTCTL_OWN_SESSION"
@@ -35,3 +39,10 @@ PARTITION_REFUSED_FLAGS = frozenset({
 
 # `approve` is available only as `approve --by <this>`.
 APPROVE_BY = "agent"
+
+
+def own_plan_path(session_id: str) -> Path:
+    """The one plan file a linked child authors: `own_plans_dir()/<sid>/plan.toml`. It is
+    granted to that child alone at spawn; every other session's write to it is refused
+    by the state gate (`exempt_paths.own_plan_owner`)."""
+    return config_root.own_plans_dir() / config_root.sanitize_session_id(session_id) / "plan.toml"

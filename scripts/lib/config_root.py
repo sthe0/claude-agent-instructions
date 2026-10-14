@@ -350,6 +350,13 @@ def plans_dir() -> Path:
     return agent_home() / "plans"
 
 
+def own_plans_dir() -> Path:
+    """Per-session plan directories of linked children (``<root>/own-plans/<sid>/
+    plan.toml``). Distinct from ``plans_dir()`` so the coordinator's plan grant and
+    the developer kind's deny over it never touch a child's own plan."""
+    return agent_home() / "own-plans"
+
+
 def agentctl_topo_units_dir() -> Path:
     """Materialized ``--review-topo`` unit tree root (``<root>/agentctl/
     topo-units`` — see agentctl/render.py's ``materialize_topo_units``). One
