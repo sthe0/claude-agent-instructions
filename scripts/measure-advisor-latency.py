@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Re-fit advisor.ENUMERATE_TIMEOUT_S against this machine's plan-size distribution.
 
-Drives the REAL advisor.enumerate_questions_health under MEASURE_CAP, set far above
+Drives the REAL advisor.enumerate_claims under MEASURE_CAP, set far above
 the shipped ceiling so no datapoint is truncated by the bound being measured."""
 import functools
 import hashlib
@@ -77,8 +77,9 @@ def main():
         for s in samples:
             load1 = os.getloadavg()[0]
             t0 = time.monotonic()
-            ok, pairs, _stderr = advisor.enumerate_questions_health(s["goal"], s["crit"], s["text"], runner)
+            claims = advisor.enumerate_claims(s["text"], runner)
             elapsed = time.monotonic() - t0
+            ok, pairs = True, claims
             # No plan path: the dataset ships in a public repo, and plan_sha256 already
             # identifies a row without naming anything.
             row = {

@@ -53,18 +53,15 @@ from agentctl.plan import (  # parse the TOML plan for a single-stage brief proj
     load_plan_with_digest,
     parse_pair,
     parse_unit,
+    stage_closure_digest,
 )
 from agentctl import plan_store  # an older plan version's referenced files, by hash
 from agentctl.stage_norm import StageNorm
 from agentctl.state import PARENT_DIFFICULTY_ENV, Node, format_parent_difficulty
-from agentctl.render import (  # pure PlanDoc(+index) -> markdown; TopoUnitsCorrupt/materialize_topo_units do the one bit of I/O
+from agentctl.render import (  # build_site_prompt is the one place a spawn's plan content is built
+    SitePrompt,
     TopoUnitsCorrupt,
-    materialize_topo_units,
-    render_pair_review_bundle,
-    render_stage_brief,
-    render_unit_review_bundle,
-    topo_pair_view,
-    topo_pair_view_dirname,
+    build_site_prompt,
 )
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
@@ -187,34 +184,65 @@ def permissions_digest(project_file: Path | None) -> str:
 
 
 def brief_plan_path(args: argparse.Namespace) -> Path | None:
-    """The resolved path of `args.plan` when assemble_prompt should project it
-    to a single-stage brief rather than inlining the whole plan text; None
-    when it should not (any condition failing falls back to whole-plan
-    behavior, never raises).
-
-    Returns the resolved path rather than `args.plan` as given because a
-    path given outside `plans_dir()` whose target resolves inside it is still
-    eligible, and the child's --add-dir only covers `plans_dir()` — a pointer
-    spelled as given could name a file the child has no grant to open.
-    """
-    kind_can_read_plans = getattr(args, "kind", None) in PLANS_READ_KINDS
-    opted_in = getattr(args, "plan_brief", False)
-    has_stage_index = getattr(args, "stage_index", None) is not None
+    """The resolved path of `args.plan` when the spawn is scoped to one stage
+    (`--stage-index` and `--plan` both given), None otherwise. The plan is never
+    inlined either way: `plan_site` builds the stage brief or, without a stage, the
+    plan summary, and the rest is read from the view directory the prompt names."""
+    stage_index = getattr(args, "stage_index", None)
     plan_path = getattr(args, "plan", None)
-    if not (kind_can_read_plans and opted_in and has_stage_index and plan_path):
+    if stage_index is None or not plan_path:
         return None
     try:
-        resolved_plan = Path(plan_path).resolve()
-        resolved_plan.relative_to(plans_dir().resolve())
-    except (OSError, ValueError):
+        return Path(plan_path).resolve()
+    except OSError:
         return None
-    return resolved_plan
 
 
 def brief_eligible(args: argparse.Namespace) -> bool:
     """Whether `args` earns a projected stage brief — `brief_plan_path`'s
     predicate face, for callers that need the decision and not the path."""
     return brief_plan_path(args) is not None
+
+
+def plan_site_kind(args: argparse.Namespace) -> str:
+    """Which `render.SITE_KINDS` site the spawn's plan section is, by argv alone."""
+    review_topo = getattr(args, "review_topo", None)
+    if review_topo is not None:
+        return "topo-unit" if is_unit_id(review_topo) else "topo-pair"
+    if brief_eligible(args):
+        return "dispatch-stage-brief"
+    if getattr(args, "kind", None) == "thinker":
+        return "whole-plan-review"
+    return "dispatch-no-stage"
+
+
+NOT_A_PLAN_NOTE = (
+    "The `--plan` file did not load as a typed plan, so this prompt carries no plan content."
+)
+
+
+def plan_site(
+    args: argparse.Namespace, *, view_root: "Path | str | None" = None,
+    history: "dict | None" = None, materialize: bool = True,
+) -> SitePrompt:
+    """The plan content this spawn's prompt passes, through `render.build_site_prompt`. A
+    `--plan` that does not load as a typed plan passes none. Raises ValueError for a
+    stage, pair or unit the plan does not have."""
+    kind = plan_site_kind(args)
+    selector: dict = {}
+    if kind == "dispatch-stage-brief":
+        selector["stage"] = args.stage_index
+    elif kind in ("topo-pair", "topo-unit"):
+        selector["unit" if kind == "topo-unit" else "pair"] = args.review_topo
+    try:
+        return build_site_prompt(
+            kind, args.plan, view_root=view_root, history=history,
+            materialize=materialize, **selector,
+        )
+    except PlanError:
+        if kind in ("topo-pair", "topo-unit"):
+            raise
+        return SitePrompt(NOT_A_PLAN_NOTE, (), frozenset())
 
 
 def own_contour_brief_lines(args: argparse.Namespace, own_plan: "Path | None" = None) -> list[str]:
@@ -291,10 +319,10 @@ def assemble_prompt(
     stage_grant_entries: "list[dict] | None" = None,
     evidence_dir: "str | None" = None,
     topo_bundle: "str | None" = None,
+    site: "SitePrompt | None" = None,
     own_contour: bool = False,
     own_plan: "Path | None" = None,
 ) -> str:
-    plan = argv_text.read_required_file(args.plan, "--plan")
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
     done_criterion = argv_text.read_arg_text(args.done_criterion)
     dossier = (
@@ -317,7 +345,6 @@ def assemble_prompt(
             f"stage's work.",
             "",
         ]
-    resolved_plan = None if topo_bundle is not None else brief_plan_path(args)
     if topo_bundle is not None:
         plan_label = (
             "## Working plan — topological review unit or pair "
@@ -325,16 +352,20 @@ def assemble_prompt(
             "see § File-access scope for the per-pair view directory)"
         )
         plan_body = topo_bundle
-    elif resolved_plan is not None:
-        doc = load_plan(str(args.plan))
-        plan_label = (
-            f"## Working plan — stage {args.stage_index} brief "
-            f"(projected; the full plan lives at `{resolved_plan}`, not inlined here)"
-        )
-        plan_body = render_stage_brief(doc, args.stage_index)
     else:
-        plan_label = "## Working plan"
-        plan_body = plan
+        if site is None:
+            site = plan_site(args, view_root=getattr(args, "view_root", None))
+        if brief_eligible(args):
+            plan_label = (
+                f"## Working plan — stage {args.stage_index} brief "
+                "(projected; the rest of the plan is read from the view directory named below)"
+            )
+        else:
+            plan_label = (
+                "## Working plan — summary (stage products only; the plan is never inlined, "
+                "read from the view directory named below)"
+            )
+        plan_body = site.text
     sections += [plan_label, "", plan_body, ""]
     sections += [
         "## Done criterion for this step",
@@ -649,10 +680,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--plan-brief",
         action="store_true",
-        help="project only --stage-index's stage into the prompt (render_stage_brief) "
-        "instead of inlining the whole plan; requires --kind in PLANS_READ_KINDS, "
-        "--stage-index set, and --plan to resolve inside plans_dir() — falls back "
-        "to today's whole-plan behavior otherwise (see brief_eligible)",
+        help="accepted for compatibility and ignored: a prompt never inlines the whole "
+        "plan -- --stage-index projects that stage's brief, anything else gets the "
+        "plan's summary, and the rest is read from the view directory the prompt names",
+    )
+    p.add_argument(
+        "--view-root",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="directory the plan view this prompt names is created under (default: "
+        "the topo units root, $AGENTCTL_TOPO_UNITS_DIR when set)",
     )
     p.add_argument(
         "--continue-worktree",
@@ -668,15 +706,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="<pair>",
         help="materialize and dispatch ONE base-service pair review (a pair id "
         "'<base>-<service>' such as '3-1', 'plan-7' or 'base-plan') instead of "
-        "the whole-plan/--plan-brief projection: the assembled prompt inlines "
+        "the whole-plan projection: the assembled prompt inlines "
         "the base's full brief, the service's declared product and the edge, "
-        "and the child is granted read-only access to a per-plan-version view "
+        "and the child is granted read-only access to a per-pair view "
         "directory holding the service's FULL node file, reachable via one "
         "Read. Requires --kind thinker; refused together with --stage-index "
-        "(it replaces that projection, not refines it) but may be combined "
-        "with --plan-brief, which is a no-op here (--review-topo never "
-        "requires --stage-index, so --plan-brief's own eligibility check never "
-        "fires). Splits a plan too large for one whole-plan review spawn -- "
+        "(it replaces that projection, not refines it). "
+        "Splits a plan too large for one whole-plan review spawn -- "
         "scripts/plan-review-topological.py is the planned whole-plan driver "
         "that walks every pair through this flag.",
     )
@@ -2019,6 +2055,10 @@ def norm_handoff_record(
     norm = _stage_norm(doc, stage_index) if doc is not None else None
     if norm is None:
         return None
+    try:
+        closure = stage_closure_digest(doc, stage_index)
+    except PlanError:
+        closure = None
     return norm_handoff.build_record(
         parent_session=session_id,
         stage_index=stage_index,
@@ -2027,6 +2067,7 @@ def norm_handoff_record(
         grants=engine_grants,
         depth=depth,
         parent_lineage=(state.parent_link or {}).get("norm_lineage"),
+        closure_digest=closure,
     )
 
 
@@ -2452,6 +2493,20 @@ def _child_outcome_envelope(outcome: str, matched: str, result_text: str, stderr
 
 
 def main(argv: list[str] | None = None) -> int:
+    return _main(argv, prompt_only=False)
+
+
+def assembled_prompt(argv: list[str]) -> str:
+    """The prompt `main(argv)` would send, in full whatever its length: nothing is
+    spawned, no handoff record is written and the size ceiling is not applied. Raises
+    ValueError when `main(argv)` would refuse before it had a prompt."""
+    result = _main(argv, prompt_only=True)
+    if not isinstance(result, str):
+        raise ValueError(f"spawn-specialist refused these arguments (exit {result}) before assembling a prompt")
+    return result
+
+
+def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
     args = build_parser().parse_args(argv)
 
     bound_host = os.environ.get("AGENTCTL_RUNTIME_HOST")
@@ -2561,7 +2616,6 @@ def main(argv: list[str] | None = None) -> int:
     # in which case every block below that checks it is a no-op and behavior is
     # unchanged from before this flag existed.
     topo_pair: "str | None" = None
-    topo_view_dir: "Path | None" = None
     topo_plan_sha256: "str | None" = None
     topo_doc = None
     topo_history: "dict | None" = None
@@ -2624,27 +2678,31 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"error: --review-topo-history {args.review_topo_history}: {exc}", file=sys.stderr)
                 log_refused("review-topo-history-unreadable", {"kind": args.kind, "review_pair": topo_pair})
                 return 2
-        topo_root = topo_units_root()
         topo_check_scripts = review_check_scripts(topo_doc, Path(args.plan))
         topo_check_dirs = review_check_script_dirs(topo_check_scripts)
-        # A unit bundle is self-contained: the unit has no view directory, no
-        # Read grant and nothing to materialize.
-        if not is_unit_id(topo_pair):
-            topo_view_dir = topo_root / topo_plan_sha256 / topo_pair_view_dirname(topo_pair)
-        if topo_view_dir is not None and not args.dry_run:
-            # Materialization is real I/O (writes the whole plan-version topo
-            # tree); --dry-run must write nothing, so it only computes the path
-            # above and prints the intended TOPO-VIEW line below, never
-            # reaching this call.
-            try:
-                materialize_topo_units(topo_doc, topo_plan_sha256, topo_root)
-            except (TopoUnitsCorrupt, PlanError) as exc:
-                print(f"error: --review-topo: {exc}", file=sys.stderr)
-                log_refused(
-                    "review-topo-materialize-failed",
-                    {"kind": args.kind, "review_pair": topo_pair, "plan_sha256": topo_plan_sha256},
-                )
-                return 2
+
+    # The plan content of this spawn's prompt, built once. --dry-run must write nothing,
+    # so it computes the view path and prints the intended TOPO-VIEW line below.
+    site: "SitePrompt | None" = None
+    try:
+        site = plan_site(
+            args, view_root=args.view_root, history=topo_history, materialize=not args.dry_run,
+        )
+    except (TopoUnitsCorrupt, PlanError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        log_refused(
+            "review-topo-materialize-failed" if topo_pair is not None else "stage-brief-error",
+            {"kind": args.kind, "review_pair": topo_pair, "plan_sha256": topo_plan_sha256,
+             "stage_index": args.stage_index},
+        )
+        return 2
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        log_refused(
+            "stage-brief-error",
+            {"kind": args.kind, "plan": argv_text.abbreviate(args.plan), "stage_index": args.stage_index},
+        )
+        return 2
 
     # engine_grants stays None unless BOTH --session and --stage-index are given
     # AND the engine's own executor field for that stage matches --kind (checked
@@ -2731,14 +2789,15 @@ def main(argv: list[str] | None = None) -> int:
     if topo_pair is not None:
         # --review-topo withholds the plans-directory grant entirely -- the
         # child gets only its one-pair view directory below (none for a unit),
-        # never the whole plans_dir() a --plan-brief/whole-plan thinker spawn
-        # would carry.
-        if topo_view_dir is not None:
-            add_dir_argv.extend(["--add-dir", str(topo_view_dir)])
+        # never the whole plans_dir() a whole-plan thinker spawn would carry.
+        for view_dir in site.add_dirs:
+            add_dir_argv.extend(["--add-dir", view_dir])
         for check_dir in topo_check_dirs:
             add_dir_argv.extend(["--add-dir", str(check_dir)])
     else:
         add_dir_argv.extend(plans_add_dir_args(args.kind, plans_directory))
+        for view_dir in site.add_dirs:
+            add_dir_argv.extend(["--add-dir", view_dir])
     add_dir_argv.extend(repo_root_add_dir_args(args.kind, workdir))
     grant_add_dir_argv: list[str] = []
     if engine_grants:
@@ -2756,15 +2815,7 @@ def main(argv: list[str] | None = None) -> int:
     perms = permissions_digest(args.project_permissions)
     topo_bundle: "str | None" = None
     if topo_pair is not None:
-        if topo_view_dir is None:
-            topo_bundle = render_unit_review_bundle(
-                topo_doc, topo_pair, plan_sha256=topo_plan_sha256, history=topo_history,
-            )
-        else:
-            topo_bundle = render_pair_review_bundle(
-                topo_doc, topo_pair, plan_sha256=topo_plan_sha256, view_dir=topo_view_dir,
-                history=topo_history,
-            )
+        topo_bundle = site.text
         if topo_check_scripts:
             topo_bundle += "\n\n" + check_scripts_brief_section(topo_check_scripts)
     def brief(own_contour: bool) -> str:
@@ -2778,6 +2829,7 @@ def main(argv: list[str] | None = None) -> int:
             stage_grant_entries=engine_grants,
             evidence_dir=evidence_dir,
             topo_bundle=topo_bundle,
+            site=site,
             own_contour=own_contour,
             own_plan=own_plan_path(own_session) if own_contour else None,
         )
@@ -2791,6 +2843,8 @@ def main(argv: list[str] | None = None) -> int:
             {"kind": args.kind, "plan": argv_text.abbreviate(args.plan), "stage_index": args.stage_index},
         )
         return 2
+    if prompt_only:
+        return prompt
     handoff_env_value: "str | None" = None
     if resumed is not None and not args.dry_run:
         handoff_env_value = adopted_handoff_env_value(resumed_state)
@@ -2866,12 +2920,12 @@ def main(argv: list[str] | None = None) -> int:
         log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
         return 2
 
-    # The plans-directory grant was withheld above; grant the one-pair view
-    # directory (a pair only) and the directories of the plan's check scripts
-    # instead (Read allow + Edit deny, same directional pair plans_permission_rules
-    # uses for its own read kinds).
-    topo_read_dirs = [d for d in [topo_view_dir] if d is not None] + topo_check_dirs
-    for read_dir in topo_read_dirs:
+    # The plan view directory the prompt names and, for --review-topo (whose
+    # plans-directory grant was withheld above), the directories of the plan's check
+    # scripts: Read allow + Edit deny, the same directional pair plans_permission_rules
+    # uses for its own read kinds.
+    read_dirs = [Path(d) for d in site.add_dirs] + topo_check_dirs
+    for read_dir in read_dirs:
         read_allow, read_deny = review_topo_view_permission_rules(read_dir)
         child_permissions = child_settings.setdefault("permissions", {})
         child_permissions.setdefault("allow", []).extend(read_allow)
@@ -2931,9 +2985,8 @@ def main(argv: list[str] | None = None) -> int:
     # the launch below); `claude -p` reads its prompt from stdin.
 
     if args.dry_run:
-        if topo_view_dir is not None:
-            view_files = topo_pair_view(topo_doc, topo_pair)
-            print(f"TOPO-VIEW: {topo_view_dir} files={','.join(view_files)}")
+        if topo_pair is not None and site.view_dir is not None:
+            print(f"TOPO-VIEW: {site.view_dir} files={','.join(site.view_files)}")
         elif topo_pair is not None:
             print("TOPO-VIEW: none files=")
         print("=== assembled prompt (delivered via stdin) ===")

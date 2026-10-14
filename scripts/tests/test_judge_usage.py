@@ -554,7 +554,7 @@ def test_legacy_runner_without_timed_out_records_an_unknown_not_a_false(monkeypa
     assert decided["runner_legacy"] is True
 
 
-# --- the four engine-path functions self-attribute, each its own name -------
+# --- the engine-path functions self-attribute, each its own name ------------
 
 def test_engine_path_functions_attribute_their_own_name_not_unattributed(monkeypatch, tmp_path):
     path = _use_ledger(monkeypatch, tmp_path)
@@ -563,7 +563,6 @@ def test_engine_path_functions_attribute_their_own_name_not_unattributed(monkeyp
         lambda argv, **kwargs: SimpleNamespace(returncode=0, stdout="YES\nfine", stderr=""),
     )
     advisor.enumerate_claims("some text", advisor.subprocess_runner)
-    advisor.enumerate_questions_health("goal", "done", "plan text", advisor.subprocess_runner)
     advisor.judge("weight_classification", {}, advisor.subprocess_runner, enabled=True)
     advisor.acceptance_judge(
         "observation", "expected", advisor.subprocess_runner, enabled=True
@@ -571,13 +570,12 @@ def test_engine_path_functions_attribute_their_own_name_not_unattributed(monkeyp
     calls = [r for r in judge_ledger.read_records(path) if r["kind"] == "call"]
     assert [c["judge"] for c in calls] == [
         "enumerate_claims",
-        "enumerate_questions_health",
         "judge",
         "acceptance_judge",
     ]
     # begin_attributed_call() runs at the top of each function, so outside any
-    # hook each of the four lands under its own fresh invocation_id.
-    assert len({c["invocation_id"] for c in calls}) == 4
+    # hook each of the three lands under its own fresh invocation_id.
+    assert len({c["invocation_id"] for c in calls}) == 3
 
 
 def test_engine_path_judge_called_inside_a_hook_keeps_the_hooks_invocation_id(

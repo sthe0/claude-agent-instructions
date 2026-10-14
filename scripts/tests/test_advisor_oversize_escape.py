@@ -1,7 +1,7 @@
 """Regression tests for ESCAPE_ADVISOR_OVERSIZE (E2BIG-class subprocess failures).
 
-Before this, enumerate_questions_health's `except Exception` arm swallowed E2BIG
-with an empty stderr string, so classify_runner_failure classified it as the
+An E2BIG failure of a whole-plan advisor call, swallowed with an empty stderr
+string, would be classified by classify_runner_failure as the
 generic ESCAPE_ADVISOR_ERROR — the same bucket as an ordinary runner crash. The
 oversize escape needs its own reason (advisor_oversize) so a fleet-wide rise in
 this bucket names a split-the-plan work item rather than a runner-health alarm —
@@ -9,7 +9,7 @@ the two have different operators and different fixes.
 
 Covered here:
   - classify_runner_failure returns ESCAPE_ADVISOR_OVERSIZE on the E2BIG stderr
-    marker that enumerate_questions_health now preserves;
+    marker a stored sidecar stderr carries;
   - the exc= path reaches the same reason without needing the marker in text;
   - the sidecar fold and the question-list oversize row are retired (amendments-2.md
     E3): approve leaves an E2BIG sidecar unread and sets no flag, and
@@ -44,8 +44,8 @@ class TestClassifyRunnerFailureOversize:
     than a runner-health alarm."""
 
     def test_e2big_stderr_marker_returns_oversize(self):
-        """The marker is what enumerate_questions_health writes into the sidecar
-        stderr field when it catches OSError(E2BIG).  classify_runner_failure must
+        """The marker is what a sidecar stderr field carries after an
+        OSError(E2BIG).  classify_runner_failure must
         read it back from THAT string alone — the round-trip path via the sidecar
         file, where the live exception is gone."""
         assert advisor.classify_runner_failure(

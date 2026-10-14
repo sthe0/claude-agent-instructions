@@ -57,12 +57,14 @@ def build_record(
     depth: int,
     parent_lineage: list[dict] | None,
     created_at: str | None = None,
+    closure_digest: str | None = None,
 ) -> dict:
     """The handoff record. `parent_lineage` is the parent session's own
     `parent_link.norm_lineage` (None for a session nobody linked); the record's lineage
     extends it by the parent stage's own entry, so the last entry always names the
-    stage this child was spawned for."""
-    return {
+    stage this child was spawned for. `closure_digest` is the stage's
+    `plan.stage_closure_digest`: the plan content the stage's brief was built from."""
+    record = {
         "schema": HANDOFF_SCHEMA,
         "parent_session": parent_session,
         "stage_index": stage_index,
@@ -74,6 +76,9 @@ def build_record(
         "norm_lineage": [*(parent_lineage or []), lineage_entry(parent_session, stage_index, norm)],
         "created_at": created_at or dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
     }
+    if closure_digest is not None:
+        record["closure_digest"] = closure_digest
+    return record
 
 
 def format_env_value(path: Path | str, sha256: str) -> str:

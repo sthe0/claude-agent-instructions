@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from agentctl.plan import load_plan_with_digest
-from agentctl.render import render_pair_review_bundle, render_unit_review_bundle
+from agentctl.render import build_site_prompt, render_unit_review_bundle
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 SCRIPT = SCRIPTS_DIR / "spawn-specialist.py"
@@ -95,6 +95,14 @@ def _dry_run(capsys, argv: list[str]) -> DryRun:
 
 def _plan_sha(plan: Path) -> str:
     return hashlib.sha256(plan.read_bytes()).hexdigest()
+
+
+def _pair_site(plan: Path, pair: str, root: Path):
+    return build_site_prompt("topo-pair", plan, pair=pair, view_root=root, materialize=False)
+
+
+def _pair_view_dir(plan: Path, pair: str, root: Path) -> Path:
+    return _pair_site(plan, pair, root).view_dir
 
 
 @pytest.fixture(autouse=True)
@@ -257,8 +265,10 @@ def test_ts6_dry_run_base_stage_pair_materializes_from_a_plan_with_an_order_bloc
     argv = _base_argv("thinker", order_plan) + ["--review-topo", "base-1"]
     result = _dry_run(capsys, argv)
     assert result.rc == 0
-    view_dir = topo_units_dir / _plan_sha(order_plan) / "view-base-1"
-    assert f"TOPO-VIEW: {view_dir} files=stage-1.md" in result.out.splitlines()
+    site = _pair_site(order_plan, "base-1", topo_units_dir)
+    view_dir = site.view_dir
+    assert "stage-1.md" in site.view_files
+    assert f"TOPO-VIEW: {view_dir} files={','.join(site.view_files)}" in result.out.splitlines()
     assert "# Topological review pair: base-1" in result.prompt
     assert [d for d in result.add_dirs if d.startswith(str(topo_units_dir))] == [str(view_dir)]
 
@@ -331,9 +341,7 @@ def test_ts1_dry_run_plan_body_is_exactly_the_topo_bundle(capsys, topo_units_dir
     result = _dry_run(capsys, argv)
     assert result.rc == 0
 
-    doc, _, sha = load_plan_with_digest(two_stage_plan)
-    view_dir = topo_units_dir / sha / "view-2-1"
-    expected_bundle = render_pair_review_bundle(doc, "2-1", plan_sha256=sha, view_dir=view_dir)
+    expected_bundle = _pair_site(two_stage_plan, "2-1", topo_units_dir).text
     body = result.prompt.split(f"\n{TOPO_PLAN_LABEL}\n\n", 1)[1]
     body = body.split(f"\n\n{DONE_HEADING}\n", 1)[0]
     assert body == expected_bundle
@@ -367,11 +375,15 @@ def test_ts1_envelope_is_unchanged_only_the_plan_section_is_replaced(two_stage_p
     plain = MOD.assemble_prompt(args, 3, "perm-sentinel", **kwargs)
     topo = MOD.assemble_prompt(args, 3, "perm-sentinel", topo_bundle=bundle, **kwargs)
 
-    plan_text = MOD.argv_text.read_required_file(args.plan, "--plan")
-    whole_plan_section = f"\n## Working plan\n\n{plan_text}\n\n{DONE_HEADING}\n"
-    assert plain.count(whole_plan_section) == 1
+    site = MOD.plan_site(args, materialize=False)
+    plain_label = (
+        "## Working plan — summary (stage products only; the plan is never inlined, "
+        "read from the view directory named below)"
+    )
+    plan_section = f"\n{plain_label}\n\n{site.text}\n\n{DONE_HEADING}\n"
+    assert plain.count(plan_section) == 1
     assert topo == plain.replace(
-        whole_plan_section, f"\n{TOPO_PLAN_LABEL}\n\n{bundle}\n\n{DONE_HEADING}\n"
+        plan_section, f"\n{TOPO_PLAN_LABEL}\n\n{bundle}\n\n{DONE_HEADING}\n"
     )
 
 
@@ -379,7 +391,7 @@ def test_ts1_file_access_scope_names_the_view_directory_not_plans_dir(capsys, to
     argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2-1"]
     result = _dry_run(capsys, argv)
     scope_section = result.prompt.split("## File-access scope", 1)[1]
-    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2-1"
+    view_dir = _pair_view_dir(two_stage_plan, "2-1", topo_units_dir)
     assert str(plans_dir_patch) not in scope_section
     assert f"- Additional directory: `{view_dir}`" in scope_section.splitlines()
 
@@ -387,7 +399,7 @@ def test_ts1_file_access_scope_names_the_view_directory_not_plans_dir(capsys, to
 def test_ts2_exactly_one_add_dir_is_the_view_directory_not_plans_directory(capsys, topo_units_dir, plans_dir_patch, two_stage_plan):
     argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2-1"]
     result = _dry_run(capsys, argv)
-    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2-1"
+    view_dir = _pair_view_dir(two_stage_plan, "2-1", topo_units_dir)
     assert str(plans_dir_patch) not in result.add_dirs
     assert [d for d in result.add_dirs if d.startswith(str(topo_units_dir))] == [str(view_dir)]
 
@@ -395,7 +407,7 @@ def test_ts2_exactly_one_add_dir_is_the_view_directory_not_plans_directory(capsy
 def test_ts2_permissions_grant_read_only_view_directory_no_plans_rules(capsys, topo_units_dir, plans_dir_patch, two_stage_plan):
     argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2-1"]
     result = _dry_run(capsys, argv)
-    view_dir = str(topo_units_dir / _plan_sha(two_stage_plan) / "view-2-1")
+    view_dir = str(_pair_view_dir(two_stage_plan, "2-1", topo_units_dir))
     assert any(view_dir in rule and rule.startswith("Read(") for rule in result.allow)
     assert any(view_dir in rule and rule.startswith("Edit(") for rule in result.deny)
     assert not any(str(plans_dir_patch) in rule for rule in result.allow)
@@ -409,9 +421,10 @@ def test_ts7_dry_run_prints_the_exact_topo_view_line(capsys, topo_units_dir, two
     argv = _base_argv("thinker", two_stage_plan) + ["--review-topo", "2-1"]
     result = _dry_run(capsys, argv)
     assert result.rc == 0
-    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2-1"
+    site = _pair_site(two_stage_plan, "2-1", topo_units_dir)
+    assert "stage-1.md" in site.view_files
     assert [line for line in result.out.splitlines() if line.startswith("TOPO-VIEW:")] == [
-        f"TOPO-VIEW: {view_dir} files=stage-1.md",
+        f"TOPO-VIEW: {site.view_dir} files={','.join(site.view_files)}",
     ]
 
 
@@ -424,7 +437,8 @@ def test_tb14_dry_run_writes_nothing(capsys, topo_units_dir, two_stage_plan, cos
 
 
 def test_ts7_view_directory_is_materialized_before_the_child_launches(capsys, topo_units_dir, two_stage_plan, monkeypatch, tmp_path):
-    view_dir = topo_units_dir / _plan_sha(two_stage_plan) / "view-2-1"
+    site = _pair_site(two_stage_plan, "2-1", topo_units_dir)
+    view_dir = site.view_dir
     seen_at_launch: list[set[str]] = []
 
     def check_view_dir(cmd):
@@ -435,7 +449,7 @@ def test_ts7_view_directory_is_materialized_before_the_child_launches(capsys, to
     argv = [a for a in _base_argv("thinker", two_stage_plan) if a != "--dry-run"]
     argv += ["--review-topo", "2-1"]
     assert MOD.main(argv) == 0
-    assert seen_at_launch == [{"stage-1.md"}]
+    assert seen_at_launch == [set(site.view_files) | {"MANIFEST.json"}]
 
 
 def test_ts3_oversize_bundle_refused_pre_spawn_naming_split_and_override(capsys, topo_units_dir, two_stage_plan, monkeypatch):

@@ -37,6 +37,7 @@ to be exactly that set.
 | `scripts/agentctl/plan_refs.py`:`plan_externalize` | resolves | Reads the index, resolves it, moves one field into a file and reseals. |
 | `scripts/agentctl/plan_store.py`:`store_plan` | resolves | Resolves a plan version's references and stores the index and every visited file by hash. |
 | `scripts/agentctl/plan_store.py`:`visited_refs` | resolves | Resolves the plan on disk and returns every reference it visited. |
+| `scripts/agentctl/render.py`:`_load_site_source` | resolves | Resolves the plan through `plan_refs.resolve_refs` and keeps the verified bytes of the index and of every referenced file; the index bytes become the whole-plan review's digest object (`objects/<plan_sha256>`). |
 | `scripts/check-exception-set-enumeration.py`:`_field_sentences` | index-only | A report-only line scanner over the index text (it needs line numbers); it never changes an exit code. A field held in a referenced file is not scanned. |
 | `scripts/hook-state-gate.py`:`diagnosing_plan_write_ok` | not a plan | Reads the session state (JSON) to decide whether a plan write is allowed. |
 | `scripts/hook-ticket-plan-sync.py`:`session_plan_path` | not a plan | Reads the session state (JSON) for the registered plan path. |

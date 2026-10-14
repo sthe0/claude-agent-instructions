@@ -15,17 +15,22 @@ carries every stage's index and title.
 from __future__ import annotations
 
 import argparse
+import copy
+import dataclasses
 import errno
+import hashlib
 import json
 import os
 import shutil
 import tempfile
+import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
 from lib import kind_baselines
 
 from . import grants as _grants
-from . import plan_store
+from . import plan_refs, plan_store
 from .directive import Directive
 from .plan import (
     CONDITION_MARKERS,
@@ -49,10 +54,12 @@ from .plan import (
     interface_empty,
     load_plan,
     parse_pair,
+    parse_plan,
     parse_unit,
     plan_coverage_entries,
     reliance_set,
     review_pairs,
+    stage_closure_digest,
 )
 
 
@@ -311,8 +318,24 @@ def render_stages_md(doc: PlanDoc, stage_indices) -> str:
     return "\n".join(render_stage_brief(doc, index) for index in sorted(stage_indices))
 
 
-def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
+def _closure_digest_line(doc: PlanDoc, stage_index: int) -> str | None:
+    """`stage_closure_digest` of the plan as authored: a site view renders a copy of the
+    plan whose long fields are pointers, and the digest of that copy would name a different
+    plan, so the view carries the authored plan's digests in `pinned_closure_digests`."""
+    pinned = getattr(doc, "pinned_closure_digests", None)
+    if pinned is not None and stage_index in pinned:
+        return pinned[stage_index]
+    try:
+        return stage_closure_digest(doc, stage_index)
+    except PlanError:
+        return None
+
+
+def render_stage_brief(doc: PlanDoc, stage_index: int, *, closure_digest: bool = False) -> str:
     """Pure: a PlanDoc + one stage index -> a markdown brief of JUST that stage.
+
+    `closure_digest=True` adds the stage's `stage_closure_digest` line; the digests the
+    topo pair bundle binds and the origin/main renderer pins are of the brief without it.
 
     Difficulty removed: a dispatched specialist executes exactly one stage, but
     the spawn prompt has been embedding `render_plan_md`'s WHOLE-plan rendering
@@ -357,6 +380,9 @@ def render_stage_brief(doc: PlanDoc, stage_index: int) -> str:
         lines.append(f"- **Delivery worktree:** {m.delivery_worktree}")
     if m.external_research:
         lines.append(f"- **External research:** {m.external_research}")
+    closure = _closure_digest_line(doc, stage_index) if closure_digest else None
+    if closure is not None:
+        lines.append(f"- **Stage closure digest:** {closure}")
     lines.append("")
     lines.append(
         f"This is a PROJECTED BRIEF of stage {stage.index} only, out of "
@@ -639,17 +665,10 @@ def materialize_topo_units(doc: PlanDoc, plan_sha256: str, root: "Path | str") -
     retrying. Any other `OSError` propagates.
 
     Returns the materialized `root/plan_sha256/` directory."""
-    root = Path(root)
-    version_root = root / plan_sha256
-    if version_root.is_dir():
-        verify_topo_units(version_root, doc)
-        return version_root
-
-    root.mkdir(parents=True, exist_ok=True)
     node_files = topo_node_files(doc)
-    manifest: dict[str, str] = {}
-    tmp_dir = Path(tempfile.mkdtemp(prefix=f".{plan_sha256}.{os.getpid()}.", dir=root))
-    try:
+
+    def populate(tmp_dir: Path) -> None:
+        manifest: dict[str, str] = {}
         for filename, content in node_files.items():
             (tmp_dir / filename).write_text(content, encoding="utf-8")
             manifest[filename] = _sha256_hex(content)
@@ -664,18 +683,40 @@ def materialize_topo_units(doc: PlanDoc, plan_sha256: str, root: "Path | str") -
         (tmp_dir / "MANIFEST.json").write_text(
             json.dumps(manifest, sort_keys=True, indent=2), encoding="utf-8"
         )
+
+    root = Path(root)
+    return _publish_tree(
+        root, root / plan_sha256, f".{plan_sha256}.{os.getpid()}.", populate,
+        lambda tree: verify_topo_units(tree, doc),
+    )
+
+
+def _publish_tree(root: Path, final: Path, tmp_prefix: str, populate, verify) -> Path:
+    """Build a directory tree under a process-unique temporary sibling of `final`, then
+    `os.replace` it into place in one step so a reader never sees a partial tree. A `final`
+    that already exists is only verified. Losing the race to a concurrent writer (the
+    replace meets a non-empty destination) discards the temporary tree and verifies the
+    winner's. Any other `OSError` propagates."""
+    if final.is_dir():
+        verify(final)
+        return final
+
+    root.mkdir(parents=True, exist_ok=True)
+    tmp_dir = Path(tempfile.mkdtemp(prefix=tmp_prefix, dir=root))
+    try:
+        populate(tmp_dir)
         try:
-            os.replace(tmp_dir, version_root)
+            os.replace(tmp_dir, final)
         except OSError as exc:
-            lost_race = exc.errno in (errno.ENOTEMPTY, errno.EEXIST) and version_root.is_dir()
+            lost_race = exc.errno in (errno.ENOTEMPTY, errno.EEXIST) and final.is_dir()
             if not lost_race:
                 raise
             shutil.rmtree(tmp_dir, ignore_errors=True)
-            verify_topo_units(version_root, doc)
+            verify(final)
     except BaseException:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
-    return version_root
+    return final
 
 
 def _verify_topo_file(path: Path, expected_content: str, expected_sha256: str, remedy: str) -> None:
@@ -1236,6 +1277,320 @@ def render_unit_review_bundle(
     lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+# --- Site prompts: the one builder every model-facing site takes its plan content from.
+# A site shows the nodes (the meta, or a stage) it needs in full and the rest of the plan
+# only through PROJECTED_FIELDS; whatever else it may need is a file in a view directory
+# granted to the model, so the plan content a prompt carries is bounded by the site, not
+# by the size of the plan. ------------------------------------------------------------
+
+PLAN_FIELD_INLINE_MAX_CHARS_DEFAULT = 4000
+
+SITE_KINDS = (
+    "dispatch-stage-brief", "dispatch-no-stage", "topo-pair", "topo-unit",
+    "whole-plan-review", "enumerate-node",
+)
+
+# The plan keys another node's summary may print, per node kind: what a consumer relies on
+# (a stage's declared product) and what orients any reader (the meta's goal and checks by
+# label). Method, procedure, knowledge and invariants of a stage, and the meta's context,
+# are never in it.
+PROJECTED_FIELDS: dict[str, frozenset[str]] = {
+    "stage": frozenset({
+        "title", "expected_result_image", "criterion_type", "done_criterion",
+        "output_artifacts",
+    }),
+    "meta": frozenset({
+        "goal", "task_id", "weight_class", "done_criterion", "criterion_type", "repo_root",
+        "delivery_worktree", "external_research", "final_check",
+    }),
+}
+
+_POINTER_PREFIX = "see objects/"
+
+# The prose attributes of the typed plan that a view prints as a pointer when over the
+# inline limit; commands, paths and identifiers are never pointers.
+_POINTER_ATTRS = frozenset({
+    "knowledge", "material", "result", "invariants", "means", "method", "procedure",
+    "preconditions", "conditions", "done_criterion", "observation", "control", "goal",
+    "external_research", "customer", "functional_place", "text", "derivation",
+})
+
+
+@dataclass(frozen=True)
+class SitePrompt:
+    text: str
+    add_dirs: tuple[str, ...]
+    shown_nodes: frozenset
+    view_dir: "Path | None" = None
+    view_files: tuple[str, ...] = ()
+
+
+@dataclass
+class _SiteSource:
+    doc: PlanDoc
+    index_bytes: bytes
+    plan_sha256: str
+    visited: list
+    files: dict
+
+
+def _load_site_source(plan_path: "str | Path") -> _SiteSource:
+    """The plan's typed doc together with every byte it was made of: the index and each
+    referenced file as `resolve_refs` read them, so the objects a view holds are the
+    verified bytes behind the doc and not a second read of the file system."""
+    path = Path(plan_path)
+    try:
+        data = path.read_bytes()
+        raw = tomllib.loads(data.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise PlanError(f"cannot read plan file {path}: {exc}") from exc
+    files: dict[str, bytes] = {}
+
+    def collect(ref_path: Path, sha256: str) -> bytes:
+        content = plan_refs._read_file(ref_path, sha256)
+        files[hashlib.sha256(content).hexdigest()] = content
+        return content
+
+    resolved, visited = plan_refs.resolve_refs(raw, path.parent, None, read=collect, index_path=path)
+    return _SiteSource(parse_plan(resolved), data, hashlib.sha256(data).hexdigest(), visited, files)
+
+
+def _visited_nodes(visited: list) -> dict[str, set]:
+    """sha256 of each referenced file -> the nodes ("meta" or a stage index) whose
+    references lead to it."""
+    nodes: dict[str, set] = {}
+    for position, _path, sha256 in visited:
+        head = position[0]
+        nodes.setdefault(sha256, set()).add(head if isinstance(head, int) else "meta")
+    return nodes
+
+
+def _pointerize(doc: PlanDoc, limit: int) -> tuple[PlanDoc, dict[str, bytes]]:
+    """A copy of `doc` whose prose fields longer than `limit` characters read
+    `see objects/<sha256>`, and the bytes of each such field by that hash. The copy carries
+    the closure digests of `doc` itself (`pinned_closure_digests`)."""
+    pinned = {}
+    for stage in doc.stages:
+        digest = _closure_digest_line(doc, stage.index)
+        if digest is not None:
+            pinned[stage.index] = digest
+    view = copy.deepcopy(doc)
+    objects: dict[str, bytes] = {}
+
+    def walk(node) -> None:
+        if dataclasses.is_dataclass(node) and not isinstance(node, type):
+            for item in dataclasses.fields(node):
+                value = getattr(node, item.name)
+                if isinstance(value, str):
+                    if item.name in _POINTER_ATTRS and len(value) > limit:
+                        data = value.encode("utf-8")
+                        sha256 = hashlib.sha256(data).hexdigest()
+                        objects[sha256] = data
+                        setattr(node, item.name, f"{_POINTER_PREFIX}{sha256}")
+                else:
+                    walk(value)
+        elif isinstance(node, (list, tuple)):
+            for inner in node:
+                walk(inner)
+        elif isinstance(node, dict):
+            for inner in node.values():
+                walk(inner)
+
+    walk(view)
+    view.pinned_closure_digests = pinned
+    return view, objects
+
+
+def _site_files(text_files: dict[str, str], objects: dict[str, bytes]) -> dict[str, bytes]:
+    files = {name: text.encode("utf-8") for name, text in text_files.items()}
+    files.update({f"objects/{sha256}": data for sha256, data in objects.items()})
+    return files
+
+
+def _site_manifest(files: dict[str, bytes]) -> str:
+    return json.dumps(
+        {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())},
+        sort_keys=True, indent=2,
+    )
+
+
+def verify_site_view(view_dir: "Path | str", files: dict[str, bytes]) -> None:
+    """Re-check an already-materialized site view against the files it must hold: the exact
+    file set, each file's bytes, and `MANIFEST.json`. Raises `TopoUnitsCorrupt` naming the
+    offending path."""
+    view_dir = Path(view_dir)
+    remedy = f"delete {view_dir} and re-run to re-materialize it"
+    if not view_dir.is_dir():
+        raise TopoUnitsCorrupt(f"{view_dir} is missing; {remedy}")
+    expected = {**files, "MANIFEST.json": _site_manifest(files).encode("utf-8")}
+    actual = {p.relative_to(view_dir).as_posix() for p in view_dir.rglob("*") if p.is_file()}
+    if actual != set(expected):
+        extra = sorted(actual - set(expected))
+        missing = sorted(set(expected) - actual)
+        raise TopoUnitsCorrupt(f"{view_dir} file set mismatch — extra: {extra}, missing: {missing}; {remedy}")
+    for name, data in expected.items():
+        if (view_dir / name).read_bytes() != data:
+            raise TopoUnitsCorrupt(f"{view_dir / name} content does not match its expected bytes; {remedy}")
+
+
+def _materialize_site_view(
+    root: Path, name: str, files: dict[str, bytes],
+) -> Path:
+    def populate(tmp_dir: Path) -> None:
+        for rel, data in files.items():
+            target = tmp_dir / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        (tmp_dir / "MANIFEST.json").write_text(_site_manifest(files), encoding="utf-8")
+
+    return _publish_tree(
+        root, root / name, f".{name}.{os.getpid()}.", populate,
+        lambda tree: verify_site_view(tree, files),
+    )
+
+
+def _view_header(view_dir: Path) -> list[str]:
+    return [
+        f"Plan view: `{view_dir}` — a field too long to print here reads "
+        f"`{_POINTER_PREFIX}<sha256>`, a file under that directory.",
+        "",
+    ]
+
+
+def _plan_summary_text(doc: PlanDoc) -> str:
+    """The whole-plan reading a site without a stage gets: the meta in full, then every
+    stage by its declared product only."""
+    lines = unit_base_text(doc).rstrip("\n").split("\n")
+    lines.extend(["", "## Stages (declared product only)", ""])
+    for stage in sorted(doc.stages, key=lambda s: s.index):
+        lines.extend(render_stage_interface(doc, stage.index).rstrip("\n").split("\n"))
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _pair_shown_nodes(doc: PlanDoc, pair_id: str) -> frozenset:
+    base, service = parse_pair(doc, pair_id)
+    shown: set = {"meta"}
+    stage = next(s for s in doc.stages if s.index == int(service))
+    if base == PAIR_BASE_NODE:
+        if interface_empty(stage):
+            shown.add(int(service))
+    else:
+        shown.add(int(base))
+        if _is_source_stage(doc, service) or interface_empty(stage):
+            shown.add(int(service))
+    return frozenset(shown)
+
+
+def build_site_prompt(
+    kind: str, plan_path: "str | Path", *, stage: "int | None" = None,
+    pair: "str | None" = None, unit: "str | None" = None,
+    view_root: "str | Path | None" = None, history: "dict | None" = None,
+    materialize: bool = True, inline_max_chars: "int | None" = None,
+) -> SitePrompt:
+    """The plan content one model-facing site passes, and the directories the model is
+    granted to read the rest from (`add_dirs`). `shown_nodes` names the nodes — "meta" or a
+    stage index — whose fields the text prints beyond `PROJECTED_FIELDS`.
+
+    Every kind but `topo-unit` and `enumerate-node` (which print every field of one node
+    and read nothing) builds a view directory under `view_root` (default: the topo units
+    root): the node files, `objects/<sha256>` for every file the shown nodes were
+    resolved from and for every field printed as a pointer, and `MANIFEST.json`.
+    `materialize=False` computes the same prompt and view path without writing.
+
+    Raises PlanError for a plan that does not load and ValueError for a stage, pair or
+    unit the plan does not have."""
+    if kind not in SITE_KINDS:
+        raise ValueError(f"unknown site kind {kind!r}; known kinds: {', '.join(SITE_KINDS)}")
+    source = _load_site_source(plan_path)
+    doc = source.doc
+
+    if kind == "topo-unit":
+        node = parse_unit(doc, unit or "")
+        text = render_unit_review_bundle(doc, unit, plan_sha256=source.plan_sha256, history=history)
+        return SitePrompt(text, (), frozenset({"meta" if node == PAIR_BASE_NODE else int(node)}))
+    if kind == "enumerate-node":
+        if stage is None:
+            return SitePrompt(unit_base_text(doc), (), frozenset({"meta"}))
+        return SitePrompt(render_stage_fields(doc, stage), (), frozenset({int(stage)}))
+
+    limit = PLAN_FIELD_INLINE_MAX_CHARS_DEFAULT if inline_max_chars is None else inline_max_chars
+    shown_doc, pointer_objects = _pointerize(doc, limit)
+    plan_digest_object = kind == "whole-plan-review"
+    label = kind
+
+    if kind == "dispatch-stage-brief":
+        if stage is None:
+            raise ValueError("a dispatch-stage-brief site needs a stage")
+        label = f"{kind}-{stage}"
+        shown = frozenset({int(stage)})
+        view_nodes = shown
+
+        def render(view_dir: Path) -> tuple[str, dict[str, str]]:
+            brief = render_stage_brief(shown_doc, int(stage), closure_digest=True)
+            return "\n".join([*_view_header(view_dir), brief]), {node_file_name(int(stage)): brief}
+    elif kind == "topo-pair":
+        base, service = parse_pair(doc, pair or "")
+        label = f"{kind}-{pair}"
+        shown = _pair_shown_nodes(doc, pair)
+        view_nodes = shown | {int(service)}
+
+        def render(view_dir: Path) -> tuple[str, dict[str, str]]:
+            bundle = render_pair_review_bundle(
+                shown_doc, pair, plan_sha256=source.plan_sha256, view_dir=view_dir,
+                history=history)
+            return bundle, {node_file_name(service): node_file_text(shown_doc, service)}
+    else:
+        shown = frozenset({"meta"})
+        view_nodes = shown
+
+        def render(view_dir: Path) -> tuple[str, dict[str, str]]:
+            summary = _plan_summary_text(shown_doc)
+            parts = [*_view_header(view_dir), summary]
+            if plan_digest_object:
+                parts.extend([
+                    "## Plan digest", "",
+                    f"The plan file itself is `{_POINTER_PREFIX}{source.plan_sha256}` in the view "
+                    f"directory: its sha256 is the plan digest.",
+                    "",
+                    f"{PLAN_DIGEST_MARKER} {source.plan_sha256}",
+                ])
+            return "\n".join(parts).rstrip() + "\n", {"meta.md": unit_base_text(shown_doc)}
+
+    def view_files(text: str, node_files: dict[str, str]) -> dict[str, bytes]:
+        printed = "\n".join([text, *node_files.values()])
+        objects = {
+            sha256: data for sha256, data in pointer_objects.items()
+            if f"{_POINTER_PREFIX}{sha256}" in printed
+        }
+        owners = _visited_nodes(source.visited)
+        objects.update({
+            sha256: source.files[sha256] for sha256, nodes in owners.items()
+            if nodes & view_nodes and sha256 in source.files
+        })
+        if plan_digest_object:
+            objects[source.plan_sha256] = source.index_bytes
+        return _site_files(node_files, objects)
+
+    placeholder = Path("<view>")
+    first_text, node_files = render(placeholder)
+    files = view_files(first_text, node_files)
+    root = Path(view_root) if view_root is not None else _default_view_root()
+    name = (f"site-{source.plan_sha256[:16]}-{label}-"
+            f"{hashlib.sha256(_site_manifest(files).encode('utf-8')).hexdigest()[:12]}")
+    view_dir = root / name
+    if materialize:
+        _materialize_site_view(root, name, files)
+    text, _ = render(view_dir)
+    return SitePrompt(text, (str(view_dir),), shown, view_dir, tuple(sorted(files)))
+
+
+def _default_view_root() -> Path:
+    from lib import config_root
+
+    return config_root.topo_units_root()
 
 
 def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
