@@ -64,6 +64,8 @@ class Scene:
 
     def __init__(self, tmp_path: Path, monkeypatch):
         self.tmp = tmp_path
+        self.venue = tmp_path / "venue"
+        self.venue.mkdir()
         self.home = tmp_path / "home"
         self.home.mkdir()
         self.agent_home = self.home / ".claude"
@@ -88,16 +90,14 @@ class Scene:
         monkeypatch.setenv(HANDOFF_ENV, self.launch.env[HANDOFF_ENV])
         _cli(self.root, "start", session=self.own_session, task="child", goal="g", done_criterion="dc")
         monkeypatch.delenv(HANDOFF_ENV)
-        (self.tmp / "tests").mkdir()
-        (self.tmp / "tests" / "test_mod.py").write_text("", encoding="utf-8")
+        (self.venue / "tests").mkdir()
+        (self.venue / "tests" / "test_mod.py").write_text("", encoding="utf-8")
         self.parent_before = self.parent_bytes()
 
     def _start_parent(self) -> str:
-        plan = Path(_parent_plan(self.tmp))
-        plan.write_text(
-            _with_stage_grant(plan.read_text(encoding="utf-8"), PYTEST_WILDCARD,
-                              f"Edit(/{self.tmp}/**)"),
-            encoding="utf-8")
+        plan = Path(_parent_plan(self.venue))
+        plan.write_text(_with_stage_grant(plan.read_text(encoding="utf-8"), PYTEST_WILDCARD),
+                        encoding="utf-8")
         _cli(self.root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc")
         _cli(self.root, "classify", session=PARENT, architectural=True, files=5,
              changed_lines=200, wall_clock_min=60)
@@ -162,7 +162,7 @@ class Scene:
         text = _spliced(parent_norm=self.norm.norm_digest(), final_checks=((PARENT_CHECK, 0),))
         head, _, rest = text.partition("[[stage]]\nindex = 2")
         final_checks = rest[rest.index("\n[[final_check]]"):]
-        return declare_venue(_with_stage_verify(head + final_checks, stage_check), self.tmp)
+        return declare_venue(_with_stage_verify(head + final_checks, stage_check), self.venue)
 
     def to_planning(self) -> None:
         _expect_ok(self.channel("classify", "--architectural", "--files", "5", "--changed-lines", "200",
