@@ -103,6 +103,12 @@ def _spawn_tags() -> dict:
     return {"session_id": os.environ.get("CLAUDE_CODE_SESSION_ID"), "ticket": ticket}
 
 
+def _spawner_session_field(session: str | None) -> dict:
+    """The engine session this spawn was made on behalf of: --session, else the spawner's own contour."""
+    spawner = session or os.environ.get(OWN_SESSION_ENV)
+    return {"spawner_session": spawner} if spawner else {}
+
+
 CONFIG_KEY_RE = re.compile(r"^\|\s*`([a-z0-9-]+)`\s*\|\s*`([^`]+)`\s*\|")
 
 
@@ -2841,6 +2847,7 @@ def main(argv: list[str] | None = None) -> int:
         "transcript_path": str(transcript_path) if transcript_path is not None else None,
         "review_pair": topo_pair,
         "plan_sha256": topo_plan_sha256,
+        **_spawner_session_field(args.session),
         **_spawn_tags(),
     })
 

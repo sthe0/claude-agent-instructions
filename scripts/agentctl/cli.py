@@ -549,7 +549,10 @@ def _effort_cross_totals(state: SessionState) -> dict:
     if key is None:
         return totals
     window = order_approvals.get(key)["effort_since_user_approval"]
-    flushed = state.order_effort_flushed or {}
+    flushed = state.order_effort_flushed
+    if flushed is None and _is_linked(state):
+        flushed = {effort.SCALE_SPEND: 0.0}
+    flushed = flushed or {}
     actual = effort.actual(state)
     base = state.order_effort_base or {}
     for scale, total_key in _ORDER_EFFORT_SCALES:
@@ -561,11 +564,30 @@ def _effort_cross_totals(state: SessionState) -> dict:
     return totals
 
 
+def _is_linked(state: SessionState) -> bool:
+    link = state.parent_link
+    return isinstance(link, dict) and bool(link.get("parent_session"))
+
+
+def _seed_linked_flush_baseline(state: SessionState) -> None:
+    """A linked session's order window counts from the user's approval, which reached it
+    through its parent: whatever it spent before its first ledgered flush was spent after
+    that approval (except across a later user re-approval while the session has never
+    flushed), so that flush moves it instead of only seeding the watermark. Only the
+    spend baseline starts at 0; wall-clock keeps the seeding behaviour."""
+    if state.order_effort_flushed is None and _is_linked(state):
+        state.order_effort_flushed = {
+            effort.SCALE_SPEND: 0.0,
+            effort.SCALE_WALL_CLOCK: effort.actual(state)[effort.SCALE_WALL_CLOCK],
+        }
+
+
 def _flush_order_effort(state: SessionState, key: str | None = None) -> None:
     """Move this session's unflushed spend/wall-clock into its order's ledger window."""
     key = key or _ledgered_order_key(state)
     if key is None:
         return
+    _seed_linked_flush_baseline(state)
     actual = effort.actual(state)
     flushed = state.order_effort_flushed
     if flushed is not None:
@@ -2233,7 +2255,7 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
             data={"blockers": reentry_blockers, "resolved_reentry_count": reentry_count},
         )
     if prior is not None:
-        effort.refresh_spend(prior, _cost_rows(args), prior.plan_path)
+        _refresh_spend(prior, store, _cost_rows(args), prior.plan_path)
         _flush_order_effort(prior)
     new = SessionState(
         session_id=args.session,
@@ -3730,7 +3752,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     _log_gate(state, "effort_fire", efblock, passed=not efblock)
     if efblock:
         return _effort_fire_refusal(state, "submit_plan", efblock)
-    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
+    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
     _flush_order_effort(state)
     plan_path = args.plan
     # #15: a resubmission — the coordinator revised the plan at PLAN_READY (after a
@@ -8240,6 +8262,140 @@ def _cost_rows(args) -> list[dict]:
     return cost.read_rows(Path(log) if log else cost.COST_LOG)
 
 
+def _parent_session_of(store: StateStore, session: str, loaded: dict) -> str | None:
+    """The `parent_link` parent of `session`, or None when it has no link or its state
+    cannot be loaded. The state is kept in `loaded` (session -> state or None), so a scan
+    loads each stored session once."""
+    if session not in loaded:
+        try:
+            loaded[session] = store.load(session)
+        except Exception:
+            loaded[session] = None
+    state = loaded[session]
+    link = state.parent_link if state is not None else None
+    return (link.get("parent_session") or None) if isinstance(link, dict) else None
+
+
+def _link_chain(
+    store: StateStore, session: str, parent: str, loaded: dict, max_hops: int,
+) -> list[SessionState] | None:
+    """The sessions from `session` up to, but excluding, `parent`, following `parent_link`
+    one hop at a time; None when no chain of at most `max_hops` hops reaches `parent`.
+    A visited set stops a cyclic link; a state that cannot be loaded ends the walk."""
+    chain: list[SessionState] = []
+    visited = {session}
+    cursor = session
+    for _ in range(max_hops):
+        up = _parent_session_of(store, cursor, loaded)
+        if up is None:
+            return None
+        chain.append(loaded[cursor])
+        if up == parent:
+            return chain
+        if up in visited:
+            return None
+        visited.add(up)
+        cursor = up
+    return None
+
+
+def _descendant_sessions(store: StateStore, parent: str, candidates) -> dict[str, list[SessionState]]:
+    """D(`parent`) among `candidates`: session -> its link chain (the session first, up to but
+    excluding `parent`) for every candidate whose `parent_link` chain reaches `parent`,
+    directly or through other descendants, in sorted session order. Never contains `parent`.
+    Read-only."""
+    loaded: dict = {}
+    chains = {}
+    max_hops = Thresholds().max_recursion_depth
+    for session in sorted(set(candidates)):
+        chain = _link_chain(store, session, parent, loaded, max_hops) if session != parent else None
+        if chain is not None:
+            chains[session] = chain
+    return chains
+
+
+def _refresh_spend(state: SessionState, store: StateStore, rows: list[dict], path: str | None) -> float:
+    """`effort.refresh_spend` over the ledger rows of this session AND of its linked
+    descendants (effort.refresh_subtree_spend). The descendant scan runs only when a row
+    names a spawner session other than this one, so a session whose ledger rows carry no
+    foreign `spawner_session` returns exactly the base value.
+
+    The part of what is booked here for a descendant that the order window already holds
+    is marked flushed in this session too (`_credit_descendant_order_flush`)."""
+    foreign = {
+        spawner for row in rows
+        if isinstance(spawner := row.get("spawner_session"), str) and spawner != state.session_id
+    }
+    chains = _descendant_sessions(store, state.session_id, foreign)
+    delta, booked = effort.refresh_subtree_spend(state, rows, chains.keys(), path)
+    if booked:
+        key = _ledgered_order_key(state)
+        if key is not None:
+            _seed_linked_flush_baseline(state)
+            if state.order_effort_flushed is not None:
+                _credit_descendant_order_flush(state, key, chains, booked)
+    return delta
+
+
+def _flushed_spend_of_order(member: SessionState, key: str, order_keys: dict) -> float | None:
+    """What `member` has flushed (or been credited) into the window of order `key`; None
+    when it is not a flushing session of that order. `order_keys` caches
+    `_ledgered_order_key` per session (it reads the plan file)."""
+    if member.order_effort_flushed is None:
+        return None
+    if member.session_id not in order_keys:
+        order_keys[member.session_id] = _ledgered_order_key(member)
+    if order_keys[member.session_id] != key:
+        return None
+    return float(member.order_effort_flushed.get(effort.SCALE_SPEND) or 0.0)
+
+
+def _credit_descendant_order_flush(
+    state: SessionState, key: str, chains: dict[str, list[SessionState]],
+    booked: dict[str, tuple[float, float]],
+) -> None:
+    """Mark as flushed in `state` the part of each newly booked descendant spend that the
+    window of the shared order `key` already holds, so `state`'s flush does not add it again.
+
+    A session's `order_effort_flushed` covers its own ledger rows PLUS the rows its own
+    refresh booked for its descendants, so the share a descendant covers of its OWN rows
+    is its flushed total less those subtree rows (attributed first; floor 0) — assuming
+    every row it books by plan path was spawned by it. A linked session's first flush
+    moves what it spent so far (`_seed_linked_flush_baseline`), so its flushed total is
+    what the window holds, never merely a watermark. The window
+    also holds a grand-descendant's rows that an intermediate session of the same order
+    carried: the intermediate's flushed total, up to its subtree rows, split over its
+    descendants in proportion to what it booked for each. The window holds the larger
+    of the two once, whichever session put it there. What neither covers — a descendant
+    that never flushed, rows on a path its own refresh never books — is left to
+    `state`'s flush. `booked` carries `(earlier, gain)` per descendant; the credit is
+    what the window holds of that descendant beyond what `state` already credited for
+    it (`order_descendant_credited`), capped by the newly booked `gain` — the order in
+    which `state` booked the descendant's rows does not matter."""
+    order_keys: dict = {}
+    for session, (_, gain) in booked.items():
+        chain = chains[session]
+        covered = 0.0
+        flushed = _flushed_spend_of_order(chain[0], key, order_keys)
+        if flushed is not None:
+            covered = max(0.0, flushed - sum(chain[0].effort_subtree_seen.values()))
+        for member in chain[1:]:
+            flushed = _flushed_spend_of_order(member, key, order_keys)
+            booked_by_member = sum(member.effort_subtree_seen.values())
+            if flushed is None or booked_by_member <= 0:
+                continue
+            carried = member.effort_subtree_seen.get(session, 0.0)
+            covered = max(covered, carried * min(flushed, booked_by_member) / booked_by_member)
+        credited = float(state.order_descendant_credited.get(session) or 0.0)
+        credit = min(gain, max(0.0, covered - credited))
+        if not credit:
+            continue
+        state.order_descendant_credited[session] = credited + credit
+        state.order_effort_flushed[effort.SCALE_SPEND] = (
+            float(state.order_effort_flushed.get(effort.SCALE_SPEND) or 0.0) + credit
+        )
+
+
 def _utcnow() -> float:
     """The one clock read behind every `effort.record_fire(..., now=...)` call site —
     collapses five copy-pasted `dt.datetime.now(dt.timezone.utc).timestamp()` calls."""
@@ -8605,7 +8761,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     # Effort-divergence spend refresh (call site 1) + fire check. Accounting runs
     # unconditionally — only ACTING on a fire is gated by gates.effort_active — see
     # effort.py's module docstring and gates.effort_active's docstring.
-    effort.refresh_spend(state, _rows, state.plan_path)
+    _refresh_spend(state, store, _rows, state.plan_path)
     _flush_order_effort(state)
     div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state))
     if effort.armed(state):
@@ -8739,7 +8895,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # separate cost-log read from the rollup below: refresh_spend needs every row by
     # plan_path (including engine-mandated review spawns no stage attributes), the
     # rollup needs only what record-result already stamped onto each Outcome.
-    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
+    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
     _flush_order_effort(state)
     div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state))
     if effort.armed(state):
@@ -10617,7 +10773,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # update. A cost row a just-spawned plan review wrote against the NEW path (args.plan)
     # is not lost by refreshing against the old path here — it is simply picked up by
     # the NEXT refresh against the new path, once a branch below rewrites plan_path.
-    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
+    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
     _flush_order_effort(state)
 
     if kind == "no_change":
@@ -10966,7 +11122,7 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
             "effort trigger not armed (no approved-plan baseline); no scale can diverge",
             data={"armed": False, "active": gates.effort_active(state), "scales": []},
         )
-    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
+    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
     thr = Thresholds()
     multiple = thr.effort_divergence_multiple()
     # The SAME cross-session totals the fire sites pass, read once and used for both
@@ -11072,17 +11228,14 @@ def cmd_children(args, *, store: StateStore, runner: Runner | None = None) -> Di
     parent = args.session
     list_ids = getattr(store, "session_ids", None)
     children: list[dict] = []
+    loaded: dict = {}
     for session_id in (list_ids() if list_ids is not None else []):
-        try:
-            child = store.load(session_id)
-        except Exception:
+        if _parent_session_of(store, session_id, loaded) != parent:
             continue
-        link = child.parent_link if child is not None else None
-        if link is None or link.get("parent_session") != parent:
-            continue
+        child = loaded[session_id]
         children.append({
             "session": child.session_id,
-            "stage_index": link.get("stage_index"),
+            "stage_index": child.parent_link.get("stage_index"),
             "node": child.node,
             "recursion_depth": child.recursion_depth,
             "difficulty_level": child.difficulty.level if child.difficulty is not None else None,

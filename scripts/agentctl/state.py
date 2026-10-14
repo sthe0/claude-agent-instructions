@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 50  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 52  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -85,6 +85,10 @@ SCHEMA_VERSION = 50  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # 50: SessionState gains parent_link (the spawning stage's norm
                      # handoff, read from AGENTCTL_NORM_HANDOFF); recursion_depth is
                      # taken from it when present
+                     # 51: SessionState gains effort_subtree_seen (per-descendant spend
+                     # watermarks of the subtree roll-up)
+                     # 52: SessionState gains order_descendant_credited (per-descendant
+                     # spend already marked flushed in the order window)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -2201,6 +2205,11 @@ class SessionState:
     #   effort_actuals     the monotone accumulators ('spend_usd', 'active_minutes').
     #   effort_fires       one record per firing (scale, multiple, history_len).
     #   effort_spend_seen  plan_path -> ledger total already booked, keyed BY PATH.
+    #   effort_subtree_seen  descendant session -> ledger total already booked for the
+    #                      rows that session spawned (`spawner_session`). SESSION-scoped,
+    #                      deliberately NOT a PlanFrame field: a linked descendant's
+    #                      spend belongs to the session, so sub-plan push/pop leave the
+    #                      watermarks untouched and pop's actuals merge counts it once.
     #   user_prompt_count  interactions actual, stamped by hook-engine-start.py.
     #   effort_crossings   RECORD_ONLY_SCALES observations (effort.record_crossing) —
     #                      SESSION-scoped like user_prompt_count itself, deliberately NOT
@@ -2213,6 +2222,7 @@ class SessionState:
     effort_actuals: dict = field(default_factory=dict)
     effort_fires: list[dict] = field(default_factory=list)
     effort_spend_seen: dict = field(default_factory=dict)
+    effort_subtree_seen: dict = field(default_factory=dict)
     user_prompt_count: int = 0
     effort_crossings: list[dict] = field(default_factory=list)
     # Order-keyed effort custody (autonomy boundary). Only meaningful for a session
@@ -2224,7 +2234,11 @@ class SessionState:
     #   order_effort_frozen   the user-approved spend/wall_clock estimate rederive keeps.
     #   agent_ack_difficulty_ids  ids of difficulty records an agent-authored
     #                         fire-acknowledge / renegotiation already consumed.
+    #   order_descendant_credited  descendant session -> the spend of it this session
+    #                         already marked flushed because the order window held it
+    #                         (cli._credit_descendant_order_flush); SESSION-scoped.
     order_effort_flushed: dict | None = None
+    order_descendant_credited: dict = field(default_factory=dict)
     order_effort_base: dict = field(default_factory=dict)
     order_effort_frozen: dict | None = None
     agent_ack_difficulty_ids: list[str] = field(default_factory=list)

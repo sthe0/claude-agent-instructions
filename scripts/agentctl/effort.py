@@ -107,6 +107,14 @@ future edit that treats an all-zero baseline as equivalent to unset would silent
 the window for a freshly-pushed child and skip its snapshot. `None` is the unarmed value
 everywhere — fresh session, after push, after reset — never a zeroed dict.
 
+SUBTREE ROLL-UP. A stage that dispatched linked children also owns their spend. A spawn
+cost row names the engine session it was made for in `spawner_session`; the CALLER passes
+the set of this session's linked descendants as plain data and `refresh_subtree_spend`
+books each descendant's rows once, against `state.effort_subtree_seen[descendant]`, never
+against `plan_path`. `effort_subtree_seen` is session-scoped and deliberately outside
+`PlanFrame`, so push and pop neither reset nor merge it and a descendant is counted once
+across sub-plan custody. With no descendants the result is exactly `refresh_spend`.
+
 Purity: this module reads only the state object it is handed plus config.md's constants.
 It never shells out, opens a socket, or reads a clock — the cost-ledger read belongs to
 the CALLER (cli.py) and arrives as data, and the wall-clock accumulation happens in
@@ -115,6 +123,7 @@ hook-engine-start.py. scripts/tests/test_effort.py pins that with the same
 """
 from __future__ import annotations
 
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 
 from .config import Thresholds
@@ -623,6 +632,59 @@ def refresh_spend(state: SessionState, rows: list[dict], path: str | None) -> fl
     )
     state.effort_spend_seen[key] = max(total, seen)
     return delta
+
+
+def is_subtree_row(row: dict, descendants: Collection[str]) -> bool:
+    """Whether a cost row was spawned by one of `descendants` (its `spawner_session`)."""
+    spawner = row.get("spawner_session")
+    return isinstance(spawner, str) and spawner in descendants
+
+
+def own_rows(rows: list[dict], descendants: Collection[str]) -> list[dict]:
+    """The rows `refresh_spend` books by `plan_path`: every row NOT spawned by a descendant."""
+    return [row for row in rows if not is_subtree_row(row, descendants)]
+
+
+def refresh_subtree_spend(
+    state: SessionState,
+    rows: list[dict],
+    descendants: Iterable[str],
+    path: str | None,
+) -> tuple[float, dict[str, tuple[float, float]]]:
+    """`refresh_spend` plus the spend of every linked descendant of this session.
+
+    Returns `(delta, booked)`: the total newly booked, and for each descendant that gained
+    `session -> (earlier, gain)` — its watermark before this call and the amount booked now.
+
+    A row spawned by a descendant (`spawner_session` in `descendants`) is booked ONLY
+    here, against that descendant's watermark in `state.effort_subtree_seen`, whatever
+    its `plan_path` — so a descendant row that names this session's own plan is not also
+    summed by `refresh_spend`. Every other row goes through `refresh_spend` unchanged, so
+    with no descendants this is exactly `refresh_spend`. `path` is the plan path to book
+    by (the OLD one when a replan has already rewritten `state.plan_path`). Like
+    `refresh_spend`, a watermark is a high-water mark and never lowered."""
+    descendants = frozenset(descendants)
+    delta = refresh_spend(state, own_rows(rows, descendants), path)
+    booked: dict[str, tuple[float, float]] = {}
+    totals: dict[str, float] = {}
+    for row in rows:
+        if not is_subtree_row(row, descendants):
+            continue
+        value = row.get("cost_usd")
+        if isinstance(value, (int, float)):
+            totals[row["spawner_session"]] = totals.get(row["spawner_session"], 0.0) + float(value)
+    for session in sorted(totals):
+        seen = float(state.effort_subtree_seen.get(session) or 0.0)
+        gain = max(0.0, totals[session] - seen)
+        state.effort_subtree_seen[session] = max(totals[session], seen)
+        if not gain:
+            continue
+        state.effort_actuals[ACTUAL_SPEND_KEY] = (
+            float(state.effort_actuals.get(ACTUAL_SPEND_KEY) or 0.0) + gain
+        )
+        delta += gain
+        booked[session] = (seen, gain)
+    return delta, booked
 
 
 def merge_actuals(parent: dict, child: dict) -> dict:
