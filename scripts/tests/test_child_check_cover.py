@@ -20,8 +20,6 @@ there and not at collection or setup; the seven `--pass` tests pin what already 
 """
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from agentctl import resources as agentctl_resources
