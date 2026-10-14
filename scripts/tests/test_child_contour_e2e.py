@@ -34,8 +34,8 @@ from test_child_approval import (
     PARENT_CHECK, _parent_plan, _spliced, _with_stage_grant, _with_stage_verify,
 )
 from test_child_contour_gate import (
-    HANDOFF_ENV, HOOK, OWN_ENV, PARENT, Launch, _child_env, _cli, _denied, _expect_ok, _Launched,
-    _load_spawn, _own, _reason, _settings_allow, _state_dir,
+    ENGINE_START_HOOK, HANDOFF_ENV, HOOK, OWN_ENV, PARENT, Launch, _child_env, _cli, _denied,
+    _expect_ok, _isolated_env, _Launched, _load_spawn, _own, _reason, _settings_allow, _state_dir,
 )
 
 SCRIPTS = Path(__file__).resolve().parent.parent
@@ -43,18 +43,7 @@ SPECIALIZATIONS = SCRIPTS.parent / "skills" / "specializations"
 PYTEST_WILDCARD = "Bash(python3 -m pytest:*)"
 CHILD_CHECK = "python3 -m pytest -q -x tests/test_mod.py"
 OUTSIDE_CHECK = "python3 -m unittest tests.test_mod"
-_AMBIENT = ("CLAUDE_CONFIG_DIR", "CLAUDE_AGENT_HOME", "AGENT_RECURSION_DEPTH", HANDOFF_ENV, OWN_ENV,
-            "CLAUDE_CODE_SESSION_ID", "AGENTCTL_PARENT_DIFFICULTY")
-
-
-@pytest.fixture(autouse=True)
-def _isolated_env(tmp_path, monkeypatch):
-    for name in _AMBIENT:
-        monkeypatch.delenv(name, raising=False)
-    norms = tmp_path / "norms"
-    norms.mkdir()
-    monkeypatch.setenv("AGENTCTL_NORM_ROOTS", str(norms))
-    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+__all__ = ["_isolated_env"]  # the autouse fixture shared with test_child_contour_gate.py
 
 
 class Scene:
@@ -82,17 +71,22 @@ class Scene:
         self.root = _state_dir(self.home)
         self.parent_plan = self._start_parent()
         self.launch, self.prompt = self._spawn()
-        self.own_session = self.launch.option("--session-id") if self.launch.cmd else None
+        self.own_session = self.launch.option("--session-id")
         assert self.launch.env is not None, f"setup: the spawn did not reach the launch (rc={self.launch.rc})"
         assert self.launch.env.get(HANDOFF_ENV) and self.launch.env.get(OWN_ENV) == self.own_session, (
             "setup: the spawn is not linked"
         )
-        monkeypatch.setenv(HANDOFF_ENV, self.launch.env[HANDOFF_ENV])
-        _cli(self.root, "start", session=self.own_session, task="child", goal="g", done_criterion="dc")
-        monkeypatch.delenv(HANDOFF_ENV)
+        self.parent_before = self.parent_bytes()
+        started = subprocess.run(
+            [sys.executable, str(ENGINE_START_HOOK)],
+            input=json.dumps({"session_id": self.own_session, "prompt": "do the stage"}),
+            capture_output=True, text=True,
+            env=_child_env(self.home, CLAUDE_CONFIG_DIR=str(self.agent_home),
+                           **{HANDOFF_ENV: self.launch.env[HANDOFF_ENV]}),
+        )
+        assert started.returncode == 0, f"setup: the child's engine autostart failed: {started.stderr}"
         (self.venue / "tests").mkdir()
         (self.venue / "tests" / "test_mod.py").write_text("", encoding="utf-8")
-        self.parent_before = self.parent_bytes()
 
     def _start_parent(self) -> str:
         plan = Path(_parent_plan(self.venue))
@@ -143,7 +137,7 @@ class Scene:
 
     def channel(self, *argv: str) -> subprocess.CompletedProcess:
         return _own(self.home, *argv, session=self.own_session, AGENTCTL_PLAN_REVIEW="1",
-                    CLAUDE_CONFIG_DIR=str(self.agent_home),
+                    CLAUDE_CONFIG_DIR=str(self.agent_home), CLAUDE_CODE_SESSION_ID=self.own_session,
                     AGENT_RECURSION_DEPTH=self.launch.env["AGENT_RECURSION_DEPTH"])
 
     def edit(self, path: str) -> subprocess.CompletedProcess:
@@ -186,6 +180,9 @@ def test_linked_child_reaches_executing_without_root_writes(scene):
     found = re.search(r"Your plan file is `([^`]+)`", scene.prompt)
     assert found, "BEHAVIOUR: the linked child's brief does not name a plan file of its own"
     plan = found.group(1)
+    assert Path(plan).resolve().is_relative_to(scene.tmp.resolve()), (
+        f"setup: the child's plan path {plan} lies outside the test's tmp tree"
+    )
 
     own_plan_rules = [r for r in _settings_allow(scene.launch.cmd) if "own-plans" in r]
     assert own_plan_rules == [f"Edit(/{plan})"], (
@@ -225,7 +222,9 @@ def test_linked_child_reaches_executing_without_root_writes(scene):
     child = FileStateStore(scene.root).load(scene.own_session)
     assert child.node == "EXECUTING", f"BEHAVIOUR: the child is at {child.node}, not EXECUTING"
     rows = [h for h in child.history if h.get("event") == "approve"]
-    assert rows and rows[-1].get("basis") == "parent_norm" and rows[-1].get("by") == "agent", rows
+    assert rows and rows[-1].get("basis") == "parent_norm" and rows[-1].get("by") == "agent", (
+        f"BEHAVIOUR: the child's last approve is not an agent approval on the parent norm: {rows!r}"
+    )
     assert scene.parent_bytes() == scene.parent_before, (
         "BEHAVIOUR: the parent's state file changed while the child went to EXECUTING"
     )
@@ -251,5 +250,7 @@ def test_e2e_child_with_check_outside_parent_grants_is_refused(scene):
         f"approve --by agent was not refused on the boundary: {result}"
     )
 
-    assert FileStateStore(scene.root).load(scene.own_session).node != "EXECUTING"
-    assert scene.parent_bytes() == scene.parent_before
+    assert FileStateStore(scene.root).load(scene.own_session).node != "EXECUTING", (
+        "the refused child reached EXECUTING"
+    )
+    assert scene.parent_bytes() == scene.parent_before, "the parent's state file changed"
