@@ -2735,13 +2735,15 @@ def main(argv: list[str] | None = None) -> int:
     else:
         add_dir_argv.extend(plans_add_dir_args(args.kind, plans_directory))
     add_dir_argv.extend(repo_root_add_dir_args(args.kind, workdir))
-    own_plan_dir_at = len(add_dir_argv)
-    if child_linked:
-        add_dir_argv.extend(["--add-dir", str(own_plan_path(own_session).parent)])
+    grant_add_dir_argv: list[str] = []
     if engine_grants:
-        add_dir_argv.extend(stage_grant_add_dir_args(engine_grants))
+        grant_add_dir_argv.extend(stage_grant_add_dir_args(engine_grants))
     if evidence_dir:
-        add_dir_argv.extend(stage_grant_add_dir_args([{"path": evidence_dir, "mode": "write"}]))
+        grant_add_dir_argv.extend(stage_grant_add_dir_args([{"path": evidence_dir, "mode": "write"}]))
+    own_plan_dir = own_plan_path(own_session).parent if child_linked else None
+    own_plan_add_dir_argv = ["--add-dir", str(own_plan_dir)] if own_plan_dir is not None else []
+    head_add_dir_argv = add_dir_argv
+    add_dir_argv = head_add_dir_argv + own_plan_add_dir_argv + grant_add_dir_argv
     add_dir_paths = _paths_from_add_dir_argv(add_dir_argv)
 
     permission_mode = resolve_permission_mode(args, engine_grants)
@@ -2796,15 +2798,11 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"warning: norm handoff not written, spawning unlinked: {exc}", file=sys.stderr)
             handoff_record, child_linked, own_session, resumed_transcript = None, False, None, None
-            del add_dir_argv[own_plan_dir_at:own_plan_dir_at + 2]
+            own_plan_dir = None
+            add_dir_argv = head_add_dir_argv + grant_add_dir_argv
             add_dir_paths = _paths_from_add_dir_argv(add_dir_argv)
             prompt = brief(False)
     if child_linked and not args.dry_run:
-        try:
-            own_plan_path(own_session).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            own_plan_path(own_session).parent.chmod(0o700)
-        except OSError as exc:
-            print(f"warning: own plan directory not created: {exc}", file=sys.stderr)
         try:
             norm_handoff.write_child_session(
                 handoff_store.root, args.session, args.stage_index,
@@ -2945,6 +2943,14 @@ def main(argv: list[str] | None = None) -> int:
     if shutil.which("claude") is None:
         print("error: `claude` not on PATH; cannot spawn. Re-run with --dry-run to inspect the prompt.", file=sys.stderr)
         return 4
+
+    # Created last, past every refusal above, so a refused spawn leaves no empty directory.
+    if own_plan_dir is not None:
+        try:
+            own_plan_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            own_plan_dir.chmod(0o700)
+        except OSError as exc:
+            print(f"warning: own plan directory not created: {exc}", file=sys.stderr)
 
     env = {
         **os.environ,

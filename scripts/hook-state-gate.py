@@ -288,6 +288,7 @@ def main() -> int:
         deny_with(node, denial)
         return 0
 
+    # An own plan counts as a plan at every node; gate_decision then freezes it past planning.
     in_plans_dir = is_plan_file(file_path)
     is_tracked = bool(plan_path) and os.path.realpath(file_path) == os.path.realpath(plan_path)
     is_plan = in_plans_dir and (

@@ -5,7 +5,8 @@ session and moves that session through `scripts/agentctl-own.py`. Three scripts 
 that channel -- the wrapper that runs it, the spawn that exports and grants it, the
 PreToolUse gate that trusts it -- so the session variable and the verb set are defined
 here once, next to `norm_handoff.NORM_HANDOFF_ENV` (the handoff the channel is only
-available to), and imported by all three.
+available to), and imported by all three. The child's own plan file path is defined here
+too (`own_plan_path`), for the same reason: the spawn grants it, the gate guards it.
 """
 from __future__ import annotations
 

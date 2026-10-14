@@ -176,7 +176,7 @@ def test_linked_spawn_grants_exactly_its_own_plan_file(tmp_path, home, agent_hom
         run = _launch(monkeypatch, tmp_path, kind=kind, stage_index=1)
         assert run.env is not None, f"setup: kind {kind} did not reach the launch (rc={run.rc})"
         child = run.option("--session-id")
-        rule = f"Edit(//{agent_home / 'own-plans' / child / 'plan.toml'})"
+        rule = f"Edit(/{agent_home / 'own-plans' / child / 'plan.toml'})"
         shadowing = [d for d in _denies(run.cmd) if spawn._edit_deny_covers_allow(d, rule)]
         assert not shadowing, f"kind {kind}: {shadowing!r} covers the child's own-plan allow {rule}"
 
@@ -194,7 +194,15 @@ def test_linked_brief_names_own_plan_path(tmp_path, home, agent_home, monkeypatc
     assert f"submit-plan --plan {path}" in section, "the brief does not tell the child to submit that file"
 
 
-def test_linked_child_writes_own_plan_at_planning(home):
+def test_linked_child_writes_own_plan_at_planning(tmp_path, home, agent_home, monkeypatch):
+    _parent_session(home)
+    launched = _launch(monkeypatch, tmp_path, stage_index=1)
+    assert launched.env is not None, f"setup: the spawn did not reach the launch (rc={launched.rc})"
+    spawned_plan = agent_home / "own-plans" / launched.option("--session-id") / "plan.toml"
+    assert f"Edit(/{spawned_plan})" in _settings_allow(launched.cmd), (
+        f"BEHAVIOUR: the child's emitted settings do not allow it to write its own plan {spawned_plan}"
+    )
+
     plan = _own_plan(CHILD)
     for node in ("CLASSIFIED", "ROUTED", "PLANNING", "PLAN_READY"):
         _write_state(home, CHILD, node, linked=True)
@@ -248,10 +256,14 @@ def test_foreign_own_plan_write_refused_through_dotdot_path(home):
 
 def test_foreign_own_plan_write_refused_through_symlink(tmp_path, home):
     _write_state(home, ROOT, "EXECUTING", linked=False)
-    alias = tmp_path / "alias.toml"
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    alias = scratch / "alias.toml"
     alias.symlink_to(_own_plan(CHILD))
-    dir_alias = tmp_path / "other-sid"
+    dir_alias = scratch / "other-sid"
     dir_alias.symlink_to(f"{FICT_HOME}/own-plans/{CHILD}")
+    # the `/tmp/` substring exempts the alias from the gate's path test before any own-plan check
+    assert "/tmp/" in str(alias) and "/tmp/" in str(dir_alias)
     _assert_foreign_refused(_edit(home, ROOT, str(alias)), "a session writing through a file symlink")
     _assert_foreign_refused(
         _edit(home, ROOT, str(dir_alias / "plan.toml")), "a session writing through a directory symlink",
@@ -309,6 +321,23 @@ def test_unlinked_spawn_gets_no_own_plan_grant(tmp_path, home, agent_home, monke
     assert not (agent_home / "own-plans").exists()
 
 
+def test_spawn_with_unwritable_handoff_gets_no_own_plan_grant(tmp_path, home, agent_home, monkeypatch, capsys):
+    _parent_session(home)
+    spawn = _load_spawn()
+
+    def refuse(*args, **kwargs):
+        raise OSError("handoff store unwritable")
+
+    monkeypatch.setattr(spawn.norm_handoff, "write_record", refuse)
+    launched = _launch(monkeypatch, tmp_path, stage_index=1)
+    assert launched.env is not None, f"setup: the spawn did not reach the launch (rc={launched.rc})"
+    assert "norm handoff not written" in capsys.readouterr().err, "setup: the handoff write was not refused"
+    assert not launched.option("--session-id"), "the spawn fell back to unlinked but kept a child session"
+    assert not [rule for rule in _settings_allow(launched.cmd) if "own-plans" in rule]
+    assert not [d for d in _add_dirs(launched.cmd) if "own-plans" in d]
+    assert not (agent_home / "own-plans").exists()
+
+
 def test_child_write_to_parent_plan_refused(home):
     parent_plan = "/work/agent-home/.claude-agent/plans/parent-plan.toml"
     directory = _state_dir(home)
@@ -347,16 +376,18 @@ def test_own_plan_alias_write_refused_at_executing(tmp_path, home):
 
 
 def test_own_plan_write_allowed_with_symlinked_agent_home(tmp_path, home):
-    real = tmp_path / "real-home"
+    # both homes sit under a `/tmp/` path, which the gate exempts on base whatever tmp_path is
+    scratch = tmp_path / "tmp"
+    real = scratch / "real-home"
     (real / "own-plans" / CHILD).mkdir(parents=True)
-    link = tmp_path / "link-home"
+    link = scratch / "link-home"
     link.symlink_to(real)
     plan = _own_plan(CHILD, str(link))
 
     _write_state(home, CHILD, "PLANNING", linked=True)
     proc = _child_edit(home, plan, agent_home=str(link))
     assert not _denied(proc), (
-        f"BEHAVIOUR: the owner was denied its own plan through a symlinked agent home: {proc.stdout!r}"
+        f"the owner was denied its own plan through a symlinked agent home: {proc.stdout!r}"
     )
 
     _write_state(home, CHILD, "EXECUTING", linked=True)
