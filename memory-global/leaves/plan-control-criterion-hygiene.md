@@ -97,6 +97,13 @@ The **corollary on refs**: a fact the stage must *read* belongs in
 `material_refs`. Putting a read-only fact in the material list turns background
 knowledge into a deliverable the criterion then demands.
 
+The same rule binds a plan's **knowledge claim that backs a control**: before
+pinning a base-version regression guard on a test, read the fixture helpers that
+test calls and confirm the stage does not change that test's verdict. *Observed
+once:* a plan pinned a test as unchangeable on the premise that its parent held
+no covering wildcard, but the fixture's handoff derived one from the plan's
+output artifact, so the stage's own cover change made the pin false.
+
 ### 3. A criterion's number comes from an explicitly bounded invocation
 
 Any counting command inside a criterion passes its bound explicitly — for
