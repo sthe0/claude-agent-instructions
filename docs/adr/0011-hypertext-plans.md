@@ -15,7 +15,7 @@ A reference is an inline TOML table with **exactly** the keys `ref` (a path rela
 
 Resolution is a pre-pass over the parsed document (TOML has no include mechanism): `plan_refs.resolve_refs` replaces every reference by the referenced content, recursively, before `parse_plan` runs, so the parser and every validator see an ordinary document. Referenced files may themselves hold references, so the structure is a DAG of documents (premise Q1); a file may be referenced from several places (Q3).
 
-Every file must lie below the **confinement root** after symlink resolution: the plans directory when the index lies under it, otherwise the index file's own directory; a caller may pass the root explicitly (Q2). Refusals raise `PlanError` with a `ref_kind` and the reference path: `missing`, `mismatch` (expected and actual hash), `cycle`, `depth`, `escape` (absolute, or outside the root), `malformed`, `position`, `index` (a referenced stage file whose own `index` disagrees with its position). The cycle check runs on the resolution stack before the file is read, hash-verified or counted for depth, so a cycle that closes within the depth bound is reported as a cycle; a chain deeper than 8 is refused as `depth`.
+Every file must lie below the **confinement root** after symlink resolution: the plans directory when the index lies under it, otherwise the index file's own directory; a caller may pass the root explicitly (Q2). Refusals raise `PlanError` with a `ref_kind` and the reference path: `missing`, `mismatch` (expected and actual hash), `cycle`, `depth`, `escape` (absolute, or outside the root), `malformed`, `position`, `index` (a referenced stage file whose own `index` disagrees with its position). The cycle check runs on the resolution stack before the file is read, hash-verified or counted for depth, so a cycle that closes within the depth bound is reported as a cycle; a chain of more than 8 nested references is refused as `depth`.
 
 The depth bound is **8**. It is a structural constant stated here, not a size threshold, so it is not a `config.md` key: the deepest intended nesting is index → stage → field file, or index → child plan → stage → field file (an [ADR-0010](0010-child-contour.md) child plan), and 8 leaves headroom while stopping a runaway chain.
 
@@ -85,8 +85,8 @@ Each recommendation is what the stages implement; the user's disposition is reco
 
 ## Decision notes
 
-- Fidelity of this ADR to its implementing plan is checked by an independent review.
-- The depth bound 8 is an ADR constant, not a config key (see "Resolution and the DAG rule").
-- The size formula divides by 3 because the pair prompt also inlines the plan-level node (see "Size limits").
+- Fidelity of this ADR to its implementing plan is checked by an independent review (assumed: every code stage already passes one).
+- The depth bound 8 is an ADR constant, not a config key (assumed: it is a structural invariant of the reference model, not a calibrated size threshold; see "Resolution and the DAG rule").
+- The size formula divides by 3 because the pair prompt also inlines the plan-level node (decided by the user; see "Size limits").
 
-No user disposition of the open premises is recorded yet; the status stays Proposed until it is.
+The status stays Proposed until the implementation lands.
