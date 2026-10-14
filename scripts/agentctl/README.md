@@ -775,7 +775,7 @@ Four properties this system must not regress toward a prompt-based loop:
 
 *Difficulty removed:* a task can run many times over its own plan and nothing in the system notices. The only detector is the user's attention — the resource the engine exists to spend less of. [`effort.py`](effort.py) is the measurement half; the fire sites in [`cli.py`](cli.py) are the acting half. When a session's ACTUAL effort has run past what its CURRENT plan claims the work costs, by the configured multiple, the engine enters the ordinary `declare → investigate → critique → replan` cycle by itself: the chosen norm is visibly missing something essential about the real situation, and that is a difficulty like any other.
 
-**Four scales, two shapes.** The estimate is derived from the plan; the actual is accumulated by the engine.
+**Four scales, two shapes.** The estimate is derived from the plan; the actual is accumulated by the engine. A stage's `spend` and `wall_clock` actuals include its linked children and their descendants — the decision and its premises are in [ADR-0011](../../docs/adr/0011-parent-accounting.md), the mechanisms in the sections on `spawner_session` and `effort_child_runs` below.
 
 | Scale | Shape | Estimate — from the CURRENT plan | Actual — accumulated |
 |---|---|---|---|
@@ -889,7 +889,7 @@ Each bound has an entry in [`../tests/mandate_mutation_control.py`](../tests/man
 
 ## Cost tracking
 
-`record-result` attributes spawn-stage cost from `~/.local/log/claude-spawn-costs.jsonl` (written by `spawn-specialist.py`) and stamps `cost_usd / duration_ms / spawn_count` on each spawn stage's `Outcome`. In-thread and main-session tokens are **not** split per stage — use `scripts/cost-report.py` for the whole-session estimate.
+`record-result` attributes spawn-stage cost from `~/.local/log/claude-spawn-costs.jsonl` (written by `spawn-specialist.py`) and stamps `cost_usd / duration_ms / spawn_count` on each spawn stage's `Outcome`. In-thread and main-session tokens are **not** split per stage — use `scripts/cost-report.py` for the whole-session estimate. Each row also carries `spawner_session`, the engine session the spawn was made for, which lets a parent's effort measure include its linked descendants' spend ([ADR-0011](../../docs/adr/0011-parent-accounting.md), § Effort divergence).
 
 `verify-final` aggregates per-stage attributed costs into `SessionState.cost` (a `CostRollup`). `resolve` includes the `CostRollup` in `Directive.data` so the manager can fill the experience-leaf `## Cost` section from real figures rather than a TODO placeholder.
 
