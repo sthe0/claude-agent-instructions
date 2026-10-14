@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 53  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 54  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -91,6 +91,9 @@ SCHEMA_VERSION = 53  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # spend already marked flushed in the order window)
                      # 53: SessionState gains effort_child_runs (the intervals a linked
                      # child ran for this session's dispatches, summed into wall-clock)
+                     # 54: Difficulty gains escalated_to / escalated_from (the typed link a
+                     # child's parent-norm escalation and the parent difficulty it opens
+                     # each carry to the other side)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -570,6 +573,13 @@ class Difficulty:
     # the record (not inside `Normalization`, which an older engine builds with `**`) so an
     # archived nested record shows how it was closed without a normalization.
     normalization_waiver: str | None = None
+    # The typed link of a parent-norm escalation (schema 54), one entry per side so the
+    # session that owns a side is the only one that writes it. A child's record carries
+    # `escalated_to` {parent_session, stage_index, norm_digest}; the difficulty its parent
+    # opens for it carries `escalated_from` {child_session, child_uid, norm_digest}. Empty
+    # on a record that is no escalation and on every record written before schema 54.
+    escalated_to: dict = field(default_factory=dict)
+    escalated_from: dict = field(default_factory=dict)
 
     def complete(self) -> bool:
         return (
@@ -595,6 +605,8 @@ class Difficulty:
             normalization=Normalization(**norm) if norm else None,
             norm_targets=[dict(t) for t in (d.get("norm_targets") or [])],
             normalization_waiver=d.get("normalization_waiver"),
+            escalated_to=dict(d.get("escalated_to") or {}),
+            escalated_from=dict(d.get("escalated_from") or {}),
             # A record written before schema 48 carries no identity: it becomes a level-0
             # stage-origin root. Its uid is derived from its content, not drawn at random,
             # so every load of the same unsaved legacy file names the record the same way

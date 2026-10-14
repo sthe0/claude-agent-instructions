@@ -6918,6 +6918,10 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     if marker == "REPLAN":
         mismatch, unverified = _child_norm_mismatch(state, store, stage, result.stderr)
         if mismatch is not None:
+            standing = gates.escalation_counterpart(
+                state, mismatch["child_uid"], mismatch["child_session"])
+            if standing is not None:
+                return _repeat_norm_mismatch(state, store, stage, mismatch, base, standing, body)
             return _open_norm_mismatch(state, store, stage, mismatch, base)
         if unverified:
             state.log("norm_mismatch_unverified", stage=stage.index, reason=unverified)
@@ -7776,20 +7780,25 @@ def _classify_transcript_denials(
 
 def _fail_stage_into_diagnosing(
     state: SessionState, store: StateStore, stage: Stage, *, note: str, event: str,
-    declaration: Declaration, **event_fields,
+    declaration: Declaration, escalated_from: dict | None = None, **event_fields,
 ):
     """FAILED / DIAGNOSING on `stage` for a fault no re-dispatch of the stage unchanged
     would remove: mirrors `cmd_record_result`'s failed-stage branch, including its two-step
     EXECUTING -> VERIFYING -> DIAGNOSING transition (`machine.TRANSITIONS` permits
-    `diagnose` only from VERIFYING), with the Declaration pre-framed by the caller. Returns
-    the opened difficulty, or None when the difficulty cap refused it; the state is saved
+    `diagnose` only from VERIFYING; a session already there takes the second step alone),
+    with the Declaration pre-framed by the caller. `escalated_from` is the typed link back
+    to a child's difficulty, stamped on the opened record before it is saved. Returns the
+    opened difficulty, or None when the difficulty cap refused it; the state is saved
     either way and each caller builds its own Directive."""
     stage.outcome.status = StageStatus.FAILED.value
     stage.outcome.actual = (stage.outcome.actual + "\n" + note) if stage.outcome.actual else note
     state.log(event, stage=stage.index, **event_fields)
-    state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
+    if state.node == Node.EXECUTING.value:
+        state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
     opened = _open_difficulty(state, declaration=declaration)
+    if opened is not None and escalated_from:
+        opened.escalated_from = dict(escalated_from)
     store.save(state)
     return opened
 
@@ -7829,19 +7838,36 @@ def _diagnose_materialization_defect(
     )
 
 
+def _escalation_link(difficulty, parent_link: dict | None) -> dict:
+    """The typed `escalated_to` link of `difficulty` to its session's parent: the parent
+    session, its stage and the norm digest the `parent` norm target was taken against;
+    empty when the record names no such target or the session has no parent. Shared by
+    `critique`, which routes the fault, and `difficulty-close`, which moves a nested
+    record's routing onto the record that resumes."""
+    parent_norm = next((t for t in difficulty.norm_targets
+                        if t.get("kind") == gates.NORM_TARGET_KIND_PARENT), None)
+    if parent_norm is None or not parent_link:
+        return {}
+    return {"parent_session": parent_link["parent_session"],
+            "stage_index": parent_link["stage_index"],
+            "norm_digest": parent_norm["baseline"]}
+
+
 def _child_norm_mismatch(
     state: SessionState, store: StateStore, stage: Stage, stderr: str,
 ) -> tuple[dict | None, str]:
     """`(record, "")` when the child this dispatch just ran holds, in its own state, a
-    current difficulty routed to this stage's norm; else `(None, reason)`.
+    live difficulty routed to this stage's norm; else `(None, reason)`.
 
     The decision rests on the child's state record -- never on the REPLAN text -- and holds
     only when all of these do: the transcript path the launch reported names the child's
     session id (its stem) and that state loads; the child's handoff names this session and
-    this stage; its open difficulty carries a `parent` norm target whose baseline is the
-    stage's current norm digest (a replan of the stage since the spawn moves it, and the
-    child's baseline is then stale); and its declaration states all three of expected,
-    actual and mismatch. The child's state is only read, never written.
+    this stage; one of its live difficulties -- the open one, or a suspended ancestor the
+    child opened a new difficulty over after routing it -- carries an `escalated_to` link
+    and a `parent` norm target whose baseline is the stage's current norm digest (a replan
+    of the stage since the spawn moves it, and the child's baseline is then stale); and its
+    declaration states all three of expected, actual and mismatch. The child's state is
+    only read, never written.
 
     A rejection is `(None, reason)`, and the caller logs the reason. `(None, "")` is a
     spawn with nothing to report -- no transcript, no readable state record, or a record
@@ -7860,43 +7886,49 @@ def _child_norm_mismatch(
         return None, f"child state {child_id} is unreadable: {exc}"
     if child is None or not child.parent_link:
         return None, ""
-    link = child.parent_link
+    return _verify_child_escalation(state, stage, child_id, child)
+
+
+def _verify_child_escalation(
+    state: SessionState, stage: Stage, child_id: str, child: SessionState,
+) -> tuple[dict | None, str]:
+    """`(record, "")` when one of `child`'s live difficulty records (open, or suspended under
+    a nested one) carries an `escalated_to` link and a current `parent` norm target on
+    `stage`'s norm of this session; else `(None, reason)`. When several records qualify, one
+    this session has not adopted is preferred, so `adopt-escalation` reaches each in turn
+    instead of stopping at an already adopted one. The checks `_child_norm_mismatch`
+    documents, minus the transcript lookup: `adopt-escalation` names the child directly."""
+    link = child.parent_link or {}
     if link.get("parent_session") != state.session_id or link.get("stage_index") != stage.index:
         return None, (f"child {child_id} is not linked to stage {stage.index} of this session "
                       f"(parent_session={link.get('parent_session')!r}, "
                       f"stage_index={link.get('stage_index')!r})")
-    opened = child.difficulty
-    if opened is None:
-        return None, f"child {child_id} holds no open difficulty"
-    current = gates.stage_norm_digest(stage)
-    targets = [t for t in opened.norm_targets
-               if t.get("target") == gates.NORM_TARGET_PARENT
-               and t.get("kind") == gates.NORM_TARGET_KIND_PARENT]
-    if not targets:
-        return None, f"child {child_id}'s open difficulty names no parent norm target"
-    if not any(t.get("baseline") == current for t in targets):
-        return None, (f"child {child_id}'s parent norm target is stale: its baseline is not "
-                      f"stage {stage.index}'s current norm digest")
-    decl = opened.declaration
-    if decl is None or not all((getattr(decl, f) or "").strip()
-                               for f in ("expected", "actual", "mismatch")):
-        return None, f"child {child_id}'s declaration lacks expected, actual or mismatch"
-    return {"child_session": child_id, "stage_index": stage.index, "norm_digest": current,
-            "declaration": {"expected": decl.expected, "actual": decl.actual,
-                            "mismatch": decl.mismatch}}, ""
+    found, reason = gates.child_escalations(stage, child)
+    if not found:
+        return None, f"child {child_id} {reason}"
+    unadopted = [e for e in found
+                 if gates.escalation_counterpart(state, e["child_uid"], child_id) is None]
+    return (unadopted or found)[0], ""
 
 
 def _open_norm_mismatch(
     state: SessionState, store: StateStore, stage: Stage, mismatch: dict, base: dict,
+    via: str | None = None,
 ) -> Directive:
     """Route a REPLAN whose child record `_child_norm_mismatch` verified into FAILED /
     DIAGNOSING on this stage, with the child's own declaration as the opened difficulty:
     the fault is in the stage's norm, so re-dispatching it unchanged would only repeat it.
-    Same transition as `_diagnose_materialization_defect`."""
+    Same transition as `_diagnose_materialization_defect`. The opened record carries
+    `escalated_from`, the typed link to the child's difficulty. `via` names the verb when
+    it is not dispatch's own REPLAN route."""
     decl = mismatch["declaration"]
     opened = _fail_stage_into_diagnosing(
         state, store, stage, event="norm_mismatch", child_session=mismatch["child_session"],
         norm_digest=mismatch["norm_digest"], declaration=Declaration(**decl),
+        escalated_from={"child_session": mismatch["child_session"],
+                        "child_uid": mismatch["child_uid"],
+                        "norm_digest": mismatch["norm_digest"]},
+        **({"via": via} if via else {}),
         note=(f"the child (session {mismatch['child_session']}) reported a mismatch in this "
               f"stage's norm: {decl['mismatch']}"))
     if opened is None:
@@ -7911,6 +7943,39 @@ def _open_norm_mismatch(
         "norm); no re-dispatch of the stage unchanged",
         marker="OVERCOME-DIFFICULTY",
         data={**base, "norm_mismatch": mismatch},
+    )
+
+
+def _repeat_norm_mismatch(
+    state: SessionState, store: StateStore, stage: Stage, mismatch: dict, base: dict,
+    standing: str, reason: str,
+) -> Directive:
+    """What a REPLAN gets when this session already holds a difficulty for the very child
+    difficulty it reports (`standing` is that difficulty's `open` or `closed` state): no
+    second record is opened, since the child cannot close its side and would otherwise
+    mint a new parent difficulty at every dispatch. The open one's directive is the one
+    `_open_norm_mismatch` gave; a closed one leaves the REPLAN's plain directive and says
+    why re-dispatching without a new fault would repeat it."""
+    ref = {"child_session": mismatch["child_session"], "child_uid": mismatch["child_uid"],
+           "stage_index": stage.index, "status": standing}
+    state.log("norm_mismatch_repeat", stage=stage.index, **ref)
+    store.save(state)
+    if standing == gates.ESCALATION_OPEN:
+        return Directive(
+            False, state.node, "investigate",
+            f"stage {stage.index}'s child reported the difficulty this session already "
+            "holds open for it -- continue overcome-difficulty on that record; no second "
+            "difficulty is opened",
+            marker="OVERCOME-DIFFICULTY",
+            data={**base, "norm_mismatch": mismatch, "escalation": ref},
+        )
+    return Directive(
+        False, state.node, "replan",
+        f"stage {stage.index}'s child repeats an escalation this session already adopted "
+        "and closed; the child's escalated difficulty is the one the closed record already "
+        "addressed, so no new difficulty is opened -- the stage's norm is what that record "
+        "changed",
+        marker="REPLAN", data={**base, "reason": reason, "escalation": ref},
     )
 
 
@@ -9037,6 +9102,13 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
         return Directive(False, state.node, "renorm",
                          "not ready for resolution: a нормативное difficulty's norm edit is "
                          "still owed", data={"blockers": renorm_block})
+    orphan_block = gates.escalation_orphan_blockers(
+        gates.escalation_orphans(state, _linked_children(store, state.session_id)))
+    if orphan_block:
+        _log_gate(state, "escalation_orphans", orphan_block, passed=False)
+        return Directive(False, state.node, "adopt_escalation",
+                         "not ready for resolution: a linked child's escalation of a stage "
+                         "norm is not adopted", data={"blockers": orphan_block})
     state.pending_renorms = gates.open_renorms(state)
     blockers = gates.blockers(state, "resolution")
     _log_gate(state, "resolution", blockers, passed=not blockers)
@@ -9874,6 +9946,7 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
             t["baseline"] = first_baselines[t["target"]]
     state.difficulty.norm_targets = (
         [t for t in snapshots if t["target"] not in held] + inherited)
+    state.difficulty.escalated_to = _escalation_link(state.difficulty, state.parent_link)
     state.difficulty.critique = Critique(
         functional_ground=args.functional_ground,
         replanning_task=args.replanning_task,
@@ -10161,6 +10234,9 @@ def cmd_difficulty_close(args, *, store: StateStore, runner: Runner | None = Non
         else:
             parent.norm_targets.append(entry)
         moved.append(entry.get("target", ""))
+    # A parent-kind target moved onto `parent` is the child's escalation, now carried by
+    # the record the child session will return REPLAN from: it needs the typed link too.
+    parent.escalated_to = _escalation_link(parent, state.parent_link)
     parent.children.append(closed)
     state.difficulty = parent
     state.log("difficulty_close", uid=closed.uid, parent_uid=parent.uid, level=closed.level,
@@ -11357,10 +11433,14 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     state = store.load(args.session) if getattr(args, "session", None) else None
     if state is None:
         return Directive(True, "(none)", "start", "no session state; run start")
+    parent = (state.parent_link or {}).get("parent_session")
+    escalations = _escalation_rows(state, parent, _load_or_none(store, parent)) if parent else []
     return Directive(
         True, state.node, "inspect",
-        f"{state.task_id}: {state.weight_class}/{state.route}",
+        f"{state.task_id}: {state.weight_class}/{state.route}"
+        + "".join(f"; escalation {e['child_uid']}={e['status']}" for e in escalations),
         data={
+            "escalations": escalations,
             "weight_class": state.weight_class,
             "route": state.route,
             "current_stage": state.current_stage,
@@ -11383,18 +11463,87 @@ def _parent_link_summary(link: dict | None) -> dict | None:
     return {key: link.get(key) for key in ("parent_session", "stage_index", "depth", "norm_digest")}
 
 
+def _load_or_none(store: StateStore, session: str) -> SessionState | None:
+    try:
+        return store.load(session)
+    except Exception:
+        return None
+
+
+def _linked_children(store: StateStore, parent: str) -> list[SessionState]:
+    """The loadable sessions whose `parent_link` names `parent`. Read-only: a state file
+    that cannot be loaded is skipped, never repaired or rewritten."""
+    list_ids = getattr(store, "session_ids", None)
+    loaded: dict = {}
+    return [loaded[session_id] for session_id in (list_ids() if list_ids is not None else [])
+            if _parent_session_of(store, session_id, loaded) == parent]
+
+
+def _escalation_rows(owner: SessionState, parent: str, parent_state: SessionState | None) -> list[dict]:
+    """One row per difficulty of `owner` (open, suspended or closed) escalated to the norm
+    of `parent`: its uid, the stage, and `gates.escalation_status` read from the parent's
+    own state."""
+    rows: list[dict] = []
+    for rec in gates.escalation_records(owner):
+        target = gates.rec_field(rec, "escalated_to") or {}
+        if target.get("parent_session") != parent:
+            continue
+        rows.append({
+            "child_uid": gates.rec_field(rec, "uid"), "stage_index": target.get("stage_index"),
+            "status": gates.escalation_status(rec, parent_state, owner.session_id),
+        })
+    return rows
+
+
+def cmd_adopt_escalation(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Open this session's counterpart of a linked child's parent-norm escalation that its
+    dispatch never saw (the child's REPLAN reached no dispatch, or reached one that could
+    not verify it). The decision rests on the child's state record, read and never written,
+    by the same checks as the dispatch route (`_verify_child_escalation`); a record that
+    does not verify is refused with the reason. An escalation this session already holds a
+    difficulty for is not opened a second time."""
+    state = _require(store, args.session)
+    if state.node not in (Node.EXECUTING.value, Node.VERIFYING.value):
+        return Directive(False, state.node, "noop",
+                         f"adopt-escalation runs from EXECUTING or VERIFYING; node is {state.node}")
+    child_id = args.child
+    child = _load_or_none(store, child_id) if child_id != state.session_id else None
+    if child is None or not child.parent_link:
+        return Directive(False, state.node, "noop",
+                         f"adopt-escalation refused: {child_id} is not a readable session "
+                         "linked to a parent stage")
+    stage_index = child.parent_link.get("stage_index")
+    try:
+        stage = state.stage(stage_index)
+    except KeyError:
+        return Directive(False, state.node, "noop",
+                         f"adopt-escalation refused: child {child_id} is linked to stage "
+                         f"{stage_index!r}, which this session's plan does not hold")
+    if state.node == Node.EXECUTING.value and stage.index != state.current_stage:
+        return Directive(False, state.node, "noop",
+                         f"adopt-escalation refused: child {child_id} is linked to stage "
+                         f"{stage.index}, but the active stage is {state.current_stage}; failing "
+                         "the earlier stage from EXECUTING would strand the active one -- "
+                         "adopt it from VERIFYING")
+    mismatch, reason = _verify_child_escalation(state, stage, child_id, child)
+    if mismatch is None:
+        return Directive(False, state.node, "noop", f"adopt-escalation refused: {reason}")
+    standing = gates.escalation_counterpart(state, mismatch["child_uid"], child_id)
+    if standing is not None:
+        return Directive(True, state.node, "noop",
+                         f"child {child_id}'s difficulty {mismatch['child_uid']} is already "
+                         f"adopted by a {standing} difficulty of this session")
+    return _open_norm_mismatch(state, store, stage, mismatch, {}, via="adopt-escalation")
+
+
 def cmd_children(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """The sessions the engine linked as children of `--session`: every stored session
     whose `parent_link.parent_session` names it. Read-only -- a state file that cannot be
     loaded is skipped, never repaired or rewritten."""
     parent = args.session
-    list_ids = getattr(store, "session_ids", None)
+    parent_state = _load_or_none(store, parent)
     children: list[dict] = []
-    loaded: dict = {}
-    for session_id in (list_ids() if list_ids is not None else []):
-        if _parent_session_of(store, session_id, loaded) != parent:
-            continue
-        child = loaded[session_id]
+    for child in _linked_children(store, parent):
         children.append({
             "session": child.session_id,
             "stage_index": child.parent_link.get("stage_index"),
@@ -11402,6 +11551,7 @@ def cmd_children(args, *, store: StateStore, runner: Runner | None = None) -> Di
             "recursion_depth": child.recursion_depth,
             "difficulty_level": child.difficulty.level if child.difficulty is not None else None,
             "resolved": child.node == Node.RESOLVED.value,
+            "escalations": _escalation_rows(child, parent, parent_state),
         })
     data = {"parent_session": parent, "children": children}
     if getattr(args, "json", False):
@@ -11411,6 +11561,7 @@ def cmd_children(args, *, store: StateStore, runner: Runner | None = None) -> Di
             f"{c['session']} stage={c['stage_index']} node={c['node']} depth={c['recursion_depth']} "
             f"difficulty={c['difficulty_level'] if c['difficulty_level'] is not None else 'none'}"
             f"{' resolved' if c['resolved'] else ''}"
+            + "".join(f" escalation {e['child_uid']}={e['status']}" for e in c["escalations"])
             for c in children
         ]
         text = "\n".join(lines) if lines else f"no children linked to {parent}"
@@ -11950,6 +12101,7 @@ COMMANDS = {
     "unblock": cmd_unblock,
     "status": cmd_status,
     "children": cmd_children,
+    "adopt-escalation": cmd_adopt_escalation,
     "drive": cmd_drive,
     "close": cmd_close,
     "push-subplan": cmd_push_subplan,
@@ -12006,7 +12158,7 @@ _SESSION_COMMANDS = (
     "investigate", "critique", "normalize", "difficulty-open", "difficulty-close",
     "verify-final", "resolve", "reject",
     "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status", "children",
-    "drive", "close", "push-subplan", "pop-subplan", "task-reset",
+    "adopt-escalation", "drive", "close", "push-subplan", "pop-subplan", "task-reset",
     "mandate-grant", "mandate-extend", "mandate-resume", "mandate-stop", "mandate-status",
     "workspace-register",
 )
@@ -12063,6 +12215,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("state_root", (_ROOT,), "directory path the state store is rooted at"),
     ("session", _SESSION_COMMANDS, "session id — the slug state is keyed by"),
     ("task", ("start", "reset", "push-subplan", "task-reset"), "task slug, not a description"),
+    ("child", ("adopt-escalation",), "session id of the linked child"),
     ("criterion_type", ("start", "reset"), "one of two fixed verification kinds"),
     ("plugin", ("plugin-activate", "plugin-deactivate", "plugin-record"), "plugin registry name"),
     ("phase", ("plugin-record",), "plugin phase name from a fixed vocabulary"),
@@ -12866,6 +13019,9 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     sp = add("unblock"); sp.add_argument("--session", required=True)
     sp = add("children"); sp.add_argument("--session", required=True)
     sp.add_argument("--json", action="store_true")
+    sp = add("adopt-escalation"); sp.add_argument("--session", required=True)
+    sp.add_argument("--child", required=True,
+                    help="session id of the linked child whose parent-norm escalation to adopt")
     sp = add("status"); sp.add_argument("--session", required=False)
 
     # drive: opening-spine orchestrator — union of classify signals + --plan +
