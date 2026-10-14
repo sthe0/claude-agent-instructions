@@ -220,7 +220,7 @@ def _decode(data: bytes, ref: object) -> str:
 
 
 class _Resolver(_Walker):
-    def __init__(self, root: Path, index_path: Path | None, read: Reader):
+    def __init__(self, root: Path | None, index_path: Path | None, read: Reader):
         super().__init__(root, index_path)
         self.read = read
         self.stack: list[Path] = []
@@ -386,8 +386,12 @@ class _Sealer(_Walker):
     def seal_file(self, path: Path, kind: str, stack: list[Path]) -> str:
         """Reseal every reference in `path`, children first; return the file's new
         sha256. `kind` is 'plan' for an index and 'stage' for a stage file."""
-        text = _decode(path.read_bytes(), str(path))
-        raw = _parse(path)
+        try:
+            original = path.read_bytes()
+        except OSError as exc:
+            raise _refuse("missing", str(path), f"cannot read: {exc}") from exc
+        text = _decode(original, str(path))
+        raw = _parse_text(text, path)
         edits: list[tuple[str, str, str]] = []
         inner = [*stack, path]
 
@@ -402,16 +406,18 @@ class _Sealer(_Walker):
                 new = self.seal_file(target, subkind, inner)
             edits.append((table["ref"], table["sha256"], new))
 
-        def seal_leaf(table: dict, position: Position = ()) -> str:
+        def seal_leaf(table: dict, position: Position) -> str:
             child(table, None)
             return ""
 
-        def seal_stage(table: dict, i: int = 0) -> dict:
+        def seal_stage(table: dict, i: int) -> dict:
             child(table, "stage")
             return {}
 
         if kind == "stage" and _classify(raw) == "ref":
             child(raw, "stage")
+        elif kind == "stage" and _classify(raw) == "malformed":
+            raise _malformed(raw)
         elif kind == "plan":
             _map_plan(raw, stage=seal_stage, text=seal_leaf)
         else:
@@ -424,7 +430,7 @@ class _Sealer(_Walker):
             if old != new:
                 text = _rewrite_hash(text, ref, old, new, expected)
         data = text.encode("utf-8")
-        if data != path.read_bytes():
+        if data != original:
             if _unsealed(_parse_text(text, path)) != _unsealed(raw):
                 raise PlanError(f"resealing {path} would change more than its sha256 values")
             path.write_bytes(data)
@@ -435,7 +441,7 @@ def seal(index_path: str | Path, *, root: str | Path | None = None) -> str:
     """Recompute every reference hash under the index bottom-up, rewriting only the
     `sha256` values; return the new root digest (the sha256 of the index bytes)."""
     index = Path(index_path).resolve()
-    sealer = _Sealer(Path(root).resolve() if root is not None else default_root(index), index)
+    sealer = _Sealer(Path(root).resolve() if root is not None else None, index)
     return sealer.seal_file(index, "plan", [])
 
 
@@ -560,7 +566,7 @@ def plan_externalize(
             f"field {name!r} cannot be externalized from a {kind}: only a string field can "
             f"(allowed: {sorted(EXTERNALIZABLE_FIELDS[kind])})")
 
-    walker_root = Path(root).resolve() if root is not None else default_root(index)
+    walker_root = Path(root).resolve() if root is not None else None
     before = load_plan(index, root=walker_root)
     raw = _parse(index)
     walker = _Walker(walker_root, index)
@@ -635,8 +641,7 @@ def plan_digest(index_path: str | Path, *, stage: int | None = None,
     except tomllib.TOMLDecodeError as exc:
         raise PlanError(f"malformed TOML in plan file {index}: {exc}") from exc
     resolved, visited = resolve_refs(
-        raw, index.parent, Path(root) if root is not None else default_root(index),
-        index_path=index)
+        raw, index.parent, root, index_path=index)
     doc = parse_plan(resolved)
     known = [s.index for s in doc.stages]
     if stage is not None and stage not in known:

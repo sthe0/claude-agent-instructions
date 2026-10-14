@@ -1050,6 +1050,36 @@ def test_plan_seal_through_the_cli_reseals_after_an_edit(tmp_path, capsys):
     assert _no_session_state(tmp_path)
 
 
+def test_the_sealer_refuses_a_missing_stage_file_as_missing(tmp_path, capsys):
+    from agentctl import plan_refs
+    from agentctl.plan import PlanError
+
+    link = _ref(tmp_path, "s.toml", 'index = 1\n')
+    index = _write(tmp_path / "plan.toml", _meta() + "\n" + _stage_array(link))
+    (tmp_path / "s.toml").unlink()
+
+    with pytest.raises(PlanError) as exc:
+        plan_refs.seal(index)
+    rc, out = _run(tmp_path, capsys, "plan-seal", "--plan", str(index))
+
+    assert exc.value.ref_kind == "missing" and "s.toml" in str(exc.value)
+    assert rc == 1 and not out["ok"] and "s.toml" in out["detail"]
+
+
+def test_the_sealer_refuses_a_stage_file_that_is_a_malformed_reference(tmp_path):
+    from agentctl import plan_refs
+    from agentctl.plan import PlanError
+
+    _write(tmp_path / "m.md", "a file that exists\n")
+    link = _ref(tmp_path, "s.toml", 'ref = "m.md"\n')
+    index = _write(tmp_path / "plan.toml", _meta() + "\n" + _stage_array(link))
+
+    with pytest.raises(PlanError) as exc:
+        plan_refs.seal(index)
+
+    assert exc.value.ref_kind == "malformed"
+
+
 def _snapshot(d: Path) -> dict[str, bytes | None]:
     """Every file with its bytes and every directory (None), so a leftover empty
     directory counts as a change."""
