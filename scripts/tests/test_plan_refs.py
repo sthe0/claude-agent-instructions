@@ -277,6 +277,7 @@ def test_a_missing_file_is_refused_as_missing_and_names_the_path(tmp_path):
 
     assert err.ref_kind == "missing"
     assert "parts/gone.md" in str(err)
+    assert str(tmp_path / "parts" / "gone.md") in str(err)
 
 
 def test_a_hash_mismatch_names_both_hashes(tmp_path):
@@ -303,6 +304,43 @@ def test_a_hash_mismatch_names_both_hashes(tmp_path):
 ])
 def test_a_malformed_reference_is_refused_as_malformed(tmp_path, ref_literal):
     index = _plan(tmp_path, _meta(), _stage(1, method=ref_literal))
+
+    assert _refusal(index).ref_kind == "malformed"
+
+
+@pytest.mark.parametrize("ref_literal", [
+    '{ ref = "m.md" }',
+    f'{{ sha256 = "{HEX_A}" }}',
+    '{ ref = "m.md", sha256 = "ABC" }',
+    f'{{ ref = "m.md", sha256 = "{"A" * 64}" }}',
+    f'{{ ref = "m.md", sha256 = "{"a" * 63}" }}',
+    f'{{ ref = "", sha256 = "{HEX_A}" }}',
+    f'{{ ref = 3, sha256 = "{HEX_A}" }}',
+    '{ ref = "m.md", sha256 = 7 }',
+])
+def test_a_malformed_whole_stage_reference_is_refused_as_malformed(tmp_path, ref_literal):
+    _write(tmp_path / "m.md", "a file that exists\n")
+    index = _write(tmp_path / "plan.toml", _meta() + "\n" + _stage_array(ref_literal))
+
+    assert _refusal(index).ref_kind == "malformed"
+
+
+def test_a_malformed_whole_stage_reference_is_refused_by_the_sealer_too(tmp_path):
+    from agentctl import plan_refs
+    from agentctl.plan import PlanError
+
+    _write(tmp_path / "m.md", "a file that exists\n")
+    index = _write(tmp_path / "plan.toml", _meta() + "\n" + _stage_array('{ ref = "m.md" }'))
+
+    with pytest.raises(PlanError) as exc:
+        plan_refs.seal(index)
+
+    assert exc.value.ref_kind == "malformed"
+
+
+def test_a_parsed_stage_file_that_is_a_malformed_reference_is_refused_as_malformed(tmp_path):
+    link = _ref(tmp_path, "s.toml", 'ref = "m.md"\n')
+    index = _write(tmp_path / "plan.toml", _meta() + "\n" + _stage_array(link))
 
     assert _refusal(index).ref_kind == "malformed"
 
@@ -650,6 +688,60 @@ def test_field_tables_separate_string_fields_from_structured_ones():
     assert "requirements" in plan_refs.NON_STRING_FIELDS["order"]
 
 
+def _keys_read_by_parse_plan(variable: str) -> set[str]:
+    import ast
+
+    source = (Path(__file__).resolve().parents[1] / "agentctl" / "plan.py").read_text("utf-8")
+    keys = set()
+    for node in ast.walk(ast.parse(source)):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get" and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == variable and node.args
+                and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+            keys.add(node.args[0].value)
+        elif (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+                and node.value.id == variable and isinstance(node.slice, ast.Constant)
+                and isinstance(node.slice.value, str)):
+            keys.add(node.slice.value)
+    return keys
+
+
+def test_the_field_tables_cover_exactly_the_keys_the_plan_schema_reads():
+    import dataclasses
+
+    from agentctl import plan_refs
+    from agentctl.state import Order
+
+    # `s.get("derived")` in plan.py reads a grant-entry table, not a [[stage]] key.
+    stage_keys = _keys_read_by_parse_plan("s") - {"derived"}
+    meta_keys = _keys_read_by_parse_plan("m")
+    order_keys = {f.name for f in dataclasses.fields(Order)} - {"malformed", "requirements_dropped"}
+    for kind, schema in (("stage", stage_keys), ("meta", meta_keys), ("order", order_keys)):
+        classified = plan_refs.EXTERNALIZABLE_FIELDS[kind] | plan_refs.NON_STRING_FIELDS[kind]
+        assert classified == schema, (kind, sorted(classified ^ schema))
+
+
+def test_a_reference_standing_directly_at_a_non_string_key_is_refused_as_position(tmp_path):
+    from agentctl import plan_refs
+
+    cases = [(kind, key) for kind in ("stage", "meta", "order")
+             for key in sorted(plan_refs.NON_STRING_FIELDS[kind])]
+    for n, (kind, key) in enumerate(cases):
+        d = tmp_path / f"case{n}"
+        ref = _ref(d, "m.md", "1\n")
+        if kind == "stage":
+            index = _plan(d, _meta(), _stage(1, **{key: ref}))
+        elif kind == "meta":
+            index = _plan(d, _meta(**{key: ref}), _stage(1))
+        else:
+            index = _plan(d, _meta(), _stage(1), tail=f"[meta.order]\n{key} = {ref}\n")
+
+        err = _refusal(index)
+
+        assert err.ref_kind == "position", (kind, key)
+        assert "m.md" in str(err), (kind, key)
+
+
 # --- equivalence of an externalized plan -----------------------------------------
 
 def _keys(doc):
@@ -956,3 +1048,118 @@ def test_plan_seal_through_the_cli_reseals_after_an_edit(tmp_path, capsys):
     assert rc == 0, out
     assert load_plan(index).stages[0].means.method == "after\n"
     assert _no_session_state(tmp_path)
+
+
+def _snapshot(d: Path) -> dict[str, bytes | None]:
+    """Every file with its bytes and every directory (None), so a leftover empty
+    directory counts as a change."""
+    return {str(p.relative_to(d)): p.read_bytes() if p.is_file() else None
+            for p in sorted(d.rglob("*"))}
+
+
+def _held_in_a_stage_file(tmp_path: Path) -> Path:
+    body = _stage_fields(1, method='"held in the stage file"')
+    ref = _ref(tmp_path, "stages/stage-1.toml", body)
+    return _write(tmp_path / "plan.toml", _meta() + "\n" + _stage_array(ref))
+
+
+@pytest.mark.parametrize("failing_step", ["seal", "reload-equality"])
+def test_a_failed_externalize_restores_every_touched_file_and_leaves_no_new_directory(
+        tmp_path, capsys, monkeypatch, failing_step):
+    from agentctl import plan_refs
+    from agentctl.plan import PlanError
+
+    index = _held_in_a_stage_file(tmp_path)
+    before = _snapshot(tmp_path)
+    if failing_step == "seal":
+        def boom(*args, **kwargs):
+            raise PlanError("seal failed")
+
+        monkeypatch.setattr(plan_refs, "seal", boom)
+    else:
+        real_load = plan_refs.load_plan
+        calls = []
+
+        def second_load_differs(*args, **kwargs):
+            calls.append(1)
+            return real_load(*args, **kwargs) if len(calls) == 1 else None
+
+        monkeypatch.setattr(plan_refs, "load_plan", second_load_differs)
+
+    rc, out = _run(tmp_path, capsys, "plan-externalize", "--plan", str(index),
+                   "--stage", "1", "--field", "method")
+
+    assert rc == 1 and not out["ok"]
+    assert _snapshot(tmp_path) == before
+
+
+def test_externalizing_a_field_that_is_already_a_reference_is_refused(tmp_path, capsys):
+    index = _plan(tmp_path, _meta(), _stage(1, method='"do the work"'))
+    args = ("plan-externalize", "--plan", str(index), "--stage", "1", "--field", "method")
+    rc, _ = _run(tmp_path, capsys, *args)
+    assert rc == 0
+    before = _snapshot(tmp_path)
+
+    rc, out = _run(tmp_path, capsys, *args)
+
+    assert rc == 1 and not out["ok"]
+    assert "already a reference" in out["detail"]
+    assert _snapshot(tmp_path) == before
+
+
+def test_externalizing_onto_an_existing_file_with_different_content_is_refused(
+        tmp_path, capsys):
+    index = _plan(tmp_path, _meta(), _stage(1, method='"do the work"'))
+    _write(tmp_path / "plan.parts" / "stage-1-method.md", "something else")
+    before = _snapshot(tmp_path)
+
+    rc, out = _run(tmp_path, capsys, "plan-externalize", "--plan", str(index),
+                   "--stage", "1", "--field", "method")
+
+    assert rc == 1 and not out["ok"]
+    assert "stage-1-method.md" in out["detail"]
+    assert _snapshot(tmp_path) == before
+
+
+def test_sealing_refuses_when_the_reference_text_also_occurs_elsewhere_in_the_file(
+        tmp_path, capsys):
+    ref = _ref(tmp_path, "m.md", "before\n")
+    copy = f"title = 'see ref = \"m.md\", sha256 = \"{_sha('before' + chr(10))}\"'\n"
+    index = _plan(tmp_path, _meta(), _stage(1, method=ref, title=None) + copy)
+    _write(tmp_path / "m.md", "after\n")
+    before = _snapshot(tmp_path)
+
+    rc, out = _run(tmp_path, capsys, "plan-seal", "--plan", str(index))
+
+    assert rc == 1 and not out["ok"]
+    assert "m.md" in out["detail"]
+    assert _snapshot(tmp_path) == before
+
+
+def test_sealing_refuses_a_rewrite_that_changes_more_than_hashes(
+        tmp_path, capsys, monkeypatch):
+    from agentctl import plan_refs
+
+    ref = _ref(tmp_path, "m.md", "before\n")
+    index = _plan(tmp_path, _meta(), _stage(1, method=ref))
+    _write(tmp_path / "m.md", "after\n")
+    real = plan_refs._rewrite_hash
+    monkeypatch.setattr(
+        plan_refs, "_rewrite_hash",
+        lambda *a, **k: real(*a, **k).replace('goal = "exercise references"', 'goal = "x"'))
+    before = _snapshot(tmp_path)
+
+    rc, out = _run(tmp_path, capsys, "plan-seal", "--plan", str(index))
+
+    assert rc == 1 and not out["ok"]
+    assert "sha256" in out["detail"]
+    assert _snapshot(tmp_path) == before
+
+
+def test_plan_digest_for_a_stage_the_plan_does_not_have_is_a_clean_error(tmp_path, capsys):
+    index = _two_stage(tmp_path)
+
+    rc, out = _run(tmp_path, capsys, "plan-digest", "--plan", str(index), "--stage", "99")
+
+    assert rc == 1 and not out["ok"]
+    assert "99" in out["detail"]

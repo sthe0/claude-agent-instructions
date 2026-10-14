@@ -1034,7 +1034,7 @@ domain = "code"
 file = "scripts/agentctl/plan_refs.py"
 class = "structural"
 disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+ground = "Plan-reference file syntax, not free-text meaning. Its regexes match the 64-hex-character sha256 shape, TOML key and table-header lines, and the text of a `ref`/`sha256` inline table when resealing hashes; its hard-behaviour sinks are PlanError refusals of a malformed, mismatching, escaping or cyclic reference, decided from the file bytes and their hashes."
 
 [[entry]]
 id = "4c1bd18f01a6093a"
@@ -1042,7 +1042,7 @@ domain = "code"
 file = "scripts/agentctl/plan_refs.py"
 class = "structural"
 disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+ground = "Plan-reference file syntax, not free-text meaning. Its regexes match the 64-hex-character sha256 shape, TOML key and table-header lines, and the text of a `ref`/`sha256` inline table when resealing hashes; its hard-behaviour sinks are PlanError refusals of a malformed, mismatching, escaping or cyclic reference, decided from the file bytes and their hashes."
 
 [[entry]]
 id = "67fa5e9258ce4f09"
@@ -1050,7 +1050,7 @@ domain = "code"
 file = "scripts/agentctl/plan_refs.py"
 class = "structural"
 disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+ground = "Plan-reference file syntax, not free-text meaning. Its regexes match the 64-hex-character sha256 shape, TOML key and table-header lines, and the text of a `ref`/`sha256` inline table when resealing hashes; its hard-behaviour sinks are PlanError refusals of a malformed, mismatching, escaping or cyclic reference, decided from the file bytes and their hashes."
 
 [[entry]]
 id = "9c3e35fe0c3609eb"
@@ -1058,7 +1058,7 @@ domain = "code"
 file = "scripts/agentctl/plan_refs.py"
 class = "structural"
 disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+ground = "Plan-reference file syntax, not free-text meaning. Its regexes match the 64-hex-character sha256 shape, TOML key and table-header lines, and the text of a `ref`/`sha256` inline table when resealing hashes; its hard-behaviour sinks are PlanError refusals of a malformed, mismatching, escaping or cyclic reference, decided from the file bytes and their hashes."
 
 [[entry]]
 id = "ee5ef1dea120b8ba"
@@ -1066,7 +1066,7 @@ domain = "code"
 file = "scripts/agentctl/plan_refs.py"
 class = "structural"
 disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+ground = "Plan-reference file syntax, not free-text meaning. Its regexes match the 64-hex-character sha256 shape, TOML key and table-header lines, and the text of a `ref`/`sha256` inline table when resealing hashes; its hard-behaviour sinks are PlanError refusals of a malformed, mismatching, escaping or cyclic reference, decided from the file bytes and their hashes."
 
 [[entry]]
 id = "26579b7554f2187f"

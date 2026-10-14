@@ -40,6 +40,8 @@ NON_STRING_FIELDS: dict[str, frozenset[str]] = {
     "order": frozenset({"requirements", "requires_traceability", "coverage"}),
 }
 
+# Exactly the keys parse_plan and Order read (pinned by a test). `[meta] context` is not
+# read by parse_plan, so it is in neither table and stays in the index.
 EXTERNALIZABLE_FIELDS: dict[str, frozenset[str]] = {
     "stage": frozenset({
         "title", "executor", "expected_result_image", "done_criterion", "cost_tier",
@@ -101,15 +103,19 @@ def _named(table: dict) -> object:
     return table.get("ref", table.get("sha256"))
 
 
+def _malformed(table: dict) -> PlanError:
+    return _refuse("malformed", _named(table),
+                   "a reference table must carry exactly `ref` (a non-empty path) "
+                   "and `sha256` (64 lowercase hex characters)")
+
+
 def _guard(value: object, where: Position) -> object:
     """A value in a position that may not hold a reference: refuse a reference anywhere
     inside it, and leave the value itself alone."""
     if isinstance(value, dict):
         kind = _classify(value)
         if kind == "malformed":
-            raise _refuse("malformed", _named(value),
-                          "a reference table must carry exactly `ref` (a non-empty path) "
-                          "and `sha256` (64 lowercase hex characters)")
+            raise _malformed(value)
         if kind == "ref":
             raise _refuse("position", value["ref"],
                           f"a reference is not allowed at {_where(where)}")
@@ -129,7 +135,7 @@ def _map_node(table: dict, position: Position, kind: str, text: Callable) -> dic
     out = {}
     for key, value in table.items():
         here = (*position, key)
-        if kind == "meta" and key == "order" and isinstance(value, dict):
+        if kind == "meta" and key == "order" and isinstance(value, dict) and _classify(value) is None:
             out[key] = _map_node(value, ("meta.order",), "order", text)
         elif key in NON_STRING_FIELDS[kind] or not isinstance(value, dict):
             out[key] = _guard(value, here)
@@ -154,6 +160,8 @@ def _map_plan(raw: dict, stage: Callable, text: Callable) -> dict:
                     elements.append(element)
                 elif _classify(element) is None:
                     elements.append(_map_node(element, (i,), "stage", text))
+                elif _classify(element) == "malformed":
+                    raise _malformed(element)
                 else:
                     elements.append(stage(element, i))
             out[key] = elements
@@ -165,9 +173,18 @@ def _map_plan(raw: dict, stage: Callable, text: Callable) -> dict:
 class _Walker:
     """Confinement, cycle and depth checks shared by the resolver and the sealer."""
 
-    def __init__(self, root: Path, index_path: Path | None):
-        self.root = root
+    def __init__(self, root: Path | None, index_path: Path | None):
+        self._root = root
         self.index_path = index_path.resolve() if index_path is not None else None
+
+    @property
+    def root(self) -> Path:
+        # Looked up on the first reference only: a plan without any never needs it.
+        if self._root is None:
+            if self.index_path is None:
+                raise PlanError("no confinement root given and no index path to derive one from")
+            self._root = default_root(self.index_path)
+        return self._root
 
     def enter(self, table: dict, base: Path, stack: list[Path]) -> Path:
         ref = table["ref"]
@@ -183,11 +200,16 @@ class _Walker:
         return path
 
 
+class _Unreadable(Exception):
+    """The default reader could not read a file; `_Resolver._bytes` turns it into the
+    `missing` refusal that names the reference as written."""
+
+
 def _read_file(path: Path, sha256: str) -> bytes:
     try:
         return path.read_bytes()
     except OSError as exc:
-        raise _refuse("missing", str(path), f"cannot read the referenced file: {exc}") from exc
+        raise _Unreadable(f"cannot read the referenced file {path}: {exc}") from exc
 
 
 def _decode(data: bytes, ref: object) -> str:
@@ -205,7 +227,10 @@ class _Resolver(_Walker):
         self.visited: Visited = []
 
     def _bytes(self, table: dict, path: Path) -> bytes:
-        data = self.read(path, table["sha256"])
+        try:
+            data = self.read(path, table["sha256"])
+        except _Unreadable as exc:
+            raise _refuse("missing", table["ref"], str(exc)) from exc
         actual = _sha256(data)
         if actual != table["sha256"]:
             raise _refuse("mismatch", table["ref"],
@@ -219,6 +244,8 @@ class _Resolver(_Walker):
         return _decode(data, table["ref"])
 
     def stage(self, table: dict, i: int, base: Path) -> dict:
+        if _classify(table) != "ref":
+            raise _malformed(table)
         pushed = 0
         try:
             while True:
@@ -235,8 +262,7 @@ class _Resolver(_Walker):
                 if shape is None:
                     break
                 if shape == "malformed":
-                    raise _refuse("malformed", _named(parsed),
-                                  "a reference table must carry exactly `ref` and `sha256`")
+                    raise _malformed(parsed)
                 table, base = parsed, path.parent
             if "index" in parsed and parsed["index"] != i:
                 raise _refuse("index", table["ref"],
@@ -259,7 +285,7 @@ class _Resolver(_Walker):
 def resolve_refs(
     raw: dict,
     base_dir: str | Path,
-    root: str | Path,
+    root: str | Path | None,
     *,
     read: Reader | None = None,
     index_path: str | Path | None = None,
@@ -273,9 +299,13 @@ def resolve_refs(
     `read(path, sha256) -> bytes` supplies a file's bytes; the default reads the file
     system and raises `missing`. The declared hash is checked against whatever `read`
     returns, and a `PlanError` it raises propagates unchanged. `index_path` names the file
-    `raw` came from, so a reference back to it is a cycle."""
+    `raw` came from, so a reference back to it is a cycle; a caller that omits it loses
+    that check (a reference back to the index then recurses until the depth bound) and,
+    when `root` is None too, has no confinement root. `root=None` means the default root
+    of `index_path`, looked up only when a reference is met."""
     resolver = _Resolver(
-        Path(root).resolve(), Path(index_path) if index_path is not None else None,
+        Path(root).resolve() if root is not None else None,
+        Path(index_path) if index_path is not None else None,
         read or _read_file)
     resolved = resolver.resolve(raw, Path(base_dir))
     return resolved, resolver.visited
@@ -304,13 +334,31 @@ def write_field_file(path: str | Path, text: str) -> str:
     return _sha256(data)
 
 
-def _parse(path: Path) -> dict:
+def _parse_text(text: str, path: Path) -> dict:
     try:
-        return tomllib.loads(_decode(path.read_bytes(), str(path)))
+        return tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         raise PlanError(f"malformed TOML in {path}: {exc}") from exc
+
+
+def _parse(path: Path) -> dict:
+    try:
+        data = path.read_bytes()
     except OSError as exc:
         raise _refuse("missing", str(path), f"cannot read: {exc}") from exc
+    return _parse_text(_decode(data, str(path)), path)
+
+
+def _unsealed(value: object) -> object:
+    """The parsed document with every reference's hash blanked, for comparing two texts
+    that may differ in nothing else."""
+    if isinstance(value, dict):
+        if _classify(value) == "ref":
+            return {"ref": value["ref"]}
+        return {k: _unsealed(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_unsealed(v) for v in value]
+    return value
 
 
 def _rewrite_hash(text: str, ref: str, old: str, new: str, expected: int) -> str:
@@ -326,10 +374,11 @@ def _rewrite_hash(text: str, ref: str, old: str, new: str, expected: int) -> str
     for pattern in patterns:
         text, count = re.subn(pattern, rf"\g<1>{new}\g<2>", text)
         done += count
-    if done < expected:
+    if done != expected:
         raise PlanError(
-            f"cannot locate the reference to {ref!r} in the file text to reseal it "
-            f"(found {done} of {expected})")
+            f"cannot reseal the reference to {ref!r}: its text occurs {done} times in the "
+            f"file but the parsed plan holds {expected} (a copy in prose or a comment, or a "
+            f"spelling the sealer does not recognise)")
     return text
 
 
@@ -353,13 +402,20 @@ class _Sealer(_Walker):
                 new = self.seal_file(target, subkind, inner)
             edits.append((table["ref"], table["sha256"], new))
 
+        def seal_leaf(table: dict, position: Position = ()) -> str:
+            child(table, None)
+            return ""
+
+        def seal_stage(table: dict, i: int = 0) -> dict:
+            child(table, "stage")
+            return {}
+
         if kind == "stage" and _classify(raw) == "ref":
             child(raw, "stage")
         elif kind == "plan":
-            _map_plan(raw, stage=lambda t, i: child(t, "stage") or {},
-                      text=lambda t, p: child(t, None) or "")
+            _map_plan(raw, stage=seal_stage, text=seal_leaf)
         else:
-            _map_node(raw, (0,), "stage", lambda t, p: child(t, None) or "")
+            _map_node(raw, (0,), "stage", seal_leaf)
 
         counts: dict[tuple[str, str, str], int] = {}
         for edit in edits:
@@ -369,6 +425,8 @@ class _Sealer(_Walker):
                 text = _rewrite_hash(text, ref, old, new, expected)
         data = text.encode("utf-8")
         if data != path.read_bytes():
+            if _unsealed(_parse_text(text, path)) != _unsealed(raw):
+                raise PlanError(f"resealing {path} would change more than its sha256 values")
             path.write_bytes(data)
         return _sha256(data)
 
@@ -388,7 +446,10 @@ _HEADER_RE = re.compile(r"^\s*(\[\[?)\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$")
 
 
 def _value_end(lines: list[str], start: int) -> int:
-    """Index of the last line of the value that begins on `lines[start]`."""
+    """Index of the last line of the value that begins on `lines[start]`. A rough scanner:
+    it ignores backslash escapes inside triple-quoted strings and the 4-5 quote closing
+    forms. A misread is caught by the reload-and-compare in `plan_externalize`, which then
+    restores every file."""
     depth = 0
     multiline = None
     first = True
@@ -537,6 +598,7 @@ def plan_externalize(
         raise PlanError(f"{field_path} already exists with different content")
     touched = {p: p.read_bytes() for p in (index, holder, *chain)}
     created = not field_path.exists()
+    parts_dir_created = not field_path.parent.exists()
     try:
         sha = write_field_file(field_path, value)
         rel = Path(os.path.relpath(field_path, holder.parent)).as_posix()
@@ -553,6 +615,8 @@ def plan_externalize(
             path.write_bytes(data)
         if created and field_path.exists():
             field_path.unlink()
+        if parts_dir_created and field_path.parent.is_dir() and not any(field_path.parent.iterdir()):
+            field_path.parent.rmdir()
         raise
     return {"field_file": str(field_path), "sha256": sha, "holder": str(holder),
             "root_digest": _sha256(index.read_bytes())}
@@ -574,7 +638,10 @@ def plan_digest(index_path: str | Path, *, stage: int | None = None,
         raw, index.parent, Path(root) if root is not None else default_root(index),
         index_path=index)
     doc = parse_plan(resolved)
-    wanted = [stage] if stage is not None else [s.index for s in doc.stages]
+    known = [s.index for s in doc.stages]
+    if stage is not None and stage not in known:
+        raise PlanError(f"stage {stage} not found in the plan (stages: {known})")
+    wanted = [stage] if stage is not None else known
     return {
         "root_digest": _sha256(data),
         "refs": [{"position": list(position), "path": str(path), "sha256": sha}

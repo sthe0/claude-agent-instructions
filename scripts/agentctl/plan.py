@@ -1756,7 +1756,7 @@ def _resolve_plan_refs(raw: dict, path: Path, base_dir, root, read) -> dict:
     resolved, _ = plan_refs.resolve_refs(
         raw,
         base_dir if base_dir is not None else path.parent,
-        root if root is not None else plan_refs.default_root(path),
+        root,
         read=read,
         index_path=path,
     )
