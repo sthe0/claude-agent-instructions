@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -54,9 +55,12 @@ def put(data: bytes, *, directory: str | Path | None = None) -> str:
     if _intact(target, digest):
         return digest
     target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_name(f"{target.name}.{os.getpid()}.partial")
+    # A unique partial per call: concurrent writers (processes or threads) never share one.
+    fd, name = tempfile.mkstemp(dir=target.parent, prefix=f"{digest}.", suffix=".partial")
+    partial = Path(name)
     try:
-        partial.write_bytes(data)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
         os.replace(partial, target)
     finally:
         partial.unlink(missing_ok=True)

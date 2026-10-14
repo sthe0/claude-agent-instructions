@@ -715,7 +715,10 @@ def test_the_inventory_names_the_known_indirect_readers():
     section = "\n".join(_inventory_section(
         INVENTORY.read_text(encoding="utf-8"), "### Known indirect readers"))
 
-    assert "gates._file_sha256" in section
+    for reader in ("gates._file_sha256", "cli._stage_grant_entries", "plan_refs._read_file",
+                   "plan_refs._parse", "plan_store.get", "plan_store._intact",
+                   "plan_store.reader"):
+        assert f"`{reader}`" in section, reader
 
 
 # --- (f) old sessions and single-file plans keep loading ---------------------------------------

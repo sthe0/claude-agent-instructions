@@ -55,13 +55,18 @@ nor the enclosing function names a plan:
   whole-plan review goes stale on any edit, including an edit to a referenced file that was
   resealed into the index.
 - `cli._stage_grant_entries` — compares the sha256 of the approved snapshot's bytes with the
-  recorded snapshot hash before trusting the snapshot's grants; index-only, as the snapshot hash
-  is the hash of the index bytes.
+  recorded snapshot hash before trusting the snapshot's grants. The hash check is index-only, as
+  the snapshot hash is the hash of the index bytes; the snapshot itself is then loaded through
+  `plan_store.load_baseline`, which resolves its references.
 - `plan_refs._read_file` — the resolver's default reader of a referenced file; the hash check on
   the returned bytes is the resolver's.
 - `plan_refs._parse` — parses one plan-shaped TOML file (the index, a referenced stage file)
   for the resolver, the sealer and the externalizer.
 - `plan_store.get` — returns an object from the store by hash and refuses an absent or corrupt one.
+- `plan_store._intact` — re-hashes an object already in the store, so `put` rewrites one whose
+  bytes do not hash to its name.
+- `plan_store.reader` — its disk fallback reads a referenced file by path while a plan version
+  is being stored; the resolver checks the hash of the returned bytes.
 
 ## How the enumerator works, and what it misses
 
@@ -79,8 +84,9 @@ read the path through a variable named `path`/`target` inside a function that ta
 Limits — what the scan does not see:
 
 - a read through a helper that names no plan (the indirect readers above);
-- a read through `Path.open()` or a bare file handle (`plan.load_plan` is listed only because
-  its own name says "plan");
+- a read through `Path.open()` or a bare file handle: the scan sees only the builtin `open(...)`,
+  so a function whose name and parameters do not say "plan" is missed even when it calls
+  `tomllib.load(fh)` on a plan;
 - a plan read by a subprocess or a shell command (`cat plan.toml`, `git show`);
 - a path or a function that never says "plan" (a renamed parameter);
 - code outside `scripts/` and files that are not Python;
