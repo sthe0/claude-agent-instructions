@@ -93,6 +93,13 @@ def _isolate_task_quality_ledger(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_plan_object_store(tmp_path, monkeypatch):
+    """Every submitted or approved plan version is stored by content under the plans
+    directory; no test may write into the real store."""
+    monkeypatch.setenv("AGENTCTL_PLAN_OBJECTS_DIR", str(tmp_path / "plan-objects"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_memory_retrieval_ledger(tmp_path, monkeypatch):
     """The hook and record-experience append to this ledger; no test may touch the real one."""
     monkeypatch.setenv("CLAUDE_MEMORY_RETRIEVAL_LEDGER", str(tmp_path / "memory-retrieval.jsonl"))

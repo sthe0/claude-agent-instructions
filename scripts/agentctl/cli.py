@@ -27,7 +27,7 @@ from pathlib import Path
 
 from lib import argv_text, config_root, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_refs, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -227,13 +227,27 @@ def _plan_file_sha256(target: str | None) -> str:
     empty result into a refusal when the caller did supply a --plan-digest, since a
     digest it cannot compare is not evidence the reviewer read anything.
     cmd_plan_review records this over the reviewed bytes; gates.plan_review_blockers
-    inlines the same sha256-of-bytes recompute (it cannot import cli — circular)."""
+    inlines the same sha256-of-bytes recompute (it cannot import cli — circular).
+
+    Index-only on purpose: for a hypertext plan the digest of the index bytes already
+    commits to every referenced file (each reference carries its file's sha256), so the
+    whole-plan review binding goes stale on any edit, referenced files included."""
     if not target:
         return ""
     try:
         return hashlib.sha256(Path(target).read_bytes()).hexdigest()
     except OSError:
         return ""
+
+
+def _plan_refs_problem(target: str) -> str | None:
+    """Why the references of the plan at `target` do not all resolve (the reference named),
+    or None when they do. A plan without references always resolves."""
+    try:
+        plan_store.visited_refs(target)
+    except PlanError as exc:
+        return str(exc)
+    return None
 
 
 def _plan_file_bytes(target: str | None) -> int | None:
@@ -345,7 +359,30 @@ def _record_bypass(state: SessionState, bypass: JudgeBypass) -> None:
     state.judge_bypassed.append(bypass)
 
 
-def _write_plan_snapshot(store: StateStore, state: SessionState, data: bytes, digest: str) -> tuple[str, str] | None:
+def _store_plan_objects(state: SessionState, data: bytes, plan_path: str | None) -> None:
+    """Put a plan version's index bytes and every file it references into the plan object
+    store (`plan_store`), so the version resolves to the same text however its files are
+    edited, moved or deleted later. `plan_path` is the file `data` was read from and defaults
+    to the session's registered path. Best-effort like the snapshot writers around it: an
+    unresolvable version is stored nowhere and refused by name when a consumer loads it."""
+    registered = plan_path or state.plan_path
+    if not registered:
+        return
+    try:
+        plan_store.store_plan(data, registered)
+    except (OSError, PlanError):
+        pass
+
+
+def _load_prior_plan(state: SessionState, path: str, *, strict: bool = True) -> PlanDoc:
+    """Load an older version of the session's plan (the approved snapshot, a version
+    snapshot): references resolve against the registered plan path and come from the
+    object store, not from files that may have changed since."""
+    return plan_store.load_baseline(path, state.plan_path, strict=strict)
+
+
+def _write_plan_snapshot(store: StateStore, state: SessionState, data: bytes, digest: str,
+                         plan_path: str | None = None) -> tuple[str, str] | None:
     """Write an ALREADY-READ plan buffer to the session's snapshot dir and return
     (snapshot_path, hash) -- the write-only half of `_snapshot_approved_plan`,
     factored out so a caller that already holds `(data, digest)` from a single
@@ -359,10 +396,12 @@ def _write_plan_snapshot(store: StateStore, state: SessionState, data: bytes, di
     snap = path_fn(state.session_id).parent / f"plan-approved-{digest[:16]}.toml"
     snap.parent.mkdir(parents=True, exist_ok=True)
     snap.write_bytes(data)
+    _store_plan_objects(state, data, plan_path)
     return str(snap), digest
 
 
-def _write_plan_version_snapshot(store: StateStore, state: SessionState, data: bytes, digest: str) -> str | None:
+def _write_plan_version_snapshot(store: StateStore, state: SessionState, data: bytes, digest: str,
+                                 plan_path: str | None = None) -> str | None:
     """Content-address EVERY submitted plan version (submit_plan and every replan
     kind), not just the approved ones `_write_plan_snapshot` covers — every
     `plan_sha256`/`prev_plan_sha256` logged on a history event must resolve to an
@@ -380,6 +419,7 @@ def _write_plan_version_snapshot(store: StateStore, state: SessionState, data: b
     snap = path_fn(state.session_id).parent / f"plan-version-{digest[:16]}.toml"
     snap.parent.mkdir(parents=True, exist_ok=True)
     snap.write_bytes(data)
+    _store_plan_objects(state, data, plan_path)
     return str(snap)
 
 
@@ -395,7 +435,7 @@ def _snapshot_plan_version(store: StateStore, state: SessionState, plan_path: st
     except OSError:
         return None
     digest = hashlib.sha256(data).hexdigest()
-    _write_plan_version_snapshot(store, state, data, digest)
+    _write_plan_version_snapshot(store, state, data, digest, plan_path=state.plan_path or plan_path)
     return digest
 
 
@@ -485,7 +525,7 @@ def _approved_snapshot_doc(state: SessionState):
     if not snap_path or not Path(snap_path).exists():
         return None
     try:
-        return load_plan(snap_path, strict=False)
+        return _load_prior_plan(state, snap_path, strict=False)
     except (OSError, PlanError):
         return None
 
@@ -533,7 +573,7 @@ def _ledgered_order_key(state: SessionState) -> str | None:
     if not path:
         return None
     try:
-        doc = load_plan(path, strict=False)
+        doc = _load_prior_plan(state, path, strict=False)
     except (OSError, PlanError):
         return None
     key = order_digest(doc)
@@ -585,7 +625,7 @@ def _order_customer_id(state: SessionState) -> str:
     if not path:
         return ""
     try:
-        order = load_plan(path, strict=False).meta.order
+        order = _load_prior_plan(state, path, strict=False).meta.order
     except (OSError, PlanError):
         return ""
     return order.customer_id if order is not None else ""
@@ -3960,7 +4000,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # approved-plan snapshot below (that one is taken only at `approve`) -- so the
     # `submit_plan` history event's plan_sha256 always resolves to a stored file, even
     # for a submission never subsequently approved.
-    _write_plan_version_snapshot(store, state, _submitted_plan_bytes, _submitted_plan_digest)
+    _write_plan_version_snapshot(store, state, _submitted_plan_bytes, _submitted_plan_digest,
+                                 plan_path=plan_path)
     _submitted_plan_sha256 = _submitted_plan_digest
     state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
@@ -5157,6 +5198,14 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                 f"--plan-digest {attested!r} does not match the live plan bytes "
                 f"({live!r}) at {target!r}: the reviewer read a different or stale "
                 "plan; re-read the current plan and re-run plan-review",
+            )
+        refs_problem = _plan_refs_problem(target)
+        if refs_problem:
+            return Directive(
+                False, state.node, "noop",
+                f"--plan-digest {attested!r} cannot be cross-checked: the plan at {target!r} has a "
+                f"reference that does not resolve ({refs_problem}), so the engine cannot confirm "
+                "the reviewer read the text the plan stands for; fix the reference and re-run plan-review",
             )
     # Terminal-pass check: a `revise` arriving after a PASS already recorded
     # for this scope this approval cycle only overturns it with run-demonstrated
@@ -7495,7 +7544,7 @@ def _stage_grant_entries(
             "disk no longer matches the bytes this session approved"
         ), None
     try:
-        snap_doc = load_plan(snap_path)
+        snap_doc = _load_prior_plan(state, snap_path)
     except (OSError, PlanError) as exc:
         return declared_entries, derived_entries, dropped, (
             f"cannot load approved-plan snapshot {snap_path!r}: {exc}"
@@ -7560,7 +7609,7 @@ def _stage_would_derive_grants(state: SessionState, stage_index: int) -> bool:
     if not snap_path or not Path(snap_path).exists():
         return False
     try:
-        snap_doc = load_plan(snap_path)
+        snap_doc = _load_prior_plan(state, snap_path)
     except (OSError, PlanError):
         return False
     snap_stage = next((s for s in snap_doc.stages if s.index == stage_index), None)
@@ -10118,7 +10167,7 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
     # against the SNAPSHOT (not plan_path) is also what makes successive renormalizations
     # honest: each is measured against the bytes that were approved, so a norm edit
     # cannot be walked to in small steps.
-    old = _load(old_path, strict=False)
+    old = _load_prior_plan(state, old_path, strict=False)
     # Read args.plan's bytes ONCE and derive `new`, the digest stamped below and the
     # snapshot written below from that same buffer -- three separate re-reads of a
     # file the coordinator can edit concurrently used to leave `accepted_plan_digest`
@@ -10176,7 +10225,7 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
     # content-addressed for, despite logging a distinct event name (see the class
     # docstring above on why it's `renormalize`, not `replan`).
     _prev_plan_sha256 = _snapshot_plan_version(store, state, old_path)
-    _write_plan_version_snapshot(store, state, _new_plan_bytes, _new_plan_digest)
+    _write_plan_version_snapshot(store, state, _new_plan_bytes, _new_plan_digest, plan_path=args.plan)
     _new_plan_sha256 = _new_plan_digest
     state.log("renormalize", stages=changed, plan=args.plan,
               prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256)
@@ -10589,7 +10638,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # submission refusal above (a plan that does not meet submission grade is
     # not worth authorizing) and strictly before the plan_approval PLUGIN
     # block below; this command has still written nothing to disk at this point.
-    auth_kind = _replan_kind(state, _load(_replan_baseline_path(state), strict=False), new)
+    auth_kind = _replan_kind(state, _load_prior_plan(state, _replan_baseline_path(state), strict=False), new)
     arblock = gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)
     _log_gate(state, "replan_authorization", arblock, passed=not arblock)
     if arblock:
@@ -10669,14 +10718,14 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # lenient load keeps the structural parse but skips every submission-grade
     # check. Only the NEW side — loaded strictly at seam (b) above — and submit-plan
     # are strict.
-    old = _load(old_path, strict=False)
+    old = _load_prior_plan(state, old_path, strict=False)
     # Content-address both sides of this replan -- the OLD baseline (read fresh;
     # `old_path` may be a legacy plan_path fallback never snapshotted before) and the
     # NEW plan, reusing the (data, digest) seam already read via `load_plan_with_digest`
     # rather than re-reading args.plan a second time. Computed once here, past every
     # refusal above, and used by whichever of the three kind branches below applies.
     _prev_plan_sha256 = _snapshot_plan_version(store, state, old_path)
-    _write_plan_version_snapshot(store, state, _new_plan_bytes, _new_plan_digest)
+    _write_plan_version_snapshot(store, state, _new_plan_bytes, _new_plan_digest, plan_path=args.plan)
     _new_plan_sha256 = _new_plan_digest
     # coverage gate: inside the difficulty flow, the corrected plan must CARRY the
     # critique's similarities into conditions/invariants and CHANGE a means/method
@@ -11135,7 +11184,7 @@ def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None)
     if not (state.difficulty and state.difficulty.critique):
         return Directive(True, state.node, "inspect", "no active critique; nothing to cover")
     old_path = _replan_baseline_path(state)
-    old = load_plan(old_path, strict=False)
+    old = _load_prior_plan(state, old_path, strict=False)
     new = load_plan(args.new)
     blockers = gates.replan_coverage_blockers(old, new, state.difficulty.critique)
     if blockers:

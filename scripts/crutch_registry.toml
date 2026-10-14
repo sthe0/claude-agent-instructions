@@ -1029,36 +1029,20 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
-id = "0b0e3e9df6fb34b3"
-domain = "code"
-file = "scripts/agentctl/plan_refs.py"
-class = "structural"
-disposition = "keep"
-ground = "Plan-reference file syntax, not free-text meaning. Its regexes match the 64-hex-character sha256 shape, TOML key and table-header lines, and the text of a `ref`/`sha256` inline table when resealing hashes; its hard-behaviour sinks are PlanError refusals of a malformed, mismatching, escaping or cyclic reference, decided from the file bytes and their hashes."
-
-[[entry]]
-id = "4c1bd18f01a6093a"
-domain = "code"
-file = "scripts/agentctl/plan_refs.py"
-class = "structural"
-disposition = "keep"
-ground = "Plan-reference file syntax, not free-text meaning. Its regexes match the 64-hex-character sha256 shape, TOML key and table-header lines, and the text of a `ref`/`sha256` inline table when resealing hashes; its hard-behaviour sinks are PlanError refusals of a malformed, mismatching, escaping or cyclic reference, decided from the file bytes and their hashes."
-
-[[entry]]
-id = "67fa5e9258ce4f09"
-domain = "code"
-file = "scripts/agentctl/plan_refs.py"
-class = "structural"
-disposition = "keep"
-ground = "Plan-reference file syntax, not free-text meaning. Its regexes match the 64-hex-character sha256 shape, TOML key and table-header lines, and the text of a `ref`/`sha256` inline table when resealing hashes; its hard-behaviour sinks are PlanError refusals of a malformed, mismatching, escaping or cyclic reference, decided from the file bytes and their hashes."
-
-[[entry]]
 id = "9c3e35fe0c3609eb"
 domain = "code"
 file = "scripts/agentctl/plan_refs.py"
 class = "structural"
 disposition = "keep"
-ground = "Plan-reference file syntax, not free-text meaning. Its regexes match the 64-hex-character sha256 shape, TOML key and table-header lines, and the text of a `ref`/`sha256` inline table when resealing hashes; its hard-behaviour sinks are PlanError refusals of a malformed, mismatching, escaping or cyclic reference, decided from the file bytes and their hashes."
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "0b0e3e9df6fb34b3"
+domain = "code"
+file = "scripts/agentctl/plan_refs.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
 id = "ee5ef1dea120b8ba"
@@ -1066,7 +1050,15 @@ domain = "code"
 file = "scripts/agentctl/plan_refs.py"
 class = "structural"
 disposition = "keep"
-ground = "Plan-reference file syntax, not free-text meaning. Its regexes match the 64-hex-character sha256 shape, TOML key and table-header lines, and the text of a `ref`/`sha256` inline table when resealing hashes; its hard-behaviour sinks are PlanError refusals of a malformed, mismatching, escaping or cyclic reference, decided from the file bytes and their hashes."
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "4c1bd18f01a6093a"
+domain = "code"
+file = "scripts/agentctl/plan_refs.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
 id = "26579b7554f2187f"
@@ -11541,6 +11533,30 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "b787ee011155cd06"
+domain = "code"
+file = "scripts/tests/test_plan_refs_consumers.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "ab8ce1741fe74f06"
+domain = "code"
+file = "scripts/tests/test_plan_refs_consumers.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "39d36bce42ec04bc"
+domain = "code"
+file = "scripts/tests/test_plan_refs_consumers.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "c0c678bdda862669"
 domain = "code"
 file = "scripts/tests/test_plan_review_accepted_risk.py"
@@ -16125,6 +16141,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "67fa5e9258ce4f09"
+domain = "code_file_rollup"
+file = "scripts/agentctl/plan_refs.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "1bb3053578b62525"
 domain = "code_file_rollup"
 file = "scripts/agentctl/plan_resources.py"
@@ -18024,6 +18048,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "136aa12dfbef1521"
 domain = "code_file_rollup"
 file = "scripts/tests/test_plan_presentation.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "2bfb95c91f3861df"
+domain = "code_file_rollup"
+file = "scripts/tests/test_plan_refs_consumers.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

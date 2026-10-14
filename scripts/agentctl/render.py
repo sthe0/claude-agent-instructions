@@ -25,6 +25,7 @@ from pathlib import Path
 from lib import kind_baselines
 
 from . import grants as _grants
+from . import plan_store
 from .directive import Directive
 from .plan import (
     CONDITION_MARKERS,
@@ -1404,11 +1405,39 @@ def _parse_stage_arg(raw) -> "list[int] | None":
     return sorted(int(part.strip()) for part in str(raw).split(",") if part.strip())
 
 
+def _externalized_fields(plan_path: str, stage_indices: list[int] | None) -> list[dict]:
+    """Where each externalized field or stage of the plan at `plan_path` lives and which
+    bytes the plan pins for it: `{field, path, sha256}` in document order. With
+    `stage_indices`, only the references of those stages."""
+    index = Path(plan_path)
+    entries = []
+    for position, path, sha256 in plan_store.visited_refs(index):
+        if stage_indices is not None and position[0] not in stage_indices:
+            continue
+        try:
+            shown = os.fspath(path.relative_to(index.resolve().parent))
+        except ValueError:
+            shown = os.fspath(path)
+        entries.append({"field": ".".join(str(part) for part in position), "path": shown, "sha256": sha256})
+    return entries
+
+
+def _externalized_section(entries: list[dict]) -> str:
+    lines = ["", "## Externalized fields", ""]
+    lines += [f"- `{e['field']}` — `{e['path']}` (sha256 `{e['sha256']}`)" for e in entries]
+    return "\n".join(lines) + "\n"
+
+
 def cmd_plan_render(args, *, store=None, runner=None) -> Directive:
     """Render the declared TOML plan to markdown on demand — a read-only PROJECTION,
     never written to disk by the engine. The markdown is the Directive's detail (the
     `question-list --format md` precedent), with the raw string also under
     data['markdown'] for programmatic capture.
+
+    A hypertext plan renders its resolved text; a trailing "Externalized fields" section
+    names the reference path and sha256 of each externalized field (also under
+    data['externalized']), so a reader can tell which text lives in which file. A plan
+    without references renders exactly as before.
 
     `--stage N` (schema-independent; reads an already-loaded PlanDoc) renders only
     that stage via `render_stage_brief` instead of the whole plan; `--stage N,M`
@@ -1428,4 +1457,10 @@ def cmd_plan_render(args, *, store=None, runner=None) -> Directive:
             md = render_stages_md(doc, stage_indices)
         except ValueError as exc:
             return Directive(False, "(render)", "error", str(exc), data={})
-    return Directive(True, "(render)", "inspect", md, data={"markdown": md})
+    externalized = _externalized_fields(args.plan, stage_indices)
+    if externalized:
+        md += _externalized_section(externalized)
+    data = {"markdown": md}
+    if externalized:
+        data["externalized"] = externalized
+    return Directive(True, "(render)", "inspect", md, data=data)
