@@ -484,6 +484,41 @@ def test_put_rewrites_an_object_whose_bytes_do_not_hash_to_its_name(tmp_path):
     assert [p.name for p in target.parent.iterdir()] == [digest]
 
 
+def test_each_put_writes_through_its_own_partial_and_leaves_none_behind(tmp_path, monkeypatch):
+    from agentctl import plan_store
+
+    sources = []
+    real_replace = plan_store.os.replace
+
+    def spy(src, dst):
+        sources.append(Path(src).name)
+        real_replace(src, dst)
+
+    monkeypatch.setattr(plan_store.os, "replace", spy)
+    first = plan_store.put(b"first")
+    plan_store.put(b"second")
+    target = tmp_path / "plan-objects" / first[:2] / first
+    target.write_bytes(b"torn")
+    plan_store.put(b"first")
+
+    assert len(sources) == len(set(sources)) == 3
+    assert all(name.endswith(".partial") for name in sources)
+    assert not list((tmp_path / "plan-objects").rglob("*.partial"))
+
+
+def test_a_failed_put_removes_its_partial(tmp_path, monkeypatch):
+    from agentctl import plan_store
+
+    def fail(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(plan_store.os, "replace", fail)
+    with pytest.raises(OSError):
+        plan_store.put(b"never stored")
+
+    assert not list((tmp_path / "plan-objects").rglob("*.partial"))
+
+
 def test_get_refuses_a_name_that_is_not_a_sha256_hex_digest():
     from agentctl import plan_store
     from agentctl.plan import PlanError
