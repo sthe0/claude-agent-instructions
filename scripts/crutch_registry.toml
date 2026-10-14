@@ -4781,6 +4781,30 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "41afe79c7bf5e500"
+domain = "code"
+file = "scripts/tests/test_child_contour_e2e.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "46b3b34a37c1eae3"
+domain = "code"
+file = "scripts/tests/test_child_contour_e2e.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "85cb467f835d7450"
+domain = "code"
+file = "scripts/tests/test_child_contour_e2e.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "9456d113e8391b74"
 domain = "code"
 file = "scripts/tests/test_child_contour_gate.py"
@@ -17040,6 +17064,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "f1b0906c902b116c"
 domain = "code_file_rollup"
 file = "scripts/tests/test_check_spawn_tool_run_guard_join.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "5df676768fac41e7"
+domain = "code_file_rollup"
+file = "scripts/tests/test_child_contour_e2e.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
