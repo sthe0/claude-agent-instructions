@@ -3544,12 +3544,9 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
     norm itself, or when its command text (an engine-executed fixed text or a declared
     exact Bash rule) is covered, segment by segment, by a `Bash(<prefix>:*)` rule the
     handoff holds (`grants.bash_command_covered_by_rules`, the matcher the harness-side
-    cover uses): the parent's wildcard already authorizes that command. A wildcard the
-    plan itself derives for one of its own output artifacts (`Bash(python3 <artifact>:*)`)
-    is left out: it names a script this plan writes, which an identity bound to the
-    script's content, not a path prefix, has to pin. Every other
-    engine-executed fixed text the engine cannot resolve is refused unless the handoff
-    carries it. `resource_origins` is the plan's `(resource, origin, source)` tags
+    cover uses): the parent's wildcard already authorizes that command, whichever rule
+    of the handoff it is. Every other engine-executed fixed text the engine cannot
+    resolve is refused unless the handoff carries it. `resource_origins` is the plan's `(resource, origin, source)` tags
     (`BoundaryView.resource_origins`): a resource that every one of its origins produces
     from a covered engine-executed text is not charged either, unless no approval could
     cover it (it is, contains or lies under a protected root or surface); without the tags
@@ -3580,10 +3577,7 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
             reasons.append(PARENT_NORM_CHECK_DROPPED)
         from . import grants as _grants
         from . import order_approvals as _oa
-        derived_for_artifacts = {item.get("source") for item in unresolved
-                                 if item.get("origin") == "output_artifact"}
-        held_wildcards = [rule for rule in _held_wildcard_rules(held_unresolved)
-                          if rule not in derived_for_artifacts]
+        held_wildcards = _held_wildcard_rules(held_unresolved)
 
         def text_covered(origin: str, source: str) -> bool:
             text = _check_text(origin, source)

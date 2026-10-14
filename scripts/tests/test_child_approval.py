@@ -294,9 +294,10 @@ def _with_stage_verify(text: str, command: str) -> str:
 def test_unresolved_stage_verify_command_is_covered_only_by_the_identical_handoff_rule(child):
     """The identity `resolve_rule_grant` gives the handoff's entry is the one
     `compute_boundary_view` gives the plan's item, so a handoff carrying exactly
-    `Bash(<that command>)` covers it and no other (the wildcard `_covering_grants` holds for
-    the plan's output artifact is not counted by the check cover, see test_child_check_cover.py)."""
-    command = "python3 mod.py --check"
+    `Bash(<that command>)` covers it and no other. The command avoids `mod.py`: the
+    `Bash(python3 mod.py:*)` wildcard `_covering_grants` holds for the plan's output
+    artifact would cover `python3 mod.py --check` (see test_child_check_cover.py)."""
+    command = "python3 -m unittest tests.test_mod"
     text = _with_stage_verify(
         _spliced(parent_norm=child.digest, final_checks=((PARENT_CHECK, 0),)), command)
     d, plan = _linked_submit(child, plan_text=text)
