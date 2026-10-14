@@ -314,6 +314,32 @@ ground = "PROVIDER_NAME_RE.fullmatch validates a landed provider name as a plain
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/plan_refs.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: _SHA_RE (64 lowercase hex digits, a sha256 digest), _KEY_RE (a TOML `key =` line), _HEADER_RE (a TOML `[table]` / `[[array]]` header line)."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "coordinator"
+
+[sites."scripts/agentctl/plan_refs.py::_classify::pattern.fullmatch"]
+class = "structural"
+ground = "_SHA_RE.fullmatch checks that a reference table's sha256 value has the digest shape; a fixed syntax."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/agentctl/plan_refs.py::_rewrite_hash::re.subn"]
+class = "structural"
+ground = "re.subn replaces the old hash inside a `{ ref = ..., sha256 = ... }` reference table naming one escaped path, in either key order; the count must equal the expected number of references."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/agentctl/plan_refs.py::_scan::pattern.match"]
+class = "structural"
+ground = "_HEADER_RE.match and _KEY_RE.match locate TOML table headers and key lines so a field value can be rewritten in place; TOML syntax, not free-text meaning."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "coordinator"
+
 [sites."scripts/agentctl/landed_providers.py::<module>::re.compile"]
 class = "structural"
 ground = "PROVIDER_NAME_RE compiles the plain-identifier syntax of a landed provider name (it becomes a plugin file name)."
