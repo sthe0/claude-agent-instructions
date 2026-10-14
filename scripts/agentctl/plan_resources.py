@@ -179,6 +179,9 @@ class BoundaryView:
     order_sha256: str
     resources: list = field(default_factory=list)
     unresolved: list[dict] = field(default_factory=list)
+    #: `(resource, origin, source)` for every entry of `resources`, in step with it: the plan
+    #: element, and its text, each resource came from.
+    resource_origins: list[tuple] = field(default_factory=list)
 
 
 def _unresolved_item(identity, origin: str, source: str) -> dict:
@@ -190,13 +193,18 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
     (verify_command, negative_control, final_check commands) resolved directly as whole
     texts, with every unresolved identity carrying its origin. The DR-V rules derived
     from a verify_command are skipped: derivation drops segments it cannot read off
-    the text, so only the direct resolution sees them."""
+    the text, so only the direct resolution sees them. Each resolved resource is also
+    recorded in `resource_origins` with the plan element and text that produced it."""
     v = venue if venue is not None else _venue_for(doc)
     view = BoundaryView(order_sha256=order_sha256)
 
+    def add(resources: list, origin: str, source: str) -> None:
+        view.resources.extend(resources)
+        view.resource_origins.extend((r, origin, source) for r in resources)
+
     def take(res: Resolution, origin: str, source: str, fallback: tuple) -> None:
         if res.status == "resolved":
-            view.resources.extend(res.resources)
+            add(res.resources, origin, source)
         else:
             view.unresolved.append(_unresolved_item(res.identity or fallback, origin, source))
 
@@ -212,9 +220,9 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
             take(resolve_rule_grant(rule_grant.rule, v), origin, rule_grant.rule,
                  ("unresolved", rule_grant.rule))
         for add_dir in effective.add_dirs:
-            view.resources.extend(resolve_add_dir_grant(add_dir.path, add_dir.mode).resources)
-        view.resources.extend(_stage_spawn_resources(stage))
-        view.resources.extend(_stage_landed_resources(stage))
+            add(resolve_add_dir_grant(add_dir.path, add_dir.mode).resources, "add_dir", add_dir.path)
+        add(_stage_spawn_resources(stage), "spawn", "")
+        add(_stage_landed_resources(stage), "landed", "")
         if runs_verify_command(stage.criterion):
             verify = stage.criterion.verify_command
             take(resolve_text(verify, v), "verify_command", verify, ("verify-command", verify))

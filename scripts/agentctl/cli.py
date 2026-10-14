@@ -1104,6 +1104,7 @@ def _autonomy_for(state: SessionState, doc) -> dict:
             view.resources, held,
             unresolved=view.unresolved, held_unresolved=held_unresolved,
             max_depth=Thresholds().max_recursion_depth, protected=protected,
+            resource_origins=view.resource_origins,
         )
     key = _ledgered_order_key(state) or order_digest(doc)
     ledger = order_approvals.get(key)
