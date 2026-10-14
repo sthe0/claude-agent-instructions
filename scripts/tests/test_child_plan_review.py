@@ -8,9 +8,9 @@ it inside the child's contour:
 
 * the channel (`agentctl-own.py`) admits the three read/compose verbs the driver runs
   besides `plan-review` -- and still refuses every user-authority verb;
-* the spawn grants a linked child exactly one more rule, the driver by its absolute
-  path in own mode (`--own`), names the command in the brief, and gives an unlinked
-  spawn (a reviewer included) neither;
+* the spawn grants a linked child exactly two more rules, the driver by its absolute
+  path in own mode (`--own`) and an Edit rule on its own plan file, names the driver
+  in the brief, and gives an unlinked spawn (a reviewer included) neither;
 * the driver, with `--own`, takes its session from the contour and drives the engine
   only through the channel; own mode and `AGENTCTL_OWN_SESSION` must agree, or it
   exits 2.
@@ -30,6 +30,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from agentctl.own_contour import own_plan_path
 from lib.widening_targets import AGENTCTL_USER_AUTHORITY_VERBS
 from test_child_contour_gate import (  # noqa: F401 - `_isolated_env` is autouse
     CHILD,
@@ -162,8 +163,9 @@ def test_linked_spawn_grants_exactly_the_review_driver(tmp_path, monkeypatch):
     )
     unlinked_cmd, _ = _launch(_load_spawn(), monkeypatch, _spawn_argv(tmp_path / "home", tmp_path, None))
     extra = sorted(set(allow) - set(_settings_allow(unlinked_cmd)))
-    assert extra == sorted([f"Bash(python3 {OWN_SCRIPT}:*)", REVIEW_RULE]), (
-        f"a linked child is granted more than the channel and the review driver: {extra}"
+    own_plan = own_plan_path(cmd[cmd.index("--session-id") + 1])
+    assert extra == sorted([f"Bash(python3 {OWN_SCRIPT}:*)", REVIEW_RULE, f"Edit(/{own_plan})"]), (
+        f"a linked child is granted more than the channel, the review driver and its own plan: {extra}"
     )
 
 
