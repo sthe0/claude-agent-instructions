@@ -54,6 +54,7 @@ from agentctl.plan import (  # parse the TOML plan for a single-stage brief proj
     parse_pair,
     parse_unit,
 )
+from agentctl import plan_store  # an older plan version's referenced files, by hash
 from agentctl.stage_norm import StageNorm
 from agentctl.state import PARENT_DIFFICULTY_ENV, Node, format_parent_difficulty
 from agentctl.render import (  # pure PlanDoc(+index) -> markdown; TopoUnitsCorrupt/materialize_topo_units do the one bit of I/O
@@ -1830,14 +1831,18 @@ def session_recursion_depth(
 
 def _session_plan(state):
     """The session's plan document -- the live plan path first, the approved snapshot as
-    the fallback -- or `None` when neither loads."""
-    for plan_file in (state.plan_path, state.plan_snapshot_path):
-        if not plan_file:
-            continue
+    the fallback -- or `None` when neither loads. The snapshot lives in the state directory,
+    so its references resolve against the registered plan path, from the object store."""
+    if state.plan_path:
         try:
-            return load_plan(plan_file)
+            return load_plan(state.plan_path)
         except (OSError, PlanError):
-            continue
+            pass
+    if state.plan_snapshot_path:
+        try:
+            return plan_store.load_baseline(state.plan_snapshot_path, state.plan_path)
+        except (OSError, PlanError):
+            pass
     return None
 
 

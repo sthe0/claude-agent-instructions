@@ -54,6 +54,9 @@ nor the enclosing function names a plan:
   check (`gates._plan_review_content_stale`); on a plan path it hashes the index bytes, so the
   whole-plan review goes stale on any edit, including an edit to a referenced file that was
   resealed into the index.
+- `cli._stage_grant_entries` — compares the sha256 of the approved snapshot's bytes with the
+  recorded snapshot hash before trusting the snapshot's grants; index-only, as the snapshot hash
+  is the hash of the index bytes.
 - `plan_refs._read_file` — the resolver's default reader of a referenced file; the hash check on
   the returned bytes is the resolver's.
 - `plan_refs._parse` — parses one plan-shaped TOML file (the index, a referenced stage file)
@@ -76,6 +79,8 @@ read the path through a variable named `path`/`target` inside a function that ta
 Limits — what the scan does not see:
 
 - a read through a helper that names no plan (the indirect readers above);
+- a read through `Path.open()` or a bare file handle (`plan.load_plan` is listed only because
+  its own name says "plan");
 - a plan read by a subprocess or a shell command (`cat plan.toml`, `git show`);
 - a path or a function that never says "plan" (a renamed parameter);
 - code outside `scripts/` and files that are not Python;

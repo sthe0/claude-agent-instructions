@@ -472,6 +472,45 @@ def test_the_registered_plan_itself_is_loaded_from_the_disk(
     assert doc.stages[0].criterion.done_criterion == part.read_text(encoding="utf-8")
 
 
+def test_put_rewrites_an_object_whose_bytes_do_not_hash_to_its_name(tmp_path):
+    from agentctl import plan_store
+
+    digest = plan_store.put(b"original")
+    target = tmp_path / "plan-objects" / digest[:2] / digest
+    target.write_bytes(b"torn")
+
+    assert plan_store.put(b"original") == digest
+    assert plan_store.get(digest) == b"original"
+    assert [p.name for p in target.parent.iterdir()] == [digest]
+
+
+def test_get_refuses_a_name_that_is_not_a_sha256_hex_digest():
+    from agentctl import plan_store
+    from agentctl.plan import PlanError
+
+    for name in ("../" + "a" * 61, "AB" * 32, "ab" * 31):
+        with pytest.raises(PlanError) as exc:
+            plan_store.get(name)
+        assert "not a sha256 hex digest" in str(exc.value)
+
+
+def test_the_spawned_brief_falls_back_to_the_snapshot_with_its_references_from_the_store(
+        store, venued_fixtures_dir, tmp_path):
+    import importlib.util
+
+    script = REPO / "scripts" / "spawn-specialist.py"
+    spec = importlib.util.spec_from_file_location("spawn_specialist_plan_refs", script)
+    spawn = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(spawn)
+    sid, plan, part, original = _hypertext_session(store, venued_fixtures_dir, tmp_path)
+    part.unlink()
+
+    doc = spawn._session_plan(store.load(sid))
+
+    assert doc is not None
+    assert doc.stages[0].criterion.done_criterion == original
+
+
 # --- (d) plan-render ------------------------------------------------------------------------
 
 def _externalized(tmp_path):

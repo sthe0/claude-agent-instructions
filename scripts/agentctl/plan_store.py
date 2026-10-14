@@ -29,20 +29,37 @@ def objects_dir() -> Path:
     return Path(override) if override else config_root.plans_dir() / "objects"
 
 
+_HEX = frozenset("0123456789abcdef")
+
+
 def _object_path(sha256: str, directory: Path | None) -> Path:
+    # The name becomes a path: anything but a sha256 hex digest could leave the store.
+    if len(sha256) != 64 or not _HEX.issuperset(sha256):
+        raise PlanError(f"{sha256!r} is not a sha256 hex digest")
     return (directory or objects_dir()) / sha256[:2] / sha256
 
 
+def _intact(target: Path, digest: str) -> bool:
+    try:
+        return hashlib.sha256(target.read_bytes()).hexdigest() == digest
+    except OSError:
+        return False
+
+
 def put(data: bytes, *, directory: str | Path | None = None) -> str:
-    """Store `data` under its sha256 (idempotent) and return the digest."""
+    """Store `data` under its sha256 (idempotent) and return the digest. An object already
+    there whose bytes do not hash to its name (a write torn by a crash) is rewritten."""
     digest = hashlib.sha256(data).hexdigest()
     target = _object_path(digest, Path(directory) if directory else None)
-    if target.exists():
+    if _intact(target, digest):
         return digest
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(f"{target.name}.{os.getpid()}.partial")
-    partial.write_bytes(data)
-    os.replace(partial, target)
+    try:
+        partial.write_bytes(data)
+        os.replace(partial, target)
+    finally:
+        partial.unlink(missing_ok=True)
     return digest
 
 
