@@ -91,11 +91,11 @@ def test_approve_nonempty_by_passes(store, venued_fixtures_dir):
 
 # --- approve at wrong node returns legible directive, not TransitionError (#339) ---
 
-def test_approve_at_executing_is_no_action(store, fixtures_dir):
+def test_approve_at_executing_is_no_action(store, venued_fixtures_dir):
     """approve at EXECUTING should report 'already approved' (ok=True), not
     raise an uncaught TransitionError — issue #339."""
     sid = "gae"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
