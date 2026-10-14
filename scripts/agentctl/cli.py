@@ -6098,6 +6098,24 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # because confirm-delivery is a reachable, audit-logged escape (gates.py's
     # plan_presentation_blockers docstring has the full justification).
     state = _require(store, args.session)
+    # Node guard: approve is only legal from PLAN_READY. Return a legible directive for
+    # other nodes so the caller gets an actionable message instead of an uncaught
+    # TransitionError bubbling from the transition table (#339).
+    _POST_APPROVAL_NODES: frozenset[str] = frozenset({
+        Node.APPROVED.value, Node.PARTITIONED.value, Node.EXECUTING.value,
+        Node.VERIFYING.value, Node.RESOLUTION.value, Node.RESOLVED.value,
+        Node.DIAGNOSING.value,
+    })
+    if state.node in _POST_APPROVAL_NODES:
+        return Directive(
+            True, state.node, "no_action",
+            f"plan is already approved (node={state.node}); nothing needs approving here",
+        )
+    if state.node != Node.PLAN_READY.value:
+        return Directive(
+            False, state.node, "submit_plan",
+            f"cannot approve at node={state.node}; submit a plan first",
+        )
     # Submission seam (c), BEFORE _log_gate: the coordinator may have edited plan_path in
     # place at plan-mutable PLAN_READY, so the bytes approve is about to attest to have
     # never been through submission validation. Refusing here — as a fix_plan Directive,
@@ -9201,6 +9219,17 @@ def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
                          "established — ask the resolution question again; "
                          + RESOLUTION_ASK_RULE_HINT + escape_note], record
     if not after:
+        misplaced_after = [
+            inp for inp, ts, _ in calls
+            if ts is not None and ts > verified_at
+            and not transcript_turns.has_marker_option(inp, RESOLUTION_ASK_MARKER)
+            and transcript_turns.has_marker_in_question_text(inp, RESOLUTION_ASK_MARKER)
+        ]
+        if misplaced_after:
+            return [prefix + f"the {RESOLUTION_ASK_MARKER!r} marker appears in the question "
+                             "text of an ask after verify-final, but it must be in an option "
+                             "label or description — re-ask with the marker placed inside an "
+                             "option; " + RESOLUTION_ASK_RULE_HINT + escape_note], record
         return [prefix + f"the {RESOLUTION_ASK_MARKER!r} ask predates the latest verify-final — "
                          "ask the resolution question again now that final verification has passed; "
                          + RESOLUTION_ASK_RULE_HINT + escape_note], record
