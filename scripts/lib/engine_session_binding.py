@@ -12,6 +12,10 @@ Recency is the order of the list, not a clock reading, so two drives within one 
 tick still order correctly; each entry's ``ts`` is diagnostic only and is never read back.
 A binding whose state file no longer exists is skipped on
 read, never trusted.
+
+The same records answer the reverse question, which conversation transcript belongs to an
+engine session (``transcript_for_session``): the delivery proof and the writer gate read the
+transcript of the conversation that ran the session.
 """
 from __future__ import annotations
 
@@ -75,6 +79,36 @@ def driven_sessions(harness_session: str) -> list[str]:
         e["session"] for e in reversed(entries)
         if config_root.resolve_agentctl_state_file(e["session"]) is not None
     ]
+
+
+def harness_sessions_driving(engine_session: str) -> list[str]:
+    """Every harness session recorded as having driven ``engine_session`` (unordered)."""
+    if not engine_session:
+        return []
+    engine = config_root.sanitize_session_id(engine_session)
+    try:
+        paths = sorted(_bindings_dir().glob("*.json"))
+    except OSError:
+        return []
+    return [p.stem for p in paths if any(e["session"] == engine for e in _read(p))]
+
+
+def transcript_for_session(session: str) -> Path | None:
+    """The newest transcript of the conversation that ran engine ``session``, or None.
+
+    A conversation writes its transcript under its harness id, which is the engine session
+    id only when the coordinator never passed ``--session``. The candidates are therefore
+    ``session`` itself and every harness session bound to it; a linked child's own run is
+    found this way, and the parent pointer in its state is never followed. Derived, never
+    supplied: the gated actor must not choose which transcript is checked."""
+    if not session:
+        return None
+    found: list[Path] = []
+    for name in dict.fromkeys([session, *harness_sessions_driving(session)]):
+        found.extend(config_root.iter_transcripts(f"*/{name}.jsonl"))
+    if not found:
+        return None
+    return max(found, key=lambda p: p.stat().st_mtime)
 
 
 def resolve(harness_session: str) -> str | None:

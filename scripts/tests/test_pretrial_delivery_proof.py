@@ -280,3 +280,26 @@ def test_delivery_unlinked_session_keeps_base_lookup(cfg, store, tmp_path, fixtu
     stamp = _stamp(cfg, session)
     assert stamp is not None, "an unlinked single-session coordinator is stamped under its own id"
     assert stamp.plan_sha256 == receipt.plan_sha256 and stamp.rendering_sha256 == receipt.rendering_sha256
+
+
+def test_receipt_stamped_on_session_owning_presented_bytes(cfg, store, tmp_path, fixtures_dir):
+    harness = "harness-three"
+    engines = ("engine-a", "engine-b", "engine-c")
+    for engine in engines:
+        _start_as(tmp_path, cfg, harness, engine)
+    receipts = {
+        engine: _plan_ready_with_receipt(store, engine, tmp_path, fixtures_dir, body="Essence of plan " + engine + ".")
+        for engine in engines
+    }
+    transcript = _delivered_transcript(_transcript_path(cfg, harness), receipts["engine-b"])
+
+    proc = _run_hook(tmp_path, cfg, _ask_payload(harness, transcript))
+
+    assert proc.returncode == 0, "setup: the hook must never exit non-zero"
+    assert _stamp(cfg, "engine-b") is not None, (
+        "BEHAVIOUR: the session whose registered essence was delivered, not the most recently "
+        "driven one, is left without a delivery stamp"
+    )
+    assert _stamp(cfg, "engine-a") is None and _stamp(cfg, "engine-c") is None, (
+        "BEHAVIOUR: a session whose essence was not delivered received the delivery stamp"
+    )

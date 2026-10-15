@@ -133,6 +133,7 @@ try:
     # not to become the address of everything text_shape holds.
     from agentctl import text_shape as _text_shape  # noqa: E402
     from lib import config_root  # noqa: E402
+    from lib import engine_session_binding  # noqa: E402
     from lib import judge_budget  # noqa: E402
     from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
     from lib.ask_text import flat_text  # noqa: E402
@@ -499,7 +500,66 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
     )
     if payload.get("tool_name") != "AskUserQuestion":
         return "allow", "", None, None
-    session_id = payload.get("session_id") or ""
+    # The harness session may drive several engine sessions; the delivered bytes belong to
+    # the one whose registered essence they are, so each candidate (most recently driven
+    # first) is decided in turn and the first that verifies the delivery wins. Without a
+    # verifying candidate the most recently driven session decides, as the production-edit
+    # gate does. A harness session with nothing bound is its own engine session.
+    harness = payload.get("session_id") or ""
+    try:
+        candidates = engine_session_binding.driven_sessions(harness)
+    except Exception:
+        candidates = []
+    first: tuple[str, str, Path | None, _PlanPresentation | None] | None = None
+    ask_judged: dict[str, bool] = {}
+    for candidate in candidates or [harness]:
+        result = _decide_session(payload, candidate, budget, ask_judged)
+        if result[3] is not None:
+            return result
+        first = first or result
+    assert first is not None
+    return first
+
+
+def _judge_approval_ask(payload: dict, budget: judge_budget.JudgeBudget) -> bool:
+    ask_text = flat_text(payload.get("tool_input") or {})
+    # Skipping the call on a False prefilter is safe because
+    # judge_approval_ask runs this same prefilter internally
+    # as its own second gate: the skip reproduces the same
+    # False verdict that call would have returned anyway
+    # (though not, when the kill-switch is set, the same
+    # ledger record).
+    prefilter_fired = _advisor.approval_ask_prefilter(ask_text)
+    judge_ledger.entered("approval_ask", prefilter_fired=prefilter_fired)
+    if not prefilter_fired:
+        return False
+    remaining_before_call, call_timeout = budget.remaining_and_timeout(
+        _APPROVAL_ASK_JUDGE_BUDGET_S
+    )
+    if call_timeout is None:
+        judge_ledger.decided(
+            "approval_ask", stage="budget", verdict=False,
+            reason="budget exhausted before call (fail-open)",
+            remaining=remaining_before_call, threshold=None,
+            ceiling=_APPROVAL_ASK_JUDGE_BUDGET_S,
+        )
+        return False
+    is_approval_ask, _reason = _advisor.judge_approval_ask(
+        ask_text,
+        _advisor.subprocess_runner,
+        enabled=os.environ.get(_APPROVAL_ASK_KILLSWITCH_ENV) != "0",
+        timeout=call_timeout,
+        remaining=remaining_before_call,
+        ceiling=_APPROVAL_ASK_JUDGE_BUDGET_S,
+    )
+    return is_approval_ask
+
+
+def _decide_session(
+    payload: dict, session_id: str, budget: judge_budget.JudgeBudget, ask_judged: dict[str, bool],
+) -> tuple[str, str, Path | None, _PlanPresentation | None]:
+    """`decide` for one engine session. `ask_judged` carries the ask-text verdict across
+    candidates, so the judge is called once per ask whichever session is decided."""
     sp = resolve_state_path(session_id)
     if sp is None:
         return "allow", "", None, None
@@ -524,6 +584,9 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
 
     turn_start_ts = None
     transcript_path = payload.get("transcript_path")
+    if not (isinstance(transcript_path, str) and transcript_path):
+        found = engine_session_binding.transcript_for_session(session_id)
+        transcript_path = str(found) if found is not None else None
     if isinstance(transcript_path, str) and transcript_path:
         turn_start_ts = latest_turn_start(Path(transcript_path))
 
@@ -552,35 +615,9 @@ def decide(payload: dict) -> tuple[str, str, Path | None, _PlanPresentation | No
             presentation_active = _gates.plan_presentation_active(state)
             if presentation_active:
                 if not same_turn_denied and not observe_only:
-                    ask_text = flat_text(payload.get("tool_input") or {})
-                    # Skipping the call on a False prefilter is safe because
-                    # judge_approval_ask runs this same prefilter internally
-                    # as its own second gate: the skip reproduces the same
-                    # False verdict that call would have returned anyway
-                    # (though not, when the kill-switch is set, the same
-                    # ledger record).
-                    prefilter_fired = _advisor.approval_ask_prefilter(ask_text)
-                    judge_ledger.entered("approval_ask", prefilter_fired=prefilter_fired)
-                    if prefilter_fired:
-                        remaining_before_call, call_timeout = budget.remaining_and_timeout(
-                            _APPROVAL_ASK_JUDGE_BUDGET_S
-                        )
-                        if call_timeout is None:
-                            judge_ledger.decided(
-                                "approval_ask", stage="budget", verdict=False,
-                                reason="budget exhausted before call (fail-open)",
-                                remaining=remaining_before_call, threshold=None,
-                                ceiling=_APPROVAL_ASK_JUDGE_BUDGET_S,
-                            )
-                        else:
-                            is_approval_ask, _reason = _advisor.judge_approval_ask(
-                                ask_text,
-                                _advisor.subprocess_runner,
-                                enabled=os.environ.get(_APPROVAL_ASK_KILLSWITCH_ENV) != "0",
-                                timeout=call_timeout,
-                                remaining=remaining_before_call,
-                                ceiling=_APPROVAL_ASK_JUDGE_BUDGET_S,
-                            )
+                    if "verdict" not in ask_judged:
+                        ask_judged["verdict"] = _judge_approval_ask(payload, budget)
+                    is_approval_ask = ask_judged["verdict"]
                 receipt = _gates._plan_presentation_for(state, _KIND_ESSENCE)
                 if observe_only and receipt is not None and _already_stamped(sp, receipt):
                     receipt = None  # an ordinary ask after approval: no scan, no write

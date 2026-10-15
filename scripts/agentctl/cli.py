@@ -4176,13 +4176,10 @@ def _plan_presentation_skeleton(stages: list[Stage]) -> str:
 
 
 def _present_plan_transcript(session_id: str) -> Path | None:
-    """The newest transcript the harness wrote for `session_id` under any
-    projects root, or None. Derived, never supplied: the gated actor must not
-    choose which transcript is checked."""
-    found = config_root.iter_transcripts(f"*/{session_id}.jsonl")
-    if not found:
-        return None
-    return max(found, key=lambda p: p.stat().st_mtime)
+    """The newest transcript of the conversation that ran engine session
+    `session_id` under any projects root, or None (see
+    `engine_session_binding.transcript_for_session`)."""
+    return engine_session_binding.transcript_for_session(session_id)
 
 
 def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
