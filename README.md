@@ -30,7 +30,7 @@ The instructions are layered by scope. The **root** (this repo) defines the **un
 | [Processes](docs/processes/) | The task lifecycle and its sub-processes: planning, difficulty/replan, self-improvement, resolution, partition. |
 | [Components](docs/components/) | The parts and where they live: skills, agents, hooks, scripts, memory scopes, settings, the Cursor mirror. |
 | [Operations](docs/operations/) | Running and maintaining the repo: setup and distribution, the git workflow, the verification guards, layer maintenance. |
-| [Decisions](docs/adr/README.md) | The architecture decision records for significant, hard-to-reverse choices. |
+| [Decisions](docs/adr/README.md) | The architecture decision records for significant, hard-to-reverse choices, among them [ADR-0011](docs/adr/0011-hypertext-plans.md) on hypertext plans. |
 
 ## Setup
 

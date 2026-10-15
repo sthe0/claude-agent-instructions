@@ -107,3 +107,68 @@ denied the plans directory and its view holds no plan file. The text is left as 
 purpose: changing it moves the node-file bytes that `base_file_digest` and
 `service_file_digest` cover, which would stale every recorded pair review.
 
+### Instruction files that speak about plan transport
+
+The instruction files a reader follows that mention how a plan is passed, digested, split or
+converted, each with its disposition: `updated` (changed to describe hypertext plans) or
+`unaffected` (the mention stays correct, with the reason). The set is found by enumeration,
+not recall: every file under `skills/`, `docs/adr/`, `memory-global/leaves/` and the top-level
+instruction files that matches the plan-transport pattern of the stage-7 check.
+
+Updated:
+
+- `skills/specializations/planner/SKILL.md` — updated: § Large plans names the reference form, the authoring verbs and who runs `plan-convert-live`.
+- `skills/specializations/planner/policy.md` — updated: § Large plans gives both limits, the remedy order and conversion.
+- `skills/specializations/thinker/SKILL.md` — updated: view directory, `objects/<sha256>` and the index copy to hash; topological-protocol paragraphs untouched.
+- `skills/specializations/_shared/marker-protocol.md` — updated: a plan may arrive as a stage brief plus a view directory; closure digest.
+- `scripts/agentctl/README.md` — updated: `## Hypertext plans`.
+- `docs/adr/0010-child-contour.md` — updated: note that a child plan may be a referenced sub-document.
+- `README.md` — updated: the decisions row names ADR-0011.
+- `memory-global/leaves/plan-file-split.md` — updated: marked Superseded by ADR-0011.
+- `memory-global/leaves/token-economy-plan.md` — updated: row 6 names ADR-0011, no manual split.
+- `memory-global/MEMORY.md` — updated: the pointer no longer advises a manual split.
+
+Unaffected:
+
+- `CLAUDE.md` — unaffected: `plan_sha256` stays the presentation receipt's binding, and the plan digest keeps its meaning.
+- `docs/adr/0005-activity-act-functional-places.md` — unaffected: a historical decision record that names `plan-render`.
+- `docs/adr/0011-hypertext-plans.md` — unaffected: the design the texts above describe.
+- `docs/adr/README.md` — unaffected: the ADR index; stage 1 added the 0011 row.
+- `skills/overcome-difficulty/SKILL.md` — unaffected: names `check-coverage --new <plan>` on a plan path, unchanged.
+- `skills/overcome-difficulty/policy.md` — unaffected: shows a spawn call with `--plan <brief file>`, a brief, not a plan.
+- `skills/specializations/code-reviewer/SKILL.md` — unaffected: the Read grant on the plans directory it describes is unchanged, and referenced files lie below that directory.
+- `skills/tracker-management/SKILL.md` — unaffected: attaches the plan TOML to a ticket; the index stays the plan file.
+- `memory-global/leaves/acting-without-asking.md` — unaffected: approval of a plan file; the digest bound is the index digest.
+- `memory-global/leaves/ask-user-question-split-turn.md` — unaffected: receipt binding to `plan_sha256`, which keeps its meaning.
+- `memory-global/leaves/behavioral-conformance-control.md` — unaffected: the attested digest is the index digest.
+- `memory-global/leaves/coordination/MEMORY.md` — unaffected: an index line about the delivery gate's `plan_sha256` binding.
+- `memory-global/leaves/experience-leaf-schema.md` — unaffected: `record-experience.py --plan` is a text argument, not a plan file.
+- `memory-global/leaves/plan-activity-ontology.md` — unaffected: `plan-render` is still a projection of the typed plan.
+- `memory-global/leaves/published-text-writer-gate.md` — unaffected: a published-text rule that names `plan_sha256` only as an example.
+- `memory-global/leaves/question-provenance-gate.md` — unaffected: question lists and `plan-render` are generated views of resolved content.
+- `memory-global/leaves/skill-first-dispatch.md` — unaffected: `plan-render` stays the way to read a plan field.
+- `memory-global/leaves/spawning-specialists.md` — unaffected: hashing capability for the reviewer-computed digest is unchanged.
+- `memory-global/leaves/system-knowledge/agentctl-acceptance-judge-gate.md` — unaffected: a record about plan-digest staling an acceptance review.
+- `memory-global/leaves/system-knowledge/agentctl-plan-review-coverage-checks-whole-record-first.md` — unaffected: coverage reads the review record, not plan bytes.
+- `memory-global/leaves/system-knowledge/agentctl-stage-vector-staleness.md` — unaffected: `submit-plan --plan <path>` still takes the index path.
+- `memory-global/leaves/system-knowledge/agentctl-verify-final-reruns-live-state.md` — unaffected: a record that names `plan-render`.
+- `memory-global/leaves/system-knowledge/claude-code-drops-pre-tool-call-text.md` — unaffected: the delivery receipt's `plan_sha256` binding is unchanged.
+- `memory-global/leaves/system-knowledge/cursor-agent-cli-spawn.md` — unaffected: a spawn example with `--plan`; the Cursor spawner's handling is in the site rows above.
+- `memory-global/leaves/system-knowledge/settings-permission-tiers.md` — unaffected: grants recorded alongside `plan_sha256`, now the index digest.
+- `memory-global/leaves/experience/MEMORY.md` — unaffected: the dated experience index, a record of past tasks.
+- `memory-global/leaves/experience/2026-07-02-spawn-sandbox-excludes-declared-stage-material.md` — unaffected: dated record of a past task.
+- `memory-global/leaves/experience/2026-07-03-engine-replan-artifact-discipline.md` — unaffected: dated record of a past task.
+- `memory-global/leaves/experience/2026-07-09-gate-must-execute-what-it-attests.md` — unaffected: dated record of a past task.
+- `memory-global/leaves/experience/2026-07-20-agentctl-premise-gate-blocks-venue-refinement-replan.md` — unaffected: dated record of a past task.
+- `memory-global/leaves/experience/2026-08-05-scope-substitution-at-plan-authoring.md` — unaffected: dated record of a past task.
+- `memory-global/leaves/experience/2026-08-11-review-loop-cannot-measure-its-own-convergence.md` — unaffected: dated record of a past task.
+- `memory-global/leaves/experience/2026-09-22-tool-scope-judged-by-contract-not-pattern.md` — unaffected: dated record of a past task.
+- `memory-global/leaves/experience/2026-10-12-landed-state-identity-by-coordinate.md` — unaffected: dated record of a past task.
+- `memory-global/leaves/experience/2026-10-12-replan-gate-machinery-wedges-correction.md` — unaffected: dated record of a past task.
+- `memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md` — unaffected: dated record of a past task.
+- `memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md` — unaffected: dated record of a past task.
+
+Frozen fixtures, not edited (assumed premise Q7 of ADR-0011) — `benchmark-profile/` and
+`benchmark-profile-spawn/` hold copies of the planner skill: unaffected, they stay as the
+benchmarks recorded them.
+

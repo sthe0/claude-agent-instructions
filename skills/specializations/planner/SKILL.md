@@ -151,9 +151,13 @@ Optional `##` sections (add when the task warrants them; not enforced by `agentc
 
 For each stage that calls for a specialist (developer, thinker, yandex-cloud-expert, …), the manager will spawn that specialization as a separate `claude -p` process — your plan only names which specialization is needed, not how to spawn it.
 
-### Large plans — split into index + per-stage files
+### Large plans — hypertext references
 
-For plans > ~20 KB / ~600 lines or > 3 stages accruing `Actual effort:` updates, split into an index + per-stage files so later Reads pull only the active stage; for ≤ 3 stages or < 10 KB the single-file default stands. Layout and section template: [plan-file-split.md](../../../memory-global/leaves/plan-file-split.md).
+A plan too big to review or to hand to a model in one piece is written as a hypertext plan ([ADR-0011](../../../docs/adr/0011-hypertext-plans.md)): any string field of a stage, a whole `[[stage]]`, or a `[meta]` / `[meta.order]` prose field may be a reference `{ ref = "<path>", sha256 = "<hex>" }` to a file whose bytes it pins. The plan digest stays `sha256` of the index file, and it covers every referenced file. A plan of ≤ 3 stages or under 10 KB stays one file. Limits, remedy order and authoring rules: [policy.md](policy.md) § Large plans.
+
+- A field above `plan-field-inline-max-chars` is moved into its file with `agentctl plan-externalize`; after editing a referenced file reseal with `agentctl plan-seal`, check with `agentctl plan-digest`.
+- A node above `plan-stage-max-chars` is not helped by externalizing: reformulate or split the stage (`submit-plan` blocks it).
+- Whole-stage files come only from `agentctl plan-convert`, which converts an old single-file plan read-only into a separate directory. For a live session whose plan outgrew the context, the **root coordinator** runs `agentctl plan-convert-live --session <id> --by agent|user` (approvals and reviews carry over). It is a user-authority verb: a spawned planner never calls it and instead recommends it in its returned marker.
 
 ### Tool guidance
 

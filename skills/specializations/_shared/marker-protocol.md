@@ -7,7 +7,7 @@ This file is the shared **invocation contract** and **return-marker reference** 
 You are a specialist running in a fresh manager process: a Claude Code root with the role's SKILL.md appended to your system prompt. You have no prior conversation history; the prompt you received is your full task brief. The manager's prompt to you contains, generically:
 
 - `AGENT_RECURSION_DEPTH` — your depth in the specialist chain.
-- The working plan and the step you own (or a task brief when you produce the first plan).
+- The working plan and the step you own (or a task brief when you produce the first plan). A large plan arrives as a stage brief plus a **view directory** you may `Read`: a field printed as `see objects/<sha256>` is the file of that name there. The brief's closure digest identifies the stage's norm including what it relies on; `agentctl plan-digest` prints it. Never call `plan-convert-live`: converting a live session's plan is the root coordinator's act, so recommend it in your marker instead.
 - The done criterion for your step.
 - Constraints from the manager.
 - Permissions previously granted by the user (if any).

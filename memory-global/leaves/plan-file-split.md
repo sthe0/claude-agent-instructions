@@ -1,12 +1,14 @@
 ---
 name: plan-file-split
-description: For substantive multi-stage plans that grow above ~20 KB, split the single plan markdown into an index file (`<slug>.md`) plus per-stage files (`<slug>-stage-<N>.md`). The index carries the structural sections (Problem, Stages-overview pointers, Final verification, Risks); each stage file carries that stage's Output / Expected result image / Actual effort. This lets later Read calls pull only the active stage instead of re-loading the entire plan.
+description: Superseded by ADR-0011 (hypertext plans). Historical record of the manual split of a markdown plan into an index plus per-stage files; a large TOML plan now uses hash-pinned references (plan-externalize) and the converter (plan-convert), not a hand split.
 type: reference
 created: 2026-05-27
-last_verified: 2026-07-22
+last_verified: 2026-10-15
 ---
 
 # Plan-file split
+
+> **Superseded by [ADR-0011](../../docs/adr/0011-hypertext-plans.md).** A plan too big for one prompt is no longer split by hand: a long field is moved into a hash-pinned file with `agentctl plan-externalize`, an edited file is resealed with `agentctl plan-seal`, an old single-file plan is converted with `agentctl plan-convert` (a live session's plan by the root coordinator with `plan-convert-live`), and the plan digest stays the digest of the index file. The size limits are the `config.md` keys `plan-stage-max-chars` and `plan-field-inline-max-chars`. Do not follow the layout below for a TOML plan; it is kept for the markdown-era plans it describes. See [planner policy](../../skills/specializations/planner/policy.md) § Large plans.
 
 > **Legacy (`.md`-era) + one corrected hazard — read this first.** This leaf predates the
 > `agentctl` engine, which now writes a **single TOML** plan (`~/.claude-agent/plans/<slug>.toml`)
