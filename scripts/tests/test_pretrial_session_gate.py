@@ -228,6 +228,90 @@ def test_pending_substantive_session_blocks_release_via_side_session(tmp_path):
     )
 
 
+def test_own_substantive_session_blocks_release_via_side_session(tmp_path):
+    # test_i427's hand-written H state is unbound by construction, which is why it is the
+    # exception: here H is bound to itself by the verbs it runs through the CLI.
+    for argv in (
+        ("start", "--task", "t", "--goal", "g"),
+        ("classify", "--files", "9", "--changed-lines", "900"),
+    ):
+        proc = _agentctl(tmp_path, *argv)
+        assert proc.returncode == 0, f"setup: {argv[0]} failed: {proc.stdout[-300:]}"
+    own_file = _state_file(tmp_path, HARNESS)
+    own_state = json.loads(own_file.read_text())
+    assert own_state["weight_class"] == "SUBSTANTIVE", "setup: the harness session is substantive"
+    own_state["node"] = "PLAN_READY"
+    own_file.write_text(json.dumps(own_state))
+
+    _drive_to_executing(tmp_path, "engine-side")
+
+    proc = _edit_from_harness(tmp_path)
+    assert proc.returncode == 0, "setup: the hook must never exit non-zero"
+    assert _is_deny(proc), (
+        "BEHAVIOUR: driving a side session to EXECUTING released production edits while the "
+        "harness session's own substantive plan still awaits approval"
+    )
+    reason = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert HARNESS in reason, "the denial must name the harness session awaiting approval"
+
+
+def _pending_session_then_side_executing(home: Path, pending_node: str) -> Path:
+    """Harness H drives substantive `engine-plan` (left at `pending_node`), then a small
+    `engine-side` session at EXECUTING. Returns the pending session's state file."""
+    for argv in (
+        ("start", "--session", "engine-plan", "--task", "t", "--goal", "g"),
+        ("classify", "--session", "engine-plan", "--files", "9", "--changed-lines", "900"),
+    ):
+        proc = _agentctl(home, *argv)
+        assert proc.returncode == 0, f"setup: {argv[0]} failed: {proc.stdout[-300:]}"
+    plan_file = _state_file(home, "engine-plan")
+    plan_state = json.loads(plan_file.read_text())
+    plan_state["node"] = pending_node
+    plan_file.write_text(json.dumps(plan_state))
+    _drive_to_executing(home, "engine-side")
+    return plan_file
+
+
+def test_pending_session_guard_does_not_apply_to_a_plan_file(tmp_path):
+    _pending_session_then_side_executing(tmp_path, "PLAN_READY")
+    assert _is_deny(_edit_from_harness(tmp_path)), "setup: the guard blocks a production path"
+
+    payload = {
+        "tool_name": "Edit",
+        "session_id": HARNESS,
+        "tool_input": {"file_path": str(tmp_path / ".claude" / "plans" / "task.toml")},
+    }
+    proc = subprocess.run(
+        [sys.executable, str(HOOK)],
+        input=json.dumps(payload), capture_output=True, text=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}, timeout=60,
+    )
+
+    assert proc.returncode == 0 and not _is_deny(proc), (
+        f"a plan file is not a production path for the pending-session guard: {proc.stdout[:300]}"
+    )
+
+
+def test_pending_session_guard_fails_open_on_an_unreadable_state_file(tmp_path):
+    plan_file = _pending_session_then_side_executing(tmp_path, "PLAN_READY")
+    plan_file.write_text("{not json")
+
+    proc = _edit_from_harness(tmp_path)
+
+    assert proc.returncode == 0 and not _is_deny(proc), (
+        f"an unreadable bound state file must be skipped, not block the edit: {proc.stdout[:300]}"
+    )
+
+
+def test_pending_session_guard_blocks_at_diagnosing(tmp_path):
+    _pending_session_then_side_executing(tmp_path, "DIAGNOSING")
+
+    proc = _edit_from_harness(tmp_path)
+
+    assert _is_deny(proc), "a substantive session at DIAGNOSING still holds the gate"
+    assert "engine-plan" in json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 def test_readonly_query_of_other_session_keeps_base_decision(tmp_path):
     _drive_to_executing(tmp_path, ENGINE, harness="harness-other")
     _write_harness_state(tmp_path, "PLAN_READY")

@@ -17,9 +17,8 @@ the session_id is sanitized to alnum/-/_ exactly as FileStateStore does), where 
 is the payload's, or the engine session lib/engine_session_binding.py records that harness
 session as driving. A production edit is also denied while another engine session that harness
 session drove is SUBSTANTIVE and still before plan approval (pending_substantive_session).
-<agent-home>
-resolves via lib/config_root.py (isolated ~/.claude-agent when present, else legacy
-~/.claude). A session file left behind by a not-yet-migrated root is still found —
+<agent-home> resolves via lib/config_root.py (isolated ~/.claude-agent when present, else
+legacy ~/.claude). A session file left behind by a not-yet-migrated root is still found —
 resolve_state_path() checks the legacy root too — so the gate fails CLOSED (keeps
 blocking) rather than open during a half-migrated transition.
 
@@ -400,7 +399,7 @@ def main() -> int:
         deny_with(node, reason)
         return 0
 
-    if not is_plan:
+    if not in_plans_dir:
         pending = pending_substantive_session(session_id, sp)
         if pending is not None:
             pending_session, pending_node = pending

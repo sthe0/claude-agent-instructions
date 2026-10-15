@@ -13416,7 +13416,7 @@ class _BindingStore(FileStateStore):
             engine_session_binding.record_drive(
                 self._harness, state.session_id, dt.datetime.now(dt.timezone.utc))
         except Exception:
-            pass  # a binding that cannot be written leaves the gate at the harness id
+            pass  # an unwritten binding leaves the gate on the previously most recent one (the harness id if none)
 
 
 def _is_followed_by_gate(harness: str, session: str) -> bool:
