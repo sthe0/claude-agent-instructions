@@ -26,7 +26,7 @@ import tempfile
 import tomllib
 from pathlib import Path
 
-from . import plan, plan_refs, plan_store, toml_emit
+from . import plan, plan_refs, plan_store, submission, toml_emit
 from .config import PlanLimitError, plan_size_limits
 from .directive import Directive
 from .plan import PlanError
@@ -98,13 +98,12 @@ def _stage_tables(raw: dict) -> list[dict]:
 
 
 def _oversize(raw: dict, stage_max_chars: int) -> list[dict]:
-    venue = plan.raw_plan_venue(raw)
-    sizes = [("meta", plan.meta_rendered_size(raw))]
-    sizes += [(position, plan.stage_rendered_size(table, venue))
-              for position, table in enumerate(_stage_tables(raw), start=1)]
-    return [{"node": node, "chars": size, "remedy": _REMEDY,
-             "message": plan.oversize_node_message(node, size, stage_max_chars)}
-            for node, size in sizes if size > stage_max_chars]
+    """The nodes the submit gate blocks, taken from that gate's own function, so the report
+    equals the block by construction. Stage indices were checked against positions by the
+    caller, so the gate's node labels are the positions."""
+    return [{"node": found["node"], "chars": found["chars"], "remedy": _REMEDY,
+             "message": found["message"]}
+            for found in submission.plan_size_blocks(raw, stage_max_chars)]
 
 
 def _parsed_view(doc) -> dict:
@@ -130,14 +129,15 @@ def _parsed_view(doc) -> dict:
     }
 
 
-def _parsed_equivalence(raw: dict, index_path: Path, root: Path) -> tuple[str, str]:
-    """`(verdict, detail)`: "ok", or "not-applicable" with the loader's message when the
-    current loader refuses the source. A source the loader accepts must load from the tree
-    to a plan with the same derived values."""
+def _parsed_equivalence(raw: dict, index_path: Path, root: Path) -> tuple[str, str, str]:
+    """`(verdict, detail, content_digest)`: "ok" with the plan content digest both forms
+    share, or "not-applicable" with the loader's message (and no digest) when the current
+    loader refuses the source. A source the loader accepts must load from the tree to a plan
+    with the same derived values."""
     try:
         source_doc = plan.parse_plan(copy.deepcopy(raw))
     except PlanError as exc:
-        return "not-applicable", str(exc)
+        return "not-applicable", str(exc), ""
     try:
         tree_doc = plan.load_plan(index_path, root=root)
     except PlanError as exc:
@@ -148,7 +148,7 @@ def _parsed_equivalence(raw: dict, index_path: Path, root: Path) -> tuple[str, s
         if value != tree_view[part]:
             raise PlanError(
                 f"parsed equivalence: {part} differs between the source and the converted tree")
-    return "ok", ""
+    return "ok", "", source_view["plan_content_digest"]
 
 
 def convert_with_report(
@@ -232,7 +232,7 @@ def convert_with_report(
             raise PlanError(
                 "raw equivalence: the resolved tree differs from the source at "
                 f"{_first_difference(raw, resolved)}")
-        parsed, parsed_detail = _parsed_equivalence(raw, index_path, tmp)
+        parsed, parsed_detail, content_digest = _parsed_equivalence(raw, index_path, tmp)
 
     report = {
         "source_sha256": _sha256(source_bytes),
@@ -245,6 +245,7 @@ def convert_with_report(
         "round_trip": "ok",
         "raw_equivalence": "ok",
         "parsed_equivalence": parsed,
+        "content_digest": content_digest,
     }
     if parsed_detail:
         report["parsed_equivalence_detail"] = parsed_detail
@@ -291,7 +292,7 @@ def _report_lines(report: dict) -> list[str]:
     return lines
 
 
-def plan_convert(plan_path: str | Path, out: str | Path) -> dict:
+def convert_into_dir(plan_path: str | Path, out: str | Path) -> dict:
     source = Path(plan_path)
     target = Path(out)
     if target.exists() and (not target.is_dir() or any(target.iterdir())):
@@ -308,7 +309,7 @@ def plan_convert(plan_path: str | Path, out: str | Path) -> dict:
 
 def cmd_plan_convert(args, *, store=None) -> Directive:
     try:
-        data = plan_convert(args.plan, args.out)
+        data = convert_into_dir(args.plan, args.out)
     except PlanError as exc:
         return Directive(False, "(plan-convert)", "error", str(exc))
     if getattr(args, "format", "text") == "json":
@@ -345,7 +346,7 @@ def _live_refusal(state, plan_file: Path | None, verb: str) -> str | None:
 
 
 def cmd_plan_convert_live(args, *, store, runner=None) -> Directive:
-    from . import cli
+    from . import cli, gates
     from .state import PlanConversion
 
     state = cli._require(store, args.session)
@@ -355,8 +356,9 @@ def cmd_plan_convert_live(args, *, store, runner=None) -> Directive:
     refusal = _live_refusal(state, plan_file, verb)
     if refusal:
         return Directive(False, state.node, "noop", refusal)
-    current = _sha256(plan_file.read_bytes())
-    if state.accepted_plan_digest != current:
+    old_bytes = _read_source(plan_file)
+    current = _sha256(old_bytes)
+    if not gates.plan_digest_equivalent(state, state.accepted_plan_digest, current):
         return Directive(
             False, state.node, "noop",
             f"{verb}: the plan file's digest {current} differs from the session's accepted "
@@ -367,7 +369,6 @@ def cmd_plan_convert_live(args, *, store, runner=None) -> Directive:
         return _revert_live(state, store, plan_file, current, by, verb)
 
     stage_max, field_max = _limits()
-    old_bytes = plan_file.read_bytes()
     try:
         files, report = convert_with_report(
             old_bytes, stem, field_max_chars=field_max, stage_max_chars=stage_max)
@@ -388,21 +389,41 @@ def cmd_plan_convert_live(args, *, store, runner=None) -> Directive:
                 False, state.node, "noop",
                 f"{verb}: {destination} already exists with different content; it would be "
                 "overwritten")
-    plan_store.put(old_bytes)
-    for data in files.values():
-        plan_store.put(data)
+    new_digest = report["root_digest"]
+    content_digest = report["content_digest"]
+    new_index = files[index_rel]
     for rel, data in parts.items():
         _write_atomic(plan_file.parent / rel, data)
-    _write_atomic(plan_file, files[index_rel])
-    new_digest = report["root_digest"]
-    content_digest = plan.plan_content_digest(plan.load_plan(plan_file))
-    state.plan_conversions.append(PlanConversion(
-        old_digest=current, new_digest=new_digest, content_digest=content_digest,
-        plan_path=str(plan_file), by=by, direction="convert"))
+    cli._write_plan_version_snapshot(store, state, old_bytes, current, plan_path=str(plan_file))
+    cli._write_plan_version_snapshot(store, state, new_index, new_digest, plan_path=str(plan_file))
+    try:
+        plan_store.get(current)
+        plan_store.get(new_digest)
+    except PlanError as exc:
+        return Directive(False, state.node, "noop", f"{verb}: {exc}")
+    if _read_source(plan_file) != old_bytes:
+        return Directive(
+            False, state.node, "noop",
+            f"{verb}: the plan file changed while it was being converted; nothing is linked, "
+            "run the verb again")
+    last = state.plan_conversions[-1] if state.plan_conversions else None
+    if not (last and last.direction == "convert" and last.old_digest == current
+            and last.new_digest == new_digest):
+        state.plan_conversions.append(PlanConversion(
+            old_digest=current, new_digest=new_digest, content_digest=content_digest,
+            plan_path=str(plan_file), by=by, direction="convert"))
     state.accepted_plan_digest = new_digest
     state.log("plan_convert", by=by, old_digest=current, new_digest=new_digest,
               direction="convert")
     store.save(state)
+    try:
+        _write_atomic(plan_file, new_index)
+    except OSError as exc:
+        return Directive(
+            False, state.node, "noop",
+            f"{verb}: the conversion is linked in the session but the index could not be "
+            f"written ({exc}); the plan file still holds the old bytes and every gate reads "
+            "it through the link; run the verb again to finish")
     text = "\n".join([
         f"converted {plan_file} in place by {by}: root digest {current} -> {new_digest}",
         "every recorded binding keeps its value and is read through the conversion link; "

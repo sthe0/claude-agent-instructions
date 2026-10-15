@@ -747,8 +747,9 @@ def test_an_edit_after_the_conversion_blocks_the_bound_records_again(
     sid, plan_file, _ = _live_session(store, tmp_path, shape="bound")
     assert _live(store, sid).ok
     part = plan_file.parent / "demo.parts" / "stage-1-method.md"
-    if not part.exists():
-        pytest.skip("the plan under test externalizes no stage-1 method")
+    if os.environ.get(ACCEPT_PLAN_ENV) and not part.exists():
+        pytest.skip("the plan given through the environment externalizes no stage-1 method")
+    assert part.exists(), "the synthetic plan must externalize its stage-1 method"
     part.write_text(part.read_text(encoding="utf-8") + "an edit\n", encoding="utf-8")
     plan_refs.seal(plan_file)
 
@@ -867,8 +868,10 @@ def test_a_conversion_whose_proof_fails_is_refused_and_changes_nothing(
     before_bytes, before_state = plan_file.read_bytes(), store.load(sid).to_dict()
     real = plan_refs.write_field_file
     monkeypatch.setattr(plan_refs, "write_field_file", lambda p, t: real(p, t + "\n"))
-    if not _fixture_source()[1].count(b"method"):
-        pytest.skip("nothing to externalize")
+    has_method = bool(_fixture_source()[1].count(b"method"))
+    if os.environ.get(ACCEPT_PLAN_ENV) and not has_method:
+        pytest.skip("the plan given through the environment has nothing to externalize")
+    assert has_method, "the synthetic plan must have a field to externalize"
 
     detail = _refused(store, sid)
 
@@ -892,6 +895,195 @@ def test_a_plan_the_current_loader_refuses_is_not_converted_in_place(
 
     assert "current loader refuses" in detail and "plan-convert" in detail
     assert refused.read_bytes() == REFUSED_SOURCE
+
+
+def _expected_new_root(plan_file: Path, old_bytes: bytes) -> str:
+    from agentctl import plan_convert
+
+    stage_max, field_max = plan_convert._limits()
+    index = plan_convert.convert(
+        old_bytes, plan_file.stem, field_max_chars=field_max, stage_max_chars=stage_max)
+    return _sha(next(iter(index.values())))
+
+
+def test_a_plan_file_changed_after_it_was_read_is_refused_and_not_linked(
+        store, tmp_path, live_objects, monkeypatch):
+    from agentctl import plan_convert
+
+    sid, plan_file, root = _live_session(store, tmp_path, shape="bound")
+    real, edited = plan_convert._write_atomic, []
+
+    def write_then_edit(path, data):
+        real(path, data)
+        if not edited:
+            edited.append(path)
+            plan_file.write_bytes(plan_file.read_bytes() + b"# edited meanwhile\n")
+
+    monkeypatch.setattr(plan_convert, "_write_atomic", write_then_edit)
+
+    detail = _refused(store, sid)
+
+    assert edited, "the plan under test writes no part, so there is no window to edit in"
+    assert "changed while it was being converted" in detail
+    state = store.load(sid)
+    assert state.plan_conversions == []
+    assert state.accepted_plan_digest == root
+    assert plan_file.read_bytes().endswith(b"# edited meanwhile\n")
+
+
+def test_a_failure_at_the_index_swap_leaves_the_session_consistent_and_the_verb_retryable(
+        store, tmp_path, live_objects, monkeypatch):
+    from agentctl import gates, plan_convert
+
+    sid, plan_file, root = _live_session(store, tmp_path, shape="bound")
+    old_bytes = plan_file.read_bytes()
+    new_root = _expected_new_root(plan_file, old_bytes)
+    real = plan_convert._write_atomic
+
+    def failing_swap(path, data):
+        if Path(path) == plan_file:
+            raise OSError("disk full")
+        real(path, data)
+
+    monkeypatch.setattr(plan_convert, "_write_atomic", failing_swap)
+
+    detail = _refused(store, sid)
+
+    assert "disk full" in detail and "run the verb again" in detail
+    assert plan_file.read_bytes() == old_bytes
+    state = store.load(sid)
+    assert [(c.old_digest, c.new_digest) for c in state.plan_conversions] == [(root, new_root)]
+    assert state.accepted_plan_digest == new_root
+    assert gates._plan_review_content_stale(state.plan_review, str(plan_file), state) is None
+    assert gates._receipt_binding_blocker(
+        state.plan_presentations[0], str(plan_file), "plan presentation", state) is None
+
+    monkeypatch.setattr(plan_convert, "_write_atomic", real)
+    retried = _live(store, sid)
+
+    assert retried.ok, retried.detail
+    state = store.load(sid)
+    assert _sha(plan_file.read_bytes()) == new_root
+    assert [(c.old_digest, c.new_digest) for c in state.plan_conversions] == [(root, new_root)]
+    assert state.accepted_plan_digest == new_root
+
+
+def test_a_converted_plan_gets_the_version_snapshot_every_other_plan_version_gets(
+        store, tmp_path, live_objects):
+    sid, plan_file, root = _live_session(store, tmp_path, shape="bound")
+
+    assert _live(store, sid).ok
+
+    session_dir = store.path(sid).parent
+    new_root = _sha(plan_file.read_bytes())
+    assert (session_dir / f"plan-version-{new_root[:16]}.toml").read_bytes() == plan_file.read_bytes()
+    assert (session_dir / f"plan-version-{root[:16]}.toml").is_file()
+
+
+def test_the_oversize_report_is_what_the_submit_gate_blocks_by_construction():
+    from agentctl import plan_convert, submission
+    import tomllib
+
+    big = _plan_text(method=LONG_METHOD).encode()
+    raw = tomllib.loads(big.decode())
+    stage_max = 600
+
+    report = _convert(big, stage=stage_max)[1]["oversize_stages"]
+    blocks = submission.plan_size_blocks(raw, stage_max)
+
+    assert report and [(o["node"], o["chars"], o["message"]) for o in report] == [
+        (b["node"], b["chars"], b["message"]) for b in blocks]
+    assert plan_convert._oversize(raw, stage_max) == report
+
+
+def test_a_stage_whose_index_differs_from_its_position_is_refused_before_any_size_label_is_made():
+    from agentctl import submission
+    import tomllib
+
+    shifted = _plan_text(method=LONG_METHOD).replace("index = 1\n", "index = 7\n", 1).encode()
+    stage_max = 600
+
+    with pytest.raises(Exception, match="stage index differs from position"):
+        _convert(shifted, stage=stage_max)
+    labelled = submission.plan_size_blocks(tomllib.loads(shifted.decode()), stage_max)
+    assert [b["node"] for b in labelled] == [7]
+
+
+def _run_to_the_last_result(store, sid, plan):
+    from argparse import Namespace
+
+    from agentctl import cli
+    from conftest import STAGE_OBSERVATIONS
+
+    def ns(**kw):
+        return Namespace(**kw)
+
+    cli.cmd_start(ns(session=sid, task="demo", goal="g", done_criterion="dc",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(
+        session=sid, chat=False, changed_lines=200, files=5, wall_clock_min=60,
+        tracker_key=None, architectural=False, external_effect=False,
+        new_dependency=False, public_api_change=False), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    for observation in STAGE_OBSERVATIONS[:2]:
+        cli.cmd_next_stage(ns(session=sid), store=store)
+        cli.cmd_record_result(ns(session=sid, status="passed", actual="ok",
+                                 control="reviewed: ok", observation=observation), store=store)
+
+
+def test_an_agent_run_conversion_is_disclosed_at_verify_final_and_resolve(
+        store, venued_fixtures_dir):
+    from argparse import Namespace
+
+    from agentctl import cli
+    from agentctl.state import PlanConversion
+
+    sid = "disclose-agent"
+    _run_to_the_last_result(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
+    state = store.load(sid)
+    state.plan_conversions += [
+        PlanConversion("a" * 64, "b" * 64, "c" * 64, "/p.toml", "agent", "convert"),
+        PlanConversion("d" * 64, "e" * 64, "f" * 64, "/q.toml", "user", "convert")]
+    store.save(state)
+
+    final = cli.cmd_verify_final(Namespace(session=sid), store=store)
+
+    assert final.ok, final.detail
+    assert [c["old_digest"] for c in final.data["agent_plan_conversions"]] == ["a" * 64]
+    assert "plan conversion(s) run by the agent" in final.detail
+    for phase, note in (("searched", ""), ("skipped", "test fixture, nothing to record")):
+        cli.cmd_plugin_record(Namespace(session=sid, plugin="experience", phase=phase, note=note),
+                              store=store)
+    resolved = cli.cmd_resolve(Namespace(session=sid, by="user", quality=5,
+                                         quality_by="user-confirmed", quality_note=None),
+                               store=store)
+    assert resolved.ok, resolved.detail
+    assert [c["old_digest"] for c in resolved.data["agent_plan_conversions"]] == ["a" * 64]
+    assert "plan conversion(s) run by the agent" in resolved.detail
+
+
+def test_a_conversion_run_by_the_user_alone_adds_no_disclosure(store, venued_fixtures_dir):
+    from argparse import Namespace
+
+    from agentctl import cli
+    from agentctl.state import PlanConversion
+
+    sid = "disclose-user"
+    _run_to_the_last_result(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
+    state = store.load(sid)
+    state.plan_conversions.append(
+        PlanConversion("d" * 64, "e" * 64, "f" * 64, "/q.toml", "user", "convert"))
+    store.save(state)
+
+    final = cli.cmd_verify_final(Namespace(session=sid), store=store)
+
+    assert final.ok, final.detail
+    assert "agent_plan_conversions" not in final.data
+    assert "run by the agent" not in final.detail
 
 
 def test_the_live_verb_is_registered_with_a_by_choice_and_no_default_session(store):

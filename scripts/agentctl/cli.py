@@ -1004,6 +1004,20 @@ def _disclose_backstop_crossings(state: SessionState, data: dict, detail: str) -
             f"inside the autonomy boundary: {named} (see agent_backstop_crossings)")
 
 
+def _disclose_agent_plan_conversions(state: SessionState, data: dict, detail: str) -> str:
+    """Put the conversions the agent ran itself (`plan-convert-live --by agent`) on `data`
+    and, when there are any, name them in `detail`, so a plan changed in place under the
+    user's approval is never invisible at the close."""
+    agent_run = [dict(vars(c)) for c in state.plan_conversions if c.by == "agent"]
+    if not agent_run:
+        return detail
+    data["agent_plan_conversions"] = agent_run
+    named = ", ".join(
+        f"{c['direction']} {c['old_digest'][:12]} -> {c['new_digest'][:12]}" for c in agent_run)
+    return (f"{detail}; NOTE: {len(agent_run)} plan conversion(s) run by the agent, the content "
+            f"proved equal by the engine: {named} (see agent_plan_conversions)")
+
+
 # Stands for "no difficulty record was open" at the release event: no real record id can
 # equal it, so any record declared afterwards is a fresh one.
 _NO_RECORD_ANCHOR = "no-record"
@@ -9143,6 +9157,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
         data["acceptance_bypass"] = acceptance_bypass
         detail += "; WARNING: acceptance recorded via bypass, not judge corroboration (see acceptance_bypass)"
     detail = _disclose_backstop_crossings(state, data, detail)
+    detail = _disclose_agent_plan_conversions(state, data, detail)
     return Directive(True, state.node, "await_user_confirmation", detail, data=data)
 
 
@@ -9473,6 +9488,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         data["acceptance_bypass"] = acceptance_bypass
         detail += " (acceptance recorded via bypass; see acceptance_bypass)"
     detail = _disclose_backstop_crossings(state, data, detail)
+    detail = _disclose_agent_plan_conversions(state, data, detail)
     if landing["override"] is not None:
         data["landing_gate_override"] = landing["override"]
         detail += (f" (landing gate overridden by AGENTCTL_LANDING_GATE={landing['override']}; "

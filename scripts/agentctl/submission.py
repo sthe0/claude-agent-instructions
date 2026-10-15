@@ -1079,18 +1079,20 @@ def plan_size_warnings(doc_or_raw, ref_positions=frozenset()) -> list[dict]:
     return findings
 
 
-def plan_size_blocks(doc_or_raw) -> list[dict]:
+def plan_size_blocks(doc_or_raw, stage_max: int | None = None) -> list[dict]:
     """The block findings of `plan_size_findings`, which every seam that admits a plan
-    reports through its refusing channel."""
+    reports through its refusing channel. `stage_max` stands in for the configured
+    `plan-stage-max-chars` for a caller that already holds the limit it reports against."""
     from .config import PlanLimitError, plan_size_limits
     from .plan import (
         _venue_for, meta_rendered_size, oversize_node_message, raw_plan_venue, stage_rendered_size,
     )
 
-    try:
-        stage_max, _ = plan_size_limits()
-    except PlanLimitError as exc:
-        return [{"node": "meta", "field": None, "severity": "block", "message": str(exc)}]
+    if stage_max is None:
+        try:
+            stage_max, _ = plan_size_limits()
+        except PlanLimitError as exc:
+            return [{"node": "meta", "field": None, "severity": "block", "message": str(exc)}]
     if isinstance(doc_or_raw, dict):
         venue = raw_plan_venue(doc_or_raw)
         stages = doc_or_raw.get("stage") if isinstance(doc_or_raw.get("stage"), list) else []
@@ -1102,7 +1104,7 @@ def plan_size_blocks(doc_or_raw) -> list[dict]:
     sizes = [("meta", meta_rendered_size(doc_or_raw))]
     sizes += [(node, stage_rendered_size(stage, venue)) for node, stage in stage_nodes]
     return [
-        {"node": node, "field": None, "severity": "block",
+        {"node": node, "field": None, "severity": "block", "chars": size,
          "message": oversize_node_message(node, size, stage_max)}
         for node, size in sizes if size > stage_max
     ]
