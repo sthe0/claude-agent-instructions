@@ -151,9 +151,11 @@ def test_i414_child_wildcard_does_not_cover_protected_check():
 
     assert gates.PARENT_NORM_DIGEST_MISMATCH not in boundary["reasons"], "setup: the handoff digest does not match"
     assert gates.PARENT_NORM_CHECK_DROPPED not in boundary["reasons"], "setup: the parent's own check is dropped"
-    assert boundary["unresolved_changed_commands"], (
+    uncovered = [item["source"] for item in boundary["unresolved_changed_commands"]]
+    assert TRUNK_PUSH_CHECK in uncovered, (
         f"BEHAVIOUR: the child's {WILDCARD_PUSH} is counted as covering the parent's protected "
-        f"check {TRUNK_PUSH_CHECK!r}; the boundary reports eligible={boundary['eligible']}"
+        f"check {TRUNK_PUSH_CHECK!r}; uncovered commands {uncovered}, "
+        f"eligible={boundary['eligible']}"
     )
 
 

@@ -81,7 +81,14 @@ FINAL_RESULT = {
     "result": "COMPLETED: stub child finished", "session_id": "stub-child-session",
     "total_cost_usd": 0.0,
 }
-RETURN_BOUND_S = 45.0
+#: Handed to the wrapper through SPAWN_FINAL_RESULT_GRACE_S: how long it may wait for the child
+#: to close its stdout after the final result line. The wrapper's default is the constant
+#: FINAL_RESULT_GRACE_S; the tests shorten it so a repaired wrapper returns quickly.
+GRACE_S = 1.0
+#: Time a repaired wrapper may take after the stub started: the grace, plus the wrapper's own
+#: start-up and teardown (taken as 15 s on a loaded machine) and a margin of the same size,
+#: still far below the stub's 600 s hold, so a wrapper that blocks on EOF cannot pass.
+RETURN_BOUND_S = GRACE_S + 15.0 + 15.0
 
 
 def _marker(tag: str) -> str:
@@ -93,9 +100,11 @@ def _stub_claude(marker: str, *, hold: str, transcript: Path) -> str:
     discovery does not wait), prints the final result line, and then keeps the child's
     stdout open for much longer than the test waits: `hold` "grandchild" through a forked
     grandchild after the stub itself exited, "child" by staying alive itself; "none" exits
-    at once. Every long-lived process carries `marker` as $0 so the test can reap strays."""
-    sleeper = "bash -c 'sleep 600; :' %s" % marker
-    tail = {"grandchild": f"{sleeper} &", "child": sleeper, "none": ""}[hold]
+    at once. The process that holds the pipe is the `sleep` itself, exec'd under `marker` as
+    its argv[0], so the test's `pkill -f marker` reaps exactly that process and no
+    unmarked sleeper outlives the run."""
+    sleeper = f"exec -a {marker} sleep 600"
+    tail = {"grandchild": f"( {sleeper} ) &", "child": sleeper, "none": ""}[hold]
     return (
         "#!/bin/bash\n"
         "cat > /dev/null\n"
@@ -115,7 +124,7 @@ def _wrapper_env(tmp_path: Path, bin_dir: Path, config: Path) -> dict:
         "CLAUDE_AGENT_HOME": str(config),
         "AGENT_RECURSION_DEPTH": "0",
         "AGENTCTL_MARKER_EXTRACTOR": "0",
-        "SPAWN_FINAL_RESULT_GRACE_S": "1",
+        "SPAWN_FINAL_RESULT_GRACE_S": str(GRACE_S),
     })
     return env
 

@@ -135,6 +135,21 @@ def _delivered_transcript(path: Path, receipt, *extra_lines: str) -> Path:
     return path
 
 
+def _write_writer_pass_transcript(path: Path, rendering_file: str) -> None:
+    """A tech-writer `Skill` call followed by a `Write` of the rendering's exact bytes: the
+    witness the present-plan writer gate binds a rendering to."""
+    text = Path(rendering_file).read_text(encoding="utf-8")
+    witness = _entry("assistant", time.time() - 10, [
+        {"type": "tool_use", "id": "w1", "name": "Skill",
+         "input": {"skill": "tech-writer", "args": "polish the plan rendering"}},
+    ])
+    composed = _entry("assistant", time.time() - 9, [
+        {"type": "tool_use", "id": "wr1", "name": "Write",
+         "input": {"file_path": "/tmp/rendering.txt", "content": text}},
+    ])
+    path.write_text(witness + "\n" + composed + "\n", encoding="utf-8")
+
+
 def _transcript_path(cfg: Path, harness: str) -> Path:
     return cfg / "projects" / "x" / f"{harness}.jsonl"
 
@@ -185,16 +200,7 @@ def test_i421_linked_child_writer_witness_found(cfg, store, tmp_path, fixtures_d
     plan = _declared_venue_plan(fixtures_dir, tmp_path / child)
     _to_plan_ready(store, child, plan)
     rendering = _write_rendering(tmp_path, RENDERING_BODY, name="child-rendering.txt", plan_path=plan)
-    text = Path(rendering).read_text(encoding="utf-8")
-    witness = _entry("assistant", time.time() - 10, [
-        {"type": "tool_use", "id": "w1", "name": "Skill",
-         "input": {"skill": "tech-writer", "args": "polish the plan rendering"}},
-    ])
-    composed = _entry("assistant", time.time() - 9, [
-        {"type": "tool_use", "id": "wr1", "name": "Write",
-         "input": {"file_path": "/tmp/rendering.txt", "content": text}},
-    ])
-    _transcript_path(cfg, harness).write_text(witness + "\n" + composed + "\n", encoding="utf-8")
+    _write_writer_pass_transcript(_transcript_path(cfg, harness), rendering)
 
     proc = _agentctl(
         tmp_path, cfg, harness, "present-plan", "--session", child, "--kind", "essence",
@@ -220,16 +226,7 @@ def test_writer_gate_unlinked_session_binds_own_transcript(cfg, store, tmp_path,
     plan = _declared_venue_plan(fixtures_dir, tmp_path / session)
     _to_plan_ready(store, session, plan)
     rendering = _write_rendering(tmp_path, RENDERING_BODY, name="single-rendering.txt", plan_path=plan)
-    text = Path(rendering).read_text(encoding="utf-8")
-    witness = _entry("assistant", time.time() - 10, [
-        {"type": "tool_use", "id": "w1", "name": "Skill",
-         "input": {"skill": "tech-writer", "args": "polish the plan rendering"}},
-    ])
-    composed = _entry("assistant", time.time() - 9, [
-        {"type": "tool_use", "id": "wr1", "name": "Write",
-         "input": {"file_path": "/tmp/rendering.txt", "content": text}},
-    ])
-    _transcript_path(cfg, session).write_text(witness + "\n" + composed + "\n", encoding="utf-8")
+    _write_writer_pass_transcript(_transcript_path(cfg, session), rendering)
 
     proc = _agentctl(
         tmp_path, cfg, session, "present-plan", "--session", session, "--kind", "essence",
@@ -242,6 +239,12 @@ def test_writer_gate_unlinked_session_binds_own_transcript(cfg, store, tmp_path,
 
 
 def test_i422_linked_child_delivery_looked_up_in_own_transcript(cfg, store, tmp_path, fixtures_dir):
+    """The child's essence is delivered in its own transcript (named by its harness id); the
+    parent has a transcript of its own that does not carry it. On base the hook resolves the
+    session from the harness id alone, so this fails for the same reason as #322 -- the
+    harness id names no engine session -- and not on a parent-transcript lookup that base
+    does not perform; no base surface distinguishes the two. The parent transcript is here
+    as the guard against a fix that finds the child's delivery by reading the parent's."""
     harness, child, parent = "harness-child-422", "engine-child-422", "engine-parent-422"
     _start_as(tmp_path, cfg, harness, child)
     receipt = _plan_ready_with_receipt(store, child, tmp_path, fixtures_dir)

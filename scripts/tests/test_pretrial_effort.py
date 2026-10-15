@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli
+from agentctl.config import Thresholds
 from agentctl.state import (
     Actor,
     Criterion,
@@ -56,6 +57,8 @@ def ns(**kw) -> Namespace:
 
 @pytest.fixture(autouse=True)
 def _no_replan_authorization_gate(monkeypatch):
+    """Applies to every test in this module: the replan-authorization gate is not under test
+    here, and the sub-plan approvals driven below would otherwise stop at it."""
     monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
 
 
@@ -125,6 +128,8 @@ def test_i441_subplan_spend_reaches_order_window_once(store, venued_fixtures_dir
 
 # --- #440: a prompt gap while BLOCKED is not active time ------------------------------------
 
+#: Below the hook's per-turn active-minutes cap (substantive-wall-clock-min, 30 in config.md),
+#: so that an EXECUTING gap is booked whole and the pin can compare it exactly.
 GAP_MINUTES = 10.0
 BOOKED_BEFORE = 5.0
 
@@ -136,6 +141,7 @@ def _state_file(home: Path, session: str) -> Path:
 def _prompt_after_gap(home: Path, session: str, node: str) -> dict:
     """Write a state at `node` whose previous prompt was GAP_MINUTES ago, run the prompt hook
     as the harness does, and return the state it leaves."""
+    assert GAP_MINUTES < Thresholds().substantive_wall_clock_min, "setup: the gap exceeds the hook's cap"
     path = _state_file(home, session)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({

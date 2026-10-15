@@ -18,7 +18,9 @@ from lib import instruction_smoke_gate
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 LIVE_SCRIPT = SCRIPTS_DIR / "instruction-sandbox-live.py"
 HOOK_CHECK = "live:hook-gate-deny"
-TOOL_LIST_FLAGS = ("--tools", "--allowedTools", "--allowed-tools")
+#: `--tools` selects the built-in tools a launch has; `--allowedTools` only pre-approves
+#: permissions for tools the launch already has, so it enables nothing.
+TOOL_LIST_FLAGS = ("--tools",)
 
 
 def _load_live_script():
@@ -62,7 +64,8 @@ def test_i437_live_hook_probe_runs_with_edit_tool():
         "BEHAVIOUR: instruction-sandbox-live.py has no builder for a hook probe launch"
     )
     argv = build_hook_probe_argv("haiku")
-    assert "Edit" in _enabled_tools(argv), (
+    enabled = _enabled_tools(argv)
+    assert "Edit" in enabled or "default" in enabled, (
         f"BEHAVIOUR: the hook probe launch does not enable the Edit tool: {argv}"
     )
     assert not any(flag == "--tools" and value == "" for flag, value in zip(argv, argv[1:])), (

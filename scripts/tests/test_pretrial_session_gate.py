@@ -24,7 +24,7 @@ HOOK = SCRIPTS_DIR / "hook-state-gate.py"
 HARNESS = "harness-h"
 ENGINE = "engine-e"
 PRODUCTION_FILE = "/work/project/module.py"
-WARNING_MARK = "differs from CLAUDE_CODE_SESSION_ID"
+WARNING_PREFIX = "agentctl: warning:"
 
 
 def _env(home: Path, harness: str | None = HARNESS) -> dict:
@@ -97,19 +97,25 @@ def test_i427_edit_authorized_by_driven_engine_session(tmp_path):
     )
 
 
+def _session_mismatch_warnings(stderr: str) -> list[str]:
+    return [
+        line for line in stderr.splitlines()
+        if line.startswith(WARNING_PREFIX) and "CLAUDE_CODE_SESSION_ID" in line
+    ]
+
+
 def test_i427_no_session_mismatch_warning_for_bound_session(tmp_path):
     _write_harness_state(tmp_path, "PLAN_READY")
     first = _agentctl(tmp_path, "start", "--session", ENGINE, "--task", "driven", "--goal", "goal")
     assert first.returncode == 0, f"setup: start failed: {first.stdout[-300:]}"
+
     second = _agentctl(tmp_path, "classify", "--session", ENGINE, "--files", "1", "--changed-lines", "5")
+
     assert second.returncode == 0, f"setup: classify failed: {second.stdout[-300:]}"
-
-    third = _agentctl(tmp_path, "next-stage", "--session", ENGINE)
-
-    assert third.returncode == 0, f"setup: next-stage failed: {third.stdout[-300:]}"
-    assert WARNING_MARK not in third.stderr, (
+    warnings = _session_mismatch_warnings(second.stderr)
+    assert not warnings, (
         "BEHAVIOUR: the second state-changing command with --session of an already driven "
-        f"engine session still warns about the harness id: {third.stderr[:300]}"
+        f"engine session still warns about the harness id: {warnings}"
     )
 
 
