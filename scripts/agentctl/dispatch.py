@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from lib import argv_text
+from lib.planner_plan_check import original_output
 from lib.runtime_models import HOST_CLAUDE, HOST_CURSOR, HOSTS
 
 from .state import CriterionType, Stage
@@ -118,9 +119,9 @@ def parse_marker(stdout: str) -> tuple[str | None, str]:
     return None, ""
 
 
-_DECORATION = r"^[-*]?\s*\*{0,2}"
-_REQUEST_LABEL_RE = re.compile(_DECORATION + r"PERMISSION-REQUEST:\*{0,2}\s*(.*)$")
-_ACTION_LABEL_RE = re.compile(_DECORATION + r"Action:\*{0,2}\s*(.*)$")
+LABEL_DECORATION = r"^[-*]?\s*\*{0,2}"
+_REQUEST_LABEL_RE = re.compile(LABEL_DECORATION + r"PERMISSION-REQUEST:\*{0,2}\s*(.*)$")
+_ACTION_LABEL_RE = re.compile(LABEL_DECORATION + r"Action:\*{0,2}\s*(.*)$")
 
 
 def _unwrap_code(text: str) -> str:
@@ -137,8 +138,12 @@ def permission_request_action(stdout: str) -> str | None:
     ``cli._parse_rule_line`` tolerates.
 
     The text is whatever follows the label on its line, or, when that is empty, the
-    block's ``Action:`` line."""
-    lines = [ln.strip() for ln in (stdout or "").splitlines()]
+    block's ``Action:`` line.
+
+    The block is read from the specialist's original output
+    (``planner_plan_check.original_output``), not from the canonical envelope around
+    it: the envelope's own bare label would otherwise shadow the original's block."""
+    lines = [ln.strip() for ln in original_output(stdout or "").splitlines()]
     for i, line in enumerate(lines):
         m = _REQUEST_LABEL_RE.match(line)
         if not m:

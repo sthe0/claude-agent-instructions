@@ -40,6 +40,7 @@ from .dispatch import (
     CHILD_INFRA_FAILURE,
     Runner,
     dispatch_stage,
+    LABEL_DECORATION,
     permission_request_action,
     parse_marker,
     subprocess_runner,
@@ -7367,7 +7368,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             data=_ask_data,
         )
     if marker == "PERMISSION-REQUEST":
-        return _route_permission_request(permission_request_action(result.stdout) or body)
+        return _route_permission_request(permission_request_action(result.stdout) or "")
     if marker == "INCOMPLETE":
         embedded = permission_request_action(result.stdout)
         if embedded is not None:
@@ -7450,7 +7451,7 @@ def _parse_transcript_path(stderr: str) -> str | None:
     return None
 
 
-_RULE_LINE_RE = re.compile(r"^[-*]?\s*\*{0,2}Rule:\*{0,2}\s*(.*)$")
+_RULE_LINE_RE = re.compile(LABEL_DECORATION + r"Rule:\*{0,2}\s*(.*)$")
 
 
 def _parse_rule_line(body: str) -> str | None:
@@ -7494,7 +7495,7 @@ def _rule_line_to_call(rule: str) -> tuple[str, dict] | None:
     return None
 
 
-_RESOURCE_LINE_RE = re.compile(r"^[-*]?\s*\*{0,2}Resource:\*{0,2}\s*(.*)$")
+_RESOURCE_LINE_RE = re.compile(LABEL_DECORATION + r"Resource:\*{0,2}\s*(.*)$")
 _RESOURCE_SPEC_RE = re.compile(r"^(file|vcs_ref|specialist|service|dataset)\((.*)\)$")
 
 

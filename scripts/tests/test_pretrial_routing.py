@@ -79,7 +79,24 @@ _BLOCK_TAIL = (
 _BLOCK_FORMATS = {
     "label-with-inline-text": f"PERMISSION-REQUEST: {REQUEST_ACTION}\n" + _BLOCK_TAIL,
     "label-alone-with-action-line": f"PERMISSION-REQUEST:\nAction: {REQUEST_ACTION}\n" + _BLOCK_TAIL,
+    "decorated": f"**PERMISSION-REQUEST:**\n- **Action:** `{REQUEST_ACTION}`\n" + _BLOCK_TAIL,
 }
+_INCOMPLETE_LINE = "INCOMPLETE: committed, not pushed\n"
+
+
+def _wrappings(block):
+    """The bare request and the same block inside an INCOMPLETE, each raw and as the
+    canonical envelope the marker extractor produces around the raw output."""
+    from lib.planner_plan_check import canonicalize
+
+    wrapped = _INCOMPLETE_LINE + block
+    return {
+        "raw": (block, wrapped),
+        "canonical": (
+            canonicalize("PERMISSION-REQUEST", "needs a push", None, block),
+            canonicalize("INCOMPLETE", "stopped for a push", None, wrapped),
+        ),
+    }
 
 
 def test_incomplete_permission_request_parity_with_bare_request(store, venued_fixtures_dir):
@@ -91,12 +108,17 @@ def test_incomplete_permission_request_parity_with_bare_request(store, venued_fi
         return [{k: v for k, v in row.items() if k != "ts"}
                 for row in store.load(sid).planning_misses]
 
-    for name, block in _BLOCK_FORMATS.items():
+    cases = [(f"{name}/{form}", bare_out, wrapped_out, form == "raw")
+             for name, block in _BLOCK_FORMATS.items()
+             for form, (bare_out, wrapped_out) in _wrappings(block).items()
+             # a raw decorated label is no marker line, so a bare one is never routed
+             if (name, form) != ("decorated", "raw")]
+    for name, bare_out, wrapped_out, has_summary in cases:
         a, b = f"r4a-{name}", f"r4b-{name}"
         _to_executing(store, a, venued_fixtures_dir)
-        bare = _dispatch_with(store, a, block)
+        bare = _dispatch_with(store, a, bare_out)
         _to_executing(store, b, venued_fixtures_dir)
-        wrapped = _dispatch_with(store, b, "INCOMPLETE: committed, not pushed\n" + block)
+        wrapped = _dispatch_with(store, b, wrapped_out)
 
         req_a, req_b = store.load(a).permission_request, store.load(b).permission_request
         assert req_a is not None, f"setup: the bare request was not parked ({name})"
@@ -117,10 +139,52 @@ def test_incomplete_permission_request_parity_with_bare_request(store, venued_fi
         assert miss_rows(b) == miss_rows(a), (
             f"BEHAVIOUR: the planning-miss rows differ between bare and INCOMPLETE-wrapped ({name})"
         )
-        assert wrapped.data.get("incomplete_summary") == "committed, not pushed", (
-            f"BEHAVIOUR: the INCOMPLETE summary is lost from the directive data ({name})"
-        )
+        if has_summary:
+            assert wrapped.data.get("incomplete_summary") == "committed, not pushed", (
+                f"BEHAVIOUR: the INCOMPLETE summary is lost from the directive data ({name})"
+            )
         assert "incomplete_summary" not in bare.data
+
+
+def test_original_output_inverts_canonicalize():
+    from lib.planner_plan_check import RETURN_MARKERS, canonicalize, original_output
+
+    original = "INCOMPLETE: x\nPERMISSION-REQUEST:\nAction: y\n\nlast line after a blank\n"
+    for marker in RETURN_MARKERS:
+        for digest in ("", "a one-line digest"):
+            for plan in (None, "/tmp/p.toml"):
+                assert original_output(canonicalize(marker, digest, plan, original)) == original, (
+                    f"{marker!r} digest={digest!r} plan={plan!r}"
+                )
+    assert original_output(canonicalize("COMPLETED", "", None, "")) == ""
+    for unwrapped in ("", "INCOMPLETE: x\nPERMISSION-REQUEST: y\n", "PERMISSION-REQUEST:\nAction: y\n",
+                      "no marker here\n\nbody"):
+        assert original_output(unwrapped) == unwrapped
+
+
+def test_covered_request_inside_incomplete_diagnoses_with_summary(store, venued_fixtures_dir):
+    def covered_dispatch(sid, stdout):
+        _to_executing(store, sid, venued_fixtures_dir)
+        state = store.load(sid)
+        state.runtime_grants["1"] = [
+            {"rule": "Bash(git push origin feature/pretrial:*)", "provenance": "runtime",
+             "consumed": False, "stage_title": state.stage(1).title},
+        ]
+        store.save(state)
+        return _dispatch_with(store, sid, stdout)
+
+    block = f"PERMISSION-REQUEST: {REQUEST_ACTION}\n" + _BLOCK_TAIL
+    bare = covered_dispatch("r7a", block)
+    wrapped = covered_dispatch("r7b", _INCOMPLETE_LINE + block)
+
+    assert bare.action == "declare" and wrapped.action == "declare", (
+        f"BEHAVIOUR: a covered request did not route to the diagnosis "
+        f"(bare={bare.action!r}, wrapped={wrapped.action!r})"
+    )
+    assert wrapped.data.get("incomplete_summary") == "committed, not pushed", (
+        "BEHAVIOUR: the INCOMPLETE summary is missing from the diagnosis directive"
+    )
+    assert "incomplete_summary" not in bare.data
 
 
 def test_decorated_permission_request_after_incomplete_parks_request(store, venued_fixtures_dir):
