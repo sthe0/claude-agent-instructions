@@ -3346,6 +3346,16 @@ def _declared_absolute_venue(meta) -> str | None:
     return None
 
 
+def raw_plan_venue(raw: dict) -> str | None:
+    """`_declared_absolute_venue` of a raw plan's `[meta]` table: the venue a parsed plan
+    of the same bytes would resolve its stages' grants against."""
+    meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+    for value in (meta.get("delivery_worktree"), meta.get("repo_root")):
+        if isinstance(value, str) and value and os.path.isabs(value):
+            return value
+    return None
+
+
 def _venue_for(doc: PlanDoc) -> str | None:
     """The venue `derive_stage_grants` resolves DR-E/in-venue paths against —
     `delivery_worktree` when declared else `repo_root`, mirroring

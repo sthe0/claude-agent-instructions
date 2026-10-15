@@ -96,7 +96,7 @@ from .render import (
     render_plan_md,
     render_stages_md,
 )
-from .submission import plan_size_findings, submission_advice, submission_violations
+from .submission import plan_size_blocks, plan_size_warnings, submission_advice, submission_violations
 from .state import (
     _EXECUTION_NODES,
     _MAX_PLAN_STACK,
@@ -1582,7 +1582,7 @@ def _refresh_caches_from_plan_path(
     if violations:
         return violations
     if advice is not None:
-        advice.extend(_submission_advice(refreshed, runner, state.weight_class))
+        advice.extend(_submission_advice(refreshed, runner, state.weight_class, state.plan_path))
     # Decided for every stage BEFORE any is mutated: a consumer's verdict depends on its
     # suppliers' pre-edit interfaces.
     carried = {rs.index: stage_carried(state.stages, refreshed.stages, rs.index)
@@ -1693,7 +1693,9 @@ def _with_advisories(d: Directive, advisories: list[str]) -> Directive:
     return d
 
 
-def _submission_advice(doc, runner: Runner | None, weight_class: str | None) -> list[str]:
+def _submission_advice(
+    doc, runner: Runner | None, weight_class: str | None, plan_path: str | None = None,
+) -> list[str]:
     """The submission seam's non-refusing channel, resolved the same way advisories are.
 
     Warn-only by construction — `submission_advice` never refuses — so every seam attaches
@@ -1717,13 +1719,19 @@ def _submission_advice(doc, runner: Runner | None, weight_class: str | None) -> 
     and strand the session at PLAN_READY with no edge back. A warn-only channel must never
     be able to refuse a command by exception."""
     try:
-        return submission_advice(
+        advice = submission_advice(
             doc,
             judge_runner=runner,
             judge_enabled=advisor.resolve_enabled(weight_class),
         )
     except Exception:
-        return []
+        advice = []
+    try:
+        positions = plan_store.visited_positions(plan_path) if plan_path else frozenset()
+        advice.extend(f["message"] for f in plan_size_warnings(doc, positions))
+    except Exception:
+        pass
+    return advice
 
 
 def _submission_problems(doc, runner: Runner | None, weight_class: str | None) -> list[str]:
@@ -1742,17 +1750,16 @@ def _submission_problems(doc, runner: Runner | None, weight_class: str | None) -
         enabled = advisor.resolve_enabled(weight_class)
     except Exception:
         enabled = False
-    return submission_violations(
+    violations = submission_violations(
         doc,
         session_weight_class=weight_class,
         judge_runner=runner,
         judge_enabled=enabled,
     )
-
-
-def _plan_ref_positions(plan_path: str) -> frozenset:
-    """Positions of the plan's external references, for the size lint's per-field warning."""
-    return frozenset(position for position, _path, _sha in plan_store.visited_refs(plan_path))
+    # A node over plan-stage-max-chars cannot be reviewed in one pair prompt, so every seam
+    # that admits plan bytes to a session (submit-plan, approve after an in-place edit,
+    # replan, renormalize) refuses it; a missing size limit refuses too (fails closed).
+    return violations + [f["message"] for f in plan_size_blocks(doc)]
 
 
 def _run_check(command: str, expected_exit: int, runner: Runner | None, cwd: str | None = None):
@@ -3993,8 +4000,6 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
                       if v and os.path.isabs(v)), None),
             )
         )
-    size_findings = plan_size_findings(doc, _plan_ref_positions(plan_path))
-    problems.extend(f["message"] for f in size_findings if f["severity"] == "block")
     if problems:
         state.plan_verified = False
 
@@ -4087,9 +4092,6 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         check_venue_warnings(doc.stages, doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
     )
     d.data.setdefault("advisories", []).extend(grant_shadow.mixed_spelling_advisories(doc))
-    d.data.setdefault("advisories", []).extend(
-        f["message"] for f in size_findings if f["severity"] == "warn"
-    )
     # Submission seam (a)'s advice channel: a stage whose expected_result_image merely
     # restates its own check. Warn-only at all three seams — see submission.submission_advice.
     # Rides the same `run` resolved at the seam above (see its comment for why the fallback
@@ -4099,7 +4101,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # live `claude -p` to every submit, which no stage has sized or measured. Read "is the
     # advisor reachable?" per call site, not by generalizing from either one.
     d.data.setdefault("advisories", []).extend(
-        _submission_advice(doc, run, state.weight_class)
+        _submission_advice(doc, run, state.weight_class, plan_path)
     )
     # Predsubmit check-run observation (C.2) — actually RUNS each stage's
     # verify_command in its declared venue, warn-only, same advisories channel.
@@ -10859,7 +10861,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # for advice that is then discarded. Placement is about cost only — the advice is
     # warn-only and cannot influence any decision above it either way. (`run` is bound at
     # the seam above; only this CALL is deferred, which is where the cost is.)
-    echo_advice = _submission_advice(new, run, state.weight_class)
+    echo_advice = _submission_advice(new, run, state.weight_class, args.plan)
     # Non-blocking hint naming --normalize-factor -- advisory only, never a gate (a
     # replan with nothing reproducible to re-norm is a completely ordinary replan).
     # Suppressed when this call itself recorded one (the `not normalize_factor`

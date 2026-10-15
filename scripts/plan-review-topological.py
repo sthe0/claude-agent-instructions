@@ -521,7 +521,7 @@ class Driver:
                                    history_path=history_path)
         except (plan.PlanError, ValueError, OSError):
             return None
-        return topo_unit_refusal(doc, ("meta", *nodes), text)
+        return topo_unit_refusal(doc, ("meta", *nodes), text, model=self.args.model)
 
     def launch(self, row: dict) -> "Launched | None":
         pair = row["pair"]

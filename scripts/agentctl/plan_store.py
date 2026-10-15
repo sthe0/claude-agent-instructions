@@ -143,3 +143,8 @@ def visited_refs(plan_path: str | Path) -> plan_refs.Visited:
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise PlanError(f"cannot read plan file {index}: {exc}") from exc
     return plan_refs.resolve_refs(raw, index.parent, None, index_path=index)[1]
+
+
+def visited_positions(plan_path: str | Path) -> frozenset:
+    """The positions of the plan's references, without their paths and digests."""
+    return frozenset(position for position, _path, _sha in visited_refs(plan_path))

@@ -55,6 +55,40 @@ def child_contour_linking_enabled(
     return constants.get(CHILD_CONTOUR_LINKING_KEY) == "on"
 
 
+# The calibrated plan-field-inline-max-chars (docs/operations/plan-size-calibration.json, F),
+# used when the config.md row is missing or unparsable; a test keeps it equal to the row.
+PLAN_FIELD_INLINE_FALLBACK_CHARS = 3000
+
+_STAGE_LIMIT_UNREADABLE = (
+    "the config.md row `plan-stage-max-chars` is missing or not an integer, so the plan "
+    "size limit cannot be checked: plan submission and topological review are refused "
+    "until the row is restored"
+)
+
+
+class PlanLimitError(ValueError):
+    """The plan node size limit cannot be read; callers refuse rather than guess it."""
+
+
+def plan_size_limits(constants: dict[str, str] | None = None) -> tuple[int, int]:
+    """`(plan-stage-max-chars, plan-field-inline-max-chars)`. Raises `PlanLimitError` when
+    the stage limit is unreadable (config.md missing included); the field limit falls
+    back to `PLAN_FIELD_INLINE_FALLBACK_CHARS`."""
+    try:
+        limits = Thresholds(constants)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise PlanLimitError(_STAGE_LIMIT_UNREADABLE) from exc
+    return limits.plan_stage_max_chars, limits.plan_field_inline_max_chars
+
+
+def plan_field_inline_limit() -> int:
+    """The field inline limit alone, which never raises."""
+    try:
+        return Thresholds().plan_field_inline_max_chars
+    except (OSError, UnicodeDecodeError):
+        return PLAN_FIELD_INLINE_FALLBACK_CHARS
+
+
 class Thresholds:
     """Typed view over the parsed config.md constants used by the engine."""
 
@@ -144,14 +178,21 @@ class Thresholds:
 
     @property
     def plan_stage_max_chars(self) -> int:
-        """Largest rendered size, in characters, of a stage or of the plan-level node."""
-        return self._int("plan-stage-max-chars")
+        """Largest rendered size, in characters, of a stage or of the plan-level node.
+        Fails closed: a missing or unparsable row raises `PlanLimitError`."""
+        try:
+            return self._int("plan-stage-max-chars")
+        except (KeyError, ValueError) as exc:
+            raise PlanLimitError(_STAGE_LIMIT_UNREADABLE) from exc
 
     @property
     def plan_field_inline_max_chars(self) -> int:
         """Longest prose field a plan prints inline; a longer one reads as a pointer or
-        is externalized."""
-        return self._int("plan-field-inline-max-chars")
+        is externalized. A missing or unparsable row falls back to the calibrated value."""
+        try:
+            return self._int("plan-field-inline-max-chars")
+        except (KeyError, ValueError):
+            return PLAN_FIELD_INLINE_FALLBACK_CHARS
 
     def effort_absolute_interactions(self) -> int:
         """Absolute threshold on user-interaction count for the interactions scale;

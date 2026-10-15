@@ -379,11 +379,9 @@ def test_a_plan_under_every_limit_has_no_size_finding_and_unchanged_other_lints(
     flawed = plan.load_plan(write(tmp_path / "flawed", plan_toml().replace(
         "[meta]\n", '[meta]\nweight_class = "bogus"\n', 1)))
     assert submission.plan_size_findings(flawed) == []
-    assert submission.submission_violations(flawed) == [
-        "[meta] weight_class = 'bogus' is not one of 'chat'/'small_change'/'substantive'. "
-        "The substantive plan grade is keyed on this declaration, so an unreadable value "
-        "escapes the grade exactly as silence would — declare the class this plan really is"
-    ]
+    violations = submission.submission_violations(flawed)
+    assert len(violations) == 1
+    assert "weight_class = 'bogus' is not one of" in violations[0]
 
 
 # --- the submit-plan seam --------------------------------------------------------------
@@ -571,4 +569,197 @@ def test_fit_report_cli_writes_the_report_file(tmp_path, capsys):
     assert fit_report().main(["--plan", str(path), "--out", str(out)]) == 0
     assert json.loads(out.read_text(encoding="utf-8"))["node_chars"].keys() == {"meta", "1", "2", "3"}
     assert "sites" in capsys.readouterr().out
+
+
+# --- every seam that admits plan bytes -------------------------------------------------
+
+def start_to_plan(store, sid: str) -> None:
+    from agentctl import cli
+
+    cli.cmd_start(Namespace(session=sid, task="demo", goal="g", done_criterion="dc",
+                            criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(Namespace(session=sid, chat=False, changed_lines=200, files=5,
+                               wall_clock_min=60, tracker_key=None, architectural=True,
+                               external_effect=False, new_dependency=False,
+                               public_api_change=False), store=store)
+    cli.cmd_plan(Namespace(session=sid), store=store)
+
+
+def with_method(venued_fixtures_dir: Path, chars: int) -> str:
+    text = (venued_fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+    return text.replace("depends_on = []\n", f'depends_on = []\nmethod = "{"m" * chars}"\n', 1)
+
+
+def test_a_node_over_the_limit_is_refused_by_the_shared_refusing_channel(tmp_path):
+    from agentctl import cli, plan
+
+    cal = calibration()
+    over = plan.load_plan(write(tmp_path / "over", plan_toml(image={1: cal["S"] + 1})))
+    problems = cli._submission_problems(over, None, "substantive")
+    assert any("stage 1 renders to" in p and "plan-stage-max-chars" in p for p in problems)
+    within = plan.load_plan(write(tmp_path / "within", plan_toml(image={1: cal["F"]})))
+    assert not any("plan-stage-max-chars" in p for p in cli._submission_problems(within, None, "substantive"))
+
+
+def test_approve_refuses_an_in_place_edit_that_puts_a_node_over_the_limit(
+        store, tmp_path, venued_fixtures_dir):
+    from agentctl import cli
+
+    cal = calibration()
+    path = write(tmp_path / "inplace", with_method(venued_fixtures_dir, 1))
+    start_to_plan(store, "inplace")
+    assert cli.cmd_submit_plan(Namespace(session="inplace", plan=str(path)), store=store).ok is True
+
+    path.write_text(with_method(venued_fixtures_dir, cal["S"] + 1), encoding="utf-8")
+    refused = cli.cmd_approve(Namespace(session="inplace", by="user"), store=store)
+    assert refused.ok is False and refused.action == "fix_plan"
+    assert any("plan-stage-max-chars" in p for p in refused.data["problems"])
+    assert store.load("inplace").approval.passed is False
+
+    path.write_text(with_method(venued_fixtures_dir, 1), encoding="utf-8")
+    assert cli.cmd_approve(Namespace(session="inplace", by="user"), store=store).ok is True
+
+
+def test_replan_refuses_a_node_over_the_limit(store, tmp_path, venued_fixtures_dir):
+    from test_replan import _to_executing_stage1
+    from agentctl import cli
+
+    _to_executing_stage1(store, "replan-over", str(venued_fixtures_dir / "plan_two_stage.toml"))
+    over = write(tmp_path / "over", with_method(venued_fixtures_dir, calibration()["S"] + 1))
+    refused = cli.cmd_replan(Namespace(session="replan-over", plan=str(over)), store=store)
+    assert refused.ok is False
+    assert "plan-stage-max-chars" in json.dumps(refused.data) + refused.detail
+    assert store.load("replan-over").plan_path != str(over)
+
+
+# --- the limits when config.md is unreadable ------------------------------------------
+
+def test_an_unreadable_stage_limit_fails_closed_with_a_message_not_a_traceback(tmp_path, monkeypatch):
+    from agentctl import cli, config, plan, render, submission
+    from agentctl.config import PlanLimitError, Thresholds, plan_size_limits
+
+    for constants in ({}, {"plan-stage-max-chars": "many"}):
+        with pytest.raises(PlanLimitError, match="plan-stage-max-chars"):
+            Thresholds(constants).plan_stage_max_chars
+        with pytest.raises(PlanLimitError):
+            plan_size_limits(constants)
+    doc = plan.load_plan(write(tmp_path / "plan", plan_toml()))
+    monkeypatch.setattr(config, "parse_config_md", lambda *_a, **_k: {})
+    blocks = submission.plan_size_blocks(doc)
+    assert [(f["node"], f["severity"]) for f in blocks] == [("meta", "block")]
+    assert "plan-stage-max-chars" in blocks[0]["message"]
+    assert any("plan-stage-max-chars" in p for p in cli._submission_problems(doc, None, "substantive"))
+    assert "plan-stage-max-chars" in render.topo_unit_refusal(doc, ("meta", 1))
+
+
+def test_an_unreadable_field_limit_falls_back_to_the_calibrated_value(monkeypatch):
+    from agentctl import config
+    from agentctl.config import PLAN_FIELD_INLINE_FALLBACK_CHARS, Thresholds
+
+    assert PLAN_FIELD_INLINE_FALLBACK_CHARS == calibration()["F"]
+    assert Thresholds({}).plan_field_inline_max_chars == PLAN_FIELD_INLINE_FALLBACK_CHARS
+    assert Thresholds({"plan-field-inline-max-chars": "x"}).plan_field_inline_max_chars == \
+        PLAN_FIELD_INLINE_FALLBACK_CHARS
+    monkeypatch.setattr(config, "parse_config_md", lambda *_a, **_k: {})
+    assert config.plan_field_inline_limit() == PLAN_FIELD_INLINE_FALLBACK_CHARS
+
+
+# --- one table, one translation --------------------------------------------------------
+
+def test_the_lint_reads_exactly_the_externalizable_stage_fields():
+    from agentctl import submission
+    from agentctl.plan_refs import EXTERNALIZABLE_FIELDS
+
+    assert set(submission._STAGE_FIELD_PATHS) == set(EXTERNALIZABLE_FIELDS["stage"])
+
+
+def renumbered(text: str) -> str:
+    for old, new in ((3, 13), (2, 12), (1, 11)):
+        text = text.replace(f"index = {old}\n", f"index = {new}\n").replace(
+            f"depends_on = [{old}]", f"depends_on = [{new}]").replace(
+            f"stage {old} verify_command", f"stage {new} verify_command")
+    return text
+
+
+def test_an_externalized_field_of_a_stage_whose_index_differs_from_its_position_is_not_warned_about(tmp_path):
+    from agentctl import plan, plan_refs, plan_store, submission
+
+    cal = calibration()
+    path = write(tmp_path / "plan", renumbered(plan_toml(extra={2: f'method = "{"m" * (cal["F"] + 1)}"\n'})))
+    doc = plan.load_plan(path)
+    assert [s.index for s in doc.stages] == [11, 12, 13]
+    inline = submission.plan_size_warnings(doc, plan_store.visited_positions(path))
+    assert [(f["node"], f["field"]) for f in inline] == [(12, "method")]
+
+    plan_refs.plan_externalize(path, stage=12, field="method")
+    assert plan_store.visited_positions(path) == {(2, "method")}
+    assert submission.plan_size_warnings(plan.load_plan(path), plan_store.visited_positions(path)) == []
+
+
+def test_plan_externalize_silences_both_submit_plan_and_the_fit_report(
+        store, tmp_path, venued_fixtures_dir, views):
+    from agentctl import cli, plan_refs, plan_store
+
+    path = write(tmp_path / "ext", with_method(venued_fixtures_dir, calibration()["F"] + 1))
+    fit = fit_report()
+    assert fit.build_report(path, None)["lint"]["1"] == "warn"
+
+    plan_refs.plan_externalize(path, stage=1, field="method")
+    assert plan_store.visited_positions(path) == {(1, "method")}
+    assert fit.build_report(path, None)["lint"]["1"] == "ok"
+    start_to_plan(store, "ext-submit")
+    d = cli.cmd_submit_plan(Namespace(session="ext-submit", plan=str(path)), store=store)
+    assert d.ok is True
+    assert not any("plan-externalize" in a for a in d.data.get("advisories", []))
+
+
+# --- smaller contracts -----------------------------------------------------------------
+
+def test_a_doc_and_an_explicit_venue_together_are_refused(tmp_path):
+    from agentctl import plan, render
+
+    doc = plan.load_plan(write(tmp_path / "plan", plan_toml()))
+    with pytest.raises(ValueError, match="venue"):
+        render._stage_field_lines(doc, doc.stages[0], dependency_blocks=False, venue="/somewhere")
+
+
+def test_raw_and_parsed_nodes_measure_the_same_under_a_declared_venue(tmp_path):
+    import tomllib
+    from agentctl import plan
+
+    venue = str(tmp_path / "venue")
+    text = plan_toml(extra={1: f'material_refs = ["{venue}/a.txt"]\n'}).replace(
+        "[meta]\n", f'[meta]\nrepo_root = "{venue}"\n', 1)
+    path = write(tmp_path / "plan", text)
+    raw = tomllib.loads(text)
+    doc = plan.load_plan(path)
+    assert plan.raw_plan_venue(raw) == plan._venue_for(doc) == venue
+    for table, stage in zip(raw["stage"], doc.stages):
+        assert plan.stage_rendered_size(table, plan.raw_plan_venue(raw)) == \
+            plan.stage_rendered_size(stage, plan._venue_for(doc))
+    assert plan.raw_plan_venue({"meta": {"repo_root": "relative"}}) is None
+
+
+def test_the_topological_refusal_uses_the_launchers_model_and_renders_the_plan_node_once(tmp_path, monkeypatch):
+    from agentctl import plan, render
+
+    doc = plan.load_plan(write(tmp_path / "plan", plan_toml()))
+    rendered: list = []
+    real = render.render_node
+    monkeypatch.setattr(render, "render_node", lambda *a, **k: rendered.append(a[0]) or real(*a, **k))
+    assert render.topo_unit_refusal(doc, ("meta", render.PAIR_BASE_NODE, 1)) is None
+    assert [n for n in rendered if n is doc] == [doc]
+
+    seen: list = []
+    monkeypatch.setattr(render, "dispatch_ceiling_chars", lambda model=None: seen.append(model) or 10**9)
+    render.topo_unit_refusal(doc, ("meta", 1), "prompt", model="a-model")
+    assert seen == ["a-model"]
+
+
+def test_the_ceiling_comes_from_the_lib_module_without_loading_the_launcher():
+    from lib import spawn_ceiling
+    from agentctl import render
+
+    assert render.dispatch_ceiling_chars("m") == spawn_ceiling.dispatch_prompt_ceiling_chars("m")
+    assert "exec_module" not in (SCRIPTS / "agentctl" / "render.py").read_text(encoding="utf-8")
 

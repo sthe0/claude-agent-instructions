@@ -29,10 +29,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lib import kind_baselines
+from lib.spawn_ceiling import dispatch_prompt_ceiling_chars
 
 from . import grants as _grants
 from . import plan_refs, plan_store
-from .config import Thresholds
+from .config import PlanLimitError, plan_field_inline_limit, plan_size_limits
 from .directive import Directive
 from .plan import (
     CONDITION_MARKERS,
@@ -48,8 +49,8 @@ from .plan import (
     PAIR_BASE_NODE,
     PlanDoc,
     PlanError,
-    _derive_stage_grants,
     _build_supplies,
+    _derive_stage_grants,
     _venue_for,
     consumers,
     grants_sha256,
@@ -433,6 +434,8 @@ def _stage_field_lines(
     no `doc` names the grant `venue` itself (None: no venue declared) and cannot ask for
     dependency blocks."""
     if doc is not None:
+        if venue is not None:
+            raise ValueError("a stage is rendered against its doc's venue or an explicit one, not both")
         venue = _venue_for(doc)
     lines: list[str] = []
     lines.append(f"## Stage {s.index}: {s.title}")
@@ -1234,7 +1237,14 @@ def render_node(
     typed when it parses, and every key it holds is printed either way, the undefined ones
     last — so a node the loader refuses can still be measured. `venue` is the grant venue
     of a stage given without its plan; `kind` ("meta" or "stage") says what a raw table is
-    when its keys do not (a bare `[meta]` table)."""
+    when its keys do not (a bare `[meta]` table).
+
+    This is the size measure of a node (`plan.stage_rendered_size` / `meta_rendered_size`),
+    not the text `build_site_prompt` prints: that builder renders its nodes through the
+    per-site bundle renderers (with dependency summaries, coverage control text and
+    pointer-ised long fields), which the node limit does not cover and the prompt-level
+    refusal against the spawn ceiling does. The top-level `[[final_check]]` list belongs to
+    no node, so no node limit bounds it either — only that same refusal does."""
     if role != "base" or not inline_all:
         raise ValueError("render_node prints the base role with every field inline")
     if isinstance(node, PlanDoc):
@@ -1276,44 +1286,44 @@ def normalize_prompt_paths(text: str, view_root: "str | Path") -> str:
     return text
 
 
-_ceiling_chars_cache: list = []
+def dispatch_ceiling_chars(model: "str | None" = None) -> int:
+    """The prompt ceiling a spawn is refused above (`lib.spawn_ceiling`'s
+    `dispatch_prompt_ceiling_chars`, the one the launcher applies)."""
+    return dispatch_prompt_ceiling_chars(model)
 
 
-def dispatch_ceiling_chars() -> int:
-    """The prompt ceiling a spawn is refused above (`spawn-specialist.py`'s
-    `dispatch_prompt_ceiling_chars` for the default model)."""
-    if not _ceiling_chars_cache:
-        import importlib.util
-
-        script = Path(__file__).resolve().parents[1] / "spawn-specialist.py"
-        spec = importlib.util.spec_from_file_location("spawn_specialist_ceiling", script)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        _ceiling_chars_cache.append(module.dispatch_prompt_ceiling_chars(None))
-    return _ceiling_chars_cache[0]
-
-
-def topo_unit_refusal(doc: PlanDoc, unit_nodes, prompt_text: "str | None" = None) -> "str | None":
+def topo_unit_refusal(
+    doc: PlanDoc, unit_nodes, prompt_text: "str | None" = None, *, model: "str | None" = None,
+) -> "str | None":
     """Why a topological review of `unit_nodes` (node ids; "meta" or "base" stands for the
     plan-level node) must not be spawned, or None when it may. A node over
     `plan-stage-max-chars` is refused with the message the submission lint blocks with; a
-    `prompt_text` over the spawn ceiling is refused on its own size."""
+    `prompt_text` over the spawn ceiling (of `model`, the launcher's) is refused on its own
+    size. A stage limit that cannot be read refuses with its own message."""
     from .plan import oversize_node_message
 
-    limit = Thresholds().plan_stage_max_chars
+    try:
+        limit, _ = plan_size_limits()
+    except PlanLimitError as exc:
+        return str(exc)
     venue = _venue_for(doc)
+    seen: set = set()
     for node in unit_nodes:
-        if node in ("meta", PAIR_BASE_NODE):
-            label, text = "meta", render_node(doc)
+        label = "meta" if node in ("meta", PAIR_BASE_NODE) else int(node)
+        if label in seen:
+            continue
+        seen.add(label)
+        if label == "meta":
+            text = render_node(doc)
         else:
-            stage = next((s for s in doc.stages if s.index == int(node)), None)
+            stage = next((s for s in doc.stages if s.index == label), None)
             if stage is None:
                 continue
-            label, text = int(node), render_node(stage, venue=venue)
+            text = render_node(stage, venue=venue)
         if len(text) > limit:
             return oversize_node_message(label, len(text), limit)
     if prompt_text is not None:
-        ceiling = dispatch_ceiling_chars()
+        ceiling = dispatch_ceiling_chars(model)
         if len(prompt_text) > ceiling:
             return (
                 f"the review prompt for {', '.join(str(n) for n in unit_nodes)} is "
@@ -1596,7 +1606,7 @@ def build_site_prompt(
             return SitePrompt(unit_base_text(doc), (), frozenset({"meta"}))
         return SitePrompt(render_stage_fields(doc, stage), (), frozenset({int(stage)}))
 
-    limit = Thresholds().plan_field_inline_max_chars if inline_max_chars is None else inline_max_chars
+    limit = plan_field_inline_limit() if inline_max_chars is None else inline_max_chars
     if not with_view:
         limit = sys.maxsize
     shown_doc, pointer_objects = _pointerize(doc, limit)

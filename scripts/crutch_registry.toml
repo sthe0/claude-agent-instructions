@@ -2829,6 +2829,22 @@ disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
 
 [[entry]]
+id = "f9597a4480cd4335"
+domain = "code"
+file = "scripts/lib/spawn_ceiling.py"
+class = "structural"
+disposition = "keep"
+ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+
+[[entry]]
+id = "6b85d0c2f007f91a"
+domain = "code"
+file = "scripts/lib/spawn_ceiling.py"
+class = "structural"
+disposition = "keep"
+ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+
+[[entry]]
 id = "aa7aea3f8974cf5c"
 domain = "code"
 file = "scripts/lib/term_ruleset.py"
@@ -4174,22 +4190,6 @@ ground = "Regexes found are markdown/frontmatter/command-syntax parsing (heading
 
 [[entry]]
 id = "1763db7bbd35d485"
-domain = "code"
-file = "scripts/spawn-specialist.py"
-class = "structural"
-disposition = "keep"
-ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
-
-[[entry]]
-id = "2f6125eb467c5897"
-domain = "code"
-file = "scripts/spawn-specialist.py"
-class = "structural"
-disposition = "keep"
-ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
-
-[[entry]]
-id = "f2212ce70e3d3dfa"
 domain = "code"
 file = "scripts/spawn-specialist.py"
 class = "structural"
@@ -12533,6 +12533,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "f7135fb328a11c4b"
+domain = "code"
+file = "scripts/tests/test_plan_size_limits.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "2b2c5680dd910140"
 domain = "code"
 file = "scripts/tests/test_plan_toml.py"
@@ -16896,6 +16904,14 @@ ground = "Parses the closed REVIEW reply contract the thinker's SKILL.md fixes â
 id = "8ae0d0962c4ae1a7"
 domain = "code_file_rollup"
 file = "scripts/lib/shell_tokens.py"
+class = "structural"
+disposition = "keep"
+ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "4a4b0797ede5db82"
+domain = "code_file_rollup"
+file = "scripts/lib/spawn_ceiling.py"
 class = "structural"
 disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow. (file-level rollup of the file's scopes.)"

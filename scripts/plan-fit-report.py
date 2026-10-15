@@ -37,7 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from agentctl import dispatch, plan, plan_refs, plan_store, render  # noqa: E402
-from agentctl.config import Thresholds  # noqa: E402
+from agentctl.config import PlanLimitError, Thresholds  # noqa: E402
 from agentctl.submission import plan_size_findings  # noqa: E402
 
 VIEW_ROOT = "<view-root>"
@@ -134,7 +134,7 @@ def build_report(plan_path: Path, source: "Path | None") -> dict:
         "plan_field_inline_max_chars": limits.plan_field_inline_max_chars,
         "node_chars": node_chars,
         "oversize_nodes": [n for n, chars in node_chars.items() if chars > limits.plan_stage_max_chars],
-        "lint": lint_by_node(doc, frozenset(p for p, _path, _sha in plan_store.visited_refs(plan_path))),
+        "lint": lint_by_node(doc, plan_store.visited_positions(plan_path)),
         "topo": {},
         "sites": [],
     }
@@ -173,7 +173,7 @@ def main(argv: "list[str] | None" = None) -> int:
     args = parser.parse_args(argv)
     try:
         report = build_report(args.plan, args.source)
-    except plan.PlanError as exc:
+    except (plan.PlanError, PlanLimitError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     args.out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
