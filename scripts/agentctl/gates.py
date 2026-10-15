@@ -268,7 +268,8 @@ def plan_asserts_landing(state: SessionState) -> bool:
     return asserts_landing(state.stages, state.final_check)
 
 
-def acceptance_staleness(review, doc, plan_digest: str) -> list[str] | None:
+def acceptance_staleness(review, doc, plan_digest: str,
+                         state: SessionState | None = None) -> list[str] | None:
     """Whether `review` no longer describes the product `doc` (accepted at `plan_digest`)
     declares: `None` when it still does, else the requirement ids that went stale.
 
@@ -282,7 +283,7 @@ def acceptance_staleness(review, doc, plan_digest: str) -> list[str] | None:
     order = doc.meta.order
     declared = [r.id for r in order.requirements] if order is not None else []
     if review.requirement_bindings is None:
-        if (review.plan_sha256 or "") == (plan_digest or ""):
+        if plan_digest_equivalent(state, review.plan_sha256 or "", plan_digest or ""):
             return None
         return declared
     current = acceptance_requirement_bindings(doc)
@@ -334,7 +335,8 @@ def _acceptance_review_check(state: SessionState) -> _AcceptanceCheck:
     review = state.acceptance_review
     if review is None:
         return _AcceptanceCheck("no_review", [], {}, [])
-    digest_moved = (review.plan_sha256 or "") != (state.accepted_plan_digest or "")
+    digest_moved = not plan_digest_equivalent(
+        state, review.plan_sha256 or "", state.accepted_plan_digest or "")
     if digest_moved and review.requirement_bindings is None:
         return _AcceptanceCheck("stale", [], {}, [])
     doc = None
@@ -346,13 +348,13 @@ def _acceptance_review_check(state: SessionState) -> _AcceptanceCheck:
             doc = None
     if doc is None:
         return _AcceptanceCheck("unreadable", [], {}, [])
-    if file_digest != (state.accepted_plan_digest or ""):
+    if not plan_digest_equivalent(state, file_digest, state.accepted_plan_digest or ""):
         # Bindings and requirement ids are read from this file: bytes the engine never
         # accepted cannot stand in for the version the review was recorded against. A
         # session with NO accepted digest has accepted none, so it fails closed here too.
         return _AcceptanceCheck("stale", [], {}, [])
     if digest_moved:
-        stale = acceptance_staleness(review, doc, state.accepted_plan_digest or "")
+        stale = acceptance_staleness(review, doc, state.accepted_plan_digest or "", state)
         if stale is not None:
             return _AcceptanceCheck("stale", [], {}, stale)
     order = doc.meta.order
@@ -885,7 +887,49 @@ def _file_sha256(path: str | None) -> str | None:
         return None
 
 
-def _plan_review_content_stale(pr, target_plan: str) -> str | None:
+def plan_digest_equivalent(state: SessionState | None, a: str | None, b: str | None) -> bool:
+    """Whether root digests `a` and `b` name the same plan: equal, or linked by a chain of
+    `state.plan_conversions` (the single-file and hypertext forms of one plan, in either
+    direction and across a revert). A record bound to one form stays bound through the
+    conversion; an edit made after it matches no link and re-blocks. `state=None` is plain
+    equality, for a caller that holds no session."""
+    if not a or not b:
+        return a == b
+    if a == b:
+        return True
+    return b in _conversion_component(state, a)
+
+
+def _conversion_component(state: SessionState | None, digest: str) -> set[str]:
+    """`digest` and every root digest linked to it by `state.plan_conversions`."""
+    reached = {digest}
+    if state is None:
+        return reached
+    grew = True
+    while grew:
+        grew = False
+        for link in state.plan_conversions:
+            ends = {link.old_digest, link.new_digest}
+            if ends & reached and not ends <= reached:
+                reached |= ends
+                grew = True
+    return reached
+
+
+def plan_lineage_root(state: SessionState | None, digest: str) -> str:
+    """One stable digest for every form of a plan: the old digest of the earliest
+    conversion linking `digest`, else `digest` itself. For a store that compares digests
+    by equality (the task accumulator's last-counted version)."""
+    if state is None or not digest:
+        return digest
+    component = _conversion_component(state, digest)
+    for link in state.plan_conversions:
+        if link.old_digest in component:
+            return link.old_digest
+    return digest
+
+
+def _plan_review_content_stale(pr, target_plan: str, state: SessionState | None = None) -> str | None:
     # #16: the coordinator edits plans in place, so a same-path binding is not a
     # content binding — recompute the plan's sha256 and reject a drift. Fail-open:
     # an unreadable target degrades to the path-only binding above, never wedging
@@ -893,7 +937,7 @@ def _plan_review_content_stale(pr, target_plan: str) -> str | None:
     if not pr.plan_sha256:
         return None
     current = _file_sha256(target_plan)
-    if current is None or current == pr.plan_sha256:
+    if current is None or plan_digest_equivalent(state, current, pr.plan_sha256):
         return None
     return (
         "thinker review is stale — the plan content at "
@@ -1031,7 +1075,7 @@ def _stale_path_blocker(reviewed_path: str | None, target_plan: str | None) -> s
     )
 
 
-def _binds_across_path_change(pr, target_plan: str | None) -> bool:
+def _binds_across_path_change(pr, target_plan: str | None, state: SessionState | None = None) -> bool:
     """Whether a review recorded at a DIFFERENT path still binds `target_plan`:
     only when the two files are byte-identical, i.e. the plan was renamed rather
     than replaced (#195).
@@ -1050,7 +1094,8 @@ def _binds_across_path_change(pr, target_plan: str | None) -> bool:
     bytes a caller can hash."""
     if not pr.plan_sha256:
         return False
-    return _file_sha256(target_plan) == pr.plan_sha256
+    current = _file_sha256(target_plan)
+    return current is not None and plan_digest_equivalent(state, current, pr.plan_sha256)
 
 
 _NO_REVIEW_BLOCKER = "no thinker review recorded — run: plan-review (thinker verdict required before this plan is approved/applied)"
@@ -1081,10 +1126,10 @@ def _plan_review_blockers_whole(pr, target_plan: str | None, *, state: SessionSt
         # Content identity IS the binding on this branch, so it subsumes the
         # drift check the same-path branch runs — reaching for that check here
         # would only re-read the file to re-confirm the hash just compared.
-        if not _binds_across_path_change(pr, target_plan):
+        if not _binds_across_path_change(pr, target_plan, state):
             return [_stale_path_blocker(pr.plan_path, target_plan)]
     else:
-        stale = _plan_review_content_stale(pr, target_plan)
+        stale = _plan_review_content_stale(pr, target_plan, state)
         if stale:
             return [stale]
     return _plan_review_verdict_blockers(pr, state=state, doc=doc)
@@ -1242,7 +1287,7 @@ def plan_review_prior_pass(state: SessionState, scope: str, target_plan: str | N
         prior = state.plan_review_passes.get("")
     if prior is None or not target_plan:
         return None
-    if prior.plan_path != target_plan and not _binds_across_path_change(prior, target_plan):
+    if prior.plan_path != target_plan and not _binds_across_path_change(prior, target_plan, state):
         return None
     return prior
 
@@ -1617,7 +1662,7 @@ def _pair_route(state: SessionState, doc, plan_path: "str | None") -> "_PairRout
     whole = state.plan_review
     if whole is None or not has_pair_records_for(state, plan_path):
         return None
-    if whole.plan_path != plan_path and not _binds_across_path_change(whole, plan_path):
+    if whole.plan_path != plan_path and not _binds_across_path_change(whole, plan_path, state):
         return None
     scope = review_scope(doc, whole)
     if scope.meta_moved or _plan_review_verdict_blockers(whole, state=state, doc=doc):
@@ -1660,7 +1705,7 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     whole = state.plan_review
     if whole is None:
         return [_no_review_blocker(state)]
-    if whole.plan_path != target_plan and not _binds_across_path_change(whole, target_plan):
+    if whole.plan_path != target_plan and not _binds_across_path_change(whole, target_plan, state):
         return [_stale_path_blocker(whole.plan_path, target_plan)]
     scope = review_scope(doc, whole)
     if scope.meta_moved:
@@ -1712,7 +1757,7 @@ def _stage_route_gaps(
     scope = _plan_review_scope_for_stage(index)
     spr = state.plan_stage_reviews.get(scope)
     if spr is None or (spr.plan_path != target_plan
-                       and not _binds_across_path_change(spr, target_plan)):
+                       and not _binds_across_path_change(spr, target_plan, state)):
         if relied_on:
             return [
                 f"stage {index} relies on stage(s) {sorted(relied_on)} whose declared product "
@@ -2194,7 +2239,8 @@ def _no_stamp_blocker(probe) -> str:
     )
 
 
-def _receipt_binding_blocker(receipt, target_plan: str | None, label: str) -> str | None:
+def _receipt_binding_blocker(receipt, target_plan: str | None, label: str,
+                             state: SessionState | None = None) -> str | None:
     """Shared receipt-side staleness check for the plan-presentation family:
     the receipt must name the exact plan path AND content currently in play.
     Fails OPEN on missing observables (mirrors plan_review_blockers's `if
@@ -2211,7 +2257,7 @@ def _receipt_binding_blocker(receipt, target_plan: str | None, label: str) -> st
         )
     if receipt.plan_sha256:
         current = _file_sha256(target_plan)
-        if current is not None and current != receipt.plan_sha256:
+        if current is not None and not plan_digest_equivalent(state, current, receipt.plan_sha256):
             return (
                 f"{label} is stale — the plan content at "
                 f"{target_plan!r} changed since it was presented; re-run present-plan"
@@ -2315,7 +2361,7 @@ def plan_presentation_blockers(
             "no plan presentation recorded — run: present-plan --kind essence "
             "(the plan must be shown to the user before it can be approved)"
         ]
-    stale = _receipt_binding_blocker(receipt, target_plan, "plan presentation")
+    stale = _receipt_binding_blocker(receipt, target_plan, "plan presentation", state)
     if stale is not None:
         return [stale]
     return _delivery_stamp_blocker(state, receipt, probe)
@@ -2348,7 +2394,7 @@ def grants_approval_blockers(state: SessionState, target_plan: str | None) -> li
     receipt = _plan_presentation_for(state, _PLAN_PRESENTATION_KIND_ESSENCE)
     if receipt is None:
         return []  # plan_presentation_blockers already names this
-    if _receipt_binding_blocker(receipt, target_plan, "plan presentation") is not None:
+    if _receipt_binding_blocker(receipt, target_plan, "plan presentation", state) is not None:
         return []  # ditto -- stale receipt already blocked elsewhere
     current = grants_sha256(doc)
     if getattr(receipt, "grants_sha256", None) != current:
@@ -2425,7 +2471,8 @@ def replan_authorization_blockers(
         return []
     if target_plan:
         current_digest = _file_sha256(target_plan)
-        if current_digest is not None and current_digest == state.accepted_plan_digest:
+        if current_digest is not None and plan_digest_equivalent(
+                state, current_digest, state.accepted_plan_digest):
             return []
 
     receipt = _plan_presentation_for(state, _PLAN_PRESENTATION_KIND_REPLAN_DIFF)
@@ -2435,7 +2482,7 @@ def replan_authorization_blockers(
             f"replan_diff --plan {target_plan!r} (a non-substantive edit to an "
             "approved plan must be shown to the user before it takes effect)"
         ]
-    stale = _receipt_binding_blocker(receipt, target_plan, "replan-diff presentation")
+    stale = _receipt_binding_blocker(receipt, target_plan, "replan-diff presentation", state)
     if stale is not None:
         return [stale]
     return _delivery_stamp_blocker(state, receipt, probe)

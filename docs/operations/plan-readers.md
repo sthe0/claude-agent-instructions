@@ -33,6 +33,7 @@ to be exactly that set.
 | `scripts/agentctl/order_approvals.py`:`record_approval` | not a plan | Reads the order-approval ledger (JSON); the plan appears only as a digest argument. |
 | `scripts/agentctl/plan.py`:`load_plan` | resolves | The loader: resolves references through `plan_refs.resolve_refs`. |
 | `scripts/agentctl/plan.py`:`load_plan_with_digest` | resolves | The loader that also returns the index bytes' digest from the same read. |
+| `scripts/agentctl/plan_convert.py`:`cmd_plan_convert_live` | index-only | Reads the registered plan's index bytes: their sha256 must equal the accepted digest before anything is converted, and the bytes go to the object store as the old version. The converter refuses a source that already holds a reference, so the index bytes are the whole plan. |
 | `scripts/agentctl/plan_refs.py`:`plan_digest` | resolves | Reports the root digest, every reference and each stage closure digest from the resolved plan. |
 | `scripts/agentctl/plan_refs.py`:`plan_externalize` | resolves | Reads the index, resolves it, moves one field into a file and reseals. |
 | `scripts/agentctl/plan_store.py`:`store_plan` | resolves | Resolves a plan version's references and stores the index and every visited file by hash. |
@@ -96,3 +97,88 @@ Limits — what the scan does not see:
 
 A row's disposition is a judgement the scan cannot make; the test only requires that it is one of
 the three above.
+
+## Root-digest comparisons
+
+A plan's root digest is the sha256 of its index bytes, so converting a plan between its single-file
+and its hypertext form changes the root digest and keeps the plan's content digest. A record bound
+to the old root (a review, a presentation, the accepted digest) must stay valid through a
+`plan-convert-live`, and an edit made after the conversion must still stale it. That is what
+`gates.plan_digest_equivalent(state, a, b)` decides: two root digests are equivalent when they are
+equal or linked by a chain of `state.plan_conversions`. Every place that compares a recorded root
+digest with a current or accepted one therefore goes through it; this inventory lists the places the
+enumerator finds and says why each one is routed or exempt. A test
+(`scripts/tests/test_plan_convert.py`) requires the rows below to be exactly the enumerated set.
+
+### Dispositions of a comparison
+
+- `routed through plan_digest_equivalent` — the function compares a recorded root digest with a
+  current or accepted one by calling `gates.plan_digest_equivalent`; no raw comparison of that kind
+  is left in it.
+- `audit only` — the digest is compared to find or label a historical record (a ledger row, a
+  ticket marker); a mismatch costs a lookup, never a gate.
+- `not a binding` — the read or comparison is not a binding of a record to a plan version: a file
+  integrity check, a comparison of two values that are both recorded, an exact byte check made
+  before a conversion, or a fixture.
+
+### Root-digest comparisons
+
+| Site | Disposition | Why |
+|---|---|---|
+| `scripts/agentctl/cli.py`:`_count_plan_review_round` | routed through plan_digest_equivalent | Decides whether a review round was already counted for this plan version by comparing the recorded counted digest with the current one. |
+| `scripts/agentctl/cli.py`:`cmd_accept` | routed through plan_digest_equivalent | Refuses to bind an acceptance to a plan file that is not the accepted version: the file's digest against the accepted plan digest. |
+| `scripts/agentctl/gates.py`:`acceptance_staleness` | routed through plan_digest_equivalent | Compares the digest a review without bindings was recorded against with the digest accepted now. |
+| `scripts/agentctl/gates.py`:`_acceptance_review_check` | routed through plan_digest_equivalent | Compares the review's digest and the plan file's digest with the accepted digest. |
+| `scripts/agentctl/gates.py`:`_plan_review_content_stale` | routed through plan_digest_equivalent | The review-currency comparison: the plan file's digest against the digest the whole-plan review attested. |
+| `scripts/agentctl/gates.py`:`_binds_across_path_change` | routed through plan_digest_equivalent | A review recorded at another path binds a renamed plan only when the digests are equivalent. |
+| `scripts/agentctl/gates.py`:`_receipt_binding_blocker` | routed through plan_digest_equivalent | A presentation receipt is stale when the plan file's digest is not equivalent to the receipt's. |
+| `scripts/agentctl/gates.py`:`replan_authorization_blockers` | routed through plan_digest_equivalent | An edit that leaves the file's digest equivalent to the accepted one needs no replan-diff presentation. |
+| `scripts/agentctl/cli.py`:`_plan_file_sha256` | not a binding | Computes the digest a record is bound to; it compares nothing. |
+| `scripts/agentctl/cli.py`:`_refresh_approved_grant_snapshot` | not a binding | Re-hashes the approved snapshot to refresh the recorded snapshot hash; the snapshot is a copy the engine wrote. |
+| `scripts/agentctl/cli.py`:`_stamp_accepted_plan_digest` | not a binding | Writes the accepted digest from the file's bytes; `plan-convert-live` writes the converted root the same way. |
+| `scripts/agentctl/cli.py`:`cmd_present_plan` | not a binding | Binds a new receipt to the digest of the plan as it is now; the receipt is created here, not compared. |
+| `scripts/agentctl/cli.py`:`cmd_plan_review` | not a binding | An exact cross-check of the digest the reviewer attests against the plan file's bytes at record time; the staleness that follows is read through the callee that counts rounds. |
+| `scripts/agentctl/cli.py`:`cmd_dispatch` | not a binding | Compares the hashes of the settings files a spawn materializes, not a plan. |
+| `scripts/agentctl/cli.py`:`_stage_grant_entries` | not a binding | Checks the approved snapshot's bytes against the recorded snapshot hash, which `plan-convert-live` never rewrites (no new snapshot is written). |
+| `scripts/agentctl/gates.py`:`_file_sha256` | not a binding | The hashing helper itself. |
+| `scripts/agentctl/gates.py`:`file_norm_digest` | not a binding | Hashes a norm file, not a plan. |
+| `scripts/agentctl/gates.py`:`_delivery_stamp_blocker` | not a binding | Compares a delivery stamp with its receipt; both are recorded, neither is a plan file's current digest. |
+| `scripts/agentctl/plan_convert.py`:`cmd_plan_convert_live` | not a binding | Requires the plan file's digest to equal the accepted digest exactly before converting; after a conversion the two are different forms, and this check runs against the form on disk. |
+| `scripts/agentctl/plan_store.py`:`_intact` | not a binding | Re-hashes a stored object against its own name. |
+| `scripts/hook-plan-delivery-gate.py`:`_already_stamped` | not a binding | Compares a stamp's receipt digest with the receipt, both recorded. |
+| `scripts/plan-review-topological.py`:`Driver.launch` | not a binding | Recomputes the root digest the reviewer attests: the sha256 of the index bytes. A positive control of the enumerator. |
+| `scripts/plan-review-topological.py`:`select_cost_row` | audit only | Picks a cost-ledger row for a pair by the plan digest it was recorded under; a miss means no cost estimate. |
+| `scripts/verify-agentctl.py`:`check_obligations` | not a binding | Hashes a synthetic plan to attest a review in a self-check fixture. |
+| `scripts/verify-agentctl.py`:`check_review_dispatch` | not a binding | Same, for the review-dispatch self-check fixture. |
+| `scripts/verify-judge-isolation.py`:`credential_fingerprint` | not a binding | Hashes a credential file to prove the judge does not touch it. |
+| `scripts/verify-ticket-plan-sync.py`:`check` | audit only | Compares the digest posted to the ticket with the file's; a report, never a gate. |
+| `scripts/verify-ticket-plan-sync.py`:`format_marker` | audit only | Writes the digest marker posted to the ticket. |
+| `scripts/verify-ticket-plan-sync.py`:`plan_file_sha256` | audit only | Hashes the plan file for the ticket marker. |
+
+### What the enumerator misses
+
+The enumerator in the test is a syntactic scan (Python `ast`) of every `*.py` under `scripts/`
+except `scripts/tests/`. It selects four things, by the enclosing function's qualified name:
+
+1. a comparison one of whose operands is named `plan_sha256`, `accepted_plan_digest`,
+   `plan_snapshot_hash`, `plan_review_counted_digest`, `root_digest` or `plan_digest` (as a name, an
+   attribute, a constant subscript or a `.get` of that constant, possibly under `or`);
+2. a call `hashlib.sha256(x.read_bytes())`;
+3. a call to `_file_sha256` or `_plan_file_sha256`;
+4. a call to `plan_digest_equivalent`.
+
+It does not see:
+
+- a comparison through a name that is not in the list (a digest bound to `current`, `before`,
+  `digest`) unless the function also hashes a file or calls one of the helpers;
+- a digest compared in a shell command, a hook written in another language or a script outside
+  `scripts/`;
+- a digest compared after a round trip through JSON under a key that is not in the list.
+
+Known comparisons of a root digest that the enumerator does not select, listed by hand:
+
+- the task accumulator's `review_rounds_last_sha256`, compared by equality against the last counted
+  plan digest. It is never given a raw root: `cli._count_review_round` passes
+  `gates.plan_lineage_root(state, digest)`, one stable digest for every form of a plan.
+- history events that carry `plan_sha256` (`plan_review`, `plan_present` and the like). They record
+  what was attested and are read for audit; nothing compares them with a current digest.

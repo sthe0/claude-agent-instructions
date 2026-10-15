@@ -27,7 +27,7 @@ from pathlib import Path
 
 from lib import argv_text, config_root, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -2315,6 +2315,9 @@ def _count_review_round(state: SessionState, plan_sha256: str, *, thinker_record
     `_count_plan_review_round`."""
     if not plan_sha256:
         return
+    # The accumulator compares digests by equality: give it one digest per plan lineage
+    # (`plan-convert-live` links the forms of one plan), so a conversion is not a new version.
+    plan_sha256 = gates.plan_lineage_root(state, plan_sha256)
     digest = {"force_digest" if thinker_record else "count_if_digest_differs": plan_sha256}
     totals = task_accumulator.add(
         state.task_id, "review_rounds", 1, session_id=state.session_id, now=_utcnow(),
@@ -5098,7 +5101,8 @@ def _count_plan_review_round(state: SessionState, target: str) -> None:
     cmd_plan_review): once per plan VERSION, never for an unreadable plan."""
     if state.approval is not None and state.approval.passed:
         counted = _plan_file_sha256(target)
-        if counted and counted != state.plan_review_counted_digest:
+        if counted and not gates.plan_digest_equivalent(
+                state, counted, state.plan_review_counted_digest):
             state.plan_review_rounds += 1
             state.plan_review_counted_digest = counted
             _sync_release_anchor(state)
@@ -6028,7 +6032,8 @@ def cmd_accept(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             "delivered product with the order that plan declares",
         )
     accepted_digest = state.accepted_plan_digest or ""
-    if plan_digest != accepted_digest and (accepted_digest or gates.acceptance_active(state)):
+    if (not gates.plan_digest_equivalent(state, plan_digest, accepted_digest)
+            and (accepted_digest or gates.acceptance_active(state))):
         # The per-requirement binding below is computed from `doc`; a file that is not
         # the accepted version would bind the review to bytes the engine never approved
         # while stamping it with the accepted digest. An acceptance-active session with
@@ -11885,6 +11890,8 @@ COMMANDS = {
     "plan-digest": plan_refs.cmd_plan_digest,
     "plan-externalize": plan_refs.cmd_plan_externalize,
     "plan-seal": plan_refs.cmd_plan_seal,
+    "plan-convert": plan_convert.cmd_plan_convert,
+    "plan-convert-live": plan_convert.cmd_plan_convert_live,
     "submit-plan": cmd_submit_plan,
     "present-plan": cmd_present_plan,
     "confirm-delivery": cmd_confirm_delivery,
@@ -11974,8 +11981,8 @@ _SESSION_COMMANDS = (
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
     "plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
-    "plan-seal", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
-    "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
+    "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan",
+    "confirm-delivery", "plan-review", "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
     "risk-accept", "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
     "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
     "record-result", "declare",
@@ -12058,11 +12065,12 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
      "grammar-bound name, never the prose --control of record-result/close"),
     ("plan", ("plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
-              "plan-seal", "plan-review-delta", "submit-plan", "replan", "drive",
+              "plan-seal", "plan-convert", "plan-review-delta", "submit-plan", "replan", "drive",
               "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
               "question-rebind", "question-raise", "present-plan", "order-dispose"),
      "plan file path"),
+    ("out", ("plan-convert",), "output directory path for the converted tree"),
     ("field", ("plan-externalize",), "name of a plan field — an identifier, not narrative"),
     ("meta_field", ("plan-externalize",), "name of a [meta] field — an identifier, not narrative"),
     ("order_field", ("plan-externalize",),
@@ -12455,6 +12463,17 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     sp = add("plan-seal"); sp.add_argument("--plan", required=True,
         help="TOML plan whose reference hashes to recompute bottom-up after an edit")
     sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-convert"); sp.add_argument("--plan", required=True,
+        help="single-file TOML plan to convert into a hypertext tree (read-only)")
+    sp.add_argument("--out", required=True,
+        help="directory that receives the tree; must not exist or must be empty")
+    sp.add_argument("--format", choices=["text", "json"], default="text")
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-convert-live"); sp.add_argument("--session", required=True)
+    sp.add_argument("--by", required=True, choices=["agent", "user"],
+        help="who converts; recorded in the conversion link and disclosed")
+    sp.add_argument("--revert", action="store_true",
+        help="restore the plan bytes recorded before the last conversion (the parts stay on disk)")
     sp = add("submit-plan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG)")
