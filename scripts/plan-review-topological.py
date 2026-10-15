@@ -96,8 +96,7 @@ class Launched:
     stderr: str
     log_offset: int
     plan_sha: str
-    plan_path: str = ""
-    view_root: "str | None" = None
+    view_dir: "str | None" = None
 
 
 @dataclass
@@ -152,7 +151,7 @@ def build_spawn_argv(args, pair: str, plan_path: str, *, dry_run: bool,
                      view_root: "str | None" = None) -> list[str]:
     selector = ["--model", args.model] if args.model else ["--complexity", args.complexity or "high"]
     argv = [
-        "--kind", "thinker", *selector, "--effort", "high", "--plan-brief",
+        "--kind", "thinker", *selector, "--effort", "high",
         "--review-topo", pair, "--plan", plan_path,
         "--done-criterion", done_criterion(pair), "--criterion-type", "acceptance-review",
     ]
@@ -432,8 +431,7 @@ def pair_telemetry(launched: Launched, pair: str) -> tuple["float | None", "int 
     if plan.is_unit_id(pair):
         pulls = 0
     else:
-        view_dir = view_dir_for(launched.plan_path, pair, launched.view_root)
-        pulls = None if view_dir is None else count_pulls(transcript, view_dir)
+        pulls = None if launched.view_dir is None else count_pulls(transcript, launched.view_dir)
     return (round(float(cost), 4) if cost is not None else None,
             int(duration) if duration is not None else None, pulls, transcript)
 
@@ -515,11 +513,12 @@ class Driver:
         pair = row["pair"]
         self.spawned.add(pair)
         sha = hashlib.sha256(Path(self.plan_path).read_bytes()).hexdigest()
+        view_dir = None if plan.is_unit_id(pair) else view_dir_for(self.plan_path, pair, self.view_root)
         offset = cost_log_size()
         argv = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
                                 history_path=self.history_file(row), view_root=self.view_root)
         rc, out, err = spawn_pair(argv)
-        return Launched(rc, out, err, offset, sha, self.plan_path, self.view_root)
+        return Launched(rc, out, err, offset, sha, view_dir)
 
     def settle(self, pair: str, launched: Launched) -> None:
         try:

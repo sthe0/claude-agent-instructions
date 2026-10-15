@@ -38,14 +38,14 @@ asserts that no token of a node the row does not show reaches the captured argv 
 | Site | Plan content passed | Mechanism | Size bound |
 |---|---|---|---|
 | `scripts/spawn-specialist.py`:`_main` | projected fields of the meta node and the stage the spawn runs; the brief of that stage, a pair or a unit; a reviewer's plan digest | view | each field `PLAN_FIELD_INLINE_MAX_CHARS_DEFAULT`; prompt `dispatch_prompt_ceiling_chars` (refused at launch) |
-| `scripts/spawn-cursor-specialist.py`:`main` | the stage brief of `--stage-index`, else the plan summary | view | each field `PLAN_FIELD_INLINE_MAX_CHARS_DEFAULT` |
+| `scripts/spawn-cursor-specialist.py`:`main` | the stage brief of `--stage-index` with every field in full, else the plan summary; no directory is granted, so no field reads as a pointer | inline field | none; this spawner has no prompt ceiling |
 | `scripts/agentctl/dispatch.py`:`build_argv` | the plan path and `--stage-index` handed to the spawner | view | none beyond the spawner's |
 | `scripts/plan-review-topological.py`:`spawn_pair` | the plan path and a pair or unit id handed to the spawner | view | none beyond the spawner's |
 | `scripts/plan-review-topological.py`:`Driver.dry_run` | the plan path and a pair id handed to the spawner (not launched) | view | none beyond the spawner's |
 | `scripts/mandate_cycle/driver.py`:`Cycle.spawn_argv` | a work-item brief file handed to the spawner as `--plan`; a file that is not a typed plan is passed as its own text up to `render.NON_PLAN_BRIEF_MAX_CHARS`, longer is refused | caller artifact | the brief file |
 | `scripts/agentctl/advisor.py`:`enumerate_claims` | the artifact `ledger-enumerate` reads; one node per call when it is a typed plan | caller artifact | the artifact, or one node |
 | `scripts/agentctl/advisor.py`:`enumerate_subprocess_runner` | whatever `enumerate_claims` hands it on stdin | caller artifact | the artifact, or one node |
-| `scripts/agentctl/advisor.py`:`judge` | the payload dict a cognition point builds: the goal, weight class, route, the plan path and stage titles, a stage's expected result image and its observation, hypotheses | caller artifact | the payload |
+| `scripts/agentctl/advisor.py`:`judge` | the payload dict a cognition point builds: the goal, weight class, route, the plan summary (the meta in full, each stage by its declared product; `render.plan_summary_text`) and stage titles, a stage's expected result image and its observation, hypotheses | caller artifact | the payload |
 | `scripts/agentctl/advisor.py`:`acceptance_judge` | a stage's observation and its expected result image | inline field | the two strings |
 | `scripts/agentctl/advisor.py`:`judge_question_materiality` | the control criterion and the question text a premise is bound to | inline field | the two strings |
 | `scripts/agentctl/gates.py`:`_semantic_invariants_coverage` | the `conditions` and `invariants` of every stage of the corrected plan, and one invariant of the critique | inline field | the stages' two fields |
@@ -74,4 +74,24 @@ asserts that no token of a node the row does not show reaches the captured argv 
 | `scripts/spawn-cursor-escape.py`:`main` | none | no plan content | the difficulty statement |
 
 ## Instruction texts
+
+The sentences the engine itself writes into a plan-bearing prompt to tell the model where the
+rest of the plan is and how to read it. They are not plan content, so no row above carries
+them; they are listed so a reader who changes one finds the others. Each line gives the file
+that holds the sentence and a fragment of it; `test_llm_prompt_sites.py` requires every
+fragment to still appear in its file.
+
+- `scripts/agentctl/render.py` — `` a field too long to print here reads ``
+- `scripts/agentctl/render.py` — `` <sha256>`, a file under that directory. ``
+- `scripts/agentctl/render.py` — `` The service's full node file is one `Read` away in the view directory ``
+- `scripts/agentctl/render.py` — `` ## Referenced files ``
+- `scripts/agentctl/render.py` — `` The plan was assembled from these files, each a file of this view: ``
+- `scripts/agentctl/render.py` — `` The plan file itself is ``
+- `scripts/agentctl/render.py` — `` directory: its sha256 is the plan digest. ``
+- `scripts/spawn-specialist.py` — `` ## Working plan — topological review unit or pair ``
+- `scripts/spawn-specialist.py` — `` the full plan is never inlined for --review-topo — ``
+- `scripts/spawn-specialist.py` — `` ## Working plan — stage {args.stage_index} brief ``
+- `scripts/spawn-specialist.py` — `` the rest of the plan is read from the view directory named below ``
+- `scripts/spawn-specialist.py` — `` ## Working plan — summary (stage products only; the plan is never inlined, ``
+- `scripts/spawn-specialist.py` — `` read from the view directory named below) ``
 

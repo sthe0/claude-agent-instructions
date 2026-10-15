@@ -187,6 +187,19 @@ def test_instruction_texts_section_exists_and_does_not_feed_the_rows():
     assert "not-a-site" not in head
 
 
+def instruction_texts() -> "list[tuple[str, str]]":
+    _, _, tail = inventory_text().partition(INSTRUCTION_HEADING)
+    return re.findall(r"^- `(\S+)` — `` (.+) ``$", tail, flags=re.MULTILINE)
+
+
+def test_instruction_texts_are_listed_and_each_still_appears_in_its_source():
+    texts = instruction_texts()
+    assert {rel for rel, _ in texts} == {
+        "scripts/agentctl/render.py", "scripts/spawn-specialist.py"}
+    for rel, fragment in texts:
+        assert fragment in (REPO / rel).read_text(encoding="utf-8"), (rel, fragment)
+
+
 def test_enumerator_selects_each_rule_on_a_synthetic_module(tmp_path):
     source = (
         "import advisor\n"

@@ -929,7 +929,6 @@ def test_symlink_inside_plans_dir_pointing_out_gets_the_brief_only(tmp_path, mon
     link.symlink_to(real_plan)
     monkeypatch.setattr(MOD, "plans_dir", lambda: plans)
 
-    assert MOD.brief_plan_path(_args(link)) == real_plan
     prompt = MOD.assemble_prompt(_args(link), depth=1, permissions="")
     assert "Implement the feature" in prompt
     assert "Review the feature" not in prompt  # the stage brief, never the whole plan
@@ -955,7 +954,6 @@ def test_symlink_outside_plans_dir_pointing_in_gets_the_brief(tmp_path, monkeypa
     link.symlink_to(real_plan)
     monkeypatch.setattr(MOD, "plans_dir", lambda: plans)
 
-    assert MOD.brief_plan_path(_args(link)) == real_plan
     prompt = MOD.assemble_prompt(_args(link), depth=1, permissions="")
     assert "Implement the feature" in prompt
     assert "Review the feature" not in prompt  # projected, not the whole plan

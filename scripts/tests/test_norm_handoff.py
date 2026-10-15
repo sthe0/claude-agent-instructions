@@ -224,7 +224,7 @@ def test_spawn_removes_an_inherited_handoff_it_cannot_replace(store, venued_fixt
     assert HANDOFF_ENV not in env, "BEHAVIOUR: an unlinked spawn passed an ancestor's handoff on"
 
 
-def test_spawn_for_an_unresolvable_stage_exports_nothing(store, venued_fixtures_dir, tmp_path, monkeypatch):
+def test_spawn_for_an_unresolvable_stage_is_refused_before_launch(store, venued_fixtures_dir, tmp_path, monkeypatch):
     monkeypatch.setenv(HANDOFF_ENV, "/ancestor/handoff.json:deadbeef")
     _executing(store, "w5", venued_fixtures_dir)
     rc, env = _spawn(monkeypatch, tmp_path, venued_fixtures_dir, "w5", stage_index=99)

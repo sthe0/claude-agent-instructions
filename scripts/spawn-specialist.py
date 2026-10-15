@@ -184,25 +184,12 @@ def permissions_digest(project_file: Path | None) -> str:
     return "\n\n".join(chunks)
 
 
-def brief_plan_path(args: argparse.Namespace) -> Path | None:
-    """The resolved path of `args.plan` when the spawn is scoped to one stage
-    (`--stage-index` and `--plan` both given), None otherwise. The plan is never
-    inlined either way: `plan_site` builds the stage brief or, without a stage, the
-    plan summary, and the rest is read from the view directory the prompt names."""
-    stage_index = getattr(args, "stage_index", None)
-    plan_path = getattr(args, "plan", None)
-    if stage_index is None or not plan_path:
-        return None
-    try:
-        return Path(plan_path).resolve()
-    except OSError:
-        return None
-
-
 def brief_eligible(args: argparse.Namespace) -> bool:
-    """Whether `args` earns a projected stage brief — `brief_plan_path`'s
-    predicate face, for callers that need the decision and not the path."""
-    return brief_plan_path(args) is not None
+    """Whether the spawn is scoped to one stage (`--stage-index` and `--plan` both
+    given). The plan is never inlined either way: `plan_site` builds the stage brief
+    or, without a stage, the plan summary, and the rest is read from the view
+    directory the prompt names."""
+    return getattr(args, "stage_index", None) is not None and bool(getattr(args, "plan", None))
 
 
 def plan_site_kind(args: argparse.Namespace) -> str:

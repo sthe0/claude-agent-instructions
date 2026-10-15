@@ -750,7 +750,7 @@ def test_the_inventory_names_the_known_indirect_readers():
     section = "\n".join(_inventory_section(
         INVENTORY.read_text(encoding="utf-8"), "### Known indirect readers"))
 
-    for reader in ("gates._file_sha256", "cli._stage_grant_entries", "plan_refs._read_file",
+    for reader in ("gates._file_sha256", "cli._stage_grant_entries", "plan_refs.read_referenced_file",
                    "plan_refs._parse", "plan_store.get", "plan_store._intact",
                    "plan_store.reader"):
         assert f"`{reader}`" in section, reader

@@ -60,7 +60,7 @@ nor the enclosing function names a plan:
   recorded snapshot hash before trusting the snapshot's grants. The hash check is index-only, as
   the snapshot hash is the hash of the index bytes; the snapshot itself is then loaded through
   `plan_store.load_baseline`, which resolves its references.
-- `plan_refs._read_file` — the resolver's default reader of a referenced file; the hash check on
+- `plan_refs.read_referenced_file` — the resolver's default reader of a referenced file; the hash check on
   the returned bytes is the resolver's.
 - `plan_refs._parse` — parses one plan-shaped TOML file (the index, a referenced stage file)
   for the resolver, the sealer and the externalizer.

@@ -121,14 +121,15 @@ def cursor_agent_path(kind: str) -> Path | None:
 
 def plan_section_text(args: argparse.Namespace) -> str:
     """The plan content of the prompt, through `render.build_site_prompt`: the brief of
-    `--stage-index`, else the plan summary; a `--plan` that is not a typed plan is a plain brief, passed as its own text."""
+    `--stage-index`, else the plan summary; a `--plan` that is not a typed plan is a plain brief, passed as its own text.
+    This spawner grants the model no directory, so no field is shortened to a pointer."""
     if not argv_text.is_readable_file(args.plan):
         raise SystemExit(argv_text.file_arg_error("--plan", args.plan))
     stage_index = getattr(args, "stage_index", None)
     kind = "dispatch-no-stage" if stage_index is None else "dispatch-stage-brief"
     selector = {} if stage_index is None else {"stage": stage_index}
     try:
-        return build_site_prompt(kind, args.plan, **selector).text
+        return build_site_prompt(kind, args.plan, inline_max_chars=sys.maxsize, **selector).text
     except PlanError:
         return non_plan_brief_text(args.plan)
 

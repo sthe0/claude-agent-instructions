@@ -91,6 +91,7 @@ from .render import (
     cmd_plan_grants,
     cmd_plan_render,
     plan_render_stage_arg_type,
+    plan_summary_text,
     render_plan_grants,
     render_plan_md,
     render_stages_md,
@@ -4061,7 +4062,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
             marker="PLAN-READY", data=directive_data,
         )
     _attach_advisories(d, "plan_completeness",
-                       {"plan": plan_path, "stage_count": len(state.stages),
+                       {"plan_summary": plan_summary_text(doc), "stage_count": len(state.stages),
                         "titles": [s.title for s in state.stages]},
                        runner, weight_class=state.weight_class,
                        runtime_host_=state.runtime_host or runtime_host.HOST_CLAUDE)

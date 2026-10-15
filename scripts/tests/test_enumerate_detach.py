@@ -385,3 +385,28 @@ def test_enumerate_runner_signature_matches_what_the_entry_point_passes(monkeypa
     )
     assert seen["timeout"] == advisor.ENUMERATE_TIMEOUT_S
     assert seen["timeout"] != advisor._ADVISOR_TIMEOUT_S
+
+
+@pytest.mark.parametrize("returncode,expected", [(0, True), (1, False)])
+def test_latency_rows_record_the_health_of_the_runner_call(
+        returncode, expected, tmp_path, monkeypatch):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "measure_advisor_latency", SCRIPTS_DIR / "measure-advisor-latency.py")
+    measure = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(measure)
+    monkeypatch.setattr(measure, "select",
+                        lambda: ([(5, "p.toml", "goal", "crit", "plan text")], 1))
+    monkeypatch.setattr(measure, "SNAP", tmp_path / "snap")
+    monkeypatch.setattr(measure, "OUT", tmp_path / "out.jsonl")
+    monkeypatch.setattr(measure, "LOG", tmp_path / "log")
+    monkeypatch.setattr(measure, "REPEATS", 1)
+    monkeypatch.setattr(
+        advisor, "subprocess_runner",
+        lambda argv, *, timeout=None, stdin="": RunResult(returncode, "a claim\n", ""))
+
+    measure.main()
+
+    rows = [json.loads(line) for line in (tmp_path / "out.jsonl").read_text().splitlines()]
+    assert [r["runner_ok"] for r in rows] == [expected]

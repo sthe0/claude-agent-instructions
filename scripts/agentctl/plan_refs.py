@@ -205,7 +205,10 @@ class _Unreadable(Exception):
     `missing` refusal that names the reference as written."""
 
 
-def _read_file(path: Path, sha256: str) -> bytes:
+def read_referenced_file(path: Path, sha256: str) -> bytes:
+    """The resolver's default reader; a caller wrapping it (to keep the bytes it returns)
+    passes its own `read` to `resolve_refs` and delegates here. The hash check is the
+    resolver's, not this function's."""
     try:
         return path.read_bytes()
     except OSError as exc:
@@ -306,7 +309,7 @@ def resolve_refs(
     resolver = _Resolver(
         Path(root).resolve() if root is not None else None,
         Path(index_path) if index_path is not None else None,
-        read or _read_file)
+        read or read_referenced_file)
     resolved = resolver.resolve(raw, Path(base_dir))
     return resolved, resolver.visited
 

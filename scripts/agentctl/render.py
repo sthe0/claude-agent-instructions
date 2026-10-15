@@ -47,7 +47,6 @@ from .plan import (
     PlanDoc,
     PlanError,
     _derive_stage_grants,
-    _sha256_hex,
     _venue_for,
     consumers,
     grants_sha256,
@@ -58,7 +57,6 @@ from .plan import (
     parse_unit,
     plan_coverage_entries,
     reliance_set,
-    review_pairs,
     stage_closure_digest,
 )
 
@@ -318,24 +316,16 @@ def render_stages_md(doc: PlanDoc, stage_indices) -> str:
     return "\n".join(render_stage_brief(doc, index) for index in sorted(stage_indices))
 
 
-def _closure_digest_line(doc: PlanDoc, stage_index: int) -> str | None:
-    """`stage_closure_digest` of the plan as authored: a site view renders a copy of the
-    plan whose long fields are pointers, and the digest of that copy would name a different
-    plan, so the view carries the authored plan's digests in `pinned_closure_digests`."""
-    pinned = getattr(doc, "pinned_closure_digests", None)
-    if pinned is not None and stage_index in pinned:
-        return pinned[stage_index]
-    try:
-        return stage_closure_digest(doc, stage_index)
-    except PlanError:
-        return None
-
-
-def render_stage_brief(doc: PlanDoc, stage_index: int, *, closure_digest: bool = False) -> str:
+def render_stage_brief(
+    doc: PlanDoc, stage_index: int, *, closure_digest: "str | None" = None,
+) -> str:
     """Pure: a PlanDoc + one stage index -> a markdown brief of JUST that stage.
 
-    `closure_digest=True` adds the stage's `stage_closure_digest` line; the digests the
-    topo pair bundle binds and the origin/main renderer pins are of the brief without it.
+    A given `closure_digest` adds the stage's closure digest line; the caller computes it
+    with `stage_closure_digest` on the plan as authored (a site view renders a copy whose
+    long fields are pointers, and that copy's digest would name a different plan). The
+    digests the topo pair bundle binds and the origin/main renderer pins are of the brief
+    without it.
 
     Difficulty removed: a dispatched specialist executes exactly one stage, but
     the spawn prompt has been embedding `render_plan_md`'s WHOLE-plan rendering
@@ -380,9 +370,8 @@ def render_stage_brief(doc: PlanDoc, stage_index: int, *, closure_digest: bool =
         lines.append(f"- **Delivery worktree:** {m.delivery_worktree}")
     if m.external_research:
         lines.append(f"- **External research:** {m.external_research}")
-    closure = _closure_digest_line(doc, stage_index) if closure_digest else None
-    if closure is not None:
-        lines.append(f"- **Stage closure digest:** {closure}")
+    if closure_digest is not None:
+        lines.append(f"- **Stage closure digest:** {closure_digest}")
     lines.append("")
     lines.append(
         f"This is a PROJECTED BRIEF of stage {stage.index} only, out of "
@@ -531,14 +520,10 @@ def _stage_field_lines(doc: PlanDoc, s, *, dependency_blocks: bool) -> list[str]
 # as a unit (`render_unit_review_bundle`). ---------------------------------
 
 class TopoUnitsCorrupt(Exception):
-    """A materialized `<root>/<plan_sha256>/` topo tree's on-disk content
-    does not match what `topo_node_files`/`topo_pair_view` would produce for
-    its plan right now — tampered with after materialization, partially
-    deleted, or (should the plan_sha256 partitioning ever be bypassed)
-    inherited from a different plan version. Raised by `verify_topo_units`,
-    which names the offending path and the remedy (delete the tree and
-    re-run `materialize_topo_units`, which re-renders it from the plan
-    bytes)."""
+    """A materialized site view's on-disk content does not match the files it must hold —
+    tampered with after materialization, or partially deleted. Raised by
+    `verify_site_view`, which names the offending path and the remedy (delete the view
+    and re-run, which re-renders it from the plan bytes)."""
 
 
 def _lines_text(lines: list[str]) -> str:
@@ -616,81 +601,6 @@ def render_stage_interface(doc: PlanDoc, stage_index: int, *, contract: bool = F
     return "\n".join(lines).rstrip() + "\n"
 
 
-def topo_pair_view_dirname(pair_id: str) -> str:
-    """The view directory's bare name for `pair_id` — e.g. `view-3-1` or
-    `view-base-7`. Matches the exact `view-<pair>` shape
-    `spawn-specialist.py --review-topo` grants `Read(//.../view-<pair>/**)`
-    against."""
-    return f"view-{pair_id}"
-
-
-def topo_pair_view(doc: PlanDoc, pair_id: str) -> list[str]:
-    """The file names making up `pair_id`'s view directory: exactly one, the
-    service's node file — never the base's, whose full text is inlined in
-    the bundle. Raises ValueError for a pair the plan does not have."""
-    _, service = parse_pair(doc, pair_id)
-    return [node_file_name(service)]
-
-
-def topo_node_files(doc: PlanDoc) -> dict[str, str]:
-    """Every node file for the WHOLE plan, keyed by filename: `stage-<n>.md`
-    for every stage and `base.md` when the plan declares an order. A pure
-    function of the plan bytes — `materialize_topo_units` writes these
-    verbatim once per plan sha256, and every pair's view directory is a
-    copy of one of them."""
-    files = {node_file_name(s.index): node_file_text(doc, s.index) for s in doc.stages}
-    if doc.meta.order is not None:
-        files[node_file_name(PAIR_BASE_NODE)] = node_file_text(doc, PAIR_BASE_NODE)
-    return files
-
-
-def materialize_topo_units(doc: PlanDoc, plan_sha256: str, root: "Path | str") -> Path:
-    """Write the WHOLE per-plan-version topo tree under
-    `root/plan_sha256/`: every node file (`topo_node_files`), a
-    `MANIFEST.json` mapping each root file and each `view-<pair>/` copy to
-    its sha256, and one `view-<pair>/` per reliance edge (`review_pairs`)
-    holding a byte-identical COPY — never a hardlink — of exactly that
-    pair's service file. A pure function of the plan bytes: idempotent, so a
-    later call for the same `plan_sha256` is a re-verification, never a
-    re-render.
-
-    Built under a process-unique temporary sibling of `root/plan_sha256/`
-    (never a fixed name, so two concurrent materializations can never
-    collide), `MANIFEST.json` written inside it before the rename, then
-    `os.replace`d into place in one step so a reader can never observe a
-    partial tree. `os.replace` onto an existing non-empty destination
-    raises `OSError` (ENOTEMPTY/EEXIST) — the signal a concurrent writer
-    won the race first; the loser discards its own temp directory and
-    re-verifies the winner's tree via `verify_topo_units` instead of
-    retrying. Any other `OSError` propagates.
-
-    Returns the materialized `root/plan_sha256/` directory."""
-    node_files = topo_node_files(doc)
-
-    def populate(tmp_dir: Path) -> None:
-        manifest: dict[str, str] = {}
-        for filename, content in node_files.items():
-            (tmp_dir / filename).write_text(content, encoding="utf-8")
-            manifest[filename] = _sha256_hex(content)
-        for pair in review_pairs(doc):
-            view_name = topo_pair_view_dirname(pair)
-            view_dir = tmp_dir / view_name
-            view_dir.mkdir()
-            for filename in topo_pair_view(doc, pair):
-                content = node_files[filename]
-                (view_dir / filename).write_text(content, encoding="utf-8")
-                manifest[f"{view_name}/{filename}"] = _sha256_hex(content)
-        (tmp_dir / "MANIFEST.json").write_text(
-            json.dumps(manifest, sort_keys=True, indent=2), encoding="utf-8"
-        )
-
-    root = Path(root)
-    return _publish_tree(
-        root, root / plan_sha256, f".{plan_sha256}.{os.getpid()}.", populate,
-        lambda tree: verify_topo_units(tree, doc),
-    )
-
-
 def _publish_tree(root: Path, final: Path, tmp_prefix: str, populate, verify) -> Path:
     """Build a directory tree under a process-unique temporary sibling of `final`, then
     `os.replace` it into place in one step so a reader never sees a partial tree. A `final`
@@ -717,85 +627,6 @@ def _publish_tree(root: Path, final: Path, tmp_prefix: str, populate, verify) ->
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
     return final
-
-
-def _verify_topo_file(path: Path, expected_content: str, expected_sha256: str, remedy: str) -> None:
-    if not path.is_file():
-        raise TopoUnitsCorrupt(f"{path} is missing; {remedy}")
-    actual = path.read_text(encoding="utf-8")
-    if _sha256_hex(actual) != expected_sha256 or actual != expected_content:
-        raise TopoUnitsCorrupt(f"{path} content does not match its MANIFEST.json sha256; {remedy}")
-
-
-def verify_topo_units(unit_dir: "Path | str", doc: PlanDoc) -> None:
-    """Re-check an ALREADY-MATERIALIZED `root/plan_sha256/` tree
-    (`unit_dir` — the WHOLE version-root directory, not a single view) for
-    `doc` right now: every root file and every `view-<pair>/` copy against
-    `MANIFEST.json`, AND the file SET at both levels — the root holds
-    exactly the expected node files, `MANIFEST.json`, and one
-    `view-<pair>/` per reliance edge, and each `view-<pair>/` holds exactly
-    that pair's `topo_pair_view`, nothing extra and nothing missing.
-
-    Raises `TopoUnitsCorrupt` naming the offending path and the remedy
-    (delete `unit_dir` and re-run `materialize_topo_units`, which
-    re-materializes it) on any mismatch."""
-    unit_dir = Path(unit_dir)
-    remedy = f"delete {unit_dir} and re-run to re-materialize it"
-    if not unit_dir.is_dir():
-        raise TopoUnitsCorrupt(f"{unit_dir} is missing; {remedy}")
-
-    node_files = topo_node_files(doc)
-    expected_manifest: dict[str, str] = {
-        filename: _sha256_hex(content) for filename, content in node_files.items()
-    }
-    expected_view_files: dict[str, set[str]] = {}
-    for pair in review_pairs(doc):
-        view_name = topo_pair_view_dirname(pair)
-        names = set(topo_pair_view(doc, pair))
-        expected_view_files[view_name] = names
-        for filename in names:
-            expected_manifest[f"{view_name}/{filename}"] = _sha256_hex(node_files[filename])
-
-    manifest_path = unit_dir / "MANIFEST.json"
-    if not manifest_path.is_file():
-        raise TopoUnitsCorrupt(f"{manifest_path} is missing; {remedy}")
-    try:
-        actual_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise TopoUnitsCorrupt(f"{manifest_path} is not valid JSON ({exc}); {remedy}") from exc
-    if actual_manifest != expected_manifest:
-        raise TopoUnitsCorrupt(f"{manifest_path} does not match the expected manifest; {remedy}")
-
-    root_files = {p.name for p in unit_dir.iterdir() if p.is_file()}
-    expected_root_files = set(node_files.keys()) | {"MANIFEST.json"}
-    if root_files != expected_root_files:
-        extra = [str(unit_dir / n) for n in sorted(root_files - expected_root_files)]
-        missing = [str(unit_dir / n) for n in sorted(expected_root_files - root_files)]
-        raise TopoUnitsCorrupt(f"{unit_dir} file set mismatch — extra: {extra}, missing: {missing}; {remedy}")
-
-    root_dirs = {p.name for p in unit_dir.iterdir() if p.is_dir()}
-    expected_root_dirs = set(expected_view_files.keys())
-    if root_dirs != expected_root_dirs:
-        extra = [str(unit_dir / n) for n in sorted(root_dirs - expected_root_dirs)]
-        missing = [str(unit_dir / n) for n in sorted(expected_root_dirs - root_dirs)]
-        raise TopoUnitsCorrupt(
-            f"{unit_dir} view directory set mismatch — extra: {extra}, missing: {missing}; {remedy}"
-        )
-
-    for filename, content in node_files.items():
-        _verify_topo_file(unit_dir / filename, content, expected_manifest[filename], remedy)
-
-    for view_name, names in expected_view_files.items():
-        view_dir = unit_dir / view_name
-        actual_names = {p.name for p in view_dir.iterdir() if p.is_file()}
-        if actual_names != names:
-            extra = [str(view_dir / n) for n in sorted(actual_names - names)]
-            missing = [str(view_dir / n) for n in sorted(names - actual_names)]
-            raise TopoUnitsCorrupt(f"{view_dir} file set mismatch — extra: {extra}, missing: {missing}; {remedy}")
-        for filename in names:
-            _verify_topo_file(
-                view_dir / filename, node_files[filename], expected_manifest[f"{view_name}/{filename}"], remedy
-            )
 
 
 _ENGINE_ORDERED = "engine-ordered"
@@ -1367,7 +1198,7 @@ def _load_site_source(plan_path: "str | Path") -> _SiteSource:
     files: dict[str, bytes] = {}
 
     def collect(ref_path: Path, sha256: str) -> bytes:
-        content = plan_refs._read_file(ref_path, sha256)
+        content = plan_refs.read_referenced_file(ref_path, sha256)
         files[hashlib.sha256(content).hexdigest()] = content
         return content
 
@@ -1387,13 +1218,7 @@ def _visited_nodes(visited: list) -> dict[str, set]:
 
 def _pointerize(doc: PlanDoc, limit: int) -> tuple[PlanDoc, dict[str, bytes]]:
     """A copy of `doc` whose prose fields longer than `limit` characters read
-    `see objects/<sha256>`, and the bytes of each such field by that hash. The copy carries
-    the closure digests of `doc` itself (`pinned_closure_digests`)."""
-    pinned = {}
-    for stage in doc.stages:
-        digest = _closure_digest_line(doc, stage.index)
-        if digest is not None:
-            pinned[stage.index] = digest
+    `see objects/<sha256>`, and the bytes of each such field by that hash."""
     view = copy.deepcopy(doc)
     objects: dict[str, bytes] = {}
 
@@ -1417,7 +1242,6 @@ def _pointerize(doc: PlanDoc, limit: int) -> tuple[PlanDoc, dict[str, bytes]]:
                 walk(inner)
 
     walk(view)
-    view.pinned_closure_digests = pinned
     return view, objects
 
 
@@ -1477,7 +1301,7 @@ def _view_header(view_dir: Path) -> list[str]:
     ]
 
 
-def _plan_summary_text(doc: PlanDoc) -> str:
+def plan_summary_text(doc: PlanDoc) -> str:
     """The whole-plan reading a site without a stage gets: the meta in full, then every
     stage by its declared product only."""
     lines = unit_base_text(doc).rstrip("\n").split("\n")
@@ -1486,6 +1310,20 @@ def _plan_summary_text(doc: PlanDoc) -> str:
         lines.extend(render_stage_interface(doc, stage.index).rstrip("\n").split("\n"))
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _referenced_files_section(visited: list) -> list[str]:
+    """What a site that shows only the plan summary offers beside it: each file the plan
+    was assembled from, by the position of the reference that led to it and by its object
+    in the view. Empty for a plan without references."""
+    if not visited:
+        return []
+    lines = ["## Referenced files", "",
+             "The plan was assembled from these files, each a file of this view:", ""]
+    lines.extend(
+        f"- `{'.'.join(str(part) for part in position)}` — `objects/{sha256}`"
+        for position, _path, sha256 in visited)
+    return [*lines, ""]
 
 
 def _pair_shown_nodes(doc: PlanDoc, pair_id: str) -> frozenset:
@@ -1545,9 +1383,13 @@ def build_site_prompt(
         label = f"{kind}-{stage}"
         shown = frozenset({int(stage)})
         view_nodes = shown
+        try:
+            closure = stage_closure_digest(doc, int(stage))
+        except PlanError:
+            closure = None
 
         def render(view_dir: Path) -> tuple[str, dict[str, str]]:
-            brief = render_stage_brief(shown_doc, int(stage), closure_digest=True)
+            brief = render_stage_brief(shown_doc, int(stage), closure_digest=closure)
             return "\n".join([*_view_header(view_dir), brief]), {node_file_name(int(stage)): brief}
     elif kind == "topo-pair":
         base, service = parse_pair(doc, pair or "")
@@ -1559,14 +1401,15 @@ def build_site_prompt(
             bundle = render_pair_review_bundle(
                 shown_doc, pair, plan_sha256=source.plan_sha256, view_dir=view_dir,
                 history=history)
-            return bundle, {node_file_name(service): node_file_text(shown_doc, service)}
+            return ("\n".join([*_view_header(view_dir), bundle]),
+                    {node_file_name(service): node_file_text(shown_doc, service)})
     else:
         shown = frozenset({"meta"})
-        view_nodes = shown
+        view_nodes = shown | {stage_node.index for stage_node in doc.stages}
 
         def render(view_dir: Path) -> tuple[str, dict[str, str]]:
-            summary = _plan_summary_text(shown_doc)
-            parts = [*_view_header(view_dir), summary]
+            summary = plan_summary_text(shown_doc)
+            parts = [*_view_header(view_dir), summary, *_referenced_files_section(source.visited)]
             if plan_digest_object:
                 parts.extend([
                     "## Plan digest", "",

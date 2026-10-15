@@ -193,14 +193,50 @@ def test_no_prompt_or_view_file_names_the_authors_directory_or_the_plans_directo
     from lib.config_root import plans_dir
 
     author = tmp_path / "qauthordirx9z"
-    index = fx.write_plan(author)
+    index = fx.write_hypertext_plan(author)
     kind, selector, _ = case
 
     site = _site(kind, index, tmp_path / "views", **selector)
 
-    for printed in (site.text, *_view_texts(site).values()):
+    view_files = [p for p in site.view_dir.rglob("*") if p.is_file()]
+    assert any(p.parent.name == "objects" for p in view_files)
+    for printed in (site.text, *(p.read_text(encoding="utf-8") for p in view_files)):
         assert str(author) not in printed
         assert str(plans_dir()) not in printed
+
+
+@pytest.mark.parametrize("kind", ("dispatch-no-stage", "whole-plan-review"))
+def test_a_site_without_a_stage_holds_every_file_the_plan_was_assembled_from(kind, tmp_path):
+    index = fx.write_hypertext_plan(tmp_path / "author")
+    parts = tmp_path / "author" / "parts"
+    assembled = {hashlib.sha256(p.read_bytes()).hexdigest() for p in parts.iterdir()}
+    assert len(assembled) == 5
+
+    site = _site(kind, index, tmp_path / "views")
+
+    held = {p.name for p in (site.view_dir / "objects").iterdir()}
+    expected = assembled | ({hashlib.sha256(index.read_bytes()).hexdigest()}
+                            if kind == "whole-plan-review" else set())
+    assert held == expected
+    assert set(site.shown_nodes) == {"meta"}
+    assert "## Referenced files" in site.text
+    assert all(f"objects/{sha256}" in site.text for sha256 in assembled)
+
+
+@pytest.mark.parametrize("case", [c for c in SITE_CASES if c[0] not in WITHOUT_VIEW],
+                         ids=_site_id)
+def test_every_site_with_a_view_opens_with_the_view_header(case, plan, tmp_path):
+    kind, selector, _ = case
+    site = _site(kind, plan, tmp_path / "views", **selector)
+
+    assert site.text.startswith(f"Plan view: `{site.view_dir}` — ")
+    assert "`see objects/<sha256>`" in site.text.splitlines()[0]
+
+
+def test_a_plan_without_references_has_no_referenced_files_section(plan, tmp_path):
+    site = _site("dispatch-no-stage", plan, tmp_path / "views")
+
+    assert "## Referenced files" not in site.text
 
 
 def _without_file_access_scope(prompt: str) -> str:
@@ -388,6 +424,17 @@ def test_the_cursor_prompt_is_the_site_text_and_none_of_the_unshown_stages(
     assert prompt is not None
     assert site.text in prompt
     assert [t for t in fx.hidden_tokens(shown) if t in prompt] == []
+
+
+def test_the_cursor_prompt_prints_a_field_over_the_inline_limit_in_full(tmp_path, monkeypatch):
+    index = fx.write_hypertext_plan(tmp_path / "author", long_method=True)
+
+    _, prompt = fx.launch_cursor(
+        monkeypatch, tmp_path, fx.cursor_argv(index, "--stage-index", "2"))
+
+    assert prompt is not None
+    assert fx.LONG_FIELD in prompt
+    assert re.search(r"see objects/[0-9a-f]{64}", prompt) is None
 
 
 def test_a_plain_brief_given_as_plan_reaches_both_spawners_as_its_own_text(tmp_path, monkeypatch):
