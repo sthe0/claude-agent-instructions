@@ -150,7 +150,8 @@ def _stamp_prompt_ts(session_id: str, now: float) -> None:
       * `effort_actuals['active_minutes']` accumulates the CAPPED gap since the previous
         prompt. The previous value of last_user_prompt_ts, read here before it is
         overwritten, IS that boundary — no second timestamp field is needed. A first
-        prompt (no prior stamp) contributes 0 rather than a guess.
+        prompt (no prior stamp) contributes 0 rather than a guess, and so does a gap that ends
+        while the session is BLOCKED.
     All three accumulate on RAW dict values with defensive coercion: effort.py's typed
     view is not importable from a hook that must survive a broken checkout."""
     if not session_id:
@@ -170,7 +171,9 @@ def _stamp_prompt_ts(session_id: str, now: float) -> None:
             int(count) if isinstance(count, (int, float)) else 0
         ) + 1
 
-        if isinstance(previous, (int, float)) and now > previous:
+        # A BLOCKED session waits for a decision, so the gap is not work on the norm; the raw
+        # state read is why the node is compared as the literal Node.BLOCKED value.
+        if isinstance(previous, (int, float)) and now > previous and data.get("node") != "BLOCKED":
             covered = _covered_gap_seconds(data, p.parent, session_id, previous, now)
             uncovered = (now - previous) - covered
             cap = _active_minutes_cap()

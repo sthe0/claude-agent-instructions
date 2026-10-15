@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 55  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 56  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -97,6 +97,9 @@ SCHEMA_VERSION = 55  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # 55: SessionState gains protected_grant_acceptances (the user's
                      # acceptance of a grant that covers a protected action, bound to the
                      # grants sha256)
+                     # 56: PlanFrame gains the plan-bound approval binding (plan_snapshot_*,
+                     # approved_grants_*, accepted_plan_digest) and plan_binding_captured, so
+                     # pop-subplan restores the parent's binding instead of the child's
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1771,6 +1774,17 @@ class PlanFrame:
     # terminal-retired plugin silently suppress that same plugin for a later sub-plan.
     plugins: dict[str, dict] = field(default_factory=dict)
     plugins_archive: dict[str, dict] = field(default_factory=dict)
+    # Approval-binding custody (schema 56): the snapshot of the plan as approved, the grant
+    # set approved with it and the digest of the bytes accepted all describe THIS plan, so a
+    # sub-plan's own approval must not leave its values behind for the parent. A frame written
+    # before schema 56 carries none of them: `plan_binding_captured` False tells pop to leave
+    # the live values alone, exactly as it did then.
+    plan_snapshot_path: str | None = None
+    plan_snapshot_hash: str | None = None
+    approved_grants_sha256: str | None = None
+    approved_grant_entries: dict[str, dict] | None = None
+    accepted_plan_digest: str | None = None
+    plan_binding_captured: bool = False
 
 
 @dataclass
@@ -2772,6 +2786,12 @@ class SessionState:
                 parent_venue_captured=bool(f.get("parent_venue_captured", False)),
                 plugins=f.get("plugins") or {},
                 plugins_archive=f.get("plugins_archive") or {},
+                plan_snapshot_path=f.get("plan_snapshot_path"),
+                plan_snapshot_hash=f.get("plan_snapshot_hash"),
+                approved_grants_sha256=f.get("approved_grants_sha256"),
+                approved_grant_entries=f.get("approved_grant_entries"),
+                accepted_plan_digest=f.get("accepted_plan_digest"),
+                plan_binding_captured=bool(f.get("plan_binding_captured", False)),
             )
             for f in data.get("plan_stack", [])
         ]
@@ -2780,3 +2800,38 @@ class SessionState:
     @classmethod
     def from_json(cls, text: str) -> "SessionState":
         return cls.from_dict(json.loads(text))
+
+
+# Every SessionState field is in exactly one of the two sets below (pinned by
+# test_sessionstate_fields_classified), so a new field cannot be added without deciding
+# whether a sub-plan push/pop must carry it.
+#
+# PLAN_BOUND_FIELDS describe the plan the session is executing: push-subplan saves them in the
+# PlanFrame (same field name) and pop-subplan restores them, so the parent resumes with its own.
+PLAN_BOUND_FIELDS = frozenset({
+    "task_id", "goal", "overall_done_criterion", "overall_criterion_type", "weight_class",
+    "repo_root", "delivery_worktree", "landing_waiver", "final_check", "route", "node",
+    "plan_path", "partition", "plan_review_rounds", "plan_review_counted_digest",
+    "code_review_rounds", "approval", "resolution", "stages", "current_stage", "plugins",
+    "plugins_archive", "plan_snapshot_path", "plan_snapshot_hash", "accepted_plan_digest",
+    "effort_estimate", "effort_baseline", "effort_actuals", "effort_fires", "effort_spend_seen",
+    "approved_grants_sha256", "approved_grant_entries",
+})
+# SESSION_SCOPED_FIELDS belong to the session (or to the engine's bookkeeping of it): push and
+# pop leave them as they are, or reset them to the child's start state, and never restore them.
+SESSION_SCOPED_FIELDS = frozenset({
+    "session_id", "plan_task_id", "blocked_from", "plan_verified", "permission_request",
+    "difficulty", "plan_review", "plan_stage_reviews", "plan_review_passes",
+    "plan_pair_reviews", "next_record_seq", "concern_ledger", "risk_acceptances",
+    "protected_grant_acceptances", "review_rounds", "stage_reviews", "judge_bypassed",
+    "code_reviews", "acceptance_review", "acceptance_bypass", "plan_presentations",
+    "recursion_depth", "artifacts", "history", "plan_stack", "cost", "last_user_prompt_ts",
+    "plan_submitted_ts", "tracker_key", "deliverable_kind", "effort_subtree_seen",
+    "effort_child_runs", "user_prompt_count", "effort_crossings", "order_effort_flushed",
+    "order_descendant_credited", "order_effort_base", "order_effort_frozen",
+    "agent_ack_difficulty_ids", "renegotiation_ceiling_difficulty_id",
+    "review_release_difficulty_id", "renegotiations", "runtime_host", "reattest_stash",
+    "declined_issues", "runtime_grants", "planning_misses", "materialization_defects",
+    "settings_drift", "cwd_drift", "pending_renorms", "difficulty_stack", "parent_difficulty",
+    "closed_difficulties", "parent_link", "schema_version",
+})

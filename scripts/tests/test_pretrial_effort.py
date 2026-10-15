@@ -231,3 +231,60 @@ def test_i359_pop_restores_plan_bound_state(store, venued_fixtures_dir, tmp_path
         f"BEHAVIOUR: pop-subplan left the plan-bound fields {drifted} as the sub-plan had them "
         "instead of restoring the parent's"
     )
+
+
+#: A pop satisfies the originating stage, re-derives the pointer from stage status, and adds the
+#: child's actuals onto the parent's (rebuilding the vector with both keys), so these legitimately
+#: differ from the parent's pre-push value; test_subplan.py and test_parent_effort_rollup.py pin them.
+POP_REWRITTEN_FIELDS = frozenset({"stages", "current_stage", "effort_actuals"})
+
+
+def test_sessionstate_fields_classified(store, venued_fixtures_dir, tmp_path):
+    import dataclasses
+
+    from agentctl import state as state_module
+
+    declared_plan_bound = set(state_module.PLAN_BOUND_FIELDS)
+    declared_session_scoped = set(state_module.SESSION_SCOPED_FIELDS)
+    actual = {f.name for f in dataclasses.fields(state_module.SessionState)}
+    both = sorted(declared_plan_bound & declared_session_scoped)
+    unclassified = sorted(actual - declared_plan_bound - declared_session_scoped)
+    stale = sorted((declared_plan_bound | declared_session_scoped) - actual)
+    frame_fields = {f.name for f in dataclasses.fields(state_module.PlanFrame)}
+    uncarried = sorted(declared_plan_bound - frame_fields)
+
+    assert not both, f"BEHAVIOUR: fields classified as both plan-bound and session-scoped: {both}"
+    assert not unclassified, (
+        f"BEHAVIOUR: SessionState fields with no plan-bound/session-scoped classification: {unclassified}"
+    )
+    assert not stale, f"BEHAVIOUR: classified names that are not SessionState fields: {stale}"
+    assert not uncarried, (
+        f"BEHAVIOUR: plan-bound fields the PlanFrame has no field to carry: {uncarried}"
+    )
+
+    parent_plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    child_plan = _plan_with_grant(venued_fixtures_dir / "plan_two_stage.toml",
+                                  tmp_path / "subplan.toml", "Bash(git status:*)")
+    _to_executing_stage1(store, "P", parent_plan)
+    cli.cmd_next_stage(ns(session="P"), store=store)
+    before = dataclasses.asdict(store.load("P"))
+    assert before["approved_grants_sha256"], "setup: the approved parent plan carries no binding"
+
+    pushed = cli.cmd_push_subplan(
+        ns(session="P", plan=child_plan, task="svc", originating_stage=2), store=store)
+    assert pushed.ok is True, f"setup: push-subplan failed: {pushed.detail}"
+    cli.cmd_classify(ns(session="P", chat=False, changed_lines=200, files=5,
+                        wall_clock_min=60, tracker_key=None, architectural=True,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_plan(ns(session="P"), store=store)
+    assert cli.cmd_submit_plan(ns(session="P", plan=child_plan), store=store).ok is True, "setup: submit"
+    assert cli.cmd_approve(ns(session="P", by="user"), store=store).ok is True, "setup: approve"
+    _resolve_child_in_place(store, "P")
+    popped = cli.cmd_pop_subplan(ns(session="P"), store=store)
+    assert popped.ok is True, f"setup: pop-subplan failed: {popped.detail}"
+    after = dataclasses.asdict(store.load("P"))
+
+    drifted = sorted(name for name in declared_plan_bound - POP_REWRITTEN_FIELDS
+                     if after[name] != before[name])
+    assert not drifted, f"BEHAVIOUR: push/pop did not round-trip the plan-bound fields {drifted}"

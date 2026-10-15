@@ -11,6 +11,7 @@ Every command function has the signature cmd_x(args, *, store, runner) -> Direct
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as dt
 import hashlib
 import json
@@ -581,8 +582,16 @@ def _order_actual(state: SessionState, now: float | None = None, *,
     minutes once per level. What no parent run covers — the session has no parent run
     (spawned straight through spawn-specialist), or the parent's run ended earlier than the
     child's run — stays here, so it is booked by someone. Without a store the parent cannot be
-    read and nothing is left out."""
+    read and nothing is left out.
+
+    A pushed sub-plan zeroes the live `effort_actuals` and parks the parent's in its frame, so
+    the live vector alone would fall below the watermark the parent's flush set: the sub-plan's
+    spend would never reach the order window, and the parent's would be booked again after the
+    pop. The order's actual is therefore the live vector plus every frame's."""
     actual = effort.actual(state, now=now)
+    for frame in state.plan_stack:
+        actual[effort.SCALE_SPEND] += float(frame.effort_actuals.get(effort.ACTUAL_SPEND_KEY) or 0.0)
+        actual[effort.SCALE_WALL_CLOCK] += float(frame.effort_actuals.get(effort.ACTUAL_MINUTES_KEY) or 0.0)
     state_dir = _state_dir(store) if store is not None else None
     if _is_linked(state) and state_dir is not None and state.effort_child_runs:
         cover = child_runs.parent_cover(
@@ -11919,6 +11928,12 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
         parent_venue_captured=parent_pair is not None,
         plugins=dict(state.plugins),
         plugins_archive=dict(state.plugins_archive),
+        plan_snapshot_path=state.plan_snapshot_path,
+        plan_snapshot_hash=state.plan_snapshot_hash,
+        approved_grants_sha256=state.approved_grants_sha256,
+        approved_grant_entries=copy.deepcopy(state.approved_grant_entries),
+        accepted_plan_digest=state.accepted_plan_digest,
+        plan_binding_captured=True,
     )
     state.plan_stack.append(frame)
     # Reset to a fresh child cycle — the child re-classifies and plans normally.
@@ -12032,6 +12047,14 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     # which no longer exists once the parent resumes.
     state.plugins = frame.plugins
     state.plugins_archive = frame.plugins_archive
+    if frame.plan_binding_captured:
+        # Approval-binding custody (schema 56): the child's own approval rebound these to the
+        # child's plan; the parent resumes with the binding it was approved under.
+        state.plan_snapshot_path = frame.plan_snapshot_path
+        state.plan_snapshot_hash = frame.plan_snapshot_hash
+        state.approved_grants_sha256 = frame.approved_grants_sha256
+        state.approved_grant_entries = frame.approved_grant_entries
+        state.accepted_plan_digest = frame.accepted_plan_digest
     state.node = new_node
     # The parent PLAN FILE is authoritative for the venue, so re-derive it here
     # rather than trust the frame: a frame captured after the value was already
