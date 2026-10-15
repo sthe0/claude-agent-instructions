@@ -584,9 +584,6 @@ def _decide_session(
 
     turn_start_ts = None
     transcript_path = payload.get("transcript_path")
-    if not (isinstance(transcript_path, str) and transcript_path):
-        found = engine_session_binding.transcript_for_session(session_id)
-        transcript_path = str(found) if found is not None else None
     if isinstance(transcript_path, str) and transcript_path:
         turn_start_ts = latest_turn_start(Path(transcript_path))
 

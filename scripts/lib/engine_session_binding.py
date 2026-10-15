@@ -93,18 +93,33 @@ def harness_sessions_driving(engine_session: str) -> list[str]:
     return [p.stem for p in paths if any(e["session"] == engine for e in _read(p))]
 
 
+def _is_linked_child(session: str) -> bool:
+    path = config_root.resolve_agentctl_state_file(session)
+    if path is None:
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and isinstance(data.get("parent_link"), dict)
+
+
 def transcript_for_session(session: str) -> Path | None:
     """The newest transcript of the conversation that ran engine ``session``, or None.
 
     A conversation writes its transcript under its harness id, which is the engine session
     id only when the coordinator never passed ``--session``. The candidates are therefore
-    ``session`` itself and every harness session bound to it; a linked child's own run is
-    found this way, and the parent pointer in its state is never followed. Derived, never
-    supplied: the gated actor must not choose which transcript is checked."""
+    ``session`` itself and every harness session bound to it, so continuing an old session
+    from a new conversation works. A linked child's harness id equals its engine id by
+    construction, and its parent drives it with verbs of its own (approve, resolve) from a
+    transcript that may be newer, so a linked child looks only at its own transcript; the
+    parent pointer in its state is never followed. Derived, never supplied: the gated actor
+    must not choose which transcript is checked."""
     if not session:
         return None
     found: list[Path] = []
-    for name in dict.fromkeys([session, *harness_sessions_driving(session)]):
+    names = [session] if _is_linked_child(session) else [session, *harness_sessions_driving(session)]
+    for name in dict.fromkeys(names):
         found.extend(config_root.iter_transcripts(f"*/{name}.jsonl"))
     if not found:
         return None

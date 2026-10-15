@@ -282,6 +282,51 @@ def test_delivery_unlinked_session_keeps_base_lookup(cfg, store, tmp_path, fixtu
     assert stamp.plan_sha256 == receipt.plan_sha256 and stamp.rendering_sha256 == receipt.rendering_sha256
 
 
+def _touch(path: Path, age_s: float) -> None:
+    import os
+
+    stamp = time.time() - age_s
+    os.utime(path, (stamp, stamp))
+
+
+def test_linked_child_transcript_lookup_ignores_driving_root_transcript(cfg, store, tmp_path):
+    from lib import engine_session_binding
+
+    root, child, parent = "root-harness-linked", "engine-child-linked", "engine-parent-linked"
+    _start_as(tmp_path, cfg, root, child)
+    assert child in engine_session_binding.driven_sessions(root), "setup: the root drove the child"
+    state = store.load(child)
+    state.parent_link = {"parent_session": parent, "stage_index": 1}
+    store.save(state)
+    own = _transcript_path(cfg, child)
+    own.write_text(_entry("user", time.time() - 50, [{"type": "text", "text": "child turn"}]) + "\n")
+    root_transcript = _transcript_path(cfg, root)
+    root_transcript.write_text(_entry("user", time.time() - 5, [{"type": "text", "text": "root turn"}]) + "\n")
+    _touch(own, 100.0)
+    _touch(root_transcript, 1.0)
+
+    assert engine_session_binding.transcript_for_session(child) == own, (
+        "BEHAVIOUR: a linked child's lookup is taken over by the newer transcript of the root "
+        "that drives it"
+    )
+    assert cli._present_plan_transcript(child) == own
+
+
+def test_unlinked_session_driven_from_new_conversation_finds_newest_transcript(cfg, store, tmp_path):
+    from lib import engine_session_binding
+
+    new, engine = "new-conversation", "engine-continued"
+    _start_as(tmp_path, cfg, new, engine)
+    old_transcript = _transcript_path(cfg, engine)
+    old_transcript.write_text(_entry("user", time.time() - 50, [{"type": "text", "text": "old"}]) + "\n")
+    new_transcript = _transcript_path(cfg, new)
+    new_transcript.write_text(_entry("user", time.time() - 5, [{"type": "text", "text": "new"}]) + "\n")
+    _touch(old_transcript, 100.0)
+    _touch(new_transcript, 1.0)
+
+    assert engine_session_binding.transcript_for_session(engine) == new_transcript
+
+
 def test_receipt_stamped_on_session_owning_presented_bytes(cfg, store, tmp_path, fixtures_dir):
     harness = "harness-three"
     engines = ("engine-a", "engine-b", "engine-c")
