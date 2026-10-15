@@ -131,6 +131,13 @@ def _where(position: Position) -> str:
     return ".".join(str(part) for part in position)
 
 
+def _identity(table: dict, position: int) -> int:
+    """A stage's identity: its declared integer `index`, else its 1-based array position
+    (`parse_plan`'s rule, with a non-integer index left to its own refusal)."""
+    declared = table.get("index")
+    return declared if type(declared) is int else position
+
+
 def _map_node(table: dict, position: Position, kind: str, text: Callable) -> dict:
     out = {}
     for key, value in table.items():
@@ -159,7 +166,7 @@ def _map_plan(raw: dict, stage: Callable, text: Callable) -> dict:
                 if not isinstance(element, dict):
                     elements.append(element)
                 elif _classify(element) is None:
-                    elements.append(_map_node(element, (i,), "stage", text))
+                    elements.append(_map_node(element, (_identity(element, i),), "stage", text))
                 elif _classify(element) == "malformed":
                     raise _malformed(element)
                 else:
@@ -250,6 +257,7 @@ class _Resolver(_Walker):
         if _classify(table) != "ref":
             raise _malformed(table)
         pushed = 0
+        first_visit = len(self.visited)
         try:
             while True:
                 path = self.enter(table, base, self.stack)
@@ -267,11 +275,15 @@ class _Resolver(_Walker):
                 if shape == "malformed":
                     raise _malformed(parsed)
                 table, base = parsed, path.parent
-            if "index" in parsed and parsed["index"] != i:
+            declared = parsed.get("index")
+            if type(declared) is not int:
                 raise _refuse("index", table["ref"],
-                              f"the file declares index {parsed['index']!r} but sits at "
-                              f"position {i}")
-            return _map_node(parsed, (i,), "stage",
+                              "a stage file must declare an integer `index`, "
+                              f"got {declared!r}" if "index" in parsed
+                              else "a stage file must declare an integer `index`")
+            for k in range(first_visit, len(self.visited)):
+                self.visited[k] = ((declared,), *self.visited[k][1:])
+            return _map_node(parsed, (declared,), "stage",
                              lambda t, p, b=path.parent: self.text(t, p, b))
         finally:
             if pushed:

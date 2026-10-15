@@ -82,25 +82,34 @@ def _contains_reference(raw: dict) -> bool:
     return bool(found)
 
 
-def _stage_tables(raw: dict) -> list[dict]:
+def _stage_tables(raw: dict) -> list[tuple[int, dict]]:
+    """`(identity, table)` per stage: the declared integer `index`, else the 1-based array
+    position, which is the identity `plan.parse_plan` gives it. Zero-based numbering and
+    stages out of order are legitimate; two stages with one identity are not."""
     stages = raw.get("stage")
     if not isinstance(stages, list):
         return []
+    found: list[tuple[int, dict]] = []
+    seen: set[int] = set()
     for position, table in enumerate(stages, start=1):
         if not isinstance(table, dict):
             raise PlanError(f"stage {position} is not a table")
-        declared = table.get("index")
-        if "index" in table and (type(declared) is not int or declared != position):
+        declared = table.get("index", position)
+        if type(declared) is not int:
             raise PlanError(
-                f"stage index differs from position: the stage at position {position} "
-                f"declares index {declared!r}; renumber it before converting")
-    return stages
+                f"stage index must be an integer: the stage at position {position} "
+                f"declares {declared!r}")
+        if declared in seen:
+            raise PlanError(f"stage index {declared} is declared twice")
+        seen.add(declared)
+        found.append((declared, table))
+    return found
 
 
 def _oversize(raw: dict, stage_max_chars: int) -> list[dict]:
     """The nodes the submit gate blocks, taken from that gate's own function, so the report
-    equals the block by construction. Stage indices were checked against positions by the
-    caller, so the gate's node labels are the positions."""
+    equals the block by construction. A stage node is labelled by its identity (declared
+    `index`, else 1-based position), the gate's own label."""
     return [{"node": found["node"], "chars": found["chars"], "remedy": _REMEDY,
              "message": found["message"]}
             for found in submission.plan_size_blocks(raw, stage_max_chars)]
@@ -172,6 +181,8 @@ def convert_with_report(
         tmp = Path(scratch)
         order: list[str] = []
         externalized: list[dict] = []
+        added_indices: list[int] = []
+        expected_stages: list[dict] = []
 
         def externalize(table: dict, node: int | str, kind: str, holder_dir: Path) -> dict:
             out: dict = {}
@@ -202,11 +213,15 @@ def convert_with_report(
                 index_table[key] = externalize(meta, "meta", "meta", tmp)
             elif key == "stage" and isinstance(value, list):
                 refs = []
-                for position, table in enumerate(stages, start=1):
-                    stage_rel = plan_refs.stage_file_relpath(stem, position)
+                for identity, table in stages:
+                    if "index" not in table:
+                        table = {"index": identity, **table}
+                        added_indices.append(identity)
+                    expected_stages.append(table)
+                    stage_rel = plan_refs.stage_file_relpath(stem, identity)
                     holder_dir = (tmp / stage_rel).parent
-                    stage_table = externalize(table, position, "stage", holder_dir)
-                    data = _emit_checked(stage_table, f"stage {position} file")
+                    stage_table = externalize(table, identity, "stage", holder_dir)
+                    data = _emit_checked(stage_table, f"stage {identity} file")
                     (tmp / stage_rel).parent.mkdir(parents=True, exist_ok=True)
                     (tmp / stage_rel).write_bytes(data)
                     order.append(stage_rel)
@@ -228,10 +243,11 @@ def convert_with_report(
                 tree_raw, tmp, tmp, index_path=index_path)
         except PlanError as exc:
             raise PlanError(f"raw equivalence: the converted tree does not resolve: {exc}") from exc
-        if resolved != raw:
+        expected = {**raw, "stage": expected_stages} if expected_stages else raw
+        if resolved != expected:
             raise PlanError(
                 "raw equivalence: the resolved tree differs from the source at "
-                f"{_first_difference(raw, resolved)}")
+                f"{_first_difference(expected, resolved)}")
         parsed, parsed_detail, content_digest = _parsed_equivalence(raw, index_path, tmp)
 
     report = {
@@ -241,6 +257,7 @@ def convert_with_report(
         "root_digest": _sha256(index_bytes),
         "files": [{"path": rel, "sha256": _sha256(data)} for rel, data in files.items()],
         "externalized": externalized,
+        "added_indices": added_indices,
         "oversize_stages": oversize,
         "round_trip": "ok",
         "raw_equivalence": "ok",
@@ -288,6 +305,8 @@ def _report_lines(report: dict) -> list[str]:
         lines.append(f"  loader: {report['parsed_equivalence_detail']}")
     lines += [f"externalized {e['node']}.{e['field']} ({e['chars']} chars) -> {e['path']}"
               for e in report["externalized"]]
+    if report.get("added_indices"):
+        lines.append(f"added index to stage(s): {report['added_indices']}")
     lines += [f"OVERSIZE {o['message']}" for o in report["oversize_stages"]]
     return lines
 

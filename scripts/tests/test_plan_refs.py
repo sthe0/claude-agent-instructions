@@ -455,8 +455,18 @@ def test_ordinary_tables_are_data_and_left_alone(tmp_path):
     assert visited == []
 
 
-def test_a_referenced_stage_whose_index_disagrees_with_its_position_is_refused(tmp_path):
-    ref = _ref(tmp_path, "stage-1.toml", _stage_fields(5))
+def test_a_referenced_stage_whose_index_differs_from_its_position_resolves(tmp_path):
+    from agentctl.plan import load_plan
+
+    ref = _ref(tmp_path, "stage-5.toml", _stage_fields(5))
+    index = _write(tmp_path / "plan.toml", _meta() + "\n" + _stage_array(ref))
+
+    assert [s.index for s in load_plan(index).stages] == [5]
+
+
+@pytest.mark.parametrize("declared", ['"2"', "true"])
+def test_a_referenced_stage_with_a_non_integer_index_is_refused_as_index(tmp_path, declared):
+    ref = _ref(tmp_path, "stage-1.toml", _stage_fields(1, index=declared))
     index = _write(tmp_path / "plan.toml", _meta() + "\n" + _stage_array(ref))
 
     err = _refusal(index)
@@ -465,15 +475,11 @@ def test_a_referenced_stage_whose_index_disagrees_with_its_position_is_refused(t
     assert "stage-1.toml" in str(err)
 
 
-def test_a_referenced_stage_without_an_index_key_loads(tmp_path):
-    from agentctl.plan import load_plan
-
+def test_a_referenced_stage_without_an_index_key_is_refused_as_index(tmp_path):
     ref = _ref(tmp_path, "stage-1.toml", _stage_fields(1, index=None))
     index = _write(tmp_path / "plan.toml", _meta() + "\n" + _stage_array(ref))
 
-    doc = load_plan(index)
-
-    assert [s.index for s in doc.stages] == [1]
+    assert _refusal(index).ref_kind == "index"
 
 
 def test_a_stage_reference_may_be_written_as_an_array_of_tables_beside_inline_stages(tmp_path):

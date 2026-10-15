@@ -692,7 +692,7 @@ def test_an_externalized_field_of_a_stage_whose_index_differs_from_its_position_
     assert [(f["node"], f["field"]) for f in inline] == [(12, "method")]
 
     plan_refs.plan_externalize(path, stage=12, field="method")
-    assert plan_store.visited_positions(path) == {(2, "method")}
+    assert plan_store.visited_positions(path) == {(12, "method")}
     assert submission.plan_size_warnings(plan.load_plan(path), plan_store.visited_positions(path)) == []
 
 

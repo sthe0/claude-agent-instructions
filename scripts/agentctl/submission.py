@@ -1029,17 +1029,17 @@ def _node_field_texts(doc_or_raw):
         for position, table in enumerate(stages, start=1):
             if isinstance(table, dict):
                 index = table.get("index")
-                nodes.append((index if isinstance(index, int) else position, "stage",
-                              raw_fields(table, "stage"), position))
+                identity = index if type(index) is int else position
+                nodes.append((identity, "stage", raw_fields(table, "stage"), identity))
         return nodes
     meta_fields = [(f, _typed_text(doc_or_raw.meta, f)) for f in sorted(EXTERNALIZABLE_FIELDS["meta"])]
     order_fields = [(f, _typed_text(doc_or_raw.meta.order, f)) for f in sorted(EXTERNALIZABLE_FIELDS["order"])] \
         if doc_or_raw.meta.order is not None else []
     nodes = [("meta", "meta", [p for p in meta_fields if p[1]], "meta"),
              ("meta", "order", [p for p in order_fields if p[1]], "meta.order")]
-    for position, stage in enumerate(doc_or_raw.stages, start=1):
+    for stage in doc_or_raw.stages:
         fields = [(f, _typed_text(stage, path)) for f, path in sorted(_STAGE_FIELD_PATHS.items())]
-        nodes.append((stage.index, "stage", [p for p in fields if p[1]], position))
+        nodes.append((stage.index, "stage", [p for p in fields if p[1]], stage.index))
     return nodes
 
 

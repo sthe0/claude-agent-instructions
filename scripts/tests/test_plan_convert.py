@@ -139,14 +139,15 @@ def test_a_non_string_field_and_a_non_externalizable_key_stay_in_the_stage_file(
     assert stage_one["index"] == 1
 
 
-def test_a_stage_without_an_index_key_converts_without_one_being_added():
+def test_a_stage_without_an_index_key_gets_its_position_as_index_in_its_stage_file():
     text = _plan_text().replace("index = 1\n", "").replace("index = 2\n", "")
-    files, _ = _convert(text.encode())
+    files, report = _convert(text.encode())
 
     import tomllib
 
     for n in (1, 2):
-        assert "index" not in tomllib.loads(files[f"demo.parts/stage-{n}.toml"].decode())
+        assert tomllib.loads(files[f"demo.parts/stage-{n}.toml"].decode())["index"] == n
+    assert report["added_indices"] == [1, 2]
 
 
 def test_the_hash_of_each_reference_is_the_sha256_of_the_bytes_it_names():
@@ -172,12 +173,20 @@ def test_an_already_hypertext_source_is_refused_toward_plan_seal():
         _convert(files["demo.toml"])
 
 
-def test_a_stage_index_that_differs_from_its_position_is_refused():
+def test_a_stage_index_that_differs_from_its_position_converts_under_its_declared_index():
+    text = _plan_text().replace("index = 2\n", "index = 5\n")
+    files, _ = _convert(text.encode())
+
+    assert "demo.parts/stage-5.toml" in files
+    assert "demo.parts/stage-2.toml" not in files
+
+
+def test_a_stage_index_that_is_not_an_integer_is_refused():
     from agentctl.plan import PlanError
 
-    text = _plan_text().replace("index = 2\n", "index = 5\n")
+    text = _plan_text().replace("index = 2\n", 'index = "2"\n')
 
-    with pytest.raises(PlanError, match="stage index differs from position"):
+    with pytest.raises(PlanError, match="stage index must be an integer"):
         _convert(text.encode())
 
 
@@ -996,17 +1005,17 @@ def test_the_oversize_report_is_what_the_submit_gate_blocks_by_construction():
     assert plan_convert._oversize(raw, stage_max) == report
 
 
-def test_a_stage_whose_index_differs_from_its_position_is_refused_before_any_size_label_is_made():
+def test_an_oversize_stage_with_a_shifted_index_is_reported_under_its_declared_index():
     from agentctl import submission
     import tomllib
 
-    shifted = _plan_text(method=LONG_METHOD).replace("index = 1\n", "index = 7\n", 1).encode()
+    shifted = (_plan_text(method=LONG_METHOD).replace("index = 1\n", "index = 7\n", 1)
+               .replace("depends_on = [1]", "depends_on = [7]")).encode()
     stage_max = 600
 
-    with pytest.raises(Exception, match="stage index differs from position"):
-        _convert(shifted, stage=stage_max)
+    report = _convert(shifted, stage=stage_max)[1]["oversize_stages"]
     labelled = submission.plan_size_blocks(tomllib.loads(shifted.decode()), stage_max)
-    assert [b["node"] for b in labelled] == [7]
+    assert [o["node"] for o in report] == [b["node"] for b in labelled] == [7]
 
 
 def _run_to_the_last_result(store, sid, plan):
