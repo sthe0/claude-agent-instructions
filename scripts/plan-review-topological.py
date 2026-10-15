@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -57,9 +58,8 @@ if str(SCRIPTS_DIR) not in sys.path:
 from agentctl import plan  # noqa: E402 - protocol tokens are read as plan.X at call time
 from agentctl.config import Thresholds, parse_config_md  # noqa: E402
 from agentctl.own_contour import OWN_SESSION_ENV  # noqa: E402
-from agentctl.render import topo_pair_view_dirname  # noqa: E402
+from agentctl.render import build_site_prompt  # noqa: E402
 from lib import review_block  # noqa: E402
-from lib.config_root import topo_units_root  # noqa: E402
 
 SPAWNER = SCRIPTS_DIR / "spawn-specialist.py"
 AGENTCTL_CLI = SCRIPTS_DIR / "agentctl-cli.py"
@@ -96,6 +96,8 @@ class Launched:
     stderr: str
     log_offset: int
     plan_sha: str
+    plan_path: str = ""
+    view_root: "str | None" = None
 
 
 @dataclass
@@ -146,7 +148,8 @@ def done_criterion(pair: str) -> str:
 
 
 def build_spawn_argv(args, pair: str, plan_path: str, *, dry_run: bool,
-                     history_path: "str | None" = None) -> list[str]:
+                     history_path: "str | None" = None,
+                     view_root: "str | None" = None) -> list[str]:
     selector = ["--model", args.model] if args.model else ["--complexity", args.complexity or "high"]
     argv = [
         "--kind", "thinker", *selector, "--effort", "high", "--plan-brief",
@@ -155,9 +158,28 @@ def build_spawn_argv(args, pair: str, plan_path: str, *, dry_run: bool,
     ]
     if history_path is not None:
         argv += ["--review-topo-history", history_path]
+    if view_root is not None:
+        argv += ["--view-root", str(view_root)]
     if dry_run:
         argv.append("--dry-run")
     return argv
+
+
+def _spawner_module():
+    spec = importlib.util.spec_from_file_location("spawn_specialist_for_review", SPAWNER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def reviewer_prompt(plan_path: str, unit_id: str, *, view_root: "str | Path",
+                    history_path: "str | None" = None) -> str:
+    """The full prompt the spawn of `build_spawn_argv` sends to the reviewer of `unit_id`
+    (a pair id or `unit:<n>`), whatever its length: the spawner's own assembly, nothing
+    spawned and no size ceiling applied."""
+    argv = build_spawn_argv(argparse.Namespace(model=None, complexity=None), unit_id, plan_path,
+                            dry_run=False, history_path=history_path, view_root=str(view_root))
+    return _spawner_module().assembled_prompt(argv)
 
 
 def session_args(sid: "str | None") -> list[str]:
@@ -384,8 +406,15 @@ def count_pulls(transcript: "str | None", view_dir: str) -> "int | None":
     return len(seen) if parsed or not lines else None
 
 
-def view_dir_for(pair: str, sha: str) -> str:
-    return str(topo_units_root() / sha / topo_pair_view_dirname(pair))
+def view_dir_for(plan_path: str, pair: str, view_root: "str | None" = None) -> "str | None":
+    """The view directory the reviewer of `pair` is granted, or None when the plan does
+    not build one (a plan that does not load, a pair it does not have)."""
+    try:
+        site = build_site_prompt("topo-pair", plan_path, pair=pair, view_root=view_root,
+                                 materialize=False)
+    except (ValueError, OSError, plan.PlanError):
+        return None
+    return str(site.view_dir)
 
 
 def pair_telemetry(launched: Launched, pair: str) -> tuple["float | None", "int | None", "int | None", "str | None"]:
@@ -400,7 +429,11 @@ def pair_telemetry(launched: Launched, pair: str) -> tuple["float | None", "int 
         duration = int(duration_found.group(1)) if duration_found else None
     candidates = [stderr_path, row.get("transcript_path") if row else None]
     transcript = next((c for c in candidates if c and os.path.isfile(c)), None)
-    pulls = 0 if plan.is_unit_id(pair) else count_pulls(transcript, view_dir_for(pair, launched.plan_sha))
+    if plan.is_unit_id(pair):
+        pulls = 0
+    else:
+        view_dir = view_dir_for(launched.plan_path, pair, launched.view_root)
+        pulls = None if view_dir is None else count_pulls(transcript, view_dir)
     return (round(float(cost), 4) if cost is not None else None,
             int(duration) if duration is not None else None, pulls, transcript)
 
@@ -427,6 +460,7 @@ class Driver:
         self.env = env
         self.engine_script = AGENTCTL_OWN if own else AGENTCTL_CLI
         self.sid = None if own else args.session
+        self.view_root = getattr(args, "view_root", None)
         self.named = set(args.pairs.split(",")) if args.pairs else None
         self.spawned: set[str] = set()
         self.results: list[PairResult] = []
@@ -483,9 +517,9 @@ class Driver:
         sha = hashlib.sha256(Path(self.plan_path).read_bytes()).hexdigest()
         offset = cost_log_size()
         argv = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
-                                history_path=self.history_file(row))
+                                history_path=self.history_file(row), view_root=self.view_root)
         rc, out, err = spawn_pair(argv)
-        return Launched(rc, out, err, offset, sha)
+        return Launched(rc, out, err, offset, sha, self.plan_path, self.view_root)
 
     def settle(self, pair: str, launched: Launched) -> None:
         try:
@@ -578,7 +612,8 @@ class Driver:
                     continue
                 history_path = self.history_file(row)
                 spawn_cmd = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
-                                             history_path=HISTORY_PLACEHOLDER if history_path else None)
+                                             history_path=HISTORY_PLACEHOLDER if history_path else None,
+                                             view_root=self.view_root)
                 if history_path:
                     emit(f"  history: {shlex.join([sys.executable, str(self.engine_script), 'plan-review-pair-history', *session_args(self.sid), '--target', self.plan_path, '--pair', pair])}"
                          f" > {HISTORY_PLACEHOLDER}")
@@ -587,7 +622,8 @@ class Driver:
                     [sys.executable, str(self.engine_script),
                      *record_argv(self.sid, self.plan_path, pair, "<pass|revise>", "<sha256>", [])]))
                 rc, out, err = spawn_pair(build_spawn_argv(self.args, pair, self.plan_path, dry_run=True,
-                                                           history_path=history_path))
+                                                           history_path=history_path,
+                                                           view_root=self.view_root))
                 chars, files = DRY_CHARS_RE.search(out), DRY_VIEW_RE.search(out)
                 if rc != 0 or chars is None or files is None:
                     emit(f"TOPO-REFUSED: pair={pair} spawner --dry-run exited {rc} ({CEILING_HINT})")
@@ -699,6 +735,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="concurrent spawns within one level (default: the level's batch width, "
                         "capped by review-parallel-max; 1 is sequential)")
     p.add_argument("--pairs", default=None, help="comma list of pair ids to review, in walk order")
+    p.add_argument("--view-root", default=None,
+                   help="directory the per-pair view directories are built under "
+                        "(default: the topo-units root)")
     p.add_argument("--ledger", default=None,
                    help="condition-4 gap ledger path (sets AGENTCTL_ESCALATION_LEDGER); "
                         "refused with --own")

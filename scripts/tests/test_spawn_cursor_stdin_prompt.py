@@ -78,10 +78,11 @@ def _run_main(monkeypatch, tmp_path, prompt_size):
     monkeypatch.setattr(mod, "skill_path", lambda kind: skill)
 
     plan = tmp_path / "big-plan.md"
-    plan.write_text("x" * prompt_size, encoding="utf-8")
+    plan.write_text("x" * 100, encoding="utf-8")
 
     argv = ["spawn-cursor-specialist.py", "--kind", "developer", "--plan", str(plan),
             "--done-criterion", "done", "--criterion-type", "measurable",
+            "--constraints", "x" * prompt_size,
             "--workspace", str(tmp_path)]
     monkeypatch.setattr(sys, "argv", argv)
     rc = mod.main()
@@ -89,8 +90,9 @@ def _run_main(monkeypatch, tmp_path, prompt_size):
 
 
 def test_big_prompt_delivered_via_stdin_not_argv(monkeypatch, tmp_path):
-    # A plan well over the argv ceiling. On the old argv path launch_supervised
-    # raised E2BIG here and main() never returned.
+    # A prompt well over the argv ceiling (plans are never inlined, so the bulk is the
+    # constraints text). On the old argv path launch_supervised raised E2BIG here and
+    # main() never returned.
     rc, captured = _run_main(monkeypatch, tmp_path, prompt_size=MAX_ARG_STRLEN + 50_000)
 
     assert rc == 0
@@ -98,7 +100,7 @@ def test_big_prompt_delivered_via_stdin_not_argv(monkeypatch, tmp_path):
     assert all(len(a.encode()) <= MAX_ARG_STRLEN for a in captured["cmd"])
     # The stdin channel was opened...
     assert captured["stdin_kw"] is not None
-    # ...and the whole prompt (plan wrapper + the >131 KB plan) rode it.
+    # ...and the whole prompt (plan wrapper + the >131 KB constraints) rode it.
     body = captured["proc"].stdin_input
     assert body is not None
     assert len(body) > MAX_ARG_STRLEN

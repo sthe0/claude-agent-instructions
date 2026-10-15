@@ -187,7 +187,8 @@ def test_record_carries_exactly_the_documented_fields(store, venued_fixtures_dir
     _, env = _spawn(monkeypatch, tmp_path, venued_fixtures_dir, "w2", stage_index=1)
     _, _, _, record = _read_exported(env[HANDOFF_ENV])
     assert set(record) == {"schema", "parent_session", "stage_index", "kind", "norm",
-                           "norm_digest", "grants", "depth", "norm_lineage", "created_at"}
+                           "norm_digest", "grants", "depth", "norm_lineage", "created_at",
+                           "closure_digest"}
     assert record["schema"] == "norm-handoff/v1"
     assert (record["parent_session"], record["stage_index"], record["kind"]) == ("w2", 1, "thinker")
     assert record["grants"] == []
@@ -227,8 +228,7 @@ def test_spawn_for_an_unresolvable_stage_exports_nothing(store, venued_fixtures_
     monkeypatch.setenv(HANDOFF_ENV, "/ancestor/handoff.json:deadbeef")
     _executing(store, "w5", venued_fixtures_dir)
     rc, env = _spawn(monkeypatch, tmp_path, venued_fixtures_dir, "w5", stage_index=99)
-    assert env is not None, f"setup: the spawn did not reach the launch (rc={rc})"
-    assert HANDOFF_ENV not in env
+    assert (rc, env) == (2, None), "a stage the plan lacks is refused before any launch"
     assert not (tmp_path / "state" / "handoffs").exists()
 
 

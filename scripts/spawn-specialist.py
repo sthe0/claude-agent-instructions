@@ -62,6 +62,7 @@ from agentctl.render import (  # build_site_prompt is the one place a spawn's pl
     SitePrompt,
     TopoUnitsCorrupt,
     build_site_prompt,
+    non_plan_brief_text,
 )
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
@@ -216,18 +217,16 @@ def plan_site_kind(args: argparse.Namespace) -> str:
     return "dispatch-no-stage"
 
 
-NOT_A_PLAN_NOTE = (
-    "The `--plan` file did not load as a typed plan, so this prompt carries no plan content."
-)
-
-
 def plan_site(
     args: argparse.Namespace, *, view_root: "Path | str | None" = None,
     history: "dict | None" = None, materialize: bool = True,
 ) -> SitePrompt:
     """The plan content this spawn's prompt passes, through `render.build_site_prompt`. A
-    `--plan` that does not load as a typed plan passes none. Raises ValueError for a
-    stage, pair or unit the plan does not have."""
+    `--plan` that does not load as a typed plan is a plain brief, passed as its own text
+    (`render.non_plan_brief_text`). Raises ValueError for a stage, pair or unit the plan
+    does not have, or a brief past the inline limit."""
+    if not argv_text.is_readable_file(args.plan):
+        raise SystemExit(argv_text.file_arg_error("--plan", args.plan))
     kind = plan_site_kind(args)
     selector: dict = {}
     if kind == "dispatch-stage-brief":
@@ -242,7 +241,7 @@ def plan_site(
     except PlanError:
         if kind in ("topo-pair", "topo-unit"):
             raise
-        return SitePrompt(NOT_A_PLAN_NOTE, (), frozenset())
+        return SitePrompt(non_plan_brief_text(args.plan), (), frozenset())
 
 
 def own_contour_brief_lines(args: argparse.Namespace, own_plan: "Path | None" = None) -> list[str]:

@@ -132,7 +132,9 @@ def test_a_real_dossier_file_is_read_into_the_prompt(assemble, tmp_path):
 @wrappers
 def test_an_absent_dossier_argument_stays_absent(assemble, tmp_path):
     # The flag is optional; omitting it must not trip the new required-file path.
-    assert "the plan body" in assemble(["--plan", _plan_file(tmp_path)])
+    prompt = assemble(["--plan", _plan_file(tmp_path)])
+    assert "## Working plan" in prompt
+    assert "the plan body" not in prompt, "the plan file is never inlined"
 
 
 # --- --plan shares the failure mode, so it shares the fix -----------------------

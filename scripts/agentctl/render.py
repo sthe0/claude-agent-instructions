@@ -1287,6 +1287,24 @@ def render_unit_review_bundle(
 
 PLAN_FIELD_INLINE_MAX_CHARS_DEFAULT = 4000
 
+NON_PLAN_BRIEF_MAX_CHARS = 20000
+
+
+def non_plan_brief_text(path: "str | Path") -> str:
+    """The text of a `--plan` file that does not load as a typed plan — a plain brief
+    (the difficulty-escape manager's, a work-item brief) — to be passed inline. A file
+    longer than `NON_PLAN_BRIEF_MAX_CHARS` is refused (ValueError), so no unbounded file
+    reaches a prompt by the way of a failed plan load."""
+    text = Path(path).read_text(encoding="utf-8")
+    if len(text) > NON_PLAN_BRIEF_MAX_CHARS:
+        raise ValueError(
+            f"{path} does not load as a typed plan and is longer than "
+            f"{NON_PLAN_BRIEF_MAX_CHARS} chars; a brief that long belongs in a typed plan "
+            "or a context dossier"
+        )
+    return text
+
+
 SITE_KINDS = (
     "dispatch-stage-brief", "dispatch-no-stage", "topo-pair", "topo-unit",
     "whole-plan-review", "enumerate-node",

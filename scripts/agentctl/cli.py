@@ -87,6 +87,7 @@ from .plan import (
     _venue_for,
 )
 from .render import (
+    build_site_prompt,
     cmd_plan_grants,
     cmd_plan_render,
     plan_render_stage_arg_type,
@@ -2896,9 +2897,16 @@ def cmd_ledger_enumerate(args, *, store: StateStore, runner: Runner | None = Non
         return Directive(False, state.node, "noop",
                          f"cannot read artifact {args.artifact!r}: {exc}")
     run = runner if runner is not None else advisor.enumerate_subprocess_runner
-    statements = advisor.enumerate_claims(
-        text, run, runtime_host=state.runtime_host or runtime_host.HOST_CLAUDE
-    )
+    host = state.runtime_host or runtime_host.HOST_CLAUDE
+    try:
+        plan_stages = [s.index for s in load_plan(args.artifact).stages]
+    except PlanError:
+        statements = advisor.enumerate_claims(text, run, runtime_host=host)
+    else:
+        statements = []
+        for stage in (None, *plan_stages):
+            node = build_site_prompt("enumerate-node", args.artifact, stage=stage)
+            statements.extend(advisor.enumerate_claims(node.text, run, runtime_host=host))
     candidates = bag.setdefault("candidates", [])
     raised: list[str] = []
     for i, statement in enumerate(statements):

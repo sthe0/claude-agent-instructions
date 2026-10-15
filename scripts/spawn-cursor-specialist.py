@@ -31,6 +31,8 @@ import time
 from pathlib import Path
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
+from agentctl.plan import PlanError
+from agentctl.render import build_site_prompt, non_plan_brief_text  # build_site_prompt is the one place a spawn's plan content is built
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # kept for Extraction typing / telemetry; Cursor path does not invoke it (see _build_extraction)
 from lib.config_root import skills_dir
@@ -117,6 +119,20 @@ def cursor_agent_path(kind: str) -> Path | None:
     return path if path.is_file() else None
 
 
+def plan_section_text(args: argparse.Namespace) -> str:
+    """The plan content of the prompt, through `render.build_site_prompt`: the brief of
+    `--stage-index`, else the plan summary; a `--plan` that is not a typed plan is a plain brief, passed as its own text."""
+    if not argv_text.is_readable_file(args.plan):
+        raise SystemExit(argv_text.file_arg_error("--plan", args.plan))
+    stage_index = getattr(args, "stage_index", None)
+    kind = "dispatch-no-stage" if stage_index is None else "dispatch-stage-brief"
+    selector = {} if stage_index is None else {"stage": stage_index}
+    try:
+        return build_site_prompt(kind, args.plan, **selector).text
+    except PlanError:
+        return non_plan_brief_text(args.plan)
+
+
 def assemble_prompt(
     args: argparse.Namespace,
     depth: int,
@@ -125,7 +141,7 @@ def assemble_prompt(
     cursor_bootstrap: str | None,
 ) -> str:
     # --plan is optional here (--smoke runs without one); an absent plan stays "".
-    plan = argv_text.read_required_file(args.plan, "--plan") if args.plan else ""
+    plan = plan_section_text(args) if args.plan else ""
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
     done_criterion = argv_text.read_arg_text(args.done_criterion)
     dossier = (

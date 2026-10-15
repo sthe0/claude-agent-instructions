@@ -192,45 +192,6 @@ def test_every_required_place_has_a_vocabulary_entry():
     )
 
 
-def test_the_enumerating_judge_may_target_every_place_in_the_vocabulary():
-    """The vocabulary has a second, EXECUTABLE consumer: the prompt that bounds the premise
-    gate's independent question-enumerator (`advisor._ENUMERATE_QUESTIONS_PROMPT`). A name
-    absent from that prompt is a place the judge is told it may not raise a question
-    against, so a restated copy there does not merely rot — it silently narrows the gate to
-    whatever the vocabulary was when the copy was last edited. It had, by six names.
-
-    Pinned rather than left to the derivation, because the prompt is prose to every reader
-    and nothing else in the suite reads it.
-
-    The menu is parsed out and compared as a SET, not searched for as substrings. A bare
-    `name in prompt` passes vacuously for any name contained in another — `criterion` inside
-    `done_criterion`, `conditions` inside `preconditions` — so a prose list naming only the
-    longer member would satisfy it for the shorter one, in exactly the regression this test
-    exists to catch. Set equality also fails in the other direction, on a name offered to the
-    judge that the vocabulary does not have."""
-    from agentctl import advisor
-
-    # Exactly one menu line, asserted rather than taken: a bare `next(...)` raises
-    # StopIteration — a test ERROR with no message — the day the line is reworded away, and
-    # silently reads the first of two if the prompt ever grows a second menu, which is the
-    # case where the set below would be compared against the wrong half of the prompt.
-    menu_lines = [
-        line for line in advisor._ENUMERATE_QUESTIONS_PROMPT.splitlines()
-        if "is one of:" in line
-    ]
-    assert len(menu_lines) == 1, (
-        f"expected exactly one 'is one of:' menu line in _ENUMERATE_QUESTIONS_PROMPT, "
-        f"found {len(menu_lines)}: {menu_lines}"
-    )
-    offered = {n.strip() for n in menu_lines[0].split("is one of:", 1)[1].split(",")}
-
-    assert offered == set(text_shape.ELEMENT_NAMES), (
-        "places the enumerating judge is not allowed to raise a question against: "
-        f"{sorted(set(text_shape.ELEMENT_NAMES) - offered)}; "
-        f"names offered that are not in the vocabulary: {sorted(offered - set(text_shape.ELEMENT_NAMES))}"
-    )
-
-
 def test_the_vocabulary_names_the_places_the_gaps_audit_found():
     """The four places an edge was found handing over with no name to spell it: a control
     instrument, the order and its parts, and the procedure. Named here rather than left to

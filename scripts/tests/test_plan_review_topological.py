@@ -233,6 +233,15 @@ def real(make_env, make_rig, tmp_path, monkeypatch):
     return env, make_rig(RealEngine(tmp_path / "state", monkeypatch), env.plan)
 
 
+def _fixed_views(rig, tmp_path, pairs, monkeypatch):
+    """Stand in for the site builder: the fake pair ids are not pairs of the rig's one-line
+    plan, so each gets a fixed view directory the transcripts can name."""
+    view = {p: tmp_path / "views" / f"view-{p}" for p in pairs}
+    monkeypatch.setattr(rig.drv, "view_dir_for",
+                        lambda plan_path, pair, view_root=None: str(view[pair]) if pair in view else None)
+    return view
+
+
 def single(make_rig, pair="3-1"):
     return make_rig(FakeEngine([[pair]]))
 
@@ -507,10 +516,10 @@ def test_td7_ledger_flag_reaches_every_agentctl_call_and_receives_the_condition4
     assert env.ledger_lines() == []
 
 
-def test_td8_every_pair_line_carries_all_seven_fields_and_unknowns_print_na(make_rig, tmp_path, drv):
+def test_td8_every_pair_line_carries_all_seven_fields_and_unknowns_print_na(make_rig, tmp_path, drv, monkeypatch):
     rig = make_rig(FakeEngine([["a", "b", "c"]]))
-    view = {p: Path(rig.drv.view_dir_for(p, rig.sha)) for p in "abc"}
-    ta = write_transcript(tmp_path / "ta.jsonl", [("t1", "Read", {"file_path": str(view["a"] / "node-1.md")})])
+    view = _fixed_views(rig, tmp_path, "abc", monkeypatch)
+    ta =write_transcript(tmp_path / "ta.jsonl", [("t1", "Read", {"file_path": str(view["a"] / "node-1.md")})])
     tb = write_transcript(tmp_path / "tb.jsonl", [("t1", "Read", {"file_path": str(view["b"] / "node-1.md")})])
     rig.specs = {
         "a": {"transcript": str(ta), "cost": None,
@@ -551,10 +560,10 @@ def test_td9_pull_counting_is_separator_safe_and_deduplicated(drv, tmp_path):
     assert drv.count_pulls(None, view) is None
 
 
-def test_td10_summary_totals_equal_the_sums_over_the_pair_lines(make_rig, tmp_path):
+def test_td10_summary_totals_equal_the_sums_over_the_pair_lines(make_rig, tmp_path, monkeypatch):
     rig = make_rig(FakeEngine([["a", "b", "c"]]))
-    view = {p: Path(rig.drv.view_dir_for(p, rig.sha)) for p in "ab"}
-    ta = write_transcript(tmp_path / "ta.jsonl", [
+    view = _fixed_views(rig, tmp_path, "ab", monkeypatch)
+    ta =write_transcript(tmp_path / "ta.jsonl", [
         ("1", "Read", {"file_path": str(view["a"] / "n.md")}), ("2", "Bash", {"command": f"ls {view['a']}"})])
     tb = write_transcript(tmp_path / "tb.jsonl", [("1", "Read", {"file_path": "/x"})])
     rig.specs = {"a": {"cost": 1.25, "duration": 1000, "transcript": str(ta)},
