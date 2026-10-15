@@ -117,6 +117,28 @@ def parse_marker(stdout: str) -> tuple[str | None, str]:
                 return child_marker, line[len(prefix):].strip()
     return None, ""
 
+
+def embedded_permission_request(stdout: str) -> str | None:
+    """The request text of a ``PERMISSION-REQUEST:`` block that is not the first
+    marker of ``stdout`` (an INCOMPLETE that stops for a permission), else None.
+
+    The text is whatever follows the label on its line, or, when that is empty, the
+    block's ``Action:`` line."""
+    lines = [ln.strip() for ln in (stdout or "").splitlines()]
+    for i, line in enumerate(lines):
+        if not line.startswith("PERMISSION-REQUEST:"):
+            continue
+        tail = line[len("PERMISSION-REQUEST:"):].strip()
+        if tail:
+            return tail
+        for follow in lines[i + 1:]:
+            if MARKER_RE.match(follow):
+                break
+            if follow.startswith("Action:"):
+                return follow[len("Action:"):].strip() or None
+        return None
+    return None
+
 # A runner takes an argv list and returns (returncode, stdout, stderr).
 Runner = Callable[[list[str]], "RunResult"]
 

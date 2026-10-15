@@ -40,6 +40,7 @@ from .dispatch import (
     CHILD_INFRA_FAILURE,
     Runner,
     dispatch_stage,
+    embedded_permission_request,
     parse_marker,
     subprocess_runner,
 )
@@ -7169,13 +7170,6 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             f"stage {stage.index} proposes a plan-level revision",
             marker="REPLAN", data={**base, "reason": body},
         )
-    if marker == "INCOMPLETE":
-        store.save(state)
-        return Directive(
-            False, state.node, "decide_incomplete",
-            f"stage {stage.index} returned INCOMPLETE — re-spawn / ask / accept",
-            marker="INCOMPLETE", data={**base, "reason": body},
-        )
     if marker == "PLAN-READY":
         store.save(state)
         return Directive(
@@ -7183,8 +7177,9 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             f"stage {stage.index} returned a fresh plan — HARD GATE, get explicit user approval",
             marker="PLAN-READY", data=base,
         )
-    if marker == "PERMISSION-REQUEST":
-        action = body
+
+    def _route_permission_request(action: str, raw: str, extra: dict | None = None) -> Directive:
+        data_base = {**base, **(extra or {})}
         # The permissions-cli check still runs for its own audit-row side effect, but
         # its answer no longer skips the ask: a global grant recorded there never
         # reaches the child's own --settings/--add-dir, so the old auto-continue just
@@ -7290,7 +7285,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             # parked here exactly as the ask_user_permission path below does,
             # or the directive's own instructions would fail when followed.
             state.permission_request = PermissionRequest(
-                action=action, stage_index=stage.index, raw=body
+                action=action, stage_index=stage.index, raw=raw
             )
             state.log(
                 "permission_self_grant", stage=stage.index, action=action, rule=rule_line,
@@ -7305,12 +7300,12 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                 f"agent --scope stage --rule {rule_line!r}`) and re-dispatch, no user ask needed",
                 marker="PERMISSION-REQUEST",
                 data={
-                    **base, "action": action, "rule": rule_line,
+                    **data_base, "action": action, "rule": rule_line,
                     "resources": [plan_resources._resource_to_dict(r) for r in self_grant_resources],
                 },
             )
         state.permission_request = PermissionRequest(
-            action=action, stage_index=stage.index, raw=body
+            action=action, stage_index=stage.index, raw=raw
         )
         # `_classify_transcript_denials` above may already have appended a
         # planning_misses row for this SAME denial (source="transcript",
@@ -7356,7 +7351,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             })
         state.log("permission_request", stage=stage.index, action=action)
         store.save(state)
-        _ask_data = {**base, "action": action, "options": ["once", "stage", "project", "global", "deny"]}
+        _ask_data = {**data_base, "action": action, "options": ["once", "stage", "project", "global", "deny"]}
         if rule_line is not None:
             _ask_data["reason_class"] = self_grant_reason
         if resource_disagreement is not None:
@@ -7369,6 +7364,18 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             # missing from this options list, so the root never saw it as an
             # offered choice.
             data=_ask_data,
+        )
+    if marker == "PERMISSION-REQUEST":
+        return _route_permission_request(body, body)
+    if marker == "INCOMPLETE":
+        embedded = embedded_permission_request(result.stdout)
+        if embedded is not None:
+            return _route_permission_request(embedded, embedded, {"incomplete_summary": body})
+        store.save(state)
+        return Directive(
+            False, state.node, "decide_incomplete",
+            f"stage {stage.index} returned INCOMPLETE — re-spawn / ask / accept",
+            marker="INCOMPLETE", data={**base, "reason": body},
         )
     if marker == CHILD_INFRA_FAILURE:
         # A transient condition about the RUN, never a judgement about the
