@@ -28,6 +28,8 @@
 "scripts/verify-config-root-refs.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "--repin rewrites its own allowlist file; a deliberate maintainer action, reviewed in the diff" }
 "scripts/memory-leaf-size-calibrate.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "re-calibration rewrites docs/operations/memory-leaf-size-calibration.json, aggregates only; a deliberate maintainer action, reviewed in the diff" }
 "scripts/memory-retrieval-calibrate.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "re-calibration rewrites docs/operations/memory-retrieval-calibration.json, aggregates only; a deliberate maintainer action, reviewed in the diff" }
+"scripts/plan-size-calibrate.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "re-calibration rewrites docs/operations/plan-size-calibration.json, aggregates only; a deliberate maintainer action, reviewed in the diff" }
+"scripts/plan-fit-report.py" = { disposition = "not-canon", category = "not-canon", reason = "writes one report file at the path the caller names with --out; reads a plan, launches nothing" }
 
 # --- exempt-landing: the sync / landing path itself ---
 "scripts/land-branch.py" = { disposition = "exempt", category = "exempt-landing", reason = "advances main from a branch; the route calls it, so it cannot be routed through itself" }

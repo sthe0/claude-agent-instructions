@@ -58,8 +58,8 @@ if str(SCRIPTS_DIR) not in sys.path:
 from agentctl import plan  # noqa: E402 - protocol tokens are read as plan.X at call time
 from agentctl.config import Thresholds, parse_config_md  # noqa: E402
 from agentctl.own_contour import OWN_SESSION_ENV  # noqa: E402
-from agentctl.render import build_site_prompt  # noqa: E402
-from lib import review_block  # noqa: E402
+from agentctl.render import build_site_prompt, topo_unit_refusal  # noqa: E402
+from lib import config_root, review_block  # noqa: E402
 
 SPAWNER = SCRIPTS_DIR / "spawn-specialist.py"
 AGENTCTL_CLI = SCRIPTS_DIR / "agentctl-cli.py"
@@ -509,14 +509,33 @@ class Driver:
         self.level_refused = True
         emit(f"TOPO-REFUSED: pair={pair} {' '.join(reason.split())}")
 
-    def launch(self, row: dict) -> Launched:
+    def size_refusal(self, pair: str, history_path: "str | None") -> "str | None":
+        """Why the prompt of `pair` must not be spawned: a node it shows over the plan size
+        limit, or the full prompt over the spawn ceiling. None when it may, or when the plan
+        does not load (the spawner then answers for itself)."""
+        try:
+            doc = plan.load_plan(self.plan_path)
+            nodes = (plan.parse_unit(doc, pair),) if plan.is_unit_id(pair) else plan.parse_pair(doc, pair)
+            text = reviewer_prompt(self.plan_path, pair,
+                                   view_root=self.view_root or config_root.topo_units_root(),
+                                   history_path=history_path)
+        except (plan.PlanError, ValueError, OSError):
+            return None
+        return topo_unit_refusal(doc, ("meta", *nodes), text)
+
+    def launch(self, row: dict) -> "Launched | None":
         pair = row["pair"]
         self.spawned.add(pair)
+        history_path = self.history_file(row)
+        refusal = self.size_refusal(pair, history_path)
+        if refusal is not None:
+            self.refuse(pair, refusal)
+            return None
         sha = hashlib.sha256(Path(self.plan_path).read_bytes()).hexdigest()
         view_dir = None if plan.is_unit_id(pair) else view_dir_for(self.plan_path, pair, self.view_root)
         offset = cost_log_size()
         argv = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
-                                history_path=self.history_file(row), view_root=self.view_root)
+                                history_path=history_path, view_root=self.view_root)
         rc, out, err = spawn_pair(argv)
         return Launched(rc, out, err, offset, sha, view_dir)
 
@@ -583,12 +602,15 @@ class Driver:
         width = resolve_parallel(self.args.parallel, len(batch))
         if width <= 1:
             for row in batch:
-                self.settle(row["pair"], self.launch(row))
+                outcome = self.launch(row)
+                if outcome is not None:
+                    self.settle(row["pair"], outcome)
             return
         with ThreadPoolExecutor(max_workers=width) as pool:
             launched = list(pool.map(self.launch, batch))
         for row, outcome in zip(batch, launched):
-            self.settle(row["pair"], outcome)
+            if outcome is not None:
+                self.settle(row["pair"], outcome)
 
     def refresh_readiness(self, rows: list[dict]) -> None:
         """Re-read the walk after a level's units settled, so a pair is not left
@@ -610,6 +632,10 @@ class Driver:
                     emit(f"TOPO-CURRENT: pair={pair}")
                     continue
                 history_path = self.history_file(row)
+                refusal = self.size_refusal(pair, history_path)
+                if refusal is not None:
+                    emit(f"TOPO-REFUSED: pair={pair} {' '.join(refusal.split())}")
+                    continue
                 spawn_cmd = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
                                              history_path=HISTORY_PLACEHOLDER if history_path else None,
                                              view_root=self.view_root)

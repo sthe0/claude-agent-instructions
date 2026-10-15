@@ -96,7 +96,7 @@ from .render import (
     render_plan_md,
     render_stages_md,
 )
-from .submission import submission_advice, submission_violations
+from .submission import plan_size_findings, submission_advice, submission_violations
 from .state import (
     _EXECUTION_NODES,
     _MAX_PLAN_STACK,
@@ -1748,6 +1748,11 @@ def _submission_problems(doc, runner: Runner | None, weight_class: str | None) -
         judge_runner=runner,
         judge_enabled=enabled,
     )
+
+
+def _plan_ref_positions(plan_path: str) -> frozenset:
+    """Positions of the plan's external references, for the size lint's per-field warning."""
+    return frozenset(position for position, _path, _sha in plan_store.visited_refs(plan_path))
 
 
 def _run_check(command: str, expected_exit: int, runner: Runner | None, cwd: str | None = None):
@@ -3988,6 +3993,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
                       if v and os.path.isabs(v)), None),
             )
         )
+    size_findings = plan_size_findings(doc, _plan_ref_positions(plan_path))
+    problems.extend(f["message"] for f in size_findings if f["severity"] == "block")
     if problems:
         state.plan_verified = False
 
@@ -4080,6 +4087,9 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         check_venue_warnings(doc.stages, doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
     )
     d.data.setdefault("advisories", []).extend(grant_shadow.mixed_spelling_advisories(doc))
+    d.data.setdefault("advisories", []).extend(
+        f["message"] for f in size_findings if f["severity"] == "warn"
+    )
     # Submission seam (a)'s advice channel: a stage whose expected_result_image merely
     # restates its own check. Warn-only at all three seams — see submission.submission_advice.
     # Rides the same `run` resolved at the seam above (see its comment for why the fallback

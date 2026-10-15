@@ -3096,6 +3096,32 @@ def plan_content_digest(doc: PlanDoc) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def stage_rendered_size(stage, venue: "str | None" = None) -> int:
+    """Characters of the stage node a base-role reader is shown: every field, resolved and
+    inline (`render.render_node`). `stage` is a `Stage` or a raw stage table, which is
+    measured whether or not the loader would accept it."""
+    from .render import render_node
+
+    return len(render_node(stage, venue=venue, kind="stage" if isinstance(stage, dict) else None))
+
+
+def meta_rendered_size(doc_or_raw) -> int:
+    """Characters of the plan-level node (`[meta]` and `[meta.order]`) in the base role:
+    a `PlanDoc`, a raw plan or a raw `[meta]` table."""
+    from .render import render_node
+
+    return len(render_node(doc_or_raw, kind="meta" if isinstance(doc_or_raw, dict) else None))
+
+
+def oversize_node_message(node, size: int, limit: int) -> str:
+    """The refusal of a node over `plan-stage-max-chars`; `node` is "meta" or a stage index."""
+    label = "the plan-level node ([meta] and [meta.order])" if node == "meta" else f"stage {node}"
+    return (
+        f"{label} renders to {size} chars, over plan-stage-max-chars {limit}: it must be "
+        "reformulated or split"
+    )
+
+
 def stage_closure_digest(doc: PlanDoc, n: int) -> str:
     """A digest of stage `n` together with every stage it relies on, transitively: it
     moves when the stage's own whole-stage element key moves or when the closure digest of

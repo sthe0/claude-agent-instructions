@@ -37,7 +37,7 @@ asserts that no token of a node the row does not show reaches the captured argv 
 
 | Site | Plan content passed | Mechanism | Size bound |
 |---|---|---|---|
-| `scripts/spawn-specialist.py`:`_main` | projected fields of the meta node and the stage the spawn runs; the brief of that stage, a pair or a unit; a reviewer's plan digest | view | each field `PLAN_FIELD_INLINE_MAX_CHARS_DEFAULT`; prompt `dispatch_prompt_ceiling_chars` (refused at launch) |
+| `scripts/spawn-specialist.py`:`_main` | projected fields of the meta node and the stage the spawn runs; the brief of that stage, a pair or a unit; a reviewer's plan digest | view | each field `plan-field-inline-max-chars`; prompt `dispatch_prompt_ceiling_chars` (refused at launch) |
 | `scripts/spawn-cursor-specialist.py`:`main` | the stage brief of `--stage-index` with every field in full; without a stage index the full rendered plan, every reference resolved (a named exception to "never the inlined plan", ADR-0011: the Cursor agent CLI takes no `--add-dir`, so a view could not be read); no field reads as a pointer | inline field | none; this spawner has no prompt ceiling |
 | `scripts/agentctl/dispatch.py`:`build_argv` | the plan path and `--stage-index` handed to the spawner | view | none beyond the spawner's |
 | `scripts/plan-review-topological.py`:`spawn_pair` | the plan path and a pair or unit id handed to the spawner | view | none beyond the spawner's |

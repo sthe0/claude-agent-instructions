@@ -981,6 +981,106 @@ def submission_violations(
     return out
 
 
+_STAGE_FIELD_PATHS = {
+    "title": "title", "executor": "actor.executor", "expected_result_image": "subject.result",
+    "done_criterion": "criterion.done_criterion", "cost_tier": "actor.cost_tier",
+    "material": "subject.material", "invariants": "subject.invariants",
+    "means": "means.means", "method": "means.method", "procedure": "means.procedure",
+    "capability_required": "actor.capability_required",
+    "criterion_type": "criterion.criterion_type", "verify_command": "criterion.verify_command",
+    "verify_venue": "criterion.verify_venue", "verify_kind": "criterion.verify_kind",
+    "verify_venue_at_final": "criterion.verify_venue_at_final",
+    "negative_control": "criterion.negative_control",
+    "negative_control_waiver": "criterion.negative_control_waiver",
+    "ephemeral_artifacts_waiver": "ephemeral_artifacts_waiver", "conditions": "conditions",
+    "preconditions": "preconditions", "knowledge": "knowledge",
+    "backlog_issue": "backlog_issue",
+}
+
+
+def _typed_text(obj, dotted: str) -> str:
+    try:
+        value = _attr(obj, dotted)
+    except AttributeError:
+        return ""
+    value = getattr(value, "value", value)
+    return value if isinstance(value, str) else ""
+
+
+def _node_field_texts(doc_or_raw):
+    """`(node, kind, [(field, text)])` for the plan-level node and every stage, from a
+    `PlanDoc` or from a raw plan (references already resolved)."""
+    from .plan_refs import EXTERNALIZABLE_FIELDS
+
+    if isinstance(doc_or_raw, dict):
+        meta = doc_or_raw.get("meta") if isinstance(doc_or_raw.get("meta"), dict) else {}
+        order = meta.get("order") if isinstance(meta.get("order"), dict) else {}
+        stages = doc_or_raw.get("stage") if isinstance(doc_or_raw.get("stage"), list) else []
+
+        def raw_fields(table: dict, kind: str):
+            return [(f, table[f]) for f in sorted(EXTERNALIZABLE_FIELDS[kind])
+                    if isinstance(table.get(f), str)]
+
+        nodes = [("meta", "meta", raw_fields(meta, "meta")),
+                 ("meta", "order", raw_fields(order, "order"))]
+        for position, table in enumerate(stages, start=1):
+            if isinstance(table, dict):
+                nodes.append((position, "stage", raw_fields(table, "stage")))
+        return nodes
+    meta_fields = [(f, _typed_text(doc_or_raw.meta, f)) for f in sorted(EXTERNALIZABLE_FIELDS["meta"])]
+    order_fields = [(f, _typed_text(doc_or_raw.meta.order, f)) for f in sorted(EXTERNALIZABLE_FIELDS["order"])] \
+        if doc_or_raw.meta.order is not None else []
+    nodes = [("meta", "meta", [p for p in meta_fields if p[1]]),
+             ("meta", "order", [p for p in order_fields if p[1]])]
+    for stage in doc_or_raw.stages:
+        fields = [(f, _typed_text(stage, path)) for f, path in sorted(_STAGE_FIELD_PATHS.items())]
+        nodes.append((stage.index, "stage", [p for p in fields if p[1]]))
+    return nodes
+
+
+def plan_size_findings(doc_or_raw, ref_positions=frozenset()) -> list[dict]:
+    """Size findings of a plan: `{node, field, severity, message}`, node "meta" or a stage
+    index. A node whose rendered size exceeds `plan-stage-max-chars` BLOCKS, with no waiver; a
+    field of `plan_refs.EXTERNALIZABLE_FIELDS` longer than `plan-field-inline-max-chars` and
+    not an external reference (`ref_positions`, as `plan_refs.resolve_refs` reports them)
+    WARNS. Other fields, grants lists included, are never reported by field."""
+    from .config import Thresholds
+    from .plan import _venue_for, meta_rendered_size, oversize_node_message, stage_rendered_size
+
+    limits = Thresholds()
+    stage_max, field_max = limits.plan_stage_max_chars, limits.plan_field_inline_max_chars
+    findings: list[dict] = []
+    venue = None if isinstance(doc_or_raw, dict) else _venue_for(doc_or_raw)
+    for node, kind, fields in _node_field_texts(doc_or_raw):
+        position_key = "meta.order" if kind == "order" else node
+        for name, text in fields:
+            if len(text) <= field_max or (position_key, name) in ref_positions:
+                continue
+            where = "the plan-level node" if node == "meta" else f"stage {node}"
+            findings.append({
+                "node": node, "field": name, "severity": "warn",
+                "message": (
+                    f"{where} field {name!r} is {len(text)} chars, over "
+                    f"plan-field-inline-max-chars {field_max}: externalize it with "
+                    f"`agentctl plan-externalize`"
+                ),
+            })
+    sizes = [("meta", meta_rendered_size(doc_or_raw))]
+    if isinstance(doc_or_raw, dict):
+        stages = doc_or_raw.get("stage") if isinstance(doc_or_raw.get("stage"), list) else []
+        sizes += [(i, stage_rendered_size(t, venue)) for i, t in enumerate(stages, start=1)
+                  if isinstance(t, dict)]
+    else:
+        sizes += [(s.index, stage_rendered_size(s, venue)) for s in doc_or_raw.stages]
+    for node, size in sizes:
+        if size > stage_max:
+            findings.append({
+                "node": node, "field": None, "severity": "block",
+                "message": oversize_node_message(node, size, stage_max),
+            })
+    return findings
+
+
 def submission_advice(doc, *, judge_runner=None, judge_enabled: bool = True) -> list[str]:
     """Everything this seam has to SAY about `doc` without refusing it. [] == nothing.
 

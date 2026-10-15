@@ -32,6 +32,7 @@ from lib import kind_baselines
 
 from . import grants as _grants
 from . import plan_refs, plan_store
+from .config import Thresholds
 from .directive import Directive
 from .plan import (
     CONDITION_MARKERS,
@@ -48,6 +49,7 @@ from .plan import (
     PlanDoc,
     PlanError,
     _derive_stage_grants,
+    _build_supplies,
     _venue_for,
     consumers,
     grants_sha256,
@@ -420,12 +422,18 @@ def render_stage_fields(doc: PlanDoc, stage_index: int) -> str:
     stage = next((s for s in doc.stages if s.index == stage_index), None)
     if stage is None:
         raise ValueError(f"no stage with index {stage_index} in plan {doc.meta.task_id!r}")
-    return "\n".join(_stage_field_lines(doc, stage, dependency_blocks=False)).rstrip() + "\n"
+    return render_node(stage, venue=_venue_for(doc))
 
 
-def _stage_field_lines(doc: PlanDoc, s, *, dependency_blocks: bool) -> list[str]:
+def _stage_field_lines(
+    doc: "PlanDoc | None", s, *, dependency_blocks: bool, venue: "str | None" = None,
+) -> list[str]:
     """The stage section of `render_stage_brief`: heading and every non-empty field.
-    `dependency_blocks=False` lists the direct dependencies by index only."""
+    `dependency_blocks=False` lists the direct dependencies by index only. A caller with
+    no `doc` names the grant `venue` itself (None: no venue declared) and cannot ask for
+    dependency blocks."""
+    if doc is not None:
+        venue = _venue_for(doc)
     lines: list[str] = []
     lines.append(f"## Stage {s.index}: {s.title}")
     lines.append("")
@@ -507,7 +515,7 @@ def _stage_field_lines(doc: PlanDoc, s, *, dependency_blocks: bool) -> list[str]
             lines.append(f"  - {edge}")
     if s.control:
         lines.append(f"- **Control (prior attestation):** {s.control}")
-    lines.extend(_grants_lines(s, _venue_for(doc)))
+    lines.extend(_grants_lines(s, venue))
     lines.extend(_effects_lines(s))
     if s.principle is not None:
         p = s.principle
@@ -561,10 +569,7 @@ def unit_base_text(doc: PlanDoc) -> str:
     """Every field of the `base` unit: the meta (goal, done criterion), the order
     (customer, functional place, requirements with derivations), its coverage map
     and the final checks."""
-    return _lines_text(
-        render_meta_md(doc) + render_order_md(doc) + render_order_coverage_md(doc)
-        + render_final_checks_md(doc)
-    )
+    return _lines_text(_meta_node_lines(doc) + render_final_checks_md(doc))
 
 
 def _node_label(doc: PlanDoc, node: "int | str") -> str:
@@ -1125,7 +1130,199 @@ def render_unit_review_bundle(
 # granted to the model, so the plan content a prompt carries is bounded by the site, not
 # by the size of the plan. ------------------------------------------------------------
 
-PLAN_FIELD_INLINE_MAX_CHARS_DEFAULT = 4000
+# --- Node renderer and size limits: one node (the plan-level node or a stage) printed with
+# every field, the text both the base role of a site and the size measure are taken from. ---
+
+_STAGE_SCHEMA_KEYS = (
+    plan_refs.EXTERNALIZABLE_FIELDS["stage"] | plan_refs.NON_STRING_FIELDS["stage"]
+    | {"observation", "control"}
+)
+_META_SCHEMA_KEYS = plan_refs.EXTERNALIZABLE_FIELDS["meta"] | plan_refs.NON_STRING_FIELDS["meta"]
+_ORDER_SCHEMA_KEYS = plan_refs.EXTERNALIZABLE_FIELDS["order"] | plan_refs.NON_STRING_FIELDS["order"]
+_WRAPPER_STAGE = {
+    "title": "-", "executor": "in_thread", "expected_result_image": "-", "done_criterion": "-",
+}
+
+
+def _meta_node_lines(doc: PlanDoc) -> list[str]:
+    return render_meta_md(doc) + render_order_md(doc) + render_order_coverage_md(doc)
+
+
+def _meta_extra_lines(doc: PlanDoc) -> list[str]:
+    """The meta fields `render_meta_md` and `render_order_md` leave out."""
+    lines: list[str] = []
+    if doc.meta.delivery_worktree:
+        lines.append(f"- **Delivery worktree:** {doc.meta.delivery_worktree}")
+    if doc.meta.order is not None and doc.meta.order.parent_norm:
+        lines.append(f"- **Parent norm:** {doc.meta.order.parent_norm}")
+    return lines
+
+
+def _undefined_lines(raw: dict, schema: frozenset) -> list[str]:
+    return [
+        f"- **{key}:** {_raw_value_text(raw[key])}" for key in sorted(k for k in raw if k not in schema)
+    ]
+
+
+def _raw_value_text(value: object) -> str:
+    return value if isinstance(value, str) else json.dumps(value, sort_keys=True, default=str)
+
+
+def _generic_node_lines(heading: str, raw: dict, schema: frozenset) -> list[str]:
+    """A raw node the loader cannot type: every key it holds, the schema's first and then
+    the undefined ones sorted."""
+    lines = [heading, ""]
+    lines.extend(f"- **{key}:** {_raw_value_text(raw[key])}" for key in sorted(k for k in raw if k in schema))
+    lines.extend(_undefined_lines(raw, schema))
+    return lines
+
+
+def _typed_stage_from_raw(raw: dict):
+    """The Stage `parse_plan` makes of a raw stage table, or None when the table does not
+    parse on its own (a required key missing, a value the loader refuses)."""
+    index = raw.get("index", 1)
+    shell = {k: v for k, v in raw.items() if k not in ("depends_on", "supplies")}
+    try:
+        doc = parse_plan({
+            "meta": {"task_id": "node"},
+            "stage": [{**_WRAPPER_STAGE, **shell, "index": index}],
+        }, strict=False)
+        stage = doc.stages[0]
+        stage.supplies = _build_supplies(raw, int(index))
+    except (PlanError, ValueError, TypeError, AttributeError):
+        return None
+    return stage
+
+
+def _raw_stage_node_text(raw: dict, venue: "str | None") -> str:
+    stage = _typed_stage_from_raw(raw) if all(raw.get(k) for k in _WRAPPER_STAGE) else None
+    if stage is None:
+        index = raw.get("index", "?")
+        lines = _generic_node_lines(f"## Stage {index}: {raw.get('title', '')}", raw, _STAGE_SCHEMA_KEYS)
+        return _lines_text(lines)
+    lines = _stage_field_lines(None, stage, dependency_blocks=False, venue=venue)
+    return _lines_text([*lines, *_undefined_lines(raw, _STAGE_SCHEMA_KEYS)])
+
+
+def _raw_meta_node_text(raw: dict) -> str:
+    meta = raw["meta"] if isinstance(raw.get("meta"), dict) else raw
+    try:
+        doc = parse_plan({"meta": meta, "stage": [dict(_WRAPPER_STAGE)]}, strict=False)
+    except (PlanError, ValueError, TypeError, AttributeError):
+        doc = None
+    order = meta.get("order") if isinstance(meta.get("order"), dict) else {}
+    if doc is None:
+        lines = _generic_node_lines("# Plan", meta, _META_SCHEMA_KEYS)
+        lines.extend(_generic_node_lines("## Order", order, _ORDER_SCHEMA_KEYS) if order else [])
+        return _lines_text(lines)
+    lines = [*_meta_node_lines(doc), *_meta_extra_lines(doc), *_undefined_lines(meta, _META_SCHEMA_KEYS),
+             *_undefined_lines(order, _ORDER_SCHEMA_KEYS)]
+    return _lines_text(lines)
+
+
+def render_node(
+    node, *, role: str = "base", inline_all: bool = True, venue: "str | None" = None,
+    kind: "str | None" = None,
+) -> str:
+    """The text of one plan node with every field printed in full, references resolved:
+    a stage (`state.Stage`, or a raw stage table), or the plan-level node — `[meta]` and
+    `[meta.order]` — given a `PlanDoc` or a raw plan (or `[meta]`) dict.
+
+    The `base` role prints each field of the node itself and nothing of its neighbours: no
+    direct-dependency summaries, no final-verification labels, no coverage control text. A
+    raw table is rendered whether or not the loader would accept it — what it holds is
+    typed when it parses, and every key it holds is printed either way, the undefined ones
+    last — so a node the loader refuses can still be measured. `venue` is the grant venue
+    of a stage given without its plan; `kind` ("meta" or "stage") says what a raw table is
+    when its keys do not (a bare `[meta]` table)."""
+    if role != "base" or not inline_all:
+        raise ValueError("render_node prints the base role with every field inline")
+    if isinstance(node, PlanDoc):
+        return _lines_text([*_meta_node_lines(node), *_meta_extra_lines(node)])
+    if isinstance(node, dict):
+        if (kind or ("meta" if "meta" in node else "stage")) == "meta":
+            return _raw_meta_node_text(node)
+        return _raw_stage_node_text(node, venue)
+    return _lines_text(_stage_field_lines(None, node, dependency_blocks=False, venue=venue))
+
+
+PATH_PLACEHOLDERS = ("<view-root>", "<repo>", "<cwd>", "<plans-dir>", "<agent-home>", "<home>")
+
+
+def named_prompt_paths(view_root: "str | Path") -> "list[tuple[Path, str]]":
+    """The machine-specific directories a prompt can name, each with its placeholder."""
+    from lib import config_root
+
+    paths = (
+        Path(view_root), Path(__file__).resolve().parents[2], Path.cwd(),
+        config_root.plans_dir(), config_root.agent_home(), Path.home(),
+    )
+    return list(zip(paths, PATH_PLACEHOLDERS))
+
+
+def normalize_prompt_paths(text: str, view_root: "str | Path") -> str:
+    """`text` with the machine-specific directories it names replaced by placeholders —
+    the view root by `<view-root>`; the repo root, the working directory, the plans
+    directory, the agent home and the user's home by `<repo>`, `<cwd>`, `<plans-dir>`,
+    `<agent-home>` and `<home>` — longest path first, so a prompt measures the same on
+    any machine."""
+    paths: dict[str, str] = {}
+    for path, placeholder in named_prompt_paths(view_root):
+        for form in {str(path), str(Path(path).resolve())}:
+            if len(form) > 1:
+                paths[form] = placeholder
+    for form in sorted(paths, key=len, reverse=True):
+        text = text.replace(form, paths[form])
+    return text
+
+
+_ceiling_chars_cache: list = []
+
+
+def dispatch_ceiling_chars() -> int:
+    """The prompt ceiling a spawn is refused above (`spawn-specialist.py`'s
+    `dispatch_prompt_ceiling_chars` for the default model)."""
+    if not _ceiling_chars_cache:
+        import importlib.util
+
+        script = Path(__file__).resolve().parents[1] / "spawn-specialist.py"
+        spec = importlib.util.spec_from_file_location("spawn_specialist_ceiling", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _ceiling_chars_cache.append(module.dispatch_prompt_ceiling_chars(None))
+    return _ceiling_chars_cache[0]
+
+
+def topo_unit_refusal(doc: PlanDoc, unit_nodes, prompt_text: "str | None" = None) -> "str | None":
+    """Why a topological review of `unit_nodes` (node ids; "meta" or "base" stands for the
+    plan-level node) must not be spawned, or None when it may. A node over
+    `plan-stage-max-chars` is refused with the message the submission lint blocks with; a
+    `prompt_text` over the spawn ceiling is refused on its own size."""
+    from .plan import oversize_node_message
+
+    limit = Thresholds().plan_stage_max_chars
+    venue = _venue_for(doc)
+    for node in unit_nodes:
+        if node in ("meta", PAIR_BASE_NODE):
+            label, text = "meta", render_node(doc)
+        else:
+            stage = next((s for s in doc.stages if s.index == int(node)), None)
+            if stage is None:
+                continue
+            label, text = int(node), render_node(stage, venue=venue)
+        if len(text) > limit:
+            return oversize_node_message(label, len(text), limit)
+    if prompt_text is not None:
+        ceiling = dispatch_ceiling_chars()
+        if len(prompt_text) > ceiling:
+            return (
+                f"the review prompt for {', '.join(str(n) for n in unit_nodes)} is "
+                f"{len(prompt_text)} chars, over the spawn ceiling {ceiling}: the nodes fit "
+                f"plan-stage-max-chars {limit} but the prompt around them does not — shrink "
+                "the nodes it shows, their dependency summaries or the review history"
+            )
+    return None
+
 
 NON_PLAN_BRIEF_MAX_CHARS = 20000
 
@@ -1399,7 +1596,7 @@ def build_site_prompt(
             return SitePrompt(unit_base_text(doc), (), frozenset({"meta"}))
         return SitePrompt(render_stage_fields(doc, stage), (), frozenset({int(stage)}))
 
-    limit = PLAN_FIELD_INLINE_MAX_CHARS_DEFAULT if inline_max_chars is None else inline_max_chars
+    limit = Thresholds().plan_field_inline_max_chars if inline_max_chars is None else inline_max_chars
     if not with_view:
         limit = sys.maxsize
     shown_doc, pointer_objects = _pointerize(doc, limit)

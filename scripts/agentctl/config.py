@@ -142,6 +142,17 @@ class Thresholds:
         """Cap on concurrent pair-reviewer spawns within one topological level."""
         return self._int("review-parallel-max")
 
+    @property
+    def plan_stage_max_chars(self) -> int:
+        """Largest rendered size, in characters, of a stage or of the plan-level node."""
+        return self._int("plan-stage-max-chars")
+
+    @property
+    def plan_field_inline_max_chars(self) -> int:
+        """Longest prose field a plan prints inline; a longer one reads as a pointer or
+        is externalized."""
+        return self._int("plan-field-inline-max-chars")
+
     def effort_absolute_interactions(self) -> int:
         """Absolute threshold on user-interaction count for the interactions scale;
         `0` means the scale is accounting-only / disabled (see config.md row for
