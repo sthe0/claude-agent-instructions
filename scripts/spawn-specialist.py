@@ -2280,6 +2280,10 @@ def communicate_until_final_result(
     still alive then is reaped with its whole process group (`reaped`). `final_result`
     is that line parsed, None when the child printed none; a child that prints no final
     result is waited for as `communicate` does."""
+    if getattr(proc, "stdout", None) is None:
+        # A process without a stdout pipe cannot be read incrementally.
+        stdout_text, stderr_text = proc.communicate(input=prompt)
+        return stdout_text, stderr_text, False, None
     out_chunks: list[str] = []
     err_chunks: list[str] = []
     final_seen = threading.Event()
