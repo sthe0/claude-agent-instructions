@@ -449,3 +449,56 @@ def test_subplan_naming_another_order_books_each_side_to_its_own_window(
         f"BEHAVIOUR: parent window {_order_window('order-parent')}, child window "
         f"{_order_window('order-child')}; expected (3.0, 7.0) and (2.0, 4.0) as (spend, minutes)"
     )
+
+
+def test_child_units_after_its_last_flush_reach_the_childs_order_window(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    parent_plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    child_plan = _copy_plan(parent_plan, tmp_path / "child.toml")
+    monkeypatch.setattr(
+        cli, "_ledgered_order_key",
+        lambda state: "order-child" if state.plan_path == child_plan else "order-parent")
+    _to_executing_stage1(store, "P", parent_plan)
+    _book(store, "P", spend=3.0, minutes=7.0)
+
+    _push_and_approve(store, "P", child_plan)
+    _book(store, "P", spend=2.0, minutes=4.0)
+    _flush(store, "P")
+    _book(store, "P", spend=1.0, minutes=1.0)
+    _pop(store, "P")
+    _flush(store, "P")
+
+    assert (_order_window("order-parent"), _order_window("order-child")) == ((3.0, 7.0), (3.0, 5.0)), (
+        f"BEHAVIOUR: parent window {_order_window('order-parent')}, child window "
+        f"{_order_window('order-child')}; the child's 1.0/1.0 booked after its last flush belongs "
+        "to the child's window"
+    )
+
+
+def test_pop_of_a_pre_56_frame_leaves_the_live_binding_and_grants(store, venued_fixtures_dir, tmp_path):
+    parent_plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    child_plan = _copy_plan(parent_plan, tmp_path / "child.toml")
+    _to_executing_stage1(store, "P", parent_plan)
+    _push_and_approve(store, "P", child_plan)
+    state = store.load("P")
+    frame = state.plan_stack[-1]
+    # The shape from_dict gives a frame written before schema 56: none of the binding keys.
+    frame.plan_binding_captured = False
+    frame.runtime_grants = None
+    frame.plan_snapshot_path = frame.plan_snapshot_hash = None
+    frame.approved_grants_sha256 = frame.approved_grant_entries = frame.accepted_plan_digest = None
+    live_grants = {"1": [{"rule": "Bash(git status:*)", "provenance": "runtime",
+                          "stage_title": "Add tests"}]}
+    state.runtime_grants = {k: [dict(e) for e in v] for k, v in live_grants.items()}
+    store.save(state)
+
+    _resolve_child_in_place(store, "P")
+    live_binding = {k: v for k, v in _bound(store.load("P")).items() if k != "runtime_grants"}
+    popped = cli.cmd_pop_subplan(ns(session="P"), store=store)
+    assert popped.ok is True, f"setup: pop-subplan failed: {popped.detail}"
+
+    after = store.load("P")
+    after_binding = {k: v for k, v in _bound(after).items() if k != "runtime_grants"}
+    assert (after_binding, after.runtime_grants) == (live_binding, live_grants), (
+        "BEHAVIOUR: a pop of a frame written before schema 56 changed the live binding or runtime grants"
+    )

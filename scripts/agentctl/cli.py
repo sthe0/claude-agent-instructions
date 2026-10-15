@@ -12020,6 +12020,9 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
             f"pop-subplan requires node=RESOLVED (child must fully resolve first); current node={state.node}",
         )
     child_task_id = state.task_id
+    # The mirror of push's flush: the child's plan may name another order, so what it spent
+    # since its last flush is booked to its own window before the parent's plan is restored.
+    _flush_order_effort(state, store=store)
     new_node = transition(state.node, "pop_subplan")  # RESOLVED -> EXECUTING
     frame = state.plan_stack.pop()
     # Restore all parent plan-level fields from the frame.
