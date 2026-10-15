@@ -11268,6 +11268,11 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 if s.outcome.status == StageStatus.FAILED.value:
                     s.outcome.status = StageStatus.PENDING.value
             _archive_difficulty(state, closing_waiver)
+            if not state.approval.passed:
+                return _replan_to_plan_ready(
+                    state, store, new, echo_advice, kind="no_change", exited_diagnosing=True,
+                    plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
+                    plan_sha256=_new_plan_sha256, **replan_cause)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
             state.log("replan", kind="no_change", exited_diagnosing=True, plan=args.plan,
                       prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
@@ -11312,6 +11317,11 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
         state.final_check = new.meta.final_check
         if diagnosing:
             _archive_difficulty(state, closing_waiver)
+            if not state.approval.passed:
+                return _replan_to_plan_ready(
+                    state, store, new, echo_advice, kind="refinement", exited_diagnosing=True,
+                    plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
+                    plan_sha256=_new_plan_sha256, **replan_cause)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
         state.log("replan", kind="refinement", exited_diagnosing=diagnosing, plan=args.plan,
                   prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
@@ -11391,11 +11401,18 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     state.overall_done_criterion = new.meta.done_criterion or state.overall_done_criterion
     state.current_stage = None
     _archive_difficulty(state, closing_waiver)
+    return _replan_to_plan_ready(
+        state, store, new, echo_advice, kind="substantive", plan=args.plan,
+        prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256, **replan_cause)
+
+
+def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advice: list[str],
+                          **log_fields) -> Directive:
+    """Re-arm the plan-approval gate and park the session at PLAN_READY after a replan
+    that needs the plan approved again, logging `log_fields` as the `replan` event."""
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
-    state.log("replan", kind="substantive", plan=args.plan,
-              prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
-              **replan_cause)
+    state.log("replan", **log_fields)
     _count_replan(state)
     effort.rederive(state)  # re-derive AFTER logging so this replan is counted
     store.save(state)
@@ -11410,7 +11427,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
         ), echo_advice)
     return _with_advisories(Directive(
         True, state.node, "await_user_approval",
-        "substantive replan; HARD GATE — re-approval required",
+        f"{log_fields['kind']} replan; HARD GATE — re-approval required",
         marker="PLAN-READY", data=directive_data,
     ), echo_advice)
 

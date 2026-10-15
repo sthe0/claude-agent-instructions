@@ -25,6 +25,7 @@ import argparse
 import datetime as dt
 import fnmatch
 import json
+import math
 import os
 import re
 import shutil
@@ -2261,7 +2262,7 @@ def final_result_grace_s(environ=None) -> float:
         grace = float(raw)
     except ValueError:
         return FINAL_RESULT_GRACE_S
-    return grace if grace >= 0 else FINAL_RESULT_GRACE_S
+    return grace if math.isfinite(grace) and grace >= 0 else FINAL_RESULT_GRACE_S
 
 
 def _is_final_result(text: str) -> bool:
@@ -2298,7 +2299,7 @@ def communicate_until_final_result(
         for line in proc.stdout:
             out_chunks.append(line)
             if (not final_seen.is_set() and line.rstrip().endswith("}")
-                    and _is_final_result("".join(out_chunks))):
+                    and _is_final_result(line)):
                 final_seen.set()
 
     def read_stderr() -> None:

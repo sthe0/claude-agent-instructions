@@ -12997,6 +12997,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "85dbe7a8000fb3cb"
+domain = "code"
+file = "scripts/tests/test_pretrial_child_lifecycle.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "13ad1b111026e521"
 domain = "code"
 file = "scripts/tests/test_pretrial_child_lifecycle.py"
@@ -13029,6 +13037,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "534fbbde52f697e9"
+domain = "code"
+file = "scripts/tests/test_pretrial_child_lifecycle.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "f57b615d6fc17711"
 domain = "code"
 file = "scripts/tests/test_pretrial_child_lifecycle.py"
@@ -13046,6 +13062,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "40d4af401024bd2d"
+domain = "code"
+file = "scripts/tests/test_pretrial_child_lifecycle.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "6e464189e51ed26b"
 domain = "code"
 file = "scripts/tests/test_pretrial_child_lifecycle.py"
 class = "not-a-gate"

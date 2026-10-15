@@ -414,3 +414,133 @@ def test_wrapper_normal_exit_result_as_base(tmp_path):
     assert returned, "the wrapper did not return for a child that exited at once"
     assert returncode == 0, f"the wrapper exited {returncode} for a child that succeeded"
     assert "COMPLETED: stub child finished" in stdout, f"result text not forwarded: {stdout[:200]!r}"
+
+
+# --- #423: the escalation must be addressed to this parent session and stage -------------
+
+
+def _fresh_after_escalation_rewritten(monkeypatch, tmp_path, **escalated_to):
+    home, workdir, first, child, store, old_digest = _escalated_child(
+        monkeypatch, tmp_path, node=Node.DIAGNOSING.value, approved=False)
+    state = store.load(child).to_dict()
+    state["difficulty"]["escalated_to"].update(escalated_to)
+    store.path(child).write_text(json.dumps(state), encoding="utf-8")
+
+    second = _spawn(monkeypatch, home, workdir)
+
+    _assert_fresh(second, child)
+
+
+def test_escalation_to_another_parent_session_mints_fresh_session(monkeypatch, tmp_path):
+    _fresh_after_escalation_rewritten(monkeypatch, tmp_path, parent_session="another-parent")
+
+
+def test_escalation_to_another_stage_mints_fresh_session(monkeypatch, tmp_path):
+    _fresh_after_escalation_rewritten(monkeypatch, tmp_path, stage_index=STAGE + 1)
+
+
+# --- #423: a resumed child that stands at DIAGNOSING re-approves instead of crashing ----
+
+
+def _diagnosing_child_with_closed_cycle(store, venued_fixtures_dir, sid: str) -> None:
+    from test_difficulty import (
+        _critique, _declare, _investigate, _normalize, _to_failed_stage1,
+    )
+
+    _to_failed_stage1(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
+    _declare(store, sid)
+    _investigate(store, sid)
+    _critique(store, sid)
+    _normalize(store, sid)
+
+
+def test_resumed_diagnosing_child_reapproves_after_refinement_replan(
+        store, venued_fixtures_dir, tmp_path):
+    from agentctl.stage_norm import StageNorm
+
+    sid = "resumed-diagnosing"
+    _diagnosing_child_with_closed_cycle(store, venued_fixtures_dir, sid)
+    state = store.load(sid)
+    assert state.node == Node.DIAGNOSING.value and state.approval.passed, "setup"
+    record = norm_handoff.build_record(
+        parent_session="parent", stage_index=1, kind="developer",
+        norm=StageNorm.from_stage(state.stage(1)), grants=[], depth=1, parent_lineage=None)
+    path, sha = norm_handoff.write_record(tmp_path / "handoffs", record)
+    _load_spawn().refresh_resumed_child_link(
+        store, state, norm_handoff.format_env_value(path, sha))
+    state = store.load(sid)
+    assert state.node == Node.DIAGNOSING.value and not state.approval.passed, "setup"
+
+    cli.cmd_replan(ns(session=sid, plan=str(venued_fixtures_dir / "plan_two_stage_refined.toml")),
+                   store=store)
+
+    state = store.load(sid)
+    assert state.node == Node.PLAN_READY.value and not state.approval.passed, (
+        f"BEHAVIOUR: a refinement replan of the resumed child left node={state.node} "
+        f"approval.passed={state.approval.passed} instead of asking for a new approval"
+    )
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    assert store.load(sid).node == Node.EXECUTING.value, (
+        "BEHAVIOUR: the re-approved resumed child cannot reach EXECUTING"
+    )
+
+
+# --- #424: the exit code after the wrapper reaped a child that outlived its result -------
+
+
+def _reaped_child_run(tmp_path: Path, *, is_error: bool) -> "tuple[bool, int | None, bool]":
+    """(wrapper returned, its exit code, a process of the child's group still alive) for a
+    stub that prints a final result with `is_error` and then stays alive past the grace."""
+    marker = _marker("reaped")
+    result = {**FINAL_RESULT, "is_error": is_error}
+
+    def stub(transcript: Path) -> str:
+        return (
+            "#!/bin/bash\n"
+            "cat > /dev/null\n"
+            f"mkdir -p {transcript.parent}\n"
+            f"echo '{{}}' > {transcript}\n"
+            f"echo '{json.dumps(result)}'\n"
+            f"exec -a {marker} sleep 600\n"
+        )
+
+    try:
+        returned, _, returncode = _run_wrapper(tmp_path, stub)
+        alive = subprocess.run(["pgrep", "-f", marker], capture_output=True).returncode == 0
+    finally:
+        subprocess.run(["pkill", "-9", "-f", marker], capture_output=True)
+    return returned, returncode, alive
+
+
+def test_reaped_child_exit_code_follows_its_successful_result(tmp_path):
+    returned, returncode, alive = _reaped_child_run(tmp_path, is_error=False)
+
+    assert returned, "BEHAVIOUR: the wrapper did not return for a child that outlived its result"
+    assert returncode == 0, (
+        f"BEHAVIOUR: the wrapper exited {returncode} for a successful result of a reaped child"
+    )
+    assert not alive, "BEHAVIOUR: the reaped child's process is still alive"
+
+
+def test_reaped_child_exit_code_follows_its_error_result(tmp_path):
+    returned, returncode, alive = _reaped_child_run(tmp_path, is_error=True)
+
+    assert returned, "BEHAVIOUR: the wrapper did not return for a child that outlived its result"
+    assert returncode == 1, (
+        f"BEHAVIOUR: the wrapper exited {returncode} for an error result of a reaped child"
+    )
+    assert not alive, "BEHAVIOUR: the reaped child's process is still alive"
+
+
+# --- #424: the grace override rejects non-finite values -----------------------------------
+
+
+def test_final_result_grace_rejects_non_finite_override():
+    spawn = _load_spawn()
+    for raw in ("nan", "inf", "-inf", "-1", "abc", ""):
+        got = spawn.final_result_grace_s({spawn.FINAL_RESULT_GRACE_ENV: raw})
+        assert got == spawn.FINAL_RESULT_GRACE_S, f"{raw!r} produced a grace of {got}"
+    assert spawn.final_result_grace_s({spawn.FINAL_RESULT_GRACE_ENV: "2.5"}) == 2.5
