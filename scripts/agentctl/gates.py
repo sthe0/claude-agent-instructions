@@ -2516,7 +2516,7 @@ def protected_grant_blockers(state: SessionState, target_plan: str | None) -> li
         doc = load_plan(target_plan)
     except (OSError, PlanError):
         return []
-    from .render import protected_grant_hits
+    from .protected_actions import protected_grant_hits
     entry_ids = sorted({entry_id for _stage, _rule, entry_id in protected_grant_hits(doc)})
     if not entry_ids:
         return []
@@ -3715,11 +3715,11 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
     exact Bash rule) is covered, segment by segment, by a `Bash(<prefix>:*)` rule the
     handoff holds (`grants.bash_command_covered_by_rules`, the matcher the harness-side
     cover uses): the parent's wildcard already authorizes that command, whichever rule
-    of the handoff it is, unless the text performs a protected action
-    (`protected_actions.protected_ids_of_command`): a wildcard never stands in for a
-    protected check, which the handoff must carry as the identical text. Every other
-    engine-executed fixed text the engine cannot resolve is refused unless the handoff
-    carries it. `resource_origins` is the plan's `(resource, origin, source)` tags
+    of the handoff it is, unless that rule itself covers a protected action
+    (`protected_actions.wildcard_hits`, the probe `approve` holds the grants to): such a
+    wildcard stands in for no check, which the handoff must carry as the identical
+    text. Every other engine-executed fixed text the engine cannot resolve is refused
+    unless the handoff carries it. `resource_origins` is the plan's `(resource, origin, source)` tags
     (`BoundaryView.resource_origins`): a resource that every one of its origins produces
     from a covered engine-executed text is not charged either, unless no approval could
     cover it (it is, contains or lies under a protected root or surface); without the tags
@@ -3751,13 +3751,12 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
         from . import grants as _grants
         from . import order_approvals as _oa
         from . import protected_actions as _protected_actions
-        held_wildcards = _held_wildcard_rules(held_unresolved)
+        held_wildcards = [rule for rule in _held_wildcard_rules(held_unresolved)
+                          if not _protected_actions.wildcard_hits([rule])]
 
         def text_covered(origin: str, source: str) -> bool:
             text = _check_text(origin, source)
-            return (text is not None
-                    and not _protected_actions.protected_ids_of_command(text)
-                    and _grants.bash_command_covered_by_rules(held_wildcards, text))
+            return text is not None and _grants.bash_command_covered_by_rules(held_wildcards, text)
 
         def only_from_covered_checks(requested) -> bool:
             origins = [(o, s) for r, o, s in resource_origins or () if r == requested]

@@ -27,7 +27,7 @@ from pathlib import Path
 
 from lib import argv_text, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from . import config as agentctl_config
@@ -91,7 +91,6 @@ from .render import (
     cmd_plan_grants,
     cmd_plan_render,
     plan_render_stage_arg_type,
-    protected_grant_hits,
     render_plan_grants,
     render_plan_md,
     render_stages_md,
@@ -5470,7 +5469,7 @@ def cmd_accept_protected_grant(args, *, store: StateStore, runner: Runner | None
     except (OSError, PlanError) as e:
         return Directive(False, state.node, "noop",
                          f"cannot record a protected-grant acceptance: {target} failed to load: {e}")
-    covered = sorted({hit_id for _stage, _rule, hit_id in protected_grant_hits(doc)})
+    covered = sorted({hit_id for _stage, _rule, hit_id in protected_actions.protected_grant_hits(doc)})
     if entry_id not in covered:
         return Directive(
             False, state.node, "noop",

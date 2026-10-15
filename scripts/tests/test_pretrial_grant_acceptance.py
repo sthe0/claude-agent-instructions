@@ -187,6 +187,7 @@ def test_covered_ordinary_check_stays_covered():
 
 
 from agentctl import own_contour  # noqa: E402
+import os  # noqa: E402
 import pytest  # noqa: E402
 from agentctl.grants import GrantValidationError, validate_rule  # noqa: E402
 from lib import widening_targets  # noqa: E402
@@ -285,3 +286,52 @@ def test_agent_approve_blocked_until_protected_grant_accepted(
     assert widening_targets.agentctl_user_authority_call(agent_call) == ACCEPT_VERB, (
         "an agent can run accept-protected-grant: it is not a user-authority verb"
     )
+    own_channel = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "agentctl-own.py"), ACCEPT_VERB, "--id", PROTECTED_ENTRY,
+         "--note", "agent self-acceptance"],
+        capture_output=True, text=True, env={**os.environ, own_contour.OWN_SESSION_ENV: sid},
+    )
+    assert own_channel.returncode == 2 and "outside the own contour" in own_channel.stderr, (
+        f"the child's own-contour channel did not refuse accept-protected-grant: "
+        f"rc={own_channel.returncode} {own_channel.stderr[-300:]}"
+    )
+    assert gates.protected_grant_blockers(home_store.load(sid), home_store.load(sid).plan_path) == [], (
+        "setup: the user's acceptance no longer counts"
+    )
+
+
+def test_child_protected_wildcard_covers_no_parent_check():
+    parent_link = {
+        "norm": {"criterion_type": "measurable", "verify_command": PARENT_VERIFY, "expected_exit": 0},
+        "norm_digest": "d" * 64,
+        "depth": 1,
+    }
+    variants = ["git push --force origin main", "git push origin HEAD:main", "git push origin master"]
+    checks = [{"identity": ("final_check", c), "origin": "final_check", "source": c} for c in variants]
+
+    boundary = gates.parent_norm_boundary(
+        parent_link, "d" * 64, [(PARENT_VERIFY, 0), *[(c, 0) for c in variants]], [], [],
+        unresolved=checks, held_unresolved=[("wildcard-tail", WILDCARD_PUSH)], max_depth=3,
+    )
+
+    uncovered = [item["source"] for item in boundary["unresolved_changed_commands"]]
+    assert uncovered == variants, (
+        f"BEHAVIOUR: the child's {WILDCARD_PUSH} still covers parent checks {sorted(set(variants) - set(uncovered))}"
+    )
+
+
+def test_child_non_protected_wildcard_still_covers_matching_parent_check():
+    parent_link = {
+        "norm": {"criterion_type": "measurable", "verify_command": PARENT_VERIFY, "expected_exit": 0},
+        "norm_digest": "d" * 64,
+        "depth": 1,
+    }
+    other_tests = "python3 -m pytest -q tests/test_other.py"
+    check = {"identity": ("final_check", other_tests), "origin": "final_check", "source": other_tests}
+
+    boundary = gates.parent_norm_boundary(
+        parent_link, "d" * 64, [(PARENT_VERIFY, 0), (other_tests, 0)], [], [],
+        unresolved=[check], held_unresolved=[("wildcard-tail", "Bash(python3 -m pytest:*)")], max_depth=3,
+    )
+
+    assert boundary["unresolved_changed_commands"] == []

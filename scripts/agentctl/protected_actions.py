@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import grants as _grants
+from . import plan as _plan
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -72,13 +73,21 @@ def wildcard_hits(rules) -> list[tuple[str, str]]:
     return hits
 
 
-def protected_ids_of_command(command: str) -> list[str]:
-    """The entry ids whose probe `command` is, or extends with further arguments. Used
-    to refuse a wildcard as the cover of a delegated check that performs a protected
-    action: such a check is covered only by an identical entry the parent holds."""
-    text = (command or "").strip()
-    return [e.id for e in CATALOGUE
-            if any(text == probe or text.startswith(probe + " ") for probe in e.probe_commands)]
+def stage_protected_hits(declared, derived) -> list[tuple[str, str]]:
+    """`wildcard_hits` over one stage's effective (declared + derived) allow rules."""
+    return wildcard_hits([r.rule for r in declared.allow] + [r.rule for r in derived.allow])
+
+
+def protected_grant_hits(doc: _plan.PlanDoc) -> list[tuple[int, str, str]]:
+    """`(stage index, rule, protected-action id)` for every rule of every stage's
+    effective (declared+derived) grant set that covers a protected action."""
+    venue = _plan._venue_for(doc)
+    hits: list[tuple[int, str, str]] = []
+    for s in doc.stages:
+        declared, derived, _dropped = _plan._stage_declared_and_derived_grants(s, venue)
+        hits.extend((s.index, rule, entry_id)
+                    for rule, entry_id in stage_protected_hits(declared, derived))
+    return hits
 
 
 def norm_anchor_problems(repo_root: Path | None = None) -> list[str]:

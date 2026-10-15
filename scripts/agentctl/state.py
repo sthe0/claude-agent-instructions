@@ -1003,6 +1003,8 @@ class RiskAcceptance:
 # (gates.protected_grant_blockers), so a later widening asks again.
 @dataclass
 class ProtectedGrantAcceptance:
+    """One acceptance; `plan_path` and acceptances for superseded grant sets are kept
+    as an audit trail, not pruned."""
     entry_id: str
     grants_sha256: str
     plan_path: str

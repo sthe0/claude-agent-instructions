@@ -24,7 +24,6 @@ from pathlib import Path
 
 from lib import kind_baselines
 
-from . import grants as _grants
 from . import protected_actions
 from .directive import Directive
 from .plan import (
@@ -41,8 +40,8 @@ from .plan import (
     PAIR_BASE_NODE,
     PlanDoc,
     PlanError,
-    _derive_stage_grants,
     _sha256_hex,
+    _stage_declared_and_derived_grants,
     _venue_for,
     consumers,
     grants_sha256,
@@ -54,35 +53,6 @@ from .plan import (
     reliance_set,
     review_pairs,
 )
-
-
-def _stage_declared_and_derived_grants(s, venue: str | None):
-    """A stage's declared grants (an empty `StageGrants` when the stage
-    authors none) plus its derived grants and dropped-entry list — the one
-    place that pairs a stage with the venue-scoped derivation (`plan.
-    _derive_stage_grants`, which takes a None venue), shared by
-    `render_stage_brief`, `render_plan_md`, `render_plan_grants`, and
-    `cmd_plan_grants` so no projection can drift from another on how a
-    stage's effective grant set is computed."""
-    declared = s.grants if getattr(s, "grants", None) else _grants.StageGrants()
-    derived, dropped = _derive_stage_grants(s, venue)
-    return declared, derived, dropped
-
-
-def _stage_protected_hits(declared, derived) -> list[tuple[str, str]]:
-    return protected_actions.wildcard_hits(
-        [r.rule for r in declared.allow] + [r.rule for r in derived.allow])
-
-
-def protected_grant_hits(doc: PlanDoc) -> list[tuple[int, str, str]]:
-    """`(stage index, rule, protected-action id)` for every rule of every stage's
-    effective (declared+derived) grant set that covers a protected action."""
-    venue = _venue_for(doc)
-    hits: list[tuple[int, str, str]] = []
-    for s in doc.stages:
-        declared, derived, _dropped = _stage_declared_and_derived_grants(s, venue)
-        hits.extend((s.index, rule, entry_id) for rule, entry_id in _stage_protected_hits(declared, derived))
-    return hits
 
 
 def _protected_hit_text(rule: str, entry_id: str) -> str:
@@ -1293,7 +1263,7 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
         dr_r = [f"{a.path}:{a.mode}" for a in derived.add_dirs if a.provenance == "derived:DR-R"]
         note = _no_venue_note(s, venue)
         protected = [_protected_hit_text(rule, entry_id)
-                     for rule, entry_id in _stage_protected_hits(declared, derived)]
+                     for rule, entry_id in protected_actions.stage_protected_hits(declared, derived)]
         if fmt == "full":
             lines.append(f"Stage {s.index} ({s.title}):")
             if declared_rules:

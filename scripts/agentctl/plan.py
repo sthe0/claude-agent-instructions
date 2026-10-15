@@ -3344,6 +3344,19 @@ def _derive_stage_grants(stage, venue: str | None):
     return _grants.derive_stage_grants(anchored, venue="/")
 
 
+def _stage_declared_and_derived_grants(s, venue: str | None):
+    """A stage's declared grants (an empty `StageGrants` when the stage
+    authors none) plus its derived grants and dropped-entry list — the one
+    place that pairs a stage with the venue-scoped derivation (`_derive_stage_grants`,
+    which takes a None venue), shared by `render_stage_brief`, `render_plan_md`,
+    `render_plan_grants`, `cmd_plan_grants` and `protected_actions.protected_grant_hits`
+    so no projection can drift from another on how a stage's effective grant set is
+    computed."""
+    declared = s.grants if getattr(s, "grants", None) else _grants.StageGrants()
+    derived, dropped = _derive_stage_grants(s, venue)
+    return declared, derived, dropped
+
+
 def _effective_grants_for_stage(stage, venue: str | None) -> "StageGrants":
     """DECLARED plus DERIVED, in that order — the set `grant_covers_call` checks an
     actual tool call against and the set `_grants_grew` compares across a replan.
