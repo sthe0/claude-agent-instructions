@@ -2191,8 +2191,10 @@ def refresh_resumed_child_link(store, state, env_value: str) -> None:
     state.approval = GateRecord(state.approval.name)
     if state.node in _APPROVED_NODES:
         state.node = Node.PLAN_READY.value
+        state.current_stage = None
     elif state.node == Node.BLOCKED.value and state.blocked_from in _APPROVED_NODES:
         state.blocked_from = Node.PLAN_READY.value
+        state.current_stage = None
     state.log("norm_handoff_refreshed", parent_session=adopted["parent_session"],
               stage_index=adopted["stage_index"], old_norm_digest=old.get("norm_digest"),
               norm_digest=adopted["norm_digest"])

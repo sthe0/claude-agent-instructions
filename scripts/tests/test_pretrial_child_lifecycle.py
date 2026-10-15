@@ -308,6 +308,24 @@ def test_resume_refreshes_link_and_requires_reapproval(monkeypatch, tmp_path):
     )
 
 
+def test_resume_of_child_blocked_from_executing_returns_it_to_plan_ready(monkeypatch, tmp_path):
+    home, workdir, first, child, store, _ = _escalated_child(
+        monkeypatch, tmp_path, node=Node.BLOCKED.value, approved=True)
+    state = json.loads(store.path(child).read_text(encoding="utf-8"))
+    state["blocked_from"] = Node.EXECUTING.value
+    state["current_stage"] = 1
+    store.path(child).write_text(json.dumps(state), encoding="utf-8")
+
+    second = _spawn(monkeypatch, home, workdir)
+
+    _assert_resumed(second, child)
+    resumed = store.load(child)
+    assert resumed.blocked_from == Node.PLAN_READY.value and resumed.current_stage is None, (
+        f"BEHAVIOUR: the resumed child parked from EXECUTING kept its approved position "
+        f"(blocked_from={resumed.blocked_from}, current_stage={resumed.current_stage})"
+    )
+
+
 def test_unescalated_norm_change_mints_fresh_session(monkeypatch, tmp_path):
     home, workdir, first = _first_child(monkeypatch, tmp_path)
     child = first.option("--session-id")
