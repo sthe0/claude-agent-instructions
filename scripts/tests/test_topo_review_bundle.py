@@ -60,7 +60,7 @@ from agentctl.render import (
     render_unit_review_bundle,
     unit_base_text,
 )
-from plan_site_fixture import token, write_plan
+from plan_site_fixture import token, write_hypertext_plan, write_plan
 
 _DECLARED_ONLY = "declared-only (supplies-wins collapse; not dispatch-ordered)"
 _SECTION_HEADINGS = (
@@ -314,7 +314,32 @@ def test_tb3_non_source_service_shows_interface_only_no_full_brief():
     assert _method_sentinel(3) in bundle
 
 
-def test_tb3_pair_binding_digests_are_the_sha256_of_the_bytes_the_reviewer_sees():
+def _view_file_sha(site, name: str) -> str:
+    return hashlib.sha256((site.view_dir / name).read_bytes()).hexdigest()
+
+
+def test_tb3_service_file_digest_is_the_sha256_of_the_view_file_for_a_plan_under_the_limit(tmp_path):
+    plan = write_plan(tmp_path / "author")
+    doc = load_plan(plan)
+    for pair, service_file in (("2-1", "stage-1.md"), ("3-2", "stage-2.md"), ("4-3", "stage-3.md")):
+        site = _topo_pair_site(plan, tmp_path / "views", pair)
+        assert pair_binding(doc, pair)["service_file_digest"] == _view_file_sha(site, service_file)
+
+
+def test_tb3_a_service_field_over_the_limit_is_bound_as_authored_not_as_the_view_bytes(tmp_path):
+    plan = write_hypertext_plan(tmp_path / "author", long_method=True)
+    doc = load_plan(plan)
+    site = _topo_pair_site(plan, tmp_path / "views", "3-2")
+
+    bound = pair_binding(doc, "3-2")["service_file_digest"]
+
+    # The binding digests the plan as authored; the reviewer reads the pointer copy.
+    assert bound == hashlib.sha256(node_file_text(doc, 2).encode("utf-8")).hexdigest()
+    assert bound != _view_file_sha(site, "stage-2.md")
+    assert "see objects/" in (site.view_dir / "stage-2.md").read_text(encoding="utf-8")
+
+
+def test_tb3_pair_binding_digests_are_the_sha256_of_the_texts_the_bundle_is_built_from():
     doc = _doc(
         [
             _stage(1),
@@ -324,19 +349,16 @@ def test_tb3_pair_binding_digests_are_the_sha256_of_the_bytes_the_reviewer_sees(
         order=_order(["R1"], {"R1": ["stage 3 verify_command"]}),
     )
     sha = lambda text: hashlib.sha256(text.encode("utf-8")).hexdigest()
-    for pair, base_node, service_node, service_text in (
-        ("3-2", 3, 2, render_stage_interface(doc, 2, contract=True)),
+    for pair, service_text in (
+        ("3-2", render_stage_interface(doc, 2, contract=True)),
         # Stage 1 relies on nothing, so it is shown by its full brief.
-        ("2-1", 2, 1, render_stage_brief(doc, 1)),
-        # The coverage edge of stage 3: base side is the order file, the service text is
-        # the stage's contract interface plus the control the entry names.
-        ("base-3", "base", 3, pair_service_text(doc, 3, "base")),
+        ("2-1", render_stage_brief(doc, 1)),
+        # The coverage edge of stage 3: the service text is the stage's contract
+        # interface plus the control the entry names.
+        ("base-3", pair_service_text(doc, 3, "base")),
     ):
         sections = _sections(_bundle(doc, pair))
         binding = pair_binding(doc, pair)
-        assert binding["context_digest"] == sha(node_file_text(doc, "base"))
-        assert binding["base_file_digest"] == sha(node_file_text(doc, base_node))
-        assert binding["service_file_digest"] == sha(node_file_text(doc, service_node))
         assert service_text.rstrip("\n") in sections["## Service declared product: "]
         assert binding["service_interface_digest"] == sha(service_text)
         assert binding["edge_digest"] == sha(sections["## Edge"] + "\n")

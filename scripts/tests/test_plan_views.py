@@ -215,9 +215,7 @@ def test_a_site_without_a_stage_holds_every_file_the_plan_was_assembled_from(kin
     site = _site(kind, index, tmp_path / "views")
 
     held = {p.name for p in (site.view_dir / "objects").iterdir()}
-    expected = assembled | ({hashlib.sha256(index.read_bytes()).hexdigest()}
-                            if kind == "whole-plan-review" else set())
-    assert held == expected
+    assert held == assembled | {hashlib.sha256(index.read_bytes()).hexdigest()}
     assert set(site.shown_nodes) == {"meta"}
     assert "## Referenced files" in site.text
     assert all(f"objects/{sha256}" in site.text for sha256 in assembled)
@@ -231,6 +229,41 @@ def test_every_site_with_a_view_opens_with_the_view_header(case, plan, tmp_path)
 
     assert site.text.startswith(f"Plan view: `{site.view_dir}` — ")
     assert "`see objects/<sha256>`" in site.text.splitlines()[0]
+
+
+def test_a_site_without_a_stage_lets_the_model_read_every_stage_of_an_inline_plan(plan, tmp_path):
+    digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+
+    site = _site("dispatch-no-stage", plan, tmp_path / "views")
+
+    assert f"objects/{digest}" in site.text
+    assert not any(t in site.text for t in fx.hidden_tokens({"meta"}))
+    index_object = (site.view_dir / "objects" / digest).read_text(encoding="utf-8")
+    assert [t for stage in fx.STAGES for t in fx.shown_tokens({stage}) if t not in index_object] == []
+
+
+def test_the_stage_brief_final_verification_names_nothing_the_model_cannot_read(plan, tmp_path):
+    site = _site("dispatch-stage-brief", plan, tmp_path / "views", stage=2)
+
+    brief = (site.view_dir / "stage-2.md").read_text(encoding="utf-8")
+    assert "## Final verification (labels only" in brief
+    assert "the coordinator runs them" in brief
+    assert "full plan file" not in site.text + brief
+
+
+def test_a_site_for_a_caller_that_grants_no_directory_has_no_view_and_no_header(plan, tmp_path):
+    from agentctl.render import build_site_prompt
+
+    for kind, selector in (("dispatch-stage-brief", {"stage": 2}), ("dispatch-no-stage", {})):
+        site = build_site_prompt(kind, plan, view_root=tmp_path / "views", with_view=False,
+                                 **selector)
+
+        assert site.add_dirs == () and site.view_dir is None and site.view_files == ()
+        assert "Plan view:" not in site.text
+        assert "objects/" not in site.text and "## Referenced files" not in site.text
+        assert [t for t in fx.shown_tokens(set(selector.values()) or set())
+                if t not in site.text] == []
+    assert not (tmp_path / "views").exists()
 
 
 def test_a_plan_without_references_has_no_referenced_files_section(plan, tmp_path):
@@ -420,9 +453,13 @@ def test_the_cursor_prompt_is_the_site_text_and_none_of_the_unshown_stages(
     rc, prompt = fx.launch_cursor(monkeypatch, tmp_path, fx.cursor_argv(plan, *extra))
 
     selector = {"stage": 2} if kind == "dispatch-stage-brief" else {}
-    site = _site(kind, plan, os.environ["AGENTCTL_TOPO_UNITS_DIR"], **selector)
+    from agentctl.render import build_site_prompt
+
+    site = build_site_prompt(kind, plan, with_view=False, inline_max_chars=sys.maxsize, **selector)
     assert prompt is not None
     assert site.text in prompt
+    assert "Plan view:" not in prompt
+    assert not any(Path(os.environ["AGENTCTL_TOPO_UNITS_DIR"]).glob("*"))
     assert [t for t in fx.hidden_tokens(shown) if t in prompt] == []
 
 

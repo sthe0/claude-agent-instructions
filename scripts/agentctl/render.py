@@ -316,10 +316,18 @@ def render_stages_md(doc: PlanDoc, stage_indices) -> str:
     return "\n".join(render_stage_brief(doc, index) for index in sorted(stage_indices))
 
 
+STAGE_BRIEF_FINAL_CHECK_NOTE = "see the full plan file for those"
+STAGE_BRIEF_FINAL_CHECK_NOTE_IN_VIEW = "the coordinator runs them"
+
+
 def render_stage_brief(
     doc: PlanDoc, stage_index: int, *, closure_digest: "str | None" = None,
+    final_check_note: str = STAGE_BRIEF_FINAL_CHECK_NOTE,
 ) -> str:
     """Pure: a PlanDoc + one stage index -> a markdown brief of JUST that stage.
+
+    `final_check_note` ends the Final verification heading; a site whose reader holds no
+    plan file passes a note that names nothing to look for.
 
     A given `closure_digest` adds the stage's closure digest line; the caller computes it
     with `stage_closure_digest` on the plan as authored (a site view renders a copy whose
@@ -385,7 +393,7 @@ def render_stage_brief(
     if m.final_check:
         lines.append(
             "## Final verification (labels only — this stage does not need the "
-            "commands; see the full plan file for those)"
+            f"commands; {final_check_note})"
         )
         lines.append("")
         for i, fc in enumerate(m.final_check, start=1):
@@ -1344,7 +1352,7 @@ def build_site_prompt(
     kind: str, plan_path: "str | Path", *, stage: "int | None" = None,
     pair: "str | None" = None, unit: "str | None" = None,
     view_root: "str | Path | None" = None, history: "dict | None" = None,
-    materialize: bool = True, inline_max_chars: "int | None" = None,
+    materialize: bool = True, inline_max_chars: "int | None" = None, with_view: bool = True,
 ) -> SitePrompt:
     """The plan content one model-facing site passes, and the directories the model is
     granted to read the rest from (`add_dirs`). `shown_nodes` names the nodes — "meta" or a
@@ -1355,6 +1363,8 @@ def build_site_prompt(
     root): the node files, `objects/<sha256>` for every file the shown nodes were
     resolved from and for every field printed as a pointer, and `MANIFEST.json`.
     `materialize=False` computes the same prompt and view path without writing.
+    `with_view=False` is for a caller that grants the model no directory: the text carries
+    no view header and no file listing, nothing is written, and `add_dirs` is empty.
 
     Raises PlanError for a plan that does not load and ValueError for a stage, pair or
     unit the plan does not have."""
@@ -1374,8 +1384,11 @@ def build_site_prompt(
 
     limit = PLAN_FIELD_INLINE_MAX_CHARS_DEFAULT if inline_max_chars is None else inline_max_chars
     shown_doc, pointer_objects = _pointerize(doc, limit)
-    plan_digest_object = kind == "whole-plan-review"
+    index_object = kind in ("whole-plan-review", "dispatch-no-stage")
     label = kind
+
+    def header(view_dir: Path) -> list[str]:
+        return _view_header(view_dir) if with_view else []
 
     if kind == "dispatch-stage-brief":
         if stage is None:
@@ -1389,8 +1402,10 @@ def build_site_prompt(
             closure = None
 
         def render(view_dir: Path) -> tuple[str, dict[str, str]]:
-            brief = render_stage_brief(shown_doc, int(stage), closure_digest=closure)
-            return "\n".join([*_view_header(view_dir), brief]), {node_file_name(int(stage)): brief}
+            brief = render_stage_brief(
+                shown_doc, int(stage), closure_digest=closure,
+                final_check_note=STAGE_BRIEF_FINAL_CHECK_NOTE_IN_VIEW)
+            return "\n".join([*header(view_dir), brief]), {node_file_name(int(stage)): brief}
     elif kind == "topo-pair":
         base, service = parse_pair(doc, pair or "")
         label = f"{kind}-{pair}"
@@ -1401,7 +1416,7 @@ def build_site_prompt(
             bundle = render_pair_review_bundle(
                 shown_doc, pair, plan_sha256=source.plan_sha256, view_dir=view_dir,
                 history=history)
-            return ("\n".join([*_view_header(view_dir), bundle]),
+            return ("\n".join([*header(view_dir), bundle]),
                     {node_file_name(service): node_file_text(shown_doc, service)})
     else:
         shown = frozenset({"meta"})
@@ -1409,8 +1424,17 @@ def build_site_prompt(
 
         def render(view_dir: Path) -> tuple[str, dict[str, str]]:
             summary = plan_summary_text(shown_doc)
-            parts = [*_view_header(view_dir), summary, *_referenced_files_section(source.visited)]
-            if plan_digest_object:
+            parts = [*header(view_dir), summary]
+            if with_view:
+                parts.extend(_referenced_files_section(source.visited))
+            if kind == "dispatch-no-stage" and with_view:
+                parts.extend([
+                    "## Plan file", "",
+                    f"The plan file itself is `{_POINTER_PREFIX}{source.plan_sha256}` in the view "
+                    f"directory: read it for the full text of any stage listed above.",
+                    "",
+                ])
+            if kind == "whole-plan-review":
                 parts.extend([
                     "## Plan digest", "",
                     f"The plan file itself is `{_POINTER_PREFIX}{source.plan_sha256}` in the view "
@@ -1431,11 +1455,13 @@ def build_site_prompt(
             sha256: source.files[sha256] for sha256, nodes in owners.items()
             if nodes & view_nodes and sha256 in source.files
         })
-        if plan_digest_object:
+        if index_object:
             objects[source.plan_sha256] = source.index_bytes
         return _site_files(node_files, objects)
 
     placeholder = Path("<view>")
+    if not with_view:
+        return SitePrompt(render(placeholder)[0], (), shown)
     first_text, node_files = render(placeholder)
     files = view_files(first_text, node_files)
     root = Path(view_root) if view_root is not None else _default_view_root()

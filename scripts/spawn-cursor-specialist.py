@@ -129,7 +129,8 @@ def plan_section_text(args: argparse.Namespace) -> str:
     kind = "dispatch-no-stage" if stage_index is None else "dispatch-stage-brief"
     selector = {} if stage_index is None else {"stage": stage_index}
     try:
-        return build_site_prompt(kind, args.plan, inline_max_chars=sys.maxsize, **selector).text
+        return build_site_prompt(
+            kind, args.plan, inline_max_chars=sys.maxsize, with_view=False, **selector).text
     except PlanError:
         return non_plan_brief_text(args.plan)
 

@@ -88,6 +88,11 @@ fragment to still appear in its file.
 - `scripts/agentctl/render.py` — `` The plan was assembled from these files, each a file of this view: ``
 - `scripts/agentctl/render.py` — `` The plan file itself is ``
 - `scripts/agentctl/render.py` — `` directory: its sha256 is the plan digest. ``
+- `scripts/agentctl/render.py` — `` directory: read it for the full text of any stage listed above. ``
+- `scripts/agentctl/render.py` — `` This is a PROJECTED BRIEF of stage ``
+- `scripts/agentctl/render.py` — `` stage(s) in the plan — the other stages are not ``
+- `scripts/agentctl/render.py` — `` ## Final verification (labels only — this stage does not need the ``
+- `scripts/agentctl/render.py` — `` STAGE_BRIEF_FINAL_CHECK_NOTE_IN_VIEW = "the coordinator runs them" ``
 - `scripts/spawn-specialist.py` — `` ## Working plan — topological review unit or pair ``
 - `scripts/spawn-specialist.py` — `` the full plan is never inlined for --review-topo — ``
 - `scripts/spawn-specialist.py` — `` ## Working plan — stage {args.stage_index} brief ``
