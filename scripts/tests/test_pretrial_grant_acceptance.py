@@ -184,3 +184,104 @@ def test_covered_ordinary_check_stays_covered():
     )
 
     assert boundary["unresolved_changed_commands"] == []
+
+
+from agentctl import own_contour  # noqa: E402
+import pytest  # noqa: E402
+from agentctl.grants import GrantValidationError, validate_rule  # noqa: E402
+from lib import widening_targets  # noqa: E402
+
+ACCEPT_VERB = "accept-protected-grant"
+PROTECTED_BLOCKER_FRAGMENT = "protected action"
+
+
+def _protected_blockers(directive) -> list[str]:
+    return [b for b in (directive.data or {}).get("blockers", []) if PROTECTED_BLOCKER_FRAGMENT in b]
+
+
+def test_protected_action_quotes_match_norm_anchors(tmp_path):
+    from agentctl import protected_actions
+
+    entry = protected_actions.CATALOGUE[0]
+    assert protected_actions.norm_anchor_problems() == [], "the repo's norms and the catalogue disagree"
+
+    stale = tmp_path / "stale"
+    (stale / Path(entry.norm_ref).parent).mkdir(parents=True)
+    (stale / entry.norm_ref).write_text(
+        protected_actions.anchor_marker(entry.id) + " A reworded norm that no longer says it.\n",
+        encoding="utf-8",
+    )
+    reworded = protected_actions.norm_anchor_problems(stale)
+    assert reworded, f"a norm reworded away from the catalogue quote goes unnoticed: {reworded}"
+
+    orphan = tmp_path / "orphan"
+    (orphan / Path(entry.norm_ref).parent).mkdir(parents=True)
+    (orphan / entry.norm_ref).write_text(
+        protected_actions.anchor_marker(entry.id) + " " + entry.quote + "\n", encoding="utf-8")
+    assert protected_actions.norm_anchor_problems(orphan) == [], "setup: the matching root reports a problem"
+    (orphan / "notes.md").write_text(protected_actions.anchor_marker("no-such-entry") + "\n", encoding="utf-8")
+    orphaned = protected_actions.norm_anchor_problems(orphan)
+    assert any("no-such-entry" in p for p in orphaned), (
+        f"an anchor with no catalogue entry goes unnoticed: {orphaned}"
+    )
+
+
+def test_accept_protected_grant_is_user_authority_verb():
+    call = ["python3", "scripts/agentctl-cli.py", ACCEPT_VERB, "--session", "s", "--id", PROTECTED_ENTRY]
+
+    assert ACCEPT_VERB in widening_targets.AGENTCTL_USER_AUTHORITY_VERBS
+    assert widening_targets.agentctl_user_authority_call(call) == ACCEPT_VERB
+    assert ACCEPT_VERB not in own_contour.OWN_CONTOUR_VERBS
+    with pytest.raises(GrantValidationError):
+        validate_rule(f"Bash(python3 scripts/agentctl-cli.py {ACCEPT_VERB}:*)")
+
+
+def test_protected_grant_acceptance_invalidated_by_grant_change(
+    home_store, fixtures_dir, tmp_path, gate_on
+):
+    sid = "protected-invalidated"
+    _reach_plan_ready_delivered(home_store, fixtures_dir, tmp_path, sid, WILDCARD_PUSH)
+    accepted = _accept_protected_grant(home_store, sid, tmp_path)
+    assert accepted.returncode == 0, f"setup: accept-protected-grant failed: {(accepted.stdout + accepted.stderr)[-300:]}"
+    plan = home_store.load(sid).plan_path
+    assert gates.protected_grant_blockers(home_store.load(sid), plan) == [], "setup: the acceptance did not take"
+
+    original = Path(plan).read_text(encoding="utf-8")
+    widened = original.replace(f'allow = ["{WILDCARD_PUSH}"]', f'allow = ["{WILDCARD_PUSH}", "Bash(git status:*)"]', 1)
+    assert widened != original, "setup: the plan's grants were not changed"
+    Path(plan).write_text(widened, encoding="utf-8")
+
+    assert gates.protected_grant_blockers(home_store.load(sid), plan), (
+        "an acceptance recorded for one grant set still counts after the grants changed"
+    )
+    refused = cli.cmd_approve(ns(session=sid, by="user"), store=home_store)
+    assert refused.ok is False and _protected_blockers(refused), (
+        f"approve of the widened plan is not held by the protected-grant blocker: {refused.detail} {refused.data}"
+    )
+    again = _accept_protected_grant(home_store, sid, tmp_path)
+    assert again.returncode == 0, f"a new acceptance for the new grants failed: {(again.stdout + again.stderr)[-300:]}"
+    assert gates.protected_grant_blockers(home_store.load(sid), plan) == []
+
+
+def test_agent_approve_blocked_until_protected_grant_accepted(
+    home_store, fixtures_dir, tmp_path, gate_on
+):
+    sid = "protected-agent"
+    _reach_plan_ready_delivered(home_store, fixtures_dir, tmp_path, sid, WILDCARD_PUSH)
+
+    refused = cli.cmd_approve(ns(session=sid, by="agent"), store=home_store)
+
+    assert refused.ok is False and _protected_blockers(refused), (
+        f"approve --by agent of a plan granting {WILDCARD_PUSH} is not held by the "
+        f"protected-grant blocker: {refused.detail} {refused.data}"
+    )
+    accepted = _accept_protected_grant(home_store, sid, tmp_path)
+    assert accepted.returncode == 0, f"setup: accept-protected-grant failed: {(accepted.stdout + accepted.stderr)[-300:]}"
+    after = cli.cmd_approve(ns(session=sid, by="agent"), store=home_store)
+    assert _protected_blockers(after) == [], (
+        f"the protected-grant blocker survives the user's acceptance: {_protected_blockers(after)}"
+    )
+    agent_call = ["python3", "scripts/agentctl-cli.py", ACCEPT_VERB, "--session", sid, "--id", PROTECTED_ENTRY]
+    assert widening_targets.agentctl_user_authority_call(agent_call) == ACCEPT_VERB, (
+        "an agent can run accept-protected-grant: it is not a user-authority verb"
+    )

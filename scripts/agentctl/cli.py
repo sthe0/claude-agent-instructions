@@ -91,6 +91,7 @@ from .render import (
     cmd_plan_grants,
     cmd_plan_render,
     plan_render_stage_arg_type,
+    protected_grant_hits,
     render_plan_grants,
     render_plan_md,
     render_stages_md,
@@ -151,6 +152,7 @@ from .state import (
     plan_review_scope_for_pair,
     plan_review_scope_for_stage,
     plan_review_scope_stage_index,
+    ProtectedGrantAcceptance,
     ReattestStash,
     RequirementVerdict,
     RESOLUTION_ASK_MARKER,
@@ -5444,6 +5446,52 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     )
 
 
+def cmd_accept_protected_grant(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record the user's acceptance of ONE protected action the current plan's grants
+    cover (`protected_actions`) — a user-authority verb, so no spawned child or reviewer
+    is ever granted it. Purely a recorder: `gates.protected_grant_blockers` re-derives
+    the hits and the grants digest at `approve`, so an acceptance bound to a different
+    grant set simply fails to clear the gate."""
+    state = _require(store, args.session)
+    target = state.plan_path
+    if not target:
+        return Directive(False, state.node, "noop",
+                         "no plan to accept a protected grant against: submit a plan first")
+    entry_id = (getattr(args, "id", "") or "").strip()
+    note = (getattr(args, "note", "") or "").strip()
+    if not entry_id or not note:
+        return Directive(False, state.node, "noop",
+                         "accept-protected-grant requires a non-empty --id and --note")
+    if gates._normalize_string(note) in gates._PLACEHOLDER_SET:
+        return Directive(False, state.node, "noop",
+                         f"--note {note!r} reads as a placeholder, not a reason — say what concretely")
+    try:
+        doc = load_plan(target)
+    except (OSError, PlanError) as e:
+        return Directive(False, state.node, "noop",
+                         f"cannot record a protected-grant acceptance: {target} failed to load: {e}")
+    covered = sorted({hit_id for _stage, _rule, hit_id in protected_grant_hits(doc)})
+    if entry_id not in covered:
+        return Directive(
+            False, state.node, "noop",
+            f"the grants of {target} cover no protected action {entry_id!r} "
+            f"(covered: {covered or 'none'}) — nothing there to accept",
+        )
+    digest = grants_sha256(doc)
+    if not any(a.entry_id == entry_id and a.grants_sha256 == digest
+               for a in state.protected_grant_acceptances):
+        state.protected_grant_acceptances.append(ProtectedGrantAcceptance(
+            entry_id=entry_id, grants_sha256=digest, plan_path=target, note=note))
+    state.log("protected_grant_accept", target=target, entry_id=entry_id, grants_sha256=digest, note=note)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"protected action {entry_id!r} accepted for the current grant set of {target}; "
+        "a change to the plan's grants asks again",
+        data={"entry_id": entry_id, "grants_sha256": digest},
+    )
+
+
 def cmd_risk_accept(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Record a customer-facing acceptance of ONE named PlanReview concern's risk —
     the alternative to editing the plan to make a `revise` concern go away. Purely a
@@ -6240,6 +6288,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         gates.blockers(state, "plan_approval")
         + plugins.plugin_gate_blockers(state, "plan_approval")
         + review_blockers
+        + gates.protected_grant_blockers(state, state.plan_path)
     )
     if not by_agent:
         blockers = (
@@ -12306,6 +12355,7 @@ COMMANDS = {
     "plan-review-compose": cmd_plan_review_compose,
     "plan-review-pair-history": cmd_plan_review_pair_history,
     "risk-accept": cmd_risk_accept,
+    "accept-protected-grant": cmd_accept_protected_grant,
     "stage-review": cmd_stage_review,
     "code-review": cmd_code_review,
     "accept": cmd_accept,
@@ -12388,8 +12438,8 @@ _SESSION_COMMANDS = (
     "order-raise", "order-dispose", "order-list", "classify", "plan",
     "plan-render", "plan-grants", "plan-resources", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
-    "risk-accept", "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
-    "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
+    "risk-accept", "accept-protected-grant", "stage-review", "code-review", "accept", "approve",
+    "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
     "record-result", "declare",
     "investigate", "critique", "normalize", "difficulty-open", "difficulty-close",
     "verify-final", "resolve", "reject",
@@ -12404,7 +12454,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("goal", ("start", "reset")),
     ("done_criterion", ("start", "reset")),
     ("note", ("plugin-record", "confirm-delivery", "plan-review", "stage-review", "code-review",
-              "accept", "question-enumerate-escape", "fire-acknowledge")),
+              "accept", "question-enumerate-escape", "fire-acknowledge", "accept-protected-grant")),
     ("statement", ("ledger-add", "ledger-candidate")),
     ("source", ("ledger-add", "question-dispose")),
     ("premises", ("ledger-add",)),
@@ -12459,8 +12509,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("tracker_key", ("plugin-activate", "classify", "drive"), "tracker issue key (ABC-123)"),
     ("id", ("ledger-add", "ledger-candidate", "ledger-dispose", "question-raise",
             "question-research", "question-dispose", "question-rebind", "question-retire",
-            "question-candidate-dispose", "order-raise", "order-dispose"),
-     "claim / question / order-element id"),
+            "question-candidate-dispose", "order-raise", "order-dispose", "accept-protected-grant"),
+     "claim / question / order-element / protected-action id"),
     ("claim", ("ledger-dispose",), "id of the grounding claim, not its text"),
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
     ("target", ("question-raise", "plan-review", "plan-review-walk", "plan-review-compose",
@@ -12966,6 +13016,12 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
                          "question-dispose --disposition assumed's --risk")
     sp.add_argument("--author", default="",
                     help="who is accepting the risk — an identity token, not narrative")
+    sp = add("accept-protected-grant"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True,
+                    help="the protected-action id the plan's grants cover (shown in the grants "
+                         "block of present-plan, e.g. push-trunk)")
+    sp.add_argument("--note", required=True,
+                    help="why the user accepts that the grants cover this action")
     sp = add("stage-review"); sp.add_argument("--session", required=True)
     sp.add_argument("--verdict", choices=list(gates.STAGE_REVIEW_VERDICTS), required=True,
                     help="pass = clears the acceptance gate; revise = blocks; override = "

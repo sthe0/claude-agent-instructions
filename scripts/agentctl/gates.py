@@ -2503,6 +2503,33 @@ def grants_approval_blockers(state: SessionState, target_plan: str | None) -> li
     return []
 
 
+def protected_grant_blockers(state: SessionState, target_plan: str | None) -> list[str]:
+    """Precondition guardian for `approve`, for the user and the agent path alike: a
+    plan whose effective grants cover a protected action (`protected_actions`) is
+    approved only once the user accepted that action (`accept-protected-grant`) for
+    THIS grant set — the acceptance is bound to the plan's `grants_sha256` and the
+    entry id, so a later change to the grants asks again. Fails OPEN on a plan that
+    does not load and on one with no protected hit. [] == may pass."""
+    if not target_plan:
+        return []
+    try:
+        doc = load_plan(target_plan)
+    except (OSError, PlanError):
+        return []
+    from .render import protected_grant_hits
+    entry_ids = sorted({entry_id for _stage, _rule, entry_id in protected_grant_hits(doc)})
+    if not entry_ids:
+        return []
+    current = grants_sha256(doc)
+    accepted = {a.entry_id for a in state.protected_grant_acceptances if a.grants_sha256 == current}
+    return [
+        f"the plan's grants cover the protected action {entry_id!r} and the user has not accepted "
+        f"it for this grant set — accept-protected-grant --session <id> --id {entry_id} --note "
+        "<why> (a user decision), or narrow the grant"
+        for entry_id in entry_ids if entry_id not in accepted
+    ]
+
+
 def replan_authorization_active(state: SessionState) -> bool:
     """Whether the replan-authorization gate applies to this session.
 
@@ -3688,8 +3715,11 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
     exact Bash rule) is covered, segment by segment, by a `Bash(<prefix>:*)` rule the
     handoff holds (`grants.bash_command_covered_by_rules`, the matcher the harness-side
     cover uses): the parent's wildcard already authorizes that command, whichever rule
-    of the handoff it is. Every other engine-executed fixed text the engine cannot
-    resolve is refused unless the handoff carries it. `resource_origins` is the plan's `(resource, origin, source)` tags
+    of the handoff it is, unless the text performs a protected action
+    (`protected_actions.protected_ids_of_command`): a wildcard never stands in for a
+    protected check, which the handoff must carry as the identical text. Every other
+    engine-executed fixed text the engine cannot resolve is refused unless the handoff
+    carries it. `resource_origins` is the plan's `(resource, origin, source)` tags
     (`BoundaryView.resource_origins`): a resource that every one of its origins produces
     from a covered engine-executed text is not charged either, unless no approval could
     cover it (it is, contains or lies under a protected root or surface); without the tags
@@ -3720,11 +3750,14 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
             reasons.append(PARENT_NORM_CHECK_DROPPED)
         from . import grants as _grants
         from . import order_approvals as _oa
+        from . import protected_actions as _protected_actions
         held_wildcards = _held_wildcard_rules(held_unresolved)
 
         def text_covered(origin: str, source: str) -> bool:
             text = _check_text(origin, source)
-            return text is not None and _grants.bash_command_covered_by_rules(held_wildcards, text)
+            return (text is not None
+                    and not _protected_actions.protected_ids_of_command(text)
+                    and _grants.bash_command_covered_by_rules(held_wildcards, text))
 
         def only_from_covered_checks(requested) -> bool:
             origins = [(o, s) for r, o, s in resource_origins or () if r == requested]

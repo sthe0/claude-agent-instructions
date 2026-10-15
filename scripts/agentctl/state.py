@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 54  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 55  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -94,6 +94,9 @@ SCHEMA_VERSION = 54  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # 54: Difficulty gains escalated_to / escalated_from (the typed link a
                      # child's parent-norm escalation and the parent difficulty it opens
                      # each carry to the other side)
+                     # 55: SessionState gains protected_grant_acceptances (the user's
+                     # acceptance of a grant that covers a protected action, bound to the
+                     # grants sha256)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -991,6 +994,29 @@ class RiskAcceptance:
             meta_digest=d.get("meta_digest", ""),
             stage_keys=dict(raw) if isinstance(raw := d.get("stage_keys"), dict) else {},
             concern_text=d.get("concern_text", ""),
+        )
+
+
+# The user's acceptance of ONE protected action a plan's grants cover (schema 55) — see
+# protected_actions.py. Bound to the exact effective grant set by `grants_sha256`: a plan
+# whose grants change gets a different digest and the acceptance stops counting
+# (gates.protected_grant_blockers), so a later widening asks again.
+@dataclass
+class ProtectedGrantAcceptance:
+    entry_id: str
+    grants_sha256: str
+    plan_path: str
+    note: str
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "ProtectedGrantAcceptance | None":
+        if not d:
+            return None
+        return cls(
+            entry_id=d["entry_id"],
+            grants_sha256=d["grants_sha256"],
+            plan_path=d.get("plan_path", ""),
+            note=d.get("note", ""),
         )
 
 
@@ -2061,6 +2087,8 @@ class SessionState:
     # gates._plan_review_verdict_blockers fall back to today's unconditional block
     # on a `revise` verdict, unchanged.
     risk_acceptances: list["RiskAcceptance"] = field(default_factory=list)
+    # Schema 55: see ProtectedGrantAcceptance. Empty on legacy states.
+    protected_grant_acceptances: list["ProtectedGrantAcceptance"] = field(default_factory=list)
     # Review-round counter (schema 30), advanced on BOTH review paths:
     #   * pre-approval — cmd_submit_plan increments it on every resubmission at
     #     PLAN_READY (the revise_plan self-loop) made while a review record stands;
@@ -2687,6 +2715,10 @@ class SessionState:
         }
         data["risk_acceptances"] = [
             r for r in (RiskAcceptance.from_dict(x) for x in data.get("risk_acceptances", [])) if r is not None
+        ]
+        data["protected_grant_acceptances"] = [
+            r for r in (ProtectedGrantAcceptance.from_dict(x)
+                        for x in data.get("protected_grant_acceptances", [])) if r is not None
         ]
         data["stage_reviews"] = [
             r for r in (StageReview.from_dict(x) for x in data.get("stage_reviews", [])) if r is not None

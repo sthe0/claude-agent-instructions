@@ -821,6 +821,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
+id = "d5c4b0f90fb75ec3"
+domain = "code"
+file = "scripts/agentctl/gates.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "d98ea993cedd9451"
 domain = "code"
 file = "scripts/agentctl/gates.py"
@@ -1219,6 +1227,22 @@ file = "scripts/agentctl/procedure.py"
 class = "semantic-guarded"
 disposition = "keep"
 ground = "The third file in the engine whose subject IS free-text meaning: it decides whether a stage's `procedure` says anything its `method` does not — whether an author has written the requirement twice instead of writing a requirement and a sequence. Its regexes and its token overlap are `collapse_prefilter`, a high-recall structural PREFILTER whose only consumer (`submission._procedure_collapse`) gates it behind `judge_collapse` before any violation is emitted — the prefilter alone refuses nothing. Same correction as the two rows above, and it stands with conditions.py on the stronger side of them: the guarded decision drives a REFUSAL, not a warning."
+
+[[entry]]
+id = "df790a2f04851bf3"
+domain = "code"
+file = "scripts/agentctl/protected_actions.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "e536044d2b243a18"
+domain = "code"
+file = "scripts/agentctl/protected_actions.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
 id = "0967b15a23a3a0e9"
@@ -13109,7 +13133,31 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "fd2a93102ade8b71"
+domain = "code"
+file = "scripts/tests/test_pretrial_grant_acceptance.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "b3e37693908bbc8a"
+domain = "code"
+file = "scripts/tests/test_pretrial_grant_acceptance.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "4f0df5becc82b680"
+domain = "code"
+file = "scripts/tests/test_pretrial_grant_acceptance.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "6068a83e6497f4a0"
 domain = "code"
 file = "scripts/tests/test_pretrial_grant_acceptance.py"
 class = "not-a-gate"
@@ -16627,6 +16675,14 @@ file = "scripts/agentctl/procedure.py"
 class = "semantic-guarded"
 disposition = "keep"
 ground = "The third file in the engine whose subject IS free-text meaning: it decides whether a stage's `procedure` says anything its `method` does not — whether an author has written the requirement twice instead of writing a requirement and a sequence. Its regexes and its token overlap are `collapse_prefilter`, a high-recall structural PREFILTER whose only consumer (`submission._procedure_collapse`) gates it behind `judge_collapse` before any violation is emitted — the prefilter alone refuses nothing. Same correction as the two rows above, and it stands with conditions.py on the stronger side of them: the guarded decision drives a REFUSAL, not a warning. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "381d21dcf98a448d"
+domain = "code_file_rollup"
+file = "scripts/agentctl/protected_actions.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "0b112d8257bb07bf"
