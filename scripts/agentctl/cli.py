@@ -13347,10 +13347,11 @@ def _inject_default_session(argv: list[str], harness: str | None) -> list[str]:
     """Return a copy of ``argv`` with ``--session <harness>`` appended when the
     harness session id is known and the caller passed no --session of its own.
 
-    hook-state-gate.py authorizes production edits by the HARNESS conversation
-    session_id (payload["session_id"] == $CLAUDE_CODE_SESSION_ID). A self-chosen
-    --session silently drives a different engine state file than the gate reads,
-    so an omitted --session must default to the harness id — not stay unset and
+    hook-state-gate.py receives only the HARNESS conversation session_id
+    (payload["session_id"] == $CLAUDE_CODE_SESSION_ID) and reads the state of the
+    engine session bound to it (lib/engine_session_binding.py, written by a verb
+    that saves state under an explicit --session), else of the harness id itself.
+    An omitted --session must default to the harness id — not stay unset and
     fail the 30 required=True subcommands. Appending places the flag inside the
     subparser's argument region (--session is a subcommand option); it is a
     no-op when --session (either '--session X' or '--session=X') is already
@@ -13383,13 +13384,13 @@ def main(argv: list[str] | None = None, *, allow_abbrev: bool = True) -> int:
         directive = Directive(False, "(error)", "error", str(exc))
     else:
         _fire_plugins(args, store, directive)
-    if harness and session and session != harness and not _is_driven_by(harness, session):
+    if harness and session and session != harness and not _is_followed_by_gate(harness, session):
         print(
             f"agentctl: warning: --session {session!r} differs from "
-            f"CLAUDE_CODE_SESSION_ID {harness!r} and this command saved no state of it, "
-            f"so the production-edit gate does not follow it: an Edit from the harness "
-            f"session is decided by the harness id until a state-changing command "
-            f"drives {session!r}.",
+            f"CLAUDE_CODE_SESSION_ID {harness!r} and is not the session this harness "
+            f"session last drove with a state-changing command, so the production-edit "
+            f"gate does not follow it: an Edit from the harness session is decided by "
+            f"another session until a state-changing command drives {session!r}.",
             file=sys.stderr,
         )
     print(json.dumps(directive.to_dict(), ensure_ascii=False, indent=2))
@@ -13418,9 +13419,11 @@ class _BindingStore(FileStateStore):
             pass  # a binding that cannot be written leaves the gate at the harness id
 
 
-def _is_driven_by(harness: str, session: str) -> bool:
+def _is_followed_by_gate(harness: str, session: str) -> bool:
+    # The binding store always lives under the agent home; with --state-root the verb's
+    # state is not the gate's state either, so that case reports "not followed" as base did.
     try:
-        return _safe_session_id(session) in engine_session_binding.driven_sessions(harness)
+        return engine_session_binding.resolve(harness) == _safe_session_id(session)
     except Exception:
         return False
 

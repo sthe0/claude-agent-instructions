@@ -9,7 +9,8 @@ session; the gate then reads its decision from the engine session it was bound t
 One JSON file per harness session under ``<agentctl dir>/engine-session-bindings``,
 holding the bound engine sessions in drive order (the last entry is the most recent).
 Recency is the order of the list, not a clock reading, so two drives within one clock
-tick still order correctly. A binding whose state file no longer exists is skipped on
+tick still order correctly; each entry's ``ts`` is diagnostic only and is never read back.
+A binding whose state file no longer exists is skipped on
 read, never trusted.
 """
 from __future__ import annotations
@@ -56,8 +57,12 @@ def record_drive(harness_session: str, engine_session: str, now: dt.datetime) ->
         entries = [e for e in _read(path) if e["session"] != engine]
         entries.append({"session": engine, "ts": now.isoformat(timespec="seconds")})
         tmp = path.with_suffix(f".tmp{os.getpid()}")
-        tmp.write_text(json.dumps({"driven": entries}), encoding="utf-8")
-        os.replace(tmp, path)
+        try:
+            tmp.write_text(json.dumps({"driven": entries}), encoding="utf-8")
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
 
 def driven_sessions(harness_session: str) -> list[str]:

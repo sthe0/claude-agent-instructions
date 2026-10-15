@@ -205,3 +205,50 @@ def test_readonly_query_of_other_session_keeps_base_decision(tmp_path):
     assert _is_deny(_edit_from_harness(tmp_path)), (
         "a read-only query of another session must not move the gate off the harness session"
     )
+
+
+def test_status_of_unbound_session_still_warns_about_the_harness_id(tmp_path):
+    started = _agentctl(tmp_path, "start", "--session", ENGINE, "--task", "t", "--goal", "g",
+                        harness="harness-other")
+    assert started.returncode == 0, f"setup: start failed: {started.stdout[-300:]}"
+
+    query = _agentctl(tmp_path, "status", "--session", ENGINE)
+
+    assert query.returncode == 0, f"status failed: {query.stdout[-300:]}"
+    assert _session_mismatch_warnings(query.stderr), (
+        "a query of a session the harness never drove must still say the gate does not follow it"
+    )
+
+
+def _edit_from_linked_child(home: Path, child: str) -> subprocess.CompletedProcess:
+    payload = {"tool_name": "Edit", "session_id": child, "tool_input": {"file_path": PRODUCTION_FILE}}
+    env = {
+        "HOME": str(home), "PATH": "/usr/bin:/bin:/usr/local/bin",
+        "AGENTCTL_OWN_SESSION": child, "AGENTCTL_NORM_HANDOFF": "handoff", "AGENT_RECURSION_DEPTH": "1",
+    }
+    return subprocess.run(
+        [sys.executable, str(HOOK)], input=json.dumps(payload),
+        capture_output=True, text=True, env=env, timeout=60,
+    )
+
+
+def test_linked_child_bound_to_another_linked_session_is_not_redirected(tmp_path):
+    child, other = "child-c", "child-c2"
+
+    def write_linked_state(session: str, node: str) -> None:
+        path = _state_file(tmp_path, session)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"node": node, "weight_class": "SUBSTANTIVE", "parent_link": {}}))
+
+    write_linked_state(child, "CLASSIFIED")
+    started = _agentctl(tmp_path, "start", "--session", other, "--task", "t", "--goal", "g", harness=child)
+    assert started.returncode == 0, f"setup: start failed: {started.stdout[-300:]}"
+    write_linked_state(other, "EXECUTING")
+    assert not _is_deny(_edit_from_linked_child(tmp_path, other)), "setup: the other linked session may edit"
+
+    proc = _edit_from_linked_child(tmp_path, child)
+
+    assert _is_deny(proc), (
+        "BEHAVIOUR: a linked child that drove another linked session is decided by that session's "
+        f"node instead of its own contour: {proc.stdout[:300]}"
+    )

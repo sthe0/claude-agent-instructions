@@ -8,11 +8,10 @@ and confirm parse_args over the injected argv yields the harness session.
 """
 from __future__ import annotations
 
-import importlib.util
+import importlib
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
-MODULE = SCRIPTS_DIR / "agentctl" / "cli.py"
 
 
 def _load_cli():
@@ -22,11 +21,7 @@ def _load_cli():
     for p in (str(SCRIPTS_DIR), str(SCRIPTS_DIR / "agentctl")):
         if p not in sys.path:
             sys.path.insert(0, p)
-    spec = importlib.util.spec_from_file_location("agentctl.cli", MODULE)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    return importlib.import_module("agentctl.cli")
 
 
 _cli = _load_cli()

@@ -13,7 +13,9 @@ The two run in parallel — if there is no agentctl state file for the session t
 hook exits 0 (allow) and the prose-fallback nudge still applies.
 
 State file: <agent-home>/agentctl/state/<session_id>.json (see scripts/agentctl/store.py;
-the session_id is sanitized to alnum/-/_ exactly as FileStateStore does). <agent-home>
+the session_id is sanitized to alnum/-/_ exactly as FileStateStore does), where session_id
+is the payload's, or the engine session lib/engine_session_binding.py records that harness
+session as driving. <agent-home>
 resolves via lib/config_root.py (isolated ~/.claude-agent when present, else legacy
 ~/.claude). A session file left behind by a not-yet-migrated root is still found —
 resolve_state_path() checks the legacy root too — so the gate fails CLOSED (keeps
@@ -234,7 +236,11 @@ def deny_with(node: str, reason: str) -> None:
 def driven_engine_session(harness_session: str) -> str:
     """The engine session whose node decides an edit from `harness_session`: the one the
     cli last bound to it (lib/engine_session_binding.py), else the harness id itself.
-    A lookup failure falls back to the harness id, as for an unbound session."""
+    A lookup failure falls back to the harness id, as for an unbound session. A linked
+    child (an own-contour signal in the env) is never redirected: its contour is pinned to
+    its own session, which is the harness id, exactly as before the binding existed."""
+    if os.environ.get(OWN_SESSION_ENV, "").strip() or os.environ.get(NORM_HANDOFF_ENV, "").strip():
+        return harness_session
     try:
         return engine_session_binding.resolve(harness_session) or harness_session
     except Exception:
