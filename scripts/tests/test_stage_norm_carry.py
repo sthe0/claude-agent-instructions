@@ -18,6 +18,7 @@ import pytest
 
 from agentctl import cli
 from agentctl.state import SessionState, StageStatus
+from conftest import declare_venue
 
 PASSED = StageStatus.PASSED.value
 PENDING = StageStatus.PENDING.value
@@ -93,7 +94,8 @@ def statuses(request, store, tmp_path):
     substantive (a structural change). Both sites materialize it from the new plan,
     so both report only the two stages the carry decision is about."""
     def run(old_kwargs, new_kwargs):
-        old, new = _plan(**old_kwargs), _plan(extra_stage=True, **new_kwargs)
+        old = declare_venue(_plan(**old_kwargs), tmp_path)
+        new = declare_venue(_plan(extra_stage=True, **new_kwargs), tmp_path)
         if request.param == "approve-refresh":
             return _statuses_at_refresh(tmp_path, old, new)
         return _statuses_at_replan(store, tmp_path, old, new)

@@ -134,13 +134,13 @@ class TestFoldEnumerationOversize:
         return sidecar_root
 
     def test_fold_no_longer_sets_oversize_flag_on_e2big_sidecar(
-            self, store, fixtures_dir, tmp_path, monkeypatch):
+            self, store, venued_fixtures_dir, tmp_path, monkeypatch):
         """The fold is retired (amendments-2.md E3): an E2BIG sidecar left by an older
         engine version is left unread, so approve neither sets the flag nor changes
         the bag."""
         monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "agent-home"))
         sid = "fold-oversize"
-        plan = str(fixtures_dir / "plan_two_stage.toml")
+        plan = str(venued_fixtures_dir / "plan_two_stage.toml")
         _to_plan_ready(store, sid, plan)
 
         digest = plugins_premise._plan_content_digest(load_plan(plan))
@@ -156,12 +156,12 @@ class TestFoldEnumerationOversize:
         assert bag["enumerated_runner_stderr"] == before
 
     def test_fold_does_not_set_flag_on_healthy_sidecar(
-            self, store, fixtures_dir, tmp_path, monkeypatch):
+            self, store, venued_fixtures_dir, tmp_path, monkeypatch):
         """The flag must not appear when runner_ok=True; it is specific to the
         oversize failure path."""
         monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "agent-home"))
         sid = "fold-healthy"
-        plan = str(fixtures_dir / "plan_two_stage.toml")
+        plan = str(venued_fixtures_dir / "plan_two_stage.toml")
         _to_plan_ready(store, sid, plan)
 
         digest = plugins_premise._plan_content_digest(load_plan(plan))
@@ -199,10 +199,10 @@ class TestQuestionListOversizeRendering:
         bag["enumeration_refused_oversize"] = True
         return state
 
-    def test_legacy_oversize_flag_is_not_rendered_in_md_output(self, store, fixtures_dir):
+    def test_legacy_oversize_flag_is_not_rendered_in_md_output(self, store, venued_fixtures_dir):
         """The list row named a split-the-plan action for a refused enumeration; no
         enumeration runs any more, so a legacy bag's flag is carried and not shown."""
-        state = self._state_with_oversize_flag(str(fixtures_dir / "plan_two_stage.toml"))
+        state = self._state_with_oversize_flag(str(venued_fixtures_dir / "plan_two_stage.toml"))
         store.save(state)
 
         d = cli.cmd_question_list(ns(session="s", format="md"), store=store)
@@ -211,11 +211,11 @@ class TestQuestionListOversizeRendering:
         assert "enumeration refused (oversize)" not in d.detail
         assert "advisor_oversize" not in d.detail
 
-    def test_oversize_flag_absent_produces_no_warning(self, store, fixtures_dir):
+    def test_oversize_flag_absent_produces_no_warning(self, store, venued_fixtures_dir):
         """The warning must NOT appear when the flag is not set — guards against
         the string leaking into every question-list output."""
         state = SessionState(session_id="s", task_id="t",
-                             plan_path=str(fixtures_dir / "plan_two_stage.toml"),
+                             plan_path=str(venued_fixtures_dir / "plan_two_stage.toml"),
                              weight_class=WeightClass.SUBSTANTIVE.value)
         plugins.activate(state, "premise")
         store.save(state)
@@ -224,10 +224,10 @@ class TestQuestionListOversizeRendering:
 
         assert "enumeration refused (oversize)" not in d.detail
 
-    def test_oversize_warning_not_in_plain_format(self, store, fixtures_dir):
+    def test_oversize_warning_not_in_plain_format(self, store, venued_fixtures_dir):
         """The warning is only injected in --format md; the plain format must stay
         unaffected."""
-        state = self._state_with_oversize_flag(str(fixtures_dir / "plan_two_stage.toml"))
+        state = self._state_with_oversize_flag(str(venued_fixtures_dir / "plan_two_stage.toml"))
         store.save(state)
 
         d = cli.cmd_question_list(ns(session="s"), store=store)

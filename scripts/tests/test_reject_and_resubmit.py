@@ -44,9 +44,9 @@ def _to_resolution(store, sid, plan):
 
 # --- #14: reject -------------------------------------------------------------
 
-def test_reject_reopens_difficulty_cycle_and_fails_default_stage(store, fixtures_dir):
+def test_reject_reopens_difficulty_cycle_and_fails_default_stage(store, venued_fixtures_dir):
     sid = "rej1"
-    _to_resolution(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_resolution(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
 
     d = cli.cmd_reject(ns(session=sid, reason="output doesn't match what was asked", stage=None), store=store)
     assert d.marker == "OVERCOME-DIFFICULTY"
@@ -59,9 +59,9 @@ def test_reject_reopens_difficulty_cycle_and_fails_default_stage(store, fixtures
     assert state.difficulty.declaration.actual == "output doesn't match what was asked"
 
 
-def test_reject_named_stage(store, fixtures_dir):
+def test_reject_named_stage(store, venued_fixtures_dir):
     sid = "rej2"
-    _to_resolution(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_resolution(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
 
     d = cli.cmd_reject(ns(session=sid, reason="stage 1's output is wrong", stage=[1]), store=store)
     assert d.ok is False
@@ -71,9 +71,9 @@ def test_reject_named_stage(store, fixtures_dir):
     assert state.stage(2).outcome.status == StageStatus.PASSED.value  # not touched
 
 
-def test_reject_empty_reason_refused(store, fixtures_dir):
+def test_reject_empty_reason_refused(store, venued_fixtures_dir):
     sid = "rej3"
-    _to_resolution(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_resolution(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
 
     d = cli.cmd_reject(ns(session=sid, reason="   ", stage=None), store=store)
     assert d.ok is False
@@ -82,18 +82,18 @@ def test_reject_empty_reason_refused(store, fixtures_dir):
     assert all(s.outcome.status == StageStatus.PASSED.value for s in state.stages)
 
 
-def test_reject_refused_outside_resolution(store, fixtures_dir):
+def test_reject_refused_outside_resolution(store, venued_fixtures_dir):
     sid = "rej4"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
 
     d = cli.cmd_reject(ns(session=sid, reason="too early", stage=None), store=store)
     assert d.ok is False
     assert store.load(sid).node == Node.PLAN_READY.value
 
 
-def test_reject_unknown_stage_index_refused(store, fixtures_dir):
+def test_reject_unknown_stage_index_refused(store, venued_fixtures_dir):
     sid = "rej5"
-    _to_resolution(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_resolution(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
 
     d = cli.cmd_reject(ns(session=sid, reason="bad index", stage=[99]), store=store)
     assert d.ok is False
@@ -104,10 +104,10 @@ def test_reject_unknown_stage_index_refused(store, fixtures_dir):
 
 # --- #15: pre-approval plan resubmission (revise_plan) -----------------------
 
-def test_resubmit_at_plan_ready_uses_revise_plan_edge(store, fixtures_dir):
+def test_resubmit_at_plan_ready_uses_revise_plan_edge(store, venued_fixtures_dir):
     sid = "rev1"
-    original = str(fixtures_dir / "plan_two_stage.toml")
-    corrected = str(fixtures_dir / "plan_two_stage_refined.toml")
+    original = str(venued_fixtures_dir / "plan_two_stage.toml")
+    corrected = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_plan_ready(store, sid, original)
     assert store.load(sid).node == Node.PLAN_READY.value
 
@@ -120,14 +120,14 @@ def test_resubmit_at_plan_ready_uses_revise_plan_edge(store, fixtures_dir):
     assert not state.approval.passed
 
 
-def test_resubmit_of_an_unrelated_stage_edit_keeps_the_review(store, fixtures_dir):
+def test_resubmit_of_an_unrelated_stage_edit_keeps_the_review(store, venued_fixtures_dir):
     """plan_two_stage_substantive_stage1_retitled.toml differs from
     plan_two_stage_substantive.toml only in stage 1's title — the review's own
     recorded meta digest still matches the resubmitted plan, so it survives
     (stage 5's selective clearing, replacing the old unconditional clear)."""
     sid = "rev2"
-    original = str(fixtures_dir / "plan_two_stage_substantive.toml")
-    corrected = str(fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
+    original = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
+    corrected = str(venued_fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
     _to_plan_ready(store, sid, original)
 
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="pass",
@@ -139,13 +139,13 @@ def test_resubmit_of_an_unrelated_stage_edit_keeps_the_review(store, fixtures_di
     assert state.plan_review is not None
 
 
-def test_resubmit_of_a_meta_edit_clears_the_review(store, fixtures_dir):
+def test_resubmit_of_a_meta_edit_clears_the_review(store, venued_fixtures_dir):
     """plan_two_stage_donecriterion_changed.toml changes the plan's done_criterion
     — a meta field — so the resubmitted bytes no longer match what the review's
     reviewed_meta_digest recorded, and the review is cleared."""
     sid = "rev2b"
-    original = str(fixtures_dir / "plan_two_stage.toml")
-    corrected = str(fixtures_dir / "plan_two_stage_donecriterion_changed.toml")
+    original = str(venued_fixtures_dir / "plan_two_stage.toml")
+    corrected = str(venued_fixtures_dir / "plan_two_stage_donecriterion_changed.toml")
     _to_plan_ready(store, sid, original)
 
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="pass",
@@ -157,7 +157,7 @@ def test_resubmit_of_a_meta_edit_clears_the_review(store, fixtures_dir):
     assert state.plan_review is None
 
 
-def test_first_submission_at_planning_uses_submit_plan_not_revise(store, fixtures_dir):
+def test_first_submission_at_planning_uses_submit_plan_not_revise(store, venued_fixtures_dir):
     """The ordinary first submission (from PLANNING) is unaffected by #15 — it must
     still route through the plain `submit_plan` edge, not `revise_plan`."""
     sid = "rev3"
@@ -171,7 +171,7 @@ def test_first_submission_at_planning_uses_submit_plan_not_revise(store, fixture
     state = store.load(sid)
     assert state.node == Node.PLANNING.value
 
-    d = cli.cmd_submit_plan(ns(session=sid, plan=str(fixtures_dir / "plan_two_stage.toml")), store=store)
+    d = cli.cmd_submit_plan(ns(session=sid, plan=str(venued_fixtures_dir / "plan_two_stage.toml")), store=store)
     assert d.marker == "PLAN-READY"
     state = store.load(sid)
     for entry in state.history:

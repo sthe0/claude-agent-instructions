@@ -38,7 +38,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
+from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER, declare_venue
 
 from agentctl import cli, plan as plan_mod, submission as submission_mod, text_shape
 from agentctl.plan import PlanError, load_plan
@@ -133,7 +133,7 @@ def _write_plan(path: Path, *, edge: str, weight_class: str | None = "substantiv
     """Write the fixture with `edge` spliced into stage 2. `weight_class=None` omits the
     declaration entirely — the shape that reaches the seam's undeclared branch."""
     line = "" if weight_class is None else f'weight_class = "{weight_class}"\n'
-    path.write_text(_PLAN.format(edge=edge, weight_class=line), encoding="utf-8")
+    path.write_text(declare_venue(_PLAN.format(edge=edge, weight_class=line), path.parent), encoding="utf-8")
     return str(path)
 
 

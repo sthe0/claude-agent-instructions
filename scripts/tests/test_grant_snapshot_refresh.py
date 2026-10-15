@@ -69,6 +69,19 @@ def _write_plan_with_repo_root(fixtures_dir, tmp_path, repo_root: str, name: str
     return str(out)
 
 
+def _venue_copy(src: Path, tmp_path: Path, name: str) -> str:
+    """A copy of a shared fixture plan with the test's tmp dir declared as its absolute
+    venue (`repo_root`) -- the engine no longer falls back to the process cwd, and a
+    venue-less replan of an approved session is refused. The fixture stays untouched.
+    The tmp dir is the same venue `test_stage_grants._to_executing` declares for the
+    approved plan (the store's parent), so a replan to this copy moves no venue."""
+    out = tmp_path / name
+    out.write_text(
+        src.read_text().replace("[meta]\n", f'[meta]\nrepo_root = {json.dumps(str(tmp_path))}\n', 1),
+    )
+    return str(out)
+
+
 def _write_transcript_stop(tmp_path, name: str, tool_use_id: str, command: str) -> str:
     """A minimal one-stop `transcript_stops`-format jsonl fixture for a single
     Bash permission-denial, for a command whose path depends on a per-test
@@ -110,7 +123,7 @@ def test_no_change_replan_refreshes_stale_snapshot_to_new_bytes(store, fixtures_
     entries` read of `state.plan_snapshot_path` would report stale content (or, if
     the underlying file were ever pruned/moved, fail outright)."""
     sid = "no-change-refresh"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = _venue_copy(fixtures_dir / "plan_two_stage.toml", tmp_path, "plan_two_stage_venue.toml")
     _to_executing(store, sid, fixtures_dir, plan_path=plan)
 
     state = store.load(sid)
@@ -119,7 +132,7 @@ def test_no_change_replan_refreshes_stale_snapshot_to_new_bytes(store, fixtures_
     assert old_snapshot_path and old_snapshot_hash
 
     commented = tmp_path / "plan_two_stage_commented.toml"
-    commented.write_text((fixtures_dir / "plan_two_stage.toml").read_text() + "\n# a trailing comment\n")
+    commented.write_text(Path(plan).read_text() + "\n# a trailing comment\n")
     new_bytes_hash = hashlib.sha256(commented.read_bytes()).hexdigest()
     assert new_bytes_hash != old_snapshot_hash  # genuinely different bytes
 
@@ -133,14 +146,17 @@ def test_no_change_replan_refreshes_stale_snapshot_to_new_bytes(store, fixtures_
     assert Path(state.plan_snapshot_path).read_bytes() == commented.read_bytes()
 
 
-def test_refinement_replan_refreshes_snapshot_and_approved_grants_hash(store, fixtures_dir):
+def test_refinement_replan_refreshes_snapshot_and_approved_grants_hash(
+    store, fixtures_dir, tmp_path,
+):
     """The refinement branch had NO refresh logic at all before the fix -- a prose
     correction (title/expected_result_image) left `plan_snapshot_path`/`hash` and
     `approved_grants_sha256` pointed at the plan this session originally
     approved, forever, no matter how many further refinements landed."""
     sid = "refinement-refresh"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = _venue_copy(fixtures_dir / "plan_two_stage.toml", tmp_path, "plan_two_stage_venue.toml")
+    refined = _venue_copy(fixtures_dir / "plan_two_stage_refined.toml", tmp_path,
+                          "plan_two_stage_refined_venue.toml")
     _to_executing(store, sid, fixtures_dir, plan_path=plan)
 
     state = store.load(sid)
@@ -236,6 +252,7 @@ def test_stage_grant_entries_read_failure_is_isolated_per_call(store, fixtures_d
     state = store.load(sid)
     good_path = state.plan_snapshot_path
     good_hash = state.plan_snapshot_hash
+    good_bytes = Path(good_path).read_bytes()
     Path(good_path).unlink()
 
     _decl1, _der1, _drop1, error1, _note1 = cli._stage_grant_entries(state, 1)
@@ -245,7 +262,7 @@ def test_stage_grant_entries_read_failure_is_isolated_per_call(store, fixtures_d
     # the earlier failure must not have mutated `state` itself.
     assert state.plan_snapshot_path == good_path
     assert state.plan_snapshot_hash == good_hash
-    Path(good_path).write_bytes(Path(fixtures_dir / "plan_two_stage.toml").read_bytes())
+    Path(good_path).write_bytes(good_bytes)
 
     _decl2, _der2, _drop2, error2, _note2 = cli._stage_grant_entries(state, 1)
     assert error2 is None
@@ -329,7 +346,10 @@ def test_effective_stage_grants_venue_decoupled_from_snapshot_meta(
     sid = "effective-grants-venue-from-state-not-snapshot"
     _to_executing(store, sid, fixtures_dir)
     state = store.load(sid)
-    assert state.repo_root is None and state.delivery_worktree is None  # fixture premise
+    # fixture premise: the approved plan declares a venue (`repo_root`, since the engine
+    # no longer falls back to the cwd) but no delivery worktree, and the venue set on
+    # the state below is a DIFFERENT directory the snapshot's `[meta]` knows nothing of.
+    assert state.repo_root == str(tmp_path) and state.delivery_worktree is None
 
     venue = str(tmp_path / "state-only-delivery-venue")
     state.delivery_worktree = venue
@@ -461,10 +481,12 @@ def test_refinement_attempting_to_grow_grants_still_classifies_substantive(fixtu
     assert diff_plans(base, changed) == "substantive"
 
 
-def test_replan_of_grant_growing_plan_returns_to_plan_ready(store, fixtures_dir):
+def test_replan_of_grant_growing_plan_returns_to_plan_ready(store, fixtures_dir, tmp_path):
     sid = "grant-growth-replan-integration"
-    base = str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml")
-    changed = str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml")
+    base = _venue_copy(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml",
+                       tmp_path, "grantgrowth_venue.toml")
+    changed = _venue_copy(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml",
+                          tmp_path, "grantgrowth_changed_venue.toml")
     _to_executing(store, sid, fixtures_dir, plan_path=base)
 
     d = cli.cmd_replan(ns(session=sid, plan=changed), store=store)

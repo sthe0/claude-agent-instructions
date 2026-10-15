@@ -37,6 +37,11 @@ HOOK_SCRIPT = SCRIPTS_DIR / "hook-engine-start.py"
 MIN = 60.0
 
 
+@pytest.fixture
+def fixtures_dir(venued_fixtures_dir):
+    return venued_fixtures_dir
+
+
 def ns(**kw):
     return Namespace(**kw)
 
@@ -659,9 +664,7 @@ def _stamp_during_dispatch(store, monkeypatch, *, make_child, linking_off=False,
     monkeypatch.setattr(hook.config_root, "resolve_agentctl_state_file",
                         lambda sid: store.path(sid))
     if linking_off:
-        from agentctl import config
-        monkeypatch.setattr(config, "child_contour_linking_enabled",
-                            lambda *a, **kw: False, raising=False)
+        monkeypatch.setenv("AGENTCTL_CHILD_LINKING", "0")
     state = store.load("P")
     state.effort_actuals["active_minutes"] = 0.0
     store.save(state)

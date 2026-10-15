@@ -139,10 +139,10 @@ def _drive_to_plan_ready(capsys, root, sid, plan):
     return _run(capsys, root, "submit-plan", "--session", sid, "--plan", plan)
 
 
-def test_submit_plan_fires_blocking_thinker_directive(capsys, tmp_path, fixtures_dir):
+def test_submit_plan_fires_blocking_thinker_directive(capsys, tmp_path, venued_fixtures_dir):
     root = str(tmp_path / "state")
     sid = "rd1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     rc, d = _drive_to_plan_ready(capsys, root, sid, plan)
     assert rc == 0
     assert d["node"] == Node.PLAN_READY.value
@@ -157,9 +157,9 @@ def test_submit_plan_fires_blocking_thinker_directive(capsys, tmp_path, fixtures
 
 
 def test_submit_plan_directive_names_topological_route_as_the_required_review(
-        capsys, tmp_path, fixtures_dir):
+        capsys, tmp_path, venued_fixtures_dir):
     root = str(tmp_path / "state")
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _, d = _drive_to_plan_ready(capsys, root, "rd1t", plan)
     detail = next(p["detail"] for p in d["data"]["plugin_directives"]
                   if p["action"] == "spawn_thinker_review")
@@ -168,7 +168,7 @@ def test_submit_plan_directive_names_topological_route_as_the_required_review(
     assert "on this inline route" not in detail
 
 
-def test_submit_plan_silent_once_bound_passing_review_exists(capsys, tmp_path, fixtures_dir):
+def test_submit_plan_silent_once_bound_passing_review_exists(capsys, tmp_path, venued_fixtures_dir):
     # A second submit-plan at PLAN_READY is a RESUBMISSION: cmd_submit_plan
     # unconditionally clears state.plan_review (the plan may have changed), so
     # exercising "silent once bound" through a second submit-plan call would
@@ -177,7 +177,7 @@ def test_submit_plan_silent_once_bound_passing_review_exists(capsys, tmp_path, f
     # mirroring plugins_premise's gate-level unit tests.
     root = str(tmp_path / "state")
     sid = "rd2"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _drive_to_plan_ready(capsys, root, sid, plan)
     digest = hashlib.sha256(Path(plan).read_bytes()).hexdigest()
     rc, d = _run(capsys, root, "plan-review", "--session", sid, "--verdict", "pass",
@@ -191,10 +191,10 @@ def test_submit_plan_silent_once_bound_passing_review_exists(capsys, tmp_path, f
     assert not any(p["plugin"] == "review_dispatch" for p in fired)
 
 
-def test_submit_plan_silent_for_small_change_session(capsys, tmp_path, fixtures_dir):
+def test_submit_plan_silent_for_small_change_session(capsys, tmp_path, venued_fixtures_dir):
     root = str(tmp_path / "state")
     sid = "rd3"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _run(capsys, root, "start", "--session", sid, "--task", "t",
          "--goal", "g", "--done-criterion", "dc", "--criterion-type", "measurable")
     _run(capsys, root, "classify", "--session", sid, "--changed-lines", "5",
@@ -205,11 +205,11 @@ def test_submit_plan_silent_for_small_change_session(capsys, tmp_path, fixtures_
     )
 
 
-def test_submit_plan_silent_when_knob_off(capsys, tmp_path, fixtures_dir, monkeypatch):
+def test_submit_plan_silent_when_knob_off(capsys, tmp_path, venued_fixtures_dir, monkeypatch):
     monkeypatch.setenv("AGENTCTL_REVIEW_DISPATCH", "0")
     root = str(tmp_path / "state")
     sid = "rd4"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     rc, d = _drive_to_plan_ready(capsys, root, sid, plan)
     assert rc == 0
     pds = d["data"].get("plugin_directives", [])

@@ -64,45 +64,78 @@ def _to_resolution(store, sid, plan):
 
 # --- empty --by refused at the plan-approval gate ------------------------
 
-def test_approve_empty_by_is_refused(store, fixtures_dir):
+def test_approve_empty_by_is_refused(store, venued_fixtures_dir):
     sid = "ga"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     d = cli.cmd_approve(ns(session=sid, by=""), store=store)
     assert d.ok is False
     assert store.load(sid).node == Node.PLAN_READY.value  # gate held
     assert any("empty approver" in b for b in d.data["blockers"])
 
 
-def test_approve_blank_by_is_refused(store, fixtures_dir):
+def test_approve_blank_by_is_refused(store, venued_fixtures_dir):
     sid = "gab"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     d = cli.cmd_approve(ns(session=sid, by="   "), store=store)
     assert d.ok is False
     assert store.load(sid).node == Node.PLAN_READY.value
 
 
-def test_approve_nonempty_by_passes(store, fixtures_dir):
+def test_approve_nonempty_by_passes(store, venued_fixtures_dir):
     sid = "gp"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     d = cli.cmd_approve(ns(session=sid, by="alice"), store=store)
     assert d.ok is True
     assert store.load(sid).node == Node.APPROVED.value
 
 
+# --- approve at wrong node returns legible directive, not TransitionError (#339) ---
+
+def test_approve_at_executing_is_no_action(store, venued_fixtures_dir):
+    """approve at EXECUTING should report 'already approved' (ok=True), not
+    raise an uncaught TransitionError — issue #339."""
+    sid = "gae"
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
+    cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    assert store.load(sid).node == Node.EXECUTING.value
+
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.ok is True
+    assert "already approved" in d.detail
+    assert store.load(sid).node == Node.EXECUTING.value  # node unchanged
+
+
+def test_approve_before_plan_submitted_is_refused(store):
+    """approve at CLASSIFIED (no plan yet) should return ok=False with a
+    helpful message, not an uncaught TransitionError."""
+    sid = "gabc"
+    cli.cmd_start(ns(session=sid, task="demo", goal="", done_criterion="",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    assert store.load(sid).node == Node.CLASSIFIED.value
+
+    d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert d.ok is False
+    assert "submit" in d.detail.lower()
+    assert store.load(sid).node == Node.CLASSIFIED.value  # node unchanged
+
+
 # --- empty --by refused at the resolution gate ---------------------------
 
-def test_resolve_empty_by_is_refused(store, fixtures_dir):
+def test_resolve_empty_by_is_refused(store, venued_fixtures_dir):
     sid = "gr"
-    _to_resolution(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_resolution(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     d = cli.cmd_resolve(ns(session=sid, by=""), store=store)
     assert d.ok is False
     assert store.load(sid).node == Node.RESOLUTION.value  # gate held
     assert any("empty confirmer" in b for b in d.data["blockers"])
 
 
-def test_resolve_nonempty_by_passes(store, fixtures_dir):
+def test_resolve_nonempty_by_passes(store, venued_fixtures_dir):
     sid = "grp"
-    _to_resolution(store, sid, str(fixtures_dir / "plan_two_stage.toml"))
+    _to_resolution(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     d = cli.cmd_resolve(ns(session=sid, by="user", quality=5, quality_by="user-confirmed",
                            quality_note=None), store=store)
     assert d.ok is True

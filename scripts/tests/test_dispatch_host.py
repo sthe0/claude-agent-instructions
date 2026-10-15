@@ -105,8 +105,8 @@ def test_dispatch_stage_cursor_host_never_names_the_claude_wrapper():
 
 # --- cmd_dispatch integration: host threads from the bound session ---------------
 
-def _to_executing(store, sid, fixtures_dir, host=None):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def _to_executing(store, sid, venued_fixtures_dir, host=None):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(ns(session=sid, task="t", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0, host=host), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -121,27 +121,27 @@ def _to_executing(store, sid, fixtures_dir, host=None):
     return cli.cmd_next_stage(ns(session=sid), store=store)
 
 
-def test_cmd_dispatch_claude_session_uses_claude_wrapper(store, fixtures_dir):
+def test_cmd_dispatch_claude_session_uses_claude_wrapper(store, venued_fixtures_dir):
     sid = "host-claude"
-    _to_executing(store, sid, fixtures_dir, host=HOST_CLAUDE)
+    _to_executing(store, sid, venued_fixtures_dir, host=HOST_CLAUDE)
     seen = []
     cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium", dry_run=False),
                      store=store, runner=_capture_runner(seen))
     assert seen[0][1] == str(SPAWN_CLI)
 
 
-def test_cmd_dispatch_cursor_session_uses_cursor_wrapper(store, fixtures_dir):
+def test_cmd_dispatch_cursor_session_uses_cursor_wrapper(store, venued_fixtures_dir):
     sid = "host-cursor"
-    _to_executing(store, sid, fixtures_dir, host=HOST_CURSOR)
+    _to_executing(store, sid, venued_fixtures_dir, host=HOST_CURSOR)
     seen = []
     cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium", dry_run=False),
                      store=store, runner=_capture_runner(seen))
     assert seen[0][1] == str(SPAWN_CLI_CURSOR)
 
 
-def test_cmd_dispatch_refuses_when_session_never_bound_a_host(store, fixtures_dir):
+def test_cmd_dispatch_refuses_when_session_never_bound_a_host(store, venued_fixtures_dir):
     sid = "host-unbound"
-    _to_executing(store, sid, fixtures_dir, host=HOST_CLAUDE)
+    _to_executing(store, sid, venued_fixtures_dir, host=HOST_CLAUDE)
     state = store.load(sid)
     # Force the pre-schema-25 / never-classified shape: no bound host.
     state.runtime_host = None

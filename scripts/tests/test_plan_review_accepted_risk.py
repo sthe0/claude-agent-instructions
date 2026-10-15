@@ -125,9 +125,9 @@ def test_review_with_no_acceptances_behaves_exactly_as_before(gate_on):
     assert blockers and "revise" in blockers[0]
 
 
-def test_acceptance_clears_its_concern_with_no_plan_edit(gate_on, tmp_path, fixtures_dir):
+def test_acceptance_clears_its_concern_with_no_plan_edit(gate_on, tmp_path, venued_fixtures_dir):
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     review = _whole_review(plan_path, doc)
     acceptance = _acceptance("", "c-tests", "missing test coverage for the new branch", plan_path, doc)
@@ -135,7 +135,7 @@ def test_acceptance_clears_its_concern_with_no_plan_edit(gate_on, tmp_path, fixt
     assert gates.plan_review_blockers(s, str(plan_path)) == []
 
 
-def test_acceptance_bound_to_superseded_plan_version_does_not_clear(gate_on, tmp_path, fixtures_dir):
+def test_acceptance_bound_to_superseded_plan_version_does_not_clear(gate_on, tmp_path, venued_fixtures_dir):
     """The acceptance was recorded against the OLD bytes; the plan's GOAL then
     moved (plan_meta_digest covers goal/done_criterion/criterion_type/weight_class/
     repo_root/order — a whole-scope acceptance's own staleness rule, mirroring
@@ -148,7 +148,7 @@ def test_acceptance_bound_to_superseded_plan_version_does_not_clear(gate_on, tmp
     `revise` verdicts never check content hash at this layer; see
     _plan_review_content_stale)."""
     plan_path = tmp_path / "plan.toml"
-    original = (fixtures_dir / "plan_two_stage_substantive.toml").read_text()
+    original = (venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text()
     plan_path.write_text(original)
     doc0 = load_plan(str(plan_path))
     review = _whole_review(plan_path, doc0)
@@ -163,11 +163,11 @@ def test_acceptance_bound_to_superseded_plan_version_does_not_clear(gate_on, tmp
     assert blockers and "revise" in blockers[0]
 
 
-def test_acceptance_bound_to_a_different_concern_id_does_not_discharge(gate_on, tmp_path, fixtures_dir):
+def test_acceptance_bound_to_a_different_concern_id_does_not_discharge(gate_on, tmp_path, venued_fixtures_dir):
     """Live proof of the "let an acceptance clear a concern it is NOT bound to"
     mutation: a right-scope, wrong-id acceptance must not discharge."""
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     review = _whole_review(plan_path, doc)  # concern_ids=["c-tests"]
     acceptance = _acceptance("", "c-other", "an unrelated concern text", plan_path, doc)
@@ -176,11 +176,11 @@ def test_acceptance_bound_to_a_different_concern_id_does_not_discharge(gate_on, 
     assert blockers and "revise" in blockers[0]
 
 
-def test_acceptance_bound_to_a_different_scope_does_not_discharge(gate_on, tmp_path, fixtures_dir):
+def test_acceptance_bound_to_a_different_scope_does_not_discharge(gate_on, tmp_path, venued_fixtures_dir):
     """Same mutation, the other axis: a right-id, wrong-scope acceptance (it
     answers stage:1's concern, not the whole plan's) must not discharge."""
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     review = _whole_review(plan_path, doc)  # scope=""
     acceptance = _acceptance("stage:1", "c-tests", "missing test coverage for the new branch", plan_path, doc)
@@ -189,12 +189,12 @@ def test_acceptance_bound_to_a_different_scope_does_not_discharge(gate_on, tmp_p
     assert blockers and "revise" in blockers[0]
 
 
-def test_override_still_requires_a_distinct_reviewer_alongside_acceptances(gate_on, tmp_path, fixtures_dir):
+def test_override_still_requires_a_distinct_reviewer_alongside_acceptances(gate_on, tmp_path, venued_fixtures_dir):
     """The override branch and its distinct-reviewer rule are untouched: even
     with a live acceptance recorded (a second, independent route to clear the
     gate), the reviewer who issued the `revise` still cannot override themselves."""
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     review = _whole_review(plan_path, doc, reviewer="thinker")
     acceptance = _acceptance("", "c-tests", "missing test coverage for the new branch", plan_path, doc)
@@ -208,17 +208,17 @@ def test_override_still_requires_a_distinct_reviewer_alongside_acceptances(gate_
     # Confirmed separately, end to end, in test_risk_accept_and_override_are_independent_routes.
 
 
-def test_stage_scoped_concern_is_discharged_by_a_stage_scoped_acceptance(gate_on, tmp_path, fixtures_dir):
+def test_stage_scoped_concern_is_discharged_by_a_stage_scoped_acceptance(gate_on, tmp_path, venued_fixtures_dir):
     """The stage 6 decision: acceptance discharges a STAGE-scoped concern too,
     not only a whole-plan one — symmetric support via the shared
     _plan_review_verdict_blockers, threaded with state/doc from both call sites."""
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc0 = load_plan(str(plan_path))
     whole = _whole_review(plan_path, doc0, verdict="pass", concerns=[], concern_ids=[],
                            plan_sha256=_sha256_file(plan_path))
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     doc1 = load_plan(str(plan_path))
     stage1 = _stage_review(plan_path, doc1, 1)
     acceptance = _acceptance("stage:1", "c-retitle", "the retitle hides a scope change", plan_path, doc1)
@@ -229,14 +229,14 @@ def test_stage_scoped_concern_is_discharged_by_a_stage_scoped_acceptance(gate_on
     assert gates.plan_review_blockers(s, str(plan_path)) == []
 
 
-def test_stage_scoped_acceptance_does_not_discharge_a_different_stage(gate_on, tmp_path, fixtures_dir):
+def test_stage_scoped_acceptance_does_not_discharge_a_different_stage(gate_on, tmp_path, venued_fixtures_dir):
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc0 = load_plan(str(plan_path))
     whole = _whole_review(plan_path, doc0, verdict="pass", concerns=[], concern_ids=[],
                            plan_sha256=_sha256_file(plan_path))
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
     doc1 = load_plan(str(plan_path))
     stage1 = _stage_review(plan_path, doc1, 1)
     acceptance = _acceptance("stage:2", "c-retitle", "the retitle hides a scope change", plan_path, doc1)  # wrong scope
@@ -249,7 +249,7 @@ def test_stage_scoped_acceptance_does_not_discharge_a_different_stage(gate_on, t
 
 
 def test_rerecorded_review_with_a_different_concern_at_the_same_id_does_not_discharge(
-        gate_on, tmp_path, fixtures_dir):
+        gate_on, tmp_path, venued_fixtures_dir):
     """The exact Finding-1 defect this stage's fix closes: re-recording a review
     at the same scope on BYTE-IDENTICAL plan content is not a plan edit, so
     acceptance staleness (which only tracks plan-version digests) never fires on
@@ -258,7 +258,7 @@ def test_rerecorded_review_with_a_different_concern_at_the_same_id_does_not_disc
     concern that happens to land at the same positional id "c-tests" in the
     re-recorded review."""
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     review = _whole_review(plan_path, doc)  # concerns=["missing test coverage..."], concern_ids=["c-tests"]
     acceptance = _acceptance("", "c-tests", "missing test coverage for the new branch", plan_path, doc)
@@ -274,9 +274,9 @@ def test_rerecorded_review_with_a_different_concern_at_the_same_id_does_not_disc
     assert blockers and "revise" in blockers[0]
 
 
-def test_rephrased_concern_at_the_same_id_stops_discharging(gate_on, tmp_path, fixtures_dir):
+def test_rephrased_concern_at_the_same_id_stops_discharging(gate_on, tmp_path, venued_fixtures_dir):
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     review = _whole_review(plan_path, doc)
     acceptance = _acceptance("", "c-tests", "missing test coverage for the new branch", plan_path, doc)
@@ -292,9 +292,9 @@ def test_rephrased_concern_at_the_same_id_stops_discharging(gate_on, tmp_path, f
     assert blockers and "revise" in blockers[0]
 
 
-def test_identical_rerecorded_review_still_discharges(gate_on, tmp_path, fixtures_dir):
+def test_identical_rerecorded_review_still_discharges(gate_on, tmp_path, venued_fixtures_dir):
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     review = _whole_review(plan_path, doc)
     acceptance = _acceptance("", "c-tests", "missing test coverage for the new branch", plan_path, doc)
@@ -305,11 +305,11 @@ def test_identical_rerecorded_review_still_discharges(gate_on, tmp_path, fixture
     assert gates.plan_review_blockers(s, str(plan_path)) == []
 
 
-def test_whitespace_only_concern_difference_still_discharges(gate_on, tmp_path, fixtures_dir):
+def test_whitespace_only_concern_difference_still_discharges(gate_on, tmp_path, venued_fixtures_dir):
     """_normalize_string reuse is load-bearing: only whitespace/case moved, the
     concern is the same concern, and the acceptance must keep discharging it."""
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     review = _whole_review(plan_path, doc)
     acceptance = _acceptance("", "c-tests", "missing test coverage for the new branch", plan_path, doc)
@@ -324,12 +324,12 @@ def test_whitespace_only_concern_difference_still_discharges(gate_on, tmp_path, 
     assert gates.plan_review_blockers(s, str(plan_path)) == []
 
 
-def test_acceptance_with_empty_concern_text_does_not_discharge(gate_on, tmp_path, fixtures_dir):
+def test_acceptance_with_empty_concern_text_does_not_discharge(gate_on, tmp_path, venued_fixtures_dir):
     """Fail-closed: an acceptance recorded with no concern_text at all (e.g. a
     legacy schema-28 record) never discharges, even with a perfectly matching
     scope/concern_id and a live plan version."""
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     review = _whole_review(plan_path, doc)
     acceptance = _acceptance("", "c-tests", "", plan_path, doc)
@@ -340,9 +340,9 @@ def test_acceptance_with_empty_concern_text_does_not_discharge(gate_on, tmp_path
 
 # --- 2. cmd_risk_accept: CLI validation and end-to-end gate effect -------------
 
-def test_risk_accept_refuses_an_unknown_concern_id(store, fixtures_dir, gate_on):
+def test_risk_accept_refuses_an_unknown_concern_id(store, venued_fixtures_dir, gate_on):
     sid = "ra-badid"
-    plan_path = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    plan_path = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
     _to_plan_ready(store, sid, plan_path)
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="revise",
                            reviewer="thinker", concerns=["blocking: missing tests"],
@@ -355,13 +355,13 @@ def test_risk_accept_refuses_an_unknown_concern_id(store, fixtures_dir, gate_on)
     assert store.load(sid).risk_acceptances == []
 
 
-def test_risk_accept_refuses_a_duplicate_concern_id(store, fixtures_dir, gate_on):
+def test_risk_accept_refuses_a_duplicate_concern_id(store, venued_fixtures_dir, gate_on):
     """A review recording the same id for two different concerns makes
     valid_ids.index(concern_id) ambiguous — it would silently resolve to the
     FIRST match. Refuse instead of guessing which concern the acceptance binds
     to."""
     sid = "ra-dupid"
-    plan_path = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    plan_path = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
     _to_plan_ready(store, sid, plan_path)
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="revise",
                            reviewer="thinker",
@@ -375,9 +375,9 @@ def test_risk_accept_refuses_a_duplicate_concern_id(store, fixtures_dir, gate_on
     assert store.load(sid).risk_acceptances == []
 
 
-def test_risk_accept_refuses_a_placeholder_basis(store, fixtures_dir, gate_on):
+def test_risk_accept_refuses_a_placeholder_basis(store, venued_fixtures_dir, gate_on):
     sid = "ra-placeholder"
-    plan_path = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    plan_path = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
     _to_plan_ready(store, sid, plan_path)
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="revise",
                            reviewer="thinker", concerns=["blocking: missing tests"],
@@ -390,9 +390,9 @@ def test_risk_accept_refuses_a_placeholder_basis(store, fixtures_dir, gate_on):
     assert store.load(sid).risk_acceptances == []
 
 
-def test_risk_accept_refuses_when_no_review_exists_at_that_scope(store, fixtures_dir, gate_on):
+def test_risk_accept_refuses_when_no_review_exists_at_that_scope(store, venued_fixtures_dir, gate_on):
     sid = "ra-noreview"
-    plan_path = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    plan_path = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
     _to_plan_ready(store, sid, plan_path)
     d = cli.cmd_risk_accept(ns(session=sid, scope=None, concern_id="c-tests",
                                 basis="the team accepts the gap", risk="a regression ships",
@@ -402,9 +402,9 @@ def test_risk_accept_refuses_when_no_review_exists_at_that_scope(store, fixtures
     assert store.load(sid).risk_acceptances == []
 
 
-def test_risk_accept_clears_the_gate_end_to_end(store, fixtures_dir, gate_on):
+def test_risk_accept_clears_the_gate_end_to_end(store, venued_fixtures_dir, gate_on):
     sid = "ra-ok"
-    plan_path = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    plan_path = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
     _to_plan_ready(store, sid, plan_path)
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="revise",
                            reviewer="thinker", concerns=["blocking: missing tests"],
@@ -423,7 +423,7 @@ def test_risk_accept_clears_the_gate_end_to_end(store, fixtures_dir, gate_on):
     assert d.node == Node.APPROVED.value
 
 
-def test_risk_accept_scope_stage_clears_the_gate_end_to_end(store, fixtures_dir, tmp_path, gate_on):
+def test_risk_accept_scope_stage_clears_the_gate_end_to_end(store, venued_fixtures_dir, tmp_path, gate_on):
     """The whole-plan `pass` is recorded first, against the ORIGINAL bytes; stage 1
     then actually moves (a stage-scoped review only comes into play for a stage
     that moved since the whole review's own baseline — a stage-scoped record
@@ -432,13 +432,13 @@ def test_risk_accept_scope_stage_clears_the_gate_end_to_end(store, fixtures_dir,
     against the NEW bytes, at the same plan_path the whole review still binds to."""
     sid = "ra-stage-ok"
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     _to_plan_ready(store, sid, str(plan_path))
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="pass",
                            reviewer="thinker", concerns=None, concern_ids=None, note="",
                            plan_digest=_sha256_file(plan_path)), store=store)
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="revise",
                            reviewer="thinker", concerns=["blocking: the retitle hides a scope change"],
                            concern_ids=["c-retitle"], note="", plan_digest=None), store=store)
@@ -455,12 +455,12 @@ def test_risk_accept_scope_stage_clears_the_gate_end_to_end(store, fixtures_dir,
     assert d.node == Node.APPROVED.value
 
 
-def test_risk_accept_and_override_are_independent_routes(store, fixtures_dir, gate_on):
+def test_risk_accept_and_override_are_independent_routes(store, venued_fixtures_dir, gate_on):
     """Confirms end to end (through the CLI, not just the gates-level check
     above) that override's distinct-reviewer rule survives acceptance's
     existence as an unrelated, independent way to clear a `revise` verdict."""
     sid = "ra-override"
-    plan_path = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    plan_path = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
     _to_plan_ready(store, sid, plan_path)
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="revise",
                            reviewer="thinker", concerns=["blocking: missing tests"],
@@ -505,17 +505,17 @@ def test_render_coverage_block_with_no_accepted_risks_is_unchanged():
             == premise.render_coverage_block(elements, 1, accepted_risks=None))
 
 
-def test_coverage_block_excludes_a_stale_accepted_risk(tmp_path, fixtures_dir):
+def test_coverage_block_excludes_a_stale_accepted_risk(tmp_path, venued_fixtures_dir):
     """Staleness mirrors how the review at that scope would itself be judged: a
     whole-scope acceptance survives an unrelated stage edit; a stage-scoped one
     does not survive an edit to ITS OWN stage."""
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc0 = load_plan(str(plan_path))
     stage_acceptance = _acceptance("stage:1", "c-retitle", "the retitle hides a scope change", plan_path, doc0)
     whole_acceptance = _acceptance("", "c-tests", "missing test coverage for the new branch", plan_path, doc0)
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
     doc1 = load_plan(str(plan_path))
     state = SessionState(session_id="s", task_id="t", weight_class="SUBSTANTIVE",
                          plan_path=str(plan_path),
@@ -527,14 +527,14 @@ def test_coverage_block_excludes_a_stale_accepted_risk(tmp_path, fixtures_dir):
     assert "c-retitle" not in block
 
 
-def test_coverage_block_marks_a_superseded_accepted_risk_instead_of_dropping_it(tmp_path, fixtures_dir):
+def test_coverage_block_marks_a_superseded_accepted_risk_instead_of_dropping_it(tmp_path, venued_fixtures_dir):
     """A concern rephrased at the SAME id (same plan version, so digest-staleness
     never fires) must not keep rendering as an ordinary accepted-risk line — that
     would read as still discharging when gates._concern_discharged no longer
     agrees. It must also not be dropped outright: the customer needs to see the
     acceptance existed and stopped covering anything."""
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     review = _whole_review(plan_path, doc)  # current concern text: "missing test coverage..."
     acceptance = _acceptance("", "c-tests", "an older phrasing of this concern", plan_path, doc)
@@ -548,11 +548,11 @@ def test_coverage_block_marks_a_superseded_accepted_risk_instead_of_dropping_it(
     assert "SUPERSEDED" in block
 
 
-def test_coverage_block_does_not_mark_a_live_accepted_risk_as_superseded(tmp_path, fixtures_dir):
+def test_coverage_block_does_not_mark_a_live_accepted_risk_as_superseded(tmp_path, venued_fixtures_dir):
     """The other direction: an acceptance whose text still matches the concern
     currently at that id renders as an ordinary line, no marker."""
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     review = _whole_review(plan_path, doc)
     acceptance = _acceptance("", "c-tests", "missing test coverage for the new branch", plan_path, doc)
@@ -581,9 +581,9 @@ def _premise_state(plan_path, doc):
 
 
 def test_premise_blockers_blocks_essence_missing_a_live_accepted_risk_line(
-        tmp_path, fixtures_dir, presentation_on):
+        tmp_path, venued_fixtures_dir, presentation_on):
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     state, bag = _premise_state(plan_path, doc)
     state.risk_acceptances = [_acceptance("", "c-tests", "missing test coverage for the new branch", plan_path, doc)]
@@ -597,9 +597,9 @@ def test_premise_blockers_blocks_essence_missing_a_live_accepted_risk_line(
 
 
 def test_premise_blockers_allows_essence_that_carries_the_accepted_risk_line(
-        tmp_path, fixtures_dir, presentation_on):
+        tmp_path, venued_fixtures_dir, presentation_on):
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     state, bag = _premise_state(plan_path, doc)
     state.risk_acceptances = [_acceptance("", "c-tests", "missing test coverage for the new branch", plan_path, doc)]
@@ -612,14 +612,14 @@ def test_premise_blockers_allows_essence_that_carries_the_accepted_risk_line(
 
 
 def test_premise_blockers_rejects_essence_carrying_only_the_old_accepted_risk_format(
-        tmp_path, fixtures_dir, presentation_on):
+        tmp_path, venued_fixtures_dir, presentation_on):
     """An essence carrying the pre-stage-6.1 line shape (scope/concern_id/author
     only, no concern text/basis/risk) for its one accepted-risk line — everything
     else in the block present and correct — no longer satisfies the live coverage
     block: the extra fields are load-bearing content the approval gate needs to
     see the trade, not decoration a reformatting-tolerant check can wave through."""
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     state, bag = _premise_state(plan_path, doc)
     state.risk_acceptances = [_acceptance("", "c-tests", "missing test coverage for the new branch",
@@ -639,12 +639,12 @@ def test_premise_blockers_rejects_essence_carrying_only_the_old_accepted_risk_fo
     assert any(current_line in b for b in blockers)
 
 
-def test_order_list_md_carries_the_live_accepted_risk_lines(store, tmp_path, fixtures_dir):
+def test_order_list_md_carries_the_live_accepted_risk_lines(store, tmp_path, venued_fixtures_dir):
     """`order-list --format md` is what the coordinator pastes into the essence, so it
     must BE the block the gate re-derives. Rendering it without the live acceptances
     would have the gate reject an essence over lines this command never printed."""
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(plan_path))
     state, bag = _premise_state(plan_path, doc)
     state.risk_acceptances = [

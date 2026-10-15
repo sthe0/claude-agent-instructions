@@ -134,6 +134,7 @@ gate; wording-only edits (titles, expected-result prose) are refinements.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import os
 import re
@@ -186,14 +187,18 @@ class PlanMeta:
     # non-empty for substantive plans; None for legacy/non-substantive.
     external_research: str | None = None
     # Directory each stage's verify_command runs in. None (default) inherits the
-    # invoker's cwd — byte-identical to pre-repo_root behaviour. Set it so a plan's
-    # repo-relative verify paths resolve no matter where the engine is driven from.
+    # invoker's cwd at the verify sites — kept only for a non-substantive plan; a
+    # substantive session refuses a plan with a command or a relative artifact that
+    # declares no ABSOLUTE venue (`venue_declaration_blockers`), and a relative value
+    # counts as undeclared. Grant derivation, reachability and the scratch-root check
+    # never read the cwd: with no declared venue they take the explicit no-venue path.
     repo_root: str | None = None
     # The linked worktree a worktree-delivered change is authored in, when it
     # differs from repo_root (a Core/IaC change lands via PR; the canonical
     # checkout at repo_root stays frozen on main until landing). None (default) =
     # no worktree-venue signal, byte-identical to pre-field behaviour. Backs the
-    # check_venue_warnings lint below.
+    # check_venue_warnings lint below. Counts as the declared venue (ahead of
+    # repo_root) when absolute.
     delivery_worktree: str | None = None
     # The plan-time, reviewed reason a plan declares no `kind = "landed"` check. A plan
     # that sets delivery_worktree must declare a landed check OR this waiver (never both),
@@ -1237,8 +1242,11 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
 
 
 def _path_is_reachable(token: str, declared: list[str], repo_root: str | None) -> bool:
-    base = Path(repo_root) if repo_root else Path(".")
-    if (base / token).exists():
+    """Whether `token` exists under the declared venue or is produced by a declared
+    artifact. The base is the declared absolute venue only: with none (unset, or a
+    relative value the process cwd would resolve) existence is not judged against the
+    cwd, so only a declared artifact makes the path reachable."""
+    if repo_root and os.path.isabs(repo_root) and (Path(repo_root) / token).exists():
         return True
     tnorm = token.rstrip("/")
     for decl in declared:
@@ -3248,17 +3256,95 @@ def norm_delta(old: PlanDoc, new: PlanDoc) -> NormDelta:
     return norm_delta_from(norm_baseline(old), new)
 
 
-def _venue_for(doc: PlanDoc) -> str:
+def _declared_absolute_venue(meta) -> str | None:
+    """The first of `delivery_worktree`, `repo_root` that is an ABSOLUTE path, or None.
+    A relative value is as undeclared as an unset one: every consumer would resolve it
+    against the process cwd, which is machine state, not a plan declaration."""
+    for value in (meta.delivery_worktree, meta.repo_root):
+        if value and os.path.isabs(value):
+            return value
+    return None
+
+
+def _venue_for(doc: PlanDoc) -> str | None:
     """The venue `derive_stage_grants` resolves DR-E/in-venue paths against —
     `delivery_worktree` when declared else `repo_root`, mirroring
-    `PlanFrame.resolve_check_venue`'s identical fallback in state.py — with a
-    last-resort "." so a plan declaring neither (permitted; every verify_command
-    then runs in the invoker's own cwd) still gets a non-empty venue string
-    rather than the malformed absolute path an empty one would build in DR-E."""
-    return doc.meta.delivery_worktree or doc.meta.repo_root or "."
+    `PlanFrame.resolve_check_venue`'s fallback in state.py — or None when neither
+    holds an absolute path. There is deliberately no cwd stand-in: a plan declaring no
+    venue has none, and every caller takes its own explicit no-venue path (grant
+    derivation drops the in-venue entries, resource resolution reports the Bash rules
+    unresolved with identity `("no-venue", rule)`)."""
+    return _declared_absolute_venue(doc.meta)
 
 
-def _effective_grants_for_stage(stage, venue: str) -> "StageGrants":
+def runs_verify_command(criterion) -> bool:
+    """Whether the engine itself executes this criterion's `verify_command` -- the one
+    predicate the executor, the boundary's resource resolution and the venue
+    declaration blocker key on. An acceptance-review stage's `verify_command` is prose
+    for the reviewer and is never run."""
+    return bool(criterion.verify_command) and (
+        criterion.criterion_type == CriterionType.MEASURABLE.value
+    )
+
+
+def venue_declaration_blockers(doc: PlanDoc) -> list[str]:
+    """A plan that declares no absolute venue yet has something the engine will run
+    or produce. [] when it declares one, or has nothing to anchor.
+
+    "Something the engine will run or produce" is the engine's own notion: a stage
+    `output_artifacts` entry that is a relative path, a stage whose criterion
+    `runs_verify_command` (its `negative_control` runs only under that same predicate),
+    or a `[[final_check]]` command (final checks always run). Such a plan is resolved
+    against the process cwd by every consumer that has no venue, so its verdict would
+    depend on where the engine was driven from; one declaration removes that.
+
+    Pure function of the plan; the caller decides which sessions it binds (the
+    substantive grade, as `verify_command_reachability_blockers`)."""
+    if _declared_absolute_venue(doc.meta) is not None:
+        return []
+    anchored: list[str] = []
+    for s in doc.stages:
+        relative = [a for a in s.output_artifacts if not os.path.isabs(a)]
+        if relative:
+            anchored.append(f"stage {s.index} ({s.title!r}) declares relative output_artifacts "
+                            f"({', '.join(repr(a) for a in relative)})")
+        if runs_verify_command(s.criterion):
+            anchored.append(f"stage {s.index} ({s.title!r}) has a verify_command to run")
+    for fi, fc in enumerate(doc.meta.final_check or [], 1):
+        if fc.command:
+            anchored.append(f"final_check {fi} ({fc.label or fc.command!r}) has a command to run")
+    if not anchored:
+        return []
+    declared = {"repo_root": doc.meta.repo_root, "delivery_worktree": doc.meta.delivery_worktree}
+    seen = ", ".join(f"{k} = {v!r}" for k, v in declared.items() if v) or "neither is set"
+    return [
+        "[meta] declares no absolute venue (" + seen + "), so these resolve against the "
+        "process cwd of whoever drives the engine: " + "; ".join(anchored) + ". Declare an "
+        "absolute repo_root or delivery_worktree in [meta] (through a replan for a session "
+        "already in flight), or make the artifact paths absolute"
+    ]
+
+
+def _derive_stage_grants(stage, venue: str | None):
+    """`grants.derive_stage_grants` for a venue that may be undeclared. With no venue
+    every relative `output_artifacts` / `material_refs` entry has nothing to be
+    resolved against, so DR-O and DR-E (which need it) derive nothing; DR-V and DR-R
+    read no venue and stay. Filtering the relative entries before the call, with a
+    root venue no absolute path is ever in, keeps `grants.py` untouched."""
+    if venue is not None:
+        return _grants.derive_stage_grants(stage, venue=venue)
+    anchored = dataclasses.replace(
+        stage,
+        output_artifacts=[a for a in stage.output_artifacts if os.path.isabs(a)],
+        subject=dataclasses.replace(
+            stage.subject,
+            material_refs=[r for r in stage.subject.material_refs if os.path.isabs(r)],
+        ),
+    )
+    return _grants.derive_stage_grants(anchored, venue="/")
+
+
+def _effective_grants_for_stage(stage, venue: str | None) -> "StageGrants":
     """DECLARED plus DERIVED, in that order — the set `grant_covers_call` checks an
     actual tool call against and the set `_grants_grew` compares across a replan.
     `derive_stage_grants` never sees the declared half (it derives from the stage's
@@ -3266,7 +3352,7 @@ def _effective_grants_for_stage(stage, venue: str) -> "StageGrants":
     grants.py, keeping that module's derivation pure of any notion of "already
     declared"."""
     declared = stage.grants if getattr(stage, "grants", None) else StageGrants()
-    derived, _dropped = _grants.derive_stage_grants(stage, venue=venue)
+    derived, _dropped = _derive_stage_grants(stage, venue)
     return StageGrants(
         allow=list(declared.allow) + list(derived.allow),
         add_dirs=list(declared.add_dirs) + list(derived.add_dirs),
@@ -3333,8 +3419,8 @@ def _grants_grew(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fa
     return False
 
 
-def _derived_verify_rules(stage, venue: str) -> list:
-    derived, _dropped = _grants.derive_stage_grants(stage, venue=venue)
+def _derived_verify_rules(stage, venue: str | None) -> list:
+    derived, _dropped = _derive_stage_grants(stage, venue)
     return [r for r in derived.allow if r.provenance == "derived:DR-V"]
 
 
@@ -3372,7 +3458,7 @@ def materialized_grant_entries(doc: PlanDoc, *, venue: str | None = None) -> dic
     entries: dict[str, dict] = {}
     for stage in doc.stages:
         declared = stage.grants if getattr(stage, "grants", None) else StageGrants()
-        derived, dropped = _grants.derive_stage_grants(stage, venue=venue)
+        derived, dropped = _derive_stage_grants(stage, venue)
         entries[str(stage.index)] = {
             "declared": [r.to_dict() for r in declared.allow]
             + [a.to_dict() for a in declared.add_dirs],

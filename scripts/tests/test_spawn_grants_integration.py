@@ -66,12 +66,16 @@ def _command_section(out: str) -> str:
 
 
 def test_dry_run_reflects_a_declared_grant_for_the_matching_kind(
-    store, fixtures_dir, tmp_path, monkeypatch, capsys,
+    store, venued_fixtures_dir, tmp_path, monkeypatch, capsys,
 ):
-    monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path)
+    # The plan's declared venue is tmp_path, so the plans dir (denied to the child as
+    # a whole) must be a different directory or it would void the venue's own edit grant.
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    monkeypatch.setattr(MOD, "plans_dir", lambda: plans)
     sid = "dry-run-declared-grant-match"
-    plan_path = _write_declared_grants_plan(fixtures_dir, tmp_path)
-    _to_executing(store, sid, fixtures_dir, plan_path=plan_path)
+    plan_path = _write_declared_grants_plan(venued_fixtures_dir, plans)
+    _to_executing(store, sid, venued_fixtures_dir, plan_path=plan_path)
 
     rc = MOD.main(_dry_run_argv(sid, "developer", 1, tmp_path / "state", Path(plan_path)))
     assert rc == 0
@@ -84,7 +88,7 @@ def test_dry_run_reflects_a_declared_grant_for_the_matching_kind(
 
 
 def test_dry_run_omits_engine_grants_for_a_kind_that_is_not_the_stages_executor(
-    store, fixtures_dir, tmp_path, monkeypatch, capsys,
+    store, venued_fixtures_dir, tmp_path, monkeypatch, capsys,
 ):
     """Stage 1's executor is "spawn:developer" (plan_two_stage.toml). A thinker
     spawn dispatched against the same stage/session must fall back to
@@ -92,8 +96,8 @@ def test_dry_run_omits_engine_grants_for_a_kind_that_is_not_the_stages_executor(
     the plan never authorized to receive it."""
     monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path)
     sid = "dry-run-kind-mismatch"
-    plan_path = _write_declared_grants_plan(fixtures_dir, tmp_path)
-    _to_executing(store, sid, fixtures_dir, plan_path=plan_path)
+    plan_path = _write_declared_grants_plan(venued_fixtures_dir, tmp_path)
+    _to_executing(store, sid, venued_fixtures_dir, plan_path=plan_path)
 
     rc = MOD.main(_dry_run_argv(sid, "thinker", 1, tmp_path / "state", Path(plan_path)))
     assert rc == 0
@@ -106,12 +110,12 @@ def test_dry_run_omits_engine_grants_for_a_kind_that_is_not_the_stages_executor(
 
 
 def test_dry_run_reflects_a_runtime_once_scope_grant_and_its_provenance(
-    store, fixtures_dir, tmp_path, monkeypatch, capsys,
+    store, venued_fixtures_dir, tmp_path, monkeypatch, capsys,
 ):
-    monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path)
+    monkeypatch.setattr(MOD, "plans_dir", lambda: venued_fixtures_dir)
     sid = "dry-run-runtime-once-grant"
-    plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    _to_executing(store, sid, fixtures_dir, plan_path=plan_path)
+    plan_path = str(venued_fixtures_dir / "plan_two_stage.toml")
+    _to_executing(store, sid, venued_fixtures_dir, plan_path=plan_path)
 
     state = store.load(sid)
     state.permission_request = cli.PermissionRequest(action="need pytest", stage_index=1, raw="need pytest")
@@ -138,13 +142,13 @@ def test_dry_run_reflects_a_runtime_once_scope_grant_and_its_provenance(
 
 
 def test_dry_run_with_no_session_or_stage_index_gets_baseline_only(
-    store, fixtures_dir, tmp_path, monkeypatch, capsys,
+    store, venued_fixtures_dir, tmp_path, monkeypatch, capsys,
 ):
     """The same declared-grant session/stage exists, but a dry-run that omits
     --session/--stage-index (e.g. an ad hoc developer spawn outside the engine
     spine) must never pick up engine grants implicitly."""
     monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path)
-    plan_path = _write_declared_grants_plan(fixtures_dir, tmp_path)
+    plan_path = _write_declared_grants_plan(venued_fixtures_dir, tmp_path)
     argv = [
         "--kind", "developer",
         "--plan", plan_path,

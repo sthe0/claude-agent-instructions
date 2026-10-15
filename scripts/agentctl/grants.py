@@ -1026,6 +1026,15 @@ def _path_call_covered(grants: StageGrants, tool_name: str, path: str) -> bool:
 
 
 def _bash_call_covered(grants: StageGrants, command: str) -> bool:
+    return bash_command_covered_by_rules([r.rule for r in grants.allow], command)
+
+
+def bash_command_covered_by_rules(rules, command: str) -> bool:
+    """True iff every top-level segment of `command` is covered by some `Bash(...)`
+    rule of `rules` (rule strings). The one matcher both the harness-side cover
+    (`_bash_call_covered`) and the parent-norm boundary (`gates.parent_norm_boundary`)
+    use, so what a grant authorizes and what a delegated check is judged against
+    are the same rule. Pure: reads nothing but its arguments."""
     segments = _raw_top_level_segments(command)
     # A compound/multi-line command is covered only when EVERY top-level
     # segment is individually covered by some Bash rule — a partially
@@ -1040,13 +1049,18 @@ def _bash_call_covered(grants: StageGrants, command: str) -> bool:
     # absent from the count.
     if segments is None or not segments:
         return False
+    rules = list(rules)
     for segment in segments:
-        if _is_unresolvable_segment(segment) or not _segment_covered(grants, segment):
+        if _is_unresolvable_segment(segment) or not _segment_covered_by_rules(rules, segment):
             return False
     return True
 
 
 def _segment_covered(grants: StageGrants, segment: str) -> bool:
+    return _segment_covered_by_rules([r.rule for r in grants.allow], segment)
+
+
+def _segment_covered_by_rules(rules, segment: str) -> bool:
     """Literal match only (round 3): the harness matches a Bash rule against
     the LITERAL command string, with no path resolution and no notion that
     an absolute and a repo-relative spelling of the same script name the
@@ -1060,8 +1074,8 @@ def _segment_covered(grants: StageGrants, segment: str) -> bool:
     making every baseline rule that needs both spellings materialize BOTH of
     them literally (see `lib.kind_baselines`) rather than teaching the engine
     to treat one spelling as if it covered the other."""
-    for r in grants.allow:
-        parsed = rule_program_and_arg(r.rule)
+    for rule in rules:
+        parsed = rule_program_and_arg(rule)
         if parsed is None or parsed[0] != "Bash":
             continue
         rule_command = bash_command_from_rule_arg(parsed[1])

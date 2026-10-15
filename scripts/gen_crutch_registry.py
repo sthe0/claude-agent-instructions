@@ -481,6 +481,15 @@ CODE_ID_OVERRIDES = {
         "the CLAUDE.md-preamble-sanctioned STRUCTURAL case (\"tool-invocation "
         "shape, command syntax\"), not natural-language meaning.",
     ),
+    ("scripts/record-experience.py", "refuse"): (
+        "structural", "keep",
+        "Sink-only scope with no regex: refuse() prints caller-built problems "
+        "and exits 2; every caller derives them from structure "
+        "(canonical-checkout routing, manifest JSON shape, path existence, "
+        "SLUG/CONTEXT_ID/REVISION identifier fullmatch); the judged "
+        "same-difficulty refusal in cmd_new exits via sys.exit(message), not "
+        "via refuse().",
+    ),
     ("scripts/record-experience.py", "cmd_extend"): (
         "structural", "keep",
         "False pairing: the scope's regexes match markdown/YAML syntax (`^###\\s` "

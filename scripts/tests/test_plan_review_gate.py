@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import venue_plan
+
 from agentctl import cli, gates
 from agentctl.state import Node, PlanReview, SessionState, StageStatus
 
@@ -150,9 +152,9 @@ def _to_plan_ready(store, sid, plan):
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
 
 
-def test_approve_blocked_then_passes_after_review(store, fixtures_dir, gate_on):
+def test_approve_blocked_then_passes_after_review(store, venued_fixtures_dir, gate_on):
     sid = "apr"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     d = cli.cmd_approve(ns(session=sid, by="user"), store=store)
     assert d.node == Node.PLAN_READY.value  # blocked
@@ -163,21 +165,21 @@ def test_approve_blocked_then_passes_after_review(store, fixtures_dir, gate_on):
     assert d.node == Node.APPROVED.value
 
 
-def test_review_recorded_binds_to_current_plan_path(store, fixtures_dir, gate_on):
+def test_review_recorded_binds_to_current_plan_path(store, venued_fixtures_dir, gate_on):
     sid = "bind"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
                            concerns=None, note="", target=None), store=store)
     assert store.load(sid).plan_review.plan_path == plan
 
 
-def test_override_by_same_reviewer_refused(store, fixtures_dir, gate_on):
+def test_override_by_same_reviewer_refused(store, venued_fixtures_dir, gate_on):
     """The reviewer whose `revise` blocks the plan cannot override themselves —
     override is the USER's escape hatch. The refusal happens before the record
     is overwritten, so the blocking `revise` (and its author) survive."""
     sid = "selfov"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_plan_ready(store, sid, plan)
     cli.cmd_plan_review(ns(session=sid, verdict="revise", reviewer="thinker",
                            concerns=None, note="", target=None), store=store)
@@ -273,12 +275,12 @@ def test_content_hash_empty_stored_hash_pass_blocks(gate_on, tmp_path):
 
 
 def test_cmd_plan_review_records_hash_and_inplace_rewrite_blocks_approve(
-        store, fixtures_dir, tmp_path, gate_on):
+        store, venued_fixtures_dir, tmp_path, gate_on):
     """End-to-end: cmd_plan_review stamps the reviewed plan's sha256; an in-place
     rewrite of the same-path plan then blocks approve as content-stale."""
     sid = "hash"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
                            concerns=None, note="", target=None,
@@ -318,12 +320,12 @@ def test_legacy_schema12_plan_review_fixture_loads(gate_on):
 # The pass verdict binds only on a reviewer-attested digest matching the live bytes,
 # so a reviewer that could not read the plan cannot record a binding pass.
 
-def test_plan_digest_matching_records_and_binds(store, fixtures_dir, tmp_path, gate_on):
+def test_plan_digest_matching_records_and_binds(store, venued_fixtures_dir, tmp_path, gate_on):
     """(a) A matching --plan-digest is stored as the attested plan_sha256 and clears
     the gate — approve reaches APPROVED."""
     sid = "pdmatch"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
                                concerns=None, note="", target=None,
@@ -334,12 +336,12 @@ def test_plan_digest_matching_records_and_binds(store, fixtures_dir, tmp_path, g
     assert d.node == Node.APPROVED.value
 
 
-def test_plan_digest_mismatch_refuses_and_records_nothing(store, fixtures_dir, tmp_path, gate_on):
+def test_plan_digest_mismatch_refuses_and_records_nothing(store, venued_fixtures_dir, tmp_path, gate_on):
     """(b) A mismatched --plan-digest exits non-zero and writes NO review — the
     reviewer read a different/stale plan, so nothing is bound."""
     sid = "pdmiss"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     assert store.load(sid).plan_review is None
     d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
@@ -349,12 +351,12 @@ def test_plan_digest_mismatch_refuses_and_records_nothing(store, fixtures_dir, t
     assert store.load(sid).plan_review is None  # nothing recorded
 
 
-def test_plan_digest_absent_pass_does_not_bind(store, fixtures_dir, tmp_path, gate_on):
+def test_plan_digest_absent_pass_does_not_bind(store, venued_fixtures_dir, tmp_path, gate_on):
     """(c) No --plan-digest on an ACTIVE session records an unattested pass that does
     NOT bind — the sibling-session 'reviewer could not read the plan' failure mode."""
     sid = "pdabsent"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
                            concerns=None, note="", target=None,
@@ -367,14 +369,14 @@ def test_plan_digest_absent_pass_does_not_bind(store, fixtures_dir, tmp_path, ga
     assert d.node == Node.PLAN_READY.value  # blocked, not APPROVED
 
 
-def test_plan_digest_attested_over_unreadable_target_refuses(store, fixtures_dir, tmp_path, gate_on):
+def test_plan_digest_attested_over_unreadable_target_refuses(store, venued_fixtures_dir, tmp_path, gate_on):
     """(e) An attestation the engine cannot cross-check is not an attestation: a
     --plan-digest supplied against a target whose live read FAILS is refused, and
     nothing is recorded. Without this, the cross-check below (`if live and ...`)
     silently skipped on an empty `live` and stored the caller's word as verified."""
     sid = "pdunreadable"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
                                concerns=None, note="", target=str(tmp_path / "NOPE.toml"),
@@ -383,13 +385,13 @@ def test_plan_digest_attested_over_unreadable_target_refuses(store, fixtures_dir
     assert store.load(sid).plan_review is None  # nothing recorded
 
 
-def test_plan_digest_absent_over_unreadable_target_still_records(store, fixtures_dir, tmp_path, gate_on):
+def test_plan_digest_absent_over_unreadable_target_still_records(store, venued_fixtures_dir, tmp_path, gate_on):
     """(f) The no-digest degradation survives the refusal above unchanged: with
     NOTHING attested, an unreadable target still records (an unattested pass that
     blocks at the gate), rather than wedging on a transient I/O error."""
     sid = "pdunreadablenodigest"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
                                concerns=None, note="", target=str(tmp_path / "NOPE.toml"),
@@ -401,12 +403,12 @@ def test_plan_digest_absent_over_unreadable_target_still_records(store, fixtures
     assert s.plan_review.plan_sha256 == ""
 
 
-def test_plan_digest_attested_over_readable_explicit_target_records(store, fixtures_dir, tmp_path, gate_on):
+def test_plan_digest_attested_over_readable_explicit_target_records(store, venued_fixtures_dir, tmp_path, gate_on):
     """(g) The positive direction of (e) on the same explicit-`--target` path: a
     readable target whose bytes hash to the attested digest still records and binds."""
     sid = "pdexplicittarget"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     d = cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
                                concerns=None, note="", target=str(plan),
@@ -416,14 +418,14 @@ def test_plan_digest_attested_over_readable_explicit_target_records(store, fixtu
     assert cli.cmd_approve(ns(session=sid, by="user"), store=store).node == Node.APPROVED.value
 
 
-def test_unread_path_cannot_borrow_the_real_plans_digest(store, fixtures_dir, tmp_path, gate_on):
+def test_unread_path_cannot_borrow_the_real_plans_digest(store, venued_fixtures_dir, tmp_path, gate_on):
     """(h) The end-to-end shape (e) closes: reviewing a NONEXISTENT path while
     passing the REAL plan's sha256 used to record a review that then bound the real
     plan by byte identity (#195's cross-path binding), carrying it to APPROVED. The
     real plan must stay blocked."""
     sid = "pdborrow"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     cli.cmd_plan_review(ns(session=sid, verdict="pass", reviewer="thinker",
                            concerns=None, note="", target=str(tmp_path / "NOPE.toml"),
@@ -433,12 +435,12 @@ def test_unread_path_cannot_borrow_the_real_plans_digest(store, fixtures_dir, tm
     assert cli.cmd_approve(ns(session=sid, by="user"), store=store).node == Node.PLAN_READY.value
 
 
-def test_override_binds_without_digest(store, fixtures_dir, tmp_path, gate_on):
+def test_override_binds_without_digest(store, venued_fixtures_dir, tmp_path, gate_on):
     """(d) An override (the deadlock escape) still binds with no --plan-digest — the
     attestation requirement lives only in the pass branch."""
     sid = "pdoverride"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     cli.cmd_plan_review(ns(session=sid, verdict="override", reviewer="fedor",
                            concerns=None, note="user escape", target=None,
@@ -560,7 +562,10 @@ def test_override_with_empty_customer_id_degrades_gracefully(store, tmp_path, ga
 # --- four live spine walks (subprocess, gate ON) -----------------------------
 
 def _run(state_root: Path, *args: str, gate: str = "1"):
-    env = dict(os.environ, AGENTCTL_PLAN_REVIEW=gate, AGENTCTL_ADVISOR="0")
+    # The walks declare their tmp dir as the plan's venue; keep it out of the OS-temp
+    # scratch roots so a relative output_artifacts entry anchored there is not refused.
+    env = dict(os.environ, AGENTCTL_PLAN_REVIEW=gate, AGENTCTL_ADVISOR="0",
+               AGENTCTL_SCRATCH_ROOTS=str(state_root.parent / "scratch-elsewhere"))
     proc = subprocess.run(
         [sys.executable, "-m", "agentctl", "--state-root", str(state_root), *args],
         cwd=str(SCRIPTS_DIR), env=env, capture_output=True, text=True,
@@ -582,7 +587,7 @@ def _classify_plan_submit(root, sid, plan, *, small=False):
 
 def test_spine_walk_construction_deny_then_pass(tmp_path):
     root = tmp_path / "st"
-    plan = str(FIXTURES / "plan_two_stage.toml")
+    plan = str(venue_plan(FIXTURES / "plan_two_stage.toml", tmp_path / "plans", tmp_path))
     _classify_plan_submit(root, "c1", plan)
     denied = _run(root, "approve", "--session", "c1", "--by", "user")
     assert '"ok": false' in denied.stdout and "plan-review" in denied.stdout.lower()
@@ -594,8 +599,8 @@ def test_spine_walk_construction_deny_then_pass(tmp_path):
 
 def test_spine_walk_replan_deny_then_pass(tmp_path):
     root = tmp_path / "st"
-    plan = str(FIXTURES / "plan_two_stage.toml")
-    refined = str(FIXTURES / "plan_two_stage_refined.toml")
+    plan = str(venue_plan(FIXTURES / "plan_two_stage.toml", tmp_path / "plans", tmp_path))
+    refined = str(venue_plan(FIXTURES / "plan_two_stage_refined.toml", tmp_path / "plans", tmp_path))
     _classify_plan_submit(root, "r1", plan)
     _run(root, "plan-review", "--session", "r1", "--verdict", "pass", "--reviewer",
          "thinker", "--plan-digest", _sha256_file(plan))
@@ -621,7 +626,7 @@ def test_spine_walk_replan_deny_then_pass(tmp_path):
 
 def test_spine_walk_override_unblocks_revise(tmp_path):
     root = tmp_path / "st"
-    plan = str(FIXTURES / "plan_two_stage.toml")
+    plan = str(venue_plan(FIXTURES / "plan_two_stage.toml", tmp_path / "plans", tmp_path))
     _classify_plan_submit(root, "o1", plan)
     _run(root, "plan-review", "--session", "o1", "--verdict", "revise", "--reviewer", "thinker")
     denied = _run(root, "approve", "--session", "o1", "--by", "user")

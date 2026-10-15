@@ -333,10 +333,10 @@ def _present_and_stamp_replan_diff(store, sid, target_plan, tmp_path, note="test
 
 # --- case 1 & 2: DIAGNOSING carve-out at the cmd_replan call site -----------------
 
-def test_case1_diagnosing_complete_difficulty_replan_succeeds(store, fixtures_dir, gate_on):
+def test_case1_diagnosing_complete_difficulty_replan_succeeds(store, venued_fixtures_dir, gate_on):
     sid = "case1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_executing_stage1(store, sid, plan)
     cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
     cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
@@ -351,10 +351,10 @@ def test_case1_diagnosing_complete_difficulty_replan_succeeds(store, fixtures_di
     assert d.ok is True
 
 
-def test_case2_incomplete_difficulty_refuses_before_replan_authorization(store, fixtures_dir, gate_on):
+def test_case2_incomplete_difficulty_refuses_before_replan_authorization(store, venued_fixtures_dir, gate_on):
     sid = "case2"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_executing_stage1(store, sid, plan)
     cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
@@ -364,10 +364,10 @@ def test_case2_incomplete_difficulty_refuses_before_replan_authorization(store, 
 
 # --- case 3: refusal leaves state untouched ---------------------------------------
 
-def test_case3_no_receipt_refuses_without_mutating_state(store, fixtures_dir, gate_on):
+def test_case3_no_receipt_refuses_without_mutating_state(store, venued_fixtures_dir, gate_on):
     sid = "case3"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_executing_stage1(store, sid, plan)
     state_path = store.path(sid)
     before = state_path.read_bytes()
@@ -382,10 +382,10 @@ def test_case3_no_receipt_refuses_without_mutating_state(store, fixtures_dir, ga
 
 # --- case 4: receipt + valid stamp applies the refinement -------------------------
 
-def test_case4_receipt_and_stamp_succeeds_and_applies_refinement(home_store, fixtures_dir, gate_on, tmp_path):
+def test_case4_receipt_and_stamp_succeeds_and_applies_refinement(home_store, venued_fixtures_dir, gate_on, tmp_path):
     sid = "case4"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_executing_stage1(home_store, sid, plan)
     _present_and_stamp_replan_diff(home_store, sid, refined, tmp_path)
 
@@ -399,11 +399,11 @@ def test_case4_receipt_and_stamp_succeeds_and_applies_refinement(home_store, fix
 
 # --- case 5: receipt bound to bytes the plan has since moved past -----------------
 
-def test_case5_cli_stale_receipt_refuses(home_store, fixtures_dir, gate_on, tmp_path):
+def test_case5_cli_stale_receipt_refuses(home_store, venued_fixtures_dir, gate_on, tmp_path):
     sid = "case5"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     refined = tmp_path / "refined.toml"
-    refined.write_text((fixtures_dir / "plan_two_stage_refined.toml").read_text())
+    refined.write_text((venued_fixtures_dir / "plan_two_stage_refined.toml").read_text())
     _to_executing_stage1(home_store, sid, plan)
     _present_and_stamp_replan_diff(home_store, sid, str(refined), tmp_path)
 
@@ -431,10 +431,10 @@ def test_case6_delivery_stamp_wrong_rendering_sha_blocks(gate_on, home_store, tm
 
 # --- case 7: a substantive diff needs no receipt and re-arms approval ------------
 
-def test_case7_substantive_diff_no_receipt_succeeds_and_rearms(store, fixtures_dir, gate_on):
+def test_case7_substantive_diff_no_receipt_succeeds_and_rearms(store, venued_fixtures_dir, gate_on):
     sid = "case7"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    bigger = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    bigger = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
     _to_executing_stage1(store, sid, plan)
 
     d = cli.cmd_replan(ns(session=sid, plan=bigger), store=store)
@@ -447,9 +447,9 @@ def test_case7_substantive_diff_no_receipt_succeeds_and_rearms(store, fixtures_d
 
 # --- case 8: byte-identical proposed plan takes the exemption --------------------
 
-def test_case8_cli_byte_identical_plan_succeeds(store, fixtures_dir, gate_on):
+def test_case8_cli_byte_identical_plan_succeeds(store, venued_fixtures_dir, gate_on):
     sid = "case8"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan)
 
     d = cli.cmd_replan(ns(session=sid, plan=plan), store=store)
@@ -636,10 +636,10 @@ def test_case12_two_replan_diff_presentations_different_paths_leave_one_record(s
 
 # --- case 13: path-mismatch staleness, made reachable by real --plan usage -------
 
-def test_case13_receipt_path_mismatch_reachable_via_present_then_replan(store, fixtures_dir, gate_on, tmp_path):
+def test_case13_receipt_path_mismatch_reachable_via_present_then_replan(store, venued_fixtures_dir, gate_on, tmp_path):
     sid = "case13"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_executing_stage1(store, sid, plan)
 
     rendering = tmp_path / "rendering.txt"
@@ -664,10 +664,10 @@ def test_case13_receipt_path_mismatch_reachable_via_present_then_replan(store, f
 # genuinely different refinement is still gated despite the divergence ----------
 
 def test_case14_renormalize_digest_diverges_from_snapshot_but_still_gates_refinement(
-    store, fixtures_dir, gate_on, tmp_path
+    store, venued_fixtures_dir, gate_on, tmp_path
 ):
     sid = "case14"
-    base_text = (fixtures_dir / "plan_two_stage_means.toml").read_text()
+    base_text = (venued_fixtures_dir / "plan_two_stage_means.toml").read_text()
     # Two variants differing ONLY in stage 1's `procedure` — the one field
     # --renormalize is licensed to move without a fresh review/approval.
     variant_a = base_text.replace(

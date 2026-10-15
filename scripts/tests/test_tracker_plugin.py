@@ -428,10 +428,10 @@ def _drive_to_resolution(capsys, root, sid, plan, *, activate_tracker):
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "experience", "--phase", "recorded")
 
 
-def test_e2e_resolve_blocked_until_published_then_passes_and_retires(capsys, tmp_path, fixtures_dir):
+def test_e2e_resolve_blocked_until_published_then_passes_and_retires(capsys, tmp_path, venued_fixtures_dir):
     root = str(tmp_path / "state")
     sid = "tk-e2e"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _drive_to_resolution(capsys, root, sid, plan, activate_tracker=True)
 
     # submit-plan fired publish_plan along the way
@@ -445,7 +445,8 @@ def test_e2e_resolve_blocked_until_published_then_passes_and_retires(capsys, tmp
     # record the three mandatory publications, then resolve is STILL blocked —
     # both fixture stages declared output_artifacts, so each owes its own
     # per-stage progress entry (the journal gate) before the resolution gate clears
-    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "plan")
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "plan",
+         "--attachment", "att-1")
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "result")
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "status")
     rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
@@ -468,13 +469,13 @@ def test_e2e_resolve_blocked_until_published_then_passes_and_retires(capsys, tmp
     assert "tracker" in raw["plugins_archive"]
 
 
-def test_e2e_skip_marker_unblocks_resolution_and_stores_reason(capsys, tmp_path, fixtures_dir):
+def test_e2e_skip_marker_unblocks_resolution_and_stores_reason(capsys, tmp_path, venued_fixtures_dir):
     # a backend with no publish transport: the coordinator discharges the
     # mandatory `plan` phase with the SKIP form. Resolution passes, and the stored
     # marker keeps the reason for audit (never a silent unrecorded phase).
     root = str(tmp_path / "state")
     sid = "tk-skip"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _drive_to_resolution(capsys, root, sid, plan, activate_tracker=True)
 
     # missing a --note is refused: an honest skip must carry a reason
@@ -502,17 +503,62 @@ def test_e2e_skip_marker_unblocks_resolution_and_stores_reason(capsys, tmp_path,
     assert marker == {"skipped": reason}
 
 
+def test_plan_phase_requires_attachment(capsys, tmp_path, venued_fixtures_dir):
+    root = str(tmp_path / "state")
+    sid = "tk-attach"
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    _drive_to_resolution(capsys, root, sid, plan, activate_tracker=True)
+    rec = ("plugin-record", "--session", sid, "--plugin", "tracker")
+
+    rc, d = _run(capsys, root, *rec, "--phase", "plan")
+    assert rc == 1
+    assert "--attachment" in d["detail"] and "--skipped" in d["detail"]
+    rc, _ = _run(capsys, root, *rec, "--phase", "plan", "--attachment", "  ")
+    assert rc == 1
+
+    # an unrelated phase is unaffected
+    rc, _ = _run(capsys, root, *rec, "--phase", "result")
+    assert rc == 0
+
+    rc, _ = _run(capsys, root, *rec, "--phase", "plan", "--attachment", "att-42")
+    assert rc == 0
+    raw = json.loads((Path(root) / f"{sid}.json").read_text(encoding="utf-8"))
+    assert raw["plugins"]["tracker"]["published_phases"]["plan"] == {"attachment": "att-42"}
+
+
+def test_plan_phase_skip_with_note_still_accepted(capsys, tmp_path, venued_fixtures_dir):
+    root = str(tmp_path / "state")
+    sid = "tk-attach-skip"
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    _drive_to_resolution(capsys, root, sid, plan, activate_tracker=True)
+    rc, _ = _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+                 "--phase", "plan", "--skipped", "--note", "no attach transport")
+    assert rc == 0
+
+
+def test_attachment_not_required_for_other_plugins(capsys, tmp_path, venued_fixtures_dir):
+    root = str(tmp_path / "state")
+    sid = "tk-attach-other"
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    _drive_to_resolution(capsys, root, sid, plan, activate_tracker=True)
+    _run(capsys, root, "plugin-activate", "--session", sid, "--plugin", "experience")
+    rc, _ = _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "experience",
+                 "--phase", "searched")
+    assert rc == 0
+
+
 # --- per-stage journal gate ----------------------------------------------------
 # A PASSED stage that declared output_artifacts changed something a ticket reader
 # cannot otherwise discover — it owes its OWN progress:<n> entry, not just the
 # three whole-task phases (plan/result/status).
 
-def test_journal_gate_blocks_one_stage_at_a_time_then_clears(capsys, tmp_path, fixtures_dir):
+def test_journal_gate_blocks_one_stage_at_a_time_then_clears(capsys, tmp_path, venued_fixtures_dir):
     root = str(tmp_path / "state")
     sid = "tk-journal"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _drive_to_resolution(capsys, root, sid, plan, activate_tracker=True)
-    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "plan")
+    _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "plan",
+         "--attachment", "att-1")
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "result")
     _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker", "--phase", "status")
 
@@ -545,10 +591,10 @@ def test_journal_gate_blocks_one_stage_at_a_time_then_clears(capsys, tmp_path, f
     assert "progress:1" in published and "progress:2" in published
 
 
-def test_e2e_non_tracker_session_has_no_tracker_effect(capsys, tmp_path, fixtures_dir):
+def test_e2e_non_tracker_session_has_no_tracker_effect(capsys, tmp_path, venued_fixtures_dir):
     root = str(tmp_path / "state")
     sid = "tk-none"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _drive_to_resolution(capsys, root, sid, plan, activate_tracker=False)
     rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
     assert rc == 0  # no tracker gate -> resolve passes immediately

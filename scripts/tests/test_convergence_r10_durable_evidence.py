@@ -22,6 +22,7 @@ from agentctl.dispatch import RunResult
 from agentctl.plan import load_plan, parse_plan
 from agentctl.submission import submission_violations
 
+from conftest import venue_plan
 from test_stage_grants import _to_executing, ns
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
@@ -217,7 +218,7 @@ def test_evidence_dir_under_scratch_root_fails_loudly_without_override(tmp_path,
 def test_dispatch_directive_names_evidence_dir(store, fixtures_dir):
     sid = "r10-dispatch-evidence"
     _to_executing(store, sid, fixtures_dir)
-    runner = lambda argv: RunResult(0, stdout="python3 spawn-specialist.py --kind developer ...\n")
+    runner = lambda argv, cwd=None: RunResult(0, stdout="python3 spawn-specialist.py --kind developer ...\n")
 
     d = cli.cmd_dispatch(
         ns(session=sid, budget="medium", complexity="medium", dry_run=True),
@@ -353,13 +354,18 @@ def test_non_developer_spawn_gets_no_checkpoint_or_evidence_grant(
 # --- #6: the evidence-dir grant never moves an already-approved plan's ------
 # --- grants_sha256 -----------------------------------------------------------
 
-# Computed at commit f8232ea (the pre-R10 tip) via `agentctl.plan.grants_sha256`
-# against the unmodified `fixtures/plan_two_stage.toml` fixture -- see the R10
-# stage's own procedure. `grants_sha256` reads ONLY the PlanDoc's own declared
-# and derived grants (agentctl/plan.py's `_grants_effective_map`), never the
-# spawn-time evidence-dir add_dir this file's other tests exercise, so the
-# SAME digest must still come back from the current code for the same fixture.
-GOLDEN_GRANTS_SHA256 = "1f8190be49094ff4050c2f164d215e737263104665c69da513f23f174db6a31c"
+# `agentctl.plan.grants_sha256` reads ONLY the PlanDoc's own declared and
+# derived grants (agentctl/plan.py's `_grants_effective_map`), never the
+# spawn-time evidence-dir add_dir this file's other tests exercise, so the SAME
+# digest must come back after a spawn resolved and printed that grant.
+#
+# The engine no longer substitutes the process cwd for an undeclared venue, so
+# the digest is only defined for a plan that declares one: the unmodified
+# `fixtures/plan_two_stage.toml` is hashed with `repo_root = GOLDEN_VENUE` (a
+# fixed literal, so the pin does not move with the checkout or tmp_path). The
+# earlier cwd-derived pin (1f8190be…) is not reproducible without a cwd venue.
+GOLDEN_VENUE = "/golden-venue"
+GOLDEN_GRANTS_SHA256 = "6ceeb9076542fe70fa04419991c66718d2ca656bf0f4a33e2774bb86934d17bb"
 
 
 def test_evidence_dir_grant_keeps_approved_grants_sha256(store, fixtures_dir, tmp_path, monkeypatch):
@@ -367,7 +373,7 @@ def test_evidence_dir_grant_keeps_approved_grants_sha256(store, fixtures_dir, tm
     from agentctl.plan import grants_sha256
 
     plan_path = str(fixtures_dir / "plan_two_stage.toml")
-    doc = load_plan(plan_path)
+    doc = load_plan(venue_plan(Path(plan_path), tmp_path / "golden", GOLDEN_VENUE))
     assert grants_sha256(doc) == GOLDEN_GRANTS_SHA256
 
     stage1 = next(s for s in doc.stages if s.index == 1)

@@ -22,14 +22,46 @@ from pathlib import Path
 from . import grants as _grants
 from . import resources as _resources
 from .directive import Directive
-from .plan import PlanDoc, _effective_grants_for_stage, _venue_for, load_plan
+from .plan import (
+    PlanDoc,
+    _effective_grants_for_stage,
+    _venue_for,
+    load_plan,
+    runs_verify_command,
+)
 from .state import CheckKind, CriterionType, Stage
 from .tool_contracts import Resolution, load_contract_table, resolve_command
 
 
-def resolve_rule_grant(rule: str, venue: str) -> Resolution:
+def _no_venue_resolution(text: str) -> Resolution:
+    """A command text the plan gives nothing to resolve against. `resolve_command` joins
+    a relative operand to the venue it is handed, so passing it a cwd stand-in would make
+    the verdict a function of where the engine was driven from; the text is left
+    unresolved with an identity of its own instead, which no covering entry can match."""
+    return Resolution(
+        "unresolved", reason_class="contract-unresolved",
+        reason=f"{text!r} cannot be resolved: the plan declares no absolute repo_root or "
+               "delivery_worktree to resolve it against",
+        identity=("no-venue", text),
+    )
+
+
+def resolve_text(text: str, venue: str | None) -> Resolution:
+    """`tool_contracts.resolve_command` for a venue that may be undeclared (None)."""
+    if venue is None:
+        return _no_venue_resolution(text)
+    return resolve_command(text, venue)
+
+
+def resolve_rule_grant(rule: str, venue: str | None) -> Resolution:
     """Resolve one `Tool(arg)` rule string to the resource(s) it covers, or
     leave it unresolved with a `reason_class` naming why.
+
+    With `venue` None (a plan declaring no absolute venue) a Bash rule that would be
+    resolved against the venue is unresolved with `identity=("no-venue", arg)`: no
+    operand of it has a base to be resolved against. A wildcard-tail verdict reads the
+    rule text only, so it is the same with or without a venue. File-tool rules carry
+    their own path and resolve as usual.
 
     A Bash rule with a `:*` wildcard tail is unresolved with
     `reason_class="wildcard-tail"`: the argv it admits at materialization
@@ -62,7 +94,7 @@ def resolve_rule_grant(rule: str, venue: str) -> Resolution:
                 ),
                 identity=("wildcard-tail", rule),
             )
-        return resolve_command(arg, venue)
+        return resolve_text(arg, venue)
     if tool not in ("Edit", "Write", "Read", "NotebookEdit"):
         return Resolution(
             "unresolved", reason_class="unknown-program",
@@ -102,7 +134,7 @@ class StageResources:
     stage_effects: list = field(default_factory=list)
 
 
-def compute_stage_resources(stage: Stage, venue: str) -> StageResources:
+def compute_stage_resources(stage: Stage, venue: str | None) -> StageResources:
     """Compute the union of a stage's typed resources: effective (declared +
     derived) grants, its own spawn/landed shape, and its declared
     [[stage.effects]] (echoed through unresolved -- resolving a
@@ -147,18 +179,13 @@ class BoundaryView:
     order_sha256: str
     resources: list = field(default_factory=list)
     unresolved: list[dict] = field(default_factory=list)
+    #: `(resource, origin, source)` for every entry of `resources`, in step with it: the plan
+    #: element, and its text, each resource came from.
+    resource_origins: list[tuple] = field(default_factory=list)
 
 
 def _unresolved_item(identity, origin: str, source: str) -> dict:
     return {"identity": list(identity), "origin": origin, "source": source}
-
-
-def runs_verify_command(criterion) -> bool:
-    """Whether the engine itself executes this criterion's `verify_command` -- the one
-    predicate both the executor and the boundary's resource resolution key on."""
-    return bool(criterion.verify_command) and (
-        criterion.criterion_type == CriterionType.MEASURABLE.value
-    )
 
 
 def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None = None) -> BoundaryView:
@@ -166,13 +193,18 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
     (verify_command, negative_control, final_check commands) resolved directly as whole
     texts, with every unresolved identity carrying its origin. The DR-V rules derived
     from a verify_command are skipped: derivation drops segments it cannot read off
-    the text, so only the direct resolution sees them."""
+    the text, so only the direct resolution sees them. Each resolved resource is also
+    recorded in `resource_origins` with the plan element and text that produced it."""
     v = venue if venue is not None else _venue_for(doc)
     view = BoundaryView(order_sha256=order_sha256)
 
+    def add(resources: list, origin: str, source: str) -> None:
+        view.resources.extend(resources)
+        view.resource_origins.extend((r, origin, source) for r in resources)
+
     def take(res: Resolution, origin: str, source: str, fallback: tuple) -> None:
         if res.status == "resolved":
-            view.resources.extend(res.resources)
+            add(res.resources, origin, source)
         else:
             view.unresolved.append(_unresolved_item(res.identity or fallback, origin, source))
 
@@ -188,18 +220,18 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
             take(resolve_rule_grant(rule_grant.rule, v), origin, rule_grant.rule,
                  ("unresolved", rule_grant.rule))
         for add_dir in effective.add_dirs:
-            view.resources.extend(resolve_add_dir_grant(add_dir.path, add_dir.mode).resources)
-        view.resources.extend(_stage_spawn_resources(stage))
-        view.resources.extend(_stage_landed_resources(stage))
+            add(resolve_add_dir_grant(add_dir.path, add_dir.mode).resources, "add_dir", add_dir.path)
+        add(_stage_spawn_resources(stage), "spawn", "")
+        add(_stage_landed_resources(stage), "landed", "")
         if runs_verify_command(stage.criterion):
             verify = stage.criterion.verify_command
-            take(resolve_command(verify, v), "verify_command", verify, ("verify-command", verify))
+            take(resolve_text(verify, v), "verify_command", verify, ("verify-command", verify))
         control = stage.criterion.negative_control
         if control:
-            take(resolve_command(control, v), "negative_control", control, ("negative-control", control))
+            take(resolve_text(control, v), "negative_control", control, ("negative-control", control))
     for check in doc.meta.final_check:
         if check.command:
-            take(resolve_command(check.command, v), "final_check", check.command,
+            take(resolve_text(check.command, v), "final_check", check.command,
                  ("final-check", check.command))
     return view
 
@@ -235,7 +267,7 @@ def _resolution_to_dict(res: Resolution, *, label: str, label_key: str = "rule")
     }
 
 
-def _plan_resources_json(doc: PlanDoc, venue: str) -> dict:
+def _plan_resources_json(doc: PlanDoc, venue: str | None) -> dict:
     stages = {}
     for s in doc.stages:
         effective = _effective_grants_for_stage(s, venue)
@@ -317,6 +349,9 @@ def _iter_corpus_commands(corpus_dirs: list[str]) -> list[tuple[str, str, str]]:
                 doc = load_plan(str(p), strict=False)
             except Exception:
                 continue
+            # An inspector the invoker runs, like `--commands-file` below: the cwd it was
+            # started in is the venue it is told to resolve against, and no verdict of the
+            # engine reads this output.
             venue = _venue_for(doc) or str(Path.cwd())
             for s in doc.stages:
                 # plan.py stores this field as a raw, unvalidated string (plan.py

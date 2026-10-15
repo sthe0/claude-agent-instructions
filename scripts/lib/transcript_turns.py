@@ -201,6 +201,24 @@ def has_marker_option(tool_input: dict, marker: str) -> bool:
     return False
 
 
+def has_marker_in_question_text(tool_input: dict, marker: str) -> bool:
+    """True iff `marker` appears in a question stem or header field (not any option).
+    Used to produce a specific diagnostic when the marker was placed in the wrong field."""
+    if not isinstance(tool_input, dict):
+        return False
+    questions = tool_input.get("questions")
+    if not isinstance(questions, list):
+        return False
+    for q in questions:
+        if not isinstance(q, dict):
+            continue
+        for key in ("question", "header"):
+            val = q.get(key)
+            if isinstance(val, str) and marker in val:
+                return True
+    return False
+
+
 def ask_user_question_calls(
     transcript_path: Path,
 ) -> list[tuple[dict, float | None, bool]] | None:

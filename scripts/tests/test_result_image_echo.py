@@ -37,7 +37,7 @@ from agentctl.result_image import echo_prefilter, judge_echo
 from agentctl.state import Node
 from agentctl.submission import submission_advice, validate_submission
 
-from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
+from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER, declare_venue
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CORPUS_DIR = FIXTURES / "plan_corpus"
@@ -114,7 +114,7 @@ refutation = "r"
 def _write_plan(path: Path, image: str) -> str:
     # json.dumps is a valid TOML basic string for these values, and it escapes the
     # backticks, quotes and dashes real corpus images carry.
-    path.write_text(_PLAN.format(image=json.dumps(image)), encoding="utf-8")
+    path.write_text(declare_venue(_PLAN.format(image=json.dumps(image)), path.parent), encoding="utf-8")
     return str(path)
 
 
@@ -330,7 +330,7 @@ def test_replan_carries_the_warning_and_pays_for_it_only_past_the_refusals(
     # `knowledge`): refused inside cmd_replan above the judge, so it costs nothing.
     broken = tmp_path / "broken.toml"
     broken.write_text(
-        _PLAN.format(image=json.dumps(image)).replace(
+        declare_venue(_PLAN.format(image=json.dumps(image)), tmp_path).replace(
             'knowledge = "how the submission seam differs from the loader"', ""),
         encoding="utf-8",
     )

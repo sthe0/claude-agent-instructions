@@ -115,7 +115,7 @@ Not mandatory only for neutral confirmation ("ok", "yes do it", "thanks") and fo
 
 ### Delegating to specialists & skills
 
-A **specialist** is a specialization skill run **inline** (via `Skill` — no spawn cost, when it fits the § Classify carve-out) or **spawned** (`claude -p`, fresh context + separate budget — mechanics: [spawning-specialists.md](memory-global/leaves/spawning-specialists.md)). Flat skills (`overcome-difficulty` / `self-improvement` / `tracker-management`) run inline only.
+A **specialist** is a specialization skill run **inline** (`Skill`, per the § Classify carve-out) or **spawned** (`scripts/spawn-specialist.py --kind <skill>` — fresh context; [spawning-specialists.md](memory-global/leaves/spawning-specialists.md)). A specialist is never an `Agent` type (`Agent` = exploration/polling; one told to read a SKILL.md is denied). Flat skills (`overcome-difficulty` / `self-improvement` / `tracker-management`) run inline only.
 
 | Signal | Specialist / skill | Mode |
 |---|---|---|
@@ -129,13 +129,13 @@ A **specialist** is a specialization skill run **inline** (via `Skill` — no sp
 | Difficulty in the work itself | `overcome-difficulty` | inline |
 | User correction / feedback about agent behavior | `self-improvement` | inline |
 | Ticket / issue / tracker mention, or an `ABC-123` key | `tracker-management` | inline |
-| Post-spawn monitoring; initial codebase / data exploration before editing | cheap `Agent` (`haiku` poll / `sonnet` search) — never inline on opus ([delegatable-work-patterns.md](memory-global/leaves/delegatable-work-patterns.md)) | spawn |
+| Post-spawn monitoring; initial codebase / data exploration before editing | cheap general `Agent` (`haiku` poll / `sonnet` search) — never inline on opus ([delegatable-work-patterns.md](memory-global/leaves/delegatable-work-patterns.md)) | `Agent`, not a specialist |
 | Other domain expertise | project-local `<cwd>/.claude/skills/specializations/`, else domain MCP / search | — |
 
-If the need exists but isn't stated, name it and propose delegation. Too small for even an inline invocation (one-liner, chat reply) → handle directly per § Classify task weight.
+If the need exists but isn't stated, name it and propose delegation. Too small for even an inline invocation (one-liner, chat reply) → handle directly.
 
 **Invariants.** Invoke a specialist **only per a plan step** — never autonomously mid-task (that's a difficulty signal → `overcome-difficulty`). **`PLAN-READY:` is a hard gate** — explicit user approval (or engine `self_approve`) before any further spawn, never inferred from silence **nor from a plan-correction directive**: a correction at the gate is refinement, not "go" — apply it, re-present, wait for affirmative approval (engine holds at `PLAN_READY`). **`COMPLETED:`** — diff the delivery against the user's approved *intent*, not just "tests pass". Spawn mechanics + the return markers → [spawning-specialists.md](memory-global/leaves/spawning-specialists.md); per-marker handling (`agentctl dispatch` routes them) → [handling-escalations.md](memory-global/leaves/handling-escalations.md).
-**MCP-first over direct CLI.** Before Bash for a known domain operation (VCS, secrets, ticket, search, paste, PR review), use an MCP tool if it can, else the matching skill, else raw CLI (read-only MCP: no writes); inline Skill is the default for specialists that fit the carve-out. See [skill-first-dispatch.md](memory-global/leaves/skill-first-dispatch.md).
+**MCP-first over direct CLI.** Before Bash for a known domain operation (VCS, secrets, ticket, search, paste, PR review), use an MCP tool if it can, else the matching skill, else raw CLI (read-only MCP: no writes). See [skill-first-dispatch.md](memory-global/leaves/skill-first-dispatch.md).
 
 ### On task resolution (record experience)
 

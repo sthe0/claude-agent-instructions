@@ -64,7 +64,8 @@ OWN_CONTOUR_VERBS = {
     "plan-review-delta", "approve", "partition", "dispatch", "record-result",
     "code-review", "verify-final", "declare", "investigate", "critique",
     "normalize", "replan", "stage-grants", "plan-grants", "question-raise",
-    "question-dispose",
+    "question-dispose", "order-raise", "order-dispose",
+    "plan-review-walk", "plan-review-pair-history", "plan-review-compose",
 }
 PARTITION_MARKER_FLAGS = ("--m1", "--m2", "--m3", "--m4", "--m3-severe", "--m4-severe")
 NAMED_EXCLUDED_VERBS = (
@@ -277,6 +278,7 @@ class Contour:
     in the state directory under a private HOME that the hook and the channel read."""
 
     def __init__(self, tmp_path: Path, monkeypatch):
+        from conftest import declare_venue
         from test_child_approval import PARENT_CHECK, _covering_grants, _parent_plan, _spliced
 
         self.tmp = tmp_path
@@ -295,7 +297,8 @@ class Contour:
         self.norm = StageNorm.from_stage(self.store.load(PARENT).stage(1))
         self.plan = str(tmp_path / "child.toml")
         Path(self.plan).write_text(
-            _spliced(parent_norm=self.norm.norm_digest(), final_checks=((PARENT_CHECK, 0),)),
+            declare_venue(_spliced(parent_norm=self.norm.norm_digest(),
+                                   final_checks=((PARENT_CHECK, 0),)), tmp_path / "work"),
             encoding="utf-8",
         )
         record = norm_handoff.build_record(
@@ -497,7 +500,7 @@ def test_own_channel_reaches_parent_norm_critique(contour):
     ], targets
 
     # the parent's dispatch of that child's REPLAN verifies the record the channel wrote
-    runner = lambda argv: RunResult(  # noqa: E731
+    runner = lambda argv, cwd=None: RunResult(  # noqa: E731
         0, stdout="REPLAN: the stage's done criterion cannot be met as written\n",
         stderr=f"spawn-specialist: transcript=/nowhere/projects/{CHILD}.jsonl\n",
     )

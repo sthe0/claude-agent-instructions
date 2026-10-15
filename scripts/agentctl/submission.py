@@ -56,10 +56,12 @@ load-bearing ones and neither weakens as enumerators are added.
 """
 from __future__ import annotations
 
+import os
 import re
 
 from . import exempt_paths, grant_shadow
 from .conditions import judge_restatement, restatement_prefilter
+from .plan import _declared_absolute_venue, venue_declaration_blockers
 from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
 from .state import AGENT_ACTOR, CheckKind, CheckVenue, CriterionType, WeightClass, asserts_landing
@@ -295,6 +297,12 @@ def _is_substantive(doc) -> bool:
     path this module exists to keep lenient — would still arm on the plan. One grade, two
     arming conditions, is a worse disagreement than the one being removed, so the plan
     stays the single key and the session's only power is to force it to speak.
+
+    The one deliberate exception is the venue declaration (`plan.venue_declaration_blockers`),
+    which `submission_violations` keys on the session's class alone: it is not a field of
+    the substantive grade but the precondition of every verdict the engine reaches by
+    running or probing a path, and `verify_command_reachability_blockers` is armed on the
+    session the same way.
 
     Normalized rather than `.lower()`-ed on purpose, and that choice is load-bearing in
     BOTH directions: it is what makes `"substantive "` substantive here but not at the
@@ -856,7 +864,7 @@ def _landing_declaration_violations(doc) -> list[str]:
     ]
 
 
-def _ephemeral_artifacts_violations(stage) -> list[str]:
+def _ephemeral_artifacts_violations(stage, venue: str | None) -> list[str]:
     """A declared output_artifacts entry that resolves under an OS-temp scratch root
     (exempt_paths.scratch_roots()) claims durability the path does not have: a green
     verify_command today says nothing about whether the artifact still exists at the
@@ -866,10 +874,21 @@ def _ephemeral_artifacts_violations(stage) -> list[str]:
     mention /tmp (a test's own tmp fixture, a throwaway diff) is unaffected; that text is
     not inspected here.
 
+    A relative entry is joined to the plan's declared `venue` before the test, never to
+    the process cwd (`under_scratch_root` realpaths a relative path against it): a plan
+    declaring no venue has no base for a relative entry, so it is skipped here and the
+    missing declaration is refused on its own by `plan.venue_declaration_blockers`.
+
     ephemeral_artifacts_waiver names why a flagged entry is legitimate (e.g. a stage whose
     only observable IS an ephemeral run, with no committed artifact) — beside, not instead
     of, negative_control_waiver."""
-    flagged = [a for a in stage.output_artifacts if exempt_paths.under_scratch_root(a)]
+    def anchored(a: str) -> str | None:
+        if os.path.isabs(a):
+            return a
+        return os.path.join(venue, a) if venue is not None else None
+
+    flagged = [a for a in stage.output_artifacts
+               if (p := anchored(a)) is not None and exempt_paths.under_scratch_root(p)]
     if not flagged:
         return []
     if str(stage.ephemeral_artifacts_waiver or "").strip():
@@ -909,6 +928,12 @@ def submission_violations(
         out.append(_UNDECLARED)
     # Whatever the weight class: the spawn refuses a grant collision for every plan.
     out.extend(grant_shadow.plan_grant_shadow_problems(doc))
+    # Keyed on the SESSION's class, independent of doc.meta.weight_class, exactly as
+    # `verify_command_reachability_blockers` is armed by the caller: a plan declaring a
+    # lighter class must not buy a verdict that depends on the invoker's cwd.
+    if session_weight_class is not None and _normalize_string(session_weight_class) == "substantive":
+        out.extend(venue_declaration_blockers(doc))
+    venue = _declared_absolute_venue(doc.meta)
     # The field loop also runs for the UNDECLARED case, where the plan itself never claimed
     # to be substantive. That is not the seam arming on the session — the refusal is still
     # the missing declaration, and a plan that answers it with a non-substantive class keeps
@@ -946,7 +971,7 @@ def submission_violations(
             )
         out.extend(_edge_violations(stage, {s.index: s for s in doc.stages}))
         out.extend(_negative_control_violations(stage))
-        out.extend(_ephemeral_artifacts_violations(stage))
+        out.extend(_ephemeral_artifacts_violations(stage, venue))
         restatement = _conditions_restatement(stage, judge_runner, judge_enabled)
         if restatement:
             out.append(restatement)

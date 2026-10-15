@@ -64,10 +64,10 @@ def _to_executing_stage1(store, sid, plan):
     cli.cmd_next_stage(ns(session=sid), store=store)
 
 
-def test_refinement_resumes_without_reapproval(store, fixtures_dir):
+def test_refinement_resumes_without_reapproval(store, venued_fixtures_dir):
     sid = "rf"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_executing_stage1(store, sid, plan)
 
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
@@ -78,10 +78,10 @@ def test_refinement_resumes_without_reapproval(store, fixtures_dir):
     assert state.stage(1).title == "Scaffold the module skeleton"  # prose applied
 
 
-def test_substantive_rearms_plan_gate(store, fixtures_dir):
+def test_substantive_rearms_plan_gate(store, venued_fixtures_dir):
     sid = "sb"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    bigger = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    bigger = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
     _to_executing_stage1(store, sid, plan)
 
     d = cli.cmd_replan(ns(session=sid, plan=bigger), store=store)
@@ -92,10 +92,10 @@ def test_substantive_rearms_plan_gate(store, fixtures_dir):
     assert [s.index for s in state.stages] == [1, 2, 3]
 
 
-def test_refinement_after_failure_rearms_the_stage(store, fixtures_dir):
+def test_refinement_after_failure_rearms_the_stage(store, venued_fixtures_dir):
     sid = "rfa"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_executing_stage1(store, sid, plan)
 
     # stage 1 fails -> FAILED, node DIAGNOSING (the overcome-difficulty sub-spine)
@@ -126,12 +126,12 @@ def test_refinement_after_failure_rearms_the_stage(store, fixtures_dir):
     assert state.ready_stages()[0].index == 1  # the retried stage is selectable again
 
 
-def test_refinement_applies_changed_means_to_state(store, fixtures_dir):
+def test_refinement_applies_changed_means_to_state(store, venued_fixtures_dir):
     """A means-only refinement must land the new means/method in state (not just
     title + result image) so the corrected means actually takes effect."""
     sid = "mc"
-    base = str(fixtures_dir / "plan_two_stage_means.toml")
-    changed = str(fixtures_dir / "plan_two_stage_means_changed.toml")
+    base = str(venued_fixtures_dir / "plan_two_stage_means.toml")
+    changed = str(venued_fixtures_dir / "plan_two_stage_means_changed.toml")
     _to_executing_stage1(store, sid, base)
     assert store.load(sid).stage(1).means.means == "blind reload"
 
@@ -144,7 +144,7 @@ def test_refinement_applies_changed_means_to_state(store, fixtures_dir):
     assert state.stage(1).means.method == "establish the import context the working caller uses"
 
 
-def test_verify_command_change_is_judged_by_what_it_runs(fixtures_dir):
+def test_verify_command_change_is_judged_by_what_it_runs(venued_fixtures_dir):
     """A verify_command edit is a refinement while the stage keeps running the same
     program/script (new arguments), and substantive once it runs another script or a
     new interpreter-less program: DR-V derives one `Bash(<segment>:*)` literal per
@@ -158,7 +158,7 @@ def test_verify_command_change_is_judged_by_what_it_runs(fixtures_dir):
     `python -c` code that derives no rule at all. The `_changed` variant of the fixture
     also rewrites the stage's done criterion, which is authority-bearing on its own."""
     def with_command(command):
-        doc = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml"))
+        doc = load_plan(str(venued_fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml"))
         doc.stages[0].criterion.verify_command = command
         return doc
 
@@ -168,19 +168,19 @@ def test_verify_command_change_is_judged_by_what_it_runs(fixtures_dir):
     assert diff_plans(base, with_command("python3 mod.py --strict")) == "substantive"
     assert diff_plans(base, with_command("python3 other.py"),
                       relax_verify_identity=True) == "substantive"
-    changed = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml"))
-    assert diff_plans(load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml")),
+    changed = load_plan(str(venued_fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml"))
+    assert diff_plans(load_plan(str(venued_fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml")),
                       changed, relax_verify_identity=True) == "substantive"
 
 
-def test_substantive_verify_command_change_carries_into_state(store, fixtures_dir):
+def test_substantive_verify_command_change_carries_into_state(store, venued_fixtures_dir):
     """A verify_command change that widens/changes the derived DR-V grant re-arms the
     plan gate (PLAN-READY), and the new verify_command lands in state immediately as
     part of that transition -- same carry-forward machinery as any other substantive
     replan, no separate approve needed to observe it."""
     sid = "vc"
-    base = str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml")
-    changed = str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml")
+    base = str(venued_fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml")
+    changed = str(venued_fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml")
     _to_executing_stage1(store, sid, base)
 
     assert store.load(sid).stage(1).criterion.verify_command == "python3 mod.py"
@@ -192,7 +192,7 @@ def test_substantive_verify_command_change_carries_into_state(store, fixtures_di
     assert state.stage(1).criterion.verify_command == "python3 mod.py --strict"
 
 
-def test_substantive_verify_command_change_resets_passed_stage(store, fixtures_dir):
+def test_substantive_verify_command_change_resets_passed_stage(store, venued_fixtures_dir):
     """`verify_command` is itself part of `stage_carry_key` (#12), so a substantive
     replan that changes stage 1's OWN verify_command must NOT carry its PASSED
     status forward -- the prior PASS was attested against the old check and is no
@@ -200,8 +200,8 @@ def test_substantive_verify_command_change_resets_passed_stage(store, fixtures_d
     re-verification (contrast test_substantive_replan_carries_forward_passed_unchanged_stage,
     where the PASSED stage's own definition is untouched)."""
     sid = "pp"
-    base = str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml")
-    changed = str(fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml")
+    base = str(venued_fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml")
+    changed = str(venued_fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml")
     _to_executing_stage1(store, sid, base)
 
     state = store.load(sid)
@@ -216,33 +216,33 @@ def test_substantive_verify_command_change_resets_passed_stage(store, fixtures_d
     assert state.stage(1).criterion.verify_command == "python3 mod.py --strict"
 
 
-def test_repo_root_change_classifies_as_refinement_and_updates_state(store, fixtures_dir):
+def test_repo_root_change_classifies_as_refinement_and_updates_state(store, venued_fixtures_dir, tmp_path):
     """A meta.repo_root-only change classifies as refinement and updates state.repo_root."""
-    base = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix.toml"))
-    with_root = load_plan(str(fixtures_dir / "plan_two_stage_verifyfix_reporoot.toml"))
+    base = load_plan(str(venued_fixtures_dir / "plan_two_stage_verifyfix.toml"))
+    with_root = load_plan(str(venued_fixtures_dir / "plan_two_stage_verifyfix_reporoot.toml"))
     assert diff_plans(base, with_root) == "refinement"
 
     sid = "rr"
-    _to_executing_stage1(store, sid, str(fixtures_dir / "plan_two_stage_verifyfix.toml"))
-    assert store.load(sid).repo_root is None
+    _to_executing_stage1(store, sid, str(venued_fixtures_dir / "plan_two_stage_verifyfix.toml"))
+    assert store.load(sid).repo_root == str(tmp_path)
 
-    d = cli.cmd_replan(ns(session=sid, plan=str(fixtures_dir / "plan_two_stage_verifyfix_reporoot.toml")), store=store)
+    d = cli.cmd_replan(ns(session=sid, plan=str(venued_fixtures_dir / "plan_two_stage_verifyfix_reporoot.toml")), store=store)
     assert d.action == "continue"
     assert store.load(sid).repo_root == "/tmp/test-repo-root"
 
 
-def test_final_check_change_classifies_as_refinement(fixtures_dir):
+def test_final_check_change_classifies_as_refinement(venued_fixtures_dir):
     """diff_plans returns 'refinement' (not 'no_change') when only final_check differs."""
-    base = load_plan(str(fixtures_dir / "plan_two_stage_finalcheck.toml"))
-    changed = load_plan(str(fixtures_dir / "plan_two_stage_finalcheck_changed.toml"))
+    base = load_plan(str(venued_fixtures_dir / "plan_two_stage_finalcheck.toml"))
+    changed = load_plan(str(venued_fixtures_dir / "plan_two_stage_finalcheck_changed.toml"))
     assert diff_plans(base, changed) == "refinement"
 
 
-def test_refinement_carries_final_check_into_state(store, fixtures_dir):
+def test_refinement_carries_final_check_into_state(store, venued_fixtures_dir):
     """refinement replan must land the new final_check in live state."""
     sid = "fc"
-    base = str(fixtures_dir / "plan_two_stage_finalcheck.toml")
-    changed = str(fixtures_dir / "plan_two_stage_finalcheck_changed.toml")
+    base = str(venued_fixtures_dir / "plan_two_stage_finalcheck.toml")
+    changed = str(venued_fixtures_dir / "plan_two_stage_finalcheck_changed.toml")
     _to_executing_stage1(store, sid, base)
 
     assert store.load(sid).final_check[0].command == "true"
@@ -254,11 +254,11 @@ def test_refinement_carries_final_check_into_state(store, fixtures_dir):
     assert state.final_check[0].command == "echo changed"
 
 
-def test_refinement_preserves_passed_stage_on_final_check_change(store, fixtures_dir):
+def test_refinement_preserves_passed_stage_on_final_check_change(store, venued_fixtures_dir):
     """A final_check-only refinement must not reset an already-PASSED stage."""
     sid = "fcp"
-    base = str(fixtures_dir / "plan_two_stage_finalcheck.toml")
-    changed = str(fixtures_dir / "plan_two_stage_finalcheck_changed.toml")
+    base = str(venued_fixtures_dir / "plan_two_stage_finalcheck.toml")
+    changed = str(venued_fixtures_dir / "plan_two_stage_finalcheck_changed.toml")
     _to_executing_stage1(store, sid, base)
 
     state = store.load(sid)
@@ -273,9 +273,9 @@ def test_refinement_preserves_passed_stage_on_final_check_change(store, fixtures
     assert state.final_check[0].command == "echo changed"
 
 
-def test_loop_guard_escalates_on_repeated_failure(store, fixtures_dir):
+def test_loop_guard_escalates_on_repeated_failure(store, venued_fixtures_dir):
     sid = "lg"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan)
 
     d = cli.cmd_record_result(ns(session=sid, status="failed", actual="same error"), store=store)
@@ -312,12 +312,12 @@ def _to_diagnosing_with_critique(store, sid, plan, *, invariants_to_preserve=Non
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
 
-def test_coverage_waiver_bypasses_block_and_is_recorded(store, monkeypatch, tmp_path, fixtures_dir):
+def test_coverage_waiver_bypasses_block_and_is_recorded(store, monkeypatch, tmp_path, venued_fixtures_dir):
     log_path = tmp_path / "gate-log.jsonl"
     monkeypatch.setattr(cli, "GATE_LOG", log_path)
     sid = "cw1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_diagnosing_with_critique(store, sid, plan)
 
     blocked = cli.cmd_replan(ns(session=sid, plan=refined, coverage_waiver=None), store=store)
@@ -339,10 +339,10 @@ def test_coverage_waiver_bypasses_block_and_is_recorded(store, monkeypatch, tmp_
     assert "replan_coverage_waiver" in [r["gate"] for r in rows]
 
 
-def test_coverage_waiver_empty_reason_refused(store, fixtures_dir):
+def test_coverage_waiver_empty_reason_refused(store, venued_fixtures_dir):
     sid = "cw2"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_diagnosing_with_critique(store, sid, plan)
 
     d = cli.cmd_replan(ns(session=sid, plan=refined, coverage_waiver="   "), store=store)
@@ -355,9 +355,9 @@ def test_coverage_waiver_empty_reason_refused(store, fixtures_dir):
 
 # --- #8: cmd_approve snapshots the approved plan; cmd_replan diffs the snapshot ---
 
-def test_approve_snapshots_the_approved_plan(store, fixtures_dir):
+def test_approve_snapshots_the_approved_plan(store, venued_fixtures_dir):
     sid = "snapA"
-    plan_file = fixtures_dir / "plan_two_stage.toml"
+    plan_file = venued_fixtures_dir / "plan_two_stage.toml"
     _to_executing_stage1(store, sid, str(plan_file))
     state = store.load(sid)
     assert state.plan_snapshot_path
@@ -367,19 +367,19 @@ def test_approve_snapshots_the_approved_plan(store, fixtures_dir):
     assert snap_path.read_bytes() == plan_file.read_bytes()
 
 
-def test_replan_uses_snapshot_when_plan_path_edited_in_place(store, fixtures_dir, tmp_path):
+def test_replan_uses_snapshot_when_plan_path_edited_in_place(store, venued_fixtures_dir, tmp_path):
     """Regression for #8: editing the tracked plan file IN PLACE after approval used
     to self-diff to 'no_change' (old and new both read from the mutated plan_path),
     silently dropping the correction. cmd_replan must diff against the immutable
     approved-plan snapshot instead."""
     sid = "snap1"
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage.toml").read_text())
     _to_executing_stage1(store, sid, str(plan_path))
 
     # simulate the bug scenario: the SAME path is overwritten with the substantive
     # plan, so a plan_path-vs-plan_path diff would self-compare and see no_change.
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
 
     d = cli.cmd_replan(ns(session=sid, plan=str(plan_path)), store=store)
     assert d.marker == "PLAN-READY"
@@ -388,7 +388,7 @@ def test_replan_uses_snapshot_when_plan_path_edited_in_place(store, fixtures_dir
     assert [s.index for s in state.stages] == [1, 2, 3]
 
 
-def test_replan_lenient_snapshot_missing_derivation_does_not_brick_replan(store, fixtures_dir, tmp_path):
+def test_replan_lenient_snapshot_missing_derivation_does_not_brick_replan(store, venued_fixtures_dir, tmp_path):
     """Regression: a substantive snapshot frozen before [stage.principle].derivation
     became a required subfield must not permanently block replan. Approval-time
     validation is strict today and cannot itself produce such a file, so the stale
@@ -396,7 +396,7 @@ def test_replan_lenient_snapshot_missing_derivation_does_not_brick_replan(store,
     as the session's approved-plan snapshot before replanning against a normal new
     plan — cmd_replan must complete the diff instead of raising."""
     sid = "snapLenient"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan)
 
     stale_snapshot = tmp_path / "stale_snapshot.toml"
@@ -430,17 +430,17 @@ refutation = "old refutation"
     state.plan_snapshot_path = str(stale_snapshot)
     store.save(state)
 
-    new_plan = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    new_plan = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
     d = cli.cmd_replan(ns(session=sid, plan=new_plan), store=store)
     assert d.marker == "PLAN-READY"
 
 
 # --- #12: PASSED carry-forward across a substantive replan -----------------
 
-def test_substantive_replan_carries_forward_passed_unchanged_stage(store, fixtures_dir):
+def test_substantive_replan_carries_forward_passed_unchanged_stage(store, venued_fixtures_dir):
     sid = "carry1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    bigger = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    bigger = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
     _to_executing_stage1(store, sid, plan)
 
     state = store.load(sid)
@@ -457,12 +457,12 @@ def test_substantive_replan_carries_forward_passed_unchanged_stage(store, fixtur
     assert state.stage(3).outcome.status == StageStatus.PENDING.value
 
 
-def test_substantive_replan_resets_passed_stage_whose_definition_changed(store, fixtures_dir):
+def test_substantive_replan_resets_passed_stage_whose_definition_changed(store, venued_fixtures_dir):
     """A stage's title changed -> its carry key no longer matches -> PASSED does
     NOT carry forward, even though the stage survives at the same index."""
     sid = "carry2"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    retitled = str(fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    retitled = str(venued_fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
     _to_executing_stage1(store, sid, plan)
 
     state = store.load(sid)
@@ -476,12 +476,12 @@ def test_substantive_replan_resets_passed_stage_whose_definition_changed(store, 
     assert state.stage(1).title == "Scaffold module (revised)"
 
 
-def test_coverage_waiver_does_not_bypass_difficulty_completeness(store, fixtures_dir):
+def test_coverage_waiver_does_not_bypass_difficulty_completeness(store, venued_fixtures_dir):
     """A waiver only lifts the coverage gate — it must not let a replan through
     while the difficulty record (declare/investigate/critique) is incomplete."""
     sid = "cw3"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_executing_stage1(store, sid, plan)
     cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
     # difficulty record left incomplete: no declare/investigate/critique yet
@@ -495,7 +495,7 @@ def test_coverage_waiver_does_not_bypass_difficulty_completeness(store, fixtures
 # --- Gap 2: no_change replan refreshes stale materialization on legacy sessions ---
 
 def test_no_change_replan_refreshes_stale_verify_command_and_backfills_snapshot(
-        store, fixtures_dir, tmp_path):
+        store, venued_fixtures_dir, tmp_path):
     """A legacy session (plan_snapshot_path=None) whose plan file's verify_command is
     edited IN PLACE self-diffs to no_change (old==new==plan_path, for lack of a
     snapshot to diff against). The no_change branch must still refresh state's
@@ -503,7 +503,7 @@ def test_no_change_replan_refreshes_stale_verify_command_and_backfills_snapshot(
     running the stale command held in state."""
     sid = "nc1"
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_verifyfix.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_verifyfix.toml").read_text())
     _to_executing_stage1(store, sid, str(plan_path))
 
     # make it a legacy pre-snapshot session
@@ -547,27 +547,27 @@ def _to_partitioned(store, sid, plan):
                          m3_severe=False, m4_severe=False), store=store)
 
 
-def test_donecriterion_only_change_is_substantive_but_preserves_stage_carry_keys(fixtures_dir):
+def test_donecriterion_only_change_is_substantive_but_preserves_stage_carry_keys(venued_fixtures_dir):
     """Sanity check for the regression fixture: a [meta] done_criterion-only edit
     must classify as substantive (meta.done_criterion is in _structural_signature)
     while every stage's carry key (which excludes meta fields) stays identical."""
     from agentctl.plan import stage_carry_key
 
-    base = load_plan(str(fixtures_dir / "plan_two_stage.toml"))
-    changed = load_plan(str(fixtures_dir / "plan_two_stage_donecriterion_changed.toml"))
+    base = load_plan(str(venued_fixtures_dir / "plan_two_stage.toml"))
+    changed = load_plan(str(venued_fixtures_dir / "plan_two_stage_donecriterion_changed.toml"))
     assert diff_plans(base, changed) == "substantive"
     assert [stage_carry_key(s) for s in base.stages] == [stage_carry_key(s) for s in changed.stages]
 
 
-def test_next_stage_finalizes_partitioned_when_replan_preserved_all_passed(store, fixtures_dir):
+def test_next_stage_finalizes_partitioned_when_replan_preserved_all_passed(store, venued_fixtures_dir):
     """The exact deadlock scenario: both stages PASSED, a substantive replan (meta
     done_criterion only) carries both PASSED outcomes forward, re-approval lands
     back at PARTITIONED with no ready stage -- next-stage must advance straight to
     VERIFYING and verify-final must reach RESOLUTION, with zero manual state edits
     beyond the legitimate cmd_record_result PASSED calls."""
     sid = "fin1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    changed = str(fixtures_dir / "plan_two_stage_donecriterion_changed.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    changed = str(venued_fixtures_dir / "plan_two_stage_donecriterion_changed.toml")
     _to_executing_stage1(store, sid, plan)
 
     d = cli.cmd_record_result(ns(session=sid, status="passed", actual="mod scaffolded",
@@ -616,11 +616,11 @@ def test_next_stage_finalizes_partitioned_when_replan_preserved_all_passed(store
     assert store.load(sid).node == Node.RESOLUTION.value
 
 
-def test_next_stage_does_not_finalize_when_a_stage_is_not_ready_and_not_passed(store, fixtures_dir):
+def test_next_stage_does_not_finalize_when_a_stage_is_not_ready_and_not_passed(store, venued_fixtures_dir):
     """The negative guard: a non-ready, non-PASSED stage at PARTITIONED must still
     refuse -- never silently finalize just because ready_stages() is empty."""
     sid = "fin2"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_partitioned(store, sid, plan)
 
     state = store.load(sid)
@@ -636,12 +636,12 @@ def test_next_stage_does_not_finalize_when_a_stage_is_not_ready_and_not_passed(s
     assert store.load(sid).node == Node.PARTITIONED.value  # unchanged
 
 
-def test_no_change_replan_with_snapshot_is_idempotent(store, fixtures_dir):
+def test_no_change_replan_with_snapshot_is_idempotent(store, venued_fixtures_dir):
     """Backward-compat: a session WITH a snapshot whose plan is genuinely unchanged
     stays a true no-op — the refresh copies identical values and the existing
     snapshot is left intact (not re-backfilled)."""
     sid = "nc2"
-    plan = str(fixtures_dir / "plan_two_stage_verifyfix.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage_verifyfix.toml")
     _to_executing_stage1(store, sid, plan)
     state = store.load(sid)
     snap_before = state.plan_snapshot_path
@@ -741,14 +741,14 @@ def test_refresh_covers_every_carry_key_field():
 
 
 def test_substantive_replan_carries_forward_passed_stage_edited_at_plan_ready(
-        store, fixtures_dir, tmp_path):
+        store, venued_fixtures_dir, tmp_path):
     """The #48 carry-forward defect. Stage 1's done_criterion is edited at PLAN_READY
     and the corrected plan carries that same edit, so stage 1's text is UNCHANGED
     between the approved plan and the corrected one — its PASSED outcome must survive.
     done_criterion is one of the seven carry-key fields the refresh used to miss."""
     sid = "carry48"
     plan_path = tmp_path / "plan.toml"
-    base = (fixtures_dir / "plan_two_stage.toml").read_text()
+    base = (venued_fixtures_dir / "plan_two_stage.toml").read_text()
     plan_path.write_text(base)
     edited = base.replace("python -c 'import mod' exits 0",
                           "python -c 'import mod' exits 0 cleanly")
@@ -759,7 +759,7 @@ def test_substantive_replan_carries_forward_passed_stage_edited_at_plan_ready(
     assert store.load(sid).stage(1).outcome.status == StageStatus.PASSED.value
 
     corrected = tmp_path / "corrected.toml"
-    corrected.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text()
+    corrected.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text()
                          .replace("python -c 'import mod' exits 0",
                                   "python -c 'import mod' exits 0 cleanly"))
 
@@ -771,14 +771,14 @@ def test_substantive_replan_carries_forward_passed_stage_edited_at_plan_ready(
 
 
 def test_substantive_replan_rearms_stage_whose_done_criterion_changed(
-        store, fixtures_dir, tmp_path):
+        store, venued_fixtures_dir, tmp_path):
     """The companion, and the half that keeps the fix honest: the refresh now copies
     done_criterion, so this test proves the copy did not turn into a blanket carry —
     a stage whose definition GENUINELY changed between the approved and corrected
     plans is still re-armed, exactly as before."""
     sid = "rearm48"
     plan_path = tmp_path / "plan.toml"
-    base = (fixtures_dir / "plan_two_stage.toml").read_text()
+    base = (venued_fixtures_dir / "plan_two_stage.toml").read_text()
     plan_path.write_text(base)
     edited = base.replace("python -c 'import mod' exits 0",
                           "python -c 'import mod' exits 0 cleanly")
@@ -788,7 +788,7 @@ def test_substantive_replan_rearms_stage_whose_done_criterion_changed(
 
     # the corrected plan changes stage 1's done_criterion AGAIN -> genuinely different
     corrected = tmp_path / "corrected.toml"
-    corrected.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text()
+    corrected.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text()
                          .replace("python -c 'import mod' exits 0",
                                   "python -c 'import mod' exits 0 under coverage"))
 
@@ -798,7 +798,7 @@ def test_substantive_replan_rearms_stage_whose_done_criterion_changed(
 
 
 def test_replan_to_a_corrected_plan_needs_no_enumeration_under_a_live_premise_gate(
-        store, fixtures_dir, monkeypatch):
+        store, venued_fixtures_dir, monkeypatch):
     """#48(b) after the enumerator's retirement, with the premise gate LIVE (the suite
     force-off deleted).
 
@@ -812,8 +812,8 @@ def test_replan_to_a_corrected_plan_needs_no_enumeration_under_a_live_premise_ga
     monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
 
     sid = "deadlock"
-    base = str(fixtures_dir / "plan_two_stage.toml")
-    corrected = str(fixtures_dir / "plan_two_stage_substantive.toml")
+    base = str(venued_fixtures_dir / "plan_two_stage.toml")
+    corrected = str(venued_fixtures_dir / "plan_two_stage_substantive.toml")
 
     cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)
@@ -841,7 +841,7 @@ def test_replan_to_a_corrected_plan_needs_no_enumeration_under_a_live_premise_ga
 
 
 def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_replan(
-        store, fixtures_dir, monkeypatch):
+        store, venued_fixtures_dir, monkeypatch):
     """The `question-rebind` twin of #48(b): `_bound_stage_key` previously read
     only `state.plan_path`, which is not yet the CORRECTED plan of a replan
     (`cmd_replan` evaluates the plan_approval gate against `args.plan`, and that
@@ -856,8 +856,8 @@ def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_repl
     monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
 
     sid = "deadlock-rebind"
-    base = str(fixtures_dir / "plan_two_stage.toml")
-    corrected = str(fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
+    base = str(venued_fixtures_dir / "plan_two_stage.toml")
+    corrected = str(venued_fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
 
     cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)
@@ -919,7 +919,7 @@ def test_corrected_plan_is_rebindable_so_the_premise_gate_stops_deadlocking_repl
 
 
 def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_replan(
-        store, fixtures_dir, monkeypatch):
+        store, venued_fixtures_dir, monkeypatch):
     """The `question-dispose` twin of #48(b): a question whose ANSWER genuinely
     changes under the corrected plan is re-dispositioned (not merely rebound —
     rebind is for 're-read; still holds', dispose is for 'the answer changed'),
@@ -928,8 +928,8 @@ def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_re
     monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
 
     sid = "deadlock-dispose"
-    base = str(fixtures_dir / "plan_two_stage.toml")
-    corrected = str(fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
+    base = str(venued_fixtures_dir / "plan_two_stage.toml")
+    corrected = str(venued_fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
 
     cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)
@@ -992,7 +992,9 @@ def test_corrected_plan_is_redisposable_so_the_premise_gate_stops_deadlocking_re
 # --- venue re-derivation: [meta] delivery_worktree must reach session state -----
 
 def _plan_with_venue(fixtures_dir, name, *, repo_root=None, delivery_worktree=None):
-    """Fixture text with the [meta] venue keys injected (omitted when None)."""
+    """Fixture text with the [meta] venue keys injected (omitted when None). Reads the
+    pristine `fixtures_dir`: the venued copy already carries a `repo_root`, and a second
+    one is a duplicate key."""
     inject = ""
     if repo_root:
         inject += f'repo_root = "{repo_root}"\n'

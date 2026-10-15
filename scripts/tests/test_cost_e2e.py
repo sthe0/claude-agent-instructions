@@ -58,9 +58,9 @@ def _full_session_to_resolved(store, sid, plan_path, cost_log_path, tmp_path):
                               quality_note=None), store=store)
 
 
-def test_resolve_surfaces_plan_total_equal_to_stage_sum(store, fixtures_dir, tmp_path):
+def test_resolve_surfaces_plan_total_equal_to_stage_sum(store, venued_fixtures_dir, tmp_path):
     """Surfaced plan total == sum of per-stage attributions."""
-    plan = fixtures_dir / "plan_two_stage.toml"
+    plan = venued_fixtures_dir / "plan_two_stage.toml"
 
     cost_log = tmp_path / "costs.jsonl"
     cost_log.write_text(
@@ -86,9 +86,9 @@ def test_resolve_surfaces_plan_total_equal_to_stage_sum(store, fixtures_dir, tmp
     assert cost["note"] != ""
 
 
-def test_state_cost_consistent_with_directive(store, fixtures_dir, tmp_path):
+def test_state_cost_consistent_with_directive(store, venued_fixtures_dir, tmp_path):
     """state.cost after resolve equals what was surfaced in the Directive."""
-    plan = fixtures_dir / "plan_two_stage.toml"
+    plan = venued_fixtures_dir / "plan_two_stage.toml"
 
     cost_log = tmp_path / "costs.jsonl"
     cost_log.write_text(
@@ -109,9 +109,9 @@ def test_state_cost_consistent_with_directive(store, fixtures_dir, tmp_path):
     assert state.cost.spawn_count == d.data["cost"]["spawn_count"]
 
 
-def test_cost_history_event_logged_at_resolve(store, fixtures_dir, tmp_path):
+def test_cost_history_event_logged_at_resolve(store, venued_fixtures_dir, tmp_path):
     """A 'cost' event is logged to history when state.cost is non-None at resolve."""
-    plan = fixtures_dir / "plan_two_stage.toml"
+    plan = venued_fixtures_dir / "plan_two_stage.toml"
 
     cost_log = tmp_path / "costs.jsonl"
     cost_log.write_text(
@@ -131,9 +131,9 @@ def test_cost_history_event_logged_at_resolve(store, fixtures_dir, tmp_path):
     assert ev["attributed_stages"] == 1
 
 
-def test_e2e_no_cost_log_resolves_cleanly(store, fixtures_dir, tmp_path):
+def test_e2e_no_cost_log_resolves_cleanly(store, venued_fixtures_dir, tmp_path):
     """A session with no cost log still resolves; plan total is None/zero."""
-    plan = fixtures_dir / "plan_two_stage.toml"
+    plan = venued_fixtures_dir / "plan_two_stage.toml"
     empty_log = tmp_path / "empty.jsonl"
     empty_log.write_text("", encoding="utf-8")
 

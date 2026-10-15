@@ -20,6 +20,14 @@ from test_supply_edges import BARE_DEPENDS_ON, _write_plan
 _OUTPUTS = 'output_artifacts = ["docs/out.md"]\n'
 
 
+@pytest.fixture(autouse=True)
+def _venue_is_not_scratch(tmp_path, monkeypatch):
+    """The plan's declared venue is this test's tmp dir, which sits under an OS-temp
+    root; a relative `docs/out.md` anchored there would otherwise be refused as
+    ephemeral, which is not what these tests pin."""
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratch-elsewhere"))
+
+
 def _plan(tmp_path, edge, *, stage1_outputs=True):
     path = _write_plan(tmp_path / "p.toml", edge=edge)
     if stage1_outputs:

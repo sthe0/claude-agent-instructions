@@ -447,6 +447,16 @@ def test_effective_tuple_detects_a_real_addition():
 
 def _to_executing(store, sid, fixtures_dir, plan_path=None):
     plan = plan_path or str(fixtures_dir / "plan_two_stage.toml")
+    # The engine no longer falls back to the process cwd: a substantive plan must
+    # declare an absolute venue. Submit a private copy of the plan with `repo_root`
+    # set to the store's tmp parent dir (never edit the shared fixture itself).
+    text = Path(plan).read_text()
+    if "repo_root" not in text:
+        venue = store.root.parent
+        text = text.replace("[meta]\n", f'[meta]\nrepo_root = "{venue}"\n', 1)
+        copy = venue / f"{sid}-venue-plan.toml"
+        copy.write_text(text)
+        plan = str(copy)
     cli.cmd_start(ns(session=sid, task="t", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -654,8 +664,15 @@ def test_replan_refinement_branch_refreshes_runtime_grant_stage_title(store, fix
     state = store.load(sid)
     assert state.runtime_grants["1"][0]["stage_title"] == "Scaffold module"
 
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
-    d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
+    # Same venue as the approved plan (see `_to_executing`): a venue-less replan
+    # plan is refused, and a changed venue would not be a refinement.
+    venue = store.root.parent
+    refined_text = (fixtures_dir / "plan_two_stage_refined.toml").read_text()
+    refined_path = venue / "plan_two_stage_refined_venue.toml"
+    refined_path.write_text(
+        refined_text.replace("[meta]\n", f'[meta]\nrepo_root = "{venue}"\n', 1)
+    )
+    d = cli.cmd_replan(ns(session=sid, plan=str(refined_path)), store=store)
     assert d.action == "continue"  # refinement resumes execution, no re-approval
 
     state = store.load(sid)

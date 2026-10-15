@@ -84,6 +84,15 @@ _HARD_SINK_CLASSES = frozenset({"pretooluse_deny", "stop_block", "exit_code_2"})
 # id (crutch-inventory.py's content-derived hash, which survives unrelated
 # line drift). id -> (file, scope, why-safe ground).
 _KNOWN_UNGUARDED_HARD_SINKS = {
+    "470d72f243768e36": (
+        "scripts/record-experience.py", "refuse",
+        "sink-only scope with no regex: refuse() prints caller-built problems "
+        "and exits 2; every caller derives them from structure "
+        "(canonical-checkout routing, manifest JSON shape, path existence, "
+        "SLUG/CONTEXT_ID/REVISION identifier fullmatch); the judged "
+        "same-difficulty refusal in cmd_new exits via sys.exit(message), not "
+        "via refuse().",
+    ),
     "156a5c93ad796c48": (
         "scripts/hook-escalation-diagnosis-gate.py", "deny_with",
         "semantic-guarded per the registry: the judge_outage_escalation call "
@@ -157,6 +166,14 @@ _KNOWN_UNGUARDED_HARD_SINKS = {
         "build_context() (which runs every prefilter + judge_* call and "
         "freezes the results) then collect_blockers() — the propagation "
         "point where the judge-guarded booleans reach this stop_block sink.",
+    ),
+    "43ad016e7533db1e": (
+        "scripts/hook-guard-agent-specialist-stand-in.py", "main",
+        "structural per the registry: main() calls decide(), which matches a "
+        "literal `skills/.../SKILL.md` path token in the Agent/Task prompt and "
+        "description fields — path syntax, no natural-language classification; "
+        "the deny verdict rests on the token's presence, not on what the prompt "
+        "means — confirmed by reading decide() at source.",
     ),
     "69a68ca9bdda4152": (
         "scripts/hook-guard-subagent-destructive-action.py", "main",

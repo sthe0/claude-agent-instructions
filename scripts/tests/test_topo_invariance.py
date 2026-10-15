@@ -19,6 +19,11 @@ so it:
     evaluated on the fixture inside that tree under pytest;
   - embeds the fixture TOML inline rather than reading a sibling fixtures file, since no
     other file travels with this one into the archived tree.
+
+The fixture declares no venue, and the one divergence from origin/main is the Grants
+line of `EXPECTED_RENDER_PLAN_MD` / `EXPECTED_RENDER_STAGES_MD`: origin/main derived
+`Bash(python3 mod.py:*)` and `Edit(//./mod.py)` against the process cwd, the delivered
+tree derives no in-venue grant and says so. Every other literal is unchanged from the origin/main capture.
 """
 from __future__ import annotations
 
@@ -180,7 +185,8 @@ EXPECTED_RENDER_PLAN_MD = (
     "- **Criterion type:** measurable\n"
     "- **Done criterion:** python -c 'import mod' exits 0\n"
     "- **Grants (file-access scope):**\n"
-    "  - derived allow: Bash(python3 mod.py:*), Edit(//./mod.py)\n"
+    "  - in-venue grants not derived: the plan declares no absolute repo_root or "
+    "delivery_worktree\n"
     "\n"
     "## Stage 2: Add tests\n"
     "\n"
@@ -214,7 +220,8 @@ EXPECTED_RENDER_STAGES_MD = (
     "- **Done criterion:** python -c 'import mod' exits 0\n"
     "- **Output artifacts:** mod.py\n"
     "- **Grants (file-access scope):**\n"
-    "  - derived allow: Bash(python3 mod.py:*), Edit(//./mod.py)\n"
+    "  - in-venue grants not derived: the plan declares no absolute repo_root or "
+    "delivery_worktree\n"
     "\n"
     "## Final verification (labels only — this stage does not need the commands; "
     "see the full plan file for those)\n"

@@ -20,6 +20,7 @@ from pathlib import Path
 from agentctl import cli, enumerate_sidecar, plugins_premise
 from agentctl.plan import load_plan
 from agentctl.render import render_plan_grants
+from conftest import venue_plan
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -57,9 +58,12 @@ def _to_plan_ready_with_premise(store, sid, plan):
                           store=store)
 
 
-def _write_rendering(path):
-    grants_block = render_plan_grants(
-        load_plan(str(FIXTURES / "plan_two_stage.toml")), fmt="compact").strip()
+def _venued_plan(tmp_path):
+    return str(venue_plan(FIXTURES / "plan_two_stage.toml", tmp_path / "plans", tmp_path))
+
+
+def _write_rendering(path, plan):
+    grants_block = render_plan_grants(load_plan(plan), fmt="compact").strip()
     path.write_text("Plan essence: fold test.\n\n" + grants_block, encoding="utf-8")
     return path
 
@@ -74,7 +78,7 @@ def test_landed_sidecar_is_not_folded_at_present_plan(store, tmp_path, monkeypat
     root = tmp_path / "sidecars"
     monkeypatch.setattr(enumerate_sidecar, "DEFAULT_ROOT", root)
     sid = "fold-essence-retired"
-    plan = str(FIXTURES / "plan_two_stage.toml")
+    plan = _venued_plan(tmp_path)
 
     _to_plan_ready_with_premise(store, sid, plan)
     _land_sidecar(sid, plan,
@@ -84,7 +88,7 @@ def test_landed_sidecar_is_not_folded_at_present_plan(store, tmp_path, monkeypat
 
     d = cli.cmd_present_plan(
         ns(session=sid, kind="essence",
-           rendering_file=str(_write_rendering(tmp_path / "essence.md")),
+           rendering_file=str(_write_rendering(tmp_path / "essence.md", plan)),
            emit_skeleton=False),
         store=store)
     assert d.ok is True, d.detail
@@ -100,7 +104,7 @@ def test_approve_neither_folds_nor_is_blocked_by_a_landed_sidecar(
     root = tmp_path / "sidecars"
     monkeypatch.setattr(enumerate_sidecar, "DEFAULT_ROOT", root)
     sid = "fold-essence-approve"
-    plan = str(FIXTURES / "plan_two_stage.toml")
+    plan = _venued_plan(tmp_path)
 
     _to_plan_ready_with_premise(store, sid, plan)
     _land_sidecar(sid, plan, [("goal", "which mode is out of scope?")], root=root)

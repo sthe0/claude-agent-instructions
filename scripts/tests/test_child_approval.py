@@ -32,7 +32,7 @@ from agentctl.config import Thresholds
 from agentctl.plan import _order_place_digest, _venue_for, load_plan, order_digest, plan_meta_digest
 from agentctl.stage_norm import StageNorm
 from agentctl.store import FileStateStore
-from conftest import SUBSTANTIVE_ORDER
+from conftest import SUBSTANTIVE_ORDER, declare_venue
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "plan_two_stage.toml"
 PARENT_CHECK = "python3 -m pytest -q tests/test_mod.py"
@@ -77,7 +77,8 @@ def _parent_plan(tmp_path: Path, *, verify: str | None = PARENT_CHECK,
     if verify is not None:
         tail = tail.replace("depends_on = []\n", f'depends_on = []\nverify_command = "{verify}"\n', 1)
     path = tmp_path / "parent.toml"
-    path.write_text(head + "\n" + SUBSTANTIVE_ORDER + sep + tail, encoding="utf-8")
+    path.write_text(declare_venue(head + "\n" + SUBSTANTIVE_ORDER + sep + tail, tmp_path),
+                    encoding="utf-8")
     return str(path)
 
 
@@ -89,14 +90,18 @@ def _parent_norm(tmp_path: Path, **kw) -> StageNorm:
 
 def _covering_grants(plan_path: str, *, without: str | None = None) -> list[dict]:
     """Handoff grant entries that cover every file resource of the plan at `plan_path`,
-    less the one whose path ends with `without`, and the unresolved rules the plan's
+    less the one whose path ends with `without` and every directory entry that would still
+    cover it (the plan's venue is one), and the unresolved rules the plan's
     output artifacts derive (the parent stage derived the same ones for the same
     artifacts). A declared unresolved rule is not covered: the tests that need it add it."""
     doc = load_plan(plan_path, strict=False)
     view = plan_resources.compute_boundary_view(doc, order_digest(doc), venue=_venue_for(doc))
     entries = [{"path": r.path, "mode": r.mode} for r in view.resources
                if isinstance(r, agentctl_resources.FileResource)]
-    entries = [e for e in entries if not (without and e["path"].endswith(without))]
+    dropped = [e["path"] for e in entries if without and e["path"].endswith(without)]
+    entries = [e for e in entries
+               if not any(e["path"] == d or d.startswith(e["path"].rstrip("/") + "/")
+                          for d in dropped)]
     return entries + [{"rule": item["source"]} for item in view.unresolved
                       if item["origin"] == "output_artifact"]
 
@@ -141,7 +146,7 @@ class Child:
 
     def write(self, text: str, name: str = "child.toml") -> str:
         path = self.tmp / name
-        path.write_text(text, encoding="utf-8")
+        path.write_text(declare_venue(text, self.tmp), encoding="utf-8")
         return str(path)
 
     def submit(self, plan: str, sid: str = "child-1") -> dict:
@@ -289,8 +294,10 @@ def _with_stage_verify(text: str, command: str) -> str:
 def test_unresolved_stage_verify_command_is_covered_only_by_the_identical_handoff_rule(child):
     """The identity `resolve_rule_grant` gives the handoff's entry is the one
     `compute_boundary_view` gives the plan's item, so a handoff carrying exactly
-    `Bash(<that command>)` covers it and no other."""
-    command = "python3 mod.py --check"
+    `Bash(<that command>)` covers it and no other. The command avoids `mod.py`: the
+    `Bash(python3 mod.py:*)` wildcard `_covering_grants` holds for the plan's output
+    artifact would cover `python3 mod.py --check` (see test_child_check_cover.py)."""
+    command = "python3 -m unittest tests.test_mod"
     text = _with_stage_verify(
         _spliced(parent_norm=child.digest, final_checks=((PARENT_CHECK, 0),)), command)
     d, plan = _linked_submit(child, plan_text=text)

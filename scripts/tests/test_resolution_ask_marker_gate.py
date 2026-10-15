@@ -18,7 +18,7 @@ import pytest
 
 from agentctl import cli, gates, state as state_module
 from agentctl.state import Node
-from conftest import STAGE_OBSERVATIONS
+from conftest import STAGE_OBSERVATIONS, venue_plan
 from lib import transcript_turns
 
 SID = "ask-sess"
@@ -79,7 +79,8 @@ def write_transcript(tmp_path: Path, entries: list[dict], sid: str = SID) -> Pat
 
 
 def to_resolution(store, sid: str = SID):
-    fixtures = Path(__file__).parent / "fixtures"
+    venue = store.root.parent
+    plan = venue_plan(Path(__file__).parent / "fixtures" / "plan_two_stage.toml", venue / "plans", venue)
     cli.cmd_start(ns(session=sid, task="demo", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(
@@ -88,7 +89,7 @@ def to_resolution(store, sid: str = SID):
         new_dependency=False, public_api_change=False,
     ), store=store)
     cli.cmd_plan(ns(session=sid), store=store)
-    cli.cmd_submit_plan(ns(session=sid, plan=str(fixtures / "plan_two_stage.toml")), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=str(plan)), store=store)
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
@@ -247,6 +248,25 @@ def test_marker_only_in_the_question_stem_does_not_count(store, tmp_path):
                                 answer_entry("a1", at + 6)])
 
     assert resolve(store).ok is False
+
+
+def test_marker_in_question_text_after_verify_final_gives_placement_error_not_predates(store, tmp_path):
+    """When an older marked ask predates verify-final and a newer ask (after verify-final) has
+    the marker only in the question text, the refusal names the wrong placement — not 'predates'."""
+    to_resolution(store)
+    at = verified_at(store)
+    write_transcript(tmp_path, [
+        ask_entry("old", at - 5, label=f"Resolve {RESOLUTION_ASK_MARKER}"),
+        answer_entry("old", at - 4),
+        ask_entry("new", at + 5, question=f"{RESOLUTION_ASK_MARKER} rate?"),
+        answer_entry("new", at + 6),
+    ])
+
+    d = resolve(store)
+    assert d.ok is False
+    blockers = ask_blockers(d)
+    assert any("question text" in b for b in blockers)
+    assert not any("predates" in b for b in blockers)
 
 
 def test_an_earlier_marked_ask_does_not_cover_a_later_unanswered_one_but_any_answered_after_does(store, tmp_path):

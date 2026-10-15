@@ -181,7 +181,11 @@ def _write_plan(path: Path, **over) -> str:
     fields.update(over)
     for key in ("method", "done_criterion", "result", "title"):
         fields[key] = json.dumps(fields[key])
-    path.write_text(_PLAN.format(**fields), encoding="utf-8")
+    text = _PLAN.format(**fields)
+    # The engine no longer falls back to the process cwd: a substantive plan must
+    # declare an absolute venue in [meta].
+    text = text.replace("[meta]\n", f'[meta]\nrepo_root = "{path.parent}"\n', 1)
+    path.write_text(text, encoding="utf-8")
     return str(path)
 
 
@@ -876,11 +880,15 @@ def test_renormalize_refuses_an_output_artifacts_re_declaration(store, tmp_path)
     `stage_question_key` alone would wave a re-declaration through as a re-sequencing."""
     plan = _write_plan(tmp_path / "p.toml")
     _approved(store, plan)
+    # The plan's venue is a tmp dir, so a RELATIVE output artifact would resolve under
+    # the OS-temp scratch root and be refused by the durability lint at submission
+    # (before the residual is reached). An absolute path under the repo is durable.
+    durable = Path(__file__).resolve().parents[1] / "agentctl" / "gates.py"
 
     d = _renormalize(store, _edited(plan, tmp_path / "q.toml",
                                     'capability_required = "cap"\nmaterial_refs',
                                     'capability_required = "cap"\n'
-                                    'output_artifacts = ["scripts/agentctl/gates.py"]\n'
+                                    f'output_artifacts = ["{durable}"]\n'
                                     'material_refs'))
 
     assert d.ok is False, d.data

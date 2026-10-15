@@ -55,6 +55,11 @@ def _load(name: str, path: Path):
 SPAWN_MOD = _load("spawn_specialist_parent_effort_rollup", SPAWN_SCRIPT)
 
 
+@pytest.fixture
+def fixtures_dir(venued_fixtures_dir):
+    return venued_fixtures_dir
+
+
 def ns(**kw):
     return Namespace(**kw)
 

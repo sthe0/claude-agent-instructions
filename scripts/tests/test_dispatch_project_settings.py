@@ -111,8 +111,8 @@ def test_dispatch_stage_omits_guard_exempt_for_an_undeclared_stage():
 
 # --- integration: cmd_dispatch resolving the path from session state -----------
 
-def _to_executing(store, sid, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def _to_executing(store, sid, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(ns(session=sid, task="t", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -127,14 +127,14 @@ def _to_executing(store, sid, fixtures_dir):
     return cli.cmd_next_stage(ns(session=sid), store=store)
 
 
-def test_cmd_dispatch_forwards_project_settings_when_delivery_venue_has_one(store, fixtures_dir, tmp_path):
+def test_cmd_dispatch_forwards_project_settings_when_delivery_venue_has_one(store, venued_fixtures_dir, tmp_path):
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
     settings_path = claude_dir / "settings.local.json"
     settings_path.write_text('{"permissions": {"allow": ["Bash(ls:*)"]}}', encoding="utf-8")
 
     sid = "project-settings-present"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.delivery_worktree = str(tmp_path)
     state.repo_root = str(tmp_path)
@@ -153,9 +153,9 @@ def test_cmd_dispatch_forwards_project_settings_when_delivery_venue_has_one(stor
     assert seen_argv[0][idx + 1] == str(settings_path)
 
 
-def test_cmd_dispatch_omits_project_settings_when_delivery_venue_has_none(store, fixtures_dir, tmp_path):
+def test_cmd_dispatch_omits_project_settings_when_delivery_venue_has_none(store, venued_fixtures_dir, tmp_path):
     sid = "project-settings-absent"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
     state.delivery_worktree = str(tmp_path)
     state.repo_root = str(tmp_path)
@@ -172,12 +172,13 @@ def test_cmd_dispatch_omits_project_settings_when_delivery_venue_has_none(store,
     assert "--project-settings" not in seen_argv[0]
 
 
-def test_cmd_dispatch_omits_project_settings_when_no_venue_resolves(store, fixtures_dir):
+def test_cmd_dispatch_omits_project_settings_when_no_venue_resolves(store, venued_fixtures_dir):
     sid = "project-settings-no-venue"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     state = store.load(sid)
-    assert state.delivery_worktree is None
-    assert state.repo_root is None
+    state.delivery_worktree = None
+    state.repo_root = None
+    store.save(state)
 
     calls = []
 

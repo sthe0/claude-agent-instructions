@@ -318,6 +318,7 @@ def test_derivation_never_raises_on_refused_entry():
 def _write_self_grants_fixture(tmp_path: Path) -> Path:
     text = (FIXTURES / "self-grants.toml").read_text()
     text = text.replace("__CLAUDE_AGENT_HOME__", str(tmp_path / "agent-home"))
+    text = text.replace("[meta]\n", f'[meta]\nrepo_root = "{tmp_path}"\n', 1)
     out = tmp_path / "self-grants.toml"
     out.write_text(text)
     return out
@@ -362,10 +363,13 @@ def test_self_grants_fixture_dr_o_derives_probe_and_guard_artifacts(tmp_path):
     assert not dropped2
 
 
-def test_settings_channel_output_fixture_dr_o_dropped_not_allowed():
-    doc = plan_mod.load_plan(
-        str(FIXTURES / "settings-channel-output.toml"), strict=False
+def test_settings_channel_output_fixture_dr_o_dropped_not_allowed(tmp_path):
+    text = (FIXTURES / "settings-channel-output.toml").read_text()
+    declared = tmp_path / "settings-channel-output.toml"
+    declared.write_text(
+        text.replace("[meta]\n", f'[meta]\nrepo_root = "{tmp_path}"\n', 1)
     )
+    doc = plan_mod.load_plan(str(declared), strict=False)
     venue = plan_mod._venue_for(doc)
     stage = doc.stages[0]
     derived, dropped = derive_stage_grants(stage, venue=venue)

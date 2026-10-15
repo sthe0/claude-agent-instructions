@@ -34,6 +34,11 @@ ACTUAL = "the criterion names an artifact no stage produces"
 MISMATCH = "the stage norm, not the child's work, is what makes the check unreachable"
 
 
+@pytest.fixture
+def fixtures_dir(venued_fixtures_dir):
+    return venued_fixtures_dir
+
+
 def ns(**kw):
     return Namespace(**kw)
 
@@ -97,7 +102,7 @@ def _routed_child(store, fixtures_dir, tmp_path, monkeypatch):
 
 def _dispatch(store, stdout=REPLAN_TEXT, *, child=CHILD):
     stderr = f"spawn-specialist: transcript=/nowhere/projects/{child}.jsonl\n"
-    runner = lambda argv: RunResult(0, stdout=stdout, stderr=stderr)
+    runner = lambda argv, cwd=None: RunResult(0, stdout=stdout, stderr=stderr)
     return cli.cmd_dispatch(ns(session=PARENT, budget="medium", complexity="medium",
                                dry_run=False), store=store, runner=runner)
 

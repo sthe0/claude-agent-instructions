@@ -827,6 +827,23 @@ def _script_and_argv(operands: list[str]) -> tuple[str | None, list[str]]:
     return None, []
 
 
+def interpreter_script_operand(seg: list[str], interpreters: frozenset[str]) -> str | None:
+    """The script a single segment hands to one of `interpreters`, or `None`.
+
+    Only the plain `INTERPRETER SCRIPT ...` shape yields a script: a dash-prefixed token
+    before the operand (`-c`, `-m`, `-X`, `-W`, `-o`, a glued `-cCODE`) means the
+    interpreter takes its code or a flag value from there, so the first non-flag token is
+    no longer known to be the script — the same refusal `_resolve_interpreter` applies.
+    The operand is returned as written, not resolved."""
+    program = _real_program(seg)
+    if program is None or program[0] not in interpreters:
+        return None
+    operands = program[1]
+    if not operands or operands[0].startswith("-"):
+        return None
+    return operands[0]
+
+
 def _resolve_interpreter(operands: list[str], venue_real: str) -> Resolution:
     """Consult the script-effects registry (`script_effects.py`) for a
     reviewed, digest-pinned entry matching the script being run. `-c`

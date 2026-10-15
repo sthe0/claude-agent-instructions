@@ -26,7 +26,7 @@ from agentctl.config import Thresholds
 from agentctl.plan import load_plan, order_digest
 from agentctl.state import Node, PermissionRequest
 from agentctl.store import FileStateStore
-from conftest import SUBSTANTIVE_ORDER
+from conftest import SUBSTANTIVE_ORDER, declare_venue
 
 SCRIPTS = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -128,7 +128,7 @@ class Eng:
     def write(self, text: str, name: str | None = None) -> str:
         self._n += 1
         path = self.tmp / (name or f"plan{self._n}.toml")
-        path.write_text(text, encoding="utf-8")
+        path.write_text(declare_venue(text, self.tmp), encoding="utf-8")
         return str(path)
 
     def state(self, sid: str):
@@ -376,7 +376,7 @@ def test_resource_dropped_at_user_reapproval_routes_dispatched_request_to_user(e
     reply = f"PERMISSION-REQUEST:\nAction: push\nWhy: needed\nFallback if denied: stop\nRule: {rule}\n"
     d = cli.cmd_dispatch(
         Namespace(session="a1", budget="medium", complexity="medium", dry_run=False),
-        store=eng.store, runner=lambda argv: RunResult(0, stdout=reply), perm_checker=lambda a: False,
+        store=eng.store, runner=lambda argv, cwd=None: RunResult(0, stdout=reply), perm_checker=lambda a: False,
     )
     assert d.action == "ask_user_permission", d.detail
     assert d.data["reason_class"] == "not-approved", d.data

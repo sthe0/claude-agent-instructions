@@ -48,10 +48,10 @@ def _write_cost_log(path, rows):
     )
 
 
-def _fire_a_session(store, fixtures_dir, tmp_path, sid):
+def _fire_a_session(store, venued_fixtures_dir, tmp_path, sid):
     """Drive a session through fire site 1 (record-result overrun) so it lands in
     DIAGNOSING with exactly one unacknowledged entry in state.effort_fires."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan)
     cost_log = tmp_path / "costs.jsonl"
     _write_cost_log(cost_log, [{"plan_path": plan, "stage_index": 1, "cost_usd": 100.0}])
@@ -67,9 +67,9 @@ def _fire_a_session(store, fixtures_dir, tmp_path, sid):
     return plan
 
 
-def test_dispatch_blocked_by_unacknowledged_fire(store, fixtures_dir, tmp_path):
+def test_dispatch_blocked_by_unacknowledged_fire(store, venued_fixtures_dir, tmp_path):
     sid = "disp-blocked"
-    _fire_a_session(store, fixtures_dir, tmp_path, sid)
+    _fire_a_session(store, venued_fixtures_dir, tmp_path, sid)
 
     d = cli.cmd_dispatch(ns(session=sid), store=store)
 
@@ -81,9 +81,9 @@ def test_dispatch_blocked_by_unacknowledged_fire(store, fixtures_dir, tmp_path):
     assert d.data["effort_fire"]["session_id"] == sid
 
 
-def test_submit_plan_blocked_by_unacknowledged_fire(store, fixtures_dir, tmp_path):
+def test_submit_plan_blocked_by_unacknowledged_fire(store, venued_fixtures_dir, tmp_path):
     sid = "submit-blocked"
-    plan = _fire_a_session(store, fixtures_dir, tmp_path, sid)
+    plan = _fire_a_session(store, venued_fixtures_dir, tmp_path, sid)
 
     d = cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
 
@@ -92,9 +92,9 @@ def test_submit_plan_blocked_by_unacknowledged_fire(store, fixtures_dir, tmp_pat
     assert d.data["effort_fire"]["scale"] == effort.SCALE_SPEND
 
 
-def test_replan_blocked_by_unacknowledged_fire(store, fixtures_dir, tmp_path):
+def test_replan_blocked_by_unacknowledged_fire(store, venued_fixtures_dir, tmp_path):
     sid = "replan-blocked"
-    plan = _fire_a_session(store, fixtures_dir, tmp_path, sid)
+    plan = _fire_a_session(store, venued_fixtures_dir, tmp_path, sid)
 
     d = cli.cmd_replan(ns(session=sid, plan=plan), store=store)
 
@@ -106,9 +106,9 @@ def test_replan_blocked_by_unacknowledged_fire(store, fixtures_dir, tmp_path):
     assert d.data["blockers"] == gates.effort_fire_blockers(store.load(sid))
 
 
-def test_fire_acknowledge_continue_clears_the_gate_without_moving_the_node(store, fixtures_dir, tmp_path):
+def test_fire_acknowledge_continue_clears_the_gate_without_moving_the_node(store, venued_fixtures_dir, tmp_path):
     sid = "ack-continue"
-    _fire_a_session(store, fixtures_dir, tmp_path, sid)
+    _fire_a_session(store, venued_fixtures_dir, tmp_path, sid)
     node_before = store.load(sid).node
 
     d = cli.cmd_fire_acknowledge(
@@ -131,13 +131,13 @@ def test_fire_acknowledge_continue_clears_the_gate_without_moving_the_node(store
     assert d2.marker != "ESCALATE_TO_USER"
 
 
-def test_fire_acknowledge_abandon_parks_at_blocked(store, fixtures_dir, tmp_path):
+def test_fire_acknowledge_abandon_parks_at_blocked(store, venued_fixtures_dir, tmp_path):
     """abandon parks at BLOCKED rather than RESOLVED: a mid-execution fire fires
     with stage 2 still PENDING, and check_invariants refuses RESOLVED unless
     every stage is PASSED — RESOLVED would misreport a genuinely-abandoned,
     incomplete session as done."""
     sid = "ack-abandon"
-    _fire_a_session(store, fixtures_dir, tmp_path, sid)
+    _fire_a_session(store, venued_fixtures_dir, tmp_path, sid)
     node_before = store.load(sid).node
 
     d = cli.cmd_fire_acknowledge(
@@ -157,9 +157,9 @@ def test_fire_acknowledge_abandon_parks_at_blocked(store, fixtures_dir, tmp_path
     assert store.load(sid).node == node_before
 
 
-def test_fire_acknowledge_revise_leaves_diagnosing_for_the_ordinary_cycle(store, fixtures_dir, tmp_path):
+def test_fire_acknowledge_revise_leaves_diagnosing_for_the_ordinary_cycle(store, venued_fixtures_dir, tmp_path):
     sid = "ack-revise"
-    _fire_a_session(store, fixtures_dir, tmp_path, sid)
+    _fire_a_session(store, venued_fixtures_dir, tmp_path, sid)
 
     d = cli.cmd_fire_acknowledge(
         ns(session=sid, by="user", decision="revise", note=None), store=store,
@@ -179,15 +179,15 @@ def test_fire_acknowledge_revise_leaves_diagnosing_for_the_ordinary_cycle(store,
                         failure_address="нормативное", norm_targets=["stage:1"]), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
     d_replan = cli.cmd_replan(
-        ns(session=sid, plan=str(fixtures_dir / "plan_two_stage_refined.toml")), store=store,
+        ns(session=sid, plan=str(venued_fixtures_dir / "plan_two_stage_refined.toml")), store=store,
     )
     assert d_replan.marker != "ESCALATE_TO_USER"
     assert d_replan.action == "next_stage"
 
 
-def test_fire_acknowledge_rejects_invalid_decision(store, fixtures_dir, tmp_path):
+def test_fire_acknowledge_rejects_invalid_decision(store, venued_fixtures_dir, tmp_path):
     sid = "ack-invalid"
-    _fire_a_session(store, fixtures_dir, tmp_path, sid)
+    _fire_a_session(store, venued_fixtures_dir, tmp_path, sid)
 
     d = cli.cmd_fire_acknowledge(
         ns(session=sid, by="user", decision="bogus", note=None), store=store,
@@ -198,9 +198,9 @@ def test_fire_acknowledge_rejects_invalid_decision(store, fixtures_dir, tmp_path
     assert state.effort_fires[-1].get("ack") is None  # refused before mutating
 
 
-def test_fire_acknowledge_requires_by(store, fixtures_dir, tmp_path):
+def test_fire_acknowledge_requires_by(store, venued_fixtures_dir, tmp_path):
     sid = "ack-no-by"
-    _fire_a_session(store, fixtures_dir, tmp_path, sid)
+    _fire_a_session(store, venued_fixtures_dir, tmp_path, sid)
 
     d = cli.cmd_fire_acknowledge(
         ns(session=sid, by="", decision="continue", note=None), store=store,
@@ -211,9 +211,9 @@ def test_fire_acknowledge_requires_by(store, fixtures_dir, tmp_path):
     assert state.effort_fires[-1].get("ack") is None
 
 
-def test_fire_acknowledge_on_a_session_with_no_fire_is_a_noop(store, fixtures_dir):
+def test_fire_acknowledge_on_a_session_with_no_fire_is_a_noop(store, venued_fixtures_dir):
     sid = "no-fire"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan)
 
     d = cli.cmd_fire_acknowledge(
@@ -224,9 +224,9 @@ def test_fire_acknowledge_on_a_session_with_no_fire_is_a_noop(store, fixtures_di
     assert "no effort-divergence fire" in d.detail
 
 
-def test_repeat_acknowledge_is_a_noop_and_does_not_re_ack(store, fixtures_dir, tmp_path):
+def test_repeat_acknowledge_is_a_noop_and_does_not_re_ack(store, venued_fixtures_dir, tmp_path):
     sid = "ack-twice"
-    _fire_a_session(store, fixtures_dir, tmp_path, sid)
+    _fire_a_session(store, venued_fixtures_dir, tmp_path, sid)
 
     d1 = cli.cmd_fire_acknowledge(
         ns(session=sid, by="user", decision="continue", note="first"), store=store,
@@ -244,9 +244,9 @@ def test_repeat_acknowledge_is_a_noop_and_does_not_re_ack(store, fixtures_dir, t
     assert state.node != Node.RESOLVED.value  # the second (abandon) decision never applied
 
 
-def test_dispatch_and_submit_plan_and_replan_all_unblocked_once_acknowledged(store, fixtures_dir, tmp_path):
+def test_dispatch_and_submit_plan_and_replan_all_unblocked_once_acknowledged(store, venued_fixtures_dir, tmp_path):
     sid = "unblock-all"
-    plan = _fire_a_session(store, fixtures_dir, tmp_path, sid)
+    plan = _fire_a_session(store, venued_fixtures_dir, tmp_path, sid)
 
     for cmd, kwargs in (
         (cli.cmd_dispatch, {}),

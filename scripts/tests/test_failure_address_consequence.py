@@ -43,6 +43,7 @@ def norms(tmp_path, monkeypatch):
     root.mkdir()
     monkeypatch.setenv("AGENTCTL_NORM_ROOTS", str(root))
     monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratch-elsewhere"))
     return root
 
 
@@ -98,7 +99,7 @@ def _plan(path, stages):
     lines = ["[meta]", 'weight_class = "small_change"', 'task_id = "demo-two-stage"',
              'goal = "Demonstrate a norm-edit consequence"',
              'done_criterion = "both stages PASSED and resolution confirmed"',
-             'criterion_type = "measurable"']
+             'criterion_type = "measurable"', f"repo_root = {json.dumps(str(path.parent))}"]
     for s in stages:
         lines += ["", "[[stage]]", f"index = {s['index']}", f"title = {json.dumps(s['title'])}",
                   'executor = "spawn:developer"',
@@ -451,12 +452,12 @@ def test_renorms_validation(plans, tmp_path):
 
 # --- the closing replan ------------------------------------------------------
 
-def test_closing_replan_refused_without_renorms_reference(store, fixtures_dir, norms):
+def test_closing_replan_refused_without_renorms_reference(store, venued_fixtures_dir, norms):
     """negative control: a closing replan whose record names a norm file must name it in a
     stage's `renorms`; the refined plan below changes stage 1 but never mentions the file."""
     f = _norm_file(norms)
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _diagnosing(store, "r1", plan)
     assert _critique(store, "r1", "ресурсное").ok is True
     _seed(store, "r1", address="нормативное", targets=[_file_target(f)])
@@ -523,14 +524,14 @@ def test_reference_only_on_a_carried_passed_stage_is_refused(store, plans, norms
     assert store.load("r5").pending_renorms[0]["stage"] == 2
 
 
-def test_waiver_refused_for_target_bearing_record(store, fixtures_dir, norms):
+def test_waiver_refused_for_target_bearing_record(store, venued_fixtures_dir, norms):
     """negative control: --normalization-waiver is not an escape for a record that carries
     norm targets, whatever its failure_address label says."""
     f = _norm_file(norms)
-    _diagnosing(store, "w1", str(fixtures_dir / "plan_two_stage.toml"))
+    _diagnosing(store, "w1", str(venued_fixtures_dir / "plan_two_stage.toml"))
     assert _critique(store, "w1", "ресурсное").ok is True
     _seed(store, "w1", targets=[_file_target(f, source="difficulty-close")])
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     d = _replan(store, "w1", refined, normalization_waiver="genuinely one-off")
     assert d.ok is False, "BEHAVIOUR: a normalization waiver closed a target-bearing record"
     state = store.load("w1")
@@ -539,10 +540,10 @@ def test_waiver_refused_for_target_bearing_record(store, fixtures_dir, norms):
         "BEHAVIOUR: the refused waiver was recorded as taken"
 
 
-def test_waiver_still_admitted_for_a_record_without_targets(store, fixtures_dir):
-    _diagnosing(store, "w2", str(fixtures_dir / "plan_two_stage.toml"))
+def test_waiver_still_admitted_for_a_record_without_targets(store, venued_fixtures_dir):
+    _diagnosing(store, "w2", str(venued_fixtures_dir / "plan_two_stage.toml"))
     assert _critique(store, "w2", "ресурсное").ok is True
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     d = _replan(store, "w2", refined, normalization_waiver="genuinely one-off")
     assert d.ok is True, "BEHAVIOUR: the waiver regressed for a record carrying no targets"
     assert any(h.get("event") == "normalization_waived" for h in store.load("w2").history)
@@ -1092,11 +1093,11 @@ def test_previous_schema_state_file_loads_through_the_store(store, plans):
     assert state.node == Node.DIAGNOSING.value
 
 
-def test_inflight_normative_record_without_targets_still_closes(store, fixtures_dir):
+def test_inflight_normative_record_without_targets_still_closes(store, venued_fixtures_dir):
     """A нормативное critique recorded before this change carries no targets: the closing
     replan, and the waiver, behave as they did."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _diagnosing(store, "m3", plan)
     assert _critique(store, "m3", "ресурсное").ok is True
     _seed(store, "m3", address="нормативное", targets=[])

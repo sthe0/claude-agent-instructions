@@ -42,6 +42,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = SCRIPTS_DIR.parent
 GATES = "agentctl/gates.py"
 CLI = "agentctl/cli.py"
+TASK_ACCUMULATOR = "agentctl/task_accumulator.py"
 T_RX = "tests/test_review_exhaustion_reflection.py"
 CATALOGUE_TEST = "test_rx_mutation_catalogue_kills_every_mutant"
 SIBLING_DATA = ("config.md", "docs/operations/review-backstop-arming.json")
@@ -67,6 +68,10 @@ def _ids(*names: str) -> "tuple[str, ...]":
 _SINCE_ROUNDS_AXIS = '"review_rounds_since_user_decision"'
 _SINCE_REPLANS_AXIS = '"replans_since_user_decision"'
 _BACKSTOP_GUARD = "    if spent < backstop:\n        return None\n"
+_BOUNDARY_OUTSIDE = (
+    '        outside = [] if boundary["eligible"] else '
+    'list(boundary.get("reasons") or [boundary["reason"]])\n'
+)
 
 CATALOGUE: "dict[str, Mutant]" = {
     "reflection-listed-first": Mutant(
@@ -142,6 +147,140 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_user_renegotiation_zeroes_the_since_user_counters",
             "test_user_plan_review_override_zeroes_the_since_user_counters",
         ),
+    ),
+    "backstop-boundary-ignored": Mutant(
+        CLI,
+        _BOUNDARY_OUTSIDE,
+        "        outside = []\n",
+        _ids(
+            "test_agent_override_refused_at_the_review_round_backstop",
+            "test_agent_fire_acknowledge_refused_at_the_replan_backstop",
+            "test_agent_renegotiation_continue_refused_at_the_replan_backstop",
+            "test_backstop_refusal_outside_the_boundary_names_the_boundary_reasons",
+        ),
+    ),
+    "backstop-boundary-always-outside": Mutant(
+        CLI,
+        _BOUNDARY_OUTSIDE,
+        '        outside = ["forced outside the boundary"]\n',
+        _ids(
+            "test_agent_override_admitted_past_the_review_round_backstop_inside_the_boundary",
+            "test_agent_fire_acknowledge_admitted_past_the_replan_backstop_inside_the_boundary",
+            "test_agent_renegotiation_continue_admitted_past_the_replan_backstop_inside_the_boundary",
+        ),
+    ),
+    "backstop-crossing-unrecorded": Mutant(
+        CLI,
+        "    crossing.update(session=state.session_id, ts=_utcnow())\n",
+        "    return\n    crossing.update(session=state.session_id, ts=_utcnow())\n",
+        _ids(
+            "test_backstop_crossing_is_recorded_once_with_its_axis_count_and_backstop",
+            "test_backstop_crossing_is_disclosed_at_verify_final_and_resolve",
+            "test_agent_override_admitted_past_the_review_round_backstop_inside_the_boundary",
+        ),
+    ),
+    "backstop-crossing-not-kept-per-task": Mutant(
+        CLI,
+        "    task_accumulator.record_crossing(\n"
+        '        state.task_id, crossing, session_id=state.session_id, now=crossing["ts"])\n',
+        "",
+        _ids(
+            "test_backstop_crossing_is_disclosed_by_a_later_session_of_the_same_task",
+            "test_backstop_crossing_is_disclosed_after_the_session_is_reset_and_a_user_decision",
+            "test_backstop_crossing_is_disclosed_to_a_session_with_no_history_of_its_own",
+        ),
+    ),
+    "backstop-task-record-not-read": Mutant(
+        CLI,
+        '    recorded = task_accumulator.get(state.task_id)["agent_backstop_crossings"]\n',
+        "    recorded = []\n",
+        _ids(
+            "test_backstop_crossing_is_disclosed_by_a_later_session_of_the_same_task",
+            "test_backstop_crossing_is_disclosed_after_the_session_is_reset_and_a_user_decision",
+            "test_backstop_crossing_is_disclosed_to_a_session_with_no_history_of_its_own",
+        ),
+    ),
+    "backstop-crossing-record-reset": Mutant(
+        TASK_ACCUMULATOR,
+        '        data["agent_backstop_crossings"] = previous["agent_backstop_crossings"]\n',
+        "",
+        _ids("test_backstop_crossing_record_survives_the_accumulator_reset"),
+    ),
+    "backstop-crossing-record-user-cleared": Mutant(
+        TASK_ACCUMULATOR,
+        "        for axis in SINCE_USER_AXES:\n            data[\"per_axis_totals\"][axis] = 0\n",
+        "        for axis in SINCE_USER_AXES:\n            data[\"per_axis_totals\"][axis] = 0\n"
+        "        data[\"agent_backstop_crossings\"] = []\n",
+        _ids("test_backstop_crossing_is_disclosed_after_the_session_is_reset_and_a_user_decision"),
+    ),
+    "backstop-crossings-not-cleared-at-resolve": Mutant(
+        CLI,
+        "        task_accumulator.discard_crossings(\n"
+        '            state.task_id, data["agent_backstop_crossings"], now=_utcnow())\n',
+        "        pass\n",
+        _ids(
+            "test_resolve_clears_the_crossings_it_disclosed_so_a_later_session_of_the_task_starts_clean",
+            "test_resolve_keeps_a_crossing_recorded_after_the_disclosure_snapshot",
+            "test_a_refused_resolve_leaves_the_crossing_record_in_place",
+        ),
+    ),
+    "backstop-crossings-cleared-wholesale-at-resolve": Mutant(
+        CLI,
+        '        state.task_id, data["agent_backstop_crossings"], now=_utcnow())\n',
+        '        state.task_id, task_accumulator.get(state.task_id)["agent_backstop_crossings"],\n'
+        "        now=_utcnow())\n",
+        _ids("test_resolve_keeps_a_crossing_recorded_after_the_disclosure_snapshot"),
+    ),
+    "backstop-crossings-cleared-before-the-resolve-gates": Mutant(
+        CLI,
+        "def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:\n"
+        "    state = _require(store, args.session)\n",
+        "def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:\n"
+        "    state = _require(store, args.session)\n"
+        "    task_accumulator.discard_crossings(state.task_id, _backstop_crossings(state))\n",
+        _ids("test_a_refused_resolve_leaves_the_crossing_record_in_place"),
+    ),
+    "backstop-crossings-clearing-not-fail-open": Mutant(
+        CLI,
+        "    except Exception as exc:  # noqa: BLE001 - fail-open by design\n"
+        '        data["agent_backstop_crossings_cleared"] = False\n',
+        "    except KeyError as exc:  # noqa: BLE001 - fail-open by design\n"
+        '        data["agent_backstop_crossings_cleared"] = False\n',
+        _ids("test_resolve_survives_a_fault_clearing_the_crossing_record"),
+    ),
+    "backstop-spend-bound-ignored": Mutant(
+        CLI,
+        "            for scale, ratio in armed.items() if ratio >= multiple]\n",
+        "            for scale, ratio in armed.items() if False]\n",
+        _ids("test_backstop_crossings_stop_once_spend_reaches_the_divergence_multiple"),
+    ),
+    "backstop-no-estimate-admitted": Mutant(
+        CLI,
+        "        return [_NO_ARMED_ESTIMATE]\n",
+        "        return []\n",
+        _ids("test_backstop_crossing_refused_when_no_estimate_is_armed"),
+    ),
+    "backstop-unapproved-session-admitted": Mutant(
+        CLI,
+        "    if _ledgered_order_key(state) is None:\n        outside.append(_NO_APPROVED_VERSION)\n",
+        "    if False:\n        outside.append(_NO_APPROVED_VERSION)\n",
+        _ids("test_backstop_crossing_refused_for_a_session_with_no_user_approved_version"),
+    ),
+    "backstop-renegotiation-crossing-unsaved": Mutant(
+        CLI,
+        "        # lands with it: a later gate below may still refuse this replan.\n"
+        "        store.save(state)\n",
+        "        # lands with it: a later gate below may still refuse this replan.\n",
+        _ids("test_renegotiation_crossing_is_kept_when_a_later_gate_refuses_the_replan"),
+    ),
+    "backstop-crossing-skips-later-checks": Mutant(
+        CLI,
+        '            return f"an agent-authored override is refused: {backstopped}", None\n'
+        "        refused = _agent_self_decision_refusal(\n",
+        '            return f"an agent-authored override is refused: {backstopped}", None\n'
+        "        if crossing is not None:\n            return None, crossing\n"
+        "        refused = _agent_self_decision_refusal(\n",
+        _ids("test_crossing_inside_the_boundary_still_needs_the_reflection_exit"),
     ),
     "exhaustion-record-not-reused": Mutant(
         CLI,

@@ -278,9 +278,9 @@ def test_canonical_permission_request_body_is_empty_so_the_gate_still_asks():
 
 # --- cmd_dispatch routing ---------------------------------------------------
 
-def _to_executing(store, sid, fixtures_dir):
+def _to_executing(store, sid, venued_fixtures_dir):
     """Advance a fresh substantive session to EXECUTING with stage 1 active."""
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(ns(session=sid, task="demo-two-stage", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -296,13 +296,13 @@ def _to_executing(store, sid, fixtures_dir):
 
 
 def _dispatch_with(store, sid, stdout, returncode=0):
-    runner = lambda argv: RunResult(returncode, stdout=stdout)
+    runner = lambda argv, cwd=None: RunResult(returncode, stdout=stdout)
     return cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
                                dry_run=False), store=store, runner=runner)
 
 
-def test_completed_routes_to_record_result(store, fixtures_dir):
-    _to_executing(store, "m1", fixtures_dir)
+def test_completed_routes_to_record_result(store, venued_fixtures_dir):
+    _to_executing(store, "m1", venued_fixtures_dir)
     d = _dispatch_with(store, "m1", "COMPLETED: stage done\n")
     assert d.ok is True
     assert d.action == "record_result"
@@ -311,8 +311,8 @@ def test_completed_routes_to_record_result(store, fixtures_dir):
     assert d.node == Node.EXECUTING.value
 
 
-def test_clarify_routes_with_continuation(store, fixtures_dir):
-    _to_executing(store, "m2", fixtures_dir)
+def test_clarify_routes_with_continuation(store, venued_fixtures_dir):
+    _to_executing(store, "m2", venued_fixtures_dir)
     d = _dispatch_with(store, "m2", "CLARIFY: which config key?\n")
     assert d.ok is True
     assert d.action == "answer_clarify"
@@ -322,8 +322,8 @@ def test_clarify_routes_with_continuation(store, fixtures_dir):
     assert d.node == Node.EXECUTING.value
 
 
-def test_replan_routes_to_replan(store, fixtures_dir):
-    _to_executing(store, "m3", fixtures_dir)
+def test_replan_routes_to_replan(store, venued_fixtures_dir):
+    _to_executing(store, "m3", venued_fixtures_dir)
     d = _dispatch_with(store, "m3", "REPLAN: step criterion is wrong\n")
     assert d.ok is False
     assert d.action == "replan"
@@ -331,8 +331,8 @@ def test_replan_routes_to_replan(store, fixtures_dir):
     assert d.data["reason"] == "step criterion is wrong"
 
 
-def test_incomplete_routes_to_decide(store, fixtures_dir):
-    _to_executing(store, "m4", fixtures_dir)
+def test_incomplete_routes_to_decide(store, venued_fixtures_dir):
+    _to_executing(store, "m4", venued_fixtures_dir)
     d = _dispatch_with(store, "m4", "INCOMPLETE: half done, blocked on X\n")
     assert d.ok is False
     assert d.action == "decide_incomplete"
@@ -340,8 +340,8 @@ def test_incomplete_routes_to_decide(store, fixtures_dir):
     assert d.data["reason"] == "half done, blocked on X"
 
 
-def test_plan_ready_routes_to_approval_gate(store, fixtures_dir):
-    _to_executing(store, "m5", fixtures_dir)
+def test_plan_ready_routes_to_approval_gate(store, venued_fixtures_dir):
+    _to_executing(store, "m5", venued_fixtures_dir)
     d = _dispatch_with(store, "m5", "PLAN-READY: plan at /tmp/p.toml\n")
     assert d.ok is True
     assert d.action == "await_plan_approval"
@@ -349,8 +349,8 @@ def test_plan_ready_routes_to_approval_gate(store, fixtures_dir):
     assert d.node == Node.EXECUTING.value  # node unchanged — re-enters approval gate
 
 
-def test_escalate_parks_blocked(store, fixtures_dir):
-    _to_executing(store, "m6", fixtures_dir)
+def test_escalate_parks_blocked(store, venued_fixtures_dir):
+    _to_executing(store, "m6", venued_fixtures_dir)
     d = _dispatch_with(store, "m6", "ESCALATE: spec ambiguity\n")
     assert d.ok is False
     assert d.action == "escalate"
@@ -359,11 +359,11 @@ def test_escalate_parks_blocked(store, fixtures_dir):
     assert store.load("m6").blocked_from == Node.EXECUTING.value
 
 
-def test_review_marker_parks_blocked(store, fixtures_dir):
+def test_review_marker_parks_blocked(store, venued_fixtures_dir):
     # REVIEW is a recognised marker with no dedicated route in cmd_dispatch's
     # if-chain: it must fall through to the same _park_blocked path as an
     # unrecognised marker, exactly as before REVIEW was added to RETURN_MARKERS.
-    _to_executing(store, "m11", fixtures_dir)
+    _to_executing(store, "m11", venued_fixtures_dir)
     d = _dispatch_with(store, "m11", "REVIEW: revise\n")
     assert d.ok is False
     assert d.action == "escalate"
@@ -372,23 +372,23 @@ def test_review_marker_parks_blocked(store, fixtures_dir):
     assert store.load("m11").blocked_from == Node.EXECUTING.value
 
 
-def test_malformed_parks_blocked(store, fixtures_dir):
-    _to_executing(store, "m7", fixtures_dir)
+def test_malformed_parks_blocked(store, venued_fixtures_dir):
+    _to_executing(store, "m7", venued_fixtures_dir)
     d = _dispatch_with(store, "m7", "MALFORMED: no marker\n")
     assert d.ok is False
     assert d.node == Node.BLOCKED.value
     assert d.marker == "ESCALATE"
 
 
-def test_markerless_success_parks_blocked(store, fixtures_dir):
-    _to_executing(store, "m8", fixtures_dir)
+def test_markerless_success_parks_blocked(store, venued_fixtures_dir):
+    _to_executing(store, "m8", venued_fixtures_dir)
     d = _dispatch_with(store, "m8", "free text, no marker\n", returncode=0)
     assert d.ok is False
     assert d.node == Node.BLOCKED.value
 
 
-def test_markerless_failure_handles_spawn_failure(store, fixtures_dir):
-    _to_executing(store, "m9", fixtures_dir)
+def test_markerless_failure_handles_spawn_failure(store, venued_fixtures_dir):
+    _to_executing(store, "m9", venued_fixtures_dir)
     d = _dispatch_with(store, "m9", "", returncode=1)
     assert d.ok is False
     assert d.action == "handle_spawn_failure"
@@ -396,7 +396,7 @@ def test_markerless_failure_handles_spawn_failure(store, fixtures_dir):
 
 
 def test_permission_dispatch_never_hands_the_digest_to_the_permission_checker(
-    store, fixtures_dir
+    store, venued_fixtures_dir
 ):
     # End-to-end twin of the parse-level guard above: a checker that WOULD grant
     # on the digest's text is asked about the EMPTY body instead, so the
@@ -404,7 +404,7 @@ def test_permission_dispatch_never_hands_the_digest_to_the_permission_checker(
     # than continue_spawn with the user's ask silently skipped.
     from lib.planner_plan_check import canonicalize
 
-    _to_executing(store, "m12", fixtures_dir)
+    _to_executing(store, "m12", venued_fixtures_dir)
     asked = []
 
     def checker(action: str) -> bool:
@@ -414,7 +414,7 @@ def test_permission_dispatch_never_hands_the_digest_to_the_permission_checker(
     canonical = canonicalize(
         "PERMISSION-REQUEST", "git push to the shared branch", None, "body"
     )
-    runner = lambda argv: RunResult(0, stdout=canonical)
+    runner = lambda argv, cwd=None: RunResult(0, stdout=canonical)
     d = cli.cmd_dispatch(ns(session="m12", budget="medium", complexity="medium",
                             dry_run=False), store=store, runner=runner,
                          perm_checker=checker)
@@ -423,9 +423,9 @@ def test_permission_dispatch_never_hands_the_digest_to_the_permission_checker(
     assert d.data["action"] == ""
 
 
-def test_marker_wins_over_nonzero_returncode(store, fixtures_dir):
+def test_marker_wins_over_nonzero_returncode(store, venued_fixtures_dir):
     # a specialist may exit non-zero yet carry a valid CLARIFY marker — marker wins
-    _to_executing(store, "m10", fixtures_dir)
+    _to_executing(store, "m10", venued_fixtures_dir)
     d = _dispatch_with(store, "m10", "CLARIFY: which path?\n", returncode=1)
     assert d.action == "answer_clarify"
     assert d.marker == "CLARIFY"
@@ -440,8 +440,8 @@ def test_marker_wins_over_nonzero_returncode(store, fixtures_dir):
 # never an automatic re-spawn; the coordinator still decides whether to spend
 # the money on a retry.
 
-def test_child_infra_failure_routes_to_retry_dispatch(store, fixtures_dir):
-    _to_executing(store, "m13", fixtures_dir)
+def test_child_infra_failure_routes_to_retry_dispatch(store, venued_fixtures_dir):
+    _to_executing(store, "m13", venued_fixtures_dir)
     d = _dispatch_with(
         store, "m13",
         "CHILD_INFRA_FAILURE: the child spawn never reached, or lost, the API "
@@ -456,8 +456,8 @@ def test_child_infra_failure_routes_to_retry_dispatch(store, fixtures_dir):
     assert "retrying the same dispatch" in d.detail
 
 
-def test_child_exhausted_routes_to_reduce_brief_or_reattest(store, fixtures_dir):
-    _to_executing(store, "m14", fixtures_dir)
+def test_child_exhausted_routes_to_reduce_brief_or_reattest(store, venued_fixtures_dir):
+    _to_executing(store, "m14", venued_fixtures_dir)
     d = _dispatch_with(
         store, "m14",
         "CHILD_EXHAUSTED: the child spawn was refused for size "
@@ -472,16 +472,16 @@ def test_child_exhausted_routes_to_reduce_brief_or_reattest(store, fixtures_dir)
     assert "reduced brief" in d.detail
 
 
-def test_child_outcome_directives_never_recommend_an_automatic_respawn(store, fixtures_dir):
+def test_child_outcome_directives_never_recommend_an_automatic_respawn(store, venued_fixtures_dir):
     # Neither directive's action names a re-spawn — the decision to spend
     # money on a retry stays with the coordinator, not the engine.
-    _to_executing(store, "m15", fixtures_dir)
+    _to_executing(store, "m15", venued_fixtures_dir)
     d_infra = _dispatch_with(
         store, "m15", "CHILD_INFRA_FAILURE: transient (matched 'ENOTFOUND').\n", returncode=1
     )
     assert d_infra.action not in ("respawn", "auto_respawn", "continue_spawn")
 
-    _to_executing(store, "m16", fixtures_dir)
+    _to_executing(store, "m16", venued_fixtures_dir)
     d_exhausted = _dispatch_with(
         store, "m16", "CHILD_EXHAUSTED: refused for size (matched 'Prompt is too long').\n",
         returncode=1,
@@ -489,7 +489,7 @@ def test_child_outcome_directives_never_recommend_an_automatic_respawn(store, fi
     assert d_exhausted.action not in ("respawn", "auto_respawn", "continue_spawn")
 
 
-def test_child_outcome_precedence_a_valid_marker_always_outranks_a_signature(store, fixtures_dir):
+def test_child_outcome_precedence_a_valid_marker_always_outranks_a_signature(store, venued_fixtures_dir):
     # The critical precedence case: the child's stdout contains BOTH a
     # matching CHILD_INFRA_FAILURE signature AND a valid terminal marker. The
     # marker must win — proving the prefilter cannot suppress a real result.
@@ -513,7 +513,7 @@ def test_child_outcome_precedence_a_valid_marker_always_outranks_a_signature(sto
     m, body = parse_marker(stdout)
     assert m == "COMPLETED"
 
-    _to_executing(store, "m17", fixtures_dir)
+    _to_executing(store, "m17", venued_fixtures_dir)
     d = _dispatch_with(store, "m17", stdout, returncode=0)
     assert d.ok is True
     assert d.action == "record_result"

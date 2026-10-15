@@ -308,8 +308,8 @@ def test_dispatch_stage_stages_oversized_done_criterion_and_cleans_up():
 
 # --- CLI wiring: cli.py threads args.constraints into dispatch_stage -----------
 
-def _to_executing(store, sid, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+def _to_executing(store, sid, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     cli.cmd_start(ns(session=sid, task="t", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -324,9 +324,9 @@ def _to_executing(store, sid, fixtures_dir):
     return cli.cmd_next_stage(ns(session=sid), store=store)
 
 
-def test_cmd_dispatch_threads_constraints_into_argv(store, fixtures_dir):
+def test_cmd_dispatch_threads_constraints_into_argv(store, venued_fixtures_dir):
     sid = "constraints-wiring"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     seen = []
 
     def runner(argv, cwd=None):
@@ -340,12 +340,12 @@ def test_cmd_dispatch_threads_constraints_into_argv(store, fixtures_dir):
     assert argv[argv.index("--constraints") + 1] == "only touch module X"
 
 
-def test_cmd_dispatch_omits_constraints_flag_when_args_lack_it(store, fixtures_dir):
+def test_cmd_dispatch_omits_constraints_flag_when_args_lack_it(store, venued_fixtures_dir):
     """Pre-existing callers that never set args.constraints
     (test_dispatch_semantics.py, test_dispatch_cwd.py) must keep working
     unmodified: getattr(args, "constraints", "") defaults to omission."""
     sid = "constraints-backcompat"
-    _to_executing(store, sid, fixtures_dir)
+    _to_executing(store, sid, venued_fixtures_dir)
     seen = []
 
     def runner(argv, cwd=None):

@@ -72,7 +72,7 @@ def quality_rows():
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def to_resolution(store, sid, fixtures_dir, plan=None):
+def to_resolution(store, sid, venued_fixtures_dir, plan=None):
     """Drive plan_two_stage.toml (or `plan`) to the RESOLUTION node, ready for a resolve call."""
     cli.cmd_start(ns(session=sid, task="demo", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
@@ -82,7 +82,7 @@ def to_resolution(store, sid, fixtures_dir, plan=None):
         new_dependency=False, public_api_change=False,
     ), store=store)
     cli.cmd_plan(ns(session=sid), store=store)
-    cli.cmd_submit_plan(ns(session=sid, plan=str(plan or fixtures_dir / "plan_two_stage.toml")), store=store)
+    cli.cmd_submit_plan(ns(session=sid, plan=str(plan or venued_fixtures_dir / "plan_two_stage.toml")), store=store)
     cli.cmd_approve(ns(session=sid, by="user"), store=store)
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
@@ -177,8 +177,8 @@ def test_submission_ignores_a_plan_without_delivery_worktree():
 
 # --- gate activation ---------------------------------------------------------
 
-def test_landing_gate_activation_follows_weight_class_delivery_worktree_and_env(store, fixtures_dir, monkeypatch):
-    to_resolution(store, "act", fixtures_dir)
+def test_landing_gate_activation_follows_weight_class_delivery_worktree_and_env(store, venued_fixtures_dir, monkeypatch):
+    to_resolution(store, "act", venued_fixtures_dir)
     state = store.load("act")
     assert gates.landing_gate_active(state) is True
     state.weight_class = WeightClass.SMALL_CHANGE.value
@@ -191,8 +191,8 @@ def test_landing_gate_activation_follows_weight_class_delivery_worktree_and_env(
 
 # --- resolve: plan-time versus resolve-time waiver ---------------------------
 
-def test_delivery_worktree_plan_without_landed_check_or_waiver_is_refused(store, fixtures_dir, tmp_path):
-    to_resolution(store, "dw-refused", fixtures_dir)
+def test_delivery_worktree_plan_without_landed_check_or_waiver_is_refused(store, venued_fixtures_dir, tmp_path):
+    to_resolution(store, "dw-refused", venued_fixtures_dir)
     amend(store, "dw-refused", delivery_worktree=str(tmp_path / "gone"))
 
     d = resolve(store, "dw-refused")
@@ -207,8 +207,8 @@ def test_delivery_worktree_plan_without_landed_check_or_waiver_is_refused(store,
     assert quality_rows() == []
 
 
-def test_plan_time_waiver_resolves_and_is_logged_with_source_plan(store, fixtures_dir, tmp_path):
-    to_resolution(store, "plan-waiver", fixtures_dir)
+def test_plan_time_waiver_resolves_and_is_logged_with_source_plan(store, venued_fixtures_dir, tmp_path):
+    to_resolution(store, "plan-waiver", venued_fixtures_dir)
     amend(store, "plan-waiver", delivery_worktree=str(tmp_path / "gone"),
           landing_waiver="docs-only, lands nothing")
 
@@ -223,8 +223,8 @@ def test_plan_time_waiver_resolves_and_is_logged_with_source_plan(store, fixture
     assert row["landing_gate_override"] is None
 
 
-def test_plan_with_no_git_venue_is_refused_without_a_resolve_waiver(store, fixtures_dir):
-    to_resolution(store, "nogit", fixtures_dir)
+def test_plan_with_no_git_venue_is_refused_without_a_resolve_waiver(store, venued_fixtures_dir):
+    to_resolution(store, "nogit", venued_fixtures_dir)
 
     d = resolve(store, "nogit")
     assert d.ok is False
@@ -232,8 +232,8 @@ def test_plan_with_no_git_venue_is_refused_without_a_resolve_waiver(store, fixtu
     assert quality_rows() == []
 
 
-def test_resolve_waiver_unblocks_a_plan_with_no_git_venue_and_is_logged(store, fixtures_dir):
-    to_resolution(store, "nogit-ok", fixtures_dir)
+def test_resolve_waiver_unblocks_a_plan_with_no_git_venue_and_is_logged(store, venued_fixtures_dir):
+    to_resolution(store, "nogit-ok", venued_fixtures_dir)
 
     d = resolve(store, "nogit-ok", landing_waiver="  investigation only  ")
     assert d.ok is True
@@ -243,16 +243,16 @@ def test_resolve_waiver_unblocks_a_plan_with_no_git_venue_and_is_logged(store, f
 
 
 @pytest.mark.parametrize("empty", ["", "   "])
-def test_empty_waiver_is_refused(store, fixtures_dir, empty):
-    to_resolution(store, "empty", fixtures_dir)
+def test_empty_waiver_is_refused(store, venued_fixtures_dir, empty):
+    to_resolution(store, "empty", venued_fixtures_dir)
 
     d = resolve(store, "empty", landing_waiver=empty)
     assert d.ok is False
     assert any("must be non-empty" in b for b in d.data["blockers"])
 
 
-def test_plan_with_a_landed_final_check_resolves_without_a_waiver(store, fixtures_dir):
-    to_resolution(store, "landed-fc", fixtures_dir)
+def test_plan_with_a_landed_final_check_resolves_without_a_waiver(store, venued_fixtures_dir):
+    to_resolution(store, "landed-fc", venued_fixtures_dir)
     amend(store, "landed-fc", final_check=[landed_final_check()])
 
     d = resolve(store, "landed-fc")
@@ -263,16 +263,16 @@ def test_plan_with_a_landed_final_check_resolves_without_a_waiver(store, fixture
 
 # --- resolve: the unlanded-branch probe --------------------------------------
 
-def _delivery_session(store, sid, fixtures_dir, work):
-    to_resolution(store, sid, fixtures_dir)
+def _delivery_session(store, sid, venued_fixtures_dir, work):
+    to_resolution(store, sid, venued_fixtures_dir)
     amend(store, sid, delivery_worktree=str(work), final_check=[landed_final_check()])
 
 
-def test_unlanded_commit_in_an_existing_delivery_worktree_blocks_resolve(store, fixtures_dir, tmp_path):
+def test_unlanded_commit_in_an_existing_delivery_worktree_blocks_resolve(store, venued_fixtures_dir, tmp_path):
     work = make_repo_with_remote(tmp_path)
     git("checkout", "--quiet", "-b", "feature", cwd=work)
     commit_file(work, "f.txt", "feature\n")
-    _delivery_session(store, "unlanded", fixtures_dir, work)
+    _delivery_session(store, "unlanded", venued_fixtures_dir, work)
 
     d = resolve(store, "unlanded")
     assert d.ok is False
@@ -281,7 +281,7 @@ def test_unlanded_commit_in_an_existing_delivery_worktree_blocks_resolve(store, 
     assert quality_rows() == []
 
 
-def test_squash_landed_delivery_branch_does_not_block_resolve(store, fixtures_dir, tmp_path):
+def test_squash_landed_delivery_branch_does_not_block_resolve(store, venued_fixtures_dir, tmp_path):
     work = make_repo_with_remote(tmp_path)
     git("checkout", "--quiet", "-b", "feature", cwd=work)
     commit_file(work, "a.txt", "a\n")
@@ -291,31 +291,31 @@ def test_squash_landed_delivery_branch_does_not_block_resolve(store, fixtures_di
     git("commit", "--quiet", "-m", "squashed", cwd=work)
     git("push", "--quiet", "origin", "main", cwd=work)
     git("checkout", "--quiet", "feature", cwd=work)
-    _delivery_session(store, "squashed", fixtures_dir, work)
+    _delivery_session(store, "squashed", venued_fixtures_dir, work)
 
     assert resolve(store, "squashed").ok is True
 
 
-def test_removed_delivery_worktree_does_not_block_resolve(store, fixtures_dir, tmp_path):
-    _delivery_session(store, "removed", fixtures_dir, tmp_path / "land-branch-removed-it")
+def test_removed_delivery_worktree_does_not_block_resolve(store, venued_fixtures_dir, tmp_path):
+    _delivery_session(store, "removed", venued_fixtures_dir, tmp_path / "land-branch-removed-it")
 
     assert resolve(store, "removed").ok is True
 
 
-def test_plan_waiver_skips_the_unlanded_branch_probe(store, fixtures_dir, tmp_path):
+def test_plan_waiver_skips_the_unlanded_branch_probe(store, venued_fixtures_dir, tmp_path):
     work = make_repo_with_remote(tmp_path)
     git("checkout", "--quiet", "-b", "feature", cwd=work)
     commit_file(work, "f.txt", "feature\n")
-    to_resolution(store, "waived-unlanded", fixtures_dir)
+    to_resolution(store, "waived-unlanded", venued_fixtures_dir)
     amend(store, "waived-unlanded", delivery_worktree=str(work), landing_waiver="throwaway branch")
 
     assert resolve(store, "waived-unlanded").ok is True
 
 
-def test_probe_error_fails_closed(store, fixtures_dir, tmp_path):
+def test_probe_error_fails_closed(store, venued_fixtures_dir, tmp_path):
     work = make_repo_with_remote(tmp_path)
     git("remote", "rename", "origin", "elsewhere", cwd=work)
-    _delivery_session(store, "git-error", fixtures_dir, work)
+    _delivery_session(store, "git-error", venued_fixtures_dir, work)
 
     d = resolve(store, "git-error")
     assert d.ok is False
@@ -324,8 +324,8 @@ def test_probe_error_fails_closed(store, fixtures_dir, tmp_path):
 
 # --- the AGENTCTL_LANDING_GATE override --------------------------------------
 
-def test_force_off_resolves_an_unwaived_plan_and_logs_the_override(store, fixtures_dir, monkeypatch):
-    to_resolution(store, "off", fixtures_dir)
+def test_force_off_resolves_an_unwaived_plan_and_logs_the_override(store, venued_fixtures_dir, monkeypatch):
+    to_resolution(store, "off", venued_fixtures_dir)
     monkeypatch.setenv("AGENTCTL_LANDING_GATE", "0")
 
     d = resolve(store, "off")
@@ -336,12 +336,12 @@ def test_force_off_resolves_an_unwaived_plan_and_logs_the_override(store, fixtur
     assert quality_rows()[-1]["landing_gate_override"] == "0"
 
 
-def test_force_on_gates_a_non_substantive_session(store, fixtures_dir, monkeypatch):
-    to_resolution(store, "on", fixtures_dir)
+def test_force_on_gates_a_non_substantive_session(store, venued_fixtures_dir, monkeypatch):
+    to_resolution(store, "on", venued_fixtures_dir)
     amend(store, "on", weight_class=WeightClass.SMALL_CHANGE.value, route=Route.IN_THREAD.value)
     assert resolve(store, "on").ok is True
 
-    to_resolution(store, "on2", fixtures_dir)
+    to_resolution(store, "on2", venued_fixtures_dir)
     amend(store, "on2", weight_class=WeightClass.SMALL_CHANGE.value, route=Route.IN_THREAD.value)
     monkeypatch.setenv("AGENTCTL_LANDING_GATE", "1")
 
@@ -352,16 +352,16 @@ def test_force_on_gates_a_non_substantive_session(store, fixtures_dir, monkeypat
 
 # --- close threads the waiver ------------------------------------------------
 
-def test_close_probe_reports_the_landing_blocker(store, fixtures_dir):
-    to_resolution(store, "close-probe", fixtures_dir)
+def test_close_probe_reports_the_landing_blocker(store, venued_fixtures_dir):
+    to_resolution(store, "close-probe", venued_fixtures_dir)
 
     d = cli.cmd_close(ns(session="close-probe"), store=store)
     assert d.action == "fix_stages"
     assert any("--landing-waiver" in b for b in d.data["blockers"])
 
 
-def test_close_passes_the_waiver_to_its_probe_and_to_the_confirmed_resolve(store, fixtures_dir):
-    to_resolution(store, "close-waiver", fixtures_dir)
+def test_close_passes_the_waiver_to_its_probe_and_to_the_confirmed_resolve(store, venued_fixtures_dir):
+    to_resolution(store, "close-waiver", venued_fixtures_dir)
 
     probe = cli.cmd_close(ns(session="close-waiver", landing_waiver="investigation only"), store=store)
     assert probe.action == "await_user_confirmation"
@@ -394,14 +394,14 @@ def _executing_parent(store, sid, **extra):
         current_stage=1, **extra))
 
 
-def test_a_plan_file_waiver_reaches_state_through_submit_and_approve(store, fixtures_dir, tmp_path):
+def test_a_plan_file_waiver_reaches_state_through_submit_and_approve(store, venued_fixtures_dir, tmp_path):
     """No amend(): the waiver travels plan TOML -> submit-plan -> approve -> resolve."""
-    text = (fixtures_dir / "plan_two_stage.toml").read_text()
+    text = (venued_fixtures_dir / "plan_two_stage.toml").read_text()
     plan = tmp_path / "plan_with_waiver.toml"
     plan.write_text(text.replace(
         'criterion_type = "measurable"\n\n[[stage]]',
         'criterion_type = "measurable"\nlanding_waiver = "investigation only, lands nothing"\n\n[[stage]]', 1))
-    to_resolution(store, "e2e-waiver", fixtures_dir, plan=plan)
+    to_resolution(store, "e2e-waiver", venued_fixtures_dir, plan=plan)
     assert store.load("e2e-waiver").landing_waiver == "investigation only, lands nothing"
 
     d = resolve(store, "e2e-waiver")

@@ -173,10 +173,10 @@ def _drive_to_plan_ready(capsys, root, sid, plan):
     _run(capsys, root, "submit-plan", "--session", sid, "--plan", plan)
 
 
-def test_cli_main_fires_observer_on_approve(capsys, tmp_path, fixtures_dir):
+def test_cli_main_fires_observer_on_approve(capsys, tmp_path, venued_fixtures_dir):
     root = str(tmp_path / "state")
     sid = "e2e1"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _drive_to_plan_ready(capsys, root, sid, plan)
     _run(capsys, root, "plugin-activate", "--session", sid, "--plugin", "dummy")
     rc, d = _run(capsys, root, "approve", "--session", sid, "--by", "user")
@@ -186,10 +186,10 @@ def test_cli_main_fires_observer_on_approve(capsys, tmp_path, fixtures_dir):
     assert any(p["plugin"] == "dummy" and p["action"] == "noted_approve" for p in pds)
 
 
-def test_cli_main_plugin_gate_blocks_resolve_then_passes(capsys, tmp_path, fixtures_dir):
+def test_cli_main_plugin_gate_blocks_resolve_then_passes(capsys, tmp_path, venued_fixtures_dir):
     root = str(tmp_path / "state")
     sid = "e2e2"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _drive_to_plan_ready(capsys, root, sid, plan)
     _run(capsys, root, "plugin-activate", "--session", sid, "--plugin", "dummy")
     _run(capsys, root, "approve", "--session", sid, "--by", "user")
@@ -214,10 +214,10 @@ def test_cli_main_plugin_gate_blocks_resolve_then_passes(capsys, tmp_path, fixtu
     assert d["marker"] == "COMPLETED"
 
 
-def test_cli_main_plugin_less_session_has_no_plugin_directives(capsys, tmp_path, fixtures_dir):
+def test_cli_main_plugin_less_session_has_no_plugin_directives(capsys, tmp_path, venued_fixtures_dir):
     root = str(tmp_path / "state")
     sid = "e2e3"
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _drive_to_plan_ready(capsys, root, sid, plan)
     rc, d = _run(capsys, root, "approve", "--session", sid, "--by", "user")
     assert rc == 0

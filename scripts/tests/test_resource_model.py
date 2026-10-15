@@ -716,6 +716,7 @@ def _order_plan_path(tmp_path, customer_id="acme"):
     path = tmp_path / "plan_order.toml"
     path.write_text(
         "[meta]\n"
+        f'repo_root = "{tmp_path}"\n'
         'weight_class = "small_change"\n'
         'task_id = "demo-order"\n'
         'goal = "g"\n'
@@ -748,6 +749,7 @@ def _order_plan_with_grant_path(tmp_path, customer_id="acme", allow_rules=()):
     path = tmp_path / "plan_order_grant.toml"
     path.write_text(
         "[meta]\n"
+        f'repo_root = "{tmp_path}"\n'
         'weight_class = "small_change"\n'
         'task_id = "demo-order-grant"\n'
         'goal = "g"\n'
@@ -795,7 +797,16 @@ def _park_permission_request(
     def ns(**kw):
         return Namespace(**kw)
 
-    plan = plan_path if plan_path is not None else str(fixtures_dir / "plan_two_stage.toml")
+    if plan_path is None:
+        venue = store.root.parent
+        declared = venue / "plan_two_stage_declared_venue.toml"
+        declared.write_text(
+            (fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+            .replace("[meta]\n", f'[meta]\nrepo_root = "{venue}"\n', 1),
+            encoding="utf-8",
+        )
+        plan_path = str(declared)
+    plan = plan_path
     cli.cmd_start(ns(session=sid, task="res-demo", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
@@ -808,7 +819,7 @@ def _park_permission_request(
     cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
                          m3_severe=False, m4_severe=False), store=store)
     cli.cmd_next_stage(ns(session=sid), store=store)
-    runner = lambda argv: RunResult(0, stdout=action)
+    runner = lambda argv, cwd=None: RunResult(0, stdout=action)
     return cli.cmd_dispatch(ns(session=sid, budget="medium", complexity="medium",
                         dry_run=False), store=store, runner=runner,
                      perm_checker=lambda a: False)
@@ -1679,7 +1690,7 @@ def test_dispatch_self_grant_resolve_permission_redispatch_carries_grant(store, 
     runtime_entries = state_after_grant.runtime_grants.get(str(stage_index), [])
     assert any(e.get("rule") == "Bash(git push origin main)" for e in runtime_entries), runtime_entries
 
-    runner = lambda argv: RunResult(0, stdout=action)
+    runner = lambda argv, cwd=None: RunResult(0, stdout=action)
     d2 = cli.cmd_dispatch(
         Namespace(session=sid, budget="medium", complexity="medium", dry_run=False),
         store=store, runner=runner, perm_checker=lambda a: False,
@@ -1842,8 +1853,10 @@ def test_self_grants_fixture_resolves_declared_rules_to_resources(fixtures_dir, 
     plan_resources = _plan_resources_module()
 
     fixture_path = fixtures_dir / "grant_plans" / "self-grants.toml"
-    text = fixture_path.read_text(encoding="utf-8").replace(
-        "__CLAUDE_AGENT_HOME__", str(tmp_path / "agent-home")
+    text = (
+        fixture_path.read_text(encoding="utf-8")
+        .replace("__CLAUDE_AGENT_HOME__", str(tmp_path / "agent-home"))
+        .replace("[meta]\n", f'[meta]\nrepo_root = "{tmp_path}"\n', 1)
     )
     plan_path = tmp_path / "self-grants.toml"
     plan_path.write_text(text, encoding="utf-8")

@@ -131,8 +131,8 @@ def _declare_investigate(store, sid):
                            hypotheses=["h1", "h2"]), store=store)
 
 
-def test_cmd_critique_accepts_valid_routing(store, fixtures_dir):
-    _to_failed_stage1(store, "cc1", str(fixtures_dir / "plan_two_stage.toml"))
+def test_cmd_critique_accepts_valid_routing(store, venued_fixtures_dir):
+    _to_failed_stage1(store, "cc1", str(venued_fixtures_dir / "plan_two_stage.toml"))
     _declare_investigate(store, "cc1")
     d = cli.cmd_critique(ns(session="cc1", functional_ground="fg", replanning_task="rt",
                             failure_address="ресурсное"), store=store)
@@ -140,8 +140,8 @@ def test_cmd_critique_accepts_valid_routing(store, fixtures_dir):
     assert store.load("cc1").difficulty.critique.failure_address == "ресурсное"
 
 
-def test_cmd_critique_rejects_bogus_routing(store, fixtures_dir):
-    _to_failed_stage1(store, "cc2", str(fixtures_dir / "plan_two_stage.toml"))
+def test_cmd_critique_rejects_bogus_routing(store, venued_fixtures_dir):
+    _to_failed_stage1(store, "cc2", str(venued_fixtures_dir / "plan_two_stage.toml"))
     _declare_investigate(store, "cc2")
     d = cli.cmd_critique(ns(session="cc2", functional_ground="fg", replanning_task="rt",
                             failure_address="maybe"), store=store)
@@ -150,10 +150,10 @@ def test_cmd_critique_rejects_bogus_routing(store, fixtures_dir):
     assert store.load("cc2").difficulty.critique is None
 
 
-def test_cmd_critique_omitted_routing_is_none(store, fixtures_dir):
+def test_cmd_critique_omitted_routing_is_none(store, venued_fixtures_dir):
     # omission is legal at critique time (routing may be decided later); the gate is
     # what demands it be present at closure
-    _to_failed_stage1(store, "cc3", str(fixtures_dir / "plan_two_stage.toml"))
+    _to_failed_stage1(store, "cc3", str(venued_fixtures_dir / "plan_two_stage.toml"))
     _declare_investigate(store, "cc3")
     d = cli.cmd_critique(ns(session="cc3", functional_ground="fg", replanning_task="rt"),
                          store=store)
@@ -226,9 +226,9 @@ def _renorm(store, sid):
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
 
-def test_replan_blocked_without_routing(store, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+def test_replan_blocked_without_routing(store, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_failed_stage1(store, "e1", plan)
     _declare_investigate(store, "e1")
     cli.cmd_critique(ns(session="e1", functional_ground="fg", replanning_task="rt"),
@@ -242,9 +242,9 @@ def test_replan_blocked_without_routing(store, fixtures_dir):
     assert store.load("e1").node == Node.DIAGNOSING.value
 
 
-def test_routed_critique_unblocks_replan(store, fixtures_dir):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+def test_routed_critique_unblocks_replan(store, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_failed_stage1(store, "e2", plan)
     _declare_investigate(store, "e2")
     cli.cmd_critique(ns(session="e2", functional_ground="fg", replanning_task="rt",
@@ -259,10 +259,10 @@ def test_routed_critique_unblocks_replan(store, fixtures_dir):
     assert state.stage(1).outcome.status == StageStatus.PENDING.value
 
 
-def test_explicit_not_applicable_unblocks_replan(store, fixtures_dir):
+def test_explicit_not_applicable_unblocks_replan(store, venued_fixtures_dir):
     # not_applicable is a first-class routing decision, not an omission — it must clear
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    refined = str(fixtures_dir / "plan_two_stage_refined.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_failed_stage1(store, "e3", plan)
     _declare_investigate(store, "e3")
     cli.cmd_critique(ns(session="e3", functional_ground="fg", replanning_task="rt",

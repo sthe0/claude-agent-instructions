@@ -61,6 +61,7 @@ from agentctl.submission import submission_violations, validate_submission
 
 from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CORPUS_DIR = FIXTURES / "plan_corpus"
 NO_KNOWLEDGE_PLAN = FIXTURES / "submission" / "stage_without_knowledge.toml"
@@ -82,7 +83,8 @@ done_criterion = "dc"
 criterion_type = "measurable"
 weight_class = "substantive"
 external_research = "checked the engine's own call sites; no prior art applies"
-""" + SUBSTANTIVE_ORDER + """
+repo_root = "%s"
+""" % REPO_ROOT + SUBSTANTIVE_ORDER + """
 [[stage]]
 index = 1
 title = "{title}"

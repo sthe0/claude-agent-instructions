@@ -1,6 +1,7 @@
 """Make the `agentctl` package importable and provide shared fixtures."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -294,6 +295,18 @@ def _advisor_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _child_contour_linking_on_by_default(monkeypatch):
+    """Keep child-contour linking ON for the suite at large, although config.md ships
+    `child-contour-linking` as `off`.
+
+    The norm-handoff, own-contour and child-approval tests exist to test linking; with the
+    shipped default they would pass only because every spawn is unlinked. AGENTCTL_CHILD_LINKING=1
+    is the documented force-on knob. test_child_contour_switch.py proves the switch itself and
+    sets or deletes the variable in each test, overriding this default."""
+    monkeypatch.setenv("AGENTCTL_CHILD_LINKING", "1")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_self_diagnose_store(tmp_path, monkeypatch):
     """Redirect the self-diagnose findings store to tmp for the suite at large.
 
@@ -398,6 +411,15 @@ def _no_ambient_norm_handoff(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_own_session(monkeypatch):
+    """Drop the ambient AGENTCTL_OWN_SESSION: the topological review driver reads
+    it as "run on this contour's session", so a suite run from inside a linked
+    child would otherwise put every base-mode driver test into own mode. Tests
+    that own the contour set the variable themselves."""
+    monkeypatch.delenv("AGENTCTL_OWN_SESSION", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_project_dir(monkeypatch):
     """Drop the ambient CLAUDE_PROJECT_DIR for the suite at large.
 
@@ -473,10 +495,23 @@ def _evidence_root_isolated_by_default(tmp_path_factory, monkeypatch):
     baseline deny for that tree shadows a write grant synthesized for an
     evidence dir nested underneath it.
 
-    Deliberately does NOT touch $AGENTCTL_SCRATCH_ROOTS, which its own test
-    exercises with this override unset."""
+    Does not touch $AGENTCTL_SCRATCH_ROOTS; `_hermetic_scratch_roots` owns it."""
     root = tmp_path_factory.mktemp("evidence-root")
     monkeypatch.setenv("AGENTCTL_EVIDENCE_ROOT", str(root))
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_scratch_roots(tmp_path_factory, monkeypatch):
+    """Pin $AGENTCTL_SCRATCH_ROOTS so no verdict depends on where the suite runs.
+
+    Without it exempt_paths.scratch_roots() adds $TMPDIR and gettempdir(), so a
+    checkout whose own absolute path sits under the ambient temp root (TMPDIR=/var/tmp
+    and a checkout under its realpath) is classified ephemeral and every plan that
+    declares it as its venue is refused. `tmp_path` lies under the pytest base temp, so
+    it stays scratch; "/tmp" stays scratch by convention. A test exercising
+    scratch_roots' own default resolution deletes or sets the variable itself."""
+    roots = ["/tmp", str(tmp_path_factory.getbasetemp())]
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", os.pathsep.join(roots))
 
 
 @pytest.fixture
@@ -487,3 +522,77 @@ def store(tmp_path):
 @pytest.fixture
 def fixtures_dir():
     return Path(__file__).resolve().parent / "fixtures"
+
+
+def declare_venue(text: str, venue) -> str:
+    """Plan TOML `text` with `repo_root = <venue>` declared in `[meta]`.
+
+    A substantive session refuses a plan that declares no absolute venue (the engine no
+    longer falls back to the process cwd), so a test that submits one declares the
+    venue it runs under. Idempotent: a text whose `[meta]` already holds an absolute
+    `repo_root` or `delivery_worktree` is returned unchanged. "Absolute" is decided by the
+    engine's own predicate (`plan._declared_absolute_venue`), so a relative value counts
+    as undeclared here exactly as it does at the submission seam. A text without a
+    `[meta]` header gains one. The caller owns `AGENTCTL_SCRATCH_ROOTS` for a plan that
+    sits under a scratch root and is submitted as substantive."""
+    import json
+    import re
+    import tomllib
+    from types import SimpleNamespace
+
+    from agentctl.plan import _declared_absolute_venue
+
+    meta = tomllib.loads(text).get("meta") or {}
+    declared = SimpleNamespace(
+        delivery_worktree=meta.get("delivery_worktree"), repo_root=meta.get("repo_root")
+    )
+    if _declared_absolute_venue(declared) is not None:
+        return text
+    line = f"repo_root = {json.dumps(str(venue))}"
+    if "repo_root" in meta:
+        return re.sub(r"(?m)^repo_root[ \t]*=.*$", lambda _m: line, text, count=1)
+    header = re.search(r"(?m)^\[meta\][ \t]*\n", text)
+    if header is None:
+        return f"[meta]\n{line}\n\n{text}"
+    return text[: header.end()] + line + "\n" + text[header.end():]
+
+
+def venue_plan(src, dst_dir, venue) -> Path:
+    """Copy plan TOML `src` into `dst_dir` with `venue` declared (see `declare_venue`);
+    for a module that addresses a fixture plan through a path constant rather than
+    `fixtures_dir`. The copy keeps `src`'s file name."""
+    src, dst_dir = Path(src), Path(dst_dir)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / src.name
+    dst.write_text(declare_venue(src.read_text(encoding="utf-8"), venue), encoding="utf-8")
+    return dst
+
+
+@pytest.fixture
+def venued_fixtures_dir(tmp_path, tmp_path_factory):
+    """`fixtures_dir` for a module that submits the shared plan fixtures to a SUBSTANTIVE
+    session, which refuses a plan with no absolute venue.
+
+    `fixtures_dir` itself stays pristine: byte-pinned digests and tests that insert their
+    own venue into the fixture text depend on it. This one is a per-test copy, outside
+    `tmp_path` (so a plan's artifact paths never sit under the test's own tmp dir), in
+    which every top-level plan TOML gains `repo_root = <this test's tmp_path>` — the same
+    path a test passes to `declare_venue`, so a replan does not change venue between
+    plan versions. Subdirectories and non-plan files are linked, not copied: goldens such
+    as `pair_bundle_golden/` and the venue-less `grant_plans/` stay byte-identical."""
+    import tomllib
+
+    src = Path(__file__).resolve().parent / "fixtures"
+    dst = tmp_path_factory.mktemp("venued-fixtures")
+    for entry in src.iterdir():
+        target = dst / entry.name
+        if entry.is_file() and entry.suffix == ".toml":
+            text = entry.read_text(encoding="utf-8")
+            try:
+                is_plan = "meta" in tomllib.loads(text)
+            except tomllib.TOMLDecodeError:
+                is_plan = False
+            target.write_text(declare_venue(text, tmp_path) if is_plan else text, encoding="utf-8")
+        else:
+            target.symlink_to(entry)
+    return dst

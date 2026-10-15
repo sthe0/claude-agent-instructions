@@ -35,7 +35,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import gates as _gates  # noqa: E402
-from agentctl.exempt_paths import is_gated_path, is_plan_file  # noqa: E402
+from agentctl.exempt_paths import (  # noqa: E402
+    is_gated_path, is_own_plan_file, is_plan_file, own_plan_owner,
+)
 from agentctl.norm_handoff import NORM_HANDOFF_ENV  # noqa: E402
 from agentctl.own_contour import OWN_SESSION_ENV  # noqa: E402
 from agentctl.state import SessionState as _SessionState  # noqa: E402
@@ -243,6 +245,21 @@ def main() -> int:
     file_path = tool_input.get("file_path") or ""
     session_id = payload.get("session_id") or ""
 
+    # A linked child's own plan (`own_plans_dir()/<sid>/plan.toml`) belongs to that child
+    # alone. Decided before every early return below: a scratch-rooted alias or a writer
+    # with no engine state must not slip past it.
+    writer = config_root.sanitize_session_id(session_id)
+    own_plan = None
+    plan_owner = own_plan_owner(file_path)
+    if plan_owner is not None:
+        own_plan = is_own_plan_file(file_path)
+        if config_root.sanitize_session_id(plan_owner) != writer or own_plan != plan_owner:
+            deny_with("(own plan)", (
+                f"foreign-own-plan: {file_path} is the own plan of session {plan_owner}; "
+                "only that session writes it, through its canonical path, while it plans"
+            ))
+            return 0
+
     sp = resolve_state_path(session_id)
     if sp is None:
         # No engine state: allow, unless the env says this is a linked child — then the
@@ -253,7 +270,7 @@ def main() -> int:
                 deny_with("(no engine state)", denial)
         return 0
 
-    if not is_gated_path(file_path):
+    if own_plan is None and not is_gated_path(file_path):
         return 0
 
     fields = load_gate_fields(sp)
@@ -271,9 +288,12 @@ def main() -> int:
         deny_with(node, denial)
         return 0
 
+    # An own plan counts as a plan at every node; gate_decision then freezes it past planning.
     in_plans_dir = is_plan_file(file_path)
     is_tracked = bool(plan_path) and os.path.realpath(file_path) == os.path.realpath(plan_path)
-    is_plan = in_plans_dir and (node in PLAN_WRITE_POSITION_NODES or is_tracked)
+    is_plan = in_plans_dir and (
+        node in PLAN_WRITE_POSITION_NODES or is_tracked or own_plan is not None
+    )
 
     # A plan file owned by another live session is decided by THAT session's node:
     # the writer's node only says what the writer may do with its own work. Checked

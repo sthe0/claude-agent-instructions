@@ -141,13 +141,13 @@ def test_from_dict_malformed_stage_keys_does_not_crash():
 
 # --- 3. a stage-scoped pass clears the gate for its own moved stage only -----
 
-def test_stage_scoped_pass_clears_gate_for_its_own_moved_stage(gate_on, tmp_path, fixtures_dir):
+def test_stage_scoped_pass_clears_gate_for_its_own_moved_stage(gate_on, tmp_path, venued_fixtures_dir):
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc0 = load_plan(str(plan_path))
     whole = _whole_review(plan_path, doc0)
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     doc1 = load_plan(str(plan_path))
     stage1 = _stage_review(plan_path, doc1, 1)
 
@@ -156,13 +156,13 @@ def test_stage_scoped_pass_clears_gate_for_its_own_moved_stage(gate_on, tmp_path
     assert gates.plan_review_blockers(state, str(plan_path)) == []
 
 
-def test_stage_scoped_pass_does_not_clear_a_different_moved_stage(gate_on, tmp_path, fixtures_dir):
+def test_stage_scoped_pass_does_not_clear_a_different_moved_stage(gate_on, tmp_path, venued_fixtures_dir):
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc0 = load_plan(str(plan_path))
     whole = _whole_review(plan_path, doc0)
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
     doc1 = load_plan(str(plan_path))
     stage2 = _stage_review(plan_path, doc1, 2)   # covers stage 2 -- not the stage that moved
 
@@ -174,13 +174,13 @@ def test_stage_scoped_pass_does_not_clear_a_different_moved_stage(gate_on, tmp_p
 
 # --- 4. an empty attestation on a stage-scoped pass binds nothing ------------
 
-def test_stage_scoped_pass_without_attestation_blocks(gate_on, tmp_path, fixtures_dir):
+def test_stage_scoped_pass_without_attestation_blocks(gate_on, tmp_path, venued_fixtures_dir):
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc0 = load_plan(str(plan_path))
     whole = _whole_review(plan_path, doc0)
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
     doc1 = load_plan(str(plan_path))
     stage1 = _stage_review(plan_path, doc1, 1, attest=False)
 
@@ -192,9 +192,9 @@ def test_stage_scoped_pass_without_attestation_blocks(gate_on, tmp_path, fixture
 
 # --- 5. a meta/order edit demands a whole-plan review regardless of coverage -
 
-def test_meta_edit_demands_whole_plan_review_even_with_current_stage_reviews(gate_on, tmp_path, fixtures_dir):
+def test_meta_edit_demands_whole_plan_review_even_with_current_stage_reviews(gate_on, tmp_path, venued_fixtures_dir):
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc0 = load_plan(str(plan_path))
     whole = _whole_review(plan_path, doc0)
     stage_reviews = {f"stage:{i}": _stage_review(plan_path, doc0, i) for i in (1, 2, 3)}
@@ -213,16 +213,16 @@ def test_meta_edit_demands_whole_plan_review_even_with_current_stage_reviews(gat
 # --- 6. a stage-scoped override is attestation-free and needs a distinct reviewer
 
 def test_stage_scoped_override_is_attestation_free_and_needs_distinct_reviewer(
-        store, fixtures_dir, tmp_path, gate_on):
+        store, venued_fixtures_dir, tmp_path, gate_on):
     sid = "sc-ov"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="pass",
                            reviewer="thinker", concerns=None, note="",
                            plan_digest=_sha256_file(plan)), store=store)
 
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="revise",
                            reviewer="thinker", concerns=["blocking: title needs work"], note="",
                            plan_digest=None), store=store)
@@ -248,9 +248,9 @@ def test_stage_scoped_override_is_attestation_free_and_needs_distinct_reviewer(
 
 # --- 7. --scope validation ----------------------------------------------------
 
-def test_scope_unrecognized_string_refused(store, fixtures_dir, gate_on):
+def test_scope_unrecognized_string_refused(store, venued_fixtures_dir, gate_on):
     sid = "sc-bad1"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage_substantive.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage_substantive.toml"))
     d = cli.cmd_plan_review(ns(session=sid, target=None, scope="bogus", verdict="pass",
                                reviewer="thinker", concerns=None, note="",
                                plan_digest=None), store=store)
@@ -259,9 +259,9 @@ def test_scope_unrecognized_string_refused(store, fixtures_dir, gate_on):
     assert store.load(sid).plan_stage_reviews == {}
 
 
-def test_scope_nonexistent_stage_refused(store, fixtures_dir, gate_on):
+def test_scope_nonexistent_stage_refused(store, venued_fixtures_dir, gate_on):
     sid = "sc-bad2"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage_substantive.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage_substantive.toml"))
     d = cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:99", verdict="pass",
                                reviewer="thinker", concerns=None, note="",
                                plan_digest=None), store=store)
@@ -272,35 +272,35 @@ def test_scope_nonexistent_stage_refused(store, fixtures_dir, gate_on):
 
 # --- 8. cmd_plan_review_delta's three outcomes --------------------------------
 
-def test_delta_whole_plan_needed_when_nothing_reviewed(store, fixtures_dir, gate_on):
+def test_delta_whole_plan_needed_when_nothing_reviewed(store, venued_fixtures_dir, gate_on):
     sid = "delta1"
-    _to_plan_ready(store, sid, str(fixtures_dir / "plan_two_stage_substantive.toml"))
+    _to_plan_ready(store, sid, str(venued_fixtures_dir / "plan_two_stage_substantive.toml"))
     d = cli.cmd_plan_review_delta(ns(session=sid, plan=None), store=store)
     assert d.ok is True
     assert d.data["whole_plan"] is True
     assert d.data["stages"] == []
 
 
-def test_delta_specific_stages_needed(store, fixtures_dir, tmp_path, gate_on):
+def test_delta_specific_stages_needed(store, venued_fixtures_dir, tmp_path, gate_on):
     sid = "delta2"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="pass",
                            reviewer="thinker", concerns=None, note="",
                            plan_digest=_sha256_file(plan)), store=store)
 
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     d = cli.cmd_plan_review_delta(ns(session=sid, plan=str(plan)), store=store)
     assert d.ok is True
     assert d.data["whole_plan"] is False
     assert d.data["stages"] == [1]
 
 
-def test_delta_no_gap_when_fully_covered(store, fixtures_dir, tmp_path, gate_on):
+def test_delta_no_gap_when_fully_covered(store, venued_fixtures_dir, tmp_path, gate_on):
     sid = "delta3"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="pass",
                            reviewer="thinker", concerns=None, note="",
@@ -323,16 +323,16 @@ def _write_rendering(tmp_path, text, name="rendering.txt", plan=None) -> str:
 
 
 def test_essence_allowed_when_stage_scoped_review_covers_the_moved_stage(
-        store, fixtures_dir, tmp_path, gate_on):
+        store, venued_fixtures_dir, tmp_path, gate_on):
     sid = "es-ok"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="pass",
                            reviewer="thinker", concerns=None, note="",
                            plan_digest=_sha256_file(plan)), store=store)
 
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     cli.cmd_submit_plan(ns(session=sid, plan=str(plan)), store=store)
     cli.cmd_plan_review(ns(session=sid, target=None, scope="stage:1", verdict="pass",
                            reviewer="thinker", concerns=None, note="",
@@ -348,14 +348,14 @@ def test_essence_allowed_when_stage_scoped_review_covers_the_moved_stage(
 
 
 def test_essence_blocked_when_moved_stage_lacks_its_own_review(
-        store, fixtures_dir, tmp_path, gate_on):
+        store, venued_fixtures_dir, tmp_path, gate_on):
     """A stage-scoped review for an untouched stage (2) puts the session into
     coverage mode; stage 1 then moves with no review of its own, so essence must
     be blocked with the granular per-stage message, not the legacy byte-hash one
     (which only fires while plan_stage_reviews is still empty)."""
     sid = "es-block"
     plan = tmp_path / "plan.toml"
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     _to_plan_ready(store, sid, str(plan))
     cli.cmd_plan_review(ns(session=sid, target=None, scope=None, verdict="pass",
                            reviewer="thinker", concerns=None, note="",
@@ -364,7 +364,7 @@ def test_essence_blocked_when_moved_stage_lacks_its_own_review(
                            reviewer="thinker", concerns=None, note="",
                            plan_digest=_sha256_file(plan)), store=store)
 
-    plan.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
 
     rendering = _write_rendering(tmp_path, "Summary of the plan.")
     d = cli.cmd_present_plan(
@@ -395,16 +395,16 @@ def test_unreadable_target_fails_open_even_with_stage_reviews_recorded(gate_on, 
     assert gates.plan_review_blockers(s, str(missing)) == []
 
 
-def test_stage_scoped_attestation_cannot_substitute_for_the_whole_plans_own(gate_on, tmp_path, fixtures_dir):
+def test_stage_scoped_attestation_cannot_substitute_for_the_whole_plans_own(gate_on, tmp_path, venued_fixtures_dir):
     """The whole-plan review's own unattested-pass block is fail-CLOSED and is
     checked before any stage is even considered — a fully-attested stage-scoped
     pass cannot paper over an unattested whole-plan review."""
     plan_path = tmp_path / "plan.toml"
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc0 = load_plan(str(plan_path))
     whole = _whole_review(plan_path, doc0, attest=False)   # unattested pass
 
-    plan_path.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    plan_path.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
     doc1 = load_plan(str(plan_path))
     stage1 = _stage_review(plan_path, doc1, 1)              # fully attested
 
@@ -432,12 +432,12 @@ def test_stage_scoped_attestation_cannot_substitute_for_the_whole_plans_own(gate
 # from the whole-plan branch's posture if a future recorder (or a hand-edited
 # state file) ever does write that shape.
 
-def test_rename_binds_through_coverage_when_bytes_match(gate_on, tmp_path, fixtures_dir):
+def test_rename_binds_through_coverage_when_bytes_match(gate_on, tmp_path, venued_fixtures_dir):
     """The coverage mirror of test_path_rename_content_match_not_stale: a
     byte-identical plan re-saved under a new filename still binds, with a
     stage-scoped review recorded (which is what routes to the coverage branch)."""
     reviewed = tmp_path / "plan.toml"
-    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    reviewed.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(reviewed))
 
     renamed = tmp_path / "plan-v2.toml"
@@ -448,14 +448,14 @@ def test_rename_binds_through_coverage_when_bytes_match(gate_on, tmp_path, fixtu
     assert gates.plan_review_blockers(state, str(renamed)) == []
 
 
-def test_different_file_with_matching_meta_digest_still_blocks(gate_on, tmp_path, fixtures_dir):
+def test_different_file_with_matching_meta_digest_still_blocks(gate_on, tmp_path, venued_fixtures_dir):
     """`plan_meta_digest` hashes goal/done_criterion/criterion_type/weight_class/
     repo_root/order — NOT task_id, so a DIFFERENT plan file can match every
     recorded key while identifying a different task. The coverage branch must
     reject that pair on content identity exactly as the whole-plan branch does;
     trusting the recorded keys alone let this through."""
     reviewed = tmp_path / "plan.toml"
-    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    reviewed.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc = load_plan(str(reviewed))
 
     impostor = tmp_path / "plan-v2.toml"
@@ -475,16 +475,16 @@ def test_different_file_with_matching_meta_digest_still_blocks(gate_on, tmp_path
     assert gates.plan_review_blockers(state, str(impostor)) == coverage
 
 
-def test_moved_stages_review_binds_a_renamed_target_by_bytes(gate_on, tmp_path, fixtures_dir):
+def test_moved_stages_review_binds_a_renamed_target_by_bytes(gate_on, tmp_path, venued_fixtures_dir):
     """The per-stage path check has the same posture as the whole-plan one: a
     stage-scoped review recorded before a byte-identical rename still covers its
     stage, rather than prescribing a `--scope stage:1` pass that already exists.
     The whole-plan record here carries the CURRENT bytes with the PRE-edit stage
     keys, which is what puts stage 1 in `moved_stages` at all."""
     reviewed = tmp_path / "plan.toml"
-    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    reviewed.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc0 = load_plan(str(reviewed))
-    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
+    reviewed.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_method_changed.toml").read_text())
     doc1 = load_plan(str(reviewed))
 
     renamed = tmp_path / "plan-v2.toml"
@@ -498,13 +498,13 @@ def test_moved_stages_review_binds_a_renamed_target_by_bytes(gate_on, tmp_path, 
 
 
 def test_moved_stages_review_at_another_path_with_other_bytes_still_blocks(
-        gate_on, tmp_path, fixtures_dir):
+        gate_on, tmp_path, venued_fixtures_dir):
     """The negative half of the test above: without byte identity, a stage-scoped
     review at another path covers nothing and the per-stage demand stands."""
     reviewed = tmp_path / "plan.toml"
-    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive.toml").read_text())
+    reviewed.write_text((venued_fixtures_dir / "plan_two_stage_substantive.toml").read_text())
     doc0 = load_plan(str(reviewed))
-    reviewed.write_text((fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
+    reviewed.write_text((venued_fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml").read_text())
     doc1 = load_plan(str(reviewed))
 
     renamed = tmp_path / "plan-v2.toml"

@@ -40,6 +40,7 @@ from .plan import (
     PAIR_BASE_NODE,
     PlanDoc,
     PlanError,
+    _derive_stage_grants,
     _sha256_hex,
     _venue_for,
     consumers,
@@ -54,19 +55,34 @@ from .plan import (
 )
 
 
-def _stage_declared_and_derived_grants(s, venue: str):
+def _stage_declared_and_derived_grants(s, venue: str | None):
     """A stage's declared grants (an empty `StageGrants` when the stage
     authors none) plus its derived grants and dropped-entry list — the one
-    place that pairs a stage with `grants.derive_stage_grants`'s
-    venue-scoped output, shared by `render_stage_brief`, `render_plan_md`,
-    `render_plan_grants`, and `cmd_plan_grants` so no projection can drift
-    from another on how a stage's effective grant set is computed."""
+    place that pairs a stage with the venue-scoped derivation (`plan.
+    _derive_stage_grants`, which takes a None venue), shared by
+    `render_stage_brief`, `render_plan_md`, `render_plan_grants`, and
+    `cmd_plan_grants` so no projection can drift from another on how a
+    stage's effective grant set is computed."""
     declared = s.grants if getattr(s, "grants", None) else _grants.StageGrants()
-    derived, dropped = _grants.derive_stage_grants(s, venue=venue)
+    derived, dropped = _derive_stage_grants(s, venue)
     return declared, derived, dropped
 
 
-def _grants_lines(s, venue: str) -> list[str]:
+NO_VENUE_GRANTS_NOTE = (
+    "in-venue grants not derived: the plan declares no absolute repo_root or delivery_worktree"
+)
+
+
+def _no_venue_note(s, venue: str | None) -> str | None:
+    """`NO_VENUE_GRANTS_NOTE` when `venue` is None and the stage has a relative
+    output_artifacts / material_refs entry whose grant that gap withholds, else None."""
+    if venue is not None:
+        return None
+    relative = [r for r in [*s.output_artifacts, *s.subject.material_refs] if not os.path.isabs(r)]
+    return NO_VENUE_GRANTS_NOTE if relative else None
+
+
+def _grants_lines(s, venue: str | None) -> list[str]:
     """The `- **Grants (file-access scope):**` block for one stage, or `[]`
     when the stage has neither a declared nor a derived grant to show —
     shared by `render_stage_brief` and `render_plan_md`'s per-stage loop so
@@ -78,9 +94,12 @@ def _grants_lines(s, venue: str) -> list[str]:
     declared_dirs = [f"{a.path}:{a.mode}" for a in declared_grants.add_dirs]
     derived_rules = [r.rule for r in derived_grants.allow]
     derived_dirs = [f"{a.path}:{a.mode}" for a in derived_grants.add_dirs]
-    if not (declared_rules or declared_dirs or derived_rules or derived_dirs):
+    note = _no_venue_note(s, venue)
+    if not (declared_rules or declared_dirs or derived_rules or derived_dirs or note):
         return []
     out = ["- **Grants (file-access scope):**"]
+    if note:
+        out.append(f"  - {note}")
     if declared_rules:
         out.append(f"  - declared allow: {', '.join(declared_rules)}")
     if declared_dirs:
@@ -1249,6 +1268,7 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
         dr_o = [r.rule for r in derived.allow if r.provenance == "derived:DR-O"]
         dr_e = [r.rule for r in derived.allow if r.provenance == "derived:DR-E"]
         dr_r = [f"{a.path}:{a.mode}" for a in derived.add_dirs if a.provenance == "derived:DR-R"]
+        note = _no_venue_note(s, venue)
         if fmt == "full":
             lines.append(f"Stage {s.index} ({s.title}):")
             if declared_rules:
@@ -1265,6 +1285,8 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
                 lines.append(f"  DR-R (outside-venue read): {', '.join(dr_r)}")
             for d in dropped:
                 lines.append(f"  dropped: {d['entry']} ({d['reason']})")
+            if note:
+                lines.append(f"  {note}")
             if not (declared_rules or declared_dirs or dr_v or dr_o or dr_e or dr_r):
                 lines.append("  (no grants)")
         else:
@@ -1283,6 +1305,8 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
                 parts.append(f"DR-E={len(dr_e)} derived")
             if dropped:
                 parts.append(f"dropped={len(dropped)}")
+            if note:
+                parts.append(f"[{note}]")
             if s.is_spawn():
                 kind = s.spawn_kind()
                 digest = kind_baselines.kind_baseline_sha256(kind)

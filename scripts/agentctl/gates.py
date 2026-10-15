@@ -3648,10 +3648,32 @@ _PARENT_NORM_REASON_TEXT = {
 }
 
 
+def _held_wildcard_rules(held_unresolved) -> list[str]:
+    """The `Bash(<prefix>:*)` rules among the handoff's unresolved entries, from their
+    `("wildcard-tail", rule)` identities."""
+    return [identity[1] for identity in held_unresolved
+            if len(identity) == 2 and identity[0] == "wildcard-tail"]
+
+
+def _check_text(origin: str, source: str) -> str | None:
+    """The command text a plan element asks the engine to run, or None for an element
+    that is not one: an engine-executed fixed text is its own command, a declared exact
+    `Bash(<command>)` rule is the command inside it."""
+    if origin in ENGINE_EXECUTED_ORIGINS:
+        return source
+    if origin == "declared":
+        from . import grants as _grants
+        parsed = _grants.rule_program_and_arg(source)
+        if parsed and parsed[0] == "Bash" and not parsed[1].endswith(":*"):
+            return parsed[1]
+    return None
+
+
 def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None,
                          final_checks, resources, held_resources, *,
                          unresolved, held_unresolved, max_depth: int,
-                         protected: list[str] | None = None) -> dict:
+                         protected: list[str] | None = None,
+                         resource_origins=None) -> dict:
     """Whether a linked child may approve its own plan on the parent-norm basis.
 
     Pure: every input is a stored value. `parent_link` is the adopted handoff
@@ -3662,8 +3684,16 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
     `held_unresolved` the identities of the handoff's own unresolved grant entries. An
     unresolved item is covered only by an identical identity in the handoff, or, when it
     is the final check that carries the parent's own `verify_command`, because it is the
-    norm itself. Every other engine-executed fixed text the engine cannot resolve is
-    refused unless the handoff carries it. Every failing condition is reported, not only
+    norm itself, or when its command text (an engine-executed fixed text or a declared
+    exact Bash rule) is covered, segment by segment, by a `Bash(<prefix>:*)` rule the
+    handoff holds (`grants.bash_command_covered_by_rules`, the matcher the harness-side
+    cover uses): the parent's wildcard already authorizes that command, whichever rule
+    of the handoff it is. Every other engine-executed fixed text the engine cannot
+    resolve is refused unless the handoff carries it. `resource_origins` is the plan's `(resource, origin, source)` tags
+    (`BoundaryView.resource_origins`): a resource that every one of its origins produces
+    from a covered engine-executed text is not charged either, unless no approval could
+    cover it (it is, contains or lies under a protected root or surface); without the tags
+    every resource is charged. Every failing condition is reported, not only
     the first; a session with no link reports only `not-linked`, as the conditions that
     read the link have nothing to read.
 
@@ -3688,13 +3718,28 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
         )
         if not carried:
             reasons.append(PARENT_NORM_CHECK_DROPPED)
+        from . import grants as _grants
         from . import order_approvals as _oa
+        held_wildcards = _held_wildcard_rules(held_unresolved)
+
+        def text_covered(origin: str, source: str) -> bool:
+            text = _check_text(origin, source)
+            return text is not None and _grants.bash_command_covered_by_rules(held_wildcards, text)
+
+        def only_from_covered_checks(requested) -> bool:
+            origins = [(o, s) for r, o, s in resource_origins or () if r == requested]
+            return (bool(origins)
+                    and all(o in ENGINE_EXECUTED_ORIGINS and text_covered(o, s) for o, s in origins)
+                    and requested.covers(requested, protected=protected))
+
         seen: set[str] = set()
         for requested in resources:
             data = _oa.resource_to_dict(requested)
             if data["kind"] == "specialist":
                 continue
             if any(held.covers(requested, protected=protected) for held in held_resources):
+                continue
+            if only_from_covered_checks(requested):
                 continue
             name = _resource_name(data)
             if name in seen:
@@ -3708,7 +3753,8 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
         for item in unresolved:
             is_the_norm = (carried and item.get("origin") == "final_check"
                            and (item.get("source") or "").strip() == verify)
-            if is_the_norm or list(item["identity"]) in held_identities:
+            if (is_the_norm or list(item["identity"]) in held_identities
+                    or text_covered(item.get("origin") or "", item.get("source") or "")):
                 continue
             unresolved_uncovered.append({**item, "needs_user": True})
         if unresolved_uncovered:

@@ -69,9 +69,9 @@ def _cover_the_order(store, sid, stage=1):
 
 
 @pytest.fixture
-def plan(fixtures_dir, tmp_path) -> Path:
+def plan(venued_fixtures_dir, tmp_path) -> Path:
     path = tmp_path / "plan.toml"
-    path.write_text((fixtures_dir / SUBSTANTIVE).read_text())
+    path.write_text((venued_fixtures_dir / SUBSTANTIVE).read_text())
     return path
 
 
@@ -317,8 +317,8 @@ def test_submit_plan_launches_no_enumerator_and_writes_no_deadline(
 
 
 def test_replan_launches_no_enumerator_and_writes_no_deadline(
-        store, fixtures_dir, monkeypatch):
-    _build(store, SID, fixtures_dir / "plan_two_stage.toml")
+        store, venued_fixtures_dir, monkeypatch):
+    _build(store, SID, venued_fixtures_dir / "plan_two_stage.toml")
     _cover_the_order(store, SID)
     assert _approve(store).ok is True
     cli.cmd_partition(ns(session=SID, m1=False, m2=False, m3=False, m4=False,
@@ -327,7 +327,7 @@ def test_replan_launches_no_enumerator_and_writes_no_deadline(
     spawned = _enumerator_spawns(monkeypatch)
 
     d = cli.cmd_replan(
-        ns(session=SID, plan=str(fixtures_dir / SUBSTANTIVE)), store=store)
+        ns(session=SID, plan=str(venued_fixtures_dir / SUBSTANTIVE)), store=store)
     assert d.ok is True, d.detail
     assert spawned == []
     assert not _bag(store).get("enumerate_deadline")
@@ -713,10 +713,10 @@ def test_the_per_stage_review_directive_names_customer_question_on_every_scope(
         assert "--customer-question" in record, record
 
 
-def test_the_walk_record_template_names_customer_question(capsys, tmp_path, fixtures_dir):
+def test_the_walk_record_template_names_customer_question(capsys, tmp_path, venued_fixtures_dir):
     import json
     root = str(tmp_path / "state")
-    plan = str(fixtures_dir / "plan_two_stage.toml")
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     for argv in (["start", "--session", "wq", "--task", "t", "--goal", "g",
                   "--done-criterion", "dc", "--criterion-type", "measurable"],
                  ["classify", "--session", "wq", "--architectural"],

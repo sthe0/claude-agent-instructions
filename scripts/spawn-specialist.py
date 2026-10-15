@@ -39,8 +39,13 @@ from typing import NamedTuple, Sequence
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from agentctl import grants  # the sole validator every materialized rule/add_dir passes through
+from agentctl.config import (  # the one definition of the child-contour kill switch
+    CHILD_CONTOUR_LINKING_ENV,
+    CHILD_CONTOUR_LINKING_KEY,
+    child_contour_linking_enabled,
+)
 from agentctl import norm_handoff  # the one definition of the handoff record the child engine adopts
-from agentctl.own_contour import OWN_CONTOUR_VERBS, OWN_SESSION_ENV  # the channel's env name and verb set
+from agentctl.own_contour import OWN_CONTOUR_VERBS, OWN_SESSION_ENV, own_plan_path  # the channel's env name, verb set and plan path
 from agentctl.plan import (  # parse the TOML plan for a single-stage brief projection
     PlanError,
     is_unit_id,
@@ -50,7 +55,7 @@ from agentctl.plan import (  # parse the TOML plan for a single-stage brief proj
     parse_unit,
 )
 from agentctl.stage_norm import StageNorm
-from agentctl.state import PARENT_DIFFICULTY_ENV, format_parent_difficulty
+from agentctl.state import PARENT_DIFFICULTY_ENV, Node, format_parent_difficulty
 from agentctl.render import (  # pure PlanDoc(+index) -> markdown; TopoUnitsCorrupt/materialize_topo_units do the one bit of I/O
     TopoUnitsCorrupt,
     materialize_topo_units,
@@ -62,7 +67,9 @@ from agentctl.render import (  # pure PlanDoc(+index) -> markdown; TopoUnitsCorr
 )
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
-from lib.config_root import agentctl_topo_units_dir, plans_dir, projects_roots, skills_dir  # config-root resolver (isolated system root)
+from agentctl import tool_contracts  # the one parser of an interpreter call's script operand
+from lib import shell_tokens
+from lib.config_root import agent_home, plans_dir, projects_roots, skills_dir, topo_units_root  # config-root resolver (isolated system root)
 from lib.kind_baselines import (  # re-exported below so `MOD.KIND_BASELINES` etc. keep working for importlib callers
     KIND_BASELINES,
     PLANNER_CHECK_ORDER_COVERAGE_RULE,
@@ -215,13 +222,15 @@ def brief_eligible(args: argparse.Namespace) -> bool:
     return brief_plan_path(args) is not None
 
 
-def own_contour_brief_lines(args: argparse.Namespace) -> list[str]:
+def own_contour_brief_lines(args: argparse.Namespace, own_plan: "Path | None" = None) -> list[str]:
     """The brief section of a linked child, in place of `## The engine belongs to the
-    parent`: its own engine contour, the channel that moves it, the route for a norm
-    that is wrong, and the terminal state. The verbs are quoted from the channel's own
-    verb set so the brief cannot name a set the channel does not run."""
+    parent`: its own engine contour, the channel that moves it, the plan file it alone
+    may write, the route for a norm that is wrong, and the terminal state. The verbs are
+    quoted from the channel's own verb set so the brief cannot name a set the channel
+    does not run."""
     verbs = ", ".join(f"`{v}`" for v in sorted(OWN_CONTOUR_VERBS))
     channel = f"python3 {Path(SCRIPTS_DIR) / 'agentctl-own.py'}"
+    review_driver = own_contour_review_command()
     marker_source = (
         "one of the markers your brief names"
         if is_manager_kind(getattr(args, "kind", None))
@@ -247,6 +256,23 @@ def own_contour_brief_lines(args: argparse.Namespace) -> list[str]:
         "(an independent thinker's review), `approve --by agent`, `partition` (no "
         "flags), `next-stage`.",
         "",
+        *(
+            [
+                f"Your plan file is `{own_plan}`: yours alone, writable while you plan and "
+                "frozen once you execute (to change it then, `replan`); submit it with "
+                f"`{channel} submit-plan --plan {own_plan}`.",
+                "",
+            ]
+            if own_plan is not None
+            else []
+        ),
+        f"To have your plan reviewed, run `{review_driver} --plan <plan>`: it walks the "
+        "plan, spawns one read-only thinker per unit and per pair, records each verdict "
+        "and composes the pass on your own session. Pass no `--session` — it comes from "
+        "your contour (`AGENTCTL_OWN_SESSION`) — and no `--ledger`. A `revise` verdict "
+        "blocks `approve --by agent`: amend the plan, `submit-plan` it again and re-run "
+        "the command.",
+        "",
         "If the norm itself is wrong — it cannot be met as stated — run `declare`, "
         "`investigate`, then `critique --failure-address нормативное --norm-target "
         "parent` through the channel, and return `REPLAN:`; do not rewrite the "
@@ -271,6 +297,7 @@ def assemble_prompt(
     evidence_dir: "str | None" = None,
     topo_bundle: "str | None" = None,
     own_contour: bool = False,
+    own_plan: "Path | None" = None,
 ) -> str:
     plan = argv_text.read_required_file(args.plan, "--plan")
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
@@ -351,7 +378,7 @@ def assemble_prompt(
         scope_lines.append("")
         sections += scope_lines
     if own_contour:
-        sections += own_contour_brief_lines(args)
+        sections += own_contour_brief_lines(args, own_plan)
     else:
         sections += [
             "## The engine belongs to the parent",
@@ -916,6 +943,96 @@ def review_topo_view_permission_rules(view_dir: Path) -> tuple[list[str], list[s
         raise ValueError(f"view_dir must be absolute, got: {view_dir}")
     base = f"/{view_dir}/**"
     return [f"Read({base})"], [f"Edit({base})"]
+
+
+_CHECK_INTERPRETERS = frozenset({"bash", "sh", "python3"})
+
+
+def _check_script_operand(command: str) -> "str | None":
+    """The absolute script path a single-segment `bash`/`sh`/`python3` call runs, else None."""
+    if grants.top_level_segment_count(command) != 1:
+        return None
+    try:
+        tokens = shell_tokens.separator_exact_split(command)
+    except ValueError:
+        return None
+    script = tool_contracts.interpreter_script_operand(tokens, _CHECK_INTERPRETERS)
+    return script if script is not None and os.path.isabs(script) else None
+
+
+class _WithheldCheckDirs(NamedTuple):
+    """Directories a `--review-topo` reviewer must not be granted, resolved once per spawn."""
+
+    config_root: Path
+    roots: tuple[Path, ...]
+    subtree_roots: tuple[Path, ...]
+
+    @classmethod
+    def for_plan(cls, plan_path: Path) -> "_WithheldCheckDirs":
+        resolve = lambda path: Path(path).resolve()  # noqa: E731
+        plans_root, topo_root = resolve(plans_dir()), resolve(topo_units_root())
+        return cls(
+            config_root=resolve(agent_home()),
+            roots=tuple(
+                resolve(root) for root in (
+                    tempfile.gettempdir(), Path.home(), agent_home(), plans_dir(),
+                    plan_path.resolve().parent, topo_units_root(),
+                )
+            ),
+            subtree_roots=(topo_root,),
+        )
+
+    def withholds(self, directory: Path) -> bool:
+        """A filesystem root, a direct child of the config root, one of the roots (temp
+        root, $HOME, config root, plans root, the plan file's directory, topo-units
+        root), any ancestor of these (a grant there would open the whole tree under it),
+        or a descendant of the topo-units root (per-unit view trees). A check directory
+        below the plans root is granted: that is where a plan's own check scripts live."""
+        if directory == Path(directory.anchor) or directory.parent == self.config_root:
+            return True
+        return (
+            any(directory == root or directory in root.parents for root in self.roots)
+            or any(root in directory.parents for root in self.subtree_roots)
+        )
+
+
+def review_check_scripts(plan, plan_path: Path) -> list[Path]:
+    """Existing scripts the plan's `verify_command`, `negative_control` and `[[final_check]]`
+    texts run, resolved through `..` and symlinks, that sit in a directory a reviewer may
+    be granted (see `_WithheldCheckDirs.withholds`)."""
+    texts = [
+        text
+        for stage in plan.stages
+        for text in (stage.criterion.verify_command, stage.criterion.negative_control)
+        if text
+    ] + [check.command for check in plan.meta.final_check]
+    withheld = _WithheldCheckDirs.for_plan(plan_path)
+    scripts: set[Path] = set()
+    for text in texts:
+        operand = _check_script_operand(text)
+        if operand is None:
+            continue
+        real = Path(os.path.realpath(operand))
+        if real.is_file() and not withheld.withholds(real.parent):
+            scripts.add(real)
+    return sorted(scripts)
+
+
+def review_check_script_dirs(scripts: list[Path]) -> list[Path]:
+    """The directories a reviewer is granted read-only for `scripts` (`review_check_scripts`)."""
+    return sorted({script.parent for script in scripts})
+
+
+def check_scripts_brief_section(scripts: list[Path]) -> str:
+    lines = [
+        "## Readable check scripts",
+        "",
+        "The plan's checks run these scripts. You may read them (Read, Grep, Glob) and "
+        "never edit them; their directories are granted read-only for this review.",
+        "",
+        *[f"- `{script}`" for script in scripts],
+    ]
+    return "\n".join(lines)
 
 
 def plans_add_dir_args(kind: str, plans_directory: Path) -> list[str]:
@@ -1921,6 +2038,29 @@ def own_contour_allow_rule() -> str:
     return f"Bash(python3 {Path(SCRIPTS_DIR) / 'agentctl-own.py'}:*)"
 
 
+def own_plan_allow_rule(session_id: str) -> str:
+    """The Edit rule that lets a linked child write its own plan file and nothing else.
+    Emitted here, at the seam, and not through `grants.validate_rule`: a declared rule
+    under the agent home stays refused, so this path is granted only to the child it
+    belongs to."""
+    return f"Edit(/{own_plan_path(session_id)})"
+
+
+def own_contour_review_command() -> str:
+    """The topological review driver by absolute path, in own mode. `--own` is part of
+    the granted prefix so the child's grant covers own mode only: the driver then
+    reaches the engine only through the channel, and refuses to run when
+    `AGENTCTL_OWN_SESSION` is unset — the mode never depends on how the harness
+    matches an env-prefixed command."""
+    return f"python3 {Path(SCRIPTS_DIR) / 'plan-review-topological.py'} --own"
+
+
+def own_contour_review_rule() -> str:
+    """The rule that lets a linked child review its own plan; its reviewers are
+    spawned unlinked."""
+    return f"Bash({own_contour_review_command()}:*)"
+
+
 def load_or_create_evidence_dir(
     session_id: str,
     stage_index: int,
@@ -1972,6 +2112,52 @@ def _iter_workdir_transcripts(workdir: str) -> list[Path]:
     for root in projects_roots():
         out.extend((root / name).glob("**/*.jsonl"))
     return sorted(out)
+
+
+def resumable_child_session(
+    store, parent_session: str, stage_index: int, workdir: str, norm_digest: str,
+):
+    """`(session, transcript, state)` of the linked child last spawned for the parent
+    stage when a re-dispatch can resume it, else None (the spawn then mints a fresh
+    session). `state` is the child's engine session state, None when its engine never
+    started.
+
+    Resumable only when this spawn runs in the workdir it ran in, its engine session is
+    not RESOLVED, the norm it adopted is the stage's current norm (`norm_digest`), and
+    its transcript is under that workdir's project directory. The engine never replaces
+    an adopted `parent_link`, so a child resumed after the stage's norm changed would
+    keep working to the old one. The harness stores and resumes a conversation through
+    the project directory named after the cwd, so a resume anywhere else, or without
+    the transcript, has nothing to continue."""
+    record = norm_handoff.read_child_session(store.root, parent_session, stage_index)
+    if record is None or record["workdir"] != workdir:
+        return None
+    session = record["session"]
+    try:
+        state = store.load(session)
+    except Exception:
+        return None
+    if state is not None and state.node == Node.RESOLVED.value:
+        return None
+    link = state.parent_link if state is not None else None
+    if link is not None and link.get("norm_digest") != norm_digest:
+        return None
+    name = _project_dir_name(workdir)
+    for root in projects_roots():
+        transcript = root / name / f"{session}.jsonl"
+        if transcript.is_file():
+            return session, transcript, state
+    return None
+
+
+def adopted_handoff_env_value(state) -> "str | None":
+    """The handoff value a resumed child's engine session adopted, or None when it holds
+    none yet. Exporting that value rather than a freshly written record keeps the env the
+    child reads equal to its own `parent_link`, which the engine never replaces."""
+    link = (state.parent_link if state is not None else None) or {}
+    if not (link.get("handoff") and link.get("sha256")):
+        return None
+    return norm_handoff.format_env_value(link["handoff"], link["sha256"])
 
 
 def _snapshot_transcripts(workdir: str) -> set[Path]:
@@ -2380,6 +2566,8 @@ def main(argv: list[str] | None = None) -> int:
     topo_plan_sha256: "str | None" = None
     topo_doc = None
     topo_history: "dict | None" = None
+    topo_check_scripts: list[Path] = []
+    topo_check_dirs: list[Path] = []
     if args.review_topo_history is not None and args.review_topo is None:
         print("error: --review-topo-history is only valid with --review-topo.", file=sys.stderr)
         log_refused("review-topo-history-without-review-topo", {"kind": args.kind})
@@ -2437,8 +2625,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"error: --review-topo-history {args.review_topo_history}: {exc}", file=sys.stderr)
                 log_refused("review-topo-history-unreadable", {"kind": args.kind, "review_pair": topo_pair})
                 return 2
-        topo_units_override = os.environ.get("AGENTCTL_TOPO_UNITS_DIR")
-        topo_root = Path(topo_units_override) if topo_units_override else agentctl_topo_units_dir()
+        topo_root = topo_units_root()
+        topo_check_scripts = review_check_scripts(topo_doc, Path(args.plan))
+        topo_check_dirs = review_check_script_dirs(topo_check_scripts)
         # A unit bundle is self-contained: the unit has no view directory, no
         # Read grant and nothing to materialize.
         if not is_unit_id(topo_pair):
@@ -2502,10 +2691,18 @@ def main(argv: list[str] | None = None) -> int:
     # A spawn is linked when the engine can name the stage it works for: the child then
     # gets a norm handoff and a pre-assigned session id its own-contour channel is pinned
     # to. The record is only decided here and written once the brief assembles, so the
-    # brief, the argv, the settings and the env all see one decision.
+    # brief, the argv, the settings and the env all see one decision. The kill switch
+    # (ADR-0010 § Amendment) turns it off; off is the same unlinked path a failed record takes.
     handoff_record: "dict | None" = None
     handoff_store = None
-    if args.session and args.stage_index is not None:
+    names_a_stage = bool(args.session) and args.stage_index is not None
+    if names_a_stage and not child_contour_linking_enabled(constants=constants):
+        print(
+            f"note: child-contour linking is off ({CHILD_CONTOUR_LINKING_KEY} in config.md, "
+            f"override {CHILD_CONTOUR_LINKING_ENV}=1), spawning unlinked",
+            file=sys.stderr,
+        )
+    elif names_a_stage:
         from agentctl.store import FileStateStore
 
         handoff_store = FileStateStore(args.state_root) if args.state_root is not None else FileStateStore()
@@ -2517,7 +2714,19 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"warning: norm handoff unavailable, spawning unlinked: {exc}", file=sys.stderr)
     child_linked = handoff_record is not None
-    own_session = str(uuid.uuid4()) if child_linked else None
+    # A re-dispatch of the stage continues the previous child's engine session, so what
+    # the root recorded on it between the two spawns reaches the child.
+    resumed = (
+        resumable_child_session(
+            handoff_store, args.session, args.stage_index, workdir, handoff_record["norm_digest"],
+        )
+        if child_linked else None
+    )
+    resumed_transcript: "Path | None" = None
+    if resumed is not None:
+        own_session, resumed_transcript, resumed_state = resumed
+    else:
+        own_session = str(uuid.uuid4()) if child_linked else None
 
     add_dir_argv: list[str] = []
     if topo_pair is not None:
@@ -2527,13 +2736,20 @@ def main(argv: list[str] | None = None) -> int:
         # would carry.
         if topo_view_dir is not None:
             add_dir_argv.extend(["--add-dir", str(topo_view_dir)])
+        for check_dir in topo_check_dirs:
+            add_dir_argv.extend(["--add-dir", str(check_dir)])
     else:
         add_dir_argv.extend(plans_add_dir_args(args.kind, plans_directory))
     add_dir_argv.extend(repo_root_add_dir_args(args.kind, workdir))
+    grant_add_dir_argv: list[str] = []
     if engine_grants:
-        add_dir_argv.extend(stage_grant_add_dir_args(engine_grants))
+        grant_add_dir_argv.extend(stage_grant_add_dir_args(engine_grants))
     if evidence_dir:
-        add_dir_argv.extend(stage_grant_add_dir_args([{"path": evidence_dir, "mode": "write"}]))
+        grant_add_dir_argv.extend(stage_grant_add_dir_args([{"path": evidence_dir, "mode": "write"}]))
+    own_plan_dir = own_plan_path(own_session).parent if child_linked else None
+    own_plan_add_dir_argv = ["--add-dir", str(own_plan_dir)] if own_plan_dir is not None else []
+    head_add_dir_argv = add_dir_argv
+    add_dir_argv = head_add_dir_argv + own_plan_add_dir_argv + grant_add_dir_argv
     add_dir_paths = _paths_from_add_dir_argv(add_dir_argv)
 
     permission_mode = resolve_permission_mode(args, engine_grants)
@@ -2550,6 +2766,8 @@ def main(argv: list[str] | None = None) -> int:
                 topo_doc, topo_pair, plan_sha256=topo_plan_sha256, view_dir=topo_view_dir,
                 history=topo_history,
             )
+        if topo_check_scripts:
+            topo_bundle += "\n\n" + check_scripts_brief_section(topo_check_scripts)
     def brief(own_contour: bool) -> str:
         return assemble_prompt(
             args,
@@ -2562,6 +2780,7 @@ def main(argv: list[str] | None = None) -> int:
             evidence_dir=evidence_dir,
             topo_bundle=topo_bundle,
             own_contour=own_contour,
+            own_plan=own_plan_path(own_session) if own_contour else None,
         )
 
     try:
@@ -2574,7 +2793,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     handoff_env_value: "str | None" = None
-    if handoff_record is not None and not args.dry_run:
+    if resumed is not None and not args.dry_run:
+        handoff_env_value = adopted_handoff_env_value(resumed_state)
+    if handoff_record is not None and handoff_env_value is None and not args.dry_run:
         # Written only now: a brief that cannot be assembled leaves no record behind. A
         # record that cannot be written makes the spawn unlinked -- brief included.
         try:
@@ -2582,8 +2803,20 @@ def main(argv: list[str] | None = None) -> int:
             handoff_env_value = norm_handoff.format_env_value(path, sha)
         except Exception as exc:
             print(f"warning: norm handoff not written, spawning unlinked: {exc}", file=sys.stderr)
-            handoff_record, child_linked, own_session = None, False, None
+            handoff_record, child_linked, own_session, resumed_transcript = None, False, None, None
+            own_plan_dir = None
+            add_dir_argv = head_add_dir_argv + grant_add_dir_argv
+            add_dir_paths = _paths_from_add_dir_argv(add_dir_argv)
             prompt = brief(False)
+    if child_linked and not args.dry_run:
+        try:
+            norm_handoff.write_child_session(
+                handoff_store.root, args.session, args.stage_index,
+                session=own_session, workdir=workdir,
+            )
+        except Exception as exc:
+            print(f"warning: child-session record not written, a re-dispatch will start a "
+                  f"fresh session: {exc}", file=sys.stderr)
     model = resolve_model(args)
 
     ceiling_chars = dispatch_prompt_ceiling_chars(model)
@@ -2634,18 +2867,32 @@ def main(argv: list[str] | None = None) -> int:
         log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
         return 2
 
-    if topo_view_dir is not None:
-        # The plans-directory grant was withheld above; grant the one-pair
-        # view directory instead (Read allow + Edit deny, same directional
-        # pair plans_permission_rules uses for its own read kinds).
-        view_allow, view_deny = review_topo_view_permission_rules(topo_view_dir)
+    # The plans-directory grant was withheld above; grant the one-pair view
+    # directory (a pair only) and the directories of the plan's check scripts
+    # instead (Read allow + Edit deny, same directional pair plans_permission_rules
+    # uses for its own read kinds).
+    topo_read_dirs = [d for d in [topo_view_dir] if d is not None] + topo_check_dirs
+    for read_dir in topo_read_dirs:
+        read_allow, read_deny = review_topo_view_permission_rules(read_dir)
         child_permissions = child_settings.setdefault("permissions", {})
-        child_permissions.setdefault("allow", []).extend(view_allow)
-        child_permissions.setdefault("deny", []).extend(view_deny)
+        child_permissions.setdefault("allow", []).extend(read_allow)
+        child_permissions.setdefault("deny", []).extend(read_deny)
 
     if child_linked:
-        child_settings.setdefault("permissions", {}).setdefault("allow", []).append(
-            own_contour_allow_rule()
+        own_plan_rule = own_plan_allow_rule(own_session)
+        child_permissions = child_settings.setdefault("permissions", {})
+        child_denies = child_permissions.get("deny", [])
+        try:
+            _check_no_allow_fully_denied(
+                [own_plan_rule], child_denies, {own_plan_rule: "own_plan_allow_rule"},
+                {rule: "child settings" for rule in child_denies},
+            )
+        except GrantShadowError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
+            return 2
+        child_permissions.setdefault("allow", []).extend(
+            [own_contour_allow_rule(), own_contour_review_rule(), own_plan_rule]
         )
 
     cmd = [
@@ -2669,7 +2916,9 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(child_settings),
     ]
     cmd.extend(add_dir_argv)
-    if own_session is not None:
+    if resumed_transcript is not None:
+        cmd.extend(["--resume", own_session])
+    elif own_session is not None:
         # The harness session id becomes this uuid, which is also the id the child's
         # engine autostarts under, so AGENTCTL_OWN_SESSION names that engine session.
         cmd.extend(["--session-id", own_session])
@@ -2700,6 +2949,14 @@ def main(argv: list[str] | None = None) -> int:
     if shutil.which("claude") is None:
         print("error: `claude` not on PATH; cannot spawn. Re-run with --dry-run to inspect the prompt.", file=sys.stderr)
         return 4
+
+    # Created last, past every refusal above, so a refused spawn leaves no empty directory.
+    if own_plan_dir is not None:
+        try:
+            own_plan_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            own_plan_dir.chmod(0o700)
+        except OSError as exc:
+            print(f"warning: own plan directory not created: {exc}", file=sys.stderr)
 
     env = {
         **os.environ,
@@ -2754,7 +3011,9 @@ def main(argv: list[str] | None = None) -> int:
     # is what avoids the pipe-buffer deadlock a manual write()+read() would risk.
     def _announce_transcript() -> None:
         nonlocal transcript_path
-        transcript_path = _discover_transcript_path(workdir, transcripts_before, timeout=10.0)
+        transcript_path = resumed_transcript or _discover_transcript_path(
+            workdir, transcripts_before, timeout=10.0
+        )
         if transcript_path is not None:
             print(f"spawn-specialist: transcript={transcript_path}", file=sys.stderr, flush=True)
         else:
